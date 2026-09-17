@@ -13,6 +13,7 @@ import type {
 } from "../../adapters/vcs/repository-directory.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import type { RunStartWorkScope } from "../steps/run-start-settings.js";
+import type { TicketTextReading } from "../work-scope/context.js";
 
 /**
  * The repositories a question a pre-sandbox step raised named, and why each one
@@ -111,6 +112,11 @@ export type PreSandboxStepResult =
       /** What a person can do about those refusals. NEVER placed in the
        *  agent's instruction channel: see `withWorkScopeOutcome`. */
       workScopeRecoveryNotes?: string[];
+      /** This step's reading of the ticket, carried so the surfaces that speak
+       *  after it offer the same way back it does (`commentPathIsTaken` in
+       *  `engine/work-scope/context.ts`). Absent from a run that scanned no
+       *  ticket, which offers the record alone. */
+      workScopeTicketText?: TicketTextReading;
     }
   | {
       status: "halt";
@@ -141,6 +147,11 @@ export type PreSandboxStepResult =
       /** What a person can do about those refusals. NEVER placed in the
        *  agent's instruction channel: see `withWorkScopeOutcome`. */
       workScopeRecoveryNotes?: string[];
+      /** This step's reading of the ticket, carried so the surfaces that speak
+       *  after it offer the same way back it does (`commentPathIsTaken` in
+       *  `engine/work-scope/context.ts`). Absent from a run that scanned no
+       *  ticket, which offers the record alone. */
+      workScopeTicketText?: TicketTextReading;
     };
 
 export const preSandboxTicketInputFields = [
@@ -224,9 +235,12 @@ export interface PreSandboxStepContext {
    *
    * A value here structurally means "this text is an answer to a which-repository
    * question", which is stronger than anything the ticket comments can establish:
-   * the synthetic comment carrying the reply is labelled with a display name, and
-   * tracker display names are user controlled, so matching on one authenticates
-   * nothing. Two facts make the flag sound instead. The interpreter only ever
+   * a comment is labelled with a display name, and tracker display names are
+   * user controlled, so matching on one authenticates nothing. It is also the
+   * ONLY carrier now. The reply used to be appended to the ticket as a comment
+   * as well, so the path scanner read it as ticket text and attached the
+   * repository a person had just refused (round 4, B1). Two facts make the flag
+   * sound instead. The interpreter only ever
    * hands a clarification answer back to the block that asked for it, and every
    * clarification prepare-workspace raises is a repository question.
    *
@@ -307,6 +321,11 @@ export type RunPreSandboxPhaseResult =
       /** What a person can do about those refusals. NEVER placed in the
        *  agent's instruction channel: see `withWorkScopeOutcome`. */
       workScopeRecoveryNotes?: string[];
+      /** This step's reading of the ticket, carried so the surfaces that speak
+       *  after it offer the same way back it does (`commentPathIsTaken` in
+       *  `engine/work-scope/context.ts`). Absent from a run that scanned no
+       *  ticket, which offers the record alone. */
+      workScopeTicketText?: TicketTextReading;
     }
   | {
       status: "halt";
@@ -328,4 +347,9 @@ export type RunPreSandboxPhaseResult =
       /** What a person can do about those refusals. NEVER placed in the
        *  agent's instruction channel: see `withWorkScopeOutcome`. */
       workScopeRecoveryNotes?: string[];
+      /** This step's reading of the ticket, carried so the surfaces that speak
+       *  after it offer the same way back it does (`commentPathIsTaken` in
+       *  `engine/work-scope/context.ts`). Absent from a run that scanned no
+       *  ticket, which offers the record alone. */
+      workScopeTicketText?: TicketTextReading;
     };

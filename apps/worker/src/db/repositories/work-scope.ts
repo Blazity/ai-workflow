@@ -147,20 +147,61 @@ export async function readWorkScopeSelectionAnswered(
  * is left out for the same reason: being asked once more is the acceptable
  * direction of that cost.
  *
- * One statement, and the answer must sit on the SAME subject as the question:
- * the record is per subject, and a clarification id is the only thing the two
- * rows share.
+ * The keys of `readWorkScopeAnsweredAtByKey`, in the same byte order, so the
+ * rule for which answers count and which repositories a question named is
+ * spelled in one statement rather than two that could drift.
  */
 export async function readWorkScopeAnsweredRepositories(
   db: Db,
   subjectKey: string,
 ): Promise<string[]> {
+  return Object.keys(await readWorkScopeAnsweredAtByKey(db, subjectKey));
+}
+
+/**
+ * For every repository in the answered set, when the newest answer to a
+ * question that NAMED it was recorded.
+ *
+ * The anchor a run dates a ticket's words against, per repository: a full path
+ * a person wrote after this instant is a decision they took KNOWING what that
+ * answer left out, and what stands in the ticket from before it is the text the
+ * question was asked about (`boundByTheAnswer` in
+ * `engine/work-scope/decide.ts`).
+ *
+ * PER REPOSITORY, NOT PER SUBJECT. A subject-wide newest answer let an answer
+ * to an UNRELATED question move the anchor: a person names a repository in a
+ * comment, as they were told to, and then says "none" to an expansion question
+ * about a different one, and their comment silently turns into text that
+ * predates the answer. Only an answer to a question that put this repository's
+ * name in front of somebody can date what was written about it.
+ *
+ * THE SAME ROWS AS THE ANSWERED SET, because it is the same fact with its time
+ * attached: the answered set is this map's keys, so the two cannot disagree
+ * about which repositories an answer spoke for. The newest instant per key is
+ * the cautious end: a comment written between two answers that both named the
+ * repository is dated against the later one, which leaves it out rather than
+ * attaching it on words that predate somebody's decision. The trail's own
+ * instant is used rather than any time a caller holds.
+ *
+ * One statement, and the answer must sit on the SAME subject as the question:
+ * the record is per subject, and a clarification id is the only thing the two
+ * rows share.
+ */
+export async function readWorkScopeAnsweredAtByKey(
+  db: Db,
+  subjectKey: string,
+): Promise<Record<string, string>> {
   const result = await db.execute(sql`
     -- Byte order, so the order does not depend on the database's collation. It
     -- sits on the selected expression rather than on the ORDER BY, because a
     -- collated ORDER BY is an expression and the trail table this joins to
     -- itself carries a repository_key of its own for it to be ambiguous with.
-    SELECT DISTINCT (asked_repository ->> 'repositoryKey') COLLATE "C" AS repository_key
+    -- The instant is spelled as JSON rather than handed back as a timestamp, so
+    -- both drivers return the same bytes: the HTTP driver answers a timestamptz
+    -- as the database's own text and the test driver as a Date. 'to_json'
+    -- writes ISO 8601 with the offset, which is what every reader parses.
+    SELECT (asked_repository ->> 'repositoryKey') COLLATE "C" AS repository_key,
+      to_json(MAX(given.at)) #>> '{}' AS answered_at
     FROM ${workScopeTrail} AS asked
     JOIN ${workScopeTrail} AS given
       ON given.subject_key = asked.subject_key
@@ -176,15 +217,20 @@ export async function readWorkScopeAnsweredRepositories(
       -- so an ask written before this fact existed, or one carrying anything
       -- but a boolean, reads as not named instead of raising.
       AND (asked_repository ->> 'named') = 'true'
-    ORDER BY repository_key
+    GROUP BY 1
+    ORDER BY 1
   `);
-  const rows = (result as { rows?: Array<{ repository_key: string | null }> }).rows ?? [];
-  const keys: string[] = [];
+  const rows =
+    (result as { rows?: Array<{ repository_key: string | null; answered_at: string | null }> })
+      .rows ?? [];
+  const answeredAt: Record<string, string> = {};
   for (const row of rows) {
-    if (row.repository_key === null) continue;
-    keys.push(row.repository_key);
+    if (row.repository_key === null || row.answered_at === null) continue;
+    const parsed = new Date(row.answered_at);
+    if (Number.isNaN(parsed.getTime())) continue;
+    answeredAt[row.repository_key] = parsed.toISOString();
   }
-  return keys;
+  return answeredAt;
 }
 
 /**
@@ -315,10 +361,10 @@ export async function readWorkScopeAnsweredQuestion(
 /**
  * Everything a run has to know about a subject's record, read once.
  *
- * `scope` is the record itself and the other four are facts the entries cannot
+ * `scope` is the record itself and the other five are facts the entries cannot
  * carry: an answer can decide something and write no entry, and only the trail
  * remembers that anybody was ever asked. A caller that wants the picture wants
- * all of them, which is why they travel together rather than as five reads a
+ * all of them, which is why they travel together rather than as six reads a
  * caller has to know the names of and combine in the right order.
  *
  * `answeredQuestion` is the one fact keyed on a QUESTION rather than on the
@@ -330,12 +376,17 @@ export interface WorkScopeFacts {
   scope: WorkScope | null;
   selectionAnswered: boolean;
   answeredRepositoryKeys: string[];
+  /** Per repository in the answered set, when the newest answer to a question
+   *  that named it was recorded. The other half of the same fact: the set says
+   *  which repositories an answer spoke for, and this says from when the
+   *  ticket's words about each of them are newer than that answer. */
+  answeredAtByKey: Record<string, string>;
   narrowingAnswered: boolean;
   answeredQuestion: WorkScopeTrailRow | null;
 }
 
 /**
- * The five reads above as one, in parallel on one connection.
+ * The six reads above as one, in parallel on one connection.
  *
  * Composed from the per-fact reads rather than written as a single statement.
  * Each of those reads carries a rule that took a defect to get right (which
@@ -345,7 +396,7 @@ export interface WorkScopeFacts {
  * pre-sandbox selection read subsets of this picture, and the pure database
  * tests sit on them one at a time. One hand-merged statement would be a second
  * copy of those rules, and the copy is what drifts. `Promise.all` keeps the
- * round trips concurrent, which is what the cost of five reads was ever about,
+ * round trips concurrent, which is what the cost of six reads was ever about,
  * and it opens no transaction, which production could not do anyway.
  */
 export async function readWorkScopeFacts(
@@ -353,20 +404,28 @@ export async function readWorkScopeFacts(
   subjectKey: string,
   clarificationId?: string,
 ): Promise<WorkScopeFacts> {
-  const [scope, selectionAnswered, answeredRepositoryKeys, narrowingAnswered, answeredQuestion] =
-    await Promise.all([
-      readWorkScope(db, subjectKey),
-      readWorkScopeSelectionAnswered(db, subjectKey),
-      readWorkScopeAnsweredRepositories(db, subjectKey),
-      readWorkScopeNarrowingAnswered(db, subjectKey),
-      clarificationId === undefined
-        ? Promise.resolve(null)
-        : readWorkScopeAnsweredQuestion(db, clarificationId),
-    ]);
+  const [
+    scope,
+    selectionAnswered,
+    answeredAtByKey,
+    narrowingAnswered,
+    answeredQuestion,
+  ] = await Promise.all([
+    readWorkScope(db, subjectKey),
+    readWorkScopeSelectionAnswered(db, subjectKey),
+    // One read for the answered set and its instants, so the two can never
+    // come from two different moments.
+    readWorkScopeAnsweredAtByKey(db, subjectKey),
+    readWorkScopeNarrowingAnswered(db, subjectKey),
+    clarificationId === undefined
+      ? Promise.resolve(null)
+      : readWorkScopeAnsweredQuestion(db, clarificationId),
+  ]);
   return {
     scope,
     selectionAnswered,
-    answeredRepositoryKeys,
+    answeredRepositoryKeys: Object.keys(answeredAtByKey),
+    answeredAtByKey,
     narrowingAnswered,
     answeredQuestion,
   };
@@ -882,25 +941,21 @@ export async function applyAnswerWorkScopePlan(
  * `listConnectedRepositoryCatalogKeys`
  * (`db/repositories/repository-catalog.ts:1119-1126`).
  *
- * The record alone and the selection flag alone have a caller each: the
- * pre-sandbox selection reads those two and nothing else, and the answer path
- * reads the record. Every other consumer wants the whole picture and takes
- * `readConnectedWorkScopeFacts` below, which is why the per-fact twins for the
- * other three reads are gone: nothing reached them.
+ * The record alone has its callers, the answer path and the edit surface.
+ * Every other consumer wants the whole picture and takes
+ * `readConnectedWorkScopeFacts` below, the pre-sandbox selection included since
+ * it reads which repositories an answer left unnamed, which is why the per-fact
+ * twins for the other reads are gone: nothing reaches them.
  */
 export function readConnectedWorkScope(subjectKey: string) {
   return readWorkScope(getDb(), subjectKey);
-}
-
-export function readConnectedWorkScopeSelectionAnswered(subjectKey: string) {
-  return readWorkScopeSelectionAnswered(getDb(), subjectKey);
 }
 
 /**
  * The whole picture on the process-wide connection, for the steps that want all
  * of it: the run start, the resume after an answer, and the expansion resume.
  *
- * One `getDb()`, so all five reads share the connection the way five separate
+ * One `getDb()`, so all six reads share the connection the way six separate
  * connected twins did.
  */
 export function readConnectedWorkScopeFacts(subjectKey: string, clarificationId?: string) {

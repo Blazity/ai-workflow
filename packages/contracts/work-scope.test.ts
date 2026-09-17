@@ -64,6 +64,7 @@ describe("work scope vocabulary", () => {
       "workspace_cap",
       "request_limit",
       "rounds_exhausted",
+      "unnamed_in_answer",
     ]);
   });
 });

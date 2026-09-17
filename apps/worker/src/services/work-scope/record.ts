@@ -280,6 +280,11 @@ async function applyEdit(
       eventRelatedKeys: [],
       attachedKeys: null,
       selectionAnswered: false,
+      // An edit decides no guess: a person selecting a repository writes an
+      // entry, which is exactly what ends an omission from an answer. The
+      // ticket's words decide nothing here either, so nothing dates them.
+      answeredRepositoryKeys: [],
+      postAnswerMentionedKeys: [],
       actor: { kind: "person", actorId: editor.id, actorLabel: label },
       now: (input.now ?? new Date()).toISOString(),
     },

@@ -41,7 +41,12 @@ import {
 // person was actually shown rather than the form we stored.
 import { formatClarificationQuestionsComment } from "../support/clarification-comment-format.js";
 import { readRepositoryAnswer } from "../work-scope/answer.js";
-import { consumeWorkScopeAsk, createRunWorkScopeRecorder } from "../work-scope/context.js";
+import {
+  commentPathAfterAnUnrecordedAnswer,
+  consumeWorkScopeAsk,
+  createRunWorkScopeRecorder,
+  type TicketTextReading,
+} from "../work-scope/context.js";
 import { decideWorkScope } from "../work-scope/decide.js";
 
 const SUBJECT = "ticket:jira:AWT-1";
@@ -160,6 +165,9 @@ interface DiscoveryInput {
   catalog?: RepositoryCatalogEntry[];
   door?: ReturnType<typeof createRepositoryQuestions>;
   ctx?: ReturnType<typeof makeCtx>;
+  /** The pre-sandbox's reading of the ticket, which decides whether a path
+   *  written in a comment reaches the next run and is taken. */
+  ticketText?: TicketTextReading | null;
 }
 
 /** The record filtering the catalog and the validator deciding against that
@@ -191,6 +199,18 @@ function decide(input: DiscoveryInput) {
           subjectKey: SUBJECT,
           scope: input.scope,
           selectionAnswered,
+          answeredRepositoryKeys: input.answeredRepositoryKeys ?? [],
+          // The pre-sandbox's reading, carried into the run the way
+          // `agent-workflow.ts` carries it. A ticket naming nothing, on a run
+          // that can date comments against every answer, is the ordinary shape
+          // here: a comment naming one repository would be read by the next run.
+          // A discovery proposal is a guess whatever the ticket says, so nothing
+          // written after the answer unbinds anything on this path.
+          ticketText: input.ticketText ?? {
+            matchedKeys: [],
+            datableKeys: input.answeredRepositoryKeys ?? [],
+            mentionedAfterAnswerKeys: [],
+          },
           catalog: {
             activated: true,
             enabledKeys: catalog.map((repo) => `${repo.provider}:${repo.repoPath}`),
@@ -214,6 +234,7 @@ function decide(input: DiscoveryInput) {
           // as the closure in `agent-workflow.ts` reads it.
           answeredRepositoryKeys: ctx.workScope?.answeredRepositoryKeys ?? [],
           recorded: input.scope?.entries ?? [],
+          commentPathIsTaken: (repositoryKeys) => record.commentPathIsTaken(repositoryKeys),
         }
       : undefined,
   );
@@ -247,8 +268,22 @@ describe("a discovery question about a repository somebody excluded tells the tr
       "github:acme/api was excluded on this work by Ada Lovelace on 2026-09-10." +
         ' Repository discovery asked for it anyway, because "the ticket names the API schema".' +
         " Answer with github:acme/api to take that exclusion back and let this run use it," +
-        " or with the repositories this ticket should use instead.",
+        " or name only the repositories to use.",
     ]);
+  });
+
+  // The reviewer's note on R12: the predicate that decides what a person is
+  // told about writing a path in a comment knows a question by its words, so it
+  // is fed the words this builder actually produces. A test carrying its own
+  // copy of the sentence cannot drift; the builder can, and the drift is
+  // silent, because both branches of the predicate return a sentence.
+  it("is recognised by the comment-path predicate as a question it cannot prove a route for", () => {
+    const { raised } = discover({
+      scope: scopeOf(entry("github:acme/api", "excluded")),
+      raw: proposal("acme/api", "the ticket names the API schema"),
+    });
+
+    expect(commentPathAfterAnUnrecordedAnswer({ questions: raised.questions })).toBe("unproven");
   });
 
   it("never tells the person to enable a repository this deployment already enables", () => {
@@ -286,6 +321,8 @@ describe("a discovery question about a repository somebody excluded tells the tr
       subjectKey: SUBJECT,
       scope: scopeOf(entry("github:acme/api", "excluded")),
       selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      ticketText: { matchedKeys: [], datableKeys: [], mentionedAfterAnswerKeys: [] },
       catalog: {
         activated: true,
         enabledKeys: CATALOG.map((repo) => `${repo.provider}:${repo.repoPath}`),
@@ -317,7 +354,7 @@ describe("a discovery question about a repository nobody decided names it", () =
       "Repository discovery asked for github:acme/secret, which this run cannot use:" +
         " it is not enabled on this deployment." +
         " Enable it on the Repositories page and start a new run to use it." +
-        " Or answer with the repositories this ticket should use instead.",
+        " Or name only the repositories to use.",
     ]);
     expect(ask?.askedRepositories).toEqual([
       { repositoryKey: "github:acme/secret", askedBecause: "not_enabled" },
@@ -327,7 +364,7 @@ describe("a discovery question about a repository nobody decided names it", () =
   it("carries a repository the catalog holds and cannot use as unusable", () => {
     const catalog = [...CATALOG, catalogEntry("github", "acme/fresh", false)];
 
-    const { ask } = discover({
+    const { ask, raised } = discover({
       scope: scopeOf(),
       catalog,
       raw: proposal("acme/fresh", "the ticket names the new service"),
@@ -336,6 +373,13 @@ describe("a discovery question about a repository nobody decided names it", () =
     expect(ask?.askedRepositories).toEqual([
       { repositoryKey: "github:acme/fresh", askedBecause: "unusable" },
     ]);
+    // Round 5, S6. This arm offers the person no move of their own, so the
+    // sentence after it is not an alternative to one: an "Or" here was an "or"
+    // to nothing, which reads as a missing sentence.
+    expect(raised.questions.join(" ")).not.toContain("Or name only");
+    expect(raised.questions.join(" ")).toContain(
+      "cannot clone it, so no run can use it until that changes. Name only the repositories to use.",
+    );
   });
 });
 
@@ -351,7 +395,7 @@ describe("a run that froze no record behaves exactly as it did before", () => {
       "Repository discovery asked for github:acme/secret, which this run cannot use:" +
         " it is not enabled on this deployment." +
         " Enable it on the Repositories page and start a new run to use it." +
-        " Or answer with the repositories this ticket should use instead.",
+        " Or name only the repositories to use.",
     ]);
     // The sentence a person reads did not change; only what the question
     // carries alongside it did, and without a record there is nothing to carry
@@ -489,7 +533,7 @@ describe("a discovery question about repositories the model was unsure of", () =
       "Repository discovery asked for github:acme/secret, which this run cannot use:" +
         " it is not enabled on this deployment." +
         " Enable it on the Repositories page and start a new run to use it." +
-        " Or answer with the repositories this ticket should use instead.",
+        " Or name only the repositories to use.",
     ]);
   });
 
@@ -593,8 +637,10 @@ describe("a discovery question about repositories the model was unsure of", () =
         " and somebody on this work was already asked which repositories to start from" +
         " and did not name it. Not naming a repository is not choosing it," +
         " so this run has no repository to work on." +
-        " Name the repositories this ticket should work on in the ticket itself," +
-        " as github:acme/web, and start a new run.",
+        // A comment, not the ticket itself: a description edit is the text the
+        // question was already asked about and binds nothing (C11f, R3).
+        " Write the full path of each repository this ticket should work on in a comment on this" +
+        " ticket, as github:acme/web, and start a new run.",
       blame: "work_scope",
     });
     expect(consumeWorkScopeAsk(ctx)).toBeUndefined();
@@ -769,16 +815,25 @@ describe("a subject whose selection question has already been answered", () => {
     // The same tripwire, for the sentence beside the list. The comment is the
     // only surface that reaches a person on a run that FINISHED: the
     // pre-sandbox halt text reaches nobody when the run does not halt, and the
-    // prompt additions reach the agent. Composed through the shared helper so a
-    // person reads one wording on both paths, and guarded on the record so only
-    // an exclusion a person made is described as one they can take back.
+    // prompt additions reach the agent. Composed through the shared helpers so a
+    // person reads one wording on every path, and guarded on the record so only
+    // a decision a person made (an exclusion, a repository left out of an
+    // answer) is described as one they can take back.
     const workflow = readFileSync(
       fileURLToPath(new URL("../agent-workflow.ts", import.meta.url)),
       "utf8",
     );
 
     expect(
-      workflow.includes("repositoryRecoveryNotes = exclusionRecoveryNotes("),
+      /const unnamedLeftOut = leftOutKeys\.filter\(\(key\) =>\s*isUnnamedInAnswer\([\s\S]{0,400}?repositoryRecoveryNotes = \[\s*\.\.\.unnamedRecoveryNotes\(\s*unnamedLeftOut,[\s\S]{0,400}?record\?\.commentPathIsTaken\(unnamedLeftOut\)/.test(
+        workflow,
+      ),
+      "the discovery path no longer tells a person leaving a repository out of an answer can be taken back",
+    ).toBe(true);
+    expect(
+      /\.\.\.exclusionRecoveryNotes\(\s*leftOutKeys\.filter\(\(key\) => excludedKeys\.has\(key\)\)/.test(
+        workflow,
+      ),
       "the discovery path no longer tells a person the exclusion can be taken back",
     ).toBe(true);
     expect(
@@ -1028,7 +1083,7 @@ describe("the answer to the excluded question settles it", () => {
     "github:acme/api was excluded on this work by Ada Lovelace on 2026-09-10." +
     ' Repository discovery asked for it anyway, because "the ticket names the API schema".' +
     " Answer with github:acme/api to take that exclusion back and let this run use it," +
-    " or with the repositories this ticket should use instead.";
+    " or name only the repositories to use.";
 
   /** The question as the ticket comment actually posts it: numbered, published. */
   function postedQuestion(): string {
@@ -1096,6 +1151,8 @@ describe("the answer to the excluded question settles it", () => {
         eventRelatedKeys: [],
         attachedKeys: null,
         selectionAnswered: false,
+        answeredRepositoryKeys: [],
+        postAnswerMentionedKeys: [],
         actor: PERSON_ACTOR,
         now: ANSWERED_AT,
       },
@@ -1209,14 +1266,22 @@ describe("the answer to the excluded question settles it", () => {
   it.each([
     ["none", "none"],
     ["none of these", "none of these"],
-  ])("asks again when a person quotes one sentence of our question and writes %s", (_what, said) => {
-    expect(read([`> ${oneSentenceOfTheQuestion()}`, said].join("\n"))).toEqual({
-      kind: "unrecognised",
-    });
-  });
+  ])(
+    "reads a quote of one sentence of our question with %s under it as a decline",
+    (_what, said) => {
+      // Round 4, and this changed meaning. The danger was always one way round:
+      // our key in the quote being read as their choice, and that is still
+      // refused. Their own word is "none", written into the box this question
+      // opened, so it declines what the question asked about instead of costing
+      // them a round.
+      expect(read([`> ${oneSentenceOfTheQuestion()}`, said].join("\n"))).toEqual({
+        kind: "none",
+      });
+    },
+  );
 
-  it("asks again when a person quotes the whole question and writes none under it", () => {
-    expect(read([`> ${postedQuestion()}`, "none"].join("\n"))).toEqual({ kind: "unrecognised" });
+  it("reads a quote of the whole question with none under it as a decline", () => {
+    expect(read([`> ${postedQuestion()}`, "none"].join("\n"))).toEqual({ kind: "none" });
   });
 
   it("reads our own question sent back after a keyboard turned the quotes curly as no answer at all", () => {
@@ -1227,9 +1292,9 @@ describe("the answer to the excluded question settles it", () => {
     expect(read(`> ${withCurlyQuotes(postedQuestion())}`)).toEqual({ kind: "unrecognised" });
   });
 
-  it("asks again when a person writes none under a quote a keyboard turned curly", () => {
+  it("reads a none under a quote a keyboard turned curly as a decline", () => {
     expect(read([`> ${withCurlyQuotes(postedQuestion())}`, "none"].join("\n"))).toEqual({
-      kind: "unrecognised",
+      kind: "none",
     });
   });
 
@@ -1245,11 +1310,17 @@ describe("the answer to the excluded question settles it", () => {
 
   /**
    * A person who answers with a different repository INSTEAD of the excluded
-   * one. Each of these named two repositories and rejected one of them, and
-   * the rejected one was recorded as selected beside the other, so the
-   * exclusion was reversed by the very sentence that upheld it. The words are
-   * read around the names, never inside them, so "acme/no-code" is still a
-   * repository and not a refusal.
+   * one, in every phrasing this reader used to resolve.
+   *
+   * ROUND 4, AND THIS WHOLE GROUP CHANGED MEANING. Each of these was read as
+   * two decisions at once: the refusal it states and the choice beside it. The
+   * reader that can do that is the reader that decided "please do not touch
+   * github:acme/billing" was a choice of billing, because the difference
+   * between them is phrasing rather than intent, and the ways people write a no
+   * do not end. So a reply that says no about anything records nothing, in
+   * every language, and the person is told to name only the repositories to
+   * use. A round is cheap; a decision recorded against somebody who wrote the
+   * opposite is not.
    */
   it.each([
     "use acme/web instead of acme/api",
@@ -1261,21 +1332,30 @@ describe("the answer to the excluded question settles it", () => {
     "remove acme/api, use acme/web",
     "acme/web, not acme/api",
     "zamiast acme/api uzyj acme/web",
+    "nie bierz acme/api, zamiast tego acme/web",
     "pomin acme/api, uzyj acme/web",
     "usun acme/api, uzyj acme/web",
-  ])("keeps only the repository a person redirected us to when they wrote %s", (said) => {
-    expect(read(said)).toEqual({
+  ])("records nothing and asks again when a person wrote %s", (said) => {
+    expect(read(said)).toEqual({ kind: "unrecognised" });
+  });
+
+  // And the same reply under our own question: taking our words out changes
+  // nothing about it, because what is left still says no.
+  it("records nothing from a redirection written under our posted question", () => {
+    const answer = [postedQuestion(), "Ada Lovelace: use acme/web instead of acme/api"].join("\n");
+
+    expect(read(answer)).toEqual({ kind: "unrecognised" });
+  });
+
+  // The reply the rule asks for, in place of every phrasing above: the
+  // repository to use, and nothing else. It is the one sentence our copy sends
+  // people back with, so it has to work.
+  it("records the repository when a person names only the one to use", () => {
+    expect(read("acme/web")).toEqual({
       kind: "repositories",
       repositoryKeys: ["github:acme/web"],
     });
-  });
-
-  it("keeps the redirection when a person wrote it under our posted question", () => {
-    // Both defences on one answer: our words come out, and what is left says
-    // no to the repository it names beside the one they chose.
-    const answer = [postedQuestion(), "Ada Lovelace: use acme/web instead of acme/api"].join("\n");
-
-    expect(read(answer)).toEqual({
+    expect(read("use acme/web")).toEqual({
       kind: "repositories",
       repositoryKeys: ["github:acme/web"],
     });
@@ -1450,6 +1530,8 @@ describe("the answer to the unsure question settles it", () => {
         eventRelatedKeys: [],
         attachedKeys: null,
         selectionAnswered: false,
+        answeredRepositoryKeys: [],
+        postAnswerMentionedKeys: [],
         actor: PERSON_ACTOR,
         now: ANSWERED_AT,
       },

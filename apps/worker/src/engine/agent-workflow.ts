@@ -18,9 +18,11 @@ import {
   consumeWorkScopeAsk,
   createRunWorkScopeRecorder,
   exclusionRecoveryNotes,
+  unnamedRecoveryNotes,
   workScopeRepositoryKey,
   type RunWorkScopeRecorder,
 } from "./work-scope/context.js";
+import { isUnnamedInAnswer } from "./work-scope/decide.js";
 import { computeUsageTotals } from "../sandbox/usage.js";
 import type { AgentOutput, PhaseUsage, ResearchResult, ReviewOutput } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
@@ -1848,6 +1850,17 @@ async function agentWorkflowBody(
           subjectKey: frozen.subjectKey,
           scope: frozen.scope,
           selectionAnswered: frozen.selectionAnswered,
+          // Refreshed with the entries after every repository answer, and
+          // empty on a context frozen before the fact existed.
+          answeredRepositoryKeys: frozen.answeredRepositoryKeys ?? [],
+          // The pre-sandbox's reading of the ticket, carried rather than made
+          // again, so the way back this loop offers is the one that step proved
+          // open or shut (`commentPathIsTaken`). This recorder derives no ticket
+          // text itself: it decides what the model asked for and what discovery
+          // proposed, and both are guesses whatever the comments say, so the
+          // post-answer mentions inside it never unbind anything here. Absent
+          // when no step read a ticket, which offers the record alone.
+          ticketText: ctx.workScopeTicketText ?? null,
           catalog: {
             activated: ctx.repositories.activated,
             enabledKeys: catalog.map(workScopeRepositoryKey),
@@ -2000,6 +2013,11 @@ async function agentWorkflowBody(
                 // see.
                 answeredRepositoryKeys: ctx.workScope.answeredRepositoryKeys ?? [],
                 recorded: ctx.workScope.scope?.entries ?? [],
+                // Whether a full path written in a comment would reach the next
+                // run, decided by the record itself so this sentence and the
+                // pre-sandbox's cannot offer a person two different doors.
+                commentPathIsTaken: (repositoryKeys) =>
+                  record.commentPathIsTaken(repositoryKeys),
               }
             : undefined,
         );
@@ -2029,28 +2047,47 @@ async function agentWorkflowBody(
                   ),
               ),
             );
-            // The recovery sentence rides with them, composed from the same
-            // helper the pre-sandbox uses so a person reads one wording on
-            // both paths. Only for the keys a PERSON excluded: the validator
-            // leaves repositories out for several reasons, and the only one
-            // anybody can take back is their own.
+            // The recovery sentences ride with them, composed from the same
+            // helpers the pre-sandbox and the expansion recorder use so a
+            // person reads one wording on every path, in the same order. Only
+            // for the keys a PERSON decided: one they excluded, and one they
+            // left out of an answer. The validator leaves repositories out for
+            // several reasons, and the only ones anybody can take back are
+            // their own. The unnamed note picks its door by the case rule
+            // inside `unnamedRecoveryNotes`, so a ticket whose text is not
+            // taken from is not offered a comment that would be asked about
+            // again.
+            const recordedEntries = ctx.workScope?.scope?.entries ?? [];
+            const answeredRepositoryKeys = ctx.workScope?.answeredRepositoryKeys ?? [];
             const excludedKeys = new Set(
-              (ctx.workScope?.scope?.entries ?? [])
+              recordedEntries
                 .filter((entry_) => entry_.state === "excluded")
                 .map((entry_) => entry_.repositoryKey),
             );
+            const leftOutKeys = decision.leftOut.map((left) => left.repositoryKey);
             if (repositoryRecoveryNotes.length === 0) {
-              repositoryRecoveryNotes = exclusionRecoveryNotes(
-                decision.leftOut
-                  .map((left) => left.repositoryKey)
-                  .filter((key) => excludedKeys.has(key)),
-                {
-                  enabledKeys: discovery.catalog.map(workScopeRepositoryKey),
-                  unusableKeys: discovery.catalog
-                    .filter((repository) => !repository.usable)
-                    .map(workScopeRepositoryKey),
-                },
+              const unnamedLeftOut = leftOutKeys.filter((key) =>
+                isUnnamedInAnswer(key, answeredRepositoryKeys, recordedEntries),
               );
+              repositoryRecoveryNotes = [
+                ...unnamedRecoveryNotes(
+                  unnamedLeftOut,
+                  // The pre-sandbox's reading of the ticket, through the
+                  // record that carries it. Without a record there is nothing
+                  // to prove the ticket is read, and the record alone is
+                  // offered.
+                  record?.commentPathIsTaken(unnamedLeftOut) ?? false,
+                ),
+                ...exclusionRecoveryNotes(
+                  leftOutKeys.filter((key) => excludedKeys.has(key)),
+                  {
+                    enabledKeys: discovery.catalog.map(workScopeRepositoryKey),
+                    unusableKeys: discovery.catalog
+                      .filter((repository) => !repository.usable)
+                      .map(workScopeRepositoryKey),
+                  },
+                ),
+              ];
             }
           }
           // And on the RUN, because the prompt reaches the agent and nobody

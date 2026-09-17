@@ -31,6 +31,62 @@ describe("JiraAdapter", () => {
   });
 
   describe("fetchTicket", () => {
+    // Round 5, A2. Everything downstream that reads a person's words tells what
+    // they wrote from what they quoted by the "> " marker, and the flattener
+    // used to drop it: a person clicking Jira's quote button on our comment
+    // saying a repository was NOT taken, and writing "yes, add it" underneath,
+    // handed the reader our own refusal as their own words and was refused for
+    // agreeing.
+    it("keeps the quote marker on a blockquote a person quoted our comment with", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "10001",
+          key: "PROJ-1",
+          fields: {
+            summary: "Add login page",
+            description: { content: [{ content: [{ text: "Build a login page" }] }] },
+            comment: {
+              comments: [
+                {
+                  author: { displayName: "Ada", accountId: "acc-ada" },
+                  body: {
+                    content: [
+                      {
+                        type: "blockquote",
+                        content: [
+                          {
+                            type: "paragraph",
+                            content: [
+                              {
+                                text: "github:acme/billing is not selected on this work, so the run started without it.",
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      { type: "paragraph", content: [{ text: "yes, add it" }] },
+                    ],
+                  },
+                  created: "2026-03-20T10:00:00Z",
+                },
+              ],
+              total: 1,
+            },
+            labels: [],
+            status: { id: "10000", name: "AI" },
+            attachment: [],
+          },
+        }),
+      });
+
+      const ticket = await jiraAdapter().fetchTicket("10001");
+
+      expect(ticket.comments[0]?.body).toBe(
+        "> github:acme/billing is not selected on this work, so the run started without it.\nyes, add it",
+      );
+    });
+
     it("returns normalized ticket content", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

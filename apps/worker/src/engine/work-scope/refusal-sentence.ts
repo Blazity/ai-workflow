@@ -128,6 +128,9 @@ const WHY: Record<
     `${repositoryKey} was past the ${REQUEST_REPOSITORIES_MAX} repositories a single request may name`,
   rounds_exhausted: (repositoryKey) =>
     `${repositoryKey} was asked for after this run had used up its repository expansion rounds`,
+  // The one clause that is not written here: a guess refused in a derived
+  // event carries no contract reason, and the two must read the same.
+  unnamed_in_answer: (repositoryKey) => workScopeUnnamedWhy(repositoryKey),
 };
 
 /** The one part a surface owns. */
@@ -163,4 +166,90 @@ export function workScopeRefusalSentence(
 ): string {
   const parts = workScopeRefusalParts(refusal, surface, decision);
   return `${parts.why}, ${parts.consequence}.`;
+}
+
+/**
+ * Why a guess did not take a repository an answer left unnamed
+ * (`isUnnamedInAnswer` in `decide.ts`).
+ *
+ * `WHY.unnamed_in_answer` renders from here, which is how the agent's refused
+ * request and a guess refused before any request say the same thing. The
+ * derived guesses cannot use the contract reason themselves: a refusal there
+ * writes a trail line, and those write none (`WorkScopeDecision.unnamed`).
+ *
+ * It names neither who answered nor when. The run holds the answered set as
+ * keys alone, and a sentence that guessed at a name or a day would be a
+ * fabrication about a person. It does not say "did not name it" either: the
+ * same fact is true of a repository somebody named and whose entry a person
+ * later removed, and there that clause would be false. What stays true in both
+ * cases is what it says.
+ */
+export function workScopeUnnamedWhy(repositoryKey: RepositoryKey): string {
+  return `${repositoryKey} was listed in a repository question already answered on this work and is not selected on it`;
+}
+
+/**
+ * The unnamed repository a person DID write about after the answer, in a comment
+ * that also says no, so the comment was not read as naming it.
+ *
+ * Run start only: it is the pre-sandbox that reads the ticket's comments. It
+ * names no way back, because this sentence reaches the agent's prompt too
+ * (rule 7); the way back rides the recovery note beside it.
+ */
+export function workScopeUnnamedSaidNoSentence(repositoryKey: RepositoryKey): string {
+  return `${workScopeUnnamedWhy(repositoryKey)}, and the newest comment written after that answer that names it also says no, so the run did not read that comment as naming it and started without it.`;
+}
+
+/**
+ * A repository named in a ticket comment the run did not read, because that
+ * comment also says no about a repository.
+ *
+ * The comment is read whole, so this sentence says a repository was named in
+ * one and nothing more: which of the paths in it the person meant to refuse is
+ * exactly what the reader cannot tell, and a sentence that guessed would tell
+ * the person they said something they did not.
+ *
+ * Run start only, and it names no way back (rule 7): this sentence reaches the
+ * agent's prompt, and the way back rides the recovery note beside it.
+ */
+export function workScopeCommentSaidNoSentence(repositoryKey: RepositoryKey): string {
+  return `${repositoryKey} is named in a ticket comment that also says no about a repository, so the run read nothing from that comment and started without it.`;
+}
+
+/**
+ * The repository the ticket's own words name only where they say no.
+ *
+ * "Do NOT touch github:acme/api, it is frozen." used to attach api and say
+ * nothing at all, so the run worked in the one repository the ticket had told
+ * it to leave alone. The ticket is read a sentence at a time, and a repository
+ * whose every mention sits in a sentence that says no is not taken from the
+ * ticket; this is the run saying so. It names no way back (rule 7).
+ */
+export function workScopeTicketSaidNoSentence(repositoryKey: RepositoryKey): string {
+  return `${repositoryKey} is named in this ticket only where its text says no about a repository, so the run did not take it from the ticket and started without it.`;
+}
+
+/**
+ * The repository a person wrote the path of after answering, on a ticket that
+ * names more repositories than one run chooses between.
+ *
+ * The run took nothing from the ticket's text, and it did not ask which to
+ * start from either, because this work already carries an answer to that
+ * question. Both halves are here, because either one alone reads as a run that
+ * simply ignored what somebody wrote.
+ *
+ * Run start only, and it names no way back (rule 7): that rides the recovery
+ * note, which is the one channel that may say writing another comment will not
+ * help.
+ */
+export function workScopeTooManyOpenSentence(repositoryKey: RepositoryKey): string {
+  return `${repositoryKey} is named in a ticket comment written after the answer on this work, and this run did not take it: the ticket names more repositories this work has not decided than one run chooses between, so the run took none of them from its text, and the question about which to start from was already answered here.`;
+}
+
+/** The unnamed repository as a sentence, with the surface's consequence. */
+export function workScopeUnnamedSentence(
+  repositoryKey: RepositoryKey,
+  surface: WorkScopeRefusalSurface,
+): string {
+  return `${workScopeUnnamedWhy(repositoryKey)}, ${CONSEQUENCE[surface]}.`;
 }

@@ -542,7 +542,15 @@ describe("prepare_workspace execute", () => {
     },
   );
 
-  it("passes the clarification answer back into pre-sandbox repository selection", async () => {
+  // THE ANSWER IS AN ANSWER, AND NEVER PART OF THE TICKET.
+  //
+  // It used to travel as both: a synthetic comment appended to the ticket the
+  // selection reads, beside the field that says these words are a reply. The
+  // comment put a person's words in front of the path scanner, which knows
+  // nothing about who said what and matches any path it sees, so a reply the
+  // careful reader had refused, "not github:acme/billing", still handed billing
+  // to the run and wrote it into the record as chosen by the ticket.
+  it("passes the clarification answer back as an answer and not as ticket text", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",
       promptAdditions: { research: [], implementation: [], review: [] },
@@ -558,18 +566,12 @@ describe("prepare_workspace execute", () => {
       { clarificationAnswer: "Use github:acme/api" },
     );
 
-    expect(mocks.runPreSandboxPhase).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ticket: expect.objectContaining({
-          comments: expect.arrayContaining([
-            expect.objectContaining({
-              author: "Human clarification",
-              body: "Use github:acme/api",
-            }),
-          ]),
-        }),
-      }),
-    );
+    const input = mocks.runPreSandboxPhase.mock.calls[0]![0];
+    expect(input.clarification).toEqual({
+      answer: "Use github:acme/api",
+      resolves: "repository_selection",
+    });
+    expect(JSON.stringify(input.ticket.comments)).not.toContain("Use github:acme/api");
   });
 
   it("keeps an answer the record declined to attribute out of the selection scan and the routing memory", async () => {
@@ -779,12 +781,12 @@ describe("prepare_workspace execute", () => {
     );
 
     const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
+    // The answer rides `clarification` and nothing else. Appended to the ticket
+    // it would reach the path scanner too, which takes a repository out of a
+    // reply that refused it.
     expect(
-      input.ticket.comments.some(
-        (c: { author: string; body: string }) =>
-          c.author === "Human clarification" && c.body === "github:acme/api",
-      ),
-    ).toBe(true);
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
     expect(input.clarification).toEqual({
       answer: "github:acme/api",
       resolves: "repository_selection",
@@ -837,12 +839,18 @@ describe("prepare_workspace execute", () => {
     );
 
     const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
+    // The answer rides `clarification` and nothing else. Appended to the ticket
+    // it would reach the path scanner too, which takes a repository out of a
+    // reply that refused it.
     expect(
-      input.ticket.comments.some(
-        (c: { author: string; body: string }) =>
-          c.author === "Human clarification" && c.body === "github:acme/api",
-      ),
-    ).toBe(true);
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
+    // And it does reach the step, on the channel that says it is an answer:
+    // withholding it is the forever loop this test is named for.
+    expect(input.clarification).toEqual({
+      answer: "github:acme/api",
+      resolves: "repository_selection",
+    });
   });
 
   it("does not ask a person to narrow a set they have already narrowed", async () => {
@@ -1162,12 +1170,12 @@ describe("prepare_workspace execute", () => {
     const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
     // The careful reader accepted these words, so the looser one is not being
     // asked to decide anything the record has not already decided.
+    // The answer rides `clarification` and nothing else. Appended to the ticket
+    // it would reach the path scanner too, which takes a repository out of a
+    // reply that refused it.
     expect(
-      input.ticket.comments.some(
-        (c: { author: string; body: string }) =>
-          c.author === "Human clarification" && c.body === "Jane: use github:acme/api",
-      ),
-    ).toBe(true);
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
     expect(input.clarification).toEqual({
       answer: "Jane: use github:acme/api",
       resolves: "repository_selection",
@@ -1230,12 +1238,12 @@ describe("prepare_workspace execute", () => {
     );
 
     const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
+    // The answer rides `clarification` and nothing else. Appended to the ticket
+    // it would reach the path scanner too, which takes a repository out of a
+    // reply that refused it.
     expect(
-      input.ticket.comments.some(
-        (c: { author: string; body: string }) =>
-          c.author === "Human clarification" && c.body === "yes, that one",
-      ),
-    ).toBe(true);
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
     expect(input.clarification).toEqual({
       answer: "yes, that one",
       resolves: "repository_selection",

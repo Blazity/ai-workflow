@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WorkScope, WorkScopeActor } from "@shared/contracts";
 import {
+  commentPathAfterAnUnrecordedAnswer,
   consumeWorkScopeAsk,
   createRunWorkScopeRecorder,
   pinnedKeysOf,
@@ -23,6 +24,8 @@ function input(overrides: Partial<RunWorkScopeInput> = {}): RunWorkScopeInput {
     subjectKey: "ticket:jira:AWT-1",
     scope: null,
     selectionAnswered: false,
+    answeredRepositoryKeys: [],
+    ticketText: null,
     catalog: {
       activated: true,
       enabledKeys: ["github:acme/api", "github:acme/web"],
@@ -423,11 +426,182 @@ describe("createRunWorkScopeRecorder", () => {
     expect(recorder.decidableKeys(["github:acme/api"])).toEqual(["github:acme/api"]);
   });
 
+  // The selection counts with `decidableKeys` and then raises the question with
+  // `decide`. If the two ever read "open" differently, the run counts one set
+  // and puts a different one in front of a person: a repository they already
+  // answered for comes back as a choice, or one still open is left out of the
+  // only question they hear. Each case below is where a restated rule drifts
+  // first: the expiry conditions, the pin halves, a duplicate key.
+  it("counts exactly the repositories the which-of-these question then offers", () => {
+    const person = { kind: "person" as const, actorId: "p1", actorLabel: "Ada" };
+    const activated = createRunWorkScopeRecorder(
+      input({
+        catalog: {
+          activated: true,
+          enabledKeys: [
+            "github:acme/api",
+            "github:acme/web",
+            "github:acme/docs",
+            "github:acme/ops",
+            "github:acme/lib",
+            "gitlab:acme/api",
+          ],
+          unusableKeys: ["github:acme/ops"],
+        },
+        repositoryScope: { providers: ["github"], repositories: [] },
+        scope: scopeWith([
+          excluded("github:acme/docs"),
+          // Answered "continue without it" while it was not enabled; enabled
+          // since, on an activated catalog, so the answer has expired.
+          {
+            repositoryKey: "github:acme/lib",
+            state: "unavailable",
+            unavailableReason: "not_enabled",
+            origin: "person",
+            rationale: "continue without it",
+            decidedBy: person,
+            decidedAt: NOW,
+          },
+          {
+            repositoryKey: "github:acme/web",
+            state: "selected",
+            origin: "trigger_policy",
+            rationale: "the trigger's own repository",
+            decidedBy: ACTOR,
+            decidedAt: NOW,
+          },
+        ]),
+      }),
+    );
+    const matched = [
+      "github:acme/api",
+      "github:acme/web",
+      "github:acme/docs",
+      "github:acme/ops",
+      "github:acme/lib",
+      "gitlab:acme/api",
+      "github:acme/tools",
+      "github:acme/api",
+    ];
+    // api: open. web: a selection nobody made a person's, still open. docs:
+    // excluded. ops: unusable. lib: expired, so open again. gitlab: outside the
+    // provider pin. tools: not in the catalog. The second api: the same key.
+    expect(activated.decidableKeys(matched)).toEqual([
+      "github:acme/api",
+      "github:acme/web",
+      "github:acme/lib",
+    ]);
+    expect(
+      activated.decide({ kind: "text_ambiguous", matchedKeys: matched }).ask.map(
+        (asked) => asked.repositoryKey,
+      ),
+    ).toEqual(["github:acme/api", "github:acme/web", "github:acme/lib"]);
+
+    // A bridge catalog that never listed usability: neither kind of
+    // `unavailable` may expire here, because nothing observed the repository
+    // becoming available. Expiring either would put the question back in front
+    // of the person who already answered it.
+    const bridge = createRunWorkScopeRecorder(
+      input({
+        catalog: {
+          activated: false,
+          enabledKeys: ["github:acme/api", "github:acme/web", "github:acme/docs", "github:acme/lib"],
+          unusableKeys: null,
+        },
+        scope: scopeWith([
+          {
+            repositoryKey: "github:acme/docs",
+            state: "unavailable",
+            unavailableReason: "not_enabled",
+            origin: "person",
+            rationale: "continue without it",
+            decidedBy: person,
+            decidedAt: NOW,
+          },
+          {
+            repositoryKey: "github:acme/web",
+            state: "unavailable",
+            unavailableReason: "unusable",
+            origin: "person",
+            rationale: "continue without it",
+            decidedBy: person,
+            decidedAt: NOW,
+          },
+        ]),
+      }),
+    );
+    const bridgeMatched = ["github:acme/api", "github:acme/web", "github:acme/docs", "github:acme/lib"];
+    expect(bridge.decidableKeys(bridgeMatched)).toEqual(["github:acme/api", "github:acme/lib"]);
+    expect(
+      bridge.decide({ kind: "text_ambiguous", matchedKeys: bridgeMatched }).ask.map(
+        (asked) => asked.repositoryKey,
+      ),
+    ).toEqual(["github:acme/api", "github:acme/lib"]);
+  });
+
   it("bounds a key list at what one event may carry", () => {
     const keys = Array.from({ length: 12 }, (_, index) => `github:acme/repo-${index}`);
     expect(
       createRunWorkScopeRecorder(input()).boundEventKeys(keys),
     ).toHaveLength(8);
+  });
+});
+
+// Joint gate round 3, R2 (the skeptic's probe P3). The ticket names three open
+// repositories and the one the answer left unnamed is not among them. A path
+// written for it joins those three, the next run counts four, asks instead of
+// taking any, and the repository never arrives. The way back may only offer the
+// comment when the count WITH the offered repository stays within three.
+describe("the comment route counts the repository it offers", () => {
+  const KEYS = ["a", "b", "c", "f", "g"].map((name) => `github:acme/${name}`);
+  const recorder = (matchedKeys: string[]) =>
+    createRunWorkScopeRecorder(
+      input({
+        catalog: { activated: true, enabledKeys: KEYS, unusableKeys: [] },
+        selectionAnswered: true,
+        answeredRepositoryKeys: ["github:acme/f", "github:acme/g"],
+        ticketText: {
+          matchedKeys,
+          datableKeys: ["github:acme/f", "github:acme/g"],
+          mentionedAfterAnswerKeys: [],
+        },
+      }),
+    );
+
+  it("offers only the record when the ticket already names three open repositories besides it", () => {
+    const record = recorder(["github:acme/a", "github:acme/b", "github:acme/c"]);
+
+    expect(record.commentPathIsTaken(["github:acme/f"])).toBe(false);
+  });
+
+  it("offers the comment when the ticket names two besides it", () => {
+    const record = recorder(["github:acme/a", "github:acme/b"]);
+
+    expect(record.commentPathIsTaken(["github:acme/f"])).toBe(true);
+  });
+
+  // S13: the sentence offers every repository it names at once, so a person who
+  // writes both paths in one comment must not tip the next run into asking.
+  it("counts every repository it offers together, not one at a time", () => {
+    const record = recorder(["github:acme/a", "github:acme/b"]);
+
+    expect(record.commentPathIsTaken(["github:acme/f"])).toBe(true);
+    expect(record.commentPathIsTaken(["github:acme/f", "github:acme/g"])).toBe(false);
+  });
+
+  it("counts a repository the ticket already names once", () => {
+    const record = recorder(["github:acme/a", "github:acme/b", "github:acme/f"]);
+
+    expect(record.commentPathIsTaken(["github:acme/f"])).toBe(true);
+  });
+
+  it("says so in the way back a refused request carries", () => {
+    const record = recorder(["github:acme/a", "github:acme/b", "github:acme/c"]);
+
+    record.decide({ kind: "requested", repositoryKeys: ["github:acme/f"] });
+
+    expect(record.recoveryNotes.join(" ")).not.toContain("ticket comment");
+    expect(record.recoveryNotes.join(" ")).toContain("work_scope.edit");
   });
 });
 
@@ -461,5 +635,34 @@ describe("consumeWorkScopeAsk", () => {
 
     expect(consumeWorkScopeAsk(carrier)).toBeUndefined();
     expect(carrier.workScopeAsk).toBeUndefined();
+  });
+});
+
+// Joint gate F4. The comment about an answer that recorded nothing runs with no
+// run behind it and no scan of the ticket. A route it offers has to be one the
+// next run provably takes; the three-repository limit is the one rule 6 of
+// docs/product/repository-record-behaviour.md states for the ticket's text.
+/**
+ * WHICH QUESTION THIS IS, told from the question itself.
+ *
+ * The two arms that matter are pinned against the REAL builders, not against a
+ * copy of their words, because a sentence typed into a test cannot drift and
+ * the builder can:
+ *
+ * - the ticket-text question, in `repo-selection-work-scope.test.ts`, which
+ *   feeds this predicate the questions the step actually produced;
+ * - the discovery question, in `engine/tests/work-scope-discovery.test.ts`,
+ *   which feeds it `repositoryDiscoveryQuestion`'s own output.
+ *
+ * What is left here is the case no builder writes: arbitrary prose from some
+ * other question, which must fall to the safe side.
+ */
+describe("commentPathAfterAnUnrecordedAnswer", () => {
+  it("offers only the record for a question raised mid run", () => {
+    expect(
+      commentPathAfterAnUnrecordedAnswer({
+        questions: ["Should this work also use github:acme/api?"],
+      }),
+    ).toBe("unproven");
   });
 });

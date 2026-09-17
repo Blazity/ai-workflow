@@ -49,6 +49,8 @@ function context(overrides: Partial<WorkScopeDecisionContext>): WorkScopeDecisio
     eventRelatedKeys: [],
     attachedKeys: [],
     selectionAnswered: false,
+    answeredRepositoryKeys: [],
+    postAnswerMentionedKeys: [],
     actor: PERSON,
     now: NOW.toISOString(),
     ...overrides,

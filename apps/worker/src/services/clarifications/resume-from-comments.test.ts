@@ -1007,7 +1007,7 @@ describe("resumeClarificationFromComments writing a repository answer to the rec
     expect(posted).not.toContain("continuing without");
   });
 
-  it("stays quiet about a which of these question, which answering settles whatever it recorded", async () => {
+  it("stays quiet about a which of these question a refusal that says what it refuses settled", async () => {
     // The one question that records nothing by design and still never comes
     // back: answering a `selection` ask at all raises this subject's
     // selection-answered flag permanently, which silences both this question
@@ -1017,15 +1017,44 @@ describe("resumeClarificationFromComments writing a repository answer to the rec
     // recorded nothing would read as a fault that is not there.
     await seedPending(asked("github:acme/api", "selection"), [QUESTION]);
     const tracker = makeTracker({
+      comments: [
+        { author: "Jane", accountId: "human-1", body: "none of these", createdAt: AFTER },
+      ],
+    });
+
+    expect(await run(tracker)).toEqual({ status: "resumed", runId: RUN });
+
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    // Recorded as the refusal it is, which is what settles the question.
+    await expect(trailEvents()).resolves.toEqual([
+      expect.objectContaining({ kind: "question_answered", answer: { kind: "none" } }),
+    ]);
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    // The opening line every not-recorded comment shares, whatever its reason.
+    expect(posted).not.toContain("Your answer reached the run");
+  });
+
+  // Joint gate round 3, R4. The same question and a bare "no" posted as a
+  // comment, which is threaded to nothing: it used to settle acme/api for good
+  // in Jane's name, silently. Now it settles nothing and Jane is told what to
+  // write instead (A8), exactly as on a question about a disabled repository.
+  it("settles nothing from a bare no posted on a which of these question, and says what to write", async () => {
+    await seedPending(asked("github:acme/api", "selection"), [QUESTION]);
+    const tracker = makeTracker({
       comments: [{ author: "Jane", accountId: "human-1", body: "no", createdAt: AFTER }],
     });
 
     expect(await run(tracker)).toEqual({ status: "resumed", runId: RUN });
 
     await expect(entriesOfSubject()).resolves.toEqual([]);
+    // An answer that settles nothing: the selection flag reads only `none` and
+    // `repositories`, so the question comes back.
+    await expect(trailEvents()).resolves.toEqual([
+      expect.objectContaining({ kind: "question_answered", answer: { kind: "unrecognised" } }),
+    ]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    // The opening line every not-recorded comment shares, whatever its reason.
-    expect(posted).not.toContain("Your answer reached the run");
+    expect(posted).toContain("reads as a plain no");
+    expect(posted).toContain('answer "none" the next time the question is asked');
   });
 
   it("records an answer the same person sent as two comments, the case the guard must not catch", async () => {

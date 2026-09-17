@@ -4,6 +4,7 @@ import type { WorkScopeEntry } from "@shared/contracts";
 import { describe, expect, it } from "vitest";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { RepositoryCatalogEntry } from "./catalog.js";
+import { TEXT_AMBIGUITY_QUESTION_OPENING } from "../../engine/work-scope/context.js";
 import {
   repositoryDiscoveryQuestion,
   validateRepositoryDiscoveryResult,
@@ -51,7 +52,7 @@ const notEnabledQuestion = (repositoryKey: string) =>
   `Repository discovery asked for ${repositoryKey}, which this run cannot use:` +
   " it is not enabled on this deployment." +
   " Enable it on the Repositories page and start a new run to use it." +
-  " Or answer with the repositories this ticket should use instead.";
+  " Or name only the repositories to use.";
 
 /** The bare question, which survives on the one arm that records nothing: a
  *  path the model invented that is not a repository key at all. There is no key
@@ -587,6 +588,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       expect(
         validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, SHARED, {
           answeredRepositoryKeys: ["github:acme/app"],
+          commentPathIsTaken: () => true,
           recorded: [],
         }),
       ).toMatchObject({
@@ -599,6 +601,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       expect(
         validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, SHARED, {
           answeredRepositoryKeys: ["github:acme/app"],
+          commentPathIsTaken: () => true,
           recorded: [],
         }),
       ).toMatchObject({
@@ -622,6 +625,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       expect(
         validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, [], {
           answeredRepositoryKeys: ["github:acme/app"],
+          commentPathIsTaken: () => true,
           recorded: [],
         }),
       ).toEqual({
@@ -631,10 +635,28 @@ describe("validateRepositoryDiscoveryResult", () => {
           " and somebody on this work was already asked which repositories to start from" +
           " and did not name it. Not naming a repository is not choosing it," +
           " so this run has no repository to work on." +
-          " Name the repositories this ticket should work on in the ticket itself," +
-          " as github:acme/app, and start a new run.",
+          " Write the full path of each repository this ticket should work on in a comment on this" +
+          " ticket, as github:acme/app, and start a new run.",
         blame: "work_scope",
       });
+    });
+
+    it("names the record instead of the ticket while the ticket's text is not read", () => {
+      // A ticket whose open matches outnumber what a run may decide between is
+      // asked about, not taken from, so "name it in the ticket" would put the
+      // same question again. The one door that works from there is the
+      // repository list itself.
+      const decision = validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, [], {
+        answeredRepositoryKeys: ["github:acme/app"],
+        commentPathIsTaken: () => false,
+        recorded: [],
+      });
+      expect(decision).toMatchObject({ kind: "failed", blame: "work_scope" });
+      if (decision.kind !== "failed") throw new Error("expected a failure");
+      expect(decision.error).toMatch(
+        / so this run has no repository to work on\. Select the repositories this ticket should work on in this work's repository list, through the work scope API or the work_scope\.edit tool, and start a new run\.$/,
+      );
+      expect(decision.error).not.toContain("in a comment");
     });
 
     it("still asks while this repository has never been put to anybody", () => {
@@ -652,6 +674,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       expect(
         validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, [], {
           answeredRepositoryKeys: ["gitlab:group/shared"],
+          commentPathIsTaken: () => true,
           recorded: [],
         }),
       ).toMatchObject({
@@ -675,7 +698,7 @@ describe("validateRepositoryDiscoveryResult", () => {
           },
           catalog,
           [],
-          { answeredRepositoryKeys: ["github:acme/app"], recorded: [] },
+          { answeredRepositoryKeys: ["github:acme/app"], recorded: [], commentPathIsTaken: () => true },
         ),
       ).toMatchObject({ kind: "clarification_needed" });
     });
@@ -724,10 +747,13 @@ describe("validateRepositoryDiscoveryResult", () => {
       });
     });
 
-    it("keeps the words the question has said since AIW-147", () => {
-      // What changes is what the question carries beside its text, never the
-      // text: a person who answered this question yesterday reads the same
-      // sentence today.
+    it("keeps the words the question has said since AIW-147, and says what the answer binds", () => {
+      // The words since AIW-147 stay, so a person who answered this question
+      // yesterday recognises it today. One sentence is added (joint gate round
+      // 3, R6): answering "docs" to this question leaves acme/app out of the
+      // work for good, and the which-of-these question has said so since A11g
+      // while this one did not. It names no lever, because a question is
+      // copied into the agent's prompts (rule 7).
       const decision = lowConfidence([
         { provider: "github", repoPath: "acme/app", rationale: "the ticket names the app" },
       ]);
@@ -736,8 +762,107 @@ describe("validateRepositoryDiscoveryResult", () => {
         "Repository discovery was not confident enough to select automatically." +
           " Which repository or repositories should this ticket inspect or modify?" +
           " Reply with full provider-scoped paths (for example github:acme/app)." +
-          " Proposed candidates: github:acme/app (the ticket names the app).",
+          " Proposed candidates: github:acme/app (the ticket names the app)." +
+          " A proposed candidate you do not name is left out of this work from now on, and no later run takes it on its own.",
       ]);
+      const [question] = decision.kind === "clarification_needed" ? decision.questions : [""];
+      expect(question).not.toMatch(/work scope API|work_scope\.edit|repository list/);
+      // The answer-not-recorded comment recognises the which-of-these question
+      // by its opening, so this one must never carry it.
+      expect(question).not.toContain(TEXT_AMBIGUITY_QUESTION_OPENING);
+    });
+
+    // Joint gate round 3, R7 (the skeptic's probe P7). Nobody is asked again
+    // about what they already answered: a candidate an earlier answer on this
+    // work named is left off the list, and the question asks about the rest.
+    it("lists only the candidates nobody on this work has answered about", () => {
+      const decision = validateRepositoryDiscoveryResult(
+        {
+          status: "selected",
+          confidence: "low",
+          repositories: [
+            { provider: "github", repoPath: "acme/app", rationale: "the ticket names the app" },
+            { provider: "gitlab", repoPath: "group/shared", rationale: "shared UI primitives" },
+          ],
+          questions: null,
+          error: null,
+        },
+        catalog,
+        [],
+        { answeredRepositoryKeys: ["github:acme/app"], commentPathIsTaken: () => true, recorded: [] },
+      );
+
+      expect(decision).toMatchObject({
+        kind: "clarification_needed",
+        about: [{ repositoryKey: "gitlab:group/shared", reason: "selection" }],
+      });
+      if (decision.kind !== "clarification_needed") throw new Error("expected a question");
+      expect(decision.about).toHaveLength(1);
+      // The example path the question has always carried is not a candidate.
+      expect(decision.questions[0]).toContain("Proposed candidates: gitlab:group/shared (");
+      expect(decision.questions[0]).not.toContain("github:acme/app (");
+    });
+
+    // The other half of the same line: a candidate this work already decided
+    // about through its record is not a choice either, asked or not.
+    it("lists no candidate the record already decided, and asks nothing when none is left", () => {
+      const decision = validateRepositoryDiscoveryResult(
+        UNSURE_ABOUT_THE_APP,
+        catalog,
+        [],
+        {
+          answeredRepositoryKeys: [],
+          commentPathIsTaken: () => true,
+          recorded: [
+            {
+              repositoryKey: "github:acme/app",
+              state: "selected",
+              origin: "person",
+              rationale: "Ada selected it.",
+              decidedBy: { kind: "person", actorId: "p-1", actorLabel: "Ada" },
+              decidedAt: "2026-09-15T10:00:00.000Z",
+            },
+          ],
+        },
+      );
+
+      // The record decided it, so the record's decision stands: a person's own
+      // selection is the repository this run works on.
+      expect(decision).toMatchObject({
+        kind: "selected",
+        repositories: [{ provider: "github", repoPath: "acme/app" }],
+      });
+    });
+
+    // S20: an answer recorded the repository as unavailable, and the catalog
+    // can use it now. The entry expired, so it is taken again without a
+    // question (A7b), rather than filtered into "nothing left" or asked about.
+    it("takes a candidate again whose unavailable entry the catalog has since outgrown", () => {
+      const decision = validateRepositoryDiscoveryResult(
+        UNSURE_ABOUT_THE_APP,
+        catalog,
+        [],
+        {
+          answeredRepositoryKeys: ["github:acme/app"],
+          commentPathIsTaken: () => true,
+          recorded: [
+            {
+              repositoryKey: "github:acme/app",
+              state: "unavailable",
+              unavailableReason: "not_enabled",
+              origin: "person",
+              rationale: "Not enabled when asked.",
+              decidedBy: { kind: "person", actorId: "p-1", actorLabel: "Ada" },
+              decidedAt: "2026-09-15T10:00:00.000Z",
+            } as WorkScopeEntry,
+          ],
+        },
+      );
+
+      expect(decision).toMatchObject({
+        kind: "selected",
+        repositories: [{ provider: "github", repoPath: "acme/app" }],
+      });
     });
   });
 
@@ -768,6 +893,7 @@ describe("validateRepositoryDiscoveryResult", () => {
 
     const SETTLED = {
       answeredRepositoryKeys: ["github:acme/secret"],
+      commentPathIsTaken: () => true,
       recorded: [excluded("github:acme/secret")],
     };
 
@@ -894,6 +1020,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
           answeredRepositoryKeys: [],
+          commentPathIsTaken: () => true,
           recorded: [excluded("github:acme/secret")],
         }),
       ).toMatchObject({
@@ -910,6 +1037,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
           answeredRepositoryKeys: ["github:acme/app"],
+          commentPathIsTaken: () => true,
           recorded: [excluded("github:acme/secret")],
         }),
       ).toMatchObject({
@@ -918,17 +1046,43 @@ describe("validateRepositoryDiscoveryResult", () => {
       });
     });
 
-    it("asks about a repository the record decided nothing about", () => {
+    it("asks about a repository nobody has been asked about", () => {
       // Dropping it would silence a repository nobody has said anything about,
       // and the person would never learn this deployment does not hold it.
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
-          answeredRepositoryKeys: ["github:acme/secret"],
+          answeredRepositoryKeys: [],
+          commentPathIsTaken: () => true,
           recorded: [],
         }),
       ).toMatchObject({
         kind: "clarification_needed",
         about: [{ repositoryKey: "github:acme/secret", reason: "not_enabled" }],
+      });
+    });
+
+    it("does not ask to enable a repository an answer left unnamed, and says it left it out", () => {
+      // Named in a which-of-these question while it was usable, left out of the
+      // answer, disabled since. That answer wrote no entry, and until the guess
+      // rule it read as "nothing decided", so the run asked the same person to
+      // enable a repository they had just not chosen.
+      expect(
+        validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
+          answeredRepositoryKeys: ["github:acme/secret"],
+          commentPathIsTaken: () => true,
+          recorded: [],
+        }),
+      ).toMatchObject({
+        kind: "selected",
+        repositories: [{ provider: "github", repoPath: "acme/app" }],
+        leftOut: [
+          {
+            repositoryKey: "github:acme/secret",
+            reason:
+              "github:acme/secret was listed in a repository question already answered on this" +
+              " work and is not selected on it, so the run started without it.",
+          },
+        ],
       });
     });
 
@@ -943,6 +1097,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
           answeredRepositoryKeys: ["github:acme/secret"],
+          commentPathIsTaken: () => true,
           recorded: [
             {
               ...excluded("github:acme/secret"),
@@ -974,6 +1129,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
           answeredRepositoryKeys: [],
+          commentPathIsTaken: () => true,
           recorded: [
             {
               ...excluded("github:acme/secret"),
@@ -1089,7 +1245,7 @@ describe("repositoryDiscoveryQuestion", () => {
         "github:acme/app was excluded on this work by Ada Lovelace on 2026-09-10." +
           ' Repository discovery asked for it anyway, because "the ticket names the billing service".' +
           " Answer with github:acme/app to take that exclusion back and let this run use it," +
-          " or with the repositories this ticket should use instead.",
+          " or name only the repositories to use.",
       ],
       ask: {
         subjectKey: SUBJECT,
@@ -1240,7 +1396,8 @@ describe("repositoryDiscoveryQuestion", () => {
       " Which repository or repositories should this ticket inspect or modify?" +
       " Reply with full provider-scoped paths (for example github:acme/app)." +
       " Proposed candidates: github:acme/app (the ticket names the app)," +
-      " gitlab:group/shared (shared UI primitives).";
+      " gitlab:group/shared (shared UI primitives)." +
+      " A proposed candidate you do not name is left out of this work from now on, and no later run takes it on its own.";
 
     const CANDIDATES = {
       kind: "clarification_needed" as const,
@@ -1357,5 +1514,193 @@ describe("what this file may not tell a person to do", () => {
     // reads a sentence a person really does get told.
     expect(prose).toContain("start a new run to use");
     expect(prose).not.toMatch(/new ticket/i);
+  });
+});
+
+/**
+ * A repository a which-of-these question listed and the answer did not name.
+ *
+ * That answer writes no entry, so the record alone cannot tell such a
+ * repository from one nobody was ever asked about: the answered set says it was
+ * asked, and the missing entry says nothing chose it. A discovery proposal is a
+ * guess at ANY confidence, and a guess may not take back what a person left
+ * out. Every other asked reason writes an entry, and the entry governs.
+ */
+describe("a discovery proposal of a repository the answer left unnamed", () => {
+  const PERSON = { kind: "person" as const, actorId: "u-1", actorLabel: "Ada Lovelace" };
+  const SURE_OF = (...repositories: Array<{ provider: "github" | "gitlab"; repoPath: string }>) => ({
+    status: "selected",
+    confidence: "high",
+    repositories: repositories.map(({ provider, repoPath }) => ({
+      provider,
+      repoPath,
+      rationale: "the ticket names it",
+    })),
+    questions: null,
+    error: null,
+  });
+  const APP = { provider: "github" as const, repoPath: "acme/app" };
+  const SHARED = { provider: "gitlab" as const, repoPath: "group/shared" };
+  it("leaves it out even when the model is sure, and stops with a sentence that names it", () => {
+    const decision = validateRepositoryDiscoveryResult(SURE_OF(APP), catalog, [], {
+      answeredRepositoryKeys: ["github:acme/app"],
+      commentPathIsTaken: () => true,
+      recorded: [],
+    });
+
+    expect(decision).toEqual({
+      kind: "failed",
+      error:
+        "github:acme/app was listed in a repository question already answered on this work" +
+        " and is not selected on it." +
+        " Repository discovery proposed nothing else this run can use," +
+        " so it has no repository to work on." +
+        " Leaving a repository out of an answer is not final: this work's repository list can be" +
+        " changed through the work scope API or the work_scope.edit tool, or the repository's full" +
+        " path can be written in a ticket comment, as github:acme/app, and the next run reads both.",
+      blame: "work_scope",
+    });
+    // Skeptic 3: the unsure sentence with an empty list of candidates.
+    expect(JSON.stringify(decision)).not.toContain("not confident about");
+  });
+
+  // The case rule, decided by the RUN rather than by what an old question
+  // happened to ask about: this ticket names more open repositories than a run
+  // may decide between, so its text is asked about rather than taken from and a
+  // path written in a comment would settle nothing. The sentence offers only
+  // the door that works.
+  it("offers only the record as the way back while the ticket's text is not read", () => {
+    const decision = validateRepositoryDiscoveryResult(SURE_OF(APP), catalog, [], {
+      answeredRepositoryKeys: ["github:acme/app"],
+      commentPathIsTaken: () => false,
+      recorded: [],
+    });
+
+    expect(decision).toEqual({
+      kind: "failed",
+      error:
+        "github:acme/app was listed in a repository question already answered on this work" +
+        " and is not selected on it." +
+        " Repository discovery proposed nothing else this run can use," +
+        " so it has no repository to work on." +
+        " Leaving a repository out of an answer is not final: this work's repository list can be" +
+        " changed through the work scope API or the work_scope.edit tool," +
+        " and the next run starts from the changed list.",
+      blame: "work_scope",
+    });
+  });
+
+  // Skeptic 4: the named one is theirs, the unnamed one is left out and said.
+  it("runs with the one the answer named and lists the unnamed one as left out", () => {
+    const decision = validateRepositoryDiscoveryResult(SURE_OF(APP, SHARED), catalog, [], {
+      answeredRepositoryKeys: ["github:acme/app", "gitlab:group/shared"],
+      commentPathIsTaken: () => true,
+      recorded: [
+        {
+          repositoryKey: "github:acme/app",
+          state: "selected",
+          origin: "person",
+          rationale: "Named in the answer to a repository question.",
+          decidedBy: PERSON,
+          decidedAt: "2026-09-16T08:30:00.000Z",
+        },
+      ],
+    });
+
+    expect(decision).toMatchObject({
+      kind: "selected",
+      repositories: [{ provider: "github", repoPath: "acme/app" }],
+      leftOut: [
+        {
+          repositoryKey: "gitlab:group/shared",
+          reason:
+            "gitlab:group/shared was listed in a repository question already answered on this" +
+            " work and is not selected on it, so the run started without it.",
+        },
+      ],
+    });
+    if (decision.kind !== "selected") throw new Error("expected a selection");
+    expect(decision.repositories).toHaveLength(1);
+  });
+
+  // Skeptic 9: asked because it was not enabled, answered "none", enabled since.
+  // That answer wrote an `unavailable` entry, and the entry is what governs:
+  // "enable it and start a new run" has to work.
+  it("takes a repository an answer recorded as unavailable once the catalog can use it", () => {
+    const decision = validateRepositoryDiscoveryResult(SURE_OF(APP), catalog, [], {
+      answeredRepositoryKeys: ["github:acme/app"],
+      commentPathIsTaken: () => true,
+      recorded: [
+        {
+          repositoryKey: "github:acme/app",
+          state: "unavailable",
+          unavailableReason: "not_enabled",
+          origin: "person",
+          rationale: "Left out of the answer to a question asked because it was not enabled.",
+          decidedBy: PERSON,
+          decidedAt: "2026-09-16T08:30:00.000Z",
+        },
+      ],
+    });
+
+    expect(decision).toMatchObject({
+      kind: "selected",
+      repositories: [{ provider: "github", repoPath: "acme/app" }],
+      leftOut: [],
+    });
+  });
+
+  // Skeptic 10: a repository the question counted but never spelled out is not in
+  // the answered set, because nobody was shown its name.
+  it("takes a repository the answered question never named", () => {
+    expect(
+      validateRepositoryDiscoveryResult(SURE_OF(SHARED), catalog, [], {
+        answeredRepositoryKeys: ["github:acme/app"],
+        commentPathIsTaken: () => true,
+        recorded: [],
+      }),
+    ).toMatchObject({
+      kind: "selected",
+      repositories: [{ provider: "gitlab", repoPath: "group/shared" }],
+      leftOut: [],
+    });
+  });
+
+  // The way back through the record, as a guess sees it afterwards.
+  it("takes it once a person has selected it after leaving it unnamed", () => {
+    expect(
+      validateRepositoryDiscoveryResult(SURE_OF(APP), catalog, [], {
+        answeredRepositoryKeys: ["github:acme/app"],
+        commentPathIsTaken: () => true,
+        recorded: [
+          {
+            repositoryKey: "github:acme/app",
+            state: "selected",
+            origin: "person",
+            rationale: "after all",
+            decidedBy: PERSON,
+            decidedAt: "2026-09-17T08:30:00.000Z",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      kind: "selected",
+      repositories: [{ provider: "github", repoPath: "acme/app" }],
+      leftOut: [],
+    });
+  });
+
+  it("keeps the unnamed repository's sentence out of what a question would carry", () => {
+    // The same sentence rides the prompt addition, so it may say what happened
+    // and never how to undo it (rule 7).
+    const decision = validateRepositoryDiscoveryResult(SURE_OF(APP, SHARED), catalog, [], {
+      answeredRepositoryKeys: ["gitlab:group/shared"],
+      commentPathIsTaken: () => true,
+      recorded: [],
+    });
+    expect(decision).toMatchObject({ kind: "selected" });
+    if (decision.kind !== "selected") throw new Error("expected a selection");
+    expect(JSON.stringify(decision.leftOut)).not.toContain("work_scope.edit");
+    expect(JSON.stringify(decision.leftOut)).toContain("gitlab:group/shared was listed");
   });
 });

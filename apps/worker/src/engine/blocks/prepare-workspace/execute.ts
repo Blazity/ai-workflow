@@ -11,6 +11,7 @@ import type {
 } from "../../../sandbox/agents/types.js";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
+import type { TicketTextReading } from "../../work-scope/context.js";
 import type {
   WorkspaceManifest,
   WorkspaceRepositoryInput,
@@ -113,6 +114,7 @@ type PreSandboxOutcome =
       workScopeAsk?: PreSandboxWorkScopeAsk;
       workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
       workScopeRecoveryNotes?: string[];
+      workScopeTicketText?: TicketTextReading;
     }
   | {
       status: "halt";
@@ -130,6 +132,7 @@ type PreSandboxOutcome =
       workScopeAsk?: PreSandboxWorkScopeAsk;
       workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
       workScopeRecoveryNotes?: string[];
+      workScopeTicketText?: TicketTextReading;
     };
 
 async function blockPrepareWorkspacePreSandboxStep(
@@ -1043,13 +1046,14 @@ export async function ensureWorkspace(
       //  - it read them and they named a repository already selected, which
       //    writes no new key and refuses nothing at all.
       //
-      // The last two must reach the scan. Withholding them is how this gate
-      // turned the commonest ticket of all, a fresh one whose first question is
-      // the bare "which repository", into a run that asks, is answered,
-      // withholds the answer from itself, and asks the identical question again
-      // until the budget kills it, with nobody told why: `ctx.ticket` is frozen
-      // at run start, so that synthetic comment is the only carrier those words
-      // have.
+      // The last two must reach the looser reader. Withholding them is how this
+      // gate turned the commonest ticket of all, a fresh one whose first
+      // question is the bare "which repository", into a run that asks, is
+      // answered, withholds the answer from itself, and asks the identical
+      // question again until the budget kills it, with nobody told why:
+      // `ctx.ticket` is frozen at run start, so `clarification` below is the
+      // only carrier those words have (it was a comment appended to the ticket
+      // until round 4, B1, which is why this paragraph used to say "the scan").
       //
       // So the verdict is read from the record itself. It is a fact about ONE
       // question and nothing in the entries records it, which is why it rides
@@ -1082,7 +1086,7 @@ export async function ensureWorkspace(
             !personSelectedKeys(ctx.workScope).some(
               (key) => !questionPutToTheRecord.personSelectedKeys.includes(key),
             );
-      const scannableClarificationAnswer =
+      const clarificationAnswerForSelection =
         execution?.clarificationAnswer && !recordRefusedTheAnswer
           ? execution.clarificationAnswer
           : undefined;
@@ -1092,12 +1096,13 @@ export async function ensureWorkspace(
           title: ctx.ticket.title,
           description: ctx.ticket.description,
           acceptanceCriteria: ctx.ticket.acceptanceCriteria,
-          comments: scannableClarificationAnswer
-            ? [
-                ...ctx.ticket.comments,
-                { author: "Human clarification", body: scannableClarificationAnswer },
-              ]
-            : ctx.ticket.comments,
+          // THE TICKET, AND NOTHING THIS RUN ADDED TO IT. An answer used to be
+          // appended here as a synthetic comment, which put a person's reply in
+          // front of the path scanner: a reply the careful reader refused, "not
+          // github:acme/billing", still named a path, so the scan matched it and
+          // the record wrote billing down as chosen by the ticket. The answer
+          // has one reader, and it rides `clarification` below.
+          comments: ctx.ticket.comments,
           labels: ctx.ticket.labels,
         },
         run: { branchName: ctx.branchName },
@@ -1118,14 +1123,14 @@ export async function ensureWorkspace(
         // Structurally an answer to a which-repository question, not merely a
         // reply that happens to be in hand: the interpreter only ever returns a
         // clarification answer to the block that asked for it, and every
-        // clarification this block raises is a repository question. The
-        // synthetic comment above carries the same words to the selection scan;
-        // this is what tells a step they may be trusted as testimony, and it is
-        // why the two travel together or not at all.
-        ...(scannableClarificationAnswer
+        // clarification this block raises is a repository question. This is the
+        // ONLY way the words reach the selection now, and what reads them there
+        // knows they are an answer, so a reply that says no is read as a person
+        // refusing rather than as a ticket naming a path.
+        ...(clarificationAnswerForSelection
           ? {
               clarification: {
-                answer: scannableClarificationAnswer,
+                answer: clarificationAnswerForSelection,
                 resolves: "repository_selection" as const,
               },
             }
@@ -1152,6 +1157,11 @@ export async function ensureWorkspace(
       }
       if (preSandbox.workScopeRecoveryNotes) {
         ctx.workScopeRecoveryNotes = preSandbox.workScopeRecoveryNotes;
+      }
+      // The step's reading of the ticket, so the discovery and expansion
+      // sentences far below offer the way back that reading proved open or shut.
+      if (preSandbox.workScopeTicketText) {
+        ctx.workScopeTicketText = preSandbox.workScopeTicketText;
       }
       // Emitted before the halt below returns, so a run that failed closed on an
       // incomplete catalog still tells an operator which provider was missing.

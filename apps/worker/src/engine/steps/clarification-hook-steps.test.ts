@@ -53,6 +53,7 @@ beforeEach(() => {
     scope: null,
     selectionAnswered: false,
     answeredRepositoryKeys: [],
+    answeredAtByKey: {},
     narrowingAnswered: false,
     answeredQuestion: null,
   };

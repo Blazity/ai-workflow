@@ -26,6 +26,7 @@ import {
 import { recordRepositoryAnswer as recordRepositoryAnswerThroughIndex } from "./index.js";
 import {
   appendWorkScopeQuestionAsked,
+  applyRunWorkScopePlan,
   readWorkScope,
   readWorkScopeAnsweredRepositories,
   readWorkScopeSelectionAnswered,
@@ -493,12 +494,31 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     expect(posted).toContain("somebody with access to the repositories screen can add or enable it");
   });
 
-  it("keeps the remedy that works for an answer that spelled no path out, because writing one out does resolve", async () => {
+  it("keeps the remedy that works for an answer that spelled no path out, which is not the one for a name we do not hold", async () => {
     // The other half of the same fork, and the reason the fork exists. Nothing
-    // here was written as a path, so nothing about it is a dead end: the words
-    // this person needs are the ones we have always sent, and a change that
-    // gave everybody the "we do not have that" sentence would be a lie told to
-    // them.
+    // here was written as a path, so nothing about it is a dead end: a change
+    // that gave everybody the "we do not have that" sentence would be a lie
+    // told to them. What they are sent to is the route that works whatever the
+    // ticket says, because this surface cannot count the ticket's open
+    // repositories and so never offers the comment (joint gate round 3, R8).
+    const row = await seedPending(asked("github:acme/api", "selection"));
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "the billing service");
+
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    expect(posted).toContain("Nothing in that answer named a repository this work should use");
+    expect(posted).toContain("select it in this work's repository list");
+    expect(posted).not.toContain("write its full path in a comment here");
+    expect(posted).not.toContain("does not have");
+  });
+
+  it("sends an answer to a question raised mid run to the record, because nothing here proves a comment is read", async () => {
+    // Joint gate F4. The same answer to a question the workflow's policy raised.
+    // How many repositories the ticket names is not known on this surface, and a
+    // path written into a ticket that already names three tips the next run into
+    // asking instead of reading it, so the only route offered is one that works.
     const row = await seedPending(asked("github:acme/api", "outside_policy"));
     const tracker = makeTracker();
 
@@ -507,8 +527,41 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     await expect(entriesOfSubject()).resolves.toEqual([]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
     expect(posted).toContain("Nothing in that answer named a repository this work should use");
-    expect(posted).toContain("write its full path in a comment here");
-    expect(posted).not.toContain("does not have");
+    expect(posted).not.toContain("in a comment here");
+    expect(posted).toContain(
+      "select it in this work's repository list through the work scope API or the work_scope.edit tool",
+    );
+  });
+
+  // A discovery question listing four candidates, and the same question one
+  // candidate shorter. Before joint gate round 3 (R8) the four were told the
+  // comment route was shut and the three were sent to it, by the count of the
+  // question's own list; the ticket beside the question could name more open
+  // repositories than either, and that count is the one the next run decides
+  // on. Neither is sent to write a path now, and neither is told a reason for
+  // the route being shut that nothing here can see.
+  const FOUR_ASKED: WorkScopeAskedRepository[] = [
+    "github:acme/api",
+    "github:acme/web",
+    "github:acme/jobs",
+    "github:acme/docs",
+  ].map((repositoryKey) => ({ repositoryKey, askedBecause: "selection", named: true }));
+
+  it.each([
+    ["four", FOUR_ASKED],
+    ["three", FOUR_ASKED.slice(0, 3)],
+  ])("offers the question and the repository list, not a comment, for a question that listed %s", async (_, list) => {
+    const row = await seedPending(list);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "the billing service");
+
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    expect(posted).toContain("Nothing in that answer named a repository this work should use");
+    expect(posted).not.toContain("write its full path in a comment here");
+    expect(posted).not.toContain("more than three repositories");
+    expect(posted).toContain("the work scope API or the work_scope.edit tool");
+    expect(posted).toContain("the next time the question is asked");
   });
 
   it("gives the fuller explanation when one answer carries both a bare name and a path we do not hold", async () => {
@@ -551,23 +604,36 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     expect(posted).not.toContain("write its full path in a comment here");
   });
 
-  it("decides nothing when the person quoted our question and said no under it", async () => {
+  it("selects nothing when the person quoted our question and said no under it", async () => {
     // Jira's quote button flattens to text with no marker on it, so without the
     // questions the row carries, our own repository key comes back looking like
     // the person's selection and is recorded against their name forever.
+    //
+    // Round 4: with our words out, what they wrote is "no", and this box
+    // belongs to this question, so it is recorded as the decline it is. The
+    // fact that must never change is the direction: their word never becomes a
+    // selection of the repository our own question named.
     const question = "Does this ticket also touch github:acme/web? Reply with none if not.";
     const row = await seedPending(asked("github:acme/web", "not_enabled"), [question]);
 
     await answer(makeTracker(), row.id, `${question}\n\nno`);
 
-    await expect(entriesOfSubject()).resolves.toEqual([]);
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({
+        repositoryKey: "github:acme/web",
+        state: "unavailable",
+        origin: "person",
+        decidedBy: PERSON,
+      }),
+    ]);
     await expect(trailEvents()).resolves.toEqual([
       {
         kind: "question_answered",
         clarificationId: row.id,
-        answer: { kind: "unrecognised" },
+        answer: { kind: "none" },
         answeredBy: PERSON,
       },
+      expect.objectContaining({ kind: "entry_written", clarificationId: row.id }),
     ]);
   });
 
@@ -591,30 +657,63 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     ]);
   });
 
-  it("records the repository a person redirected to and excludes the one they declined", async () => {
+  // Round 4, and this test changed meaning. A redirect used to be recorded as
+  // two decisions at once, the refusal and the choice beside it. It is a reply
+  // that says no, so it records nothing, and the person is told what to write
+  // instead: the round it costs is the price of never recording the opposite of
+  // what somebody wrote.
+  it("records nothing from a redirect and tells the person why", async () => {
     const row = await seedPending(asked("github:acme/api", "outside_policy"));
+    const tracker = makeTracker();
 
-    await answer(makeTracker(), row.id, "not acme/api, use github:acme/web");
+    await answer(tracker, row.id, "not acme/api, use github:acme/web");
 
-    const entries = await entriesOfSubject();
-    expect(entries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          repositoryKey: "github:acme/web",
-          state: "selected",
-          origin: "person",
-          rationale: NAMED,
-          decidedBy: PERSON,
-        }),
-        expect.objectContaining({
-          repositoryKey: "github:acme/api",
-          state: "excluded",
-          origin: "person",
-          decidedBy: PERSON,
-        }),
-      ]),
-    );
-    expect(entries).toHaveLength(2);
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    const posted = tracker.postComment.mock.calls.map((call) => call[1]).join("\n");
+    expect(posted).toContain("names a repository and also says no");
+    expect(posted).toContain("name only the repositories to use");
+  });
+
+  // Joint gate round 3, R1, as the person meets it: the question said acme/web
+  // stays whatever they reply, they tried to drop it anyway, and they read on
+  // the ticket why nothing happened and where that is done instead.
+  it("tells the person on the ticket that a reply does not drop a repository the work already holds", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey: SUBJECT,
+      runId: "run-0",
+      plan: {
+        upserts: [
+          {
+            entry: {
+              repositoryKey: "github:acme/web",
+              state: "selected",
+              origin: "ticket_text",
+              rationale: "The ticket text names this repository path.",
+              decidedBy: { kind: "run", runId: "run-0", definitionId: 1, definitionVersion: 1 },
+              decidedAt: "2026-09-16T09:00:00.000Z",
+            },
+            replacesExpired: false,
+          },
+        ],
+        deletes: [],
+        trail: [],
+      },
+    });
+    const row = await seedPending(asked("github:acme/api", "selection"), [
+      "More than 3 repositories match this ticket. Which repositories are essential for the initial research?" +
+        " Reply with one or more of: github:acme/api. Already part of this work, and kept whatever you reply:" +
+        " github:acme/web. Your reply does not remove them.",
+    ]);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "github:acme/api, but not github:acme/web");
+
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({ repositoryKey: "github:acme/web", origin: "ticket_text" }),
+    ]);
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    expect(posted).toContain("names a repository the question listed as already part of this work");
+    expect(posted).toContain("an exclusion in this work's repository list");
   });
 
   it("reads a bare list of names sent as a Jira comment, author line and all", async () => {
@@ -949,13 +1048,14 @@ describe("recordRepositoryAnswer names why a selection question is coming back",
     );
     const stored = await getHookClarification(db, row.id);
     if (!stored) throw new Error("clarification vanished");
-    return recordRepositoryAnswer(persistence(), {
+    const outcome = await recordRepositoryAnswer(persistence(), {
       row: stored,
       answer: answerText,
       answeredAt: new Date(),
       answerer: ACTOR,
       composedFromComments: false,
     });
+    return outcome.told;
   }
 
   it("says nothing named a repository when the words resolved to none of them", async () => {
@@ -964,6 +1064,16 @@ describe("recordRepositoryAnswer names why a selection question is coming back",
 
   it("says the deployment does not hold it when the person spelled a path out in full", async () => {
     await expect(told("github:acme/unknown-service")).resolves.toBe("no_such_repository");
+  });
+
+  // Round 5, A7. A path inside a quoted line is ours, or somebody else's, and
+  // it is never this person spelling one out: judged as theirs it produced the
+  // sentence saying this deployment has no repository by that name, about a
+  // name they never typed.
+  it("does not say the deployment lacks a repository a quoted line named", async () => {
+    await expect(told("> see github:acme/unknown-service\nwhichever one the team prefers")).resolves.toBe(
+      "no_repository_named",
+    );
   });
 
   it('tells nobody anything about "none", which settles the question', async () => {
@@ -1015,8 +1125,8 @@ describe("recordRepositoryAnswer reached through the cluster's interface", () =>
 
     const ownPath: WorkScopeWritePlan[] = [];
     const throughIndex: WorkScopeWritePlan[] = [];
-    const ownPathTold = await recordRepositoryAnswer(capturing(ownPath), input);
-    const throughIndexTold = await recordRepositoryAnswerThroughIndex(
+    const ownPathOutcome = await recordRepositoryAnswer(capturing(ownPath), input);
+    const throughIndexOutcome = await recordRepositoryAnswerThroughIndex(
       capturing(throughIndex),
       input,
     );
@@ -1031,6 +1141,272 @@ describe("recordRepositoryAnswer reached through the cluster's interface", () =>
       }),
     ]);
     expect(throughIndex).toEqual(ownPath);
-    expect(throughIndexTold).toBe(ownPathTold);
+    expect(throughIndexOutcome).toEqual(ownPathOutcome);
+  });
+});
+
+/**
+ * The which-of-these question names the repositories this work already holds as
+ * kept, and offers only the rest as choices (A11g). A reply that says no beside
+ * one of those kept repositories is the one reply this reader cannot split: the
+ * no may be about the kept repository, which an answer does not remove, and
+ * reading it as a redirect records that very repository as the person's own
+ * selection while the one actually asked about is silenced for good.
+ */
+describe("an answer that says no about a repository the question showed as kept", () => {
+  const KEPT = ["github:acme/api", "github:acme/docs", "github:acme/web"];
+  const QUESTION =
+    "More than 3 repositories match this ticket. Which repositories are essential for the initial research?" +
+    " Reply with one or more of: github:acme/infra. Already part of this work, and kept whatever you reply:" +
+    " github:acme/web, github:acme/api, github:acme/docs. Your reply does not remove them.";
+  const ASKED: WorkScopeAskedRepository[] = [
+    { repositoryKey: "github:acme/infra", askedBecause: "selection", named: true },
+  ];
+  const JIRA_ACTOR = "jira-comments:AWT-9";
+
+  function keptByTheText(keys: string[]) {
+    return {
+      subjectKey: SUBJECT,
+      version: 3,
+      entries: keys.map((repositoryKey) => ({
+        repositoryKey,
+        state: "selected" as const,
+        origin: "ticket_text" as const,
+        rationale: "The ticket text names this repository path.",
+        decidedBy: { kind: "run" as const, runId: "run-0", definitionId: 1, definitionVersion: 1 },
+        decidedAt: "2026-09-16T09:00:00.000Z",
+      })),
+    };
+  }
+
+  async function record(
+    answerText: string,
+    options: {
+      asked?: WorkScopeAskedRepository[];
+      questions?: string[];
+      kept?: string[];
+      composedFromComments?: boolean;
+    } = {},
+  ) {
+    const row = await seedPending(options.asked ?? ASKED, options.questions ?? [QUESTION]);
+    const stored = await getHookClarification(db, row.id);
+    if (!stored) throw new Error("clarification vanished");
+    const plans: WorkScopeWritePlan[] = [];
+    const persistence: RepositoryAnswerPersistence = {
+      repositoryCatalog: () =>
+        Promise.resolve({
+          activated: true,
+          keys: [...KEPT, "github:acme/infra", "github:acme/billing"],
+          enabledKeys: [...KEPT, "github:acme/infra", "github:acme/billing"],
+        }),
+      readWorkScope: () =>
+        Promise.resolve(keptByTheText(options.kept ?? KEPT) as Awaited<
+          ReturnType<RepositoryAnswerPersistence["readWorkScope"]>
+        >),
+      applyAnswerWorkScope: ({ plan }) => {
+        plans.push(plan);
+        return Promise.resolve({ outcome: "applied" as const, version: 4 });
+      },
+    };
+    const outcome = await recordRepositoryAnswer(persistence, {
+      row: stored,
+      answer: answerText,
+      answeredAt: new Date("2026-09-17T10:00:00.000Z"),
+      answerer:
+        options.composedFromComments === false ? ACTOR : { id: JIRA_ACTOR, label: "Ada" },
+      composedFromComments: options.composedFromComments ?? true,
+      authorCount: 1,
+    });
+    const answered = plans
+      .flatMap((plan) => plan.trail)
+      .flatMap((event) => (event.kind === "question_answered" ? [event.answer] : []));
+    return {
+      told: outcome.told,
+      declined: outcome.declined,
+      upserts: plans.flatMap((plan) => plan.upserts),
+      deletes: plans.flatMap((plan) => plan.deletes),
+      answered,
+    };
+  }
+
+  // Joint gate round 3, R1: every phrasing the skeptic's probe used. Each one
+  // recorded acme/web as the person's own selection and silenced acme/infra.
+  const PHRASINGS = [
+    "please drop github:acme/web, it is not part of this",
+    "github:acme/infra, but not github:acme/web",
+    "remove acme/web from this work",
+    // The skeptic's scenario S1 and S2 spellings: a bare name, a link, Polish.
+    "drop web",
+    "https://github.com/acme/web is out of scope",
+    "nie ruszajcie web",
+    "github:acme/infra bez github:acme/web",
+    "github:acme/infra, web is not needed",
+    // S7: naming only kept repositories, positively.
+    "keep github:acme/web and github:acme/api",
+  ];
+  it.each(
+    PHRASINGS.flatMap((words) => [
+      { words, channel: "a ticket comment", composedFromComments: true },
+      { words, channel: "the dashboard", composedFromComments: false },
+    ]),
+  )("records nothing from $words sent through $channel, and tells the person why", async ({
+    words,
+    composedFromComments,
+  }) => {
+    const result = await record(composedFromComments ? `Ada: ${words}` : words, {
+      composedFromComments,
+    });
+
+    expect(result.upserts).toEqual([]);
+    expect(result.answered).toEqual([{ kind: "unrecognised" }]);
+    expect(result.told).toBe("names_kept_repository");
+  });
+
+  // A plain yes to a question that shows kept repositories beside one choice
+  // could mean the choice or could mean "fine, keep those": the one-repository
+  // agreement rule was written for a question about ONE repository.
+  it("does not read a plain yes as the one choice when the question also showed kept repositories", async () => {
+    const result = await record("Ada: yes");
+
+    expect(result.upserts).toEqual([]);
+    expect(result.answered).toEqual([{ kind: "unrecognised" }]);
+    expect(result.told).toBeDefined();
+  });
+
+  // S7: a kept repository named beside the choice is not turned into the
+  // person's own selection; its entry keeps the reason it is held for.
+  it("records the choice a person named, and nothing about a kept repository beside it", async () => {
+    const both = await record("Ada: github:acme/web and github:acme/infra");
+
+    expect(both.upserts.map((upsert) => upsert.entry.repositoryKey)).toEqual(["github:acme/infra"]);
+    expect(both.told).toBeUndefined();
+  });
+
+  // R1 widened (S3): the same misreading for a repository the question never
+  // showed. A no beside billing never selects billing, and the choice named
+  // beside it is not taken on a reply that could not be split.
+  it("records nothing from a no beside a repository nobody showed, and says why", async () => {
+    const beside = await record("Ada: github:acme/infra, but please do not touch github:acme/billing");
+
+    expect(beside.upserts).toEqual([]);
+    expect(beside.answered).toEqual([{ kind: "unrecognised" }]);
+    expect(beside.told).toBe("refusal_beside_named");
+  });
+
+  it("records nothing from a no about a repository nobody showed, and says why", async () => {
+    const alone = await record("Ada: please do not touch github:acme/billing");
+
+    expect(alone.upserts).toEqual([]);
+    expect(alone.answered).toEqual([{ kind: "unrecognised" }]);
+    // Round 4: it names a repository and says no about it, which is the
+    // sentence that is true of it. "Nothing in that answer named a repository"
+    // would read as nonsense to somebody who had just named one.
+    expect(alone.told).toBe("refusal_beside_named");
+  });
+
+  // Round 4, m8. Repository discovery stamps `selection` on its asks as well,
+  // and its question lists nothing as kept, so a reader keying on the ask
+  // reason told this person their answer had been about repositories nobody
+  // put in front of them, and recorded nothing from a reply that named one.
+  // What the person was shown is a fact about the question, so it is read
+  // there.
+  it("treats nothing as kept on a question that listed no kept repositories", async () => {
+    // The reply names a repository the RECORD holds for a reason of its own,
+    // which is what the kept rule is about, and which this question never
+    // showed as kept because it showed nothing as kept.
+    const result = await record("Ada: github:acme/web", {
+      asked: [{ repositoryKey: "github:acme/infra", askedBecause: "selection", named: true }],
+      questions: [
+        "Repository discovery was not confident enough to select automatically." +
+          " Which repository or repositories should this ticket inspect or modify?" +
+          " Proposed candidates: github:acme/infra (the ticket names the dashboard).",
+      ],
+    });
+
+    expect(result.told).toBeUndefined();
+    expect(result.upserts.map((upsert) => upsert.entry.repositoryKey)).toEqual([
+      "github:acme/web",
+    ]);
+    expect(result.upserts[0]?.entry.origin).toBe("person");
+  });
+
+  it("still records the choice a person named, beside the kept repositories", async () => {
+    const result = await record("Ada: github:acme/infra");
+
+    expect(result.upserts).toEqual([
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          repositoryKey: "github:acme/infra",
+          state: "selected",
+          origin: "person",
+        }),
+      }),
+    ]);
+    expect(result.told).toBeUndefined();
+  });
+
+  // Round 4, and this test changed meaning with the rule. A question raised
+  // mid run shows no kept repositories, which used to be what let a redirect
+  // through here; the rule does not care where the question came from, because
+  // the thing it refuses to guess at is the same in both places. The reply
+  // records nothing and the person is told the one thing that works.
+  it("records nothing from a redirect to a question raised mid run", async () => {
+    const result = await record("not acme/infra, use github:acme/web instead", {
+      asked: [{ repositoryKey: "github:acme/infra", askedBecause: "outside_policy", named: true }],
+      questions: ["Should this work also use github:acme/infra?"],
+    });
+
+    expect(result.upserts).toEqual([]);
+    expect(result.answered).toEqual([{ kind: "unrecognised" }]);
+    expect(result.told).toBe("refusal_beside_named");
+  });
+
+  // Joint gate round 3, R4. A bare no posted on the ticket is threaded to
+  // nothing, and on a selection question it used to settle the asked
+  // repositories for good in that person's name (A8).
+  it("records nothing from a plain no posted on the ticket, and tells the person what to write", async () => {
+    const result = await record("Ada: no");
+
+    expect(result.upserts).toEqual([]);
+    expect(result.answered).toEqual([{ kind: "unrecognised" }]);
+    expect(result.told).toBe("unaddressed_refusal");
+  });
+
+  // A9: typed into the question's own box, the same word is an answer to it.
+  it("still records a plain no typed on the dashboard as declining the choices", async () => {
+    const result = await record("no", { composedFromComments: false });
+
+    expect(result.answered).toEqual([{ kind: "none" }]);
+    expect(result.told).toBeUndefined();
+  });
+
+  // What says what it refuses is its own evidence on the ticket as well.
+  it("still records a none that names what it refuses when it comes from the ticket", async () => {
+    const result = await record("Ada: none of these");
+
+    expect(result.answered).toEqual([{ kind: "none" }]);
+    expect(result.told).toBeUndefined();
+  });
+
+  // Round 5, A6. The quote button is how a person answers on a ticket, and the
+  // phrase under it is the one our own question teaches. Read with the quote
+  // still in it, the reply was judged a bare no addressed to nothing and the
+  // person was told their words decided nothing, for using the exact words we
+  // asked for.
+  it("records a none of these written under a quote of our question", async () => {
+    const result = await record("Ada: > Which repositories are essential?\nnone of these");
+
+    expect(result.answered).toEqual([{ kind: "none" }]);
+    expect(result.told).toBeUndefined();
+  });
+
+  // S5: "none" binds only what the question offered. The kept repositories keep
+  // their entries, untouched.
+  it("leaves every kept repository's entry alone on a none", async () => {
+    const result = await record("Ada: none");
+
+    expect(result.answered).toEqual([{ kind: "none" }]);
+    expect(result.upserts).toEqual([]);
+    expect(result.deletes).toEqual([]);
   });
 });

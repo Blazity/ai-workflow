@@ -1,6 +1,6 @@
 import { workScopeQuestionAnswerSchema } from "@shared/contracts";
 import { describe, expect, it } from "vitest";
-import { readRepositoryAnswer } from "./answer.js";
+import { answerSaysNoAndNamesARepository, readRepositoryAnswer } from "./answer.js";
 // The real comment builder, so a test can send the question back in the form a
 // person was actually shown rather than the form we stored.
 import { formatClarificationQuestionsComment } from "../support/clarification-comment-format.js";
@@ -82,12 +82,17 @@ describe("readRepositoryAnswer", () => {
     expect(read("none needed")).toEqual({ kind: "unrecognised" });
   });
 
-  it("reads `none, github:acme/api` as that repository, because an identity token outranks a refusal word", () => {
-    expect(read("none, github:acme/api")).toEqual({
-      kind: "repositories",
-      repositoryKeys: ["github:acme/api"],
-    });
-  });
+  // Round 4, the owner's rule. A reply that says no about anything records
+  // nothing, and the words beside the no change that for no phrasing: working
+  // out what a no attached to is the guess every defect in this feature came
+  // out of. Both of these are unreadable, and both people are told the same
+  // thing, which is to name only the repositories to use.
+  it.each(["none, github:acme/api", "none, use github:acme/api"])(
+    "reads %o as unrecognised, because it says no and names a repository",
+    (answer) => {
+      expect(read(answer)).toEqual({ kind: "unrecognised" });
+    },
+  );
 
   it("resolves a provider scoped identity the catalog holds", () => {
     expect(read("Use github:acme/api please")).toEqual({
@@ -195,10 +200,12 @@ describe("readRepositoryAnswer", () => {
     });
   });
 
-  it("reads a refusal naming a different repository as that repository", () => {
+  // Round 4. This used to be read as a redirect: no to the asked repository,
+  // yes to the named one. It names a repository, so the refusal is no longer a
+  // plain one, and nothing here decides which half the person meant to stand.
+  it("reads a refusal naming a different repository as unrecognised", () => {
     expect(read("none, use gitlab:acme/web", catalogKeys, ["github:acme/api"])).toEqual({
-      kind: "repositories",
-      repositoryKeys: ["gitlab:acme/web"],
+      kind: "unrecognised",
     });
   });
 
@@ -208,14 +215,20 @@ describe("readRepositoryAnswer", () => {
     });
   });
 
-  it.each([`${QUESTION}\n\nno`, `${QUESTION}\nno`])(
-    "asks again when the question is quoted back with a no under it: %o",
+  it.each([`${QUESTION}\n\nno`, `${QUESTION}\nno`, `> ${QUESTION}\nno`])(
+    "declines what the question listed when it is quoted back with a no under it: %o",
     (answer) => {
       // Jira's quote button sends our own repository key back inside the
       // answer, and the adapter flattens it with no quote marker, so without
       // the questions we asked this reads as the person selecting it.
+      //
+      // Round 4, and this test changed meaning with it. Once our words are out,
+      // what the person wrote is the word "no", and this reply is threaded to
+      // the question it answers, so it declines what that question listed
+      // rather than costing them another round. Our own key is still not
+      // recorded as their choice, which is what this test is here for.
       expect(read(answer, catalogKeys, ["github:acme/api"], [QUESTION])).toEqual({
-        kind: "unrecognised",
+        kind: "none",
       });
     },
   );
@@ -268,10 +281,13 @@ describe("readRepositoryAnswer", () => {
     expect(read(answer, catalogKeys, ["github:acme/api"])).toEqual({ kind: "unrecognised" });
   });
 
-  it("reads `not acme/api, use acme/web` as the web repository alone", () => {
+  // Round 4. The clearest redirect anybody writes, and it is still unreadable:
+  // the reader that could take web out of this is the reader that took billing
+  // out of "do not touch github:acme/billing", and one of those two is a
+  // decision recorded against somebody who refused it.
+  it("reads `not acme/api, use acme/web` as unrecognised", () => {
     expect(read("not acme/api, use acme/web", catalogKeys, ["github:acme/api"])).toEqual({
-      kind: "repositories",
-      repositoryKeys: ["gitlab:acme/web"],
+      kind: "unrecognised",
     });
   });
 
@@ -346,21 +362,23 @@ describe("readRepositoryAnswer", () => {
     expect(read("api and the old acme/legacy-thing")).toEqual({ kind: "unrecognised" });
   });
 
-  // Row A11b of the behaviour map, and it pins a COST WE CHOSE rather than an
-  // accident. `withoutQuotedQuestions` takes our QUESTIONS out of a reply and
-  // nothing else, so one of our other comments quoted back is still in the text
-  // the two refusal rules read, on purpose: a refusal is only itself when it is
-  // all the person sent, and what it writes outlives the run. The recovery
-  // sentence carries "is not final", so a person who quotes it and names a
-  // repository underneath has a perfectly good answer read as a no to the very
-  // repository they just named, and it is dropped.
+  // Row A11b of the behaviour map, and round 5 changed what it costs.
   //
-  // THE CHEAP FAILURE IS THE POINT. Asking the same question a second time
-  // costs one round; reading half of our own quote as somebody's no writes an
-  // exclusion in their name that nothing undoes until they go and find it
-  // (A34). This test holds that trade in place, so the day the quote is
-  // stripped as well it is changed deliberately rather than lost quietly.
-  it("asks again when a person quotes our recovery sentence and names a repository under it", () => {
+  // This used to pin a trade we had chosen: our own comments quoted back stayed
+  // in the text the refusal rules read, so a person quoting the recovery
+  // sentence, which carries "is not final", and naming a repository under it
+  // got another round. That was cheap next to reading our own words as their
+  // no, and it was a cost we took deliberately.
+  //
+  // It is not a cost worth taking now that the quote is marked. What a person
+  // QUOTED comes out of their words on every channel that marks it, so the
+  // answer under the quote is read, and the reply that is most obviously a yes
+  // finally works. Both forms are pinned: the quote button's marker, and the
+  // Jira wiki "bq." a project on the old editor writes.
+  it.each([
+    ["a mail client or the rich editor", (line: string) => `> ${line}`],
+    ["the Jira wiki editor", (line: string) => `bq. ${line}`],
+  ])("reads the repository named under our recovery sentence quoted by %s", (_channel, quote) => {
     const [recovery] = exclusionRecoveryNotes(["github:acme/api"], {
       enabledKeys: ["github:acme/api"],
       unusableKeys: null,
@@ -371,11 +389,200 @@ describe("readRepositoryAnswer", () => {
 
     expect(
       read(
-        `${recovery}\n\ngithub:acme/api`,
+        `${quote(recovery!)}\n\ngithub:acme/api`,
         catalogKeys,
         ["github:acme/api"],
         [PLAIN_QUESTION],
       ),
+    ).toEqual({ kind: "repositories", repositoryKeys: ["github:acme/api"] });
+  });
+
+  // And the cost that is still real, because nothing marks it: a person who
+  // retypes one of our sentences instead of quoting it is read as writing it,
+  // so a negation in it is theirs. Asking again is the cheap half of rule 1.
+  it("asks again when a person retypes our recovery sentence with no quote marker", () => {
+    const [recovery] = exclusionRecoveryNotes(["github:acme/api"], {
+      enabledKeys: ["github:acme/api"],
+      unusableKeys: null,
+    });
+
+    expect(
+      read(`${recovery}\n\ngithub:acme/api`, catalogKeys, ["github:acme/api"], [PLAIN_QUESTION]),
     ).toEqual({ kind: "unrecognised" });
+  });
+});
+
+// Joint gate round 3, R1 widened. A no never becomes a selection of the
+// repository it sits beside. Each phrasing here is one a person could plausibly
+// write, and each used to record billing (or web) in their name.
+describe("readRepositoryAnswer and a no beside a named repository", () => {
+  const CATALOG = ["infra", "web", "api", "docs", "billing"].map((name) => `github:acme/${name}`);
+  const readAsked = (answer: string, askedKeys: string[], keptKeys: string[] = []) => {
+    const result = readRepositoryAnswer(answer, {
+      catalogKeys: CATALOG,
+      askedKeys,
+      askedQuestions: [],
+      keptKeys,
+    });
+    expect(workScopeQuestionAnswerSchema.parse(result)).toEqual(result);
+    return result;
+  };
+
+  it.each([
+    ["github:acme/infra, but please do not touch github:acme/billing", ["github:acme/infra"]],
+    ["please do not touch github:acme/billing", ["github:acme/infra"]],
+    ["please do not use github:acme/billing", ["github:acme/infra"]],
+    ["not github:acme/billing, web is fine", ["github:acme/web", "github:acme/docs"]],
+    ["github:acme/infra, instead of github:acme/billing", ["github:acme/infra"]],
+    ["no, github:acme/billing is enough", ["github:acme/infra"]],
+    ["not github:acme/infra, go with github:acme/billing and github:acme/web", ["github:acme/infra"]],
+    // The asked repository named where no no is: the person may want it, so
+    // the cue beside billing cannot be read as a choice instead of it.
+    ["github:acme/infra, but use github:acme/billing instead", ["github:acme/infra"]],
+  ])("reads %j as unrecognised", (answer, askedKeys) => {
+    expect(readAsked(answer, askedKeys)).toEqual({ kind: "unrecognised" });
+  });
+
+  // Round 4, and these three changed meaning. They were the redirects the
+  // reader did take: a no beside a cue ("use X instead", "go with X") was read
+  // as choosing X. The cue is gone with the rest of the clause machinery,
+  // because the same reader that resolves these resolves the ones above, and
+  // the two are told apart by phrasing rather than by intent. Every one of them
+  // now comes back to the person with the rule: name only the repositories to
+  // use.
+  it.each([
+    "no, use github:acme/billing instead",
+    "not github:acme/infra, go with github:acme/billing",
+    "github:acme/billing instead",
+    // The Polish redirect our own copy used to teach, unreadable for exactly
+    // the same reason and answered with exactly the same sentence.
+    "nie bierz github:acme/infra, zamiast tego github:acme/billing",
+  ])("reads %j as unrecognised, because it says no and names a repository", (answer) => {
+    expect(readAsked(answer, ["github:acme/infra"])).toEqual({ kind: "unrecognised" });
+  });
+
+  // Round 4, B2 and M3: the retraction that names nothing, and the hedge. Both
+  // were read as a plain choice, because the second thought carried no path for
+  // a clause reader to attach it to. The rule needs neither: the reply says no,
+  // so it records nothing and the question comes back.
+  it.each([
+    "use github:acme/ops. actually no, skip it",
+    "github:acme/ops, no wait",
+    "I would not use github:acme/api, maybe github:acme/ops",
+    "not github:acme/api, github:acme/ops?",
+    "nie jestem pewien, chyba github:acme/ops",
+  ])("reads %j as unrecognised, because a second thought is still a no", (answer) => {
+    expect(readAsked(answer, ["github:acme/ops"])).toEqual({ kind: "unrecognised" });
+  });
+
+  // Round 4, M5. Our own way-back sentence is built around the word "not", so a
+  // person quoting it and agreeing would be refused by their own agreement.
+  // Quoted lines are our words, and what is read is what they wrote under them.
+  it("reads the reply under a quoted refusal sentence as the repository they named", () => {
+    const quoted =
+      "> github:acme/billing was listed in a repository question already answered on this" +
+      " work and is not selected on it, so the run started without it.";
+    expect(readAsked(`${quoted}\nyes, use github:acme/billing`, ["github:acme/billing"])).toEqual({
+      kind: "repositories",
+      repositoryKeys: ["github:acme/billing"],
+    });
+  });
+
+  // Round 4, m9. The question lists the choices, so "all" has one meaning and
+  // costing a person a round for it is a round spent on nothing.
+  it.each(["all", "both", "wszystkie", "All of them."])(
+    "reads %j as every repository the question listed",
+    (answer) => {
+      expect(readAsked(answer, ["github:acme/infra", "github:acme/billing"])).toEqual({
+        kind: "repositories",
+        repositoryKeys: ["github:acme/infra", "github:acme/billing"],
+      });
+    },
+  );
+
+  it("reads `all of the frontend ones` as unrecognised", () => {
+    expect(readAsked("all of the frontend ones", ["github:acme/infra"])).toEqual({
+      kind: "unrecognised",
+    });
+  });
+
+  // S7: the question said these stay whatever the reply, so a reply naming them
+  // records nothing about them and does not turn a path in the ticket into a
+  // person's own selection.
+  it("records nothing about a kept repository a reply names, and reads the rest", () => {
+    const kept = ["github:acme/web", "github:acme/api"];
+    expect(readAsked("github:acme/web and github:acme/infra", ["github:acme/infra"], kept)).toEqual({
+      kind: "repositories",
+      repositoryKeys: ["github:acme/infra"],
+    });
+    expect(readAsked("web, infra", ["github:acme/infra"], kept)).toEqual({
+      kind: "repositories",
+      repositoryKeys: ["github:acme/infra"],
+    });
+    expect(
+      readAsked("keep github:acme/web and github:acme/api", ["github:acme/infra"], kept),
+    ).toEqual({ kind: "unrecognised" });
+    // Even with the words that make a redirect: the question said web stays,
+    // so a no here is never a choice of web.
+    expect(
+      readAsked("not github:acme/infra, use github:acme/web instead", ["github:acme/infra"], kept),
+    ).toEqual({ kind: "unrecognised" });
+  });
+});
+
+// Round 5, A1 and A3: two replies that were read as more, or told less, than
+// they said.
+describe("readRepositoryAnswer counts the word against the list", () => {
+  const CATALOG = ["infra", "web", "api", "docs"].map((name) => `github:acme/${name}`);
+  const readAsked = (answer: string, askedKeys: string[]) =>
+    readRepositoryAnswer(answer, { catalogKeys: CATALOG, askedKeys, askedQuestions: [] });
+
+  // A1. "both" against four repositories is not agreement to four: the word and
+  // the list contradict each other, and a contradiction recorded as a choice is
+  // four permanent entries in that person's name.
+  it.each(["both", "oba", "obie", "all three"])(
+    "reads %j as unrecognised when the question listed four repositories",
+    (answer) => {
+      expect(readAsked(answer, CATALOG)).toEqual({ kind: "unrecognised" });
+    },
+  );
+
+  it("reads `both` as the two repositories a question listing two asked about", () => {
+    expect(readAsked("both", ["github:acme/infra", "github:acme/web"])).toEqual({
+      kind: "repositories",
+      repositoryKeys: ["github:acme/infra", "github:acme/web"],
+    });
+  });
+
+  it("reads `all` as every repository however many the question listed", () => {
+    expect(readAsked("all", CATALOG)).toEqual({ kind: "repositories", repositoryKeys: CATALOG });
+  });
+});
+
+// A3. The sentence a person gets back has to be true of what they wrote. A no
+// beside a BARE name is the commonest way anybody writes one, and telling them
+// nothing in their answer named a repository is both false and the one reply
+// that never teaches them the rule.
+describe("answerSaysNoAndNamesARepository", () => {
+  const CATALOG = ["github:acme/ops", "github:acme/api"];
+  const says = (answer: string) =>
+    answerSaysNoAndNamesARepository(answer, { catalogKeys: CATALOG, askedQuestions: [] });
+
+  it.each([
+    "nie, tylko ops",
+    "no, just ops",
+    "not api, ops",
+    "no, github:acme/ops only",
+  ])("is true for %j", (answer) => {
+    expect(says(answer)).toBe(true);
+  });
+
+  it("is false for a reply that is nothing but a refusal", () => {
+    expect(says("none")).toBe(false);
+    expect(says("no")).toBe(false);
+  });
+
+  it("is false for a reply that names a repository and says no about nothing", () => {
+    expect(says("github:acme/ops")).toBe(false);
   });
 });

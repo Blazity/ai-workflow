@@ -356,15 +356,19 @@ describe("rule 6: every sentence we write after the question is answered", () =>
       // any of it decides whether those words are true.
       for (const listedRepositories of [true, false]) {
         for (const aLaterRunCanPickThemUp of [true, false]) {
-          comments.push({
-            where:
-              `answer not recorded, ${reason}, question listed repositories:` +
-              ` ${listedRepositories}, pickable: ${aLaterRunCanPickThemUp}`,
-            body: formatAnswerNotRecordedComment(reason, {
-              listedRepositories,
-              aLaterRunCanPickThemUp,
-            }),
-          });
+          for (const commentPath of ["too_many_open", "unproven"] as const) {
+            comments.push({
+              where:
+                `answer not recorded, ${reason}, question listed repositories:` +
+                ` ${listedRepositories}, pickable: ${aLaterRunCanPickThemUp},` +
+                ` comment path: ${commentPath}`,
+              body: formatAnswerNotRecordedComment(reason, {
+                listedRepositories,
+                aLaterRunCanPickThemUp,
+                commentPath,
+              }),
+            });
+          }
         }
       }
     }
@@ -398,11 +402,14 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     for (const reason of ANSWER_NOT_RECORDED_REASONS) {
       for (const listedRepositories of [true, false]) {
         for (const aLaterRunCanPickThemUp of [true, false]) {
-          const body = formatAnswerNotRecordedComment(reason, {
-            listedRepositories,
-            aLaterRunCanPickThemUp,
-          });
-          expect(`${reason} :: ${body}`).toMatch(LATER_READER);
+          for (const commentPath of ["too_many_open", "unproven"] as const) {
+            const body = formatAnswerNotRecordedComment(reason, {
+              listedRepositories,
+              aLaterRunCanPickThemUp,
+              commentPath,
+            });
+            expect(`${reason} :: ${body}`).toMatch(LATER_READER);
+          }
         }
       }
     }
@@ -418,6 +425,7 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     const comment = formatAnswerNotRecordedComment("no_such_repository", {
       listedRepositories: false,
       aLaterRunCanPickThemUp: false,
+      commentPath: "unproven",
     });
 
     expect(comment).toContain("the repositories screen can add or enable it");
@@ -429,6 +437,50 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     expect(readFileSync(screen("repositories-screen.tsx"), "utf8")).toContain("enabled");
   });
 
+  // Joint gate F4. A question raised mid run proves nothing about how many
+  // repositories the ticket names, so the comment route is not offered at all:
+  // only the two routes that work whatever the ticket says.
+  it("offers only routes that work when nothing here can prove the comment is taken", () => {
+    for (const reason of ANSWER_NOT_RECORDED_REASONS) {
+      if (reason === "no_such_repository") continue;
+      const body = formatAnswerNotRecordedComment(reason, {
+        listedRepositories: true,
+        aLaterRunCanPickThemUp: true,
+        commentPath: "unproven",
+      });
+
+      expect(`${reason} :: ${body}`).not.toContain("in a comment here");
+      expect(`${reason} :: ${body}`).toContain(
+        "To use one of them after all, select it in this work's repository list through the work" +
+          " scope API or the work_scope.edit tool, which the next run starts from, or name it the" +
+          " next time the question is asked.",
+      );
+    }
+  });
+
+  it("tells a wordless answer what the run did AND what the record kept, which is nothing", () => {
+    // A thumbs up on the dashboard is stored raw, and the run's own reader takes
+    // the wordless branch: it stops asking and carries on WITHOUT those
+    // repositories. The record does the opposite of deciding, because a
+    // permanent refusal is not a thing to read out of an emoji
+    // (`saysNothingToAttach`). Told only the first half, the person reads a
+    // decision they never made; told only the second, they think the run waited
+    // for them.
+    const body = formatAnswerNotRecordedComment("no_words", {
+      listedRepositories: true,
+      aLaterRunCanPickThemUp: true,
+      commentPath: "unproven",
+    });
+
+    expect(body).toContain(
+      "continuing without the repositories the question asked about." +
+        " Nothing was recorded about them, so a later run may use them and may ask about them again.",
+    );
+    // And never the sentence that belongs to an answer the record DID keep: an
+    // omission binds later runs only when the answer was read as one.
+    expect(body).not.toContain("is not selected on it");
+  });
+
   it("does not send a person to write a path for a repository no run could read back", () => {
     // The run itself put these in front of the person: a question may list a
     // repository the catalog does not enable or cannot serve. The next run
@@ -438,6 +490,7 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     const blocked = formatAnswerNotRecordedComment("no_repository_named", {
       listedRepositories: true,
       aLaterRunCanPickThemUp: false,
+      commentPath: "unproven",
     });
 
     expect(blocked).toContain("reaches nothing");
@@ -446,14 +499,49 @@ describe("rule 6: every sentence we write after the question is answered", () =>
 
     // The control, and the whole reason the fact is carried rather than
     // assumed: the ordinary question, whose repositories a later run CAN pick
-    // up, still gets the sentence that is true for it.
+    // up, still gets the sentence that is true for it, which since joint gate
+    // round 3 (R8) names the routes that work whatever the ticket says.
     const ordinary = formatAnswerNotRecordedComment("no_repository_named", {
       listedRepositories: true,
       aLaterRunCanPickThemUp: true,
+      commentPath: "unproven",
     });
 
-    expect(ordinary).toContain("write its full path in a comment here");
+    expect(ordinary).toContain("select it in this work's repository list");
     expect(ordinary).not.toContain("reaches nothing");
+  });
+
+  it("does not send a person to write a path while the question listed more than three repositories", () => {
+    // The which-of-these question about a ticket that names more than three.
+    // The next run reads the path in the comment and takes nothing from the
+    // text, because that many is a choice it asks about, so the ordinary
+    // sentence would swallow the second attempt and ask the same question. The
+    // two routes that settle it are the question itself when it comes back and
+    // the work's repository list.
+    //
+    // Round 5, S2, and the pinned text changed meaning here. It used to end
+    // "because the next run then asks which of them to start from instead",
+    // which is a question this surface cannot promise: once something on this
+    // work has answered it, the ticket's text is read by nobody and no question
+    // comes back. The sentence now states the outcome the person can count on
+    // and leaves the question open.
+    for (const reason of ANSWER_NOT_RECORDED_REASONS) {
+      if (reason === "no_such_repository") continue;
+      const tooMany = formatAnswerNotRecordedComment(reason, {
+        listedRepositories: true,
+        aLaterRunCanPickThemUp: true,
+        commentPath: "too_many_open",
+      });
+
+      expect(`${reason} :: ${tooMany}`).not.toContain("write its full path in a comment here");
+      expect(`${reason} :: ${tooMany}`).toContain(
+        "Writing one of their paths in a comment here brings nothing into this work while this" +
+          " ticket names more than three repositories a run could still start from, and the next run" +
+          " may not ask about them either. To use one of them, name it the next time the question is" +
+          " asked, or select it in this work's repository list through the work scope API or the" +
+          " work_scope.edit tool, which the next run starts from.",
+      );
+    }
   });
 
   it("reads the closed path route off the reason each repository was asked about", () => {

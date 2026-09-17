@@ -61,6 +61,8 @@ function context(overrides: Partial<WorkScopeDecisionContext> = {}): WorkScopeDe
     eventRelatedKeys: [],
     attachedKeys: [],
     selectionAnswered: false,
+    answeredRepositoryKeys: [],
+    postAnswerMentionedKeys: [],
     actor: run,
     now,
     ...overrides,
@@ -750,9 +752,168 @@ describe("decideWorkScope decision table", () => {
 
       expect(decision).toMatchObject({ attach: [API], refused: [] });
     });
+
+    // Skeptic, round 3. The ticket that raised the which-of-these question still
+    // names the repository, and it always will: the description is the very text
+    // the person was asked about. Once an exclusion drops the match count under
+    // the ambiguity limit this event runs, and taking the key here would write
+    // "selected" about a repository somebody declined.
+    it("origin ticket_text, a key the answer left unnamed and no post-answer words: left unnamed, nothing written", () => {
+      const decision = decide(context({ answeredRepositoryKeys: [API, WEB] }), {
+        kind: "derived",
+        origin: "ticket_text",
+        repositoryKeys: [API],
+        rationale: "Ticket text names api.",
+      });
+
+      expect(decision).toEqual({
+        plan: emptyPlan,
+        attach: [],
+        ask: [],
+        refused: [],
+        editRejected: [],
+        trailTruncated: 0,
+        unnamed: [API],
+      });
+    });
+
+    // Skeptic F3, and it is what every record answered before this rule shipped
+    // looks like: an earlier run guessed the repository and wrote `selected`
+    // `inferred` for it, THEN the question was asked and the answer left it out.
+    // The answer writes nothing for a name it did not take, so the entry is
+    // still there, and read as an entry it would hand the repository to every
+    // guess from now on with nobody ever having chosen it.
+    it("origin inferred, a key whose only entry is an earlier guess: still left unnamed", () => {
+      const decision = decide(
+        context({
+          answeredRepositoryKeys: [API],
+          scope: scopeOf(
+            entry({ repositoryKey: API, origin: "inferred", rationale: "Label routing memory." }),
+          ),
+        }),
+        { kind: "derived", origin: "inferred", repositoryKeys: [API], rationale: "Label routing memory." },
+      );
+
+      expect(decision).toMatchObject({ attach: [], unnamed: [API] });
+      expect(decision.plan).toEqual(emptyPlan);
+    });
+
+    // The control that keeps the rule narrow: an entry somebody stands behind
+    // is an entry, and the repository is theirs to have.
+    it("origin inferred, a key a person selected after the answer: attached", () => {
+      const decision = decide(
+        context({
+          answeredRepositoryKeys: [API],
+          scope: scopeOf(
+            entry({ repositoryKey: API, origin: "person", rationale: "after all", decidedBy: person }),
+          ),
+        }),
+        { kind: "derived", origin: "inferred", repositoryKeys: [API], rationale: "Label routing memory." },
+      );
+
+      expect(decision.attach).toEqual([API]);
+      expect(decision.unnamed).toBeUndefined();
+    });
+
+    // The way back the recovery sentence names: somebody writes the full path
+    // after answering, which is a decision they took knowing what they left out.
+    it("the same key once a person wrote its path after the answer: attached and recorded as ticket_text", () => {
+      const decision = decide(
+        context({ answeredRepositoryKeys: [API, WEB], postAnswerMentionedKeys: [API] }),
+        { kind: "derived", origin: "ticket_text", repositoryKeys: [API], rationale: "Ticket text names api." },
+      );
+      const textEntry = {
+        repositoryKey: API,
+        state: "selected",
+        origin: "ticket_text",
+        rationale: "Ticket text names api.",
+        decidedBy: run,
+        decidedAt: now,
+      };
+
+      expect(decision).toEqual({
+        plan: {
+          upserts: [{ entry: textEntry, replacesExpired: false }],
+          deletes: [],
+          trail: [{ kind: "entry_written", entry: textEntry, previousState: null }],
+        },
+        attach: [API],
+        ask: [],
+        refused: [],
+        editRejected: [],
+        trailTruncated: 0,
+      });
+    });
+
+    // The same words do NOT unbind a guess. A remembered routing answer is this
+    // system's inference about the subject, not a reading of what anybody wrote,
+    // so a comment naming the repository says nothing about whether the guess
+    // was right.
+    it("origin inferred stays bound by the answer however recently the path was written", () => {
+      const decision = decide(
+        context({ answeredRepositoryKeys: [API], postAnswerMentionedKeys: [API] }),
+        { kind: "derived", origin: "inferred", repositoryKeys: [API], rationale: "Label routing memory." },
+      );
+
+      expect(decision).toMatchObject({ attach: [], unnamed: [API] });
+      expect(decision.plan).toEqual(emptyPlan);
+    });
   });
 
   describe("text_ambiguous", () => {
+    // Joint gate F6. A key the record holds as selected by a non-guess origin,
+    // attached at run start, is not a choice a reply can make: the answer
+    // removes a guess and nothing else. It is reported as taken instead.
+    it("a matched key the record already holds and the run attached: not offered, reported as taken", () => {
+      const decision = decide(
+        context({
+          scope: scopeOf(
+            entry({ repositoryKey: API, origin: "ticket_text" }),
+            entry({ repositoryKey: DOCS, origin: "trigger_policy" }),
+          ),
+          attachedKeys: [API, DOCS],
+        }),
+        { kind: "text_ambiguous", matchedKeys: [WEB, API, DOCS, TOOLS] },
+      );
+
+      expect(decision.ask).toEqual([
+        { repositoryKey: WEB, askedBecause: "selection" },
+        { repositoryKey: TOOLS, askedBecause: "selection" },
+      ]);
+      expect(decision.alreadyTaken).toEqual([API, DOCS]);
+    });
+
+    // The count gate's own picks: attached by this run's signals a moment ago,
+    // with nothing on the record yet. Those are exactly what the question is for.
+    it("a matched key this run attached with no entry on the record: still offered", () => {
+      const decision = decide(context({ attachedKeys: [WEB, API, DOCS, TOOLS] }), {
+        kind: "text_ambiguous",
+        matchedKeys: [WEB, API, DOCS, TOOLS],
+      });
+
+      expect(decision.ask.map((asked) => asked.repositoryKey)).toEqual([WEB, API, DOCS, TOOLS]);
+      expect(decision.alreadyTaken).toBeUndefined();
+    });
+
+    // One open key beside taken ones is still a question: the text names more
+    // than the run may decide between, and that one is the person's to decide.
+    it("one open key left beside taken ones: asked", () => {
+      const decision = decide(
+        context({
+          scope: scopeOf(
+            entry({ repositoryKey: API, origin: "ticket_text" }),
+            entry({ repositoryKey: DOCS, origin: "ticket_text" }),
+            entry({ repositoryKey: TOOLS, origin: "ticket_text" }),
+          ),
+          attachedKeys: [API, DOCS, TOOLS],
+        }),
+        { kind: "text_ambiguous", matchedKeys: [WEB, API, DOCS, TOOLS] },
+      );
+
+      expect(decision.ask).toEqual([{ repositoryKey: WEB, askedBecause: "selection" }]);
+      expect(decision.alreadyTaken).toEqual([API, DOCS, TOOLS]);
+    });
+
     it("carriesRecord, no selected entry of origin person, selectionAnswered false: ask every matched key with reason selection", () => {
       const decision = decide(
         context({ scope: scopeOf(entry({ repositoryKey: API, origin: "ticket_text" })) }),
@@ -863,6 +1024,57 @@ describe("decideWorkScope decision table", () => {
   });
 
   describe("requested", () => {
+    // Skeptic 8. The agent asks mid run for a repository a which-of-these answer
+    // left unnamed. Attaching it takes back the omission, asking puts an answered
+    // question to the same person again, so it is refused with a reason of its
+    // own, one trail line, and the run carries on.
+    it("a key an answer left unnamed, no entry: refused as unnamed_in_answer, nothing asked or attached", () => {
+      const decision = decide(context({ answeredRepositoryKeys: [API] }), {
+        kind: "requested",
+        repositoryKeys: [API, WEB],
+      });
+
+      expect(decision.refused).toEqual([{ repositoryKey: API, reason: "unnamed_in_answer" }]);
+      expect(decision.ask).toEqual([]);
+      expect(decision.attach).toEqual([WEB]);
+      expect(decision.plan.trail).toContainEqual({
+        kind: "request_refused",
+        repositoryKey: API,
+        reason: "unnamed_in_answer",
+      });
+    });
+
+    // The same F3 record on the mid-run door: a guess's entry does not buy the
+    // agent a repository the person left out either.
+    it("a key whose only entry is an earlier guess: refused as unnamed_in_answer", () => {
+      const decision = decide(
+        context({
+          answeredRepositoryKeys: [API],
+          scope: scopeOf(
+            entry({ repositoryKey: API, origin: "inferred", rationale: "Label routing memory." }),
+          ),
+        }),
+        { kind: "requested", repositoryKeys: [API] },
+      );
+
+      expect(decision.refused).toEqual([{ repositoryKey: API, reason: "unnamed_in_answer" }]);
+      expect(decision.attach).toEqual([]);
+      expect(decision.ask).toEqual([]);
+    });
+
+    it("the same key once a person selected it: attached, because the selection is theirs", () => {
+      const decision = decide(
+        context({
+          answeredRepositoryKeys: [API],
+          scope: scopeOf(entry({ repositoryKey: API, origin: "person", rationale: "after all" })),
+        }),
+        { kind: "requested", repositoryKeys: [API] },
+      );
+
+      expect(decision.refused).toEqual([]);
+      expect(decision.attach).toEqual([API]);
+    });
+
     const refusedFor = (repositoryKey: string, reason: string) => ({
       plan: { upserts: [], deletes: [], trail: [{ kind: "request_refused", repositoryKey, reason }] },
       attach: [],
@@ -1290,6 +1502,72 @@ describe("decideWorkScope decision table", () => {
       });
 
       expect(decision.plan.upserts.map((upsert) => upsert.entry.state)).toEqual(["selected"]);
+    });
+
+    // An earlier run's guess said "selected" about a repository a which-of-these
+    // question then put to a person, who did not name it. Left in place, the
+    // record keeps claiming a choice the person just declined, and the entry's
+    // mere presence shields the key from the rule that binds guesses.
+    it("selection question, a named key the answer leaves out that a guess had selected: that guess's entry is removed, nothing is written", () => {
+      const guessed = entry({ repositoryKey: API, origin: "inferred" });
+      const decision = decide(context({ actor: person, policy: null, scope: scopeOf(guessed) }), {
+        kind: "answered",
+        clarificationId: "clar-9",
+        asked: [
+          { repositoryKey: API, askedBecause: "selection", named: true },
+          { repositoryKey: WEB, askedBecause: "selection", named: true },
+        ],
+        answer: { kind: "none" },
+      });
+
+      expect(decision.plan).toEqual({
+        upserts: [],
+        deletes: [{ repositoryKey: API, origin: "inferred" }],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId: "clar-9",
+            answer: { kind: "none" },
+            answeredBy: person,
+          },
+          { kind: "entry_removed", entry: guessed, removedBy: person },
+        ],
+      });
+    });
+
+    // Only a guess yields to the omission. A typed path, a person's own choice, a
+    // trigger policy and a workflow-owned branch are decisions or facts the
+    // answer did not address, and none of them is touched.
+    it("selection question, a left-out key whose entry is not a guess: untouched", () => {
+      for (const origin of ["ticket_text", "person", "trigger_policy", "workflow_owned_branch"] as const) {
+        const kept = entry({ repositoryKey: API, origin });
+        const decision = decide(context({ actor: person, policy: null, scope: scopeOf(kept) }), {
+          kind: "answered",
+          clarificationId: "clar-9",
+          asked: [{ repositoryKey: API, askedBecause: "selection", named: true }],
+          answer: { kind: "none" },
+        });
+        expect(decision.plan.deletes, origin).toEqual([]);
+        expect(decision.plan.upserts, origin).toEqual([]);
+      }
+    });
+
+    // Named in the answer, so it is theirs: written as a person's selection over
+    // the guess, never removed.
+    it("selection question, the guessed key named in the answer: selected by the person, not removed", () => {
+      const decision = decide(
+        context({ actor: person, policy: null, scope: scopeOf(entry({ repositoryKey: API })) }),
+        {
+          kind: "answered",
+          clarificationId: "clar-9",
+          asked: [{ repositoryKey: API, askedBecause: "selection", named: true }],
+          answer: { kind: "repositories", repositoryKeys: [API] },
+        },
+      );
+      expect(decision.plan.deletes).toEqual([]);
+      expect(decision.plan.upserts.map((upsert) => [upsert.entry.origin, upsert.entry.state])).toEqual([
+        ["person", "selected"],
+      ]);
     });
 
     it("answer none or repositories, an asked key the answer does not name: recorded by the reason it was asked", () => {

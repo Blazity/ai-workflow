@@ -6,7 +6,12 @@ import {
   repositoryCatalogKey,
   type RepositoryCatalogEntry,
 } from "./catalog.js";
-import { exclusionRecoveryNotes } from "../work-scope/context.js";
+import { exclusionRecoveryNotes, unnamedRecoveryNotes } from "../work-scope/context.js";
+import { isGuessEntry, isUnnamedInAnswer } from "../work-scope/decide.js";
+import {
+  workScopeUnnamedSentence,
+  workScopeUnnamedWhy,
+} from "../work-scope/refusal-sentence.js";
 import {
   repositoryKeySchema,
   type RepositoryKey,
@@ -160,6 +165,12 @@ export function validateRepositoryDiscoveryResult(
     answeredRepositoryKeys: readonly string[];
     /** The record's entries as the run holds them. */
     recorded: readonly WorkScopeEntry[];
+    /** Would a full path written in a ticket comment about these repositories
+     *  reach the next run and be taken? Decided by the run's own record
+     *  (`commentPathIsTaken` in `engine/work-scope/context.ts`) and asked
+     *  rather than recomputed, so this file's way back and the pre-sandbox's
+     *  are the same sentence about the same ticket. */
+    commentPathIsTaken: (repositoryKeys: readonly RepositoryKey[]) => boolean;
   },
 ): RepositoryDiscoveryDecision {
   const parsed = discoveryResultSchema.safeParse(raw);
@@ -218,13 +229,35 @@ export function validateRepositoryDiscoveryResult(
   // the model kept proposing it. One list now. A candidate this file cannot
   // record is not offered as a choice either: the loop below meets it and asks
   // about it BY NAME, which is a question whose answer lands somewhere.
+  //
+  // NOBODY IS ASKED AGAIN ABOUT WHAT THEY ALREADY ANSWERED, and that holds for
+  // each repository on the list, not only for the list as a whole. A candidate
+  // this work already decided about (a person's selection, an exclusion, any
+  // entry that is not a guess) is no candidate: the record carries it, so it is
+  // neither offered nor counted as declined. A candidate somebody was already
+  // asked about and answered stays a candidate, so a list made only of those is
+  // still the declined proposal below, but it is left off any question that
+  // asks about the rest.
   const unsure = result.confidence !== "high";
-  const candidates = unsure ? candidateAsks(proposals, catalog) : [];
+  const candidates = unsure
+    ? candidateAsks(proposals, catalog).filter(
+        (candidate) =>
+          !mandatoryRepositories.some(
+            (repository) => repositoryCatalogKey(repository) === candidate.repositoryKey,
+          ) &&
+          !(settled?.recorded ?? []).some(
+            (entry) => entry.repositoryKey === candidate.repositoryKey && !isGuessEntry(entry),
+          ),
+      )
+    : [];
   const candidateKeys = candidates.map((candidate) => candidate.repositoryKey as string);
-  if (unsure && candidateKeys.some((key) => !alreadyAsked(key, settled))) {
+  const unanswered = candidates.filter(
+    (candidate) => !alreadyAsked(candidate.repositoryKey, settled),
+  );
+  if (unsure && unanswered.length > 0) {
     return {
       kind: "clarification_needed",
-      questions: [candidateClarificationQuestion(candidates)],
+      questions: [candidateClarificationQuestion(unanswered)],
       reason:
         result.confidence === "medium"
           ? "discovery_confidence_medium"
@@ -232,7 +265,7 @@ export function validateRepositoryDiscoveryResult(
       // A selection among named candidates, exactly like the "which of these"
       // question the pre-sandbox asks, so the answer settles this subject for
       // good instead of being dropped for naming no repository (A46).
-      about: candidates,
+      about: unanswered,
     };
   }
   /** True when the question above was suppressed because every candidate it
@@ -254,6 +287,8 @@ export function validateRepositoryDiscoveryResult(
   }
   const discoveredKeys = new Set<string>();
   const dropped: DroppedRepository[] = [];
+  /** Proposals an answer on this subject left unnamed, in proposal order. */
+  const unnamed: RepositoryKey[] = [];
   // SILENCE IS NOT SELECTION: an unsure proposal every candidate of which was
   // already put to somebody contributes nothing at all.
   for (const requested of declined ? [] : proposals) {
@@ -268,6 +303,20 @@ export function validateRepositoryDiscoveryResult(
     // (A48).
     if (discoveredKeys.has(key)) continue;
     discoveredKeys.add(key);
+    // A proposal is a guess at ANY confidence, and a guess does not take back a
+    // repository a which-of-these answer left unnamed. Before the catalog is
+    // consulted, because the record may have filtered such a repository out of
+    // the offered list, and a missing repository would otherwise be asked about
+    // as one nobody enabled. A repository the run already holds for a reason of
+    // its own is not a guess and stays.
+    if (
+      settled &&
+      !selected.has(key) &&
+      isUnnamedInAnswer(key, settled.answeredRepositoryKeys, settled.recorded)
+    ) {
+      unnamed.push(key);
+      continue;
+    }
     const repository = catalogByKey.get(key);
     if (!repository || !repository.usable) {
       // ASKED ONCE, TOLD AFTERWARDS. A person who already answered a question
@@ -320,7 +369,12 @@ export function validateRepositoryDiscoveryResult(
       error:
         dropped.length > 0
           ? nothingLeftToWorkOn(dropped)
-          : nothingLeftToStartFrom(candidateKeys),
+          : unnamed.length > 0
+            ? nothingLeftButUnnamed(unnamed, settled?.commentPathIsTaken(unnamed) ?? false)
+            : nothingLeftToStartFrom(
+                candidateKeys,
+                settled?.commentPathIsTaken(candidateKeys) ?? false,
+              ),
       blame: "work_scope",
     };
   }
@@ -341,6 +395,13 @@ export function validateRepositoryDiscoveryResult(
       ...(declined
         ? candidateKeys.map((key) => ({ repositoryKey: key, reason: leftUnnamedNote([key]) }))
         : []),
+      // The same sentence the pre-sandbox says about a guess it did not take, so
+      // a person reads one wording whichever guess it was. It reaches the model
+      // as well, so it carries no way back (rule 7).
+      ...unnamed.map((key) => ({
+        repositoryKey: key,
+        reason: workScopeUnnamedSentence(key, "run_start"),
+      })),
     ],
     droppedRepositoryKeys: dropped.map((left) => left.decided.repositoryKey),
   };
@@ -502,21 +563,48 @@ function nothingLeftToWorkOn(dropped: DroppedRepository[]): string {
   ].join(" ");
 }
 
+/** What a run says when every proposal was a repository an answer left
+ *  unnamed. A failure reason reaches the run's status and the ticket comment
+ *  and not the agent's instructions, so it ends on the way back, which is the
+ *  same one the pre-sandbox gives (`unnamedRecoveryNotes`). */
+function nothingLeftButUnnamed(
+  repositoryKeys: RepositoryKey[],
+  commentPathIsTaken: boolean,
+): string {
+  return [
+    ...repositoryKeys.map((key) => `${workScopeUnnamedWhy(key)}.`),
+    "Repository discovery proposed nothing else this run can use,",
+    "so it has no repository to work on.",
+    ...unnamedRecoveryNotes(repositoryKeys, commentPathIsTaken),
+  ].join(" ");
+}
+
 /** What a run says when leaving those candidates out left it with nothing.
  *
  *  It ends on a door that is really open. A "none" to the which-of-these
  *  question writes NO entry by design, so nothing on this work refuses these
- *  repositories: naming one in the ticket itself is matched by the pre-sandbox
- *  before any question is asked, and it attaches. That is the cheap move, and it
- *  is the one to say first. */
-function nothingLeftToStartFrom(repositoryKeys: string[]): string {
+ *  repositories: a full path written in a COMMENT after that answer is matched
+ *  by the pre-sandbox before any question is asked, and it attaches (C11g). Not
+ *  the description: the description is the text the question was already asked
+ *  about, so an edit there is bound by the answer and the run stops here again
+ *  (C11f). That is the cheap move, and it is the one to say first, WHERE IT
+ *  WORKS. Where the ticket already names more
+ *  open repositories than the run may decide between, its text is asked about
+ *  rather than taken from (`commentPathIsTaken`), so there the sentence names
+ *  the record instead. */
+function nothingLeftToStartFrom(
+  repositoryKeys: string[],
+  commentPathIsTaken: boolean,
+): string {
   const them = repositoryKeys.length > 1 ? "them" : "it";
   return [
     `Repository discovery was not confident about ${repositoryKeys.join(", ")},`,
     `and somebody on this work was already asked which repositories to start from and did not name ${them}.`,
     "Not naming a repository is not choosing it,",
     "so this run has no repository to work on.",
-    `Name the repositories this ticket should work on in the ticket itself, as ${repositoryKeys[0] ?? "github:owner/repo"}, and start a new run.`,
+    commentPathIsTaken
+      ? `Write the full path of each repository this ticket should work on in a comment on this ticket, as ${repositoryKeys[0] ?? "github:owner/repo"}, and start a new run.`
+      : "Select the repositories this ticket should work on in this work's repository list, through the work scope API or the work_scope.edit tool, and start a new run.",
   ].join(" ");
 }
 
@@ -650,16 +738,28 @@ function unavailableClarification(
  * not hold can be enabled, and one it holds and cannot clone cannot be fixed
  * from the Repositories page at all.
  */
+// A QUESTION MAY NOT TEACH A PHRASING THE READER REFUSES. Both questions below
+// used to end with "or with the repositories this ticket should use instead",
+// and a person taking us up on that wrote "acme/web instead of acme/api", which
+// says no about one repository and names another. A reply that says no records
+// nothing (`readRepositoryAnswer`), so the copy asked for the one answer that
+// cannot be read. It now asks for what it can: the repositories to use, and
+// nothing else, in the words the ticket comment uses when it explains the same
+// rule (`NAME_ONLY_THE_ONES_TO_USE` in `engine/support/clarification-comment-format.ts`).
 function unavailableRepositoryQuestion(
   repositoryKey: RepositoryKey,
   reason: Extract<RepositoryDiscoveryAsk["reason"], "not_enabled" | "unusable">,
 ): string {
+  // THE LAST CLAUSE IS "OR" ONLY WHERE THERE IS SOMETHING TO BE OR TO. The
+  // enabled arm offers a move, so naming other repositories is the alternative
+  // to it. The unusable arm offers none, because nobody can fix a repository
+  // the catalog cannot clone from a screen, and "Or name only the repositories
+  // to use" after it was an alternative to nothing at all.
   return [
     `Repository discovery asked for ${repositoryKey}, which this run cannot use:`,
     reason === "not_enabled"
-      ? `it is not enabled on this deployment. ${enableThemNext(1)}`
-      : "this deployment holds it but cannot clone it.",
-    "Or answer with the repositories this ticket should use instead.",
+      ? `it is not enabled on this deployment. ${enableThemNext(1)} Or name only the repositories to use.`
+      : "this deployment holds it but cannot clone it, so no run can use it until that changes. Name only the repositories to use.",
   ].join(" ");
 }
 
@@ -783,7 +883,7 @@ function excludedRepositoryQuestion(
     `${excludedBy(refused.repositoryKey, excluded)}.`,
     `Repository discovery asked for it anyway, because "${theModelsWords(refused.rationale)}".`,
     `Answer with ${refused.repositoryKey} to take that exclusion back and let this run use it,`,
-    "or with the repositories this ticket should use instead.",
+    "or name only the repositories to use.",
   ].join(" ");
 }
 
@@ -839,5 +939,12 @@ function candidateClarificationQuestion(asks: RepositoryDiscoveryAsk[]): string 
     "Which repository or repositories should this ticket inspect or modify?",
     "Reply with full provider-scoped paths (for example github:acme/app).",
     `Proposed candidates: ${candidates}.`,
+    // WHAT THE ANSWER BINDS, as the which-of-these question says it (A11g):
+    // a candidate listed here and left out of the answer is refused to every
+    // later guess on this work (`isUnnamedInAnswer`). Only the candidates,
+    // because they are the repositories this question puts in front of the
+    // person; a path they write beside them binds nothing. No lever, because a
+    // question is copied into the agent's prompts and the memory file (rule 7).
+    "A proposed candidate you do not name is left out of this work from now on, and no later run takes it on its own.",
   ].join(" ");
 }

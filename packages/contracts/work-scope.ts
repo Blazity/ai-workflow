@@ -102,6 +102,10 @@ export const WORK_SCOPE_REFUSAL_REASONS = [
   // refused without a question.
   "request_limit",
   "rounds_exhausted",
+  // A which-of-these question named the repository, the answer did not, and
+  // nothing on the record has chosen it since: a guess, here the agent's own
+  // request, may not take it back.
+  "unnamed_in_answer",
 ] as const;
 export const workScopeRefusalReasonSchema = z.enum(WORK_SCOPE_REFUSAL_REASONS);
 export type WorkScopeRefusalReason = z.infer<typeof workScopeRefusalReasonSchema>;

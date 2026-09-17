@@ -7,7 +7,7 @@
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export { recordRepositoryAnswer } from "./from-answer.js";
-export type { RepositoryAnswerPersistence } from "./from-answer.js";
+export type { RepositoryAnswerPersistence, RepositoryAnswerOutcome } from "./from-answer.js";
 export {
   applyConnectedWorkScopeEdit,
   applyWorkScopeEdit,

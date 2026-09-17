@@ -66,6 +66,21 @@ export interface WorkScopeDecisionContext {
   attachedKeys: RepositoryKey[] | null;
   /** The subject's trail holds an answer to a selection question. */
   selectionAnswered: boolean;
+  /** The repositories a question on this subject NAMED and somebody answered
+   *  (`readWorkScopeAnsweredRepositories` in `db/repositories/work-scope.ts`).
+   *  Read with the entries, because the two together say what an answer left
+   *  unnamed (`isUnnamedInAnswer`). A caller that decides no guess, an edit or an
+   *  answer, passes an empty list and says why. */
+  answeredRepositoryKeys: readonly RepositoryKey[];
+  /** The repositories whose full path a PERSON wrote on this subject AFTER the
+   *  answer was decided. The one thing that lets a text match attach a key the
+   *  answer left unnamed (`decideDerived`): the ticket's own description raised
+   *  that question, so re-reading it decides nothing, while somebody typing the
+   *  path afterwards is a new decision and is what the recovery sentence asks
+   *  them to do. Empty is the safe reading and the only one a caller that
+   *  derives no ticket text needs; a caller that cannot date a match passes it
+   *  empty and says why. */
+  postAnswerMentionedKeys: readonly RepositoryKey[];
   actor: WorkScopeActor;
   now: string;
 }
@@ -81,6 +96,14 @@ export type WorkScopeDecisionEvent =
       kind: "derived";
       origin: "workflow_owned_branch" | "ticket_text" | "trigger_policy" | "inferred";
       repositoryKeys: RepositoryKey[];
+      /** Repositories this origin's evidence still names and this event does
+       *  NOT attach: they are not decided here, and their entries are not
+       *  deleted either. The one caller is the ticket text scan, which stops
+       *  reading a comment that says no about a repository: the words are still
+       *  on the ticket, so what an earlier run derived from them is not
+       *  evidence that went away, and deleting it would take a repository off
+       *  every later run with nobody's decision behind it. */
+      stillNamedKeys?: RepositoryKey[];
       rationale: string;
     }
   | { kind: "text_ambiguous"; matchedKeys: RepositoryKey[] }
@@ -104,6 +127,102 @@ export interface WorkScopeDecision {
    *  caller can say how many more there were instead of dropping them in
    *  silence. */
   trailTruncated: number;
+  /**
+   * Keys a guess named that an answer on this subject left unnamed, in input
+   * order, and present only when there is one.
+   *
+   * Apart from `refused` because the refusal vocabulary is a contract and has
+   * no reason meaning this, and because it writes NO trail line: the trail
+   * already holds the question and the answer that explain it, and a remembered
+   * routing answer is recomputed on every run, so a line per run would repeat
+   * the same fact forever. The caller still says it, keyed, to a person.
+   */
+  unnamed?: RepositoryKey[];
+  /**
+   * The matched repositories a which-of-these question did NOT offer, because
+   * this work already holds them: the record has them selected, by a run's
+   * reading of the ticket, a trigger policy or a branch, and the run start
+   * attached them. A reply cannot remove them (`decideAnswered` removes a guess
+   * and nothing else), so offering them as choices would put a decision in
+   * front of a person that their answer does not make. The caller names them in
+   * the question as already taken. `text_ambiguous` only, and only beside an
+   * ask.
+   */
+  alreadyTaken?: RepositoryKey[];
+}
+
+/**
+ * Did an answer on this subject leave this repository unnamed, with nothing on
+ * the record choosing it since?
+ *
+ * THE ONE RULE for what a guess may not take back. A which-of-these question
+ * (`selection`) writes no entry for a repository its answer did not name, by
+ * design, so the only trace of that omission is the pair: the key is in the
+ * answered set, which holds only keys the question put in front of a person,
+ * and the record holds no entry for it. Every other asked reason writes an
+ * entry whatever the answer said (`decideAnswered`: `unavailable` for
+ * `not_enabled` and `unusable`, `excluded` for `outside_policy`, `selected`
+ * `person` for a named key), and that entry governs instead, which is what lets
+ * "enable it and start a new run" work for a repository an answer recorded as
+ * unavailable.
+ *
+ * WHAT IT BINDS: guesses, which are a remembered routing answer and the
+ * only-accessible shortcut here, and every discovery proposal
+ * (`repository-discovery/protocol.ts`). It binds a ticket text match too, for
+ * as long as the only text naming the repository is text that predates the
+ * answer: a person who writes the full path in a comment afterwards has decided
+ * again, and `boundByTheAnswer` is where that one exception is spelled. A
+ * workflow-owned branch, a definition pin and a trigger policy are not guesses,
+ * and a person's selection writes an entry, so none of those is bound.
+ *
+ * A GUESS'S OWN ENTRY IS NOT AN ENTRY HERE. An earlier run may have written
+ * `selected` `inferred` for the repository before anybody was asked, and read
+ * as an entry it would shield the key from this rule forever: the answer writes
+ * nothing for a name it left out, so the pair never forms and every later guess
+ * takes the repository again. That is the state every subject answered before
+ * this rule shipped is in. A guess is also the one entry no person stands
+ * behind, and run start already refuses to furnish a workspace from it
+ * (`decideRunStart`), so treating it as absent here takes nothing away from
+ * anybody. The answer-time removal (`decideAnswered`, reason `selection`) still
+ * deletes it, which keeps the record honest rather than merely ignored.
+ *
+ * ALSO TRUE AFTER AN EDIT REMOVED THE ENTRY. The trail cannot tell an omission
+ * from a named repository whose entry a person later removed, and removing an
+ * entry does not unmake an answer (the which-of-these question stays silenced
+ * for the same reason), so both read as unnamed. The cost of that reading is a
+ * guess not taken and a sentence saying so; the other reading would take back
+ * an omission somebody made.
+ */
+export function isUnnamedInAnswer(
+  repositoryKey: RepositoryKey,
+  answeredRepositoryKeys: readonly RepositoryKey[],
+  entries: readonly WorkScopeEntry[],
+): boolean {
+  if (!answeredRepositoryKeys.includes(repositoryKey)) return false;
+  return entries
+    .filter((entry) => entry.repositoryKey === repositoryKey)
+    .every(isGuessEntry);
+}
+
+/** The one entry shape no person stands behind: a repository a run picked for
+ *  itself. Every other entry is a decision somebody or something took. */
+export function isGuessEntry(entry: WorkScopeEntry): boolean {
+  return entry.state === "selected" && entry.origin === "inferred";
+}
+
+/**
+ * A repository this work already holds for a reason an answer does not undo: a
+ * `selected` entry that is not a guess (a person's own, a path written in the
+ * ticket, a trigger policy, a workflow-owned branch).
+ *
+ * One predicate for the two places that must agree on it: the which-of-these
+ * question, which names such a repository as kept rather than offering it
+ * (`decideTextAmbiguous`), and the reader of the reply, which must never take a
+ * no written beside it as a redirect (`keptKeys` in
+ * `services/work-scope/from-answer.ts`).
+ */
+export function isHeldSelection(entry: WorkScopeEntry): boolean {
+  return entry.state === "selected" && !isGuessEntry(entry);
 }
 
 /**
@@ -264,6 +383,10 @@ function readFacts(context: WorkScopeDecisionContext) {
     const entry = entries.get(key);
     return entry && !isExpired(entry) ? entry : undefined;
   };
+  const isUnnamed = (key: RepositoryKey) =>
+    isUnnamedInAnswer(key, context.answeredRepositoryKeys, context.scope?.entries ?? []);
+  const isMentionedAfterAnswer = (key: RepositoryKey) =>
+    context.postAnswerMentionedKeys.includes(key);
   return {
     entries,
     isEnabled,
@@ -275,6 +398,8 @@ function readFacts(context: WorkScopeDecisionContext) {
     expansion,
     isExpired,
     liveEntryOf,
+    isUnnamed,
+    isMentionedAfterAnswer,
   };
 }
 
@@ -315,6 +440,31 @@ function blockingReason(entry: WorkScopeEntry | undefined): WorkScopeRefusalReas
   return null;
 }
 
+/**
+ * The keys of `keys` still open to a decision, once each and in input order:
+ * reachable, and carrying no live entry that already answers for them (an
+ * expired entry answers for nothing).
+ *
+ * The one definition of "open", read by two callers. The which-of-these
+ * question offers exactly these keys, and the run's recorder
+ * (`createRunWorkScopeRecorder` in `context.ts`, `decidableKeys`) counts them
+ * BEFORE it decides whether there is an ambiguity at all, and narrows the
+ * catalog discovery offers by them. A second copy of the rule is how the count
+ * and the question would come to disagree about the same repository.
+ */
+export function decidableWorkScopeKeys(
+  context: WorkScopeDecisionContext,
+  keys: readonly RepositoryKey[],
+): RepositoryKey[] {
+  return openKeys(readFacts(context), keys);
+}
+
+function openKeys(facts: Facts, keys: readonly RepositoryKey[]): RepositoryKey[] {
+  return [...new Set(keys)].filter(
+    (key) => facts.isReachable(key) && blockingReason(facts.liveEntryOf(key)) === null,
+  );
+}
+
 type Recorded =
   | { kind: "upsert"; upsert: WorkScopeWritePlan["upserts"][number]; event: WorkScopeTrailEvent }
   | { kind: "delete"; deletion: WorkScopeWritePlan["deletes"][number]; event: WorkScopeTrailEvent }
@@ -329,6 +479,8 @@ function recordDecision(context: WorkScopeDecisionContext, facts: Facts) {
   const ask: WorkScopeAskedRepository[] = [];
   const refused: WorkScopeDecision["refused"] = [];
   const editRejected: WorkScopeDecision["editRejected"] = [];
+  const unnamed: RepositoryKey[] = [];
+  const alreadyTaken: RepositoryKey[] = [];
   const refusedOnce = new Set<string>();
   const attached = new Set(context.attachedKeys ?? []);
 
@@ -353,6 +505,16 @@ function recordDecision(context: WorkScopeDecisionContext, facts: Facts) {
     },
     rejectEdit(repositoryKey: RepositoryKey) {
       editRejected.push({ repositoryKey, reason: "not_enabled" });
+    },
+    /** A guess the answer left unnamed: said to the caller, never to the trail
+     *  (see `WorkScopeDecision.unnamed`). */
+    leaveUnnamed(repositoryKey: RepositoryKey) {
+      if (!unnamed.includes(repositoryKey)) unnamed.push(repositoryKey);
+    },
+    /** A matched repository the question does not offer because the work
+     *  already holds it (see `WorkScopeDecision.alreadyTaken`). */
+    keepTaken(repositoryKey: RepositoryKey) {
+      if (!alreadyTaken.includes(repositoryKey)) alreadyTaken.push(repositoryKey);
     },
     answered(event: WorkScopeTrailEvent) {
       recorded.push({ kind: "answer", event });
@@ -454,6 +616,8 @@ function recordDecision(context: WorkScopeDecisionContext, facts: Facts) {
         refused,
         editRejected,
         trailTruncated,
+        ...(unnamed.length > 0 ? { unnamed } : {}),
+        ...(alreadyTaken.length > 0 ? { alreadyTaken } : {}),
       };
     },
   };
@@ -550,6 +714,30 @@ function expiredReplacementRationale(previous: WorkScopeEntry): string {
   return `${since} ${who} recorded it as ${recordedAs}${quoted}.`;
 }
 
+/**
+ * May the answer's omission stop this derived origin from attaching the key?
+ *
+ * A remembered routing answer and the only-accessible shortcut are guesses, so
+ * always. A workflow-owned branch and a trigger policy are not guesses, so
+ * never.
+ *
+ * A TICKET TEXT MATCH IS BOTH, AND THE SOURCE OF THE TEXT DECIDES WHICH. The
+ * description and the acceptance criteria are snapshotted per run and are the
+ * very words the which-of-these question was asked about, so a later run reading
+ * them again is not a new decision: it is this system putting words in the
+ * person's mouth, and once an exclusion or a disabled repository drops the match
+ * count under the ambiguity limit that is exactly what would happen. A person
+ * writing the full path in a comment AFTER the answer is the opposite: a fresh
+ * decision, taken on purpose, and the way back the recovery sentence tells them
+ * to take (`unnamedRecoveryNotes` in `context.ts`). The caller is what tells the
+ * two apart, and a caller that cannot passes no post-answer mention at all.
+ */
+function boundByTheAnswer(facts: Facts, origin: WorkScopeOrigin, key: RepositoryKey): boolean {
+  if (origin === "inferred") return true;
+  if (origin === "ticket_text") return !facts.isMentionedAfterAnswer(key);
+  return false;
+}
+
 function decideDerived(
   context: WorkScopeDecisionContext,
   facts: Facts,
@@ -562,6 +750,16 @@ function decideDerived(
     // refuse it here. It still counts as named by this event below, so its own
     // entry of this origin is not deleted for being absent.
     if (decision.isAttached(key)) continue;
+    // A guess, and the answer on this subject left this repository unnamed. The
+    // origins that are not guesses are never bound: a workflow-owned branch and
+    // a trigger policy (`isUnnamedInAnswer`). A ticket text match is bound by
+    // the answer unless a person wrote the path after it, which is the one text
+    // a match can come from that the answer did not already speak for
+    // (`boundByTheAnswer`).
+    if (facts.isUnnamed(key) && boundByTheAnswer(facts, event.origin, key)) {
+      decision.leaveUnnamed(key);
+      continue;
+    }
     const entry = facts.liveEntryOf(key);
     const blocked = blockingReason(entry);
     if (blocked) {
@@ -586,7 +784,10 @@ function decideDerived(
   // no longer name is dropped; a person who took the key over meanwhile keeps
   // it, because the store deletes only a row still carrying this origin.
   if (event.origin !== "ticket_text" && event.origin !== "workflow_owned_branch") return;
-  const derived = new Set(keys);
+  // Named by the evidence counts as named here, decided or not: the deletion
+  // above is for evidence that GOES AWAY, and a repository the caller could
+  // still read on the ticket did not.
+  const derived = new Set([...keys, ...(event.stillNamedKeys ?? [])]);
   for (const entry of context.scope?.entries ?? []) {
     if (entry.origin === event.origin && !derived.has(entry.repositoryKey)) {
       decision.remove(entry);
@@ -617,11 +818,15 @@ function decideDerived(
  * one which-of-these question a person ever hears on that subject. Fixing it
  * honestly needs a durable marker on the entry saying which surface wrote it,
  * which is a contract and a storage change; the same is already true of
- * answering a clarification through MCP. The mitigation in place is that the
- * agent is not told the lever exists: the recovery sentence naming
+ * answering a clarification through MCP. The mitigation in place is narrower
+ * than "the agent never reads about the lever": this system never PLACES it in
+ * the agent's instruction channel. The recovery sentence naming
  * `work_scope.edit` is kept out of the prompt additions and out of the
  * clarification questions that become the agent's durable memory
- * (`engine/pre-sandbox/steps/repo-selection.ts`).
+ * (`withWorkScopeOutcome` in `engine/pre-sandbox/steps/repo-selection.ts`). It
+ * is still posted to the ticket, and a later run reads the ticket's comments,
+ * so an agent can meet it there as ticket history; the ruling on that line
+ * sits where the questions comment is posted in `engine/agent-workflow.ts`.
  */
 function decideTextAmbiguous(
   context: WorkScopeDecisionContext,
@@ -629,25 +834,63 @@ function decideTextAmbiguous(
   decision: DecisionRecorder,
   matchedKeys: RepositoryKey[],
 ): void {
-  if (!context.carriesRecord || context.selectionAnswered) return;
+  if (!context.carriesRecord) return;
   const personSelected = (context.scope?.entries ?? []).some(
     (entry) =>
       entry.state === "selected" &&
       entry.origin === "person" &&
       facts.isReachable(entry.repositoryKey),
   );
-  if (personSelected) return;
+  if (context.selectionAnswered || personSelected) {
+    // SILENCED IS NOT SILENT ABOUT WHAT AN ANSWER LEFT OUT. A repository the
+    // ticket names, the run does not hold, and an answer on this work left
+    // unnamed is the same fact a derived guess meets (`decideDerived`): said
+    // to the caller, keyed, never to the trail. Without it the finished run's
+    // comment lists nothing, because the only sentence about these
+    // repositories was a paragraph the agent reads (row C10). Only one the run
+    // does not hold: the gate over every signal raises this event about
+    // repositories already in the workspace, and "started without it" would
+    // be false about those. Only one the answer still binds: a path a person
+    // wrote after answering is theirs, and the caller says it was kept to the
+    // earlier choice instead (C11c).
+    for (const key of openKeys(facts, matchedKeys)) {
+      if (decision.isAttached(key)) continue;
+      if (facts.isUnnamed(key) && boundByTheAnswer(facts, "ticket_text", key)) {
+        decision.leaveUnnamed(key);
+      }
+    }
+    return;
+  }
   // A repository behind the provider pin may never be offered to a person, and
-  // one the record already decided must not be offered as if it were open.
-  // Stage 4 applies the same filter BEFORE it counts the matches, so a set that
-  // collapses to one to three decidable keys becomes an ordinary `derived`
+  // one the record excluded or recorded as unavailable must not be offered as if
+  // it were open. The selection counts the matches through the same function
+  // BEFORE it raises this event (`decidableWorkScopeKeys`), so a set that
+  // collapses to one to three open keys becomes an ordinary `derived`
   // `ticket_text` event rather than a repository nobody ever hears about.
-  const choices = unique(matchedKeys).filter(
-    (key) => facts.isReachable(key) && blockingReason(facts.liveEntryOf(key)) === null,
-  );
-  // One choice left is no ambiguity.
-  if (choices.length < 2) return;
+  const open = openKeys(facts, matchedKeys);
+  // THE GUARD ABOVE READS A PERSON'S SELECTION ONLY, AND THAT IS NOT THE WHOLE
+  // OF WHAT THE WORK ALREADY HOLDS. An earlier run's reading of the ticket, a
+  // trigger policy or a workflow-owned branch leaves a `selected` entry the run
+  // start attaches, and a reply cannot remove it: the answer deletes a guess and
+  // nothing else, by the plan's own decision. Offered as a choice, such a
+  // repository would read as one the person can leave out, and leaving it out
+  // would change nothing. So it is not offered; the caller names it in the
+  // question as already taken. Only what the RECORD holds and this run attached
+  // counts: a repository this run's own signals picked moments ago has no
+  // entry yet, and asking about exactly those is what the count gate is for.
+  const taken = open.filter((key) => {
+    if (!decision.isAttached(key)) return false;
+    const entry = facts.liveEntryOf(key);
+    return entry !== undefined && isHeldSelection(entry);
+  });
+  const choices = open.filter((key) => !taken.includes(key));
+  if (choices.length === 0) return;
+  // One choice left is no ambiguity, unless the rest are already taken: then
+  // the text still names more than the run may decide between, and the one
+  // repository left is a real question.
+  if (choices.length < 2 && taken.length === 0) return;
   for (const key of choices) decision.ask(key, "selection");
+  for (const key of taken) decision.keepTaken(key);
 }
 
 /** First match wins, in this order, for each of the first three keys. */
@@ -675,6 +918,14 @@ function decideRequestedKey(
   if (decision.isAttached(key)) return;
   if (!facts.isInPin(key)) {
     decision.refuse(key, "outside_policy");
+    return;
+  }
+  // The agent's request is a guess like any other, and asking instead would put
+  // a question already answered to the same person. Refused with a reason of its
+  // own, so the model and the person can tell it from an exclusion, and the run
+  // carries on without it.
+  if (facts.isUnnamed(key)) {
+    decision.refuse(key, "unnamed_in_answer");
     return;
   }
   const entry = facts.liveEntryOf(key);
@@ -789,9 +1040,28 @@ function decideAnswered(
           clarificationId,
         );
         break;
-      // The question never listed the matches as a choice to decline.
-      case "selection":
+      // Nothing is WRITTEN: a selected entry or an exclusion would record a
+      // stronger decision than leaving a name out of an answer (rule 5), and
+      // the omission already binds through the answered set
+      // (`isUnnamedInAnswer`).
+      //
+      // One thing is REMOVED. A guess recorded before the person was asked, a
+      // `selected` `inferred` entry, would otherwise go on saying "selected"
+      // about a repository they have just not chosen, and its mere presence
+      // would read to `isUnnamedInAnswer` as an entry that governs, so the next
+      // guess would take it again. Only that origin: a person's own entry, a
+      // typed path, a trigger policy and a workflow-owned branch are not
+      // guesses, and an answer that left a name out does not overrule them.
+      case "selection": {
+        const guessed = (context.scope?.entries ?? []).find(
+          (entry) =>
+            entry.repositoryKey === asked.repositoryKey &&
+            entry.state === "selected" &&
+            entry.origin === "inferred",
+        );
+        if (guessed) decision.remove(guessed);
         break;
+      }
     }
   }
   for (const key of unique(named)) {

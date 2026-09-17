@@ -18,6 +18,7 @@ import {
 import {
   recordRepositoryAnswer,
   type RepositoryAnswerPersistence,
+  type RepositoryAnswerOutcome,
 } from "../work-scope/index.js";
 import {
   commentsCoverAnswerWindow,
@@ -48,7 +49,7 @@ import {
 } from "../tickets/index.js";
 import {
   formatAnswerNotRecordedComment,
-  type AnswerNotRecordedReason,
+  formatAnswerDeclinedComment,
   formatClarificationAnswerComment,
   aLaterRunCanPickUpAskedRepositories,
 } from "./comment-format.js";
@@ -66,6 +67,7 @@ import {
   type ResumeAttemptReservation,
 } from "./resume-attempts.js";
 import { retireConnectedClarificationForGoneTicket } from "../../db/repositories/clarifications.js";
+import { commentPathAfterAnUnrecordedAnswer } from "../../engine/work-scope/context.js";
 import {
   findBoundActiveRunOwner,
   findConnectedBoundActiveRunOwner,
@@ -79,7 +81,35 @@ import { retireClarificationForGoneTicket } from "./retirement.js";
 export const MAX_ANSWER_LENGTH = MAX_CLARIFICATION_ANSWER_LENGTH;
 
 export type AnswerClarificationOutcome =
-  | { kind: "answered"; row: HookClarificationRow }
+  | {
+      kind: "answered";
+      row: HookClarificationRow;
+      /**
+       * What this answer did to the repository record, in one sentence for the
+       * person who wrote it, and absent when it recorded exactly what it named.
+       *
+       * THE PERSON WHO ANSWERED HAS TO LEARN IT IN THE CHANNEL THEY ANSWERED
+       * IN. The ticket comment reaches the ticket's readers, and somebody
+       * answering from the dashboard or an MCP client may never open it; they
+       * see "answered", and the next run asks them the same question. The
+       * delivery is unaffected either way: the answer reached the run, and this
+       * is what happened to the record beside it.
+       *
+       * TWO CASES, ONE FIELD. Either the answer recorded no repository decision,
+       * and this carries the same words the ticket comment does, or it declined
+       * the repositories the question listed, and this says which ones and how
+       * to bring one back. They are mutually exclusive, they are read in one
+       * place by every channel, and a reader that had to branch on which of two
+       * fields arrived would be a second rule to keep in step.
+       *
+       * The composed TEXT rather than a code, on purpose. The code is an
+       * internal classification whose only job is choosing these words, and a
+       * second vocabulary on the wire is a second thing to keep in step: a
+       * surface rendering its own sentence per code would drift from the ticket,
+       * and a person reading both would meet two stories about one answer.
+       */
+      recordOutcome?: string;
+    }
   | { kind: "invalid_answer" }
   | { kind: "conflict" }
   | { kind: "resume_terminal" }
@@ -406,9 +436,9 @@ async function answerClarificationAndResumeWithPersistence(
   // Before the resume, because the resumed run reads the RECORD and never the
   // answer text: a run that died between the two would otherwise lose what a
   // person said, and the next run would ask them again.
-  let recordTold: AnswerNotRecordedReason | undefined;
+  let recorded: RepositoryAnswerOutcome = {};
   if (authorship.kind === "write") {
-    recordTold = await recordRepositoryAnswer(persistence, {
+    recorded = await recordRepositoryAnswer(persistence, {
       row,
       answer,
       answeredAt,
@@ -426,21 +456,30 @@ async function answerClarificationAndResumeWithPersistence(
   // read at all, so when that count has something to say it is the more
   // specific of the two and goes first: an answer several people wrote is told
   // that, not that it named no repository.
-  const tell = authorship.tell ?? recordTold;
-  if (tell !== undefined && row.ticketKey) {
-    const ticketKey = row.ticketKey;
-    await issueTracker
-      .postComment(
-        ticketKey,
-        formatAnswerNotRecordedComment(tell, {
+  const tell = authorship.tell ?? recorded.told;
+  // Composed once, for both readers. The ticket comment and the reply this call
+  // returns carry the same words, so a person who reads both meets one story
+  // about one answer, and a wording change lands on both at once.
+  const notRecorded =
+    tell === undefined
+      ? undefined
+      : formatAnswerNotRecordedComment(tell, {
           listedRepositories: (row.askedRepositories?.length ?? 0) > 0,
           // The second fact the sentence needs, and this row is the only place
           // that holds it: a question the run raised about a repository the
           // catalog does not enable or cannot serve offers a path route that
           // the next run cannot honour.
           aLaterRunCanPickThemUp: aLaterRunCanPickUpAskedRepositories(row.askedRepositories),
-        }),
-      )
+          // And the third: what may be said about writing a path in a
+          // comment. Never that it works: whether the next run takes it is a
+          // count of the ticket's open repositories, and this surface has no
+          // run behind it to count them.
+          commentPath: commentPathAfterAnUnrecordedAnswer({ questions: row.questions }),
+        });
+  if (notRecorded !== undefined && row.ticketKey) {
+    const ticketKey = row.ticketKey;
+    await issueTracker
+      .postComment(ticketKey, notRecorded)
       .catch((error: unknown) => {
         logger.warn(
           { ticketKey, runId: row.runId, error: (error as Error).message },
@@ -484,7 +523,17 @@ async function answerClarificationAndResumeWithPersistence(
   // best-effort: a status write must never fail a delivered answer.
   await persistence.markResumed(row.runId).catch(() => {});
 
-  return { kind: "answered", row: answered };
+  // WHAT THIS ANSWER DID TO THE RECORD, in one field and one wording for every
+  // channel that took it. Either it recorded nothing and this says why, in the
+  // words the ticket comment carries, or it declined the repositories the
+  // question listed and this says which. Absent when the answer recorded what
+  // it named, which is the case that needs no sentence.
+  const recordOutcome =
+    notRecorded ??
+    (recorded.declined && recorded.declined.length > 0
+      ? formatAnswerDeclinedComment(recorded.declined)
+      : undefined);
+  return { kind: "answered", row: answered, ...(recordOutcome ? { recordOutcome } : {}) };
 }
 
 /** Finish a failed reserved delivery and report whether anything is left. */

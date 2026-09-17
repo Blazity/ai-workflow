@@ -1,4 +1,4 @@
-import { asc } from "drizzle-orm";
+import { asc, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type {
   WorkScopeActor,
@@ -16,6 +16,7 @@ import {
   applyRunWorkScopePlan,
   listWorkScopeTrail,
   readWorkScope,
+  readWorkScopeAnsweredAtByKey,
   readWorkScopeAnsweredQuestion,
   readWorkScopeAnsweredRepositories,
   readWorkScopeFacts,
@@ -1520,6 +1521,97 @@ describe("readWorkScopeAnsweredRepositories", () => {
   });
 });
 
+/**
+ * Joint gate F2. The anchor a comment about a repository is dated against is
+ * the newest answer to a question that NAMED that repository, never the newest
+ * answer on the subject: a "none" to an expansion question about something else
+ * must not turn a path a person wrote on our instructions into text that
+ * predates the answer.
+ */
+describe("readWorkScopeAnsweredAtByKey", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+  const subjectKey = "ticket:jira:AWT-777";
+
+  async function askAndAnswer(
+    clarificationId: string,
+    repositories: WorkScopeAskedRepository[],
+    given: { kind: "none" } | { kind: "repositories"; repositoryKeys: string[] },
+    at: string,
+  ) {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_asked", clarificationId, repositories }],
+      },
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_answered", clarificationId, answer: given, answeredBy: ada }],
+      },
+    });
+    // The trail stamps its own instant; the scenario needs three that are far
+    // enough apart to put a comment between two of them.
+    await db.execute(sql`
+      UPDATE ${workScopeTrail} SET at = ${at}::timestamptz
+      WHERE subject_key = ${subjectKey} AND kind = 'question_answered'
+        AND event ->> 'clarificationId' = ${clarificationId}
+    `);
+  }
+
+  it("dates a repository against the answer that named it, not a later answer about another one", async () => {
+    // T1: the which-of-these question named api and web, and the answer was "none".
+    await askAndAnswer(
+      "clarification-selection",
+      [
+        { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+        { repositoryKey: "github:acme/web", askedBecause: "selection", named: true },
+      ],
+      { kind: "none" },
+      "2026-09-16T09:00:00.000Z",
+    );
+    // T3: an expansion question about ops, answered "none" an hour later.
+    await askAndAnswer(
+      "clarification-expansion",
+      [{ repositoryKey: "github:acme/ops", askedBecause: "outside_policy", named: true }],
+      { kind: "none" },
+      "2026-09-16T11:00:00.000Z",
+    );
+
+    expect(await readWorkScopeAnsweredAtByKey(db, subjectKey)).toEqual({
+      "github:acme/api": "2026-09-16T09:00:00.000Z",
+      "github:acme/ops": "2026-09-16T11:00:00.000Z",
+      "github:acme/web": "2026-09-16T09:00:00.000Z",
+    });
+  });
+
+  it("takes the newer of two answers that both named the repository", async () => {
+    await askAndAnswer(
+      "clarification-1",
+      [{ repositoryKey: "github:acme/api", askedBecause: "selection", named: true }],
+      { kind: "none" },
+      "2026-09-16T09:00:00.000Z",
+    );
+    await askAndAnswer(
+      "clarification-2",
+      [{ repositoryKey: "github:acme/api", askedBecause: "outside_policy", named: true }],
+      { kind: "none" },
+      "2026-09-16T10:00:00.000Z",
+    );
+
+    expect(await readWorkScopeAnsweredAtByKey(db, subjectKey)).toEqual({
+      "github:acme/api": "2026-09-16T10:00:00.000Z",
+    });
+  });
+});
+
 describe("appendWorkScopeQuestionAsked", () => {
   const asked: WorkScopeAskedRepository[] = [
     { repositoryKey: "github:acme/web", askedBecause: "not_enabled" },
@@ -1806,7 +1898,7 @@ describe("readWorkScopeFacts", () => {
     });
   }
 
-  /** A subject every one of the five reads has something to say about, so a
+  /** A subject every one of the six reads has something to say about, so a
    *  combined read that dropped a fact could not pass by answering the default
    *  everywhere. */
   async function subjectWithEveryFact() {
@@ -1826,7 +1918,7 @@ describe("readWorkScopeFacts", () => {
     await answer("clarification-2", { kind: "none" });
   }
 
-  it("answers exactly what the five reads answer for the same subject", async () => {
+  it("answers exactly what the six reads answer for the same subject", async () => {
     await subjectWithEveryFact();
 
     const facts = await readWorkScopeFacts(db, subjectKey, "clarification-1");
@@ -1835,6 +1927,7 @@ describe("readWorkScopeFacts", () => {
       scope: await readWorkScope(db, subjectKey),
       selectionAnswered: await readWorkScopeSelectionAnswered(db, subjectKey),
       answeredRepositoryKeys: await readWorkScopeAnsweredRepositories(db, subjectKey),
+      answeredAtByKey: await readWorkScopeAnsweredAtByKey(db, subjectKey),
       narrowingAnswered: await readWorkScopeNarrowingAnswered(db, subjectKey),
       answeredQuestion: await readWorkScopeAnsweredQuestion(db, "clarification-1"),
     });
@@ -1843,6 +1936,11 @@ describe("readWorkScopeFacts", () => {
     expect(facts.scope?.entries).toHaveLength(1);
     expect(facts.selectionAnswered).toBe(true);
     expect(facts.answeredRepositoryKeys).toEqual(["github:acme/api"]);
+    // The instant the ticket's later words about that repository are dated
+    // against, and it is the trail's own, which is why it is read rather than
+    // passed in.
+    expect(Object.keys(facts.answeredAtByKey)).toEqual(["github:acme/api"]);
+    expect(Date.parse(facts.answeredAtByKey["github:acme/api"] ?? "")).not.toBeNaN();
     expect(facts.narrowingAnswered).toBe(true);
     expect(facts.answeredQuestion?.event.kind).toBe("question_answered");
   });
@@ -1859,13 +1957,14 @@ describe("readWorkScopeFacts", () => {
     expect(facts.selectionAnswered).toBe(true);
   });
 
-  it("answers the five defaults for a subject nobody ever decided on", async () => {
+  it("answers the six defaults for a subject nobody ever decided on", async () => {
     const facts = await readWorkScopeFacts(db, "ticket:jira:AWT-404", "clarification-1");
 
     expect(facts).toEqual({
       scope: null,
       selectionAnswered: false,
       answeredRepositoryKeys: [],
+      answeredAtByKey: {},
       narrowingAnswered: false,
       answeredQuestion: null,
     });

@@ -46,6 +46,30 @@ const AFFIRMATIVE_ANSWERS = new Set([
   "uzyj",
 ]);
 
+// The whole answer, and nothing but these phrases, is every repository the
+// question listed. A question offering three repositories is answered "all" by
+// somebody who means all three, and reading that as unreadable costs them a
+// round for the one reply that is not ambiguous at all. Matched exactly, like
+// the affirmatives above, so "all of the frontend ones" stays unreadable.
+//
+// EACH WORD IS GATED ON THE COUNT IT MEANS, and null means any count. "both"
+// against a question that listed four repositories is not somebody agreeing to
+// four: the word and the list contradict each other, and the reply that
+// contradicts the question in front of it is exactly the one this reader must
+// not turn into a decision in that person's name (A34).
+const ALL_OF_THEM = new Map<string, number | null>([
+  ["all", null],
+  ["all of them", null],
+  ["all of these", null],
+  ["wszystkie", null],
+  ["wszystkie z nich", null],
+  ["all three", 3],
+  ["both", 2],
+  ["both of them", 2],
+  ["oba", 2],
+  ["obie", 2],
+]);
+
 // The words a person says no with, compared on word boundaries against what
 // they wrote AROUND the repositories they named. Polish is folded to ASCII
 // first, so "nie" covers both spellings of its kin. "no need" needs no entry:
@@ -68,6 +92,9 @@ const LEAVE_OUT = /\bleave\b[^\n]*\bout\b/;
 // half of "leave out" and "scope" alone is this feature's own noun.
 const OUT_OF_SCOPE = /\bout of scope\b/;
 
+// "keep acme/web out" says no with a word that is otherwise ordinary.
+const KEEP_OUT = /\bkeep\b[^\n]*\bout\b/;
+
 /**
  * The one reader of a person's answer to a repository question. Where the
  * answer arrives and the protocol that asked both read it here, so a replay
@@ -81,12 +108,33 @@ const OUT_OF_SCOPE = /\bout of scope\b/;
  * for certain about the conversation: a line of the answer that repeats one of
  * them is our own words coming back, not testimony.
  *
- * A guess is never an answer: an identity the catalog does not hold, a path two
- * providers share, or prose that is not a plain list of names is unrecognised,
- * and the protocol asks its follow-up rather than recording a repository
- * against a person's name. What this reader records outlives the run, so a
- * repeated question is a cost and a fabricated decision is a defect, and every
- * ambiguity here resolves to unrecognised (A34).
+ * `keptKeys` are the repositories the question SHOWED as already part of this
+ * work and kept whatever the reply (the which-of-these question names them,
+ * A11g). They are not asked, and a reply does not change them: naming one is
+ * not recorded, and a plain yes beside them is not read as the one choice.
+ * Absent means the question showed none.
+ *
+ * A REPLY THAT SAYS NO ABOUT ANYTHING RECORDS NOTHING, AND THE QUESTION COMES
+ * BACK. This reader used to try to work out what a no attached to: which clause
+ * it sat in, whether the words beside it chose something else, whether a
+ * contrast made the other name a choice. Every defect this feature has had came
+ * out of that attempt, because the ways people write a no do not end, and each
+ * wrong reading is a decision recorded in the name of somebody who said the
+ * opposite. So a no, anywhere in the reply, makes the whole reply unreadable
+ * and the person is told what to write instead (rule 1). Under-reading is the
+ * cheap failure here: a repeated question costs a round and explains itself.
+ *
+ * The ONE no that still decides is a reply that is nothing but a refusal. This
+ * answer is threaded to the question that asked it, so "no" has exactly one
+ * thing it can be about: every repository the question listed, and that is what
+ * it declines.
+ *
+ * A guess is never an answer either: an identity the catalog does not hold, a
+ * path two providers share, or prose that is not a plain list of names is
+ * unrecognised, and the protocol asks its follow-up rather than recording a
+ * repository against a person's name. What this reader records outlives the
+ * run, so a repeated question is a cost and a fabricated decision is a defect,
+ * and every ambiguity here resolves to unrecognised (A34).
  */
 export function readRepositoryAnswer(
   answer: string,
@@ -94,57 +142,192 @@ export function readRepositoryAnswer(
     catalogKeys: RepositoryKey[];
     askedKeys: RepositoryKey[];
     askedQuestions: string[];
+    keptKeys?: RepositoryKey[];
   },
 ): WorkScopeQuestionAnswer {
-  // Our own words come out FIRST, and every rule that can only attach or ask
-  // reads what is left rather than the raw answer. They used to come out only
-  // before the naming rule, which cost the most natural reply in a ticket: a
-  // person who quotes the question and writes "yes" underneath got another
-  // round, because the plain-yes rule was looking at the quote too.
-  //
-  // The two REFUSAL rules below deliberately still read the whole reply. What
-  // they decide outlives the run, an entry in that person's name saying this
-  // work does not touch a repository, and a reply that carries our question as
-  // well as their word is not wholly a refusal. A wrong yes costs one run; a
-  // wrong no is a decision nobody can undo until the panel ships, so that one
-  // keeps failing towards asking again (A34).
-  const theirWords = withoutQuotedQuestions(answer, input.askedQuestions);
+  // Our own words come out FIRST, and every rule below reads what is left. It
+  // used to matter only for the naming rules; it is now what keeps the rule
+  // above from reading our own sentences as the person's refusal. The way back
+  // this system prints to a ticket contains the word "not", so a person who
+  // quotes our comment and writes "yes, bring it back" underneath would be
+  // refused every single time.
+  const theirWords = withoutQuotedText(answer, input.askedQuestions);
   // An answer made of nothing but our own words is not an answer. It is the
   // quote button, or a mail client's `>`, and reading a repository out of it
   // would record OUR key as the person naming it, over the very decision they
   // are being asked about.
   if (!/[a-z0-9]/iu.test(theirWords)) return UNRECOGNISED;
   const testimony = whatThePersonNamed(theirWords, input.catalogKeys);
-  const identities = parseRepositoryExpansionAnswer(testimony);
-  if (identities.length > 0) {
-    const resolved: RepositoryKey[] = [];
-    for (const identity of identities) {
-      const key = resolveIdentity(identity, input.catalogKeys);
-      if (key === null) return UNRECOGNISED;
-      resolved.push(key);
-    }
-    const keys = [...new Set(resolved)];
-    if (saysNo(answer, testimony)) {
-      // "no, we do not need acme/api" about the very repositories the question
-      // asked about is a contradiction, not a selection. A no beside a
-      // repository we did NOT ask about is the redirect A30 decided: those are
-      // the person's choice, and the asked ones they said no to are dropped.
-      const redirected = keys.filter((key) => !input.askedKeys.includes(key));
-      if (redirected.length === 0) return UNRECOGNISED;
-      return readRepositories(redirected);
-    }
-    return readRepositories(keys);
+  const spelled = namedRepositories(testimony, input.catalogKeys);
+  const keptKeys = input.keptKeys ?? [];
+  if (saysNo(testimony)) {
+    // The one no that decides: a refusal that names no repository at all. It is
+    // threaded to the question that asked it, so there is exactly one thing it
+    // can be about, which is everything that question listed.
+    if (spelled === null && saysNothingToAttach(theirWords)) return { kind: "none" };
+    // Every other no, wherever it sits and whatever else the reply says.
+    // Working out what it attached to is the guess this reader no longer makes.
+    return UNRECOGNISED;
   }
-  if (saysNothingToAttach(answer)) return { kind: "none" };
+  if (spelled !== null) {
+    if (spelled === "unresolved") return UNRECOGNISED;
+    // Naming a kept repository records nothing about it: the question said it
+    // stays whatever the reply, so the reply does not turn the reason it is
+    // held into a person's selection.
+    return readRepositories(spelled.keys.filter((key) => !keptKeys.includes(key)));
+  }
   // A reply of bare names ("api, web") is how people answer when the question
   // listed the repositories. Every token must be such a name, so a sentence
   // that happens to contain one is not read as a choice.
   const named = readBareNames(testimony, input.catalogKeys);
-  if (named !== null) return readRepositories(named);
-  if (input.askedKeys.length === 1 && isAffirmative(theirWords)) {
+  if (named !== null) return readRepositories(named.filter((key) => !keptKeys.includes(key)));
+  // A question about ONE repository, and only that: a yes under a question
+  // that also showed kept repositories may be agreeing to keep them.
+  if (input.askedKeys.length === 1 && keptKeys.length === 0 && isAffirmative(theirWords)) {
     return { kind: "repositories", repositoryKeys: [input.askedKeys[0]] };
   }
+  // "all", for a question that listed what all of them are. There is nothing to
+  // work out here: the reply is threaded to that question, and the choices it
+  // offered are the only thing "all" can mean. A word that counts ("both",
+  // "all three") has to agree with the list, or it is not about this question.
+  if (input.askedKeys.length > 0 && isAllOfThem(theirWords, input.askedKeys.length)) {
+    return readRepositories(input.askedKeys.filter((key) => !keptKeys.includes(key)));
+  }
   return UNRECOGNISED;
+}
+
+/**
+ * Does this reply name a repository the question showed as kept, in a way the
+ * person is owed a sentence about?
+ *
+ * Two readings reach here, and both leave the record untouched: a reply trying
+ * to drop a kept repository, which cannot be split from the rest of it, and a
+ * reply naming only kept repositories, which records nothing because the
+ * question said they stay. Spelled out as a path or a link it counts however it
+ * was written; as a bare name it counts only beside a no, because "the docs"
+ * in a sentence is not somebody naming a repository.
+ */
+export function answerNamesKeptRepositories(
+  answer: string,
+  input: {
+    catalogKeys: RepositoryKey[];
+    askedQuestions: string[];
+    keptKeys: RepositoryKey[];
+  },
+): boolean {
+  if (input.keptKeys.length === 0) return false;
+  const theirWords = withoutQuotedText(answer, input.askedQuestions);
+  if (!/[a-z0-9]/iu.test(theirWords)) return false;
+  const testimony = whatThePersonNamed(theirWords, input.catalogKeys);
+  const spelled = namedRepositories(testimony, input.catalogKeys);
+  if (
+    spelled !== null &&
+    spelled !== "unresolved" &&
+    spelled.keys.some((key) => input.keptKeys.includes(key))
+  ) {
+    return true;
+  }
+  if (!saysNo(testimony)) return false;
+  return namesByBareName(testimony, input.keptKeys, input.catalogKeys);
+}
+
+/**
+ * Does this text name one of these repositories by its bare name, where that
+ * name belongs to exactly one repository this deployment holds?
+ *
+ * Read only beside a no, by both callers. "the docs" in a sentence is not
+ * somebody naming a repository, and taking one on a bare word would attach
+ * repositories nobody chose; beside a refusal the same word is what people
+ * actually write, and the only thing it buys is a truer sentence back.
+ */
+function namesByBareName(
+  testimony: string,
+  keys: readonly RepositoryKey[],
+  catalogKeys: RepositoryKey[],
+): boolean {
+  const tokens = new Set(
+    testimony
+      .split(/[\s,]+/)
+      .map((token) => normalizeToken(token).toLowerCase())
+      .filter((token) => token.length > 0),
+  );
+  return keys.some((key) => {
+    const name = lastPathSegment(key);
+    return (
+      tokens.has(name) &&
+      catalogKeys.filter((other) => lastPathSegment(other) === name).length === 1
+    );
+  });
+}
+
+/**
+ * Did this reply say no AND name a repository?
+ *
+ * The reply that is not a plain refusal, told apart from one that is, because
+ * the two are owed different sentences. "github:acme/infra, but do not touch
+ * github:acme/billing" names two repositories and refuses at least one of them,
+ * and "nothing in that answer named a repository this work should use" would be
+ * plainly false to the person who wrote it. What they are told instead is the
+ * rule: a reply that says no about anything records nothing, so name only the
+ * repositories to use.
+ *
+ * A BARE NAME COUNTS HERE, exactly as it does for a kept repository above.
+ * "nie, tylko ops" and "no, just ops" are how people write, and the sentence
+ * saying nothing in the answer named a repository reads as nonsense to somebody
+ * who just named one; worse, it is the one sentence that never tells them the
+ * rule they fell foul of.
+ */
+export function answerSaysNoAndNamesARepository(
+  answer: string,
+  input: { catalogKeys: RepositoryKey[]; askedQuestions: string[] },
+): boolean {
+  const theirWords = withoutQuotedText(answer, input.askedQuestions);
+  if (!/[a-z0-9]/iu.test(theirWords)) return false;
+  // A reply that is nothing but a refusal names nothing by definition, and it
+  // is not this: it decides, and the record keeps it.
+  if (saysNothingToAttach(theirWords)) return false;
+  const testimony = whatThePersonNamed(theirWords, input.catalogKeys);
+  if (!saysNo(testimony)) return false;
+  const spelled = namedRepositories(testimony, input.catalogKeys);
+  if (spelled !== null && spelled !== "unresolved" && spelled.keys.length > 0) return true;
+  return namesByBareName(testimony, input.catalogKeys, input.catalogKeys);
+}
+
+/** The repositories an answer spells out. Null when it spells out none;
+ *  "unresolved" when one of them is not a key this deployment holds, which
+ *  makes the whole answer unreadable (A34). */
+function namedRepositories(
+  testimony: string,
+  catalogKeys: RepositoryKey[],
+): { keys: RepositoryKey[] } | "unresolved" | null {
+  const identities = parseRepositoryExpansionAnswer(testimony);
+  if (identities.length === 0) return null;
+  const resolved: RepositoryKey[] = [];
+  for (const identity of identities) {
+    const key = resolveIdentity(identity, catalogKeys);
+    if (key === null) return "unresolved";
+    resolved.push(key);
+  }
+  return { keys: [...new Set(resolved)] };
+}
+
+/**
+ * Does a comment written on the ticket say no about the repository paths it
+ * names?
+ *
+ * The same reading an answer gets, for text that is not an answer: a full path
+ * a person writes after answering reopens that repository (C11g), and "please
+ * do not touch github:acme/api" written there is the opposite of naming it.
+ * Read on the whole comment, so a comment that says no about anything is not
+ * taken as naming anything; leaving a repository out costs a person one step,
+ * attaching one they declined is a decision nobody made.
+ *
+ * Quoted lines come out first, for the reason they do on the answer path: a
+ * person replying to our comment quotes a sentence built around "not", and
+ * their own word is what is being read.
+ */
+export function commentSaysNoAboutItsPaths(comment: string): boolean {
+  return saysNo(withoutQuotedText(comment, []));
 }
 
 /**
@@ -195,24 +378,69 @@ function isForeignLink(token: string, catalogKeys: RepositoryKey[]): boolean {
   );
 }
 
-/** True when the answer says no to the repositories it names: one of the
- *  phrases that is a refusal whole, or any of the words a person says no with
- *  written beside them. Read from the WHOLE answer, quoted question and all,
- *  because a refusal is only itself when it is all the person sent and what it
- *  decides outlives the run. */
-function saysNo(answer: string, testimony: string): boolean {
-  if (saysNothingToAttach(answer)) return true;
-  // A repository key is not a sentence: "acme/no-code" carries the letters of a
-  // negation and says nothing, so only the words around the names are read.
-  const prose = foldPolishDiacritics(
-    testimony
+/**
+ * Does this text say no about anything?
+ *
+ * One of the phrases that is a refusal whole, or any of the words a person says
+ * no with, anywhere in what they wrote. It is read on the text with OUR words
+ * already taken out: every sentence this system prints about a repository it
+ * left out carries a "not", and a person quoting one back is not refusing
+ * anything.
+ *
+ * What it does NOT do, on purpose, is work out which repository the no is
+ * about. That question has no reliable answer in free text, and every wrong
+ * answer to it is a decision recorded against somebody who said the opposite.
+ */
+function saysNo(text: string): boolean {
+  if (saysNothingToAttach(text)) return true;
+  const prose = proseOf(text);
+  return (
+    NEGATION_WORDS.test(prose) ||
+    LEAVE_OUT.test(prose) ||
+    KEEP_OUT.test(prose) ||
+    OUT_OF_SCOPE.test(prose)
+  );
+}
+
+/**
+ * The person's own words: our question out, and every quoted line with it.
+ *
+ * `withoutQuotedQuestions` takes out the question we asked, in each form a
+ * channel may have rendered it. This adds the other half, which is every line a
+ * person quoted at all: the quote button and every mail client write `>`, and
+ * what gets quoted here is usually OUR comment saying a repository was left
+ * out, a sentence built around the word "not". Read as theirs, it refuses
+ * everything, so the reply that is most obviously a yes ("> ... was not taken"
+ * / "yes, bring it back") would be the one that never works.
+ */
+export function withoutQuotedText(answer: string, askedQuestions: string[]): string {
+  // OUR QUESTION COMES OUT FIRST, and the quote markers after it. A mail client
+  // re-wraps a quoted question and puts its marker in the middle of our
+  // sentences, so dropping marked lines first would leave the first half of our
+  // own question standing as if the person had typed it.
+  //
+  // TWO MARKERS, because two channels write them. The mail clients and every
+  // markdown editor write ">", and Jira's own wiki markup writes "bq." in front
+  // of the quoted line, which is what a person sees when they click quote in a
+  // project that never moved to the rich editor.
+  return withoutQuotedQuestions(answer, askedQuestions)
+    .split("\n")
+    .filter((line) => !/^\s*(?:>|bq\.\s)/.test(line))
+    .join("\n");
+}
+
+/** The words around the repositories a text names, folded for matching. A
+ *  repository key is not a sentence: "acme/no-code" carries the letters of a
+ *  negation and says nothing, so only the words around the names are read. */
+function proseOf(text: string): string {
+  return foldPolishDiacritics(
+    text
       .split(/[\s,]+/)
       .filter((token) => !normalizeToken(token).includes("/"))
       .join(" "),
   )
     .toLowerCase()
     .replace(/['’]/g, "");
-  return NEGATION_WORDS.test(prose) || LEAVE_OUT.test(prose) || OUT_OF_SCOPE.test(prose);
 }
 
 /** True for an answer that says there is nothing to attach.
@@ -253,12 +481,24 @@ function readBareNames(answer: string, catalogKeys: RepositoryKey[]): Repository
 }
 
 function isAffirmative(answer: string): boolean {
-  const whole = foldPolishDiacritics(answer)
+  return AFFIRMATIVE_ANSWERS.has(wholeReply(answer));
+}
+
+/** The reply that says every repository the question listed, for a question
+ *  whose list the word agrees with. */
+function isAllOfThem(answer: string, askedCount: number): boolean {
+  const means = ALL_OF_THEM.get(wholeReply(answer));
+  if (means === undefined) return false;
+  return means === null || means === askedCount;
+}
+
+/** The reply as one folded line, for the two sets that are matched whole. */
+function wholeReply(answer: string): string {
+  return foldPolishDiacritics(answer)
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ")
     .replace(/[^a-z0-9]+$/, "");
-  return AFFIRMATIVE_ANSWERS.has(whole);
 }
 
 function resolveIdentity(

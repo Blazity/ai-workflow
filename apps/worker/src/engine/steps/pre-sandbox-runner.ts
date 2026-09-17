@@ -41,6 +41,7 @@ export async function executePreSandboxPhase(
   let workScopeAsk: RunPreSandboxPhaseResult["workScopeAsk"];
   let workScopeLeftOut: RunPreSandboxPhaseResult["workScopeLeftOut"];
   let workScopeRecoveryNotes: RunPreSandboxPhaseResult["workScopeRecoveryNotes"];
+  let workScopeTicketText: RunPreSandboxPhaseResult["workScopeTicketText"];
 
   for (const step of config.preSandbox.steps) {
     const handler = registry[step.uses];
@@ -108,6 +109,9 @@ export async function executePreSandboxPhase(
       if (result.workScopeRecoveryNotes) {
         workScopeRecoveryNotes = result.workScopeRecoveryNotes;
       }
+      if (result.workScopeTicketText) {
+        workScopeTicketText = result.workScopeTicketText;
+      }
 
       if (result.status === "halt") {
         return {
@@ -124,6 +128,7 @@ export async function executePreSandboxPhase(
           workScopeAsk,
           workScopeLeftOut,
           workScopeRecoveryNotes,
+          workScopeTicketText,
         };
       }
     } catch (err) {
@@ -149,6 +154,7 @@ export async function executePreSandboxPhase(
         workScopeAsk,
         workScopeLeftOut,
         workScopeRecoveryNotes,
+        workScopeTicketText,
       };
     }
   }
@@ -163,6 +169,7 @@ export async function executePreSandboxPhase(
     workScopeAsk,
     workScopeLeftOut,
     workScopeRecoveryNotes,
+    workScopeTicketText,
   };
 }
 

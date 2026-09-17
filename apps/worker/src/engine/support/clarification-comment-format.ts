@@ -1,4 +1,5 @@
 import type { WorkScopeAskReason } from "@shared/contracts";
+import type { UnrecordedAnswerCommentPath } from "../work-scope/context.js";
 import { scrubForPublication } from "./publication-scrub.js";
 
 /**
@@ -154,11 +155,13 @@ export function formatAlreadyAnsweredComment(input: { answeredByLabel: string })
  * Every way an answer that reached the run can leave no repository decision
  * behind it, each with the sentence that explains it to the person who wrote it.
  *
- * THE MAP IS THE LIST. `AnswerNotRecordedReason` is its keys, so a seventh
- * reason cannot be declared without the sentence that explains it, and the rule
- * 6 test walks this object instead of a literal list beside it that somebody has
- * to remember to extend. A type cannot be enumerated at runtime; this is the
- * narrowest thing that can, and it is the thing every reason must have.
+ * THE MAP IS THE LIST. `AnswerNotRecordedReason` is its keys, so a new reason
+ * cannot be declared without the sentence that explains it, and the rule 6 test
+ * walks this object instead of a literal list beside it that somebody has to
+ * remember to extend. A type cannot be enumerated at runtime; this is the
+ * narrowest thing that can, and it is the thing every reason must have. The
+ * count is deliberately not written here: it was "a seventh reason" while the
+ * map held nine, which is how a comment that counts stops being true.
  */
 const ANSWER_NOT_RECORDED_WHY = {
   /** Several people wrote into the one answer, so no single person can be
@@ -190,6 +193,15 @@ const ANSWER_NOT_RECORDED_WHY = {
    *  takes as nothing left to attach and the record takes as nothing said. */
   no_words:
     "That answer has no words in it, so there was nothing in it to read and the AI workflow recorded no repository decision from it. A thumbs up reads as agreement to a person and as nothing at all here.",
+  /** It named a repository the question listed as already part of this work,
+   *  to drop it or only to keep it. A reply does not change those, and nothing
+   *  else in it could be read as a decision. */
+  names_kept_repository:
+    "That answer names a repository the question listed as already part of this work. A reply to that question does not change those, and the AI workflow could not read a decision about the other repositories from it, so it recorded no repository decision from it.",
+  /** It named a repository and also said no, and the no could not be tied to
+   *  the repositories it was about. */
+  refusal_beside_named:
+    "That answer names a repository and also says no, and the AI workflow could not tell which repositories the no was about, so it recorded no repository decision from it rather than choosing for you.",
 };
 
 /** Why an answer that reached the run left no repository decision behind it. */
@@ -327,6 +339,20 @@ export function aLaterRunCanPickUpAskedRepositories(
  * decides which words are offered back. A question that listed none never
  * offered "none" to anybody, and answering it that way would record nothing, so
  * that case is told to name a path instead.
+ *
+ * AND EVERYBODY ELSE A QUESTION LISTED REPOSITORIES TO, by count rather than
+ * by catalog. Whether a written path is taken depends on how many open
+ * repositories the ticket names with it, and this surface has no run behind it
+ * and cannot count them. The which-of-these question about the ticket's text is
+ * raised only while more than three stand, so there the sentence says why the
+ * route is shut; on every other question it says nothing about the route at
+ * all. `question.commentPath` is that fact, decided by
+ * `commentPathAfterAnUnrecordedAnswer` (`engine/work-scope/context.ts`), and on
+ * both branches the sentence names only routes that work: naming one when the
+ * question comes back, and the work's repository list. We may under-promise
+ * here, never over-promise. The question that listed no repository at all
+ * still offers the path route, which this surface cannot prove either; that is
+ * an open row (C11o).
  */
 export function formatAnswerNotRecordedComment(
   reason: AnswerNotRecordedReason,
@@ -336,15 +362,32 @@ export function formatAnswerNotRecordedComment(
     /** Could a later run's path matcher pick those repositories up out of a
      *  comment? Read only where `listedRepositories` is true. */
     aLaterRunCanPickThemUp: boolean;
+    /** What may be said about writing one of their paths in a comment. Never
+     *  that it works, because nothing on this surface can prove it:
+     *  "too_many_open" where the ticket names more open repositories than a run
+     *  decides between, so the sentence says why the route is shut;
+     *  "unproven" everywhere else, so the sentence names only routes that work.
+     *  Decided by `commentPathAfterAnUnrecordedAnswer` in
+     *  `engine/work-scope/context.ts`. Read only where both facts above are
+     *  true. */
+    commentPath: UnrecordedAnswerCommentPath;
   },
 ): string {
   // What happens to this run. The same for every reason but one: a wordless
   // answer to a question that named repositories ends the run's own asking, and
   // it carries on WITHOUT them. That is the fact the person most needs and the
   // one they can least see, because a thumbs up reads as approval.
+  //
+  // AND WHAT IT DID NOT DO. A wordless answer ends THIS run's asking and
+  // records nothing at all: it is read as nothing said rather than as "none"
+  // (`saysNothingToAttach` in `engine/work-scope/answer.ts`), so the
+  // repositories it dropped are not decided against, and a later run may take
+  // them. Saying only the first half reads as a decision this person made for
+  // good, which is the opposite of what happened.
   const nowThisRun =
     reason === "no_words" && question.listedRepositories
-      ? "Your answer reached the run, which is continuing without the repositories the question asked about."
+      ? "Your answer reached the run, which is continuing without the repositories the question asked about." +
+        " Nothing was recorded about them, so a later run may use them and may ask about them again."
       : "Your answer reached the run, which is continuing.";
 
   // The route that works, written from what the next run actually reads. The
@@ -352,7 +395,9 @@ export function formatAnswerNotRecordedComment(
   // and none of them is one a written path could reach.
   const namingWorks = question.listedRepositories
     ? question.aLaterRunCanPickThemUp
-      ? "To use one of them after all, write its full path in a comment here: the next run reads this ticket, comments and all, and picks it up."
+      ? question.commentPath === "too_many_open"
+        ? tooManyNamedForAComment
+        : onlyTheRecordIsProven
       : onlyTheCatalogCanOpenThese
     : "Write the full path of the repository this work should use in a comment here, for example github:acme/app, and the next run reads this ticket and picks it up.";
   // The route that does not exist, said plainly instead of implied. Only worth
@@ -377,9 +422,63 @@ export function formatAnswerNotRecordedComment(
     // Nothing about declining here: the run has already carried on without
     // them, which is what a refusal would have done.
     no_words: `${ASKED_AGAIN_ON_A_LATER_RUN} ${namingWorks}`,
+    // Two separate moves, because they were one sentence the person could not
+    // make: a kept repository leaves when the reason it is there goes, and
+    // choosing among the others happens when the question comes back.
+    names_kept_repository: `${ASKED_AGAIN_ON_A_LATER_RUN} ${keptStayUntilTheirReasonGoes} ${NAME_ONLY_THE_ONES_TO_USE} ${namingWorks}`,
+    refusal_beside_named: `${ASKED_AGAIN_ON_A_LATER_RUN} ${NAME_ONLY_THE_ONES_TO_USE} ${namingWorks}`,
   };
   return [nowThisRun, ANSWER_NOT_RECORDED_WHY[reason], next[reason]].join("\n\n");
 }
+
+/**
+ * What a DECLINE recorded, for the channel that took it.
+ *
+ * A bare "no" typed into the dashboard's box or sent through
+ * `runs_answer_clarification` is an answer to the question in front of that
+ * person, so it declines every repository the question listed: one entry each,
+ * permanent, in their name. Those two channels used to say nothing at all about
+ * it. The screen said "answered" and the rule lived in an MCP tool description
+ * that no human ever reads, so the most consequential thing a one word answer
+ * can do was also the least visible.
+ *
+ * This sentence goes to the answer's own reply and NOT to the ticket: the
+ * ticket comment exists for answers that recorded nothing, and a decline
+ * decided exactly what it looks like it decided. It names the way back, because
+ * its readers are people and it never reaches a prompt (rule 7).
+ *
+ * ONE WAY BACK FOR EVERY KIND OF QUESTION, and it carries the catalog clause on
+ * purpose. A question lists repositories for three different reasons, and a
+ * decline of one asked because the deployment does not enable it cannot be
+ * undone by a selection alone: `work_scope.edit` refuses to select a key the
+ * repository catalog does not enable and writes nothing. A sentence per reason
+ * would be four wordings for one screen, so the clause that is true of all of
+ * them is here instead, and a person whose repository is simply excluded reads
+ * a condition that does not apply to them rather than a route that does not
+ * work.
+ */
+export function formatAnswerDeclinedComment(repositoryKeys: readonly string[]): string {
+  const them = repositoryKeys.length === 1 ? "it" : "them";
+  return [
+    `Your answer was read as declining ${repositoryKeys.join(", ")}, which the question listed, so this work is recorded as leaving ${them} out.`,
+    `To bring ${repositoryKeys.length === 1 ? "it" : "one of them"} back, select it in this work's repository list, through the work scope API or the work_scope.edit tool; a repository this deployment does not enable has to be enabled on the repositories screen first, or that selection is refused.`,
+  ].join(" ");
+}
+
+/** How a repository the work already holds leaves it, said per reason because
+ *  the reasons do not leave the same way. An exclusion is a person's own entry,
+ *  which no later reading of the ticket, trigger policy or selection overrides
+ *  (`blockingReason` in `engine/work-scope/decide.ts`). A workflow-owned branch
+ *  is taken whatever the record says, so that the pull request on it is never
+ *  stranded (`selectRepositoriesFromMetadata`), and the sentence promises
+ *  nothing about excluding one. */
+const keptStayUntilTheirReasonGoes =
+  "A repository that is already part of this work stays until the reason it is there goes: an exclusion in this work's repository list, through the work scope API or the work_scope.edit tool, keeps out one the ticket's text, a trigger policy or a person's selection brought in, and one a workflow-owned branch brought in stays while this work owns that branch.";
+
+/** Choosing among the repositories the question offers, which is only done by
+ *  answering it, the next time it is asked. */
+const NAME_ONLY_THE_ONES_TO_USE =
+  'The next time the question is asked, name only the repositories to use, or answer "none".';
 
 /** The half of the sentence that is true of every answer the record kept
  *  nothing from, whatever the question asked for. */
@@ -406,6 +505,28 @@ const checkTheNameOrAddIt =
  *  than matching the other file's word for it. */
 const onlyTheCatalogCanOpenThese =
   "Writing one of their paths in a comment here reaches nothing, because the catalog cannot serve them as things stand: somebody with access to the repositories screen has to enable them there before any run can use one, and naming one the next time the question is asked records it then.";
+
+/** The way out when the question listed more than three repositories.
+ *
+ *  It said the path reaches the next run and is asked about there instead. The
+ *  first half was true and the second was a promise this surface cannot keep:
+ *  a run asks which of them to start from only while nothing on this work has
+ *  answered that question, and once something has, a path written in a comment
+ *  is neither taken nor asked about. So the sentence now says the outcome the
+ *  person can count on, that the comment brings nothing in, and stops short of
+ *  promising the question that may never come. Two routes do settle it: naming
+ *  one when the question comes back, which records it, and selecting it in the
+ *  work's repository list, which the next run starts from whatever the ticket
+ *  names. */
+const tooManyNamedForAComment =
+  "Writing one of their paths in a comment here brings nothing into this work while this ticket names more than three repositories a run could still start from, and the next run may not ask about them either. To use one of them, name it the next time the question is asked, or select it in this work's repository list through the work scope API or the work_scope.edit tool, which the next run starts from.";
+
+/** The way out where nothing on this surface can prove a written path is
+ *  taken: a question raised mid run says nothing about how many repositories
+ *  the ticket names, and a path written there can tip the next run into asking
+ *  instead. Both routes named here work whatever the ticket says. */
+const onlyTheRecordIsProven =
+  "To use one of them after all, select it in this work's repository list through the work scope API or the work_scope.edit tool, which the next run starts from, or name it the next time the question is asked.";
 
 /** What to do differently when it is asked again, for the reasons that are
  *  about HOW the answer arrived rather than what it said. */

@@ -644,12 +644,32 @@ function toAdfParagraphs(text: string) {
   return paragraphs.length > 0 ? paragraphs : [{ type: "paragraph" }];
 }
 
+/**
+ * Jira's rich text as plain text.
+ *
+ * A BLOCKQUOTE KEEPS ITS MARKER, and it is the one node type this function
+ * marks at all. Everything downstream that reads a person's words has to tell
+ * what they wrote from what they quoted: the repository answer reader drops
+ * quoted lines before it decides whether a reply says no
+ * (`withoutQuotedText` in `engine/work-scope/answer.ts`), because every
+ * sentence this system posts about a repository it left out is built around the
+ * word "not". Flattened without the marker, a person clicking Jira's quote
+ * button and typing "yes, add it" underneath handed us our own refusal as if it
+ * were theirs, and the answer that could not be plainer was the one that never
+ * worked. "> " is the marker every other channel writes, so one reader knows
+ * them all.
+ */
 function extractAdfText(adf: any): string {
   if (!adf) return "";
   if (typeof adf === "string") return adf;
   if (adf.text) return adf.text;
   if (adf.content) {
-    return adf.content.map(extractAdfText).join("\n");
+    const text = adf.content.map(extractAdfText).join("\n");
+    if (adf.type !== "blockquote") return text;
+    return text
+      .split("\n")
+      .map((line: string) => `> ${line}`)
+      .join("\n");
   }
   return "";
 }

@@ -18,11 +18,16 @@ import {
   hasNoWords,
   parseRepositoryExpansionAnswer,
   refusalNamesRepositories,
-  withoutQuotedQuestions,
 } from "../../engine/repository-discovery/runner.js";
 import type { AnswerNotRecordedReason } from "../../engine/support/clarification-comment-format.js";
-import { readRepositoryAnswer } from "../../engine/work-scope/answer.js";
-import { decideWorkScope } from "../../engine/work-scope/decide.js";
+import {
+  answerNamesKeptRepositories,
+  answerSaysNoAndNamesARepository,
+  readRepositoryAnswer,
+  withoutQuotedText,
+} from "../../engine/work-scope/answer.js";
+import { questionShowedKeptRepositories } from "../../engine/work-scope/context.js";
+import { decideWorkScope, isHeldSelection } from "../../engine/work-scope/decide.js";
 import { logger } from "../../infra/logger.js";
 
 /** What recording an answer needs of the tier that owns the database, and
@@ -86,6 +91,23 @@ function withoutComposedAuthors(answer: string): string {
     .join(COMPOSED_COMMENT_SEPARATOR);
 }
 
+/**
+ * What one answer did to the record, for the channel that took it.
+ *
+ * Both halves are for a person, and they are mutually exclusive: an answer
+ * either left no repository decision behind it, which is `told`, or it was read
+ * as a decline and wrote one entry per repository the question listed, which is
+ * `declined`. The caller turns either into the sentence a person reads; nothing
+ * else in a run branches on this.
+ */
+export interface RepositoryAnswerOutcome {
+  /** Why this answer recorded nothing, absent when it recorded something. */
+  told?: AnswerNotRecordedReason;
+  /** The repositories a decline left out of this work, in the order the plan
+   *  wrote them. Absent unless the answer was read as a refusal. */
+  declined?: RepositoryKey[];
+}
+
 /** What an answer we decline to attribute is handed to the decision as, which
  *  leaves the trail row saying an answer arrived and writes no entry. Its own
  *  kind, rather than the one that means we could not read the words: the words
@@ -127,7 +149,7 @@ export async function recordRepositoryAnswer(
     composedFromComments: boolean;
     authorCount?: number;
   },
-): Promise<AnswerNotRecordedReason | undefined> {
+): Promise<RepositoryAnswerOutcome> {
   const askedRepositories = input.row.askedRepositories ?? [];
   const authorCount = input.authorCount;
 
@@ -169,19 +191,49 @@ export async function recordRepositoryAnswer(
   // the reader below and by the sentence at the end, so the two cannot disagree
   // about which names we hold.
   const catalogKeys = [...new Set([...catalog.keys, ...askedKeys])];
+  // There is no branch here for a subject that could not be found, and none is
+  // missing. The clarification row names the subject the question was asked
+  // under, and a row without one cannot be read at all
+  // (`db/repositories/clarification-hooks.ts:33` refuses it), so the key below
+  // always exists. A subject with no row in `work_scopes` is not a subject
+  // nobody can name either: it is one nobody has decided anything about yet,
+  // and this answer is the first decision, which is what creates the record. A
+  // gate on that emptiness would drop exactly the first answer on a ticket,
+  // which is the answer this function exists to keep.
+  const scope = await persistence.readWorkScope(input.row.subjectKey);
+  // What the question showed as already part of this work, read from the
+  // record rather than out of the question's words: what it showed is what the
+  // record holds for a reason an answer does not undo (`isHeldSelection`, the
+  // same predicate the question was built with). Read at the answer, so a
+  // repository taken off the work in between is no longer kept, and one added
+  // in between is treated as shown: the cost of that is a repeated question,
+  // never a decision.
+  //
+  // READ FROM THE QUESTION THAT SHOWED THEM, not from the reason it was asked.
+  // Repository discovery stamps `selection` on its asks too, and its question
+  // lists no kept repositories at all, so keying on the reason told a person
+  // their answer had been about repositories nobody had put in front of them.
+  // One builder writes that sentence, so its presence is the fact
+  // (`questionShowedKeptRepositories`).
+  const keptKeys =
+    askedRepositories.length > 0 &&
+    askedRepositories.every((repository) => repository.askedBecause === "selection") &&
+    questionShowedKeptRepositories(input.row.questions)
+      ? (scope?.entries ?? [])
+          .filter(isHeldSelection)
+          .map((entry) => entry.repositoryKey)
+          .filter((key) => !askedKeys.includes(key))
+      : [];
+  // What we asked is the only part of this exchange we know for certain, and
+  // the reader needs it: Jira's quote button sends our own question back inside
+  // the answer with no marker on it, and the repository key in it is ours, not
+  // the person's.
+  const reading = { catalogKeys, askedQuestions: input.row.questions, keptKeys };
   // A declined answer is not read at all, which is the point: the words may be
   // perfectly readable, they are simply not one person's decision to record.
   const answerRead = declined
     ? DECLINED_ANSWER
-    : readRepositoryAnswer(withoutComposedAuthors(input.answer), {
-        catalogKeys,
-        askedKeys,
-        // What we asked is the only part of this exchange we know for certain,
-        // and the reader needs it: Jira's quote button sends our own question
-        // back inside the answer with no marker on it, and the repository key
-        // in it is ours, not the person's.
-        askedQuestions: input.row.questions,
-      });
+    : readRepositoryAnswer(withoutComposedAuthors(input.answer), { ...reading, askedKeys });
 
   // A PLAIN NO ON A TICKET IS NOT EVIDENCE THAT ANYBODY ANSWERED US.
   //
@@ -211,19 +263,26 @@ export async function recordRepositoryAnswer(
   // dashboard and the MCP client type into a box opened by this question and a
   // "no" there is unmistakably an answer to it. Only a question that put
   // repositories in front of somebody, because a refusal to any other decides
-  // nothing to begin with (`decideAnswered` writes for an asked repository the
-  // question named, and nothing at all for one it did not or for a `selection`
-  // ask, so there is no permanent write here to raise the bar for and nothing
-  // to tell anybody about). And only a refusal: an answer naming
+  // nothing to begin with (`decideAnswered` writes nothing for an asked
+  // repository the question did not name, and the answered set leaves it out).
+  // A `selection` question is inside that line, not outside it: its refusal
+  // writes no entry, but it settles every repository the question named for
+  // good, through the answered set (`isUnnamedInAnswer`), and it raises the
+  // subject's selection flag, which is as permanent as an exclusion and signed
+  // by the same person (A8). And only a refusal: an answer naming
   // repositories is its own evidence, since nobody types a repository path by
   // accident.
   const refusalDecidesNothing =
     answerRead.kind === "none" &&
     input.composedFromComments &&
-    askedRepositories.some(
-      (repository) => repository.named === true && repository.askedBecause !== "selection",
-    ) &&
-    !refusalNamesRepositories(withoutComposedAuthors(input.answer));
+    askedRepositories.some((repository) => repository.named === true) &&
+    // Their own words, quotes out (A6). A person who clicks quote on our
+    // question and writes "none of these" underneath used the exact phrase the
+    // question teaches, and reading the quote too made that answer look like a
+    // bare no addressed to nothing, so they were told it decided nothing.
+    !refusalNamesRepositories(
+      withoutQuotedText(withoutComposedAuthors(input.answer), input.row.questions),
+    );
   if (refusalDecidesNothing) {
     // A warning, for the same reason the declined count is one: from the
     // outside this looks exactly like the question being asked twice.
@@ -233,16 +292,6 @@ export async function recordRepositoryAnswer(
     );
   }
   const answer = refusalDecidesNothing ? UNADDRESSED_REFUSAL_ANSWER : answerRead;
-  // There is no branch here for a subject that could not be found, and none is
-  // missing. The clarification row names the subject the question was asked
-  // under, and a row without one cannot be read at all
-  // (`db/repositories/clarification-hooks.ts:33` refuses it), so the key below
-  // always exists. A subject with no row in `work_scopes` is not a subject
-  // nobody can name either: it is one nobody has decided anything about yet,
-  // and this answer is the first decision, which is what creates the record. A
-  // gate on that emptiness would drop exactly the first answer on a ticket,
-  // which is the answer this function exists to keep.
-  const scope = await persistence.readWorkScope(input.row.subjectKey);
   const decision = decideWorkScope(
     {
       scope,
@@ -277,6 +326,11 @@ export async function recordRepositoryAnswer(
       eventRelatedKeys: [],
       attachedKeys: null,
       selectionAnswered: false,
+      // An answer decides no guess, so what earlier answers left unnamed is
+      // nothing this event reads, and neither is the ticket text that a later
+      // run dates against them.
+      answeredRepositoryKeys: [],
+      postAnswerMentionedKeys: [],
       actor: {
         kind: "person",
         actorId: input.answerer.id,
@@ -295,7 +349,7 @@ export async function recordRepositoryAnswer(
     clarificationId: input.row.id,
     plan: decision.plan,
   });
-  if (refusalDecidesNothing) return "unaddressed_refusal";
+  if (refusalDecidesNothing) return { told: "unaddressed_refusal" };
 
   // NOBODY IS ASKED SOMETHING THEY HAVE ALREADY ANSWERED WITHOUT BEING TOLD WHY.
   //
@@ -334,7 +388,34 @@ export async function recordRepositoryAnswer(
   const settledByAnsweringAtAll =
     (answer.kind === "none" || answer.kind === "repositories") &&
     askedRepositories.some((repository) => repository.askedBecause === "selection");
-  if (!recordKeptNothing || settledByAnsweringAtAll) return undefined;
+  // WHAT A DECLINE RECORDED, for the person who typed it. A bare "no" on the
+  // dashboard or over MCP declines every repository the question listed, and
+  // until now those channels said nothing at all about it: the screen showed
+  // "answered" and the rule lived in a tool description no human reads.
+  //
+  // Read off the ASK rather than off the plan's entries, because the entry is
+  // not what the person needs told. A `selection` question writes no entry for
+  // a name left out (rule 5, `decideAnswered`) and binds it all the same
+  // through the answered set, so a list built from the upserts would be silent
+  // about exactly the question this feature exists for. `named` is the same
+  // condition the writer uses: a repository nobody was shown the name of was
+  // not declined by anybody.
+  const declinedKeys =
+    answer.kind === "none"
+      ? [
+          ...new Set(
+            askedRepositories
+              .filter((repository) => repository.named === true)
+              .map((repository) => repository.repositoryKey),
+          ),
+        ]
+      : [];
+  // Before the two branches below, not inside one of them. A decline is a
+  // decision, so it is never also a reason the record kept nothing, and putting
+  // it after a branch that can return would make whether the person hears it
+  // depend on which kind of question they answered.
+  if (declinedKeys.length > 0) return { declined: declinedKeys };
+  if (!recordKeptNothing || settledByAnsweringAtAll) return {};
   // An answer with no word in it is its own case, because the RUN does
   // something with it that nothing else here does: `isRefusalAnswer` takes the
   // wordless branch and ends the asking, so the run carries on without the
@@ -344,20 +425,37 @@ export async function recordRepositoryAnswer(
   // comment arrives here as "Jane: (thumbs up)", which HAS words, and the run
   // asks its follow-up instead; that one is told the ordinary sentence, which
   // is the truthful one for it.
-  if (hasNoWords(input.answer)) return "no_words";
+  if (hasNoWords(input.answer)) return { told: "no_words" };
+  // Two unreadable replies the ordinary sentence would describe falsely, since
+  // "nothing in that answer named a repository this work should use" is not
+  // true of "this one, but not that one". A reply about a repository the
+  // question said stays gets where that repository leaves instead, and a reply
+  // that names a repository beside a no it could not be tied to is told why
+  // it was not read as a choice.
+  if (answer.kind === "unrecognised") {
+    const theirAnswer = withoutComposedAuthors(input.answer);
+    if (answerNamesKeptRepositories(theirAnswer, reading)) {
+      return { told: "names_kept_repository" };
+    }
+    if (answerSaysNoAndNamesARepository(theirAnswer, reading)) {
+      return { told: "refusal_beside_named" };
+    }
+  }
   // WHICH OF THE TWO WAYS AN ANSWER NAMES NOTHING. Both end here with an empty
   // record, and only one of them leaves "write the full path in a comment" true.
   // A person who wrote a bare or partial name can write it out in full and the
   // next run resolves it; a person who already wrote `github:acme/thing` in
   // full, for a repository this deployment does not hold, would write the same
   // words for the next run to resolve to the same nothing.
-  return namedOnlyRepositoriesWeDoNotHold({
-    answer: withoutComposedAuthors(input.answer),
-    askedQuestions: input.row.questions,
-    catalogKeys,
-  })
-    ? "no_such_repository"
-    : "no_repository_named";
+  return {
+    told: namedOnlyRepositoriesWeDoNotHold({
+      answer: withoutComposedAuthors(input.answer),
+      askedQuestions: input.row.questions,
+      catalogKeys,
+    })
+      ? "no_such_repository"
+      : "no_repository_named",
+  };
 }
 
 /**
@@ -386,10 +484,12 @@ function namedOnlyRepositoriesWeDoNotHold(input: {
   askedQuestions: string[];
   catalogKeys: RepositoryKey[];
 }): boolean {
-  // Our own question quoted back is not the person naming anything, which is
-  // the same drop the reader makes before it reads a word.
+  // Our own question quoted back is not the person naming anything, and neither
+  // is any other quoted line: this is the same drop the reader makes before it
+  // reads a word, so a path sitting inside a quote cannot produce the sentence
+  // saying this deployment has no repository by that name (A7).
   const identities = parseRepositoryExpansionAnswer(
-    withoutQuotedQuestions(input.answer, input.askedQuestions),
+    withoutQuotedText(input.answer, input.askedQuestions),
   );
   if (identities.length === 0) return false;
   const held = new Set(input.catalogKeys);

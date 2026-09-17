@@ -3,8 +3,10 @@ import { WORK_SCOPE_REFUSAL_REASONS, type WorkScopeRefusalReason } from "@shared
 import { REQUEST_REPOSITORIES_MAX } from "./decide.js";
 import {
   MAX_WORKSPACE_REPOSITORIES,
+  workScopeCommentSaidNoSentence,
   workScopeRefusalParts,
   workScopeRefusalSentence,
+  workScopeUnnamedSentence,
   type WorkScopeRefusalSurface,
 } from "./refusal-sentence.js";
 
@@ -42,6 +44,7 @@ const REASONS: Record<WorkScopeRefusalReason, true> = {
   workspace_cap: true,
   request_limit: true,
   rounds_exhausted: true,
+  unnamed_in_answer: true,
 };
 
 /**
@@ -215,5 +218,52 @@ describe("workScopeRefusalSentence", () => {
     );
 
     expect(sentence).toContain("on last Tuesday,");
+  });
+});
+
+describe("workScopeUnnamedSentence", () => {
+  // It reaches the model beside every refusal above, so the same rule binds it:
+  // what happened, and no way back. The way back lives in `unnamedRecoveryNotes`.
+  it("says what happened on both surfaces and carries no way back", () => {
+    expect(workScopeUnnamedSentence(KEY, "run_start")).toBe(
+      "github:acme/api was listed in a repository question already answered on this work" +
+        " and is not selected on it, so the run started without it.",
+    );
+    expect(workScopeUnnamedSentence(KEY, "expansion")).toBe(
+      "github:acme/api was listed in a repository question already answered on this work" +
+        " and is not selected on it, so it is not attached.",
+    );
+    for (const surface of SURFACES) {
+      for (const pattern of WAY_BACK_PATTERNS) {
+        expect(workScopeUnnamedSentence(KEY, surface)).not.toMatch(pattern);
+      }
+    }
+  });
+});
+
+describe("workScopeCommentSaidNoSentence", () => {
+  // Joint gate round 3, C11r. The run stops reading a comment that says no
+  // about a repository, so a repository named in one is left behind for a
+  // reason no refusal reason covers: nothing is wrong with the repository. The
+  // sentence goes where every refusal goes, the agent's prompt included, so it
+  // carries what happened and no way back; the way back is the recovery note
+  // in `context.ts`, which says what a comment has to look like.
+  it("says a comment named it and carries no way back", () => {
+    expect(workScopeCommentSaidNoSentence(KEY)).toBe(
+      "github:acme/api is named in a ticket comment that also says no about a repository," +
+        " so the run read nothing from that comment and started without it.",
+    );
+    for (const pattern of WAY_BACK_PATTERNS) {
+      expect(workScopeCommentSaidNoSentence(KEY)).not.toMatch(pattern);
+    }
+  });
+
+  // It says a comment named the repository and stops there. WHICH of the paths
+  // in that comment the person meant to refuse is the one thing the reader
+  // cannot tell, and a sentence that named this repository as the refused one
+  // would tell the person they said something they did not.
+  it("does not say this repository is the one the comment refused", () => {
+    expect(workScopeCommentSaidNoSentence(KEY)).not.toMatch(/said no (?:to|about) github/iu);
+    expect(workScopeCommentSaidNoSentence(KEY)).not.toMatch(/you (?:said|asked)/iu);
   });
 });

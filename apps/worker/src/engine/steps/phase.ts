@@ -125,8 +125,9 @@ export type ResolvedHumanRepositoryExpansion =
         /** The repositories a question on this subject named and somebody
          *  answered for, re-read with the entries for the same reason: the
          *  answer this run just took is what the rounds after it must not ask
-         *  about again. Absent on a result stored before this field existed,
-         *  which leaves the run reading the set it froze at start. */
+         *  about again. Absent on a result stored before this field existed, and
+         *  then `scope` is not installed either: the two are one value, and half
+         *  of it is what lets a guess take back what somebody removed. */
         answeredRepositoryKeys?: string[];
       };
     };
@@ -242,16 +243,33 @@ export async function applyHumanRepositoryExpansion(
   // already chosen. The trigger policy stays as this run resolved it, because
   // a policy that changed mid-run would give one run two different filters
   // (A17, A10).
-  if (ctx.workScope && resumed && resumed.scope !== undefined) {
+  //
+  // THE ENTRIES AND THE ANSWERED SET INSTALL TOGETHER OR NOT AT ALL. They are
+  // one value: a guess is refused only by the two read together, so fresh
+  // entries beside an older answered set reads a decision as no decision and the
+  // next guess writes a repository the person removed straight back
+  // (`RunWorkScopeInput.answeredRepositoryKeys` in `engine/work-scope/
+  // context.ts`). A result stored before the answered set existed carries only
+  // half, and the whole pair is then left alone: the run goes on reading the
+  // copy it froze at start, where the two halves did come from one read, or
+  // where the selection step read them again for a freeze written before this
+  // field existed (`readRunWorkScope` in
+  // `engine/pre-sandbox/steps/repo-selection.ts`, which owns what a missing
+  // field on the RUN-START copy means, as this owns what a missing field on a
+  // RESUME result means).
+  if (
+    ctx.workScope &&
+    resumed &&
+    resumed.scope !== undefined &&
+    resumed.answeredRepositoryKeys !== undefined
+  ) {
     ctx.workScope = {
       ...ctx.workScope,
       scope: resumed.scope,
+      answeredRepositoryKeys: resumed.answeredRepositoryKeys,
       ...(resumed.selectionAnswered === undefined
         ? {}
         : { selectionAnswered: resumed.selectionAnswered }),
-      ...(resumed.answeredRepositoryKeys === undefined
-        ? {}
-        : { answeredRepositoryKeys: resumed.answeredRepositoryKeys }),
     };
   }
   // THE RECORD OUTRANKS THE ANSWER TEXT. The answer was read and recorded when
@@ -877,6 +895,12 @@ async function resumeFromWorkScope(
     subjectKey: resume.subjectKey,
     scope,
     selectionAnswered,
+    answeredRepositoryKeys,
+    // The one event this recorder raises is `resumed`, which walks the record's
+    // own entries and derives no ticket text at all, so there is nothing here
+    // for a path in a comment to decide, and no ticket is read: the way back
+    // this path offers names the record alone (`commentPathIsTaken`).
+    ticketText: null,
     catalog: {
       // The run's own answer, not this listing's: on a bridge nobody activated
       // the catalog, so every repository reads as enabled and an entry recorded

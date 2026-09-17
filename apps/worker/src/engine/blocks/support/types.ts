@@ -31,6 +31,7 @@ import type {
 import type { WorkspacePublicationResult } from "../../steps/workspace-publication.js";
 import type { RunStartWorkScope } from "../../steps/run-start-settings.js";
 import type { RunTriggerRepositoryPolicySource } from "../../work-scope/policy.js";
+import type { TicketTextReading } from "../../work-scope/context.js";
 import type { LoadedPrompts } from "../../steps/prompts-step.js";
 import type { AgentWorkflowInput } from "../../agent-input.js";
 import type {
@@ -141,6 +142,14 @@ export interface EngineCtx {
    * the ticket comment and is never placed in the agent's instruction channel.
    */
   workScopeRecoveryNotes?: string[];
+  /**
+   * The pre-sandbox's reading of the ticket, as it made it, so a sentence
+   * written later in the run can say whether a path written in a comment would
+   * reach the next run and be taken (`commentPathIsTaken` in
+   * `engine/work-scope/context.ts`). Absent means no step read a ticket, and the
+   * sentence then offers the record alone.
+   */
+  workScopeTicketText?: TicketTextReading;
   /**
    * Did the repository question this run is waiting on give the record a
    * repository to rule on, so that what it wrote afterwards says anything at

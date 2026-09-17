@@ -60,6 +60,21 @@ export interface RunStartWorkScope {
    *  only safe reading of a missing set is the empty one: a person is asked
    *  once more, rather than told about a decision this run cannot see. */
   answeredRepositoryKeys?: string[];
+  /** Per repository in `answeredRepositoryKeys`, when the newest answer to a
+   *  question that NAMED it was recorded. It is what the run dates the ticket's
+   *  words about that repository against: a full path a person wrote after its
+   *  instant is a fresh decision and may attach it, while the description that
+   *  raised the question may not (`boundByTheAnswer` in
+   *  `engine/work-scope/decide.ts`). Per repository, because an answer to an
+   *  unrelated question must not turn a comment a person wrote on our
+   *  instructions into text that predates the answer.
+   *
+   *  ABSENT MEANS NOTHING ON THIS SUBJECT CAN BE DATED AGAINST AN ANSWER, SO
+   *  NOTHING IS. A run replaying a result written before this field existed has
+   *  no instants, and that reads as no post-answer words at all, which leaves a
+   *  repository out rather than choosing one on somebody's behalf, and offers
+   *  the person the record alone as the way back. */
+  answeredAtByKey?: Record<string, string>;
   /** What the record made of the answer this run woke on: false only when it
    *  declined to attribute the words, which today means more than one person
    *  wrote them. Set by `readWorkScopeAfterAnswerStep`, so it is absent on every
@@ -149,6 +164,7 @@ export async function loadRunStartSettingsStep(input: {
   const scope = workScopeFacts?.scope ?? null;
   const selectionAnswered = workScopeFacts?.selectionAnswered ?? false;
   const answeredRepositoryKeys = workScopeFacts?.answeredRepositoryKeys ?? [];
+  const answeredAtByKey = workScopeFacts?.answeredAtByKey ?? {};
   const narrowingAnswered = workScopeFacts?.narrowingAnswered ?? false;
   const { snapshot } = resolveSettingsSnapshot(
     new Map(rows.map((row) => [row.key, row.value])),
@@ -184,6 +200,7 @@ export async function loadRunStartSettingsStep(input: {
             scope,
             selectionAnswered,
             answeredRepositoryKeys,
+            answeredAtByKey,
             narrowingAnswered,
           },
         }),

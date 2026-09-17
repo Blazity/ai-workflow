@@ -310,6 +310,7 @@ describe("the frozen work scope", () => {
       },
       selectionAnswered: false,
       answeredRepositoryKeys: [],
+      answeredAtByKey: {},
       narrowingAnswered: false,
     });
   });
@@ -324,6 +325,7 @@ describe("the frozen work scope", () => {
       scope: null,
       selectionAnswered: false,
       answeredRepositoryKeys: [],
+      answeredAtByKey: {},
       narrowingAnswered: false,
     });
     expect(runStartWorkScope(result)).toEqual({
@@ -331,6 +333,7 @@ describe("the frozen work scope", () => {
       scope: null,
       selectionAnswered: false,
       answeredRepositoryKeys: [],
+      answeredAtByKey: {},
       narrowingAnswered: false,
     });
   });
@@ -387,6 +390,11 @@ describe("the frozen work scope", () => {
       // holding only the flag would stop asking about every repository on this
       // subject the moment one of them was answered (A47).
       answeredRepositoryKeys: ["github:acme/api"],
+      // And WHEN, per repository, from the same read: the instant the run
+      // dates the ticket's later words about that repository against, so a
+      // path a person writes after answering can be told from the description
+      // that raised the question.
+      answeredAtByKey: { "github:acme/api": expect.any(String) },
       // And the narrowing question is a different question, untouched by this
       // answer. One fact, one read, one thing silenced.
       narrowingAnswered: false,
@@ -441,6 +449,8 @@ describe("the frozen work scope", () => {
       scope: null,
       selectionAnswered: false,
       answeredRepositoryKeys: [],
+      // A narrowing question names no repository, so its answer dates nothing.
+      answeredAtByKey: {},
       narrowingAnswered: true,
     });
   });

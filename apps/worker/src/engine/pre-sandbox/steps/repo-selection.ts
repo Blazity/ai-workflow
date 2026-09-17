@@ -24,9 +24,14 @@ import type {
 } from "../types.js";
 import {
   createRunWorkScopeRecorder,
+  KEPT_REPOSITORIES_SENTENCE_OPENING,
+  TEXT_AMBIGUITY_QUESTION_OPENING,
+  TEXT_MATCH_AMBIGUITY_LIMIT,
   workScopeRepositoryKey,
   type RunWorkScopeRecorder,
+  type TicketTextReading,
 } from "../../work-scope/context.js";
+import { commentSaysNoAboutItsPaths } from "../../work-scope/answer.js";
 import {
   addRepositoryDiscoveryRelationships,
   buildRepositoryCatalog,
@@ -162,6 +167,10 @@ function withWorkScopeOutcome(
     ...(recorder.recoveryNotes.length > 0
       ? { workScopeRecoveryNotes: [...recorder.recoveryNotes] }
       : {}),
+    // The scan itself, for the steps that speak after this one. Discovery and
+    // the expansion loop offer the same way back, and without the ticket's own
+    // matches they would have to guess whether a comment reaches the next run.
+    ...(recorder.ticketText ? { workScopeTicketText: recorder.ticketText } : {}),
   };
   /*
    * TWO STRINGS, AND A QUESTION MAY ONLY EVER CARRY THE FIRST.
@@ -170,8 +179,8 @@ function withWorkScopeOutcome(
    * workspace, the agent needs it, and it goes everywhere: the halt message,
    * the questions, the prompt addition.
    *
-   * `recovery` names a lever only a person holds, editing this work's
-   * repository list through the dashboard or the `work_scope.edit` tool. It
+   * `recovery` names a lever meant for a person, editing this work's
+   * repository list through the work scope API or the `work_scope.edit` tool. It
    * rides `message` and `cause`, which reach the run's status reason and the
    * ticket comment, and it must never reach a QUESTION, because a question is
    * not a message to a person that the agent happens not to read. A question
@@ -246,9 +255,15 @@ function withWorkScopeOutcome(
  *
  * A resumed run re-reads. Its frozen copy predates the answer that woke it, and
  * the answer was decided and recorded the moment it ARRIVED, so the record is
- * the whole of what it meant: the entries it wrote and whether the selection
- * question is now settled. The re-read also sees a panel edit made in between,
- * which is the fresher truth rather than a staler one.
+ * the whole of what it meant: the entries it wrote, whether the selection
+ * question is now settled, and which repositories that question named. The
+ * last one is not optional: an omission from a which-of-these answer writes no
+ * entry, so a run that re-read the entries without it would see "nothing
+ * decided" and let a guess take back what the person just left out
+ * (`isUnnamedInAnswer`). One read of the whole picture rather than two named
+ * ones, so a fact added to it reaches this run too. The re-read also sees a
+ * panel edit made in between, which is the fresher truth rather than a staler
+ * one.
  */
 async function readRunWorkScope(
   context: PreSandboxStepContext,
@@ -262,19 +277,52 @@ async function readRunWorkScope(
   if (!frozen || !policy || !actor) return null;
   let scope: WorkScope | null = frozen.scope;
   let selectionAnswered = frozen.selectionAnswered;
-  if (context.clarification) {
-    const { readConnectedWorkScope, readConnectedWorkScopeSelectionAnswered } = await import(
+  // The frozen copy, used as it stands only when the run froze one: a context
+  // written before this field existed re-reads below rather than reading its
+  // absence as "nothing was asked".
+  let answeredRepositoryKeys: string[] = frozen.answeredRepositoryKeys ?? [];
+  // Read beside the answered set and never apart from it: per repository, it
+  // says from when the ticket's words about it are newer than the answer that
+  // named it, and a copy of one older than the other would date a comment
+  // against the wrong answer. Absent on a freeze written before it existed,
+  // which dates nothing.
+  let answeredAtByKey: Record<string, string> | undefined = frozen.answeredAtByKey;
+  // TWO REASONS TO GO BACK TO THE STORE, AND THE SECOND IS A DEPLOY.
+  //
+  // A resumed run re-reads because its copy predates the answer. A run that
+  // froze its context BEFORE this field existed re-reads because its copy of the
+  // answered set is not empty but missing, and those are different facts: empty
+  // says nobody was asked, missing says this run cannot tell. Guessing on
+  // "missing" is what hands a repository somebody declined to the first signal
+  // that names it, on the one run nobody can see the difference on. The read is
+  // one query against a record the run already carries, and it brings back the
+  // scope, the answered set and the answer's instant together, so this run never
+  // holds half a pair.
+  //
+  // ONE OWNER FOR EACH "ABSENT". This decides what a missing field on the
+  // RUN-START freeze means, and it is the only place that does. What a missing
+  // field on a RESUME result means belongs to `applyHumanRepositoryExpansion`
+  // (`engine/steps/phase.ts`), which installs the pair in full or leaves the
+  // frozen copy alone. The two never fight: by the time a resume result is
+  // read, this step has already given the run a pair that came from one read.
+  //
+  // NO NEW STEP CALL. This runs inside the pre-sandbox step body that already
+  // reads the store on the clarification path, so a run suspended across the
+  // deploy replays that step's recorded result and never executes it, and the
+  // journal of a suspended run is unchanged.
+  if (context.clarification || frozen.answeredRepositoryKeys === undefined) {
+    const { readConnectedWorkScopeFacts } = await import(
       "../../../db/repositories/work-scope.js"
     );
-    [scope, selectionAnswered] = await Promise.all([
-      readConnectedWorkScope(frozen.subjectKey),
-      readConnectedWorkScopeSelectionAnswered(frozen.subjectKey),
-    ]);
+    ({ scope, selectionAnswered, answeredRepositoryKeys, answeredAtByKey } =
+      await readConnectedWorkScopeFacts(frozen.subjectKey));
   }
   return {
     subjectKey: frozen.subjectKey,
     scope,
     selectionAnswered,
+    answeredRepositoryKeys,
+    postAnswer: postAnswerComments(context.ticket, answeredAtByKey, context.botAccountId),
     catalogActivated: context.repositoryAccess.activated,
     policy,
     actor,
@@ -371,10 +419,19 @@ const selectRepositoriesForRun = async (
     )
     .map((failure) => failure.provider);
 
-  const directAnswer = latestClarificationAnswer(context.ticket.comments);
+  // The answer as an ANSWER, from the field that says it is one. It used to be
+  // read back out of a synthetic ticket comment, which meant the path scanner
+  // saw it too and could take a repository out of a reply that refused it.
+  const directAnswer =
+    context.clarification?.resolves === "repository_selection"
+      ? context.clarification.answer
+      : null;
   const workScope = await readRunWorkScope(context);
+  const scan = ticketTextScan(context.ticket, context.botAccountId);
   const selected = selectRepositoriesFromMetadata({
-    ticketText: ticketText(context.ticket, context.botAccountId),
+    ticketText: scan.own,
+    ...(scan.comments ? { commentText: scan.comments } : {}),
+    ...(scan.unread ? { unreadCommentText: scan.unread } : {}),
     repositories,
     workflowOwnedBranches,
     ...(repositoryScope ? { repositoryScope } : {}),
@@ -435,16 +492,31 @@ const selectRepositoriesForRun = async (
   }
 
   if (selected.status === "discovery_needed") {
-    // The ONLY place remembered routing is consulted, and the safety property
-    // holds by construction rather than by ordering: selectRepositoriesFromMetadata
-    // cannot see a remembered entry at all, so there is no signal precedence to
-    // get wrong. Reaching this branch already proves every deterministic signal
-    // declined, because a workflow-owned branch for this ticket, the definition
-    // pin, a repository path written in the ticket, an incomplete catalog and the
-    // only-accessible-repository shortcut each return before it, and
-    // mandatoryRepositories is provably empty here for the same reason. What a
-    // remembered answer replaces is therefore exactly the question this branch
-    // leads to, never a decision something else already made.
+    // The ONLY place remembered routing is consulted: `rememberedRoutingSelection`
+    // has no other caller, and selectRepositoriesFromMetadata takes no routing
+    // input. What that function does see is the record, where an earlier
+    // remembered answer sits as an `inferred` entry, and run start never
+    // attaches one (`decideRunStart` in `work-scope/decide.ts`), so memory cannot
+    // reach a later run through the record either.
+    //
+    // WHAT REACHING THIS BRANCH PROVES: nothing was selected. `discovery_needed`
+    // is that function's last return, and every signal that put a repository in
+    // its selection returns first (the record's entries, a workflow-owned branch
+    // whose repository was listed, a ticket text match the record allowed, the
+    // only-accessible shortcut), as do a repository pin and an incomplete
+    // catalog whatever they find. So mandatoryRepositories is empty here, and
+    // the selection below drops nothing already chosen.
+    //
+    // WHAT IT DOES NOT PROVE: that no signal fired. A provider-only pin does not
+    // return (it bounds `selected.catalog` instead), and a workflow-owned branch
+    // whose repository was not listed, text matches the record refused, a
+    // which-of-these question an earlier answer silenced, an only-accessible
+    // repository the record refused, and (on a run with no record) a prior
+    // answer naming several repositories all arrive here having selected nothing.
+    // That is why the remembered repository is decided through the record below,
+    // under the same exclusions, pin and policy as any derived key, and under
+    // the answer: a repository a which-of-these question listed and the answer
+    // left unnamed is not taken back by a guess (`isUnnamedInAnswer`).
     const remembered = routingMemoryEnabled(context.settings)
       ? await rememberedRoutingSelection(context.ticket.labels ?? [], selected.catalog)
       : null;
@@ -552,13 +624,6 @@ const MAX_ROUTING_WRITE_ATTEMPTS = 3;
  *  owners than this loses the tail, which costs a question and never a wrong
  *  repository. */
 const MAX_ROUTING_OWNERS_READ = 5;
-/**
- * The rationale the ticket-text scan stamps, duplicated here rather than shared
- * with selectRepositoriesFromMetadata so that function keeps a zero-line diff.
- * The coupling is covered end to end: the write tests drive the real selection
- * path, so renaming the rationale there stops the write and fails them.
- */
-const TICKET_TEXT_RATIONALE = "ticket mentions repository path";
 
 /**
  * The repository a ticket's labels remember, or null for "ask". Best effort in the
@@ -695,9 +760,15 @@ async function rememberedRoutingSelection(
 /**
  * Records "a ticket carrying label L in this organisation was resolved to
  * repository R by a human". The write point, because a human's which-repo answer
- * always resolves through this step: the discovery prompt is assembled from the
- * untouched ticket, so the synthetic clarification comment prepare-workspace
- * appends is read here and nowhere else.
+ * always resolves through this step: it arrives on the step's `clarification`
+ * and nowhere else.
+ *
+ * It used to say the answer reached here as a synthetic comment appended to the
+ * ticket by prepare-workspace. That append is gone (round 4, B1): it handed a
+ * person's reply to a scanner that reads paths and not people, so "not
+ * github:acme/billing" attached billing as a repository the TICKET named. The
+ * answer has one reader now, and this function gates on the rationale that
+ * reader writes rather than on anything found in the ticket's text.
  *
  * Best effort, and it may not fail the run: the selection has already succeeded by
  * the time this is called, so everything here is wrapped and swallowed.
@@ -724,15 +795,23 @@ async function rememberRoutingAnswer(input: {
     // time, which would corroborate itself.
     const ticketIdentifier = input.ticketIdentifier?.trim();
     if (!ticketIdentifier) return;
-    // Both remaining conditions still matter on top of that gate. The rationale is
-    // what proves the repository entered the selection through the ticket-text scan
-    // rather than through a pin, an owned branch or the only-accessible-repository
-    // shortcut, none of which a human chose; the mention is what proves the human's
-    // own reply named this repository rather than some earlier sentence in the ticket.
+    // A reply that says no about anything decides nothing, here as everywhere:
+    // the careful reader refuses it (`readRepositoryAnswer`), and a memory of
+    // "this label means that repository" built from the same words would be the
+    // refused decision, remembered for every later ticket.
     const answerText = input.clarification.answer.toLowerCase();
+    if (commentSaysNoAboutItsPaths(input.clarification.answer)) return;
+    // Both remaining conditions still matter on top of that gate. The rationale
+    // is what proves a human's own reply brought this repository into the run,
+    // either because the record attached what the answer named or because the
+    // answer resolved it directly, rather than a pin, an owned branch or the
+    // only-accessible-repository shortcut, none of which a human chose; the
+    // mention is what proves this reply named it rather than some earlier
+    // sentence in the ticket.
     const named = input.repositories.filter(
       (repo) =>
-        repo.selectedRationale === TICKET_TEXT_RATIONALE &&
+        (repo.selectedRationale === HUMAN_ANSWER_RATIONALE ||
+          repo.selectedRationale === RECORD_RATIONALE) &&
         mentionsRepositoryPath(answerText, repo.repoPath),
     );
     // Exactly one, or nothing. With two repositories named, every label on the
@@ -1004,6 +1083,16 @@ export interface RunWorkScopeSelectionInput {
   subjectKey: string;
   scope: WorkScope | null;
   selectionAnswered: boolean;
+  /** Which repositories a question on this subject named and somebody
+   *  answered, read with `scope` (see `readRunWorkScope`). */
+  answeredRepositoryKeys: string[];
+  /** What a PERSON wrote on this subject, dated, beside the instants it is
+   *  dated against (`postAnswerComments`). The only text that may still attach
+   *  a repository an answer left unnamed, so the text the question itself was
+   *  asked about is deliberately not in it. Null when this run cannot tell a
+   *  person's comment from the bot's, or has no instants to date against: then
+   *  nothing written counts, and the person is offered the record alone. */
+  postAnswer: PostAnswerComments | null;
   /** Whether the catalog decides access at all. On a bridge it does not, and a
    *  `not_enabled` entry may not expire, because every repository answers
    *  enabled there and the expiry would ask the person a second time. */
@@ -1034,10 +1123,9 @@ type SelectionOutcome = (
     }
 ) & { workScope?: RunWorkScopeRecorder };
 
-/** More than this many decidable text matches is the ambiguity a person is
- *  asked about. Counted AFTER the undecidable ones are dropped, so a ticket
- *  naming five repositories of which two are open is not an ambiguity. */
-const TEXT_MATCH_AMBIGUITY_LIMIT = 3;
+// More than `TEXT_MATCH_AMBIGUITY_LIMIT` decidable text matches is the ambiguity
+// a person is asked about. Counted AFTER the undecidable ones are dropped, so a
+// ticket naming five repositories of which two are open is not an ambiguity.
 
 /** Entry rationales. Evidence only, never a run id or a time: an upsert whose
  *  every field equals the stored entry is not planned, so re-deriving the same
@@ -1047,9 +1135,25 @@ const WORKFLOW_OWNED_RATIONALE = "A workflow owned branch for this ticket lives 
 const TICKET_TEXT_ENTRY_RATIONALE = "The ticket text names this repository path.";
 const ONLY_ACCESSIBLE_RATIONALE = "The only repository this run could reach.";
 const ROUTING_MEMORY_RATIONALE = "A remembered routing answer for this ticket's labels.";
+/** What the run stamps on a repository a person's own reply resolved. Read by
+ *  `rememberRoutingAnswer`, which stores a routing memory only for a repository
+ *  a human brought in. */
+const HUMAN_ANSWER_RATIONALE = "human clarification answer";
 
 export function selectRepositoriesFromMetadata(input: {
+  /** The ticket's own words. A caller with no comments to separate passes
+   *  everything here, and then nothing below can take a repository back. */
   ticketText: string;
+  /** The comments the caller read as the person's own words, joined. Apart from
+   *  the ticket's own words because a comment can be taken back by a later one
+   *  and the ticket's words cannot. */
+  commentText?: string;
+  /** The comments the caller did not read as naming repositories, joined,
+   *  absent when there are none. A repository named only here is not taken and
+   *  not counted as an open match, its entry is not deleted, and it is said out
+   *  loud: `ticketTextScan` holds why. Only a run with a record may have one,
+   *  because the record is what carries the sentence that says it. */
+  unreadCommentText?: string;
   repositories: RepositoryMetadata[];
   workflowOwnedBranches: WorkflowOwnedBranchSelectionInput[];
   repositoryScope?: WorkflowRepositoryScope;
@@ -1079,6 +1183,102 @@ export function selectRepositoriesFromMetadata(input: {
     usableRepositories.map((repo) => [repositoryKey(repo), repo]),
   );
   const selected = new Map<string, SelectedRepository>();
+  // Pure intersection over what the server already offered, so the pin can only
+  // ever remove candidates. Without a pin this is the input list untouched.
+  const scopedRepositories = filterPinnedRepositories(
+    usableRepositories,
+    input.repositoryScope,
+  );
+  // NOT READING A COMMENT AND NOT SAYING SO ARE TWO DIFFERENT THINGS, AND ONLY
+  // THE RECORD CAN SAY IT. Every sentence a person gets about a repository this
+  // run left behind rides the recorder, so without one there is nowhere to put
+  // the reason, and dropping a comment silently is the failure this whole round
+  // exists to end. A run with no record therefore reads the ticket exactly as it
+  // always did, comments and all, and changes nothing about a path nobody can
+  // be told about.
+  const unreadCommentText = input.workScope ? (input.unreadCommentText ?? "") : "";
+  const ownWords = (
+    input.workScope
+      ? input.ticketText
+      : // With no record the ticket is read whole, comments and all, exactly as
+        // it always was.
+        [input.ticketText, input.commentText ?? "", input.unreadCommentText ?? ""].join("\n")
+  ).toLowerCase();
+  const commentWords = (input.workScope ? (input.commentText ?? "") : "").toLowerCase();
+  // A REPOSITORY A LATER COMMENT TOOK BACK. The comment that says no is not read
+  // at all, so an earlier comment naming the same repository would otherwise
+  // still decide it: "use github:acme/ops", then "actually not ops", and ops is
+  // taken anyway. Matched on the path AND on the bare name, because that is how
+  // a person writes a second thought, and on every repository a bare name fits
+  // when it fits more than one: taking a repository nobody wants is the failure
+  // that lasts, and leaving one out is said out loud and undone in a comment.
+  // The ticket's own words are not subject to this; they are the ticket.
+  const retractedKeys = new Set(
+    unreadCommentText
+      ? scopedRepositories
+          .filter(
+            (repo) =>
+              mentionsRepositoryPath(unreadCommentText.toLowerCase(), repo.repoPath) ||
+              mentionsRepositoryPath(unreadCommentText.toLowerCase(), repoShortName(repo)),
+          )
+          .map((repo) => repositoryKey(repo))
+      : [],
+  );
+  // AND THE TICKET'S OWN WORDS, SENTENCE BY SENTENCE. "Do NOT touch
+  // github:acme/api, it is frozen." in a description used to attach api and say
+  // nothing, so the run worked in the one repository the ticket had told it to
+  // leave alone. A comment is read whole because it is one thought; a
+  // description is many, and reading it whole would let one refused repository
+  // drop every other repository the ticket names. So each sentence is read on
+  // its own, and a repository whose every mention in the ticket's own words sits
+  // in a sentence that says no is not taken from them, and is said out loud
+  // below. A sentence ends at a full stop, a question mark, an exclamation mark
+  // or a line break, none of which appear inside a repository path.
+  const ownSentences = input.workScope ? sentencesOf(input.ticketText) : [];
+  const takenFromOwnWords = (repo: RepositoryMetadata): boolean =>
+    input.workScope
+      ? ownSentences.some(
+          (sentence) =>
+            mentionsRepositoryPath(sentence.toLowerCase(), repo.repoPath) &&
+            !commentSaysNoAboutItsPaths(sentence),
+        )
+      : mentionsRepositoryPath(ownWords, repo.repoPath);
+  // Named by the ticket and taken from nowhere in it: every sentence that names
+  // it says no about something.
+  const refusedByOwnWords = (repo: RepositoryMetadata): boolean =>
+    Boolean(input.workScope) &&
+    mentionsRepositoryPath(ownWords, repo.repoPath) &&
+    !takenFromOwnWords(repo);
+  // Scanned here, above the record, because two things read it: the selection
+  // below, which decides what the ticket names, and the recorder, which decides
+  // from the same matches whether a path written in a comment would reach the
+  // next run at all (`commentPathIsTaken`). One scan, so the run cannot leave a
+  // repository out on one reading of the ticket and describe the way back on
+  // another.
+  const exactMatches = scopedRepositories.filter(
+    (repo) =>
+      takenFromOwnWords(repo) ||
+      (mentionsRepositoryPath(commentWords, repo.repoPath) &&
+        !retractedKeys.has(repositoryKey(repo))),
+  );
+  const ticketTextMatchedKeys = exactMatches.map((repo) => repositoryKey(repo));
+  // The same scan over the comments the run did not read, for the two things it
+  // owes a person about them: nothing in the record goes away because of one
+  // (`stillNamedKeys`), and every repository they name that this run did not
+  // take is said out loud (`leaveOut` below). By PATH here, not by bare name:
+  // this sentence says a comment named the repository, and a bare name is
+  // enough to hold a repository back without being enough to say that.
+  const unreadCommentKeys = unreadCommentText
+    ? scopedRepositories
+        .filter((repo) => mentionsRepositoryPath(unreadCommentText.toLowerCase(), repo.repoPath))
+        .map((repo) => repositoryKey(repo))
+        .filter((key) => !ticketTextMatchedKeys.includes(key))
+    : [];
+  // And the repositories the ticket's own words name only where they say no.
+  const refusedByTicketKeys = scopedRepositories
+    .filter(refusedByOwnWords)
+    .map((repo) => repositoryKey(repo))
+    .filter((key) => !ticketTextMatchedKeys.includes(key));
   // The listing IS the catalog here, because it is already filtered by what this
   // run may touch: on a bridge that is everything the providers offered, and on
   // an activated catalog it is the enabled intersection. Usability is the one
@@ -1087,6 +1287,7 @@ export function selectRepositoriesFromMetadata(input: {
   const record = input.workScope
     ? createRunWorkScopeRecorder({
         ...input.workScope,
+        ticketText: ticketTextReading(input.workScope.postAnswer, ticketTextMatchedKeys),
         ...(input.repositoryScope ? { repositoryScope: input.repositoryScope } : {}),
         catalog: {
           activated: input.workScope.catalogActivated,
@@ -1148,12 +1349,50 @@ export function selectRepositoriesFromMetadata(input: {
     rationale: WORKFLOW_OWNED_RATIONALE,
   });
 
-  // Pure intersection over what the server already offered, so the pin can only
-  // ever remove candidates. Without a pin this is the input list untouched.
-  const scopedRepositories = filterPinnedRepositories(
-    usableRepositories,
-    input.repositoryScope,
-  );
+  // A path a person wrote after answering, for a repository this run cannot
+  // open: not enabled, no longer usable, or outside what the workflow may take.
+  // The text scan reads only the usable, pinned part of the listing, so it never
+  // sees one, and the way back the recovery sentence offered would end in
+  // silence. Said before the pin returns, because a pinned workflow is one of
+  // the reasons. Said, not written: nothing about the work was decided.
+  if (record && input.workScope) {
+    const listedKeys = new Set(input.repositories.map((repo) => repositoryKey(repo)));
+    for (const key of record.ticketText?.mentionedAfterAnswerKeys ?? []) {
+      if (ticketTextMatchedKeys.includes(key) || selected.has(key)) continue;
+      record.leaveOut(
+        key,
+        !listedKeys.has(key)
+          ? input.workScope.catalogActivated
+            ? "not_enabled"
+            : "not_listed"
+          : usableKeys.has(key)
+            ? "outside_pin"
+            : "unusable",
+      );
+    }
+  }
+
+  // And a path written in a comment this run did not read at all, for a
+  // repository it could otherwise have taken. The person wrote the path our own
+  // sentence asked them for, so the one thing that must not happen is the run
+  // passing it over without a word. Said here, beside the reason above and
+  // before the pin returns, so every repository the ticket names and the run
+  // left behind is accounted for on the same channels.
+  if (record) {
+    for (const key of unreadCommentKeys) {
+      if (selected.has(key)) continue;
+      record.leaveOut(key, "comment_says_no");
+    }
+    // And the repository the ticket itself names only where it says no. Said
+    // once, here, rather than left to a person noticing a repository missing
+    // from a list nobody prints: the ticket named it, and a run that quietly
+    // dropped it looks exactly like a run that failed to match it.
+    for (const key of refusedByTicketKeys) {
+      if (selected.has(key)) continue;
+      record.leaveOut(key, "ticket_says_no");
+    }
+  }
+
   const pinnedRepositories = input.repositoryScope?.repositories ?? [];
   if (pinnedRepositories.length > 0) {
     const scopedByKey = new Map(
@@ -1193,16 +1432,19 @@ export function selectRepositoriesFromMetadata(input: {
     return done({ status: "selected", repositories: [...selected.values()] });
   }
 
-  const normalizedTicketText = input.ticketText.toLowerCase();
-  const exactMatches = scopedRepositories.filter((repo) =>
-    mentionsRepositoryPath(normalizedTicketText, repo.repoPath),
-  );
   if (record) {
-    const matchedKeys = record.boundEventKeys(exactMatches.map((repo) => repositoryKey(repo)));
+    const matchedKeys = record.boundEventKeys(ticketTextMatchedKeys);
     // Filtered BEFORE it is counted: what is unreachable and what the record
     // already decided is not an open choice, so five matches of which two are
     // still open is an ordinary derivation, not an ambiguity.
     const decidable = record.decidableKeys(matchedKeys);
+    // What the ticket still says and this run did not read. It decides nothing
+    // and counts towards nothing; it only keeps the deletion below honest,
+    // which is why it rides every ticket text event this branch raises.
+    const stillNamed =
+      unreadCommentKeys.length > 0
+        ? { stillNamedKeys: record.boundEventKeys(unreadCommentKeys) }
+        : {};
     if (decidable.length > TEXT_MATCH_AMBIGUITY_LIMIT) {
       const ambiguous = record.decide({ kind: "text_ambiguous", matchedKeys });
       if (ambiguous.ask.length === 0) {
@@ -1213,8 +1455,26 @@ export function selectRepositoriesFromMetadata(input: {
         // the run simply missed them. Say which ones, and why they were not
         // taken, so a person who has changed their mind knows there is
         // something to change.
-        const untaken = decidable.filter((key) => !selected.has(key));
-        if (untaken.length > 0) {
+        // Less what the decision already said, keyed, as left out of an
+        // answer: one sentence per repository, never two.
+        const untaken = decidable.filter(
+          (key) => !selected.has(key) && !(ambiguous.unnamed ?? []).includes(key),
+        );
+        // A PERSON'S OWN ACTION MUST NOT TURN THE REPORT OFF. A repository
+        // somebody wrote the path of after answering is no longer left out BY
+        // the answer, so the sentence saying so stops being true and stops being
+        // said; the ticket still names more open repositories than one run
+        // chooses between, so nothing is taken either, and the question is not
+        // asked again on a subject that carries an answer. The person did
+        // exactly what this system asked them to do and the only channel talking
+        // to them went quiet. So they are told, keyed, what happened to the path
+        // they wrote and what does work.
+        const writtenSinceTheAnswer = untaken.filter((key) =>
+          (record.ticketText?.mentionedAfterAnswerKeys ?? []).includes(key),
+        );
+        for (const key of writtenSinceTheAnswer) record.leaveOut(key, "too_many_open");
+        const untakenRest = untaken.filter((key) => !writtenSinceTheAnswer.includes(key));
+        if (untakenRest.length > 0) {
           // TWO SENTENCES, BECAUSE THE RUN CAN BE IN TWO STATES HERE AND ONLY
           // ONE OF THEM HAS CHOICES TO HAVE KEPT TO. A person may take their
           // entries out through the edit surface, and the question stays
@@ -1228,8 +1488,8 @@ export function selectRepositoriesFromMetadata(input: {
           // states.
           record.note(
             selected.size > 0
-              ? `The ticket also names ${untaken.join(", ")}, and this run kept to the repositories already chosen on this work rather than asking again.`
-              : `The ticket names ${untaken.join(", ")}, and this run did not ask which of them to start from because this work already carries an answer to that question.`,
+              ? `The ticket also names ${untakenRest.join(", ")}, and this run kept to the repositories already chosen on this work rather than asking again.`
+              : `The ticket names ${untakenRest.join(", ")}, and this run did not ask which of them to start from because this work already carries an answer to that question.`,
           );
         }
       }
@@ -1238,6 +1498,7 @@ export function selectRepositoriesFromMetadata(input: {
         kind: "derived",
         origin: "ticket_text",
         repositoryKeys: decidable,
+        ...stillNamed,
         rationale: TICKET_TEXT_ENTRY_RATIONALE,
       }).attach) {
         const repo = repositoriesByKey.get(key);
@@ -1249,11 +1510,14 @@ export function selectRepositoriesFromMetadata(input: {
       // The evidence is gone, so what the old text matched goes with it. ONLY
       // when the matcher found nothing at all: an empty event deletes this
       // origin's entries, and a corrected ticket must never empty its own scope
-      // with nobody asked.
+      // with nobody asked. A comment the run declined to read is not a ticket
+      // that stopped naming a repository, which is why the words in it are
+      // carried here as still named.
       record.decide({
         kind: "derived",
         origin: "ticket_text",
         repositoryKeys: [],
+        ...stillNamed,
         rationale: TICKET_TEXT_ENTRY_RATIONALE,
       });
     } else {
@@ -1278,7 +1542,12 @@ export function selectRepositoriesFromMetadata(input: {
   if (record && record.ask.length > 0) {
     return done({
       status: "clarification_needed",
-      questions: [selectionQuestion(record.ask.map((asked) => asked.repositoryKey))],
+      questions: [
+        selectionQuestion(
+          record.ask.map((asked) => asked.repositoryKey),
+          record.alreadyTaken,
+        ),
+      ],
     });
   }
 
@@ -1293,7 +1562,17 @@ export function selectRepositoriesFromMetadata(input: {
   // Reading the text again here would decide the same repositories a second
   // time, from prose, which is exactly the path that let one run's answer steer
   // a later run.
-  if (input.directAnswer && !record) {
+  //
+  // AND SKIPPED FOR A REPLY THAT SAYS NO, which is the same rule the careful
+  // reader keeps: "not acme/api" resolves one identity here, and taking it
+  // would attach the one repository the person refused. A run with no record
+  // has no channel to explain a reply it could not use, so it asks again
+  // instead, which is a question rather than a silence.
+  const directAnswerSaysNo =
+    input.directAnswer !== undefined &&
+    input.directAnswer !== null &&
+    commentSaysNoAboutItsPaths(input.directAnswer);
+  if (input.directAnswer && !record && !directAnswerSaysNo) {
     const normalizedAnswer = normalizeRepoAnswer(input.directAnswer);
     const answerExactMatches = scopedRepositories.filter(
       (repo) =>
@@ -1308,7 +1587,7 @@ export function selectRepositoriesFromMetadata(input: {
       const repo = answerMatches[0]!;
       const key = repositoryKey(repo);
       if (!selected.has(key)) {
-        selected.set(key, selectedRepository(repo, "human clarification answer"));
+        selected.set(key, selectedRepository(repo, HUMAN_ANSWER_RATIONALE));
       }
     }
   }
@@ -1357,7 +1636,12 @@ export function selectRepositoriesFromMetadata(input: {
       if (ambiguous.ask.length > 0) {
         return done({
           status: "clarification_needed",
-          questions: [selectionQuestion(ambiguous.ask.map((asked) => asked.repositoryKey))],
+          questions: [
+            selectionQuestion(
+              ambiguous.ask.map((asked) => asked.repositoryKey),
+              ambiguous.alreadyTaken ?? [],
+            ),
+          ],
         });
       }
       // Silenced, so the run does NOT stop. This subject already carries an
@@ -1408,11 +1692,15 @@ export function selectRepositoriesFromMetadata(input: {
   // the catalog is unavailable is a confident, wrong statement to a human, worse
   // than the loop this fallback exists to end.
   // Gated on the record for the same reason as the whole-reply scan above, and
-  // it is the LAST place where prose still decided a repository. Left open it
-  // would resolve an answer a second time, at random depending on how the
-  // sentence was written, and a loop caused by a question nobody recorded would
-  // look like one that "sometimes works".
-  if (input.directAnswer && !record) {
+  // on the reply saying no for the reason that scan is: this parser resolves
+  // "not acme/api" to acme/api, which is the refused repository attached by the
+  // dumbest reader in the file.
+  //
+  // It is the LAST place where prose still decided a repository. Left open with
+  // a record live it would resolve an answer a second time, at random depending
+  // on how the sentence was written, and a loop caused by a question nobody
+  // recorded would look like one that "sometimes works".
+  if (input.directAnswer && !record && !directAnswerSaysNo) {
     const unresolved: string[] = [];
     const resolved = new Map<string, RepositoryMetadata>();
     for (const identity of parseRepositoryExpansionAnswer(input.directAnswer)) {
@@ -1432,16 +1720,25 @@ export function selectRepositoriesFromMetadata(input: {
         ],
       });
     }
-    // Everything named resolved, and to a single repository: an explicit choice
-    // the whole-reply scan could not read. Honour it rather than asking again.
-    // Several distinct repositories is the same ambiguity the answer scan above
-    // declines to guess at, so that still falls through to discovery.
-    if (resolved.size === 1) {
-      const repo = [...resolved.values()][0]!;
-      selected.set(
-        repositoryKey(repo),
-        selectedRepository(repo, "human clarification answer"),
-      );
+    // Everything named resolved: an explicit choice the whole-reply scan could
+    // not read, and this run honours it rather than asking again.
+    //
+    // UP TO THE AMBIGUITY LIMIT, NOT ONE. A reply naming two repositories used
+    // to fall through here, and until this round it landed anyway, because the
+    // answer was also appended to the ticket and the path scan took every match
+    // in it. That append is gone (it handed a refused reply to a scanner that
+    // reads paths and not people), so "one" would now drop what somebody wrote,
+    // on the one path that cannot tell them: a run with no record posts no
+    // sentence about an answer it did not use. More than the limit is the
+    // ambiguity nothing here resolves, and that still goes to discovery, which
+    // asks rather than guessing.
+    if (resolved.size > 0 && resolved.size <= TEXT_MATCH_AMBIGUITY_LIMIT) {
+      for (const repo of resolved.values()) {
+        const key = repositoryKey(repo);
+        if (!selected.has(key)) {
+          selected.set(key, selectedRepository(repo, HUMAN_ANSWER_RATIONALE));
+        }
+      }
       return done({ status: "selected", repositories: [...selected.values()] });
     }
   }
@@ -1477,12 +1774,50 @@ export function selectRepositoriesFromMetadata(input: {
 
 /** The which-of-these question, naming every repository it asks about by its
  *  full key. The answer is read back against those keys, so a question that
- *  listed none of them could not be answered in a way anything could record. */
-function selectionQuestion(repositoryKeys: RepositoryKey[]): string {
-  return (
-    `More than ${TEXT_MATCH_AMBIGUITY_LIMIT} repositories match this ticket. ` +
+ *  listed none of them could not be answered in a way anything could record.
+ *
+ *  IT SAYS WHAT THE ANSWER BINDS. Read as written, this asks what to research
+ *  first; what it actually settles is wider and lasts: a repository this list
+ *  names and the answer leaves out is refused to every later guess on this work,
+ *  including the agent's own mid-run request (`isUnnamedInAnswer` in
+ *  `engine/work-scope/decide.ts`). Somebody scoping one afternoon's research
+ *  cannot be held to a decision nobody told them they were making, so the
+ *  question tells them.
+ *
+ *  AND IT NAMES NO LEVER. A question is copied verbatim into the research,
+ *  implementation and review prompts and into the ticket's memory file, so a
+ *  sentence here naming the work scope API or `work_scope.edit` would hand the
+ *  agent the undo for a person's own decision (rule 7). The way back travels
+ *  beside the question instead, in the recovery note the ticket comment carries
+ *  and no prompt does (`unnamedRecoveryNotes` in `engine/work-scope/context.ts`,
+ *  rendered by `formatClarificationQuestionsComment`).
+ *
+ *  AND IT DOES NOT OFFER WHAT THE WORK ALREADY HOLDS. A matched repository the
+ *  record has selected by a run's reading of the ticket, a trigger policy or a
+ *  branch stays attached whatever the reply says, because an answer removes a
+ *  guess and nothing else. So those are named apart, as already taken, with the
+ *  one thing that does remove them said in plain words and no tool named; and
+ *  the binding sentence says it covers the repositories a person may reply
+ *  with, which is the whole of what it is true of. */
+function selectionQuestion(
+  repositoryKeys: RepositoryKey[],
+  alreadyTaken: readonly RepositoryKey[],
+): string {
+  const head =
+    `${TEXT_AMBIGUITY_QUESTION_OPENING} ` +
     "Which repositories are essential for the initial research? " +
-    `Reply with one or more of: ${repositoryKeys.join(", ")}.`
+    `Reply with one or more of: ${repositoryKeys.join(", ")}.`;
+  if (alreadyTaken.length === 0) {
+    return (
+      `${head} A repository you do not name is left out of this work from now on, ` +
+      "and no later run takes it on its own."
+    );
+  }
+  return (
+    `${head} ${KEPT_REPOSITORIES_SENTENCE_OPENING} ${alreadyTaken.join(", ")}. ` +
+    "Your reply does not remove them. " +
+    "Of the repositories you may reply with, one you do not name is left out of this work " +
+    "from now on, and no later run takes it on its own."
   );
 }
 
@@ -1512,21 +1847,6 @@ function mentionsRepositoryPath(candidateText: string, repoPath: string): boolea
   const escaped = repoPath.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const boundary = "[^a-z0-9/_-]";
   return new RegExp(`(^|${boundary})${escaped}($|${boundary})`).test(candidateText);
-}
-
-/** The most recent direct answer to a which-repo clarification, or null when
- *  this isn't a retry. `execution?.clarificationAnswer` is appended as a
- *  synthetic trailing comment (see engine/blocks/prepare-workspace/execute.ts:1098); scanning from the
- *  end finds the current round's answer regardless of how many prior rounds
- *  (if any) also appended one. */
-function latestClarificationAnswer(
-  comments: Array<{ author: string; body: string }> | undefined,
-): string | null {
-  if (!comments) return null;
-  for (let i = comments.length - 1; i >= 0; i--) {
-    if (comments[i]!.author === "Human clarification") return comments[i]!.body;
-  }
-  return null;
 }
 
 /**
@@ -1627,8 +1947,40 @@ function editDistance(a: string, b: string): number {
 }
 
 /**
+ * The ticket's own words, one sentence at a time.
+ *
+ * A sentence ends at a full stop, a question mark, an exclamation mark or a
+ * line break. None of those appear inside a repository path: a path with a dot
+ * in it ("acme/foo.bar") is not split, because the split needs whitespace after
+ * the stop, and a bullet list is split by its own line breaks, which is what a
+ * description written as a list needs.
+ */
+function sentencesOf(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+|\n+/u)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0);
+}
+
+/** The ticket as the path matcher reads it, in the three parts the reading of a
+ *  comment splits it into. */
+interface TicketTextScan {
+  /** The ticket's OWN words: its key, title, description, acceptance criteria
+   *  and labels. A repository named here is named by the ticket, and no comment
+   *  takes that back. */
+  own: string;
+  /** The comments this run read, joined. A repository named only here can be
+   *  taken back by a later comment that says no about it. */
+  comments: string;
+  /** The comments this run did not read, joined. Scanned for the paths they
+   *  carry and for nothing else: what it names is not taken, is not deleted
+   *  from the record either, and is said out loud. */
+  unread: string;
+}
+
+/**
  * Everything on the ticket the path matcher reads, with this installation's own
- * comments left out.
+ * comments left out, and with the comments that say no held apart.
  *
  * The bot's question about repositories lists repository keys, so joining every
  * comment made the workflow's own question read as if a person had written it:
@@ -1640,8 +1992,20 @@ function editDistance(a: string, b: string): number {
  * would drop a person's comments too, and a repository named only in one would
  * stop being matched, which trades a question too many for a repository too
  * few.
+ *
+ * WHY A COMMENT IS READ FOR A REFUSAL AND THE TICKET'S OWN WORDS ARE NOT. The
+ * description and the acceptance criteria are the ticket, the words every
+ * question about this work is asked about, and "do not touch acme/api until the
+ * freeze lifts" there describes the work rather than answering this run. A
+ * comment is a person speaking, so it is read the way an answer is
+ * (`commentSaysNoAboutItsPaths`), and read WHOLE: nothing can tell "not api,
+ * but infra" from "not api or infra", and guessing attaches a repository
+ * somebody declined. The cost is a comment that named one repository to use
+ * beside one to leave alone, and it is paid out loud, never in silence: what
+ * such a comment names is reported per repository with the way back beside it
+ * (`leaveOut`), and what the record already holds stays (`stillNamedKeys`).
  */
-function ticketText(
+function ticketTextScan(
   ticket: {
     identifier?: string;
     title?: string;
@@ -1651,18 +2015,149 @@ function ticketText(
     labels?: string[];
   },
   botAccountId?: string,
-): string {
+): TicketTextScan {
   const comments = (ticket.comments ?? []).filter(
     (comment) => botAccountId === undefined || comment.accountId !== botAccountId,
   );
-  return [
-    ticket.identifier,
-    ticket.title,
-    ticket.description,
-    ticket.acceptanceCriteria,
-    ...comments.map((comment) => comment.body),
-    ...(ticket.labels ?? []),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const saysNo = comments.filter((comment) => commentSaysNoAboutItsPaths(comment.body));
+  return {
+    own: [ticket.identifier, ticket.title, ticket.description, ticket.acceptanceCriteria]
+      .concat(ticket.labels ?? [])
+      .filter(Boolean)
+      .join("\n"),
+    comments: comments
+      .filter((comment) => !saysNo.includes(comment))
+      .map((comment) => comment.body)
+      .join("\n"),
+    unread: saysNo.map((comment) => comment.body).join("\n"),
+  };
+}
+
+/** A person's comments, dated, and the instants they are dated against. */
+interface PostAnswerComments {
+  /** Per answered repository, when the newest answer that named it landed. */
+  answeredAtByKey: Record<string, string>;
+  /** Every comment a person wrote that carries an instant. */
+  comments: Array<{ body: string; createdAtMs: number }>;
+}
+
+/**
+ * The part of the ticket a PERSON wrote, dated, for the run to compare against
+ * the answer that named each repository.
+ *
+ * WHY THE REST OF THE TICKET IS NOT IN HERE. The description and the acceptance
+ * criteria are the words the which-of-these question was asked about, and they
+ * are snapshotted per run, so a later run that reads them again is not hearing a
+ * new decision. It took an exclusion to make that visible: strike one repository
+ * off a ticket that named four and the remaining matches drop under the
+ * ambiguity limit, the text branch runs, and the repositories a person declined
+ * are attached and written down with nobody's name on them. Only what somebody
+ * typed after answering may reopen the matter (`boundByTheAnswer` in
+ * `engine/work-scope/decide.ts`).
+ *
+ * THREE THINGS IT CANNOT PROVE, AND ALL THREE READ AS PRE-ANSWER. Without the
+ * bot's account id a comment cannot be told from our own question, which lists
+ * the very repository keys the run asked about, so the whole value is null;
+ * without an author id the same is true of one comment, and without a timestamp
+ * it cannot be placed after anything, so that comment is dropped. Each one costs
+ * a repository the person can still put back through the record, where the
+ * other reading writes down a decision they did not take. And because the
+ * sentence offering the comment door reads the same value, a run that cannot
+ * read comments never offers that door (`commentPathIsTaken` in
+ * `engine/work-scope/context.ts`).
+ */
+function postAnswerComments(
+  ticket: PreSandboxStepContext["ticket"],
+  answeredAtByKey: Record<string, string> | undefined,
+  botAccountId: string | undefined,
+): PostAnswerComments | null {
+  if (answeredAtByKey === undefined || botAccountId === undefined) return null;
+  return {
+    answeredAtByKey,
+    comments: (ticket.comments ?? []).flatMap((comment) => {
+      if (!comment.accountId || comment.accountId === botAccountId) return [];
+      const createdAtMs = comment.createdAt === undefined ? NaN : Date.parse(comment.createdAt);
+      return Number.isNaN(createdAtMs) ? [] : [{ body: comment.body, createdAtMs }];
+    }),
+  };
+}
+
+/**
+ * The one reading of the ticket the record decides the comment door on.
+ *
+ * `mentionedAfterAnswerKeys` is dated PER REPOSITORY: a comment counts for a
+ * repository only when it came after the newest answer to a question that named
+ * THAT repository. An answer to an unrelated question later on does not move
+ * it, so a path a person wrote on our instructions stays theirs.
+ *
+ * MATCHED AGAINST THE ANSWERED KEYS, NOT THE LISTING. Only a repository an
+ * answer named can be dated at all, so its key is already known, and matching
+ * against the key rather than the listing reaches the one a person can no
+ * longer find in it: disabled on the Repositories page, or never enabled. The
+ * path is compared with the same exact matcher as the ticket's own text.
+ * Whether somebody typed a path is a fact about what they wrote, and the pin,
+ * the catalog and the policy still decide what the run may do with it.
+ *
+ * THE NEWEST COMMENT ABOUT A REPOSITORY DECIDES, AND ONE THAT SAYS NO NAMES
+ * NOTHING. "Please do not touch github:acme/api" is the opposite of taking the
+ * repository back, so a comment is read with the negation reading an answer
+ * gets (`commentSaysNoAboutItsPaths`), on the whole comment: the reader cannot
+ * tell "don't touch api, but infra" from "don't touch api or infra". That
+ * leaves out some comments that meant yes, which costs a person one more step
+ * and is said on the line the run writes for that repository
+ * (`saidNoAfterAnswerKeys`); reading the other way attaches a repository
+ * somebody declined. The newest comment wins, so a person who changes their
+ * mind in a later comment is read as they now stand.
+ */
+function ticketTextReading(
+  postAnswer: PostAnswerComments | null,
+  matchedKeys: string[],
+): TicketTextReading {
+  if (postAnswer === null) {
+    return { matchedKeys, datableKeys: [], mentionedAfterAnswerKeys: [] };
+  }
+  const anchorOf = (key: string): number | null => {
+    const at = postAnswer.answeredAtByKey[key];
+    if (at === undefined) return null;
+    const ms = Date.parse(at);
+    return Number.isNaN(ms) ? null : ms;
+  };
+  const datableKeys = Object.keys(postAnswer.answeredAtByKey).filter(
+    (key) => anchorOf(key) !== null,
+  );
+  const mentionedAfterAnswerKeys: string[] = [];
+  const saidNoAfterAnswerKeys: string[] = [];
+  for (const key of datableKeys) {
+    const anchor = anchorOf(key) ?? Number.POSITIVE_INFINITY;
+    const path = key.slice(key.indexOf(":") + 1);
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    // A SECOND THOUGHT IS WRITTEN THE WAY PEOPLE WRITE ONE. "use
+    // github:acme/ops", then "actually not ops": the retraction names the
+    // repository by its bare name, so a reader that only knows full paths never
+    // sees it and the first comment still decides. A comment counts for this
+    // repository when it writes the path, or when it says no and writes the
+    // name. Never the other way round: a bare name in a comment that says yes
+    // is "the ops team", not a repository, and taking one nobody chose is the
+    // failure that lasts.
+    const about = postAnswer.comments.filter((comment) => {
+      if (comment.createdAtMs <= anchor) return false;
+      const body = comment.body.toLowerCase();
+      if (mentionsRepositoryPath(body, path)) return true;
+      return mentionsRepositoryPath(body, name) && commentSaysNoAboutItsPaths(comment.body);
+    });
+    // The newest wins, and a tie goes to the refusal. Two comments can carry
+    // the same instant, and a tracker gives us no order inside one: reading
+    // them in the order they arrived in the array would make the decision
+    // depend on the provider's paging. Leaving a repository out is said out
+    // loud and taken back in one comment; taking one somebody refused is not.
+    const newest = about.reduce<{ body: string; createdAtMs: number } | null>((latest, comment) => {
+      if (latest === null || comment.createdAtMs > latest.createdAtMs) return comment;
+      if (comment.createdAtMs < latest.createdAtMs) return latest;
+      return commentSaysNoAboutItsPaths(comment.body) ? comment : latest;
+    }, null);
+    if (newest === null) continue;
+    if (commentSaysNoAboutItsPaths(newest.body)) saidNoAfterAnswerKeys.push(key);
+    else mentionedAfterAnswerKeys.push(key);
+  }
+  return { matchedKeys, datableKeys, mentionedAfterAnswerKeys, saidNoAfterAnswerKeys };
 }

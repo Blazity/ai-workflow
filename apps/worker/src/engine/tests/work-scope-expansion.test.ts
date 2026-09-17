@@ -34,7 +34,16 @@ import {
 } from "../repository-discovery/runner.js";
 import { appendRunClarificationRound, createRepositoryQuestions } from "../agent-workflow.js";
 import { applyHumanRepositoryExpansion } from "../steps/phase.js";
-import { consumeWorkScopeAsk, createRunWorkScopeRecorder } from "../work-scope/context.js";
+import {
+  consumeWorkScopeAsk,
+  createRunWorkScopeRecorder,
+  type TicketTextReading,
+} from "../work-scope/context.js";
+import {
+  buildResearchAnalysisReport,
+  formatPublishedAnalysisComment,
+  withAnalysisPublication,
+} from "../support/run-analysis-report.js";
 import type { EngineCtx } from "../blocks/support/types.js";
 import { makeCtx } from "../blocks/support/test-support.js";
 
@@ -109,11 +118,24 @@ function recorderFor(input: {
   attached?: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
   policy?: TriggerRepositoryPolicy;
   activated?: boolean;
+  answeredRepositoryKeys?: string[];
+  /** The pre-sandbox's reading of the ticket. By default a ticket naming
+   *  nothing, read by a run that can date a comment against every answer. */
+  ticketText?: TicketTextReading | null;
 }) {
   return createRunWorkScopeRecorder({
     subjectKey: SUBJECT,
     scope: input.scope,
     selectionAnswered: false,
+    answeredRepositoryKeys: input.answeredRepositoryKeys ?? [],
+    ticketText:
+      input.ticketText === undefined
+        ? {
+            matchedKeys: [],
+            datableKeys: input.answeredRepositoryKeys ?? [],
+            mentionedAfterAnswerKeys: [],
+          }
+        : input.ticketText,
     catalog: {
       activated: input.activated ?? true,
       enabledKeys: input.catalog.map((repo) => `${repo.provider}:${repo.repoPath}`),
@@ -489,6 +511,155 @@ describe("every guard rail of the expansion protocol refuses the model", () => {
     // Nobody can answer a refusal, so the model is told expansion is over
     // rather than being left to request the same repository every pass.
     expect(state.expansionClosed).toBe("bound");
+  });
+});
+
+describe("an expansion request for a repository an answer left unnamed", () => {
+  // Skeptic 8. A which-of-these question named acme/api, the answer named none,
+  // and research then asks for acme/api. Attaching takes the omission back,
+  // asking puts an answered question to the same person again. It is refused
+  // with its own reason, the run carries on, and the person reads why and how to
+  // take it back.
+  it("refuses it with its own reason, carries on, and tells the model and the person apart from an exclusion", () => {
+    const catalog = [catalogEntry("github", "acme/web"), catalogEntry("github", "acme/api")];
+    const record = recorderFor({
+      scope: null,
+      catalog,
+      attached: [{ provider: "github", repoPath: "acme/web" }],
+      answeredRepositoryKeys: ["github:acme/api"],
+    });
+    const requests = [requestFor("github", "acme/api")];
+    const verdict = validateAgainstRecord({
+      requests,
+      catalog,
+      attached: [{ provider: "github", repoPath: "acme/web" }],
+      record,
+    });
+
+    expect(verdict).toEqual({
+      kind: "refused",
+      refusals: [{ repositoryKey: "github:acme/api", reason: "unnamed_in_answer" }],
+      repositories: [],
+    });
+    const { action } = decideRepositoryExpansion({
+      origin: "model",
+      verdict,
+      state: { rounds: 0, priorRequests: [] },
+      requests,
+    });
+    expect(action.kind).toBe("proceed");
+
+    // The model's sentence says what happened and nothing an exclusion says.
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    const [refusal] = verdict.refusals;
+    if (!refusal) throw new Error("expected one refusal");
+    expect(repositoryExpansionRefusalSentence(refusal)).toBe(
+      "github:acme/api was listed in a repository question already answered on this work" +
+        " and is not selected on it, so it is not attached.",
+    );
+    // One trail line, as every expansion refusal has.
+    expect(trailOf(record)).toEqual([
+      { kind: "request_refused", repositoryKey: "github:acme/api", reason: "unnamed_in_answer" },
+    ]);
+    // The person's channel: the way back, both doors, because the one question
+    // on this work named a single repository.
+    expect(record.recoveryNotes).toEqual([
+      "Leaving a repository out of an answer is not final: this work's repository list can be" +
+        " changed through the work scope API or the work_scope.edit tool, or the repository's full" +
+        " path can be written in a ticket comment, as github:acme/api, and the next run reads both.",
+    ]);
+  });
+});
+
+describe("what a person reads about a mid-run refusal", () => {
+  /** Enough of a usage snapshot for the report builder; nothing here reads it. */
+  const USAGE = {
+    costUsd: 0,
+    costKnown: false,
+    tokensInput: null,
+    tokensCached: null,
+    tokensOutput: null,
+    phases: {
+      research: { costUsd: null, tokens: null, durationMs: 1, numTurns: 1, model: "gpt-5.6" },
+    },
+  };
+
+  // The run carries on, so no halt text reaches anybody and the prompt addition
+  // reaches the model alone. The comment a finished run posts is the only
+  // surface left, and what the person needs from it is all three things: which
+  // repository, that their own answer is why, and what to do if they want it
+  // after all. Driven from the refusal the record actually decided, through the
+  // real report builder and the real comment formatter.
+  it("names the repository, says the answer did not name it, and gives the way back", () => {
+    const catalog = [catalogEntry("github", "acme/web"), catalogEntry("github", "acme/api")];
+    const record = recorderFor({
+      scope: null,
+      catalog,
+      attached: [{ provider: "github", repoPath: "acme/web" }],
+      answeredRepositoryKeys: ["github:acme/api"],
+      ticketText: {
+        matchedKeys: ["github:acme/api"],
+        datableKeys: ["github:acme/api"],
+        mentionedAfterAnswerKeys: [],
+      },
+    });
+    const verdict = validateAgainstRecord({
+      requests: [requestFor("github", "acme/api")],
+      catalog,
+      attached: [{ provider: "github", repoPath: "acme/web" }],
+      record,
+    });
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    const [refusal] = verdict.refusals;
+    if (!refusal) throw new Error("expected one refusal");
+
+    const report = withAnalysisPublication(
+      buildResearchAnalysisReport({
+        runId: "expansion-refusal",
+        workspaceManifest: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              defaultBranch: "main",
+              branchName: "arthur/AWT-1",
+              researchBaseSha: "abcdef123456",
+              access: "write",
+            },
+          ],
+        },
+        // Exactly what `agent-workflow.ts` concatenates for a refused request,
+        // and the notes the same recorder composed.
+        leftOutRepositories: [
+          {
+            repositoryKey: refusal.repositoryKey,
+            reason: repositoryExpansionRefusalSentence(refusal),
+          },
+        ],
+        repositoryRecoveryNotes: [...record.recoveryNotes],
+        researchResult: { body: "Plan" },
+        usage: USAGE,
+      }),
+      [{ provider: "github", repoPath: "acme/web", id: 1, url: "https://github.com/acme/web/pull/1" }],
+      "Implemented",
+      USAGE,
+    );
+
+    const comment = formatPublishedAnalysisComment(report, "https://dashboard.example/runs/x");
+    const repositories = comment
+      .split("\n\n")
+      .find((section) => section.startsWith("Repositories"));
+
+    expect(repositories).toContain(
+      "- github:acme/api · left out · github:acme/api was listed in a repository question" +
+        " already answered on this work and is not selected on it, so it is not attached.",
+    );
+    expect(repositories).toContain(
+      "Leaving a repository out of an answer is not final: this work's repository list can be" +
+        " changed through the work scope API or the work_scope.edit tool, or the repository's" +
+        " full path can be written in a ticket comment, as github:acme/api, and the next run" +
+        " reads both.",
+    );
   });
 });
 
@@ -1070,6 +1241,75 @@ describe("what this run's own question settled decides the rounds after it", () 
 
     expect(sentence).toContain("Ada Lovelace");
     expect(sentence).toContain("2026-09-10");
+  });
+
+  /**
+   * The half-written result a run suspended across the deploy that added the
+   * answered set replays: entries, the flag, and no answered set at all.
+   *
+   * The two are ONE value. A guess is refused by the entries and the answered
+   * set read together, so a scope installed on its own puts a run's decisions
+   * beside a set from another read, and nothing in the run can say which of the
+   * two is the older. The pair the run start took in one read is therefore kept
+   * whole, which is what this run did before the field existed.
+   */
+  async function resumeWithoutTheAnsweredSet() {
+    const frozen = {
+      subjectKey: SUBJECT,
+      scope: scopeOf(entry("github:acme/api", "excluded")),
+      selectionAnswered: false,
+      answeredRepositoryKeys: [],
+    };
+    const ctx = makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: v2Manifest,
+      selectedRepositories: [repository("github", "acme/web")],
+      clarifications: [
+        {
+          questions: ["Repository expansion: research requested github:acme/db"],
+          answer: "none",
+          runId: "run-1",
+        },
+      ],
+      workScope: frozen,
+    });
+    await applyHumanRepositoryExpansion(ctx, {
+      resolve: async () => ({
+        decision: { kind: "exhausted" },
+        // An older deployment's step: the entries it read and the flag beside
+        // them, with no answered set to read them against.
+        workScope: { repositories: [], scope: scopeOf(), selectionAnswered: true },
+      }),
+      attach: vi.fn(),
+      fetchContexts: vi.fn(),
+    });
+    return { ctx, frozen };
+  }
+
+  it("installs neither half of the pair when the step returned only the entries", async () => {
+    const { ctx, frozen } = await resumeWithoutTheAnsweredSet();
+
+    expect(ctx.workScope).toBe(frozen);
+  });
+
+  it("still refuses the repository the record decided, which the half the step returned had lost", async () => {
+    const { ctx } = await resumeWithoutTheAnsweredSet();
+
+    const record = recorderFor({
+      scope: ctx.workScope?.scope ?? null,
+      catalog,
+      attached,
+      policy: listed,
+    });
+    const verdict = validateAgainstRecord({
+      requests: [requestFor("github", "acme/api")],
+      catalog,
+      attached,
+      record,
+    });
+
+    expect(verdict.kind).toBe("refused");
+    expect(record.ask).toEqual([]);
   });
 
   it("leaves the run on its frozen record when the step returned none", async () => {
