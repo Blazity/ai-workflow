@@ -30,6 +30,19 @@ and never application infrastructure. ADR-001 owns the tiers.
 - **Each package typechecks itself.** A package with no scripts drops silently
   out of `pnpm -r typecheck`, so each keeps a `typecheck` script and a strict
   `tsconfig.json`.
+- **The test scripts name the packages they run.** `pnpm run test:packages`
+  runs `test` in `contracts`, `costs`, `harness`, `prompts`, `skills` and
+  `workflow-graph`. `pnpm run test:packages:zod4` runs `test:zod4` in
+  `contracts` and `workflow-graph`, the two packages that carry a runtime zod
+  dependency; the other five have no such script and no zod 4 evidence. Both
+  scripts name those packages with `--filter` rather than selecting
+  `./packages/*` with `--if-present`, which reported a package that owns no
+  such script as a package that passed, so a run over seven packages proved
+  two. `conditions` has no `test` script at all and no suite in either run;
+  that is a gap, not a decision recorded here. The test in
+  `scripts/ci/verify-changed.test.ts` holds each named list equal to the
+  packages that own the script, so adding a package to a run is a deliberate
+  edit and leaving one out is a failing test rather than a silent opt out.
 - **Shared dependency versions live in the root catalog.** Anything two
   projects declare goes on `catalog:`, enforced by
   `scripts/gates/check-deps-consistency.mjs`.
