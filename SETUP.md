@@ -508,17 +508,43 @@ vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings
 ### Behavioural PR gate (engine-canary)
 
 The `engine-canary-scope` job runs on every same-repository pull request, holds
-no secrets, and decides whether the `engine-canary` job runs at all: it does for
-pull requests that change `apps/worker/src/engine/**`, `apps/worker/src/db/**`,
-`packages/**`, the run lifecycle (`apps/worker/src/services/run-lifecycle/**`),
-or the canary itself (its runners under `apps/worker/e2e/`, the
-`scripts/ci/engine-canary*` scripts, `.github/workflows/ci.yml`). `ci` requires the scope job to succeed and accepts a skipped
+no secrets, and decides whether the `engine-canary` job runs at all. The
+prefixes it selects on live in `scripts/ci/engine-canary-scope.ts`, which is the
+authority and carries the reason for each one. They are:
+
+- The deployed surfaces the canary drives: `apps/worker/src/engine/**`,
+  `apps/worker/src/db/**`, `apps/worker/src/mcp/**`,
+  `apps/worker/src/routes/**`, `apps/worker/src/sandbox/**`,
+  `apps/worker/src/harness-profiles/**`, `packages/**`, and exactly three
+  directories out of the wider `apps/worker/src/services/` tree:
+  `apps/worker/src/services/run-lifecycle/**`,
+  `apps/worker/src/services/system/**`, and
+  `apps/worker/src/services/overview/**`. No other directory under
+  `apps/worker/src/services/` selects the canary.
+- The canary itself: `apps/worker/e2e/harness-profiles/**`,
+  `apps/worker/e2e/replay/**`, the `scripts/ci/engine-canary*` scripts, and
+  `.github/workflows/ci.yml`.
+- The dependency inputs of the deployed bundle: `pnpm-lock.yaml`,
+  `pnpm-workspace.yaml`, and `apps/worker/package.json`. These three are on the
+  list because the two production failures this gate exists for arrived through
+  a dependency rather than through worker source, and no other job in the
+  repository can see that class.
+
+`scripts/ci/engine-canary-docs.test.ts` holds this list level with the code: a
+prefix that the source selects on and this section does not name fails
+`test:ci`.
+
+`ci` requires the scope job to succeed and accepts a skipped
 `engine-canary` only when that job succeeded and said the canary is not needed;
 a failed or cancelled scope job turns `ci` red. With no
-`ENGINE_CANARY_TARGET`, the canary job exits green and emits a warning that the
-behavioural gate is wired but idle. Once a target is declared, missing
-configuration fails before deployment and a failed identity check stops the job
-before any canary write. A pull request that changes anything under
+`ENGINE_CANARY_TARGET`, the canary job fails with an error naming the variable:
+the job only starts when the scope job said this change needs the canary, so an
+unconfigured target is a refusal rather than an idle state. It used to exit
+green with a warning instead, which reported a success for a job that had run no
+behavioural gate at all, so deleting one repository variable or mistyping its
+name disarmed the gate with nothing red anywhere. Once a target is declared,
+missing configuration fails before deployment and a failed identity check stops
+the job before any canary write. A pull request that changes anything under
 `apps/worker/drizzle/**` skips the canary job with a warning from the scope job,
 because the target shares the production database with every migration; the
 canary runs only after that migration has merged and the shared database has
