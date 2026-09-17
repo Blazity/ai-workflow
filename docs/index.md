@@ -124,6 +124,7 @@ so links into it keep resolving.
 | [archive/SECURUTY-OBSERVABILITY.md](./archive/SECURUTY-OBSERVABILITY.md) | An early security and observability note |
 | [archive/design-qa.md](./archive/design-qa.md) | The AIW-179 visual QA session and its verdict |
 | [archive/learnings.md](./archive/learnings.md) | The session learnings file, mined into `.claude/rules/*.md` and the root `AGENTS.md` |
+| [archive/agent-notes/](./archive/agent-notes/) | History and reasoning moved out of the `AGENTS.md` files and `.claude/rules/*.md` on 2026-09-17, one file per area |
 
 ## Artifacts, not documents
 
