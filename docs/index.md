@@ -12,7 +12,9 @@ Every document outside `archive/` and `research/` starts with two lines,
 [ADR-005](./adr/ADR-005-documentation-taxonomy.md), and
 `scripts/gates/docs-status.mjs` enforces them over `docs/`, `apps/*/docs/`,
 each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
-`SETUP.md` and `CONTEXT.md` at the root.
+`SETUP.md` and `CONTEXT.md` at the root. Those paths are required rather than
+opportunistic: when one of them moves the gate refuses, instead of quietly
+checking the smaller set that is left (ADR-007).
 
 ## Start here
 
@@ -48,6 +50,8 @@ each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
 | [adr/ADR-004-gates-and-required-ci.md](./adr/ADR-004-gates-and-required-ci.md) | The gate ladder, one shape per gate, and what has to be true before a check can be required |
 | [adr/ADR-005-documentation-taxonomy.md](./adr/ADR-005-documentation-taxonomy.md) | This taxonomy: the status header, the currency rule, the reachability rule, per-app agent files |
 | [adr/ADR-006-model-catalog.md](./adr/ADR-006-model-catalog.md) | The recognised model policy, live-advertisement intersection, stored-ID compatibility, and catalog ownership |
+| [adr/ADR-007-empty-scan-is-a-refusal.md](./adr/ADR-007-empty-scan-is-a-refusal.md) | Why a gate that scanned nothing refuses instead of passing, the two helpers that refuse, and the one gate that cannot |
+| [adr/ADR-008-claims-the-code-owns.md](./adr/ADR-008-claims-the-code-owns.md) | When a document may restate a list the code owns, and the test that holds the copy level in both directions |
 
 ## Product
 
@@ -138,4 +142,4 @@ have no status header and the docs gate skips them.
 | `docs/example-skill/SKILL.md` | The example agent skill referenced from SETUP.md |
 | `docs/example-workflows/loop-branch-workflow.json` | An importable example definition |
 | `CHANGELOG.md` | The daily collation workflow (`.github/workflows/changelog.yml`) writes it; readers consume it directly |
-| `changelog/unreleased/*.md` | The daily collation workflow reads and deletes them |
+| `changelog/unreleased/*.md` | The daily collation workflow reads and deletes them; the CI completeness check (`scripts/ci/changelog-entry-gate.ts`) reads them too, to see whether a pull request's entry yields a bullet |

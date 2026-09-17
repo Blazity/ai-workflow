@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-17
 
 # Architecture decision records
 
@@ -16,6 +16,10 @@ Every ADR is MADR with these sections, in this order:
 - **Context.** The forces: what is true in the repository today, with
   `file:line` citations or a link to the research that measured it, and what
   breaks if nothing is decided.
+- **Evidence.** Only when the decision rests on a measurement too long to cite
+  inline in Context: the commands, counts and observed output that establish
+  the facts Context states. It records what was observed, never the argument
+  for the decision, which stays in Context and Decision.
 - **Decision.** The rule, stated so a reviewer can apply it without reading
   the rest of the file.
 - **Consequences.** What follows: what becomes enforceable, what becomes
@@ -82,9 +86,9 @@ ADR, never edited in place: the old file keeps its number, gains
 | [ADR-004](./ADR-004-gates-and-required-ci.md) | Gates and required CI | Accepted | Written |
 | [ADR-005](./ADR-005-documentation-taxonomy.md) | Documentation taxonomy | Accepted | Written |
 | [ADR-006](./ADR-006-model-catalog.md) | Model catalog | Accepted | Written |
+| [ADR-007](./ADR-007-empty-scan-is-a-refusal.md) | An empty scan is a refusal | Accepted | Written |
+| [ADR-008](./ADR-008-claims-the-code-owns.md) | Claims the code owns | Accepted | Written |
 
-Stage numbers refer to the stage table in
-[docs/plans/2026-09-09-architecture-restructure.md](../plans/2026-09-09-architecture-restructure.md).
-Stage 2 filled the ADR-002, ADR-003 and ADR-005 rows. Stage 8b fills the last
-planned row the same way: replace `Proposed` with the decision status the ADR
-lands with and change `State` to `Written`. No other row moves.
+When a reserved ADR is written, fill its row in place: replace `Proposed` with
+the decision status the ADR lands with and change `State` to `Written`. No
+other row moves.

@@ -100,7 +100,22 @@ pnpm run verify:changed -- --base origin/main
 
 The explicit base is optional. Without it, the command resolves the first local
 commit available in this order: the branch upstream, `origin/HEAD`, then
-`origin/main`. It never fetches. Before enabling the native hook, first inspect:
+`origin/main`. It never fetches.
+
+The run echoes each planned command with its position, stops at the first
+failure, and then lists every command after it as unproven rather than passed.
+Those are `NOT_RUN`. Cite the commands that actually finished, never the plan
+the run printed when it started.
+
+The scope planner reports `NOOP` when the candidate and worktree scans complete
+with no changed paths. That is a valid no-change result: it exits successfully
+without claiming that any scoped check ran. A non-empty path with no declared
+verification scope is `INVALID_SCOPE` and fails; an empty scan inside a required
+gate is also a failure because it did not prove the invariant that gate owns.
+The planner rechecks `HEAD` around the diff, path scan, and each planned command
+so a concurrent commit cannot be reported under the SHA captured at start.
+
+Before enabling the native hook, first inspect:
 
 ```sh
 git config --local --get core.hooksPath
