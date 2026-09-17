@@ -1,13 +1,23 @@
 ---
 paths:
-  - "apps/worker/src/engine/agent-workflow.ts"
-  - "apps/worker/src/engine/post-pr-gate-workflow.ts"
-  - "apps/worker/src/engine/steps/**"
-  - "apps/worker/src/engine/blocks/**"
+  - "apps/worker/src/engine/**"
+  - "apps/worker/workflow-test-fixtures/**"
 ---
 
 # Workflow and step bodies
 
+- Keep every production `"use step"` and `"use workflow"` file under
+  `apps/worker/src/engine/`, because the Workflow DevKit discovers directives
+  from file content rather than imports. A file outside the builder scan fails
+  only at runtime with `is not registered in the current deployment`. A stray
+  backtick in a comment can hide every directive below it. Guards:
+  `apps/worker/src/engine/workflow-import-boundary.test.ts` and
+  `apps/worker/src/engine/step-registration-coverage.test.ts`.
+- Import worker source from `apps/worker/workflow-test-fixtures/` without a
+  file extension, for example `../../src/foo`. A `.js` suffix is resolved
+  literally, can drop the import chain from the builder graph, and can make
+  `(cd apps/worker && pnpm run test:workflow-sdk)` time out with
+  `Cannot find module .../packages/<name>/<file>`.
 - `apps/worker/src/engine/agent-workflow.ts` is a Workflow DevKit `"use workflow"`
   module with NO top-level adapter or logger imports. Every use of `logger` or
   an adapter inside a `"use step"` is a deferred
@@ -25,3 +35,5 @@ paths:
 - `"use workflow"` bodies run sandboxed and must be deterministic. Side
   effects, database clients and network calls belong in `"use step"` bodies,
   which have full Node access.
+
+History: docs/archive/agent-notes/worker-runtime.md
