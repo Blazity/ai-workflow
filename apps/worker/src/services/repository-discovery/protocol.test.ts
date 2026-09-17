@@ -154,10 +154,13 @@ describe("validateRepositoryDiscoveryResult", () => {
     // The discovery protocol has no allowlist parameter, and the catalog handed to
     // it (buildRepositoryCatalog) is not allowlist-filtered, so an off-allowlist
     // repository present on the catalog is admitted here. It is blocked downstream
-    // instead: at attachResearchRepositoriesStep (agent.ts, isRepoAllowed re-check
-    // before any clone), in validateHumanRepositoryExpansion (isAllowed, covered in
-    // runner.test.ts) for human answers, and again at push in the trusted workspace
-    // publisher. This test documents that layering: selection is a catalog concern,
+    // instead: at attachResearchRepositoriesStep (engine/steps/phase.ts:704-707, the
+    // mayRunTouchRepository re-check before any clone, which human answers reach too,
+    // engine/agent-workflow.ts:2563), and again at push in the trusted workspace
+    // publisher. validateHumanRepositoryExpansion's isAllowed (covered in
+    // runner.test.ts) is not what guards human answers in production: its one
+    // caller, engine/steps/phase.ts:806, passes none, and instead validates against
+    // a catalog already narrowed by filterRunRepositories (phase.ts:796-797). This test documents that layering: selection is a catalog concern,
     // not an allowlist concern.
     expect(
       validateRepositoryDiscoveryResult(

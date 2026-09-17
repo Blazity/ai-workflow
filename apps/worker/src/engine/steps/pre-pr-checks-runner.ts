@@ -267,9 +267,11 @@ export interface RepoScriptsDirtiedRepo {
 export interface PrePrCheckRunResult {
   outcome: Exclude<CheckOutcome, "skipped">;
   passed: boolean;
-  /** @deprecated Always 0: the repair loop is gone. Kept so the graph output
-   *  contract (block-registry.ts) and agent.ts keep compiling until stage 3
-   *  drops the field. */
+  /** @deprecated Always 0: the repair loop is gone. Kept, and kept REQUIRED in
+   *  the graph output contract (engine/definition/block-registry.ts:731-734,
+   *  emitted at engine/agent-workflow.ts:3668), because definitions already
+   *  deployed bind steps.checks.output.fixCycles: removing it breaks those
+   *  graphs rather than cleaning anything up. */
   fixCycles: number;
   /** @deprecated Always empty, for the same reason as fixCycles. */
   fixCycleUsages: Array<PhaseUsage | null>;
@@ -1037,7 +1039,7 @@ export async function collectRepoCheckBatchStep(
   // the path where the poll just gave up, which is precisely when the sandbox
   // may be gone, and a command sent to a dead sandbox throws out of a step whose
   // maxRetries is 0. Same guard checkPhaseDone makes for the same reason
-  // (sandbox/poll-agent.ts).
+  // (engine/steps/sandbox-poll-agent.ts).
   if (sandbox.status !== "running") {
     return withChecksClockObservation(workspaceIncident(BATCH_SANDBOX_GONE_REASON));
   }

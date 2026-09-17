@@ -60,7 +60,7 @@ const BLOCKER_ERRORS: Record<ManualDispatchBlockerCode, PublicBlockerError> = {
   invalid_input: { code: "VALIDATION_FAILED", retryable: false, effectNotApplied: true },
   not_eligible: { code: "CONFLICT", retryable: false, effectNotApplied: true },
   // Raised by a plan awaiting a human, today also before any reservation is
-  // taken (resolve.ts:207, reached from service.ts:103 before the durable
+  // taken (resolve.ts:271, reached from service.ts:248 before the durable
   // request row exists), so keeping the key is the conservative choice rather
   // than a forced one. The release threshold stays exactly the ratified
   // allowlist: widening it is what buys a second run on somebody's ticket.
@@ -118,7 +118,8 @@ function dispatchDigest(identity: {
 function requestIdForLease(leaseId: string): string {
   const digits = hashCanonicalJson(leaseId).slice(0, 32).split("");
   // Formatted as a UUID because that is what this field is elsewhere in the
-  // repo (manual-dispatch/http.ts:38 validates it as one). Version 8 is the
+  // repo (packages/contracts/requests-workflow-triggers.ts:177 validates it as
+  // one). Version 8 is the
   // shape reserved for a value derived from application data, and the variant
   // nibble carries the RFC's 10xx bits.
   digits[12] = "8";
@@ -142,7 +143,7 @@ function targetRefsFor(input: {
     String(input.definitionId),
     input.triggerNodeId,
     // Upper-cased the way the dispatch domain normalizes a ticket key
-    // (resolve.ts:600), so searching the audit trail for a ticket is not case
+    // (resolve.ts:665), so searching the audit trail for a ticket is not case
     // sensitive. A pull request URL has no local canonical form, so it is
     // recorded exactly as the agent sent it.
     input.input.kind === "ticket" ? input.input.ticketKey.toUpperCase() : input.input.url,
@@ -178,9 +179,9 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
             // Hashed over this call's own arguments, with only the version taken
             // from the server. Hashing what the service resolved instead would
             // hand back a digest the agent cannot reproduce from the bytes it
-            // sent: a ticket key comes back upper-cased (resolve.ts:600) and a
+            // sent: a ticket key comes back upper-cased (resolve.ts:665) and a
             // pull request URL comes back as the provider spells it
-            // (resolve.ts:415), so every dispatch would fail validation forever
+            // (resolve.ts:478), so every dispatch would fail validation forever
             // with no local way to guess the canonical form. The binding does
             // not weaken, it tightens: the version inside the digest is the one
             // the server resolved, a deployment that moves between the two calls
@@ -263,9 +264,11 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
           if (response.status === "recovering") {
             // Stored as this key's outcome, and not retryable. The dispatch is
             // durably queued: its manual_dispatch_requests row is alive in one of
-            // the four statuses the recovery pass picks up (manual-dispatch/
-            // store.ts:234, run from /cron/poll every minute), so no work was
-            // lost. Releasing the key would DELETE it and let a retry mint a
+            // the four statuses the recovery pass picks up
+            // (db/repositories/manual-dispatch.ts:280-285, run by the poll pass at
+            // services/triggers/polling/poll-pass.ts:227, which /cron/poll starts
+            // every 15 minutes, not every minute: apps/worker/vercel.json), so no
+            // work was lost. Releasing the key would DELETE it and let a retry mint a
             // second dispatch row for the same subject; once the first row's run
             // has finished and freed the subject reservation, that second row
             // starts a second run on the same ticket.

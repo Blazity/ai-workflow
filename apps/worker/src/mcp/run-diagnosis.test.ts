@@ -172,9 +172,9 @@ describe("diagnoseRun", () => {
     expect(joined).not.toMatch(/resumes? automatically/i);
   });
 
-  // Real shape: STARTUP_TIMEOUT_REASON (lib/run-start-lifecycle.ts:16-17),
-  // written verbatim as statusReason by markStartupFailure (run-start-lifecycle.ts:
-  // 364-379), which sets status "failed" (not "blocked") and never started a
+  // Real shape: STARTUP_TIMEOUT_REASON (services/run-lifecycle/run-start-lifecycle.ts:25-26),
+  // written verbatim as statusReason by persistence.markFailure (run-start-lifecycle.ts:
+  // 285-289, into markStartupRunFailure, db/repositories/runs/startup.ts:181-189), which sets status "failed" (not "blocked") and never started a
   // workflow, so `steps` is empty by construction.
   it("classifies a startup-timeout message as never_started, with low confidence", () => {
     const result = diagnoseRun({
@@ -192,8 +192,8 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: NO_DEFINITION_BLOCKED_REASON (lib/run-start-lifecycle.ts:153-154),
-  // recorded as statusReason on a "blocked" row (run-start-lifecycle.ts:190-192)
+  // Real shape: NO_DEFINITION_BLOCKED_REASON (services/run-lifecycle/run-start-lifecycle.ts:150-151),
+  // recorded as statusReason on a "blocked" row (db/repositories/runs/startup.ts:156-157)
   // when no enabled workflow definition handles the trigger.
   it("classifies a no-definition-matched message as no_workflow_matched, with low confidence", () => {
     const result = diagnoseRun({
@@ -214,7 +214,7 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: leak-review.ts:668-674 sets an explicit `options.message`
+  // Real shape: engine/blocks/leak-review/execute.ts:662-667 sets an explicit `options.message`
   // overriding the generic "The checks could not be started." prefix, so it
   // needs its own rule distinct from the generic workspace_gate rule below.
   it("classifies a leak-review publication block as workspace_gate, with low confidence", () => {
@@ -236,11 +236,12 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: finalize-workspace.ts composes `executionError(publication.reason,
+  // Real shape: finalize-workspace composes `executionError(publication.reason,
   // { category: "checks" })` when the AIW-223 pre-publication gate rejects
-  // publication (workflows/blocks/finalize-workspace.ts:70-74), and
+  // publication (engine/blocks/finalize-workspace/execute.ts:396-399, "checks" only
+  // when failureKind is "pre_pr_gate", otherwise "provider"), and
   // publication.reason is one of the WorkspaceGateError messages
-  // (workflows/workspace-gate.ts:135-137). deriveFailureMessage then composes
+  // (engine/steps/workspace-gate.ts:290 and :327). deriveFailureMessage then composes
   // "The checks could not be started. (<reason>)" (packages/workflow-graph/
   // failure-message.ts, interpreter.ts for the generic sentence).
   it("classifies a workspace-gate failure message as workspace_gate, with low confidence", () => {
@@ -311,7 +312,7 @@ describe("diagnoseRun", () => {
   });
 
   // Real shape: a setup command failed while the workspace was being created
-  // (workflows/blocks/prepare-workspace.ts), which is provisioning, not a check.
+  // (engine/blocks/prepare-workspace/execute.ts:737-739), which is provisioning, not a check.
   // It used to match no rule at all and come back as "unknown".
   it("classifies a failed repository setup as repository_scripts_failed", () => {
     const result = diagnoseRun({
@@ -345,7 +346,7 @@ describe("diagnoseRun", () => {
   });
 
   // Real shape: finalize_workspace refuses an unmet `checks.*` input
-  // (workflows/blocks/finalize-workspace.ts), wrapped in the checks category
+  // (engine/blocks/finalize-workspace/execute.ts:338-339), wrapped in the checks category
   // lead. The scripts block itself reports status "ok" for this run, by design,
   // so nothing structural in the trace says the scripts are the cause.
   it("classifies unmet repository scripts as repository_scripts_failed", () => {
@@ -409,10 +410,10 @@ describe("diagnoseRun", () => {
   });
 
   // Real shape: the dashboard-facing RunStatus has no "cancelled" value (@shared/
-  // contracts domain.ts:1), a cancelled run is reported as "blocked" with a
+  // contracts domain.ts:21), a cancelled run is reported as "blocked" with a
   // statusReason mentioning the cancellation, e.g. "Orphaned run cancelled by
-  // reconciler" (db/queries/run-detail-read.test.ts:120) or "Cancelled via Slack
-  // /ai-workflow cancel" (db/queries/run-detail-read.test.ts:385). If the caller
+  // reconciler" (db/repositories/runs/run-detail-read.test.ts:163) or "Cancelled via Slack
+  // /ai-workflow cancel" (db/repositories/runs/run-detail-read.test.ts:428). If the caller
   // passes this dashboard vocabulary instead of a raw "cancelled" status (which
   // does not exist), this keeps the category reachable, at low confidence since
   // it reads message text.
@@ -432,12 +433,12 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: fallbackTerminalError's "blocked" lead (lib/overview/
-  // sanitize-run-detail.ts:104-113), the observed face of three silent
+  // Real shape: fallbackTerminalError's "blocked" lead (engine/support/
+  // sanitize-run-detail.ts:106-115), the observed face of three silent
   // stop paths that record no statusReason: markRunBlockedOnCancel and
-  // sweepOrphanedAwaitingRuns (lib/telemetry/run-telemetry.ts:528-533,
-  // 581-602) and retireClarificationForGoneTicket (clarifications/
-  // answer-core.ts:111-119).
+  // sweepOrphanedAwaitingRuns (db/repositories/runs/telemetry.ts:661-671,
+  // 821-843) and retireClarificationForGoneTicket (services/clarifications/
+  // retirement.ts:11, with a second copy at answer-core.ts:522).
   it("classifies a blocked run with no recorded reason as stopped_without_reason, with low confidence", () => {
     const result = diagnoseRun({
       workflowId: "wf_agent",
@@ -462,7 +463,7 @@ describe("diagnoseRun", () => {
   // output fails contract validation (V2Scheduler.processResult in
   // packages/workflow-graph/scheduler.ts, `{ category: "schema", phase:
   // "contract" }`, plus the block-registry output checks), and
-  // validateStructuredValue's schema_mismatch (sandbox/agents/protocol.ts:205-219)
+  // validateStructuredValue's schema_mismatch (sandbox/agents/protocol.ts:209-226)
   // produces the agent-protocol variant.
   it("classifies a schema/contract-violation message as validation_failed, with low confidence", () => {
     const result = diagnoseRun({
@@ -518,8 +519,8 @@ describe("diagnoseRun", () => {
   });
 
   // Real shape: PROVIDER_CAUSES auth entry (packages/workflow-graph/failure-message.ts:
-  // 100-105), reached via a "provider"-category block (e.g. call_llm, workflows/
-  // blocks/call-llm.ts:210-212) whose caught error message is fed through
+  // 148-152), reached via a "provider"-category block (e.g. call_llm, engine/
+  // blocks/call-llm/execute.ts:197-198) whose caught error message is fed through
   // deriveFailureMessage/classifyProviderFailure unmodified.
   it("classifies the curated AI-provider auth-rejection message as dependency_auth, with low confidence", () => {
     const result = diagnoseRun({
@@ -645,9 +646,9 @@ describe("diagnoseRun", () => {
 
   // Real shape: agent-CLI runtime-prep/execution sentences set directly as
   // `options.message` (never composed from raw provider text): protocol.ts:
-  // 122/131/243/418 ("The agent runtime could not be prepared.") and
-  // protocol.ts:173/185 ("The current agent phase could not be completed.").
-  // Both are AgentRuntimeError category "provider" (sandbox/agents/types.ts:467),
+  // 138/147/259/453 ("The agent runtime could not be prepared.") and
+  // protocol.ts:189/201 ("The current agent phase could not be completed.").
+  // Both are AgentRuntimeError (sandbox/agents/runtime-error.ts:11) category "provider" (sandbox/agents/types.ts:529),
   // so they classify as dependency_unavailable, same as the generic provider
   // fallback above: the exposed text cannot distinguish "missing credentials"
   // from "CLI install/exit failed", so this must not claim auth specifically.
@@ -669,7 +670,7 @@ describe("diagnoseRun", () => {
 
   // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.timeout (packages/workflow-graph/
   // interpreter.ts) composed with a "phase timed out" detail, e.g.
-  // workflows/blocks/generic-agent.ts:470 ("agent phase timed out") or
+  // engine/blocks/generic-agent/execute.ts:461 ("agent phase timed out") or
   // engine/agent-workflow.ts ("phase timed out").
   it("classifies a phase-timeout message as sandbox_timeout, with low confidence", () => {
     const result = diagnoseRun({
@@ -688,7 +689,7 @@ describe("diagnoseRun", () => {
   });
 
   // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.sandbox (same table), the
-  // generic "sandbox"-category sentence (e.g. workflows/blocks/prepare-workspace.ts's
+  // generic "sandbox"-category sentence (e.g. engine/blocks/prepare-workspace/execute.ts:946-947's
   // outer catch, `category: "sandbox"`).
   it("classifies a workspace-environment failure message as workspace_unavailable, with low confidence", () => {
     const result = diagnoseRun({
@@ -726,11 +727,11 @@ describe("diagnoseRun", () => {
   });
 
   // Structured signal: a step's own status (RunStep.status "failed", @shared/
-  // contracts domain.ts:148-153) rather than any message text, so this is high
+  // contracts domain.ts:171-177) rather than any message text, so this is high
   // confidence even though we don't know the specific cause. Placed at the end
   // of the rule list, after every message rule, because most block failures
   // return an executionError rather than throwing (the step itself completes;
-  // only the later `throw new WorkflowExecutionError` in agent.ts:2913 fails the
+  // only the later `throw new WorkflowExecutionError` in engine/agent-workflow.ts:453 fails the
   // run), so a genuinely "failed" step is a narrow case, not a broad catch-all.
   // nextActions must not default to "retry": some step_failed causes (a gate,
   // a budget stop) should not simply be retried.

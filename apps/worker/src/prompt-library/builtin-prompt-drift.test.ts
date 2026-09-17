@@ -58,7 +58,7 @@ async function retireFreshInstallDefinition(client: PGlite): Promise<void> {
 }
 
 /** Stores `definition` as a definition whose deployed pointer selects it, which
- *  is exactly what a dispatch loads (workflows/definition-step.ts). Left
+ *  is exactly what a dispatch loads (engine/steps/definition-step.ts:163). Left
  *  disabled: the drift check deliberately covers every deployed definition,
  *  because manual dispatch and a pinned definitionId run disabled ones too. */
 async function deployDefinition(

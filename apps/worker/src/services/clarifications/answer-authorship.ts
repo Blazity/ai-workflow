@@ -279,7 +279,9 @@ function composedAnswerAccountId(actorId: string): string {
  *  stored answer cannot be counted. It reaches a log and an HTTP response
  *  rather than the ticket, because a hold spends no delivery attempt and so
  *  never ends in the comment a spent budget posts. What the ticket is told,
- *  when the holding itself runs out, is `formatAnswerAuthorsUncountedComment`. */
+ *  when the holding itself runs out, is `formatAnswerNotRecordedComment` with the
+ *  `uncounted` reason (`engine/support/clarification-comment-format.ts:331`),
+ *  posted by `services/clarifications/answer-core.ts:435-441`. */
 export const UNCOUNTED_AUTHORS_ERROR =
   "the people who wrote this answer could not be counted from the ticket";
 

@@ -10,7 +10,12 @@ import type { WorkspacePublicationResult } from "../steps/workspace-publication.
 // {{variables}} are substituted. It stitches the real runtime steps in order:
 //   1. buildPromptVariables(ctx)           -> the {{name}} -> value map
 //   2. substituteNodePromptParams(node)    -> node.params.message with vars resolved
-//                                             (this is what executeBlock does at agent.ts:1864)
+//                                             (executeBlock and agent.ts:1864 are gone and nothing in
+//                                             production calls this now; a v2 run resolves only
+//                                             {{data:...}} tokens in the message, through
+//                                             resolveV2PromptDataConfiguration,
+//                                             engine/helpers/prompt-output.ts:117, and fails the
+//                                             block on any leftover {{name}}, :170)
 //   3. resolveSlackMessageInput(params)    -> the string the handler passes as extraText
 //   4. formatTicketEvent(pr_ready)         -> the final Slack-mrkdwn text posted in-thread
 //

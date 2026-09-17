@@ -16,7 +16,7 @@
  * Pure: it reads the loaded graph and the definition pin the caller passes and
  * touches no store, no clock and no network. The per-kind defaults and the way
  * a definition pin becomes a candidate set are the contract's
- * (`resolveTriggerRepositoryPolicy`, `packages/contracts/work-scope.ts:429`)
+ * (`resolveTriggerRepositoryPolicy`, `packages/contracts/work-scope.ts:588`)
  * and are composed here rather than copied, because the dashboard shows the
  * operator the same answer.
  */

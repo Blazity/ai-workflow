@@ -48,10 +48,11 @@ export interface RepositoryAnswerPersistence {
 
 /** How the Jira comment path composes an answer: each qualifying comment as
  *  "<author>: <body>", joined with a blank line
- *  (`services/clarifications/resume-from-comments.ts:257-258`). The space after
+ *  (`services/clarifications/resume-from-comments.ts:327-328`). The space after
  *  the colon is what keeps "github:acme/web" from reading as an author. The
  *  expansion protocol's refusal reader knows the same two shapes
- *  (`engine/repository-discovery/runner.ts:1447-1448`), where it asks a
+ *  (`COMMENT_SEPARATOR` and `COMMENT_AUTHOR_PREFIX`,
+ *  `engine/repository-discovery/runner.ts:1470-1471`), where it asks a
  *  different question of them: whether every part is a refusal, trying each
  *  part with the prefix and without it, so it never drops a byte either way. */
 const COMPOSED_COMMENT_SEPARATOR = "\n\n";

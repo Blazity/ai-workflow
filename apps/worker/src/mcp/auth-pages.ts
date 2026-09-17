@@ -2,8 +2,8 @@ import { MCP_SCOPES } from "./contracts.js";
 
 // offline_access is the standard OAuth2 / OIDC refresh-token marker, the same scope
 // Atlassian and Supabase surface on their consent screens. It is deliberately not an
-// MCP permission: request-context.ts materializes an actor's scope set by intersecting
-// against MCP_SCOPES, so offline_access can never become one. The consent path is the
+// MCP permission: services/mcp/actor-resolution.ts:140-150 materializes an actor's scope
+// set by intersecting against MCP_SCOPES, so offline_access can never become one. The consent path is the
 // one place it has to pass through, so the provider issues the 30-day refresh token,
 // which is why the consent allowlist is MCP_SCOPES plus this single marker. Every
 // consent spot (the get-gate, the rendered screen, and the post-grant) reads it through

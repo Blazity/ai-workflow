@@ -122,7 +122,7 @@ describe("MCP consent screen", () => {
     // Two independent guards keep it covered, both verified against the
     // deployment rather than assumed. First, /oauth2/authorize refuses a
     // redirect_uri outside the client's registered set before it ever redirects
-    // here (@better-auth/oauth-provider@1.6.20, dist/index.mjs:3864-3872), and
+    // here (@better-auth/oauth-provider@1.6.30, dist/index.mjs:3898-3906), and
     // answered 400 for http://evil.example/cb on a client registered only for
     // loopback. Second, redirect_uri is inside the HMAC over the ba_param list:
     // swapping it in a genuine signed query made prelogin answer

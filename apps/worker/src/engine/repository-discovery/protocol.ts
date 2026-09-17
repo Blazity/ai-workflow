@@ -304,7 +304,7 @@ export function validateRepositoryDiscoveryResult(
     // two of them, by the shape of the loop above rather than by a condition
     // here. A repository nobody has been shown is ASKED ABOUT WHERE IT IS MET,
     // inside the loop, and that return happens long before this line. A
-    // repository reaches `dropped` only when `alreadyExcluded` found it in the
+    // repository reaches `dropped` only when `alreadyDecided` (below) found it in the
     // answered set, which is to say the question naming it was already put and
     // somebody answered it; a candidate reaches `declined` on the same footing.
     // So everything arriving here has been asked about and answered, and asking

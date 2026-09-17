@@ -232,7 +232,9 @@ export interface FetchPrContextOptions {
 
 /**
  * Fetch PR comments, check results, and conflict status for every repository
- * with a workflow-owned PR. Mirrors agent.ts's fetchSelectedRepositoryPRContexts.
+ * with a workflow-owned PR. The only implementation: the workflow body imports
+ * and calls this step (`engine/agent-workflow.ts:1555`, `:2315`, `:2577`) rather than keeping a
+ * copy of its own.
  */
 export async function blockFetchPrContextsStep(
   repositories: SelectedRepository[],

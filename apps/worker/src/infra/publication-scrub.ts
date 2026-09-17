@@ -16,8 +16,8 @@ const WORKSPACE_ROOT_DIR = "/vercel/sandbox";
  */
 
 /**
- * Mirrors MEMORY_DIR in workflows/memory-steps.ts. Duplicated rather than
- * imported so a lib module never depends on a workflow step module.
+ * Mirrors MEMORY_DIR in engine/steps/memory-steps.ts:16. Duplicated rather than
+ * imported so an infra module never depends on a workflow step module.
  */
 const MEMORY_DIR = "ai-workflow/memory";
 /**

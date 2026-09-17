@@ -268,7 +268,7 @@ export function entryOwnsClarificationThread(
 /** Resolve both ways a durable run can encounter schema v1: the current loader
  * rejects it, while a resumed workflow may replay a plan snapshot already in
  * the journal. The workflow body itself uses this seam, so its tests execute the
- * same branch rather than inspecting agent.ts as text. */
+ * same branch rather than inspecting this module as text. */
 export async function loadWorkflowPlanWithRetirementExit<
   Plan extends { definition: unknown },
 >(input: {
@@ -1528,8 +1528,8 @@ async function agentWorkflowBody(
               subjectKey: entry.subjectKey,
               ownerToken: entry.ownerToken,
               // Remaining run duration PLUS the checks ceiling, exactly like
-              // every other sandbox that can host a batch (agent-sandbox.ts,
-              // prepare-workspace.ts). The checks cap no longer consults the
+              // every other sandbox that can host a batch (blocks/agent-sandbox.ts:91,
+              // blocks/prepare-workspace/execute.ts:437). The checks cap no longer consults the
               // run's duration, so sizing this from the duration alone would
               // kill a resumed run's sandbox under a batch that is well inside
               // its own bound, and report it as a lost workspace.
@@ -3601,7 +3601,7 @@ async function agentWorkflowBody(
             // They are launched detached and polled across ticks, because a
             // client tenant's real checks outlive the 300s one function
             // invocation gets and used to kill the run with no recoverable
-            // cause. See workflows/blocks/pre-pr-checks.ts.
+            // cause. See engine/blocks/pre-pr-checks.ts.
             const prePrConfig = await loadPrePrCheckConfigStep(
               runChecksScopeKeys(ctx),
             );
@@ -4313,9 +4313,9 @@ async function agentWorkflowBody(
             runValues,
             executeBlock: executeV2Block,
             hooks: v2Hooks,
-            // The env value is an operational ceiling only, never a raise: see
-            // V2_MAX_BLOCK_CONCURRENCY in infra/runtime-env.ts for what it is for and what
-            // concurrent dispatch here depends on staying true.
+            // The setting is an operational ceiling only, never a raise: see
+            // V2_MAX_BLOCK_CONCURRENCY in packages/contracts/settings-registry.ts:167 for what it is for, and
+            // engine/blocks/support/poll-delay.ts:1-25 for what concurrent dispatch here depends on staying true.
             maxConcurrency: Math.min(
               runSettings.V2_MAX_BLOCK_CONCURRENCY ??
                 V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency,

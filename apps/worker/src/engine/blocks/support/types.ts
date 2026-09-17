@@ -53,7 +53,7 @@ import type { SettledThread } from "../../steps/review-ledger-settle.js";
 import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
 
 /**
- * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
+ * Frozen contract between the graph engine (engine/agent-workflow.ts, wired in stage C4) and
  * the block executors in this directory. The engine builds one EngineCtx per
  * run and passes the same object to every executor.
  *

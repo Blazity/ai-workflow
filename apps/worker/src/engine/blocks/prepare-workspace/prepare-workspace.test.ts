@@ -1127,7 +1127,7 @@ describe("prepare_workspace execute", () => {
       "needs_human_input",
     );
     // The record as the answer left it, which is what the run re-reads before
-    // the block runs again (`agent-workflow.ts:1528`).
+    // the block runs again (`agent-workflow.ts:1576-1585`).
     acceptedCtx.workScope = {
       subjectKey: "ticket:jira:AWT-1",
       scope: {

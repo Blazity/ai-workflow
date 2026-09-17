@@ -828,7 +828,8 @@ async function rememberRoutingAnswer(input: {
         content: prepared.content,
         // Pre-sandbox has no run id in its step context: PreSandboxStepContext
         // carries only the branch name, and threading one would mean editing
-        // pre-sandbox/types.ts, pre-sandbox/runner.ts and prepare-workspace.ts. The
+        // engine/pre-sandbox/types.ts, engine/steps/pre-sandbox-runner.ts and
+        // engine/blocks/prepare-workspace/execute.ts. The
         // prefix marks the value as deliberately not a run id, which the dashboard
         // displays this column as, while keeping the branch for diagnostics.
         sourceRunId: `presandbox:${input.branchName}`,
@@ -1515,7 +1516,7 @@ function mentionsRepositoryPath(candidateText: string, repoPath: string): boolea
 
 /** The most recent direct answer to a which-repo clarification, or null when
  *  this isn't a retry. `execution?.clarificationAnswer` is appended as a
- *  synthetic trailing comment (see prepare-workspace.ts); scanning from the
+ *  synthetic trailing comment (see engine/blocks/prepare-workspace/execute.ts:1098); scanning from the
  *  end finds the current round's answer regardless of how many prior rounds
  *  (if any) also appended one. */
 function latestClarificationAnswer(

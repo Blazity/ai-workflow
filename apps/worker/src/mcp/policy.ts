@@ -47,15 +47,17 @@ const DISPATCH_POLICY = {
 // The one write that changes what OTHER agents are told to do, which is why it
 // shares nothing with the dispatch policy above.
 //
-// Its own scope, because consent is per scope (contracts.ts:4) and rewriting the
+// Its own scope, because consent is per scope (services/mcp/contracts.ts:17) and rewriting the
 // system's instructions is not what a token minted to read tickets and fire runs
 // was agreed to do.
 //
 // And no "service" role, unlike DISPATCH_POLICY: an automation has no business
-// rewriting a production prompt with no human behind it. request-context.ts already
-// strips this scope out of a service actor's set, so a client_credentials token
-// cannot reach here holding it; this list is what still refuses the call if a future
-// token shape ever does.
+// rewriting a production prompt with no human behind it.
+// services/mcp/actor-resolution.ts:124-138 already strips this scope out of a service
+// actor's set (PERSON_ONLY_SCOPES, applied by withoutAuthoringScopes), so a
+// client_credentials token cannot reach here holding it; this list is what still
+// refuses the call if a future token shape ever does. request-context.ts holds no
+// scope decision at all: it verifies the token and hands the claims to that service.
 const PROMPT_WRITE_POLICY = {
   scope: "prompts:write",
   roles: ["admin", "owner"],
@@ -81,10 +83,10 @@ const PROMPT_WRITE_POLICY = {
 // repositories are cloned, what an agent is told to do inside them and what is
 // pushed back. Everything the dispatch policy protects is downstream of it.
 //
-// Its own scope, for the reason contracts.ts:12 gives: consent to fire a reviewed
+// Its own scope, for the reason services/mcp/contracts.ts:25-30 gives: consent to fire a reviewed
 // workflow is not consent to write a new one. No "service", for the same reason
-// prompts:write refuses it, and request-context.ts keeps the scope out of a service
-// actor's set so an unattended automation does not hold it in the first place.
+// prompts:write refuses it, and services/mcp/actor-resolution.ts:124-138 keeps the scope
+// out of a service actor's set so an unattended automation does not hold it in the first place.
 const WORKFLOW_WRITE_POLICY = {
   scope: "workflows:write",
   roles: ["admin", "owner"],
@@ -105,9 +107,11 @@ const WORKFLOW_WRITE_POLICY = {
 } as const satisfies McpToolPolicy;
 
 // Publishing is where an authored graph stops being a document. It replaces the
-// snapshot every future dispatch resolves against, and store.ts:1211-1212 mints
-// the webhook endpoints and syncs the schedule rows of the new head, so a schedule
-// node published here starts producing runs from a clock with nobody calling
+// snapshot every future dispatch resolves against, and the deploy then mints the
+// webhook endpoints and, for an enabled definition, syncs the schedule rows of the
+// new head (services/workflow-definitions/policy-operations.ts:760, into
+// live-trigger-sync.ts:95 and :110), so a schedule
+// node published into an enabled definition starts producing runs from a clock with nobody calling
 // anything again. That is an open world and a destructive replacement, and a
 // client must not treat it as the safe half of authoring.
 const WORKFLOW_PUBLISH_POLICY = {
@@ -135,7 +139,7 @@ const WORKFLOW_PUBLISH_POLICY = {
  * And it refuses "service", which DISPATCH_POLICY allows. A token with no `sub` has
  * nobody behind it, and a machine answering a question addressed to a human defeats
  * the purpose of having asked: the run parked precisely because it needed a person.
- * Note what does NOT protect this: withoutAuthoringScopes (request-context.ts) takes
+ * Note what does NOT protect this: withoutAuthoringScopes (services/mcp/actor-resolution.ts:136) takes
  * the authoring and configuration scopes away from a service actor, never
  * runs:dispatch, which smoke and dogfood automation legitimately hold. So unlike the
  * authoring tools, this list is the ONLY lock on that invariant. Keep it closed, and
@@ -193,7 +197,7 @@ const CANCEL_POLICY = {
  * Keeps "service", unlike the authoring tools and unlike answering a clarification. The
  * platform comments on and moves tickets on every run it executes, with no human behind
  * any of it, so an unattended client doing the same is the normal case rather than the
- * dangerous one. request-context.ts is where that difference is recorded.
+ * dangerous one. services/mcp/actor-resolution.ts:120-123 is where that difference is recorded.
  *
  * Adding a comment is additive and stays inside the tracker, so the base policy is the
  * mild one and the two tools with sharper edges override what they need below.

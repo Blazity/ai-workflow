@@ -830,26 +830,26 @@ describe("post-PR review workflow: the failure check text", () => {
  *
  * 2. "Empty review results" is unreachable from a scenario, for two independent
  * reasons. The rejection lives in the production `post_pr_review` executor
- * (`workflows/blocks/post-pr-review.ts` calling `normalizeReviewResultsInput`),
+ * (`engine/blocks/post-pr-review/execute.ts:93` calling `normalizeReviewResultsInput`),
  * which the harness replaces with a script; and this graph binds `reviewResults`
  * as a reference list over three fixed references, which resolves one to one and
  * therefore always yields three entries. Scripting the block to return a binding
  * error it cannot produce here would read as coverage of a failure mode that
  * cannot occur. The rejection itself is asserted in
- * `workflows/review-results.test.ts`, and "a failure upstream of the Branch
+ * `engine/helpers/review-results.test.ts`, and "a failure upstream of the Branch
  * completes neither check" is the provider-failure scenario above.
  *
  * 3. "The review agent receives the pull request change set", and its gate "a
  * definition with no review_agent node fetches no change set", are outside what
- * ANY graph-level scenario can observe. Both happen in `agent.ts` before the
+ * ANY graph-level scenario can observe. Both happen in `engine/agent-workflow.ts` (:1280-1284) before the
  * graph walk, where the change set is assembled and pushed into
  * `ctx.preSandboxAdditions.review`; this file drives `executeV2Graph` with the
  * harness executor, so that code never runs. Even if it did, `review_agent`
  * nodes here declare no inputs, so their resolved input record is `{}` and could
  * not carry a rendered prompt section. The assembly and its rendering already
- * have unit tests in `workflows/review-change-set.test.ts`; the one piece with
+ * have unit tests in `engine/steps/review-change-set.test.ts`; the one piece with
  * no test is the gate predicate itself,
  * `plan.nodes.some((node) => node.type === "review_agent")`, which is still
- * inline in `agent.ts` and needs to move next to `pullRequestChangeSetTarget`
+ * inline in `engine/agent-workflow.ts:1280` and needs to move next to `pullRequestChangeSetTarget`
  * before a unit test can reach it.
  */

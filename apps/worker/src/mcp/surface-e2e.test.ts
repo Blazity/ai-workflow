@@ -421,7 +421,8 @@ const AUTHORED_TRIGGER_NODE_ID = "authored-ticket";
 const AUTHORED_GRAPH_MARKER = "E2E-GRAPH-4a9d31";
 
 /** The smallest graph this deployment deploys: one manually dispatchable trigger,
- *  the same shape the store's own v2 tests deploy (store-v2.test.ts:36). */
+ *  the same shape the store's own v2 tests deploy
+ *  (services/workflow-definitions/persistence-v2.test.ts:35). */
 function authoredGraph() {
   return {
     schemaVersion: 2,
@@ -903,7 +904,7 @@ describe("A. the client cycle and the published surface", () => {
       // A messaging adapter is configured for this deployment, so the announcement a
       // successful authoring write sends can actually reach somebody. The honest
       // "none" is what a deployment with no chat credentials reports, where
-      // lib/adapters.ts hands every tool the no-op adapter.
+      // engine/support/adapters.ts:81 hands every tool the no-op adapter.
       authoringAnnouncements: "chat",
     });
     // The envelope's own hash and the one inside the payload are produced by two

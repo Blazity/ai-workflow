@@ -68,7 +68,8 @@ export interface WorkspaceGateState {
 
 /**
  * What a run's repository scripts left in a repository's tree, exactly as the
- * script blocks publish it (agent.ts RepositoryScriptsOutput.dirtied).
+ * script blocks publish it (`RepositoryScriptsOutput.dirtied`,
+ * `engine/blocks/support/repository-scripts-output.ts`).
  *
  * Structural rather than imported, so the gate keeps no dependency on the block
  * layer that produces it: this file is reached from the publication boundary,
@@ -519,7 +520,8 @@ function countedFiles(files: readonly string[]): string {
 
 /** Bounded here and unbounded in the ticket comment, on purpose: this string
  *  becomes a run status the surfaces around it clamp, and that comment is the
- *  one surface with room for the whole list (agent.ts renderRepositoryScriptDrift). */
+ *  one surface with room for the whole list (`renderRepositoryScriptDrift`,
+ *  `engine/helpers/repository-failure.ts:424`). */
 function listFiles(files: readonly string[]): string {
   const named = files.slice(0, DRIFTED_FILES_NAMED);
   const remaining = files.length - named.length;

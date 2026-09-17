@@ -159,7 +159,7 @@ function unknownBlockGraph() {
 }
 
 /** Passes the definition SCHEMA and fails the DEPLOYMENT gate: "entry" is
- *  reserved for the active trigger input (schema.ts:2537), and only the deployment
+ *  reserved for the active trigger input (packages/workflow-graph/graph-issues.ts:747-749), and only the deployment
  *  validation knows that. A graph that saves as a draft and is then refused at
  *  publish is the observable proof that publish runs the gate the dashboard's
  *  Deploy runs and the draft save does not. */
@@ -338,7 +338,7 @@ const SCHEDULE_NODE_ID = "nightly";
  *  schedule is the trigger whose ability to fire lives entirely outside the
  *  definition row: the evaluator reads workflow_schedules and skips a paused or
  *  revoked row, and a deploy deliberately does not lift a pause
- *  (store.ts:1003-1004). */
+ *  (db/repositories/schedule-triggers.ts:44-49 leaves paused_at out of its set). */
 function scheduleGraph() {
   return graph({
     nodes: [
@@ -711,7 +711,7 @@ describe("workflows.publish", () => {
     expect(saved.isError).not.toBe(true);
 
     // And refused at publish, by the gate that lives inside
-    // deployWorkflowDefinition (store.ts:1150) and nowhere else. If this tool had
+    // deployWorkflowDefinition (services/workflow-definitions/policy-operations.ts:427) and nowhere else. If this tool had
     // reimplemented the publish instead of calling the store, this graph would go
     // live with an id the runtime reserves for the trigger input.
     const result = await publish(client, { idempotencyKey: KEY_TWO });
@@ -831,7 +831,7 @@ describe("workflows.publish", () => {
       pinnedRepositoriesNotEnabled: [],
     });
     // The store's own bookkeeping: the enabled definition's live head moved, so the
-    // next real ticket resolves this graph (store.ts:605-612).
+    // next real ticket resolves this graph (db/repositories/definitions/atomic.ts:144-147).
     const [row] = await db
       .select({
         deployedVersion: workflowDefinitions.deployedVersion,
@@ -1218,7 +1218,7 @@ describe("who may author a workflow", () => {
       expect(await auditedErrorCodes()).toEqual(["INSUFFICIENT_SCOPE"]);
     });
 
-    // request-context.ts keeps workflows:write out of a service actor's scope set,
+    // services/mcp/actor-resolution.ts keeps workflows:write out of a service actor's scope set,
     // and the role list is the second lock: an unattended automation must not be
     // able to author what the platform runs, whatever its token happens to carry.
     it(`refuses a service client on ${name} even when its token carries workflows:write`, async () => {

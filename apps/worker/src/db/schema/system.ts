@@ -23,7 +23,7 @@ export const envMarker = pgTable("env_marker", {
  *
  * Written by three upserters that own disjoint columns:
  * - The poll cron snapshots lifecycle/status/ticket/PR(gate) from the
- *   Workflow world + the run registry (see lib/telemetry/collect-snapshots).
+ *   Workflow world + the run registry (see services/telemetry/collect-snapshots.ts).
  * - The agent workflow records cost/tokens/per-phase usage + the agent PR on
  *   completion - data that only exists inside the run (see recordRunUsage).
  * - The mid-run block-status writer owns exactly block_statuses,

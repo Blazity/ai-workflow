@@ -70,9 +70,11 @@ const PROMPT_SLUG_MAX_LENGTH = 200;
 // The prompt id columns are int4, so anything past this cannot exist. Capped
 // here rather than left to the driver, which answers an overflow with a numeric
 // error that would reach the agent as INTERNAL_ERROR instead of NOT_FOUND
-// (prompt-library/store.ts:405 guards its own reads the same way).
+// (services/prompts/prompt-library-identifiers.ts:11-20, MAX_PROMPT_INT4, guards
+// its own reads the same way).
 const PROMPT_ID_MAX = 2_147_483_647;
-// Exactly the ceiling the store already enforces on a body (prompt-library/store.ts,
+// Exactly the ceiling the prompt service already enforces on a body
+// (services/prompts/prompt-library-validation.ts:6,
 // PROMPT_BODY_MAX_LENGTH), deliberately neither higher nor lower. Lower would leave
 // an agent able to READ a prompt through prompts.get that it can never write back,
 // which is the shape of bug that looks like data loss. Restating it here rather than
@@ -85,7 +87,7 @@ const PROMPT_ID_MAX = 2_147_483_647;
 // equality is a claim a test has to hold: tool-catalog.test.ts asserts it against
 // the store's exported constant, where importing the store costs nothing.
 export const PROMPT_BODY_MAX_LENGTH = 50_000;
-// workflow_definitions.name is unbounded text (db/schema.ts:855) and the audit row
+// workflow_definitions.name is unbounded text (db/schema/definitions.ts:85) and the audit row
 // keeps a created definition's name verbatim in targetRefs, so the cap belongs
 // here rather than nowhere. Same order as a prompt slug, because it is the same
 // kind of thing: a label a person reads in a list.
@@ -150,7 +152,7 @@ const TRIGGER_NODE_ID_MAX_LENGTH = 200;
 // authority on whether a type is real is blocks.get's own lookup, which answers
 // an unknown one with NOT_FOUND instead of a catalog-level VALIDATION_FAILED.
 const BLOCK_TYPE_MAX_LENGTH = 64;
-// Mirrors WINDOWS in db/queries/runs-read.ts (a literal, not imported, for the
+// Mirrors WINDOWS in services/run-lifecycle/dashboard-run-data.ts:24 (a literal, not imported, for the
 // reason the module doc above gives): tool-catalog.test.ts asserts the two stay
 // equal.
 const RUN_STATS_WINDOWS = ["24h", "7d", "30d", "all"] as const;
@@ -252,7 +254,7 @@ const dispatchSubjectSchema = z.discriminatedUnion("kind", [
 
 const preflightInputSchema = z
   .object({
-    // Named as the preflight response names it (api.ts:247), so an agent can
+    // Named as the preflight response names it (packages/contracts/api.ts:306), so an agent can
     // copy the field straight back into a dispatch.
     definitionId: z.number().int().positive(),
     triggerNodeId: z.string().trim().min(1).max(TRIGGER_NODE_ID_MAX_LENGTH),

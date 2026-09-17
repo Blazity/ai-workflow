@@ -361,9 +361,14 @@ describe("substituteNodePromptParams", () => {
 });
 
 describe("terminate postComment substitution", () => {
-  // The terminate hook in agent.ts is dispatched inline by the interpreter and
-  // never passes through substituteNodePromptParams, so it substitutes the
-  // comment itself via substitutePromptVariables(buildPromptVariables(ctx)).
+  // The terminate hook (engine/agent-workflow.ts:4119) is dispatched inline by the
+  // interpreter and never passes through substituteNodePromptParams. It does not
+  // call substitutePromptVariables(buildPromptVariables(ctx)) either: its postComment
+  // goes through resolveV2PromptDataConfiguration (engine/helpers/prompt-output.ts:117,
+  // called at engine/agent-workflow.ts:3957), which resolves only {{data:...}} tokens
+  // (packages/workflow-graph/v2-bindings.ts:11), and a leftover {{ or }} fails the
+  // block (engine/helpers/prompt-output.ts:170, engine/agent-workflow.ts:3962-3972).
+  // So the second case below exercises a substitution production no longer performs.
   // These cases pin that comment shape and the declaration the hook relies on.
   it("keeps terminate declared as a postComment variable param", () => {
     expect(VARIABLE_PARAM_KEYS.terminate).toEqual(["postComment"]);

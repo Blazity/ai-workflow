@@ -58,8 +58,9 @@ import {
  *
  * Runs never read DEFAULT_AGENT_PROMPTS. A workflow definition carries a pinned
  * {{prompt:<slug>@N}} token inside its own stored JSON and the run resolves that
- * pin against prompt_library_versions (workflows/prompt-references-step.ts ->
- * prompt-library/store.ts createPromptReferenceLoader). Editing a code constant
+ * pin against prompt_library_versions (engine/steps/prompt-references-step.ts ->
+ * prompt-library/prompt-reference-loader.ts:15 createPromptReferenceLoader).
+ * Editing a code constant
  * therefore changes nothing until a resync migration moves the stored row, and a
  * resync that only looks at version 1 misses a definition that pins @2.
  * Migrations 0034 and 0036 made exactly that mistake and were inert on

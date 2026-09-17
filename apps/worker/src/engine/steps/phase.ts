@@ -36,7 +36,7 @@ import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
  * are deliberate. It names the groups it wants instead of taking the gate's
  * own selection, and it records no workspace gate. Its output carries no
  * `gate` key at all, which is what keeps it out of recoverPrePrGateFromSteps
- * (blocks/finalize-workspace.ts): that walk recognizes a gate by the
+ * (blocks/finalize-workspace/execute.ts:72): that walk recognizes a gate by the
  * outcome+gate pair on any step output, and this block does carry an outcome.
  *
  * Recording no gate is not the same as being unable to affect publication. A
