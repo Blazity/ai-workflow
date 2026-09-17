@@ -633,18 +633,21 @@ of `src/engine/tests`, never on a chosen file.
   second, equally truthful, asked row.
 - `answered` is decided ONCE, when the answer ARRIVES, in the one function all
   three answer channels share (`answerClarificationAndResumeWithPersistence`,
-  `apps/worker/src/services/clarifications/answer-core.ts:194`; the dashboard
+  `apps/worker/src/services/clarifications/answer-core.ts`; the dashboard
   route, the Jira comment webhook and the MCP tool all reach it). That function
   reads the answer with the same pure reader the protocol uses, loads the
   catalog snapshot the services tier already exposes, applies the plan in ONE
   statement that also inserts the `question_answered` row, and then resumes the
-  run exactly as it does today (`answer-core.ts:283`). The reason: a person's
-  answer must survive the run that asked it. Runs fail after an answer often,
-  and a run that dies between the answer and its next step would otherwise lose
-  it, so the next run asks again, which is the defect this plan exists to end.
+  run exactly as it does today (its `resumeHook` call, same file). The reason:
+  a person's answer must survive the run that asked it. Runs fail after an
+  answer often, and a run that dies between the answer and its next step would
+  otherwise lose it, so the next run asks again, which is the defect this plan
+  exists to end.
 - Exactly once: `question_answered` is unique per clarification id, and the
   statement applies the entries only when that row was inserted. A retried
-  resume of the same answer (`answer-core.ts:205-209`) writes nothing twice.
+  resume of the same answer (the `row.status` conflict guard in
+  `answerClarificationAndResumeWithPersistence`, same file) writes nothing
+  twice.
 - The answer is read against the catalog store's keys PLUS the question's
   asked keys, so a person naming back the repository they were asked about is
   always understood, even when the catalog table does not hold it. On a bridge
@@ -788,8 +791,9 @@ nobody reads it.
 - **The repository a question is about is recorded when the question is ASKED,
   never when it is answered.** The clarification row has no repository column
   (`apps/worker/src/db/clarifications-schema.ts:13-53`) and the answer path
-  receives the row, the raw answer and the actor and nothing else
-  (`apps/worker/src/services/clarifications/answer-core.ts:179`), so by answer
+  receives the row, the raw answer and the actor and nothing else (the
+  `AnswerClarificationInput` type in
+  `apps/worker/src/services/clarifications/answer-core.ts`), so by answer
   time the identity is gone unless the ask wrote it down. Without this the
   central promise breaks exactly where it matters: "continue without it" would
   append a line naming no repository, no entry would be created, and the next
@@ -892,7 +896,7 @@ nobody reads it.
 | Repository map rendering (pure) | ranked, capped index text from a catalog snapshot, attached keys, ticket terms and the scope | `apps/worker/src/sandbox/context.ts:129-161` (research prompt), `assembleRepositoryDiscoveryPrompt`, `runner.ts:56-97` |
 | Trigger policy validation | a trigger node with a policy validates; unknown keys and an expansion rule the kind does not allow are refused | the per-kind `.strict()` config schemas at `apps/worker/src/engine/definition/block-params-schemas.ts:66,131,199,294` and their tests in `block-params-schemas.test.ts:10` |
 | Decision trail append, run side | an attach, a refusal or an automatic choice appends one line naming the repository, the origin and the reason, inside the step that already attaches and already writes | `attachResearchRepositoriesStep`, `apps/worker/src/engine/steps/phase.ts:527` with its existing write at `:581`; the actor and reason columns of `repository_profile_versions`, `apps/worker/src/db/repositories/repository-catalog.ts:556` |
-| Answer recorded on arrival | an answer to a repository question writes its entries and its `question_answered` row once, in one statement, from the shared answer function, and a retried resume of the same answer writes nothing; the resumed run reads the record rather than any copy of the answer | `answerClarificationAndResumeWithPersistence`, `apps/worker/src/services/clarifications/answer-core.ts:194`, its status guard at `:205-209` and its resume at `:283` |
+| Answer recorded on arrival | an answer to a repository question writes its entries and its `question_answered` row once, in one statement, from the shared answer function, and a retried resume of the same answer writes nothing; the resumed run reads the record rather than any copy of the answer | `answerClarificationAndResumeWithPersistence`, `apps/worker/src/services/clarifications/answer-core.ts`, its `row.status` conflict guard and its `resumeHook` call |
 | Run repository report (read) | one read returns what a run used and why, its rounds, its requests with verdicts, and the map it was shown | `workflow_runs.analysis_report`, `apps/worker/src/db/schema/runs.ts:93` and `apps/worker/src/engine/support/run-analysis-report.ts:44-81`, unread by any MCP tool today |
 | MCP parity | `work_scope.get` and `work_scope.set` answer exactly what the API routes answer | `apps/worker/src/mcp/tools/repositories.ts:363` and `pnpm run mcp:contract:generate` |
 | Cross-run behaviour (engine test) | a second run on a subject inherits the first run's entries and asks nothing about them | `apps/worker/src/engine/tests/multi-repo-research.test.ts:406-860`, `makeCtx` in `apps/worker/src/engine/blocks/support/test-support.ts:154` |
@@ -1332,8 +1336,9 @@ nobody reads it.
   could not read (`:2271`) and the in-run discovery question (`:1818`). Both
   park a person on a clarification whose `askedRepositories` is null, and the
   answer path returns without writing anything when that field is empty
-  (`apps/worker/src/services/clarifications/answer-core.ts:449-450`), so the
-  person's second answer is dropped and the next run asks them the same thing.
+  (`recordRepositoryAnswer`, `apps/worker/src/services/work-scope/from-answer.ts`),
+  so the person's second answer is dropped and the next run asks them the same
+  thing.
   A rule that has to be remembered at each call site is a rule that will be
   missed at the next one, so the fix is structural: a repository question that
   cannot name what it asks about may not be raised at all.
@@ -1473,8 +1478,9 @@ the symptom.
   `getResumableClarificationForTicket`, which matches `pending` or `answered`
   rows whose run still holds a `bound` claim
   (`apps/worker/src/db/repositories/clarification-hooks.ts:143-145`), the
-  by-id paths refuse a row that is not `pending`
-  (`apps/worker/src/services/clarifications/answer-core.ts:282-285`), and
+  by-id paths refuse a row that is not `pending` (the `row.status` conflict
+  guard in `answerClarificationAndResumeWithPersistence`,
+  `apps/worker/src/services/clarifications/answer-core.ts`), and
   `recordRepositoryAnswer` has exactly one production call site behind that
   gate. So a reply typed after a cancel, an expiry, or a later round writes no
   entry, no trail row and no comment, and the next run asks again. Recording it
@@ -1553,7 +1559,8 @@ has a disposition, per merge condition 7.
   authorings of the same fact. The structure is the source of truth, the prose is
   a view of it, and the type system is what keeps them in step.
 - **A convention read two ways.** `unusableKeys: null` means "this path never
-  listed repositories", and `answer-core.ts:786-790` and `phase.ts:877-883`
+  listed repositories", and `recordRepositoryAnswer`
+  (`apps/worker/src/services/work-scope/from-answer.ts`) and `phase.ts:877-883`
   answer it differently. DISPOSITION: verify before merge whether the difference
   is deliberate, and if it is, say so in the type's own comment.
 - **The record is write-mostly.** `applyPersonWorkScopeEdit`, `listWorkScopeTrail`,

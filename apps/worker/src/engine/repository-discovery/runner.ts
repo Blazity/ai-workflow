@@ -1393,9 +1393,11 @@ function resolveIdentity(
  *
  * Which channel that applies to is the caller's business, not this file's:
  * `services/work-scope/from-answer.ts:220-226` asks only about answers composed
- * from ticket comments (the flag `services/clarifications/answer-core.ts:422`
- * sets), because the dashboard and the MCP client type into a
- * box this question opened and a "no" there is unmistakably an answer to it.
+ * from ticket comments (the `composedFromComments` flag that
+ * `answerClarificationAndResumeWithPersistence` sets, in
+ * services/clarifications/answer-core.ts), because the dashboard and the MCP
+ * client type into a box this question opened and a "no" there is
+ * unmistakably an answer to it.
  */
 export type RefusalReach = "names_repositories" | "ordinary_ticket_speech";
 

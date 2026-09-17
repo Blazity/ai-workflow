@@ -39,9 +39,7 @@ import {
 import { logger } from "../../infra/logger.js";
 import { aiColumnMoveTarget } from "../tickets/index.js";
 import {
-  markConnectedRunBlockedOnCancel,
   markConnectedRunResumed,
-  markRunBlockedOnCancel,
   markRunResumed,
 } from "../../db/repositories/runs/telemetry.js";
 import {
@@ -67,16 +65,12 @@ import {
   RESUME_FAILED_STATUS,
   type ResumeAttemptReservation,
 } from "./resume-attempts.js";
-import {
-  supersedeConnectedClarification,
-  supersedeConnectedPendingClarificationsForTicket,
-  supersedeClarification,
-  supersedePendingForTicket,
-} from "../../db/repositories/clarifications.js";
+import { retireConnectedClarificationForGoneTicket } from "../../db/repositories/clarifications.js";
 import {
   findBoundActiveRunOwner,
   findConnectedBoundActiveRunOwner,
 } from "../../db/repositories/active-runs.js";
+import { retireClarificationForGoneTicket } from "./retirement.js";
 
 /** Re-exported under the name this cluster has always used. The number itself
  *  belongs to the contracts package, which is also what the request schema and
@@ -507,35 +501,4 @@ async function failedResumeOutcome(
     : attempt === "lost"
       ? { kind: "conflict" }
       : { kind: "resume_failed_retryable", error };
-}
-
-/**
- * Best-effort teardown when a clarification's Jira ticket has been deleted:
- * supersede sibling questions, supersede this row, and settle the parked run so
- * it does not stay awaiting forever. Each step swallows its own error.
- *
- * The run is settled as "blocked", not "success": it is still suspended on a
- * hook whose question was just superseded, so nobody can answer it and it will
- * never reach a PR. Recording success would freeze that dead run into a green
- * result the cron can no longer correct.
- */
-export async function retireClarificationForGoneTicket(
-  db: Db,
-  row: HookClarificationRow,
-): Promise<void> {
-  if (row.ticketKey) {
-    await supersedePendingForTicket(db, row.ticketKey).catch(() => {});
-  }
-  await supersedeClarification(db, row.id).catch(() => {});
-  await markRunBlockedOnCancel(db, row.runId).catch(() => {});
-}
-
-export async function retireConnectedClarificationForGoneTicket(
-  row: HookClarificationRow,
-): Promise<void> {
-  if (row.ticketKey) {
-    await supersedeConnectedPendingClarificationsForTicket(row.ticketKey).catch(() => {});
-  }
-  await supersedeConnectedClarification(row.id).catch(() => {});
-  await markConnectedRunBlockedOnCancel(row.runId).catch(() => {});
 }

@@ -281,7 +281,8 @@ function composedAnswerAccountId(actorId: string): string {
  *  never ends in the comment a spent budget posts. What the ticket is told,
  *  when the holding itself runs out, is `formatAnswerNotRecordedComment` with the
  *  `uncounted` reason (`engine/support/clarification-comment-format.ts:331`),
- *  posted by `services/clarifications/answer-core.ts:435-441`. */
+ *  posted by the `postComment` call in `answerClarificationAndResumeWithPersistence`
+ *  (services/clarifications/answer-core.ts). */
 export const UNCOUNTED_AUTHORS_ERROR =
   "the people who wrote this answer could not be counted from the ticket";
 

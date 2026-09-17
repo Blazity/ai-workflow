@@ -654,6 +654,9 @@ describe("resumeClarificationFromComments", () => {
 
     expect(result).toEqual({ status: "ticket_gone" });
     expect((await getHookClarification(db, row.id))?.status).toBe("superseded");
+    expect(
+      (await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN)))[0]?.status,
+    ).toBe("blocked");
     expect(mocks.resumeHook).not.toHaveBeenCalled();
   });
 });

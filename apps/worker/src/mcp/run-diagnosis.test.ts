@@ -437,8 +437,9 @@ describe("diagnoseRun", () => {
   // sanitize-run-detail.ts:106-115), the observed face of three silent
   // stop paths that record no statusReason: markRunBlockedOnCancel and
   // sweepOrphanedAwaitingRuns (db/repositories/runs/telemetry.ts:661-671,
-  // 821-843) and retireClarificationForGoneTicket (services/clarifications/
-  // retirement.ts:11, with a second copy at answer-core.ts:522).
+  // 821-843) and retireClarificationForGoneTicket
+  // (services/clarifications/retirement.ts, its connected counterpart in
+  // db/repositories/clarifications.ts).
   it("classifies a blocked run with no recorded reason as stopped_without_reason, with low confidence", () => {
     const result = diagnoseRun({
       workflowId: "wf_agent",

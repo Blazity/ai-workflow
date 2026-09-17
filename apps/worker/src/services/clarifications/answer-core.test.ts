@@ -2,10 +2,11 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSettingsSnapshot, type WorkScopeAskedRepository } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
-import type {
-  IssueTrackerAdapter,
-  TicketComment,
-  TicketContent,
+import {
+  IssueTrackerNotFoundError,
+  type IssueTrackerAdapter,
+  type TicketComment,
+  type TicketContent,
 } from "../../adapters/issue-tracker/types.js";
 import {
   activeRuns,
@@ -256,5 +257,24 @@ describe("answerClarificationAndResume after a spent resume budget", () => {
     expect(stored?.status).toBe("resume_failed");
     expect(stored?.answer).toBe("Use Next.js");
     expect(stored?.resumeAttempts).toBe(3);
+  });
+});
+
+describe("answerClarificationAndResume when the ticket is gone", () => {
+  it("supersedes the question and settles the run blocked, not success", async () => {
+    const row = await seedPending();
+    const tracker = makeTracker();
+    tracker.fetchTicket.mockRejectedValueOnce(new IssueTrackerNotFoundError("issue", TICKET));
+
+    const result = await answer(tracker, row.id, "Use Next.js");
+
+    expect(result.kind).toBe("ticket_gone");
+    const [stored] = await db
+      .select()
+      .from(clarificationRequests)
+      .where(eq(clarificationRequests.id, row.id));
+    expect(stored?.status).toBe("superseded");
+    const [runRow] = await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN));
+    expect(runRow?.status).toBe("blocked");
   });
 });

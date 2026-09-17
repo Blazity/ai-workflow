@@ -82,14 +82,21 @@ export function getConnectedClarificationForRun(runId: string) {
   return getClarificationForRun(getDb(), runId);
 }
 
-export function supersedeConnectedPendingClarificationsForTicket(ticketKey: string) {
+// Not exported: only retireConnectedClarificationForGoneTicket below composes
+// these, so they stay module-private rather than a second public name for the
+// same operation.
+function supersedeConnectedPendingClarificationsForTicket(ticketKey: string) {
   return supersedePendingForTicket(getDb(), ticketKey);
 }
 
-export function supersedeConnectedClarification(id: string) {
+function supersedeConnectedClarification(id: string) {
   return supersedeClarification(getDb(), id);
 }
 
+/** Connected counterpart of retireClarificationForGoneTicket
+ *  (services/clarifications/retirement.ts): same three best-effort steps
+ *  against the connected wrappers above. See that function for why the run
+ *  is settled "blocked", not "success". */
 export async function retireConnectedClarificationForGoneTicket(row: {
   id: string;
   ticketKey: string | null;

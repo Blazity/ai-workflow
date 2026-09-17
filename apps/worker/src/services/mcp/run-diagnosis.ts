@@ -272,7 +272,7 @@ const ENGINE_STALLED_PREFIX = "Run engine stalled:";
 // 106): the observed face of three silent stop paths that record no
 // statusReason: markRunBlockedOnCancel and sweepOrphanedAwaitingRuns
 // (db/repositories/runs/telemetry.ts:661 and :821) and
-// retireClarificationForGoneTicket (services/clarifications/answer-core.ts:522).
+// retireClarificationForGoneTicket (services/clarifications/retirement.ts).
 const STOPPED_WITHOUT_REASON_PREFIX =
   "This run was stopped before it finished, but no specific reason was recorded.";
 

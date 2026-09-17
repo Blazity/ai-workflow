@@ -12,9 +12,9 @@ import {
   answerClarificationAndResume,
   answerConnectedClarificationAndResume,
   MAX_ANSWER_LENGTH,
-  retireConnectedClarificationForGoneTicket,
-  retireClarificationForGoneTicket,
 } from "./answer-core.js";
+import { retireClarificationForGoneTicket } from "./retirement.js";
+import { retireConnectedClarificationForGoneTicket } from "../../db/repositories/clarifications.js";
 import {
   commentsCoverAnswerWindow,
   composedAnswerActorId,
