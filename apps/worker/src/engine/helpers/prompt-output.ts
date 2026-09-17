@@ -7,7 +7,7 @@ import { executionError, type StepsRecord } from "@shared/workflow-graph";
 import { parseWorkflowDataReferenceV2, resolveWorkflowPromptDataTokensV2, type V2BindingResolutionContext } from "@shared/workflow-graph";
 import type { BlockExecutionResult } from "@shared/workflow-graph";
 import { resolveBlockAgent } from "../definition/resolve-agent.js";
-import { substitutePromptVariables, VARIABLE_PARAM_KEYS, type PromptVariableValues } from "@shared/prompts";
+import { containsPlaceholderOutsideTokens, parsePromptDataTokens, substitutePromptVariables, VARIABLE_PARAM_KEYS, type PromptVariableValues } from "@shared/prompts";
 import type { WorkspacePublicationResult } from "../steps/workspace-publication.js";
 import { type WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import { resolveCallLlmTarget } from "../blocks/call-llm/execute.js";
@@ -114,22 +114,47 @@ const promptOverride = (node: WorkflowDefinitionNode): string | undefined => {
   return typeof raw === "string" && raw.trim().length > 0 ? raw : undefined;
 };
 
-export function resolveV2PromptDataConfiguration(
+export type V2PromptConfigurationResolution =
+  | { ok: true; configuration: WorkflowDefinitionV2Node["configuration"] }
+  | { ok: false; issue: string };
+
+/**
+ * A v2 block's prompt-bearing configuration as the block will use it, or the
+ * placeholder its author left. Every {{data:...}} token in a VARIABLE_PARAM_KEYS
+ * field is replaced once with the run's value, in one pass, so a value is never
+ * read for tokens again: braces or tokens inside ticket text arrive as written.
+ * A reference the run cannot resolve throws, and the scheduler records that as
+ * the block's failure. Agent prompt fields are left for compileEffectivePrompt.
+ *
+ * The placeholder refusal reads the AUTHORED text around the data tokens, never
+ * the resolved value, so only what the author wrote can fail the block. It
+ * refuses a subset of what checking the resolved value refused: resolution
+ * replaces token spans only, so authored braces survive into the value.
+ */
+export function resolveV2PromptConfiguration(
   node: WorkflowDefinitionV2Node,
   context: V2BindingResolutionContext,
-  options: { preserveAgentPromptSource?: boolean } = {},
+): V2PromptConfigurationResolution {
+  // Resolution must run before the authored check. The resolver's token pattern
+  // (DATA_TOKEN_PATTERN in packages/workflow-graph/v2-bindings.ts) also matches
+  // tokens parsePromptDataTokens rejects, such as {{data:not a path}}; checked
+  // first, such a token would sit outside the parsed tokens and turn its binding
+  // error into a placeholder refusal.
+  const configuration = resolvePromptDataConfiguration(node, context);
+  const issue = authoredPromptPlaceholderIssue(node.type, node.configuration);
+  return issue === null ? { ok: true, configuration } : { ok: false, issue };
+}
+
+function resolvePromptDataConfiguration(
+  node: WorkflowDefinitionV2Node,
+  context: V2BindingResolutionContext,
 ): WorkflowDefinitionV2Node["configuration"] {
   const keys = VARIABLE_PARAM_KEYS[node.type];
   if (!keys) return node.configuration;
   let changed = false;
   const configuration = { ...node.configuration };
   for (const key of keys) {
-    if (
-      options.preserveAgentPromptSource &&
-      isV2AgentPromptField(node.type, key)
-    ) {
-      continue;
-    }
+    if (isV2AgentPromptField(node.type, key)) continue;
     const value = node.configuration[key];
     if (typeof value === "string") {
       const resolved = resolveWorkflowPromptDataTokensV2(value, context);
@@ -155,7 +180,7 @@ export function resolveV2PromptDataConfiguration(
   return changed ? configuration : node.configuration;
 }
 
-export function v2NonAgentPromptPlaceholderIssue(
+function authoredPromptPlaceholderIssue(
   type: WorkflowBlockType,
   configuration: Readonly<Record<string, unknown>>,
 ): string | null {
@@ -167,7 +192,11 @@ export function v2NonAgentPromptPlaceholderIssue(
       : Array.isArray(value)
         ? value.filter((item): item is string => typeof item === "string")
         : [];
-    if (values.some((item) => item.includes("{{") || item.includes("}}"))) {
+    if (
+      values.some((item) =>
+        containsPlaceholderOutsideTokens(item, parsePromptDataTokens(item))
+      )
+    ) {
       return `${type} ${field} contains an unresolved placeholder.`;
     }
   }
@@ -559,8 +588,8 @@ export function shouldPromoteResearchWriteScope(input: {
   return true;
 }
 
-/** open_pr title: a binding wins, else the authored (already {{var}}-substituted)
- *  template param, else the default template resolved against `vars`. */
+/** open_pr title: a binding wins, else the authored param (its {{data:...}}
+ *  tokens already resolved), else the default template resolved against `vars`. */
 export function resolveOpenPrTitle(
   params: Record<string, unknown>,
   resolvedInputs: Record<string, unknown>,

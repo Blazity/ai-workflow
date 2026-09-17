@@ -137,7 +137,7 @@ export function formatTicketEvent(
               ].join("\n");
       const withUsage = appendUsage(body, event.usageReport);
       // extraText is user/ticket-derived (a send_slack_message block's message
-      // after {{variable}} substitution), so defang Slack broadcast tokens in it
+      // with its {{data:...}} tokens resolved), so defang Slack broadcast tokens in it
       // before it joins our system-built copy. Applied ONLY here, not to the
       // whole message, so our own <url|label> links are never touched.
       return event.extraText
@@ -159,7 +159,7 @@ export function formatTicketEvent(
       return `${head} canceled: ${event.reason}`;
 
     case "note":
-      // A note carries only the user's own message (already {{variable}}-substituted).
+      // A note carries only the user's own message (its {{data:...}} tokens resolved).
       // No system head/emoji so it reads as a plain message; defang broadcast tokens
       // so ticket-derived text can't ping the whole channel.
       return neutralizeSlackBroadcasts(event.text);

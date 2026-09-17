@@ -13,8 +13,10 @@ async function blockPostTicketCommentStep(
   const { createAdapters } = await import("../../../engine/support/adapters.js");
   const { issueTracker } = createAdapters();
   await assertConnectedActiveRunOwner(owner);
-  // The body is {{variable}}-substituted before it gets here, so it can carry
-  // {{change_summary}} or any agent block's output, exactly like post_pr_comment.
+  // The body arrives with its {{data:...}} tokens resolved (by
+  // resolveV2PromptConfiguration in executeV2Block) or bound whole through the
+  // body input, so it can carry any agent block's output, exactly like
+  // post_pr_comment.
   return issueTracker.postComment(ticketId, scrubForPublication(body));
 }
 blockPostTicketCommentStep.maxRetries = 0;

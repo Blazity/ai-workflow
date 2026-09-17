@@ -1,6 +1,8 @@
-/** One {{name}} placeholder substituted into prompt-bearing block
- *  params at runtime. The dashboard uses this list for autocomplete and
- *  highlighting; the worker's prompt-vars module is the substitution engine. */
+/** One {{name}} variable. The worker substitutes these with
+ *  substitutePromptVariables (prompt-vars) into repository rules and the
+ *  default Open PR title and body only; a v2 block's own prompt-bearing params
+ *  take {{data:...}} tokens instead and fail on a leftover {{name}}. The
+ *  dashboard uses this list for autocomplete and highlighting. */
 export interface PromptVariableSpec {
   name: string;
   description: string;

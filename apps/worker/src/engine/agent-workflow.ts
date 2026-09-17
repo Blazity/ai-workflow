@@ -88,7 +88,7 @@ import { loadClarificationHistoryStep, logClarificationHistoryFailure, parkForCl
 import { prePrChecksFailureMessage } from "./steps/repository-failure.js";
 import { type SanitizedReplayObservation, captureV2RunObservationStartStep, closeTerminalPrChecksStep, finishV2RunObservationAttemptStep, flushV2RunObservationsStep, markV2RunObservationUnavailableStep, persistRunTelemetryBestEffort, recordBlockStatusesStep, resolveClarificationDecisionObservation, startV2RunObservationAttemptStep, updateV2RunObservationWaitingStep } from "./steps/telemetry.js";
 import { resolveAgentTicketInput, resolveImplementationPlanInput, selectEntryTriggerNode, triggerOutputWithTicketContext, triggerTypeFor } from "./helpers/trigger-input.js";
-import { appendClarificationRound, blockRunStateSummary, buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, buildPromptVariables, implementationChangeSummary, optionalPricedModelsForRun, promptOverride, publicationPrForTelemetry, repoMemoryDistillTarget, resolveOpenPrBody, resolveOpenPrTitle, resolveRunPriceLookup, resolveSlackMessageInput, resolveTicketStatusInput, resolveV2PromptDataConfiguration, reviewAgentExecutionResult, shouldPromoteResearchWriteScope, soleActiveBlockId, v2NonAgentPromptPlaceholderIssue, v2OpenPrRepositoriesProvenanceIssue, v2TerminalBlockResult } from "./helpers/prompt-output.js";
+import { appendClarificationRound, blockRunStateSummary, buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, buildPromptVariables, implementationChangeSummary, optionalPricedModelsForRun, promptOverride, publicationPrForTelemetry, repoMemoryDistillTarget, resolveOpenPrBody, resolveOpenPrTitle, resolveRunPriceLookup, resolveSlackMessageInput, resolveTicketStatusInput, resolveV2PromptConfiguration, reviewAgentExecutionResult, shouldPromoteResearchWriteScope, soleActiveBlockId, v2OpenPrRepositoriesProvenanceIssue, v2TerminalBlockResult } from "./helpers/prompt-output.js";
 import { checksBudgetObserver, definitionRequestsRepairCycles, errorMessage, failureExitPhase, isRepositoryScriptsFailurePhase, nodeCanRecordGate, recoverLatestRepositoryScriptsFailureFromSteps, repositoryScriptsFailureComment, truncateError } from "./helpers/repository-failure.js";
 import { postReviewLedgerFailureNoteStep, readLedgerEvidenceFileStep, settleReviewLedgerThreads } from "./steps/review-ledger.js";
 import { applyReviewLedgerGate, buildResolutionEvidenceComment, pendingPrCheckIntent, resolveNoChangeAction, reviewLedgerOutputFields, reviewLedgerRepoLocalPath, runLedgerEvidenceSecondPass, settledAnswerCount, toLedgerGuardWorkItems, toReviewThreadDispositions, unsettledWorkItemAliases } from "./helpers/review-ledger.js";
@@ -3708,7 +3708,9 @@ async function agentWorkflowBody(
                 { category: "binding", phase: "open-pr" },
               );
             }
-            // node.params.title/body are already {{var}}-substituted (executeBlock).
+            // node.params.title/body carry their {{data:...}} tokens resolved by
+            // resolveV2PromptConfiguration in executeV2Block. The default template,
+            // used when both are empty, takes {{name}} variables from prVars.
             // ticket.title is the last-resort title if a template resolves empty.
             const prVars = buildPromptVariables(ctx);
             const prTitle =
@@ -3830,7 +3832,8 @@ async function agentWorkflowBody(
           }
 
           case "send_slack_message": {
-            // node.params.message is already {{variable}}-substituted (executeBlock).
+            // node.params.message carries its {{data:...}} tokens resolved by
+            // resolveV2PromptConfiguration in executeV2Block.
             const message = resolveSlackMessageInput(node.params, resolvedInputs);
             const sendOn = node.params.sendOn === "always" ? "always" : "pr_ready";
 
@@ -3954,23 +3957,19 @@ async function agentWorkflowBody(
           runValues,
           getStepOutput: (nodeId) => steps[nodeId]?.output,
         };
-        const configuration = resolveV2PromptDataConfiguration(
+        const promptConfiguration = resolveV2PromptConfiguration(
           node,
           bindingContext,
-          { preserveAgentPromptSource: true },
         );
-        const placeholderIssue = v2NonAgentPromptPlaceholderIssue(
-          node.type,
-          configuration,
-        );
-        if (placeholderIssue) {
-          return executionError(placeholderIssue, {
+        if (!promptConfiguration.ok) {
+          return executionError(promptConfiguration.issue, {
             category: "binding",
             phase: node.type,
             message:
               "The block has an unresolved prompt placeholder. Update and redeploy the workflow.",
           });
         }
+        const configuration = promptConfiguration.configuration;
         const compileInvocationPrompt: NonNullable<
           BlockExecutionContext["compileEffectivePrompt"]
         > = async ({ blockPrompt, runtimeData, sandboxId }) => {

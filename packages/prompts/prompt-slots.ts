@@ -191,3 +191,26 @@ export function containsMalformedPromptDataToken(text: string): boolean {
   );
   return /\{\{\s*data\s*:/i.test(withoutCompleteTokens);
 }
+
+/**
+ * Whether the author left a placeholder: `{{` or `}}` in the text between the
+ * given tokens (data, slot, or both, sorted by position). Each gap is checked
+ * on its own, so text a token will be replaced by never counts, and braces are
+ * never formed across a token that is removed.
+ */
+export function containsPlaceholderOutsideTokens(
+  text: string,
+  tokens: readonly { start: number; end: number }[],
+): boolean {
+  let cursor = 0;
+  for (const token of [...tokens, { start: text.length, end: text.length }]) {
+    if (containsPlaceholderBraces(text.slice(cursor, token.start))) return true;
+    cursor = token.end;
+  }
+  return false;
+}
+
+/** Whether text holds `{{` or `}}`, either half of a placeholder. */
+export function containsPlaceholderBraces(text: string): boolean {
+  return /\{\{|\}\}/.test(text);
+}

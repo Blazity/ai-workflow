@@ -120,6 +120,7 @@ export {
 export {
   containsMalformedPromptDataToken,
   containsMalformedPromptSlotToken,
+  containsPlaceholderOutsideTokens,
   formatPromptDataToken,
   formatPromptSlotToken,
   isPromptDataReference,
@@ -142,7 +143,6 @@ export {
   type RepositoryRulesVariableName,
 } from "./prompt-variables";
 export {
-  substituteNodePromptParams,
   substitutePromptVariables,
   VARIABLE_PARAM_KEYS,
   type PromptVariableValues,

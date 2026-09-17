@@ -15,6 +15,8 @@ import {
 import {
   containsMalformedPromptDataToken,
   containsMalformedPromptSlotToken,
+  containsPlaceholderBraces,
+  containsPlaceholderOutsideTokens,
   isPromptSlotBinding,
   parsePromptDataTokens,
   parsePromptSlotTokens,
@@ -196,19 +198,27 @@ export async function compileEffectivePrompt(
     slotBindings,
     issues,
   );
-  let blockPrompt = resolvePromptData(
-    input.blockPrompt,
-    input,
-    issues,
-    unresolvedSources,
-  );
-  blockPrompt = resolvePromptSlots(
-    blockPrompt,
-    slotDefinitions,
-    slotBindings,
-    input,
-    issues,
-    unresolvedSources,
+  // The authored prompt (reusable prompt bodies included, expanded before this
+  // compiler runs) decides every check, and each data and slot value is inserted
+  // in one pass that never reads inserted text again. Braces, slot tokens or
+  // prompt references inside a ticket or a step output therefore reach the
+  // agent as written and can neither fill a slot nor fail the block.
+  const authoredPrompt = input.blockPrompt;
+  const replacements = [
+    ...resolvePromptData(authoredPrompt, input, issues, unresolvedSources),
+    ...resolvePromptSlots(
+      authoredPrompt,
+      slotDefinitions,
+      slotBindings,
+      input,
+      issues,
+      unresolvedSources,
+    ),
+  ].sort((left, right) => left.start - right.start);
+  const blockPrompt = replaceTokens(
+    authoredPrompt,
+    replacements,
+    (replacement) => replacement.text,
   );
   if (blockPrompt.trim().length === 0) {
     issues.push(issue(
@@ -219,8 +229,8 @@ export async function compileEffectivePrompt(
     ));
   }
   if (
-    containsMalformedPromptReference(blockPrompt) ||
-    /\{\{\s*prompt\s*:/i.test(blockPrompt)
+    containsMalformedPromptReference(authoredPrompt) ||
+    /\{\{\s*prompt\s*:/i.test(authoredPrompt)
   ) {
     issues.push(issue(
       input.nodeId,
@@ -229,7 +239,10 @@ export async function compileEffectivePrompt(
       "The prompt contains an unresolved reusable-prompt reference.",
     ));
   }
-  if (containsResidualMustache(blockPrompt)) {
+  if (
+    replacements.some((replacement) => !replacement.resolved) ||
+    containsPlaceholderOutsideTokens(authoredPrompt, replacements)
+  ) {
     issues.push(issue(
       input.nodeId,
       "prompt_placeholder_unresolved",
@@ -446,7 +459,7 @@ function resolvePromptSlots(
   input: EffectivePromptCompileInput,
   issues: WorkflowDefinitionValidationIssue[],
   unresolvedSources: EffectivePromptUnresolvedSource[],
-): string {
+): TokenReplacement[] {
   if (containsMalformedPromptSlotToken(text)) {
     issues.push(issue(
       input.nodeId,
@@ -468,9 +481,14 @@ function resolvePromptSlots(
       continue;
     }
     let value: unknown;
+    // A literal binding or a declared default is text an author wrote, and no
+    // token inside it is ever resolved, so braces there are a placeholder left
+    // behind. A value bound to run data is inserted as written.
+    let authoredValue = false;
     const binding = bindings[name];
     if (binding?.kind === "literal") {
       value = structuredClone(binding.value);
+      authoredValue = true;
     } else if (binding?.kind === "reference") {
       if (input.resolveDataReference) {
         try {
@@ -494,6 +512,15 @@ function resolvePromptSlots(
       }
     } else if (Object.prototype.hasOwnProperty.call(definition, "defaultValue")) {
       value = structuredClone(definition.defaultValue);
+      authoredValue = true;
+    }
+    if (authoredValue && jsonStringLeaves(value).some(containsPlaceholderBraces)) {
+      issues.push(issue(
+        input.nodeId,
+        "prompt_placeholder_unresolved",
+        `/configuration/promptSlotBindings/${escapePointer(name)}`,
+        "The prompt contains an unresolved placeholder.",
+      ));
     }
 
     if (value === undefined) {
@@ -539,8 +566,7 @@ function resolvePromptSlots(
     resolved.set(name, value as JsonValue);
   }
 
-  const tokens = parsePromptSlotTokens(text);
-  return replaceTokens(text, tokens, (token) => {
+  return parsePromptSlotTokens(text).map((token) => {
     const definition = definitions.get(token.name);
     if (!definition) {
       issues.push(issue(
@@ -549,10 +575,13 @@ function resolvePromptSlots(
         "/configuration/prompt",
         `Prompt token "${token.name}" has no slot declaration.`,
       ));
-      return token.raw;
+      return unresolvedToken(token);
     }
     const value = resolved.get(token.name);
-    return value === undefined ? "" : serializePromptValue(value);
+    return resolvedToken(
+      token,
+      value === undefined ? "" : serializePromptValue(value),
+    );
   });
 }
 
@@ -561,7 +590,7 @@ function resolvePromptData(
   input: EffectivePromptCompileInput,
   issues: WorkflowDefinitionValidationIssue[],
   unresolvedSources: EffectivePromptUnresolvedSource[],
-): string {
+): TokenReplacement[] {
   if (containsMalformedPromptDataToken(text)) {
     issues.push(issue(
       input.nodeId,
@@ -570,12 +599,11 @@ function resolvePromptData(
       "The prompt contains a malformed data token.",
     ));
   }
-  const tokens = parsePromptDataTokens(text);
-  return replaceTokens(text, tokens, (token) => {
+  return parsePromptDataTokens(text).map((token) => {
     if (input.resolveDataReference) {
       try {
         const value = input.resolveDataReference(token.reference);
-        return serializePromptValue(value);
+        return resolvedToken(token, serializePromptValue(value));
       } catch {
         issues.push(issue(
           input.nodeId,
@@ -583,7 +611,7 @@ function resolvePromptData(
           "/configuration/prompt",
           `Prompt data reference "${token.reference}" is unavailable at runtime.`,
         ));
-        return token.raw;
+        return unresolvedToken(token);
       }
     }
     if (input.preview) {
@@ -593,14 +621,50 @@ function resolvePromptData(
         reference: token.reference,
         message: "Prompt data is resolved when this block runs.",
       });
-      return serializePromptValue(
-        schema
-          ? input.exampleValueForSchema(schema)
-          : `<runtime:${token.reference}>`,
+      return resolvedToken(
+        token,
+        serializePromptValue(
+          schema
+            ? input.exampleValueForSchema(schema)
+            : `<runtime:${token.reference}>`,
+        ),
       );
     }
-    return token.raw;
+    return unresolvedToken(token);
   });
+}
+
+/** What one authored token becomes. `resolved` is false when the token text is
+ *  kept, which leaves a placeholder in the prompt. */
+interface TokenReplacement {
+  start: number;
+  end: number;
+  text: string;
+  resolved: boolean;
+}
+
+function resolvedToken(
+  token: { start: number; end: number },
+  text: string,
+): TokenReplacement {
+  return { start: token.start, end: token.end, text, resolved: true };
+}
+
+function unresolvedToken(
+  token: { start: number; end: number; raw: string },
+): TokenReplacement {
+  return { start: token.start, end: token.end, text: token.raw, resolved: false };
+}
+
+/** The strings inside a JSON value. Checking these rather than the serialized
+ *  JSON keeps an object such as {"a":{"b":1}} from reading as a placeholder. */
+function jsonStringLeaves(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(jsonStringLeaves);
+  if (value !== null && typeof value === "object") {
+    return Object.values(value).flatMap(jsonStringLeaves);
+  }
+  return [];
 }
 
 function serializePromptValue(value: JsonValue): string {
@@ -644,10 +708,6 @@ function sanitizeSectionContent(content: string): string {
 
 function neutralizeSectionSentinels(content: string): string {
   return content.replace(/<<<AI_WORKFLOW_/gi, "\u2039\u2039\u2039AI_WORKFLOW_");
-}
-
-function containsResidualMustache(content: string): boolean {
-  return content.includes("{{") || content.includes("}}");
 }
 
 function renderSection(sectionData: EffectivePromptSection): string {

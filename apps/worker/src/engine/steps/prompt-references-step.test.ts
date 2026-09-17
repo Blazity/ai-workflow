@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import type { WorkflowDefinitionNode } from "@shared/contracts";
+import type {
+  PromptSlotDefinition,
+  WorkflowDefinitionNode,
+  WorkflowDefinitionV2Node,
+} from "@shared/contracts";
 import { resolvePromptReferencesInNodes } from "./prompt-references-step.js";
-import { substituteNodePromptParams } from "@shared/prompts";
 import type { PromptReferenceTarget } from "@shared/prompts";
+import { compileEffectivePrompt } from "../helpers/effective-prompt.js";
+import { resolveV2PromptConfiguration } from "../helpers/prompt-output.js";
 
 function node(
   type: WorkflowDefinitionNode["type"],
@@ -50,21 +55,136 @@ describe("resolvePromptReferencesInNodes", () => {
     expect(original.params.questions).toEqual(["A {{prompt:2@1}}", "B"]);
   });
 
-  it("produces text that the existing global-variable pass resolves afterwards", async () => {
-    const load = vi.fn(async () => ({
-      promptId: 3,
-      promptName: "Research",
-      requestedVersion: "latest" as const,
-      resolvedVersion: 5,
-      body: "Work on {{ticket_key}} from {{branch_name}}",
-    }));
-    const original = node("planning_agent", { prompt: "Instructions: {{prompt:3}}" });
-    const referenced = await resolvePromptReferencesInNodes([original], load);
-    const finalNode = substituteNodePromptParams(referenced.nodes[0], {
-      ticket_key: "AIW-42",
-      branch_name: "feat/live-prompts",
+  describe("what a run does with an expanded reference", () => {
+    // A run expands references once at run start (resolvePromptReferencesForRun,
+    // copied back into the v2 configuration in engine/agent-workflow.ts). The
+    // expanded body is authored text from then on: a non-agent block resolves
+    // its {{data:...}} tokens with resolveV2PromptConfiguration, an agent block
+    // compiles its data and slot tokens with compileEffectivePrompt, and both
+    // refuse a placeholder the body left.
+    const bindingContext = {
+      entryOutput: {
+        status: "fired",
+        ticketKey: "AIW-42",
+        ticket: { title: "Add rate limiting" },
+      },
+      runValues: { branchName: "feat/live-prompts" },
+      getStepOutput: () => undefined,
+    };
+
+    const expand = async (
+      type: WorkflowDefinitionNode["type"],
+      field: string,
+      body: string,
+      slots: PromptSlotDefinition[] = [],
+    ) => {
+      const load = vi.fn(async () => ({
+        promptId: 3,
+        promptName: "impl",
+        requestedVersion: 2 as const,
+        resolvedVersion: 2,
+        body,
+        slots,
+      }));
+      const original = node(type, { [field]: "{{prompt:impl@2}}" });
+      const referenced = await resolvePromptReferencesInNodes([original], load, {
+        requirePinned: true,
+      });
+      return {
+        text: referenced.nodes[0].params[field] as string,
+        slots: referenced.slotsByNode[original.id] ?? [],
+      };
+    };
+
+    const v2Node = (
+      type: WorkflowDefinitionNode["type"],
+      configuration: WorkflowDefinitionV2Node["configuration"],
+    ): WorkflowDefinitionV2Node => ({
+      id: `node-${type}`,
+      type,
+      x: 0,
+      y: 0,
+      configuration,
+      inputs: {},
+      additionalInputs: [],
     });
-    expect(finalNode.params.prompt).toBe("Instructions: Work on AIW-42 from feat/live-prompts");
+
+    it("resolves data tokens a referenced body carries when a non-agent block runs", async () => {
+      const { text } = await expand(
+        "send_slack_message",
+        "message",
+        "Shipped {{data:steps.entry.output.ticketKey}} on {{data:run.branchName}}",
+      );
+
+      expect(
+        resolveV2PromptConfiguration(
+          v2Node("send_slack_message", { message: text }),
+          bindingContext,
+        ),
+      ).toEqual({
+        ok: true,
+        configuration: { message: "Shipped AIW-42 on feat/live-prompts" },
+      });
+    });
+
+    it("refuses a legacy variable a referenced body carries on a non-agent block", async () => {
+      const { text } = await expand("send_slack_message", "message", "Shipped {{ticket_key}}");
+
+      expect(
+        resolveV2PromptConfiguration(
+          v2Node("send_slack_message", { message: text }),
+          bindingContext,
+        ),
+      ).toEqual({
+        ok: false,
+        issue: "send_slack_message message contains an unresolved placeholder.",
+      });
+    });
+
+    it("compiles a referenced agent prompt with its slot and data tokens filled", async () => {
+      const { text, slots } = await expand(
+        "implementation_agent",
+        "prompt",
+        "Scope: {{slot:scope}}\nTicket: {{data:steps.entry.output.ticket.title}}",
+        [{
+          name: "scope",
+          description: "What to change",
+          schema: { type: "string" },
+          required: true,
+        }],
+      );
+
+      const compilation = await compileEffectivePrompt({
+        nodeId: "node-implementation_agent",
+        blockPrompt: text,
+        runtimeData: "",
+        slots,
+        slotBindings: { scope: { kind: "literal", value: "the billing module" } },
+        bindingContext,
+      });
+
+      expect(compilation.issues).toEqual([]);
+      expect(compilation.sections.find((section) => section.kind === "block")
+        ?.content).toBe("Scope: the billing module\nTicket: Add rate limiting");
+    });
+
+    it("refuses a legacy variable a referenced agent prompt carries", async () => {
+      const { text } = await expand("implementation_agent", "prompt", "Implement {{ticket_key}}");
+
+      const compilation = await compileEffectivePrompt({
+        nodeId: "node-implementation_agent",
+        blockPrompt: text,
+        runtimeData: "",
+        bindingContext,
+      });
+
+      expect(compilation.issues).toEqual([
+        expect.objectContaining({
+          code: "prompt_placeholder_unresolved",
+          message: "The prompt contains an unresolved placeholder.",
+        }),
+      ]);
+    });
   });
 
   it("keeps per-node manifests and recursive slot declarations separate", async () => {
