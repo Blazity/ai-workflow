@@ -1,5 +1,5 @@
 Status: draft
-Last-verified: 2026-09-16
+Last-verified: 2026-09-17
 
 # The repository record: what a person can do, and what happens in every case
 
@@ -25,6 +25,14 @@ stating the OPPOSITE of the code (A5 and A7), one row understating what a
 refusal costs the person (B4), two cases that were done and still marked in
 delivery (A3b and A16), and three behaviours with a guard in the suite and no
 row at all, of which one is the way back from an exclusion (B4b, B5b and C10).
+
+**On 2026-09-17 a red team walked the whole user path against this map**, and it
+found what a row-by-row pass structurally cannot: the cases nobody wrote a row
+for. One row was true in one reading and false in the other and was split (A14
+and A14b), and four cases had no row at all (A11b, B10, C10b, and the run that
+is asked to enable a repository it cannot reach). The lesson is that a map
+audited against the code agrees with the code, so the pass that finds a missing
+row has to start from a person doing something rather than from a row.
 
 What a held row still does NOT promise is that the behaviour has been seen in
 production. That is the campaign at the end of the plan, and until it has run,
@@ -93,9 +101,14 @@ edit from a person's once it is written (deferred, and recorded as a gap below).
 | A10 | Answers with no words at all ("...", a thumbs up) on the ticket | Nothing is dropped, because a ticket comment always carries its author's name in front of it, so the text is never wordless. The person is told their answer recorded nothing | A reaction is not a sentence, and a thumbs up usually means approval, so silence about it is the worst outcome | held, but its premise is unguarded: no test pins the author prefix on a single comment, so a tidy-up that drops it would turn this row into A10b in production without a red line |
 | A10b | The same on the dashboard or over MCP, where the raw reaction is stored | The run proceeds WITHOUT the repositories the question asked about, and the person is told exactly that before anything else | There the emoji is the whole answer, the run acts on it, and the person has no way of knowing that from the screen | held |
 | A11 | Writes prose we cannot read | Nothing recorded, the person is told, the question returns | Better asked twice than recorded wrongly | held |
+| A11b | Answers by quoting one of OUR earlier comments and writing underneath it | Our question is stripped out of their words, but our other comments are not, so a quoted sentence carrying a negation can turn a good answer into one we will not read. Nothing is recorded, the person is told exactly that, and the question returns | The two refusal rules read the whole reply on purpose, because a refusal is only itself when it is all the person sent, and what it writes outlives the run. Failing towards asking again is the cheap half of rule 1; reading half a quote as somebody's no is the expensive half | held |
+| A11c | Is told what to do next, for a question that listed a repository the catalog does not enable or cannot serve | They are NOT sent to write the path out, because the next run's matcher sees only the repositories it froze at its start and would read nothing. They are told that the catalog cannot serve those repositories, that somebody with access to the repositories screen has to enable them, and that naming one the next time the question is asked records it then | The run itself put that repository in front of them, so a remedy it cannot honour is worse than no remedy: it spends the person's second attempt and teaches them the system ignores them | held |
+| A11d | Is told to write the path of a repository the workflow's own policy keeps out | The path IS read by the next run, and that run then refuses the repository and says why, naming the limit rather than staying quiet. So the remedy costs them an attempt and buys an explanation, which is why it is not grouped with the case above | The two failures look alike from outside and are not: one ends in a sentence and one ends in silence. Only silence is the defect, and a remedy that reaches a spoken refusal is doing its job | held |
+| A11e | The same question listed one repository a later run can pick up and one it cannot | They get the sentence about writing a path, because it is true of the question as a whole, and the person who writes the path of the blocked one alone still meets silence | The wider sentence is the one that stays true for somebody. Telling everybody the route reaches nothing, on a question where it reaches one of the two, is the same false sentence with its sign flipped. This is a residual cost and it is named here rather than discovered later | open, deliberate |
 | A12 | Two people answer, and both comments arrive in one delivery | No entry is written, the trail records that an answer arrived, and the people are told | We cannot sign one decision with two names, and picking one of them is a fabrication | held |
 | A13 | An automation rule comments under a person's name | Treated as that person, and it is a known limit | The payload says a person wrote it, and we have no evidence to the contrary | open, documented in code |
-| A14 | Answers after the run has already died | The record keeps the answer, and the NEXT run reads the record rather than the sentence | This is the defect the record exists to end: a run that dies seconds after an answer used to lose it | held |
+| A14 | Answers, and the run dies before it can act on it | The record already has the answer, because it is written when the answer ARRIVES and before the resume, and the NEXT run reads the record rather than the sentence | This is the defect the record exists to end: a run that dies seconds after an answer used to lose it | held |
+| A14b | Answers after the question is no longer open, because the run was cancelled, the question expired, or a later round replaced it | Nothing is recorded, and the next run asks again. What the person is told comes from the run itself, which posts why it stopped or what it finished without, and the way back is the repository list rather than a reply | A comment can only be read as an answer while somebody is holding the question open. Threaded to one nobody is, it would be signed by a time window instead of by an answer, and that is the fabricated decision rule 1 puts below a repeated question | open, deliberate |
 | A15 | Answers a question that listed no repository | Naming a path is recorded. Refusing records nothing, and the words offered back are paths, never "none of these", which would mean nothing | Never send a person to a vocabulary the question in front of them did not offer | held |
 | A16 | Answers a question that asked them to narrow a set whose size they were told and whose names they were not shown | What they named is the whole answer for that subject, nothing is written about a name they never saw, and the question does not come back | They decided the scope. Twelve decisions about twelve repositories would be eleven fabrications | held |
 | A16b | The same person would like to see the names before narrowing | They do not, this round. The question says how many there are and asks which are essential | The names a question prints decide what a later "none" binds, so printing them is a change to what answers MEAN, and it is not being made in the same change as the loop fix | deferred, deliberate |
@@ -106,9 +119,10 @@ edit from a person's once it is written (deferred, and recorded as a gap below).
 
 Two things about how this is built, both read in the source rather than taken
 from a report, because they are what keep the rows below from being three
-separate answers to the same question. The authenticated route, the MCP tool and
-the read all go through one service (`services/work-scope`), so there is one
-decision table and not one per surface. And the write is a single
+separate answers to the same question. The authenticated route, the MCP tool,
+the read, and the path a person's ANSWER takes when it arrives all go through one
+service (`services/work-scope`), so there is one decision table and not one per
+surface. And the write is a single
 data-modifying statement that moves the version and the entries together, with
 the version row locked before any entry is touched, because production runs on
 a driver that cannot open an interactive transaction while the test driver can,
@@ -128,6 +142,7 @@ only in production.
 | B7 | Two people edit the same subject at once | The second is told it conflicted, and nothing is silently overwritten | held |
 | B8 | Edits a subject that carries no record | Told that this subject carries no record, rather than one being created behind them | held |
 | B9 | An agent edits through MCP | Today it is indistinguishable from a person downstream, so an agent can silence a question a person would have been asked | deferred, named gap |
+| B10 | Edits the record while a run is in flight | The edit is written and the run in flight ignores it, and the next run starts from the changed list. A run freezes what it may reach at its start, so excluding something stops the NEXT run rather than one already working. The repository catalog obeys the same rule, and a record obeying a different one would be the surprise | held |
 
 ## C. What the run does with the record
 
@@ -143,6 +158,7 @@ only in production.
 | C8 | The subject is a webhook delivery with no ticket | No record, and no question | deferred |
 | C9 | A schedule occurrence with no subject | No record | held |
 | C10 | The run FINISHES, having left a repository out | The run's comment on the ticket lists it as left out with the same sentence a halt would have used, says once what the reader can do about it, and says how many more it did not list. This is the only surface that reaches a person on a run that did not halt | held |
+| C10b | That comment is too long for the ticket to take | The repositories section goes whole rather than in part, and the comment says by name which sections it dropped. A reader who is told there was more looks for it; a reader shown a trimmed list reads the last line as the last repository | held |
 
 ## D. What the agent is allowed to see
 

@@ -1467,6 +1467,28 @@ the symptom.
   rule it implements is that an answer committed by somebody who wrote none of
   its words records nothing.
 
+- A57. An answer that arrives after the question is no longer open is lost
+  whole, and that is the decision rather than the gap. The final red team walked
+  it and the chain holds: the only comment ingress reads
+  `getResumableClarificationForTicket`, which matches `pending` or `answered`
+  rows whose run still holds a `bound` claim
+  (`apps/worker/src/db/repositories/clarification-hooks.ts:143-145`), the
+  by-id paths refuse a row that is not `pending`
+  (`apps/worker/src/services/clarifications/answer-core.ts:282-285`), and
+  `recordRepositoryAnswer` has exactly one production call site behind that
+  gate. So a reply typed after a cancel, an expiry, or a later round writes no
+  entry, no trail row and no comment, and the next run asks again. Recording it
+  anyway is the change we are NOT making. What would justify the write is
+  somebody holding the question open; all that is left in this case is a comment
+  inside a time window, and a window signs decisions that nobody made. That is
+  the one failure A34 puts below being asked twice, and the same evidence rule
+  already governs a bare "no" on the ticket channel. The person is not left dark
+  either way: the run that stopped posts why it stopped, the run that finished
+  posts what it finished without (C10), and both now carry a way back that names
+  the lever. The row is A14b on the behaviour map. What would change the answer
+  is a thread from a comment to the question it replies to, which Jira does not
+  give us today and which A56 also waits on.
+
 ## Architecture findings and their disposition
 
 A depth audit on 2026-09-16 traced one fact end to end: a person names a
@@ -1690,6 +1712,29 @@ reported.
    in production, because that flag is stamped after the block returns, and only
    the executor's own hand-stamped fixtures made it look right.
 
+   The final red team, run on 2026-09-17 over the whole user path rather than
+   over a diff, found three more. Two were real and are fixed. The first is the
+   founding complaint itself, reached by a door nobody had opened: an answer to
+   the which repository question that the reader cannot resolve left the record
+   empty, and the code suppressed the explaining sentence on the belief that
+   answering a selection question settles it whatever it recorded. The SQL that
+   belief rests on counts only answers of kind `none` or `repositories`
+   (`db/repositories/work-scope.ts:102`), so neither the flag nor the sentence
+   happened and the identical question came back in silence. A comment asserting
+   what the statement beside it does not do is the same failure as a stale
+   duplicate, and it is harder to see because there is only one copy. The second
+   is that the way back from an exclusion named no way: the sentence promised the
+   list could change and pointed at nothing, while the sentence directly below it
+   already named a screen. The third, that an answer arriving after the question
+   closed is lost whole, is TRUE and is the decision rather than the gap (A57,
+   row A14b).
+
+   What is worth carrying from this round is the shape of the pass, not its
+   findings. The row-by-row audit run the day before checked every row against
+   the code and agreed with the code, which is exactly what an audit anchored on
+   rows must do. Every one of these three sat in a case no row described. A map
+   is only tested by somebody starting from a person doing something.
+
    A zero-blocker pass has still never happened on this stage.
 5. **Not yet.** The tree is not frozen while a lane is still writing.
 6. **Not yet.**
@@ -1702,11 +1747,18 @@ reported.
 9. **Held.** See the condition itself for why it narrowed.
 10. **Not yet.**
 
-### One deepening found while building, for the design pass
+### One deepening found while building, and since done
 
-Not done, and deliberately not done at freeze time. Recorded here because it was
-found by the person it cost, which is the only reliable source for this kind of
-finding.
+DONE in the design pass after the freeze, as `readWorkScopeFacts` and its
+connected twin (`apps/worker/src/db/repositories/work-scope.ts`). The three
+combiners now take one read: the run start step, the resume inside
+`resolveHumanRepositoryExpansionStep`, and the read after an answer. The per-fact
+reads stay, because each carries a rule that took a defect to get right and the
+pure database tests sit on them one at a time, so the new read composes them
+rather than restating them in one statement. Three connected twins nothing
+reached any more were deleted. The rest of this section is kept as it was
+written, because the measurement is the argument and it is worth reading before
+the next interface of this shape is designed.
 
 `loadRunStartSettingsStep` destructures four named reads from
 `db/repositories/work-scope.ts` and runs them together, never skipping any. The
@@ -1761,6 +1813,10 @@ Rules that bind the whole campaign, all learned the expensive way:
 | P9 | A Jira read failing mid answer | Answer, then make the read fail for one delivery | Any repository path | The delivery holds rather than deciding, the hold costs none of the three attempts, and it is bounded by its window with a give-up comment | A12, rule 1 |
 | P10 | The agent's channels | Any run that reaches research after a repository question | Nothing | Read the run's prompt and its memory file: the question and what was left out are present, and no sentence about reversing an exclusion is in either | D1, D2, D4 |
 | P11 | The reversal actually works | After P7, edit the record to take the exclusion back, then start a new run | Nothing | The run uses the repository. A promise that a decision is reversible is worth nothing until a run proves it | rule 4, B5, B6 |
+| P12 | A person names a repository nobody asked them about, and it is disabled | A ticket with no question open, and a repository the catalog holds but does not enable | The path written in an ordinary comment | The next run reads the ticket text, cannot use the repository, and SAYS SO to the person. The record refuses a derived key without asking anybody, which is right, but a refusal nobody hears is the silence this feature exists to end. If the run says nothing, that is the finding | A3, A5, rule 6 |
+| P13 | The narrowing question is asked once | A ticket whose discovery finds more repositories than the question may list | Name two of them | What they named is the whole answer, nothing is recorded about a name they were never shown, and the same question does not come back on the next run | A16, rule 1 |
+| P14 | A person answers the which repository question with words we cannot resolve | A ticket with the selection question open, on a deployment holding at least two repositories | `api and web` | A comment arrives saying nothing in that answer named a repository and what to write instead. The question may come back; the silence may not. This is the founding complaint of the whole feature and the only recipe that reproduces it directly | A11, rule 1 |
+| P15 | A person answers after the question has closed | A ticket with a repository question open, then cancel the run | `github:acme/api` posted after the cancel | Nothing is recorded and the next run asks again, which is the decision. What must also be observed is that the ticket already carries the run's own comment saying why it stopped, so the person is not left with no account of anything. If that comment is missing, the decision loses its footing and the row changes | A14b |
 
 P11 is the one that matters most, because everything else in condition 3 is a
 sentence and that is the only step that turns the sentence into a fact.
