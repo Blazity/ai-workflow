@@ -734,6 +734,42 @@ describe("what the run says when the selection question is silenced", () => {
         "and this run kept to the repositories already chosen on this work rather than asking again.",
     );
   });
+
+  // Row B6: a person may take their entries out through the edit surface, and
+  // the next run decides those repositories from scratch. What silences the
+  // question does NOT come out with them, because it lives in the trail and
+  // records that somebody was asked and answered, which removing an entry does
+  // not unmake. So the run reaches this sentence holding an answer and no
+  // selection at all, and the wording above would tell the person who just
+  // emptied the list that the run kept to choices that no longer exist.
+  it("says what is true when the record carries an answer and no selection at all", async () => {
+    mocks.readSelectionAnswered.mockResolvedValue(true);
+    const result = await runStep({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Fix the thing",
+        description: "Touches acme/web, acme/api, acme/docs, acme/infra and acme/ops.",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+      },
+      workScope: { subjectKey: SUBJECT, scope: scope([]), selectionAnswered: true },
+    });
+
+    expect(result.workScopeAsk).toBeUndefined();
+    expect(result.selectedRepositories ?? []).toEqual([]);
+    const addition = result.promptAdditions?.find(
+      (entry_) => entry_.title === "Repositories left out",
+    );
+    expect(addition?.content).toContain(
+      "The ticket names github:acme/web, github:acme/api, github:acme/docs, github:acme/infra, " +
+        "github:acme/ops, and this run did not ask which of them to start from because this work " +
+        "already carries an answer to that question.",
+    );
+    // And never the claim it cannot support: there are no chosen repositories
+    // on this run to have kept to.
+    expect(addition?.content).not.toContain("kept to the repositories already chosen");
+  });
 });
 
 describe("what a person reads when the run stops to ask", () => {
@@ -809,8 +845,9 @@ describe("what a person reads when the run stops to ask", () => {
         " so the run started without it.",
     );
     expect(result.message).toContain(
-      "Excluding a repository is not final: this work's repository list can be changed, " +
-        "and the next run starts from the changed list.",
+      "Excluding a repository is not final: this work's repository list can be changed" +
+        " through the work scope API or the work_scope.edit tool," +
+        " and the next run starts from the changed list.",
     );
   });
 
@@ -1126,7 +1163,8 @@ describe("what the person reads when the run leaves a repository out and carries
         " so the run started without it.",
     );
     expect(repositories).toContain(
-      "Excluding a repository is not final: this work's repository list can be changed," +
+      "Excluding a repository is not final: this work's repository list can be changed" +
+        " through the work scope API or the work_scope.edit tool," +
         " and the next run starts from the changed list.",
     );
     // And still not in the agent's instruction channel, on the same run.

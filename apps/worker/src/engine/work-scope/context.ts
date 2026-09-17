@@ -331,10 +331,17 @@ export function consumeWorkScopeAsk<Ask>(carrier: { workScopeAsk?: Ask }): Ask |
 
 /** The way back from a person's exclusion, in the same place the exclusion is
  *  reported: a person who reads why the run started without a repository reads
- *  here that the choice is theirs to change. It names a list rather than a
- *  screen, so it stays true until the panel ships and gains a link then. */
+ *  here that the choice is theirs to change, and what to do to change it.
+ *
+ *  It names the two edit surfaces THIS delivery ships, the work scope API
+ *  (`PATCH /api/v1/work-scope`) and the `work_scope.edit` tool, and not a
+ *  screen. Both halves of that matter. A way back a reader cannot take today is
+ *  not a way back, so the sentence has to name a lever that exists now; and the
+ *  dashboard panel is not in this delivery, so naming one would send the reader
+ *  to a page that is not there. The panel is what replaces these two names with
+ *  a link on the day it ships. */
 const EXCLUSION_RECOVERY_NOTE =
-  "Excluding a repository is not final: this work's repository list can be changed, and the next run starts from the changed list.";
+  "Excluding a repository is not final: this work's repository list can be changed through the work scope API or the work_scope.edit tool, and the next run starts from the changed list.";
 
 /** The second fact, when the listing carries it. A repository that is excluded
  *  AND cannot be served today is two facts, and a reader given only the first

@@ -1,3 +1,4 @@
+import type { WorkScopeAskReason } from "@shared/contracts";
 import { scrubForPublication } from "./publication-scrub.js";
 
 /**
@@ -201,6 +202,71 @@ export const ANSWER_NOT_RECORDED_REASONS = Object.keys(
 ) as AnswerNotRecordedReason[];
 
 /**
+ * Could a later run pick a repository this question listed up out of a comment,
+ * answered one ask reason at a time.
+ *
+ * THE MAP IS THE LIST, the same rule `ANSWER_NOT_RECORDED_WHY` above is written
+ * to: a fifth ask reason cannot be declared without somebody answering this
+ * question for it, because the type will not let it. A list of the false ones
+ * would leave a new reason silently true, and silently true here is the
+ * sentence that sends a person down a route that cannot work.
+ *
+ * ONE ROUTE IS BEING JUDGED, and it is the one the sentence promises: a person
+ * writes a repository's full path in a comment, and the NEXT run reads the
+ * ticket and picks it up. That run matches paths against the repositories it
+ * FROZE at its start (`ticketText` and `mentionsRepositoryPath` in
+ * `engine/pre-sandbox/steps/repo-selection.ts`, scanning `scopedRepositories`),
+ * so the only question per reason is whether a repository asked about for that
+ * reason is in that list.
+ */
+const A_LATER_RUN_CAN_PICK_IT_UP: Record<WorkScopeAskReason, boolean> = {
+  /** NO. The frozen list IS the enabled list, so a repository the catalog does
+   *  not enable is not in it: the path a person writes matches nothing, and
+   *  nothing is said a second time. Only the catalog can change that. */
+  not_enabled: false,
+  /** NO, and by a SECOND mechanism on the same path, which is why it lands here
+   *  beside `not_enabled` rather than with the two below. The matcher scans
+   *  `scopedRepositories`, which descends from `usableRepositories`, so a
+   *  repository this deployment enables but cannot serve (no default branch, as
+   *  the catalog builds usability today) is filtered out before one path is
+   *  compared. Enabled-but-unserveable and not-enabled are different facts
+   *  about the catalog, and a later delivery may well want to say different
+   *  things about them; this predicate answers only whether writing the path
+   *  out reaches anything, and for both the answer is no. */
+  unusable: false,
+  /** YES. The repository is one this deployment holds and can serve, so it is
+   *  in the frozen list and the path is read. What kept it out of this run was
+   *  the trigger's policy, and a policy binds which repositories the RUN may
+   *  take, never which paths the matcher can see. */
+  outside_policy: true,
+  /** YES. Every repository a selection question lists is one the run could have
+   *  taken, which is what made it a choice worth putting to somebody at all. */
+  selection: true,
+};
+
+/**
+ * Could a later run pick up ANY of the repositories this question listed, if
+ * somebody wrote its full path in a comment?
+ *
+ * ANY, not every, and the direction is deliberate. A question that listed one
+ * repository the next run can match and one it cannot still has a working path
+ * route, and telling that person it reaches nothing would be the same false
+ * sentence with its sign flipped. What is left is the mixed question, where a
+ * person who writes the path of the blocked one alone gets silence; this
+ * decides which of the two sentences is true of the question as a whole, and
+ * the wider one is the one that stays true for somebody.
+ *
+ * An empty or absent list answers false, and nothing reads that answer: it is
+ * the question that listed no repositories at all, which the formatter sends
+ * down its other branch.
+ */
+export function aLaterRunCanPickUpAskedRepositories(
+  asked: readonly { askedBecause: WorkScopeAskReason }[] | null | undefined,
+): boolean {
+  return (asked ?? []).some((repository) => A_LATER_RUN_CAN_PICK_IT_UP[repository.askedBecause]);
+}
+
+/**
  * Posted when the answer reached the run and left no repository decision behind
  * it, which is a thing the person who answered cannot see and would otherwise
  * only learn by being asked the same question again.
@@ -236,6 +302,22 @@ export const ANSWER_NOT_RECORDED_REASONS = Object.keys(
  * shapes, this is the fuller explanation and it is still true for them, so it
  * is the one they get.
  *
+ * AND A SECOND PERSON, REACHED THROUGH A DIFFERENT DOOR: the one WE named it
+ * to. The case above is a repository the PERSON wrote down and this deployment
+ * does not hold. This one is a repository the run itself put in front of them,
+ * because a question may list one the catalog does not enable or cannot serve.
+ * The path route is false for that person too, and for the same mechanical
+ * reason: the next run matches paths against the repositories it froze at its
+ * start, and such a repository is not among them. Sending them off to write a
+ * path spends their second attempt on a route that cannot work and says
+ * nothing at all when it fails, which is worse than the first case, because
+ * there the person picked the name and here we did.
+ * `question.aLaterRunCanPickThemUp` is that missing fact, and where it is
+ * false the sentence names the catalog instead, which is the only thing that
+ * can change the answer. `A_LATER_RUN_CAN_PICK_IT_UP` above answers that for
+ * each ask reason in turn, and says there why `unusable` sits with
+ * `not_enabled`.
+ *
  * ONE KEYWORD, AND IT IS THE ONE THE QUESTION TEACHES. The expansion question
  * says `Reply "none"` (`engine/repository-discovery/runner.ts`), so this says
  * "none" too. A second phrase for the same act would teach that the exact words
@@ -248,7 +330,13 @@ export const ANSWER_NOT_RECORDED_REASONS = Object.keys(
  */
 export function formatAnswerNotRecordedComment(
   reason: AnswerNotRecordedReason,
-  question: { listedRepositories: boolean },
+  question: {
+    /** Did the question put repository keys in front of the person at all? */
+    listedRepositories: boolean;
+    /** Could a later run's path matcher pick those repositories up out of a
+     *  comment? Read only where `listedRepositories` is true. */
+    aLaterRunCanPickThemUp: boolean;
+  },
 ): string {
   // What happens to this run. The same for every reason but one: a wordless
   // answer to a question that named repositories ends the run's own asking, and
@@ -259,9 +347,13 @@ export function formatAnswerNotRecordedComment(
       ? "Your answer reached the run, which is continuing without the repositories the question asked about."
       : "Your answer reached the run, which is continuing.";
 
-  // The route that works, written from what the next run actually reads.
+  // The route that works, written from what the next run actually reads. The
+  // middle branch is the one the run itself can close: it listed repositories,
+  // and none of them is one a written path could reach.
   const namingWorks = question.listedRepositories
-    ? "To use one of them after all, write its full path in a comment here: the next run reads this ticket, comments and all, and picks it up."
+    ? question.aLaterRunCanPickThemUp
+      ? "To use one of them after all, write its full path in a comment here: the next run reads this ticket, comments and all, and picks it up."
+      : onlyTheCatalogCanOpenThese
     : "Write the full path of the repository this work should use in a comment here, for example github:acme/app, and the next run reads this ticket and picks it up.";
   // The route that does not exist, said plainly instead of implied. Only worth
   // saying where the question offered repositories to decline.
@@ -301,6 +393,19 @@ const ASKED_AGAIN_ON_A_LATER_RUN =
  *  later run, which is where naming it records it. */
 const checkTheNameOrAddIt =
   "Check the name: if that repository should be here, somebody with access to the repositories screen can add or enable it, and naming it the next time the question is asked records it then.";
+
+/** The way out when nothing the question listed is a repository a written path
+ *  could reach. Two halves, like `checkTheNameOrAddIt`, and the same two
+ *  routes, minus the name: there is nothing for this person to check, because
+ *  WE put those repositories in front of them. What stands between them and
+ *  using one is the deployment's own repository list, so that is what the
+ *  sentence names, exactly as `catalogCannotServeNote`
+ *  (`engine/work-scope/context.ts`) names it for the same repositories on the
+ *  other channel. "The repositories screen" is the name this file has used
+ *  since `checkTheNameOrAddIt`, and one name for one place is worth more here
+ *  than matching the other file's word for it. */
+const onlyTheCatalogCanOpenThese =
+  "Writing one of their paths in a comment here reaches nothing, because the catalog cannot serve them as things stand: somebody with access to the repositories screen has to enable them there before any run can use one, and naming one the next time the question is asked records it then.";
 
 /** What to do differently when it is asked again, for the reasons that are
  *  about HOW the answer arrived rather than what it said. */

@@ -11,16 +11,18 @@ import { logger } from "../../infra/logger.js";
 import {
   answerClarificationAndResume,
   answerConnectedClarificationAndResume,
+  MAX_ANSWER_LENGTH,
+  retireConnectedClarificationForGoneTicket,
+  retireClarificationForGoneTicket,
+} from "./answer-core.js";
+import {
   commentsCoverAnswerWindow,
   composedAnswerActorId,
   composedAuthorCount,
   isComposedAnswerActor,
-  MAX_ANSWER_LENGTH,
   qualifyingComments,
   readBotAccountId,
-  retireConnectedClarificationForGoneTicket,
-  retireClarificationForGoneTicket,
-} from "./answer-core.js";
+} from "./answer-authorship.js";
 import {
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,

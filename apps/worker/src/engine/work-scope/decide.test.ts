@@ -1395,6 +1395,88 @@ describe("decideWorkScope decision table", () => {
         trailTruncated: 0,
       });
     });
+
+    /**
+     * The OTHER way back from an exclusion, and the one nothing pinned.
+     *
+     * Taking an exclusion back has two routes, and the recovery sentence a
+     * person reads promises both of them by promising the list can change.
+     * `services/work-scope/record.test.ts` walks the edit surface. This walks
+     * the one a person is actually handed: the run asks about the repository
+     * they took off this work, they name it, and their answer overwrites their
+     * own earlier decision. The named branch writes `selected` without looking
+     * at what the entry already said, which is the behaviour rather than an
+     * oversight, so the assertion is the whole decision and not just the state.
+     *
+     * The store agrees, which is what makes the promise true past this layer:
+     * `overwriteAllowed` (`db/repositories/work-scope.ts`) admits a proposed
+     * entry whose `origin_rank` is less than or equal to the stored one, and
+     * `person` over `person` is equal.
+     */
+    it("a named key the same person had excluded: the answer overwrites the exclusion", () => {
+      const decision = decide(
+        context({
+          actor: person,
+          policy: null,
+          scope: scopeOf(
+            entry({
+              repositoryKey: API,
+              state: "excluded",
+              origin: "person",
+              rationale: DECLINED_OUTSIDE_POLICY,
+              decidedBy: person,
+            }),
+          ),
+        }),
+        {
+          kind: "answered",
+          clarificationId: "clar-9",
+          // Exactly what the discovery protocol asks for a repository a person
+          // excluded that the catalog can still serve: the meaning of the
+          // question is the selection itself, so a "none" leaves the exclusion
+          // standing and naming it writes the new decision
+          // (`engine/repository-discovery/protocol.ts`).
+          asked: [{ repositoryKey: API, askedBecause: "selection" }],
+          answer: { kind: "repositories", repositoryKeys: [API] },
+        },
+      );
+
+      const reselected = {
+        repositoryKey: API,
+        state: "selected",
+        origin: "person",
+        rationale: NAMED,
+        decidedBy: person,
+        decidedAt: now,
+      };
+      expect(decision).toEqual({
+        plan: {
+          upserts: [{ entry: reselected, replacesExpired: false }],
+          deletes: [],
+          trail: [
+            {
+              kind: "question_answered",
+              clarificationId: "clar-9",
+              answer: { kind: "repositories", repositoryKeys: [API] },
+              answeredBy: person,
+            },
+            // `previousState` is what makes the reversal legible afterwards: a
+            // trail row saying `null` here would read as a first decision.
+            {
+              kind: "entry_written",
+              entry: reselected,
+              previousState: "excluded",
+              clarificationId: "clar-9",
+            },
+          ],
+        },
+        attach: [],
+        ask: [],
+        refused: [],
+        editRejected: [],
+        trailTruncated: 0,
+      });
+    });
   });
 
   describe("edited", () => {

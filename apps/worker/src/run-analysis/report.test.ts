@@ -137,7 +137,8 @@ describe("run analysis report", () => {
         { repositoryKey: "github:acme/api", reason: "somebody excluded it on this work." },
       ],
       repositoryRecoveryNotes: [
-        "Excluding a repository is not final: this work's repository list can be changed," +
+        "Excluding a repository is not final: this work's repository list can be changed" +
+          " through the work scope API or the work_scope.edit tool," +
           " and the next run starts from the changed list.",
       ],
       researchResult: { body: "Plan" },
@@ -156,7 +157,8 @@ describe("run analysis report", () => {
     // it is not a repository, it is what the reader can do about one.
     expect(repositories).toContain("- github:acme/api · left out · somebody excluded it");
     expect(repositories).toContain(
-      "\nExcluding a repository is not final: this work's repository list can be changed," +
+      "\nExcluding a repository is not final: this work's repository list can be changed" +
+        " through the work scope API or the work_scope.edit tool," +
         " and the next run starts from the changed list.",
     );
   });

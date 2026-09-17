@@ -39,7 +39,8 @@ const OWNER: ActiveRunOwner = {
 const REFUSAL =
   "github:acme/api was excluded on this work, so the run started without it.";
 const REVERSAL =
-  "Excluding a repository is not final: this work's repository list can be changed," +
+  "Excluding a repository is not final: this work's repository list can be changed" +
+  " through the work scope API or the work_scope.edit tool," +
   " and the next run starts from the changed list.";
 
 describe("postClarificationQuestionsCommentStep", () => {

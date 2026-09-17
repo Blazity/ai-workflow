@@ -4,6 +4,9 @@ import { readRepositoryAnswer } from "./answer.js";
 // The real comment builder, so a test can send the question back in the form a
 // person was actually shown rather than the form we stored.
 import { formatClarificationQuestionsComment } from "../support/clarification-comment-format.js";
+// The real recovery sentence, so this file cannot drift into holding a stale
+// copy of a production string and proving something about nothing.
+import { exclusionRecoveryNotes } from "./context.js";
 
 const catalogKeys = [
   "github:acme/api",
@@ -341,5 +344,38 @@ describe("readRepositoryAnswer", () => {
 
   it("is unrecognised when the answer names a repository nothing holds", () => {
     expect(read("api and the old acme/legacy-thing")).toEqual({ kind: "unrecognised" });
+  });
+
+  // Row A11b of the behaviour map, and it pins a COST WE CHOSE rather than an
+  // accident. `withoutQuotedQuestions` takes our QUESTIONS out of a reply and
+  // nothing else, so one of our other comments quoted back is still in the text
+  // the two refusal rules read, on purpose: a refusal is only itself when it is
+  // all the person sent, and what it writes outlives the run. The recovery
+  // sentence carries "is not final", so a person who quotes it and names a
+  // repository underneath has a perfectly good answer read as a no to the very
+  // repository they just named, and it is dropped.
+  //
+  // THE CHEAP FAILURE IS THE POINT. Asking the same question a second time
+  // costs one round; reading half of our own quote as somebody's no writes an
+  // exclusion in their name that nothing undoes until they go and find it
+  // (A34). This test holds that trade in place, so the day the quote is
+  // stripped as well it is changed deliberately rather than lost quietly.
+  it("asks again when a person quotes our recovery sentence and names a repository under it", () => {
+    const [recovery] = exclusionRecoveryNotes(["github:acme/api"], {
+      enabledKeys: ["github:acme/api"],
+      unusableKeys: null,
+    });
+    // The control: without a word of negation in the quoted sentence there
+    // would be nothing here to pin.
+    expect(recovery).toContain("is not final");
+
+    expect(
+      read(
+        `${recovery}\n\ngithub:acme/api`,
+        catalogKeys,
+        ["github:acme/api"],
+        [PLAIN_QUESTION],
+      ),
+    ).toEqual({ kind: "unrecognised" });
   });
 });

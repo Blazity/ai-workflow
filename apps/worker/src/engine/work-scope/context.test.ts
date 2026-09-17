@@ -187,7 +187,7 @@ describe("createRunWorkScopeRecorder", () => {
     });
 
     expect(recorder.recoveryNotes).toEqual([
-      "Excluding a repository is not final: this work's repository list can be changed, and the next run starts from the changed list.",
+      "Excluding a repository is not final: this work's repository list can be changed through the work scope API or the work_scope.edit tool, and the next run starts from the changed list.",
     ]);
     // Two refusals, and the sentence for a person is not among them.
     expect(recorder.notes).toHaveLength(2);
@@ -296,7 +296,7 @@ describe("createRunWorkScopeRecorder", () => {
     });
 
     expect(recorder.recoveryNotes).toEqual([
-      "Excluding a repository is not final: this work's repository list can be changed, and the next run starts from the changed list.",
+      "Excluding a repository is not final: this work's repository list can be changed through the work scope API or the work_scope.edit tool, and the next run starts from the changed list.",
     ]);
   });
 
@@ -332,7 +332,7 @@ describe("createRunWorkScopeRecorder", () => {
 
     expect(recorder.notes).toHaveLength(1);
     expect(recorder.recoveryNotes).toEqual([
-      "Excluding a repository is not final: this work's repository list can be changed, and the next run starts from the changed list.",
+      "Excluding a repository is not final: this work's repository list can be changed through the work scope API or the work_scope.edit tool, and the next run starts from the changed list.",
     ]);
   });
 

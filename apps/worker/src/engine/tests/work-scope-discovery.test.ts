@@ -911,7 +911,8 @@ describe("a subject whose selection question has already been answered", () => {
         "github:acme/api was excluded on this work by Ada Lovelace on 2026-09-10." +
         " Repository discovery proposed nothing else this run can use," +
         " so it has no repository to work on." +
-        " Excluding a repository is not final: this work's repository list can be changed," +
+        " Excluding a repository is not final: this work's repository list can be changed" +
+        " through the work scope API or the work_scope.edit tool," +
         " and the next run starts from the changed list.",
       blame: "work_scope",
     });

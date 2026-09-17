@@ -1214,8 +1214,21 @@ export function selectRepositoriesFromMetadata(input: {
         // something to change.
         const untaken = decidable.filter((key) => !selected.has(key));
         if (untaken.length > 0) {
+          // TWO SENTENCES, BECAUSE THE RUN CAN BE IN TWO STATES HERE AND ONLY
+          // ONE OF THEM HAS CHOICES TO HAVE KEPT TO. A person may take their
+          // entries out through the edit surface, and the question stays
+          // silenced afterwards because what silences it is the TRAIL, which
+          // records that somebody was asked and answered; removing an entry
+          // does not unmake that. So the record can hold an answer and no
+          // selection at all, and "kept to the repositories already chosen"
+          // then names choices that do not exist, which reads to the person who
+          // just emptied the list as the run ignoring them. The suppression is
+          // right and stays; it is the sentence that has to be true in both
+          // states.
           record.note(
-            `The ticket also names ${untaken.join(", ")}, and this run kept to the repositories already chosen on this work rather than asking again.`,
+            selected.size > 0
+              ? `The ticket also names ${untaken.join(", ")}, and this run kept to the repositories already chosen on this work rather than asking again.`
+              : `The ticket names ${untaken.join(", ")}, and this run did not ask which of them to start from because this work already carries an answer to that question.`,
           );
         }
       }

@@ -948,7 +948,12 @@ describe("resumeClarificationFromComments writing a repository answer to the rec
     // which is the next asking: this clarification is answered, and answering
     // it again under this comment reaches nothing.
     expect(posted).toContain('answer "none" the next time the question is asked');
-    expect(posted).toContain("write its full path in a comment here");
+    // And NOT the path route, because this question was raised about a
+    // repository the catalog does not enable: the next run matches written
+    // paths against the repositories it froze at its start, so a person sent to
+    // write this one out would spend a second attempt on silence.
+    expect(posted).not.toContain("write its full path in a comment here");
+    expect(posted).toContain("the repositories screen");
   });
 
   it("tells the person when a bare question's answer left nothing behind, in the words that question used", async () => {

@@ -11,6 +11,7 @@ import {
   formatClarificationQuestionsComment,
   formatClarificationResumeFailedComment,
   formatClarificationUnreadableNudgeComment,
+  aLaterRunCanPickUpAskedRepositories,
 } from "./comment-format.js";
 
 const DASHBOARD = "https://app/ticket/AWT-42?run=wrun_9";
@@ -95,13 +96,15 @@ describe("formatClarificationQuestionsComment", () => {
       aiColumnName: "AI",
       expiresAtIso: null,
       repositoryRecoveryNotes: [
-        "Excluding a repository is not final: this work's repository list can be changed," +
+        "Excluding a repository is not final: this work's repository list can be changed" +
+          " through the work scope API or the work_scope.edit tool," +
           " and the next run starts from the changed list.",
       ],
     });
 
     expect(body).toContain(
-      "Excluding a repository is not final: this work's repository list can be changed,",
+      "Excluding a repository is not final: this work's repository list can be changed" +
+        " through the work scope API or the work_scope.edit tool,",
     );
     // Under the question it is about, and above the instructions, because it
     // widens what an answer could be rather than explaining how to send one.
@@ -348,13 +351,21 @@ describe("rule 6: every sentence we write after the question is answered", () =>
   function closedQuestionComments(): Array<{ where: string; body: string }> {
     const comments: Array<{ where: string; body: string }> = [];
     for (const reason of ANSWER_NOT_RECORDED_REASONS) {
-      // Both shapes of question, because what a person was shown decides which
-      // words are offered back to them.
+      // Every shape of question, because what a person was shown decides which
+      // words are offered back to them, and whether a written path could reach
+      // any of it decides whether those words are true.
       for (const listedRepositories of [true, false]) {
-        comments.push({
-          where: `answer not recorded, ${reason}, question listed repositories: ${listedRepositories}`,
-          body: formatAnswerNotRecordedComment(reason, { listedRepositories }),
-        });
+        for (const aLaterRunCanPickThemUp of [true, false]) {
+          comments.push({
+            where:
+              `answer not recorded, ${reason}, question listed repositories:` +
+              ` ${listedRepositories}, pickable: ${aLaterRunCanPickThemUp}`,
+            body: formatAnswerNotRecordedComment(reason, {
+              listedRepositories,
+              aLaterRunCanPickThemUp,
+            }),
+          });
+        }
       }
     }
     comments.push(
@@ -386,8 +397,13 @@ describe("rule 6: every sentence we write after the question is answered", () =>
   it("tells a person what does work, rather than paying for the closed route with silence", () => {
     for (const reason of ANSWER_NOT_RECORDED_REASONS) {
       for (const listedRepositories of [true, false]) {
-        const body = formatAnswerNotRecordedComment(reason, { listedRepositories });
-        expect(`${reason} :: ${body}`).toMatch(LATER_READER);
+        for (const aLaterRunCanPickThemUp of [true, false]) {
+          const body = formatAnswerNotRecordedComment(reason, {
+            listedRepositories,
+            aLaterRunCanPickThemUp,
+          });
+          expect(`${reason} :: ${body}`).toMatch(LATER_READER);
+        }
       }
     }
   });
@@ -401,6 +417,7 @@ describe("rule 6: every sentence we write after the question is answered", () =>
       fileURLToPath(new URL(`../../../../dashboard/app/(cockpit)/repositories/${file}`, import.meta.url));
     const comment = formatAnswerNotRecordedComment("no_such_repository", {
       listedRepositories: false,
+      aLaterRunCanPickThemUp: false,
     });
 
     expect(comment).toContain("the repositories screen can add or enable it");
@@ -410,6 +427,56 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     // whether it is enabled.
     expect(existsSync(screen("import-dialog.tsx"))).toBe(true);
     expect(readFileSync(screen("repositories-screen.tsx"), "utf8")).toContain("enabled");
+  });
+
+  it("does not send a person to write a path for a repository no run could read back", () => {
+    // The run itself put these in front of the person: a question may list a
+    // repository the catalog does not enable or cannot serve. The next run
+    // matches written paths against the repositories it froze at its start, so
+    // the path route named in the ordinary sentence would swallow their second
+    // attempt and say nothing. What is true instead is the catalog.
+    const blocked = formatAnswerNotRecordedComment("no_repository_named", {
+      listedRepositories: true,
+      aLaterRunCanPickThemUp: false,
+    });
+
+    expect(blocked).toContain("reaches nothing");
+    expect(blocked).toContain("the repositories screen");
+    expect(blocked).not.toContain("write its full path in a comment here");
+
+    // The control, and the whole reason the fact is carried rather than
+    // assumed: the ordinary question, whose repositories a later run CAN pick
+    // up, still gets the sentence that is true for it.
+    const ordinary = formatAnswerNotRecordedComment("no_repository_named", {
+      listedRepositories: true,
+      aLaterRunCanPickThemUp: true,
+    });
+
+    expect(ordinary).toContain("write its full path in a comment here");
+    expect(ordinary).not.toContain("reaches nothing");
+  });
+
+  it("reads the closed path route off the reason each repository was asked about", () => {
+    // The two reasons a question raises about a repository this deployment
+    // cannot open (`engine/work-scope/decide.ts`). Neither is in the list the
+    // next run matches paths against: `not_enabled` because that list IS the
+    // enabled list, `unusable` because the matcher scans the usable subset of
+    // it.
+    expect(aLaterRunCanPickUpAskedRepositories([{ askedBecause: "not_enabled" }])).toBe(false);
+    expect(aLaterRunCanPickUpAskedRepositories([{ askedBecause: "unusable" }])).toBe(false);
+    // The other two name a repository the deployment holds and can serve, so a
+    // path written in a comment is read and the sentence stays as it was.
+    expect(aLaterRunCanPickUpAskedRepositories([{ askedBecause: "selection" }])).toBe(true);
+    expect(aLaterRunCanPickUpAskedRepositories([{ askedBecause: "outside_policy" }])).toBe(true);
+    // ANY, not every: one repository a written path can reach keeps the
+    // ordinary sentence true of the question as a whole, and the alternative
+    // would be the same false sentence with its sign flipped.
+    expect(
+      aLaterRunCanPickUpAskedRepositories([
+        { askedBecause: "not_enabled" },
+        { askedBecause: "selection" },
+      ]),
+    ).toBe(true);
   });
 
   it("does tell a person to reply while the question is still open, which is the same rule reaching the other answer", () => {
