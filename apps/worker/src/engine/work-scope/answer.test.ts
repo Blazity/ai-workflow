@@ -557,6 +557,37 @@ describe("readRepositoryAnswer counts the word against the list", () => {
   it("reads `all` as every repository however many the question listed", () => {
     expect(readAsked("all", CATALOG)).toEqual({ kind: "repositories", repositoryKeys: CATALOG });
   });
+
+  // Round 6, R5. The words were missing from the map, so the least ambiguous
+  // reply there is came back unreadable and the question was asked again for
+  // nothing. "obydwa" and "obydwie" are how "both" is written here at least as
+  // often as "oba", and a question listing three is answered "wszystkie trzy".
+  it.each(["obydwa", "obydwie", "Obydwa."])(
+    "reads %j as the two repositories a question listing two asked about",
+    (answer) => {
+      expect(readAsked(answer, ["github:acme/infra", "github:acme/web"])).toEqual({
+        kind: "repositories",
+        repositoryKeys: ["github:acme/infra", "github:acme/web"],
+      });
+    },
+  );
+
+  it("reads `wszystkie trzy` as the three repositories a question listing three asked about", () => {
+    const three = ["github:acme/infra", "github:acme/web", "github:acme/api"];
+    expect(readAsked("wszystkie trzy", three)).toEqual({
+      kind: "repositories",
+      repositoryKeys: three,
+    });
+  });
+
+  // And they count like the words beside them: a number that disagrees with the
+  // list decides nothing.
+  it.each(["obydwa", "obydwie", "wszystkie trzy"])(
+    "reads %j as unrecognised when the question listed four repositories",
+    (answer) => {
+      expect(readAsked(answer, CATALOG)).toEqual({ kind: "unrecognised" });
+    },
+  );
 });
 
 // A3. The sentence a person gets back has to be true of what they wrote. A no

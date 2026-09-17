@@ -2185,7 +2185,6 @@ describe("what the ticket's text may decide after the answer it raised", () => {
 
   it.each([
     "Don't touch github:acme/api, but github:acme/infra needs the new client",
-    "Don't forget: github:acme/infra and github:acme/api need the new endpoint",
     "Nie ruszajcie github:acme/api, za to github:acme/infra trzeba zaktualizować",
   ])("takes neither path from %j, and says why for each", async (body) => {
     const result = await runStep({
@@ -2202,6 +2201,33 @@ describe("what the ticket's text may decide after the answer it raised", () => {
       { repositoryKey: "github:acme/api", reason: saidNoInAComment("github:acme/api") },
       { repositoryKey: "github:acme/infra", reason: saidNoInAComment("github:acme/infra") },
     ]);
+  });
+
+  // Round 6, R1, and this is the case the round before got wrong. A comment
+  // carrying a negation word is not a comment that keeps us out of a repository:
+  // "don't forget" asks for the repositories beside it, and reading it as a
+  // refusal took BOTH of them off the run and told the person their own comment
+  // had said no about the repository they had just asked for.
+  it.each([
+    "Don't forget: github:acme/infra and github:acme/api need the new endpoint",
+    "Don't forget to update github:acme/infra and github:acme/api",
+    "Fix the login bug in github:acme/api and github:acme/infra, but do not deploy yet",
+    "Napraw logowanie w github:acme/api oraz github:acme/infra, nie wdrażaj jeszcze",
+  ])("takes both paths from %j", async (body) => {
+    const result = await runStep({
+      ticket: { ...TICKET, comments: [commentAt(body, "2026-09-16T10:00:00.000Z")] },
+      botAccountId: BOT,
+      workScope: AFTER_THE_ANSWER,
+    });
+
+    // Written after the answer, so each path is that person naming it (C11g),
+    // and nothing is left out to be explained.
+    expect(result.selectedRepositories?.map((selected) => selected.repoPath)).toEqual([
+      "acme/web",
+      "acme/api",
+      "acme/infra",
+    ]);
+    expect(result.workScopeLeftOut ?? []).toEqual([]);
   });
 
   it("takes the repository when the newest comment about it says to use it", async () => {
@@ -2498,6 +2524,163 @@ describe("a comment that says no names nothing", () => {
     expect((result.workScopeRecoveryNotes ?? []).join(" ")).toContain(
       "does not bring it into this work",
     );
+  });
+
+  // Round 6, R1, on the ticket's own words. The round before read any negation
+  // word in the sentence as a refusal of the repositories named in it, which is
+  // the most ordinary ticket anybody writes: the work is asked for in one
+  // breath and a caution is added in the next. Each of these dropped the
+  // repository the ticket is about and told the person, by name, that their own
+  // ticket had said no about it.
+  it.each([
+    "Fix the login bug in github:acme/api, but do not deploy yet.",
+    "Don't forget to update github:acme/api.",
+    "Never mind the old client, github:acme/api needs the new one.",
+    "Use github:acme/api rather than the old service.",
+    "Napraw logowanie w github:acme/api, nie wdrażaj jeszcze.",
+    "Napraw github:acme/api bez zmiany schematu.",
+    // Round 6, the coordinator's ruling on the bare verbs. Each of these tells
+    // us what not to do INSIDE the repository it is asking us to work in, which
+    // is "do not deploy" wearing a different verb: the verb has to govern the
+    // repository, and here it governs a migration, a test and a schema.
+    "Skip the migration in github:acme/api.",
+    "Ignore the failing test in github:acme/api.",
+    "The schema is frozen in github:acme/api.",
+    "Pomiń migrację w github:acme/api.",
+  ])("takes the repository the description names in %j", async (description) => {
+    const result = await runStep({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Invoices are wrong",
+        description,
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+      },
+      botAccountId: BOT_HERE,
+      workScope: NO_ANSWER,
+    });
+
+    expect(result.selectedRepositories?.map((selected) => selected.repoPath)).toEqual([
+      "acme/api",
+    ]);
+    // And nothing is said about it, because nothing was left behind. The
+    // sentence that named a repository as refused by its own ticket was the
+    // second half of the defect.
+    expect(result.workScopeLeftOut ?? []).toEqual([]);
+  });
+
+  // Round 6, R1 again, from the other side: the phrasings that really do keep
+  // this run out, each sharing a phrase with the path it is about.
+  it.each([
+    "Fix it. Do not use github:acme/api, it is frozen.",
+    "Fix it. Leave github:acme/api out of this.",
+    "Fix it. github:acme/api is out of scope.",
+    "Fix it. Skip github:acme/api for now.",
+    "Napraw to. Nie ruszaj github:acme/api.",
+    "Napraw to. Pomiń github:acme/api.",
+    "Napraw to bez github:acme/api.",
+    // The other half of the same ruling: the verb standing in front of the
+    // repository, spelled out or called one.
+    "Fix it. Ignore github:acme/api.",
+    "Fix it. Skip the repository github:acme/api.",
+    "Fix it. github:acme/api is frozen.",
+  ])("does not take the repository the description names only in %j", async (description) => {
+    const result = await runStep({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Invoices are wrong",
+        description,
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+      },
+      botAccountId: BOT_HERE,
+      workScope: NO_ANSWER,
+    });
+
+    expect(result.selectedRepositories ?? []).toEqual([]);
+    expect(result.workScopeLeftOut?.map((left) => left.repositoryKey)).toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  // Round 6, R1, the list a person writes when several repositories are out.
+  // Each bullet on its own says nothing, so the header has to carry, and it has
+  // to stop carrying: the paragraph after the list is not part of it.
+  it("carries a list header to its items and no further", async () => {
+    const result = await runStep({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Invoices are wrong",
+        description: [
+          "Do not touch:",
+          "- github:acme/api",
+          "- github:acme/infra",
+          "",
+          "The callback lives in github:acme/web.",
+        ].join("\n"),
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+      },
+      botAccountId: BOT_HERE,
+      workScope: NO_ANSWER,
+    });
+
+    expect(result.selectedRepositories?.map((selected) => selected.repoPath)).toEqual([
+      "acme/web",
+    ]);
+    expect(result.workScopeLeftOut?.map((left) => left.repositoryKey)).toEqual([
+      "github:acme/api",
+      "github:acme/infra",
+    ]);
+  });
+
+  // Round 6, R2. The two readers used to disagree about what the text IS: the
+  // one deciding whether the words said no dropped quoted lines and the one
+  // finding paths did not, so this description disarmed the refusal on one side
+  // and matched the path on the other, and the run cloned the repository the
+  // ticket had told it to leave alone.
+  it("does not take a path a quoted line of the description refuses", async () => {
+    const result = await runStep({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Invoices are wrong",
+        description:
+          "Fix the billing callback in acme/web.\n> Do NOT touch github:acme/api, it is frozen.",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+      },
+      botAccountId: BOT_HERE,
+      workScope: NO_ANSWER,
+    });
+
+    expect(result.selectedRepositories?.map((selected) => selected.repoPath)).toEqual([
+      "acme/web",
+    ]);
+  });
+
+  // Round 6, R3. Our own sentence, quoted back with an "agreed" under it, is
+  // not that person naming the repository: the key in it is ours. The scan that
+  // found paths in a comment read the comment raw, so agreeing with a sentence
+  // about a repository this work left out attached it.
+  it("does not take a path a person only quoted from our own comment", async () => {
+    const result = await runStep({
+      ticket: ticketWith(
+        "> github:acme/api was left out of this work and the run started without it.\nagreed",
+      ),
+      botAccountId: BOT_HERE,
+      workScope: NO_ANSWER,
+    });
+
+    expect(result.selectedRepositories?.map((selected) => selected.repoPath)).toEqual([
+      "acme/web",
+    ]);
+    // Nothing was refused either: they quoted us, and a quote decides nothing
+    // in either direction.
+    expect(result.workScopeLeftOut ?? []).toEqual([]);
   });
 
   // The control: the same words, a sentence apart. A description that refuses

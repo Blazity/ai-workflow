@@ -436,6 +436,11 @@ async function answerClarificationAndResumeWithPersistence(
   // Before the resume, because the resumed run reads the RECORD and never the
   // answer text: a run that died between the two would otherwise lose what a
   // person said, and the next run would ask them again.
+  // Which channel this answer came from, and it is the mark the composer put on
+  // the actor rather than a guess: only the ticket path composes an answer out
+  // of comments. Two things below read it, the record and the decline sentence,
+  // so it is decided once.
+  const composedFromComments = isComposedAnswerActor(answerer.id);
   let recorded: RepositoryAnswerOutcome = {};
   if (authorship.kind === "write") {
     recorded = await recordRepositoryAnswer(persistence, {
@@ -443,7 +448,7 @@ async function answerClarificationAndResumeWithPersistence(
       answer,
       answeredAt,
       answerer,
-      composedFromComments: isComposedAnswerActor(answerer.id),
+      composedFromComments,
       ...(authorship.authorCount === undefined ? {} : { authorCount: authorship.authorCount }),
     });
   }
@@ -476,10 +481,25 @@ async function answerClarificationAndResumeWithPersistence(
           // run behind it to count them.
           commentPath: commentPathAfterAnUnrecordedAnswer({ questions: row.questions }),
         });
-  if (notRecorded !== undefined && row.ticketKey) {
+  // AND WHAT A DECLINE DECIDED, IN THE CHANNEL THAT TOOK IT. "none of these"
+  // written as a ticket comment leaves every repository the question listed out
+  // of this work for good, one permanent entry each in that person's name, and
+  // the ticket said nothing about it: the sentence went back as the answer
+  // call's reply, which on this path nobody ever sees, because the answer WAS a
+  // comment and there is no screen behind it. The other two channels keep the
+  // reply and get no ticket comment (C11s), so each person is told once, where
+  // they answered. Not on a resume retry, which is the same answer arriving
+  // again rather than a second decision.
+  const declinedSentence =
+    recorded.declined && recorded.declined.length > 0
+      ? formatAnswerDeclinedComment(recorded.declined)
+      : undefined;
+  const toTheTicket =
+    notRecorded ?? (composedFromComments && !isResumeRetry ? declinedSentence : undefined);
+  if (toTheTicket !== undefined && row.ticketKey) {
     const ticketKey = row.ticketKey;
     await issueTracker
-      .postComment(ticketKey, notRecorded)
+      .postComment(ticketKey, toTheTicket)
       .catch((error: unknown) => {
         logger.warn(
           { ticketKey, runId: row.runId, error: (error as Error).message },
@@ -528,11 +548,7 @@ async function answerClarificationAndResumeWithPersistence(
   // words the ticket comment carries, or it declined the repositories the
   // question listed and this says which. Absent when the answer recorded what
   // it named, which is the case that needs no sentence.
-  const recordOutcome =
-    notRecorded ??
-    (recorded.declined && recorded.declined.length > 0
-      ? formatAnswerDeclinedComment(recorded.declined)
-      : undefined);
+  const recordOutcome = notRecorded ?? declinedSentence;
   return { kind: "answered", row: answered, ...(recordOutcome ? { recordOutcome } : {}) };
 }
 

@@ -198,6 +198,11 @@ const ANSWER_NOT_RECORDED_WHY = {
    *  else in it could be read as a decision. */
   names_kept_repository:
     "That answer names a repository the question listed as already part of this work. A reply to that question does not change those, and the AI workflow could not read a decision about the other repositories from it, so it recorded no repository decision from it.",
+  /** It was a word that counts repositories ("both", "all three"), saying a
+   *  different number from the one the question listed. The word and the list
+   *  contradict each other, so neither of them can be acted on. */
+  counting_word_and_list_disagree:
+    "That answer is a word for a number of repositories, and it is not the number the question listed, so the AI workflow could not tell which of them were meant and recorded no repository decision from it.",
   /** It named a repository and also said no, and the no could not be tied to
    *  the repositories it was about. */
   refusal_beside_named:
@@ -427,6 +432,13 @@ export function formatAnswerNotRecordedComment(
     // choosing among the others happens when the question comes back.
     names_kept_repository: `${ASKED_AGAIN_ON_A_LATER_RUN} ${keptStayUntilTheirReasonGoes} ${NAME_ONLY_THE_ONES_TO_USE} ${namingWorks}`,
     refusal_beside_named: `${ASKED_AGAIN_ON_A_LATER_RUN} ${NAME_ONLY_THE_ONES_TO_USE} ${namingWorks}`,
+    // The one reason whose remedy is a different word rather than more words:
+    // the reply was unambiguous and simply disagreed with the list, so the
+    // person needs the word that means every repository the question lists, or
+    // the names themselves. Without this they read that their answer named no
+    // repository, which says nothing about the count, and the obvious second
+    // attempt is the same word.
+    counting_word_and_list_disagree: `${ASKED_AGAIN_ON_A_LATER_RUN} ${EVERY_ONE_THE_QUESTION_LISTS} ${namingWorks}`,
   };
   return [nowThisRun, ANSWER_NOT_RECORDED_WHY[reason], next[reason]].join("\n\n");
 }
@@ -479,6 +491,14 @@ const keptStayUntilTheirReasonGoes =
  *  answering it, the next time it is asked. */
 const NAME_ONLY_THE_ONES_TO_USE =
   'The next time the question is asked, name only the repositories to use, or answer "none".';
+
+/** The word that means every repository a question lists, whatever it lists, so
+ *  a person whose counting word disagreed with the list has one that cannot.
+ *  It is the vocabulary the reader already accepts (`ALL_OF_THEM` in
+ *  `engine/work-scope/answer.ts`), and nothing here teaches a word that reader
+ *  would not take. */
+const EVERY_ONE_THE_QUESTION_LISTS =
+  'The next time the question is asked, answer "all" to use every repository it lists, or name the ones to use.';
 
 /** The half of the sentence that is true of every answer the record kept
  *  nothing from, whatever the question asked for. */

@@ -16,6 +16,7 @@ import {
 import { createTestDb } from "../../db/test-db.js";
 import { logger } from "../../infra/logger.js";
 import { answerClarificationAndResume } from "./answer-core.js";
+import { composedAnswerActorId } from "./answer-authorship.js";
 import {
   getHookClarification,
   prepareHookClarification,
@@ -483,10 +484,12 @@ describe("answerClarificationAndResume telling a person what their decline recor
     expect(said).toContain("enabled on the repositories screen first");
   });
 
-  // It is the channel that took the answer that owes this sentence. The ticket
-  // has the run itself, which names every repository it started without and
-  // why, so posting it there too would tell one story twice in one thread.
-  it("does not post the decline to the ticket", async () => {
+  // It is the channel that took the answer that owes this sentence. An answer
+  // typed on the dashboard or sent over MCP gets it in the reply that comes
+  // back, and the ticket has the run itself, which names every repository it
+  // started without and why, so posting it there too would tell one story twice
+  // in one thread.
+  it("does not post the decline to the ticket when the answer came from a screen", async () => {
     const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
     const tracker = makeTracker();
 
@@ -494,6 +497,52 @@ describe("answerClarificationAndResume telling a person what their decline recor
 
     const posted = tracker.postComment.mock.calls.map(([, body]) => body);
     expect(posted.filter((body) => body.includes("was read as declining"))).toHaveLength(0);
+  });
+
+  // Round 6, R4, and it is the same rule read from the other channel. "none of
+  // these" written as a ticket COMMENT leaves both repositories out of this work
+  // for good, one permanent entry each in that person's name. The sentence
+  // existed and went back as the answer call's reply, which on this path nobody
+  // ever sees: the answer was a comment, and there is no screen behind it. So
+  // the ticket heard nothing at all about the most consequential thing three
+  // words can do here.
+  it("posts the decline to the ticket when the answer arrived as a comment", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "none of these", {
+      actor: { id: composedAnswerActorId("human-1"), label: "Ada (via Jira)" },
+      answerAuthorCount: 1,
+    });
+
+    expect(outcome.kind).toBe("answered");
+    const declined = tracker.postComment.mock.calls
+      .map(([, body]) => body)
+      .filter((body) => body.includes("was read as declining"));
+    expect(declined).toHaveLength(1);
+    // The same words the other channels carry, so a person reading the ticket
+    // and a person reading the screen meet one story.
+    expect(declined[0]).toContain("github:acme/api, github:acme/ops");
+    expect(declined[0]).toContain("work_scope.edit");
+  });
+
+  // And exactly once. A lost resume redelivers the identical answer, which is
+  // the same decision arriving again rather than a second one.
+  it("does not post the decline again when the same answer is redelivered", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+    const asJira = {
+      actor: { id: composedAnswerActorId("human-1"), label: "Ada (via Jira)" },
+      answerAuthorCount: 1,
+    };
+
+    await answer(tracker, row.id, "none of these", asJira);
+    await answer(tracker, row.id, "none of these", asJira);
+
+    const declined = tracker.postComment.mock.calls
+      .map(([, body]) => body)
+      .filter((body) => body.includes("was read as declining"));
+    expect(declined).toHaveLength(1);
   });
 
   // And an answer that chose is not told it declined anything. The question

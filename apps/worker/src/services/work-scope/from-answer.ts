@@ -21,6 +21,7 @@ import {
 } from "../../engine/repository-discovery/runner.js";
 import type { AnswerNotRecordedReason } from "../../engine/support/clarification-comment-format.js";
 import {
+  answerCountsAgainstTheList,
   answerNamesKeptRepositories,
   answerSaysNoAndNamesARepository,
   readRepositoryAnswer,
@@ -439,6 +440,19 @@ export async function recordRepositoryAnswer(
     }
     if (answerSaysNoAndNamesARepository(theirAnswer, reading)) {
       return { told: "refusal_beside_named" };
+    }
+    // "both" under a question that listed three. The reply is not ambiguous and
+    // it names nothing: it contradicts the list in front of it, so the reader
+    // records nothing (A11l). Told as its own reason, because the ordinary
+    // sentence says nothing in the answer named a repository, which is silent
+    // about the count and leaves the same word as the obvious second attempt.
+    if (
+      answerCountsAgainstTheList(theirAnswer, {
+        askedQuestions: input.row.questions,
+        askedCount: askedKeys.length,
+      })
+    ) {
+      return { told: "counting_word_and_list_disagree" };
     }
   }
   // WHICH OF THE TWO WAYS AN ANSWER NAMES NOTHING. Both end here with an empty

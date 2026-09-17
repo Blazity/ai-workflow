@@ -554,13 +554,13 @@ function unopenableRemedy(repositoryKey: RepositoryKey, reason: UnopenableReason
     // have to guess that they may.
     case "comment_says_no":
       return `A ticket comment brings a repository into this work only when it says no about none of them. To bring ${repositoryKey} in, write a comment naming only the repositories to work on, or change this work's repository list through the work scope API or the work_scope.edit tool.`;
-    // The ticket's own words are read a sentence at a time, so the way back is
-    // a sentence of their own: editing the one that says no is the slowest of
+    // The ticket's own words are read a phrase at a time, so the way back is a
+    // phrase of their own: editing the one that keeps us out is the slowest of
     // the three, and it is left out rather than offered, because a description
     // is written for people and rewriting it to steer a run is the tail wagging
     // the dog.
     case "ticket_says_no":
-      return `A sentence that says no about a repository does not bring it into this work. To use ${repositoryKey}, write a comment naming only the repositories to work on, or change this work's repository list through the work scope API or the work_scope.edit tool.`;
+      return `A phrase that asks for a repository to be left alone does not bring it into this work. To use ${repositoryKey}, write a comment naming only the repositories to work on, or change this work's repository list through the work scope API or the work_scope.edit tool.`;
     // AND THE ONE CASE WHERE WRITING ANYTHING ON THE TICKET IS THE WRONG MOVE,
     // said in as many words so nobody keeps trying it. They wrote the path our
     // own sentence asked them for; on a ticket naming this many repositories

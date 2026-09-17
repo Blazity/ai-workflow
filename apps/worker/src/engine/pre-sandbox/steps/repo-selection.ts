@@ -31,7 +31,19 @@ import {
   type RunWorkScopeRecorder,
   type TicketTextReading,
 } from "../../work-scope/context.js";
-import { commentSaysNoAboutItsPaths } from "../../work-scope/answer.js";
+import { replySaysNoAboutAnything } from "../../work-scope/answer.js";
+// The one reading of the words on a ticket, for the two readers here that have
+// an opinion about them: the scan that finds repository paths and the rule that
+// decides whether those words keep this run out of one.
+import {
+  mentionsRepositoryPath,
+  segmentsNamePath,
+  segmentsRefuseByName,
+  segmentsTakePath,
+  ticketTextExcludesARepository,
+  ticketTextSegments,
+  type TicketTextSegment,
+} from "../../work-scope/ticket-text.js";
 import {
   addRepositoryDiscoveryRelationships,
   buildRepositoryCatalog,
@@ -800,7 +812,7 @@ async function rememberRoutingAnswer(input: {
     // "this label means that repository" built from the same words would be the
     // refused decision, remembered for every later ticket.
     const answerText = input.clarification.answer.toLowerCase();
-    if (commentSaysNoAboutItsPaths(input.clarification.answer)) return;
+    if (replySaysNoAboutAnything(input.clarification.answer)) return;
     // Both remaining conditions still matter on top of that gate. The rationale
     // is what proves a human's own reply brought this repository into the run,
     // either because the record attached what the answer named or because the
@@ -1204,50 +1216,71 @@ export function selectRepositoriesFromMetadata(input: {
         // it always was.
         [input.ticketText, input.commentText ?? "", input.unreadCommentText ?? ""].join("\n")
   ).toLowerCase();
-  const commentWords = (input.workScope ? (input.commentText ?? "") : "").toLowerCase();
-  // A REPOSITORY A LATER COMMENT TOOK BACK. The comment that says no is not read
-  // at all, so an earlier comment naming the same repository would otherwise
-  // still decide it: "use github:acme/ops", then "actually not ops", and ops is
-  // taken anyway. Matched on the path AND on the bare name, because that is how
-  // a person writes a second thought, and on every repository a bare name fits
-  // when it fits more than one: taking a repository nobody wants is the failure
-  // that lasts, and leaving one out is said out loud and undone in a comment.
-  // The ticket's own words are not subject to this; they are the ticket.
-  const retractedKeys = new Set(
-    unreadCommentText
-      ? scopedRepositories
-          .filter(
-            (repo) =>
-              mentionsRepositoryPath(unreadCommentText.toLowerCase(), repo.repoPath) ||
-              mentionsRepositoryPath(unreadCommentText.toLowerCase(), repoShortName(repo)),
-          )
-          .map((repo) => repositoryKey(repo))
-      : [],
+  // THE COMMENTS THIS RUN READ, AS SEGMENTS RATHER THAN AS ONE STRING, and the
+  // quoted lines in them are gone before any path is matched. A person who
+  // quotes our own sentence ("github:acme/api was left out of this work") and
+  // writes "agreed" underneath used to have api attached: the reader that
+  // decided the comment said nothing dropped the quote, and the scan that found
+  // the path did not, so our words came back as theirs.
+  const commentSegments: TicketTextSegment[] = ticketTextSegments(
+    input.workScope ? (input.commentText ?? "") : "",
   );
-  // AND THE TICKET'S OWN WORDS, SENTENCE BY SENTENCE. "Do NOT touch
+  // A REPOSITORY A LATER COMMENT TOOK BACK. The comment that keeps us out is not
+  // read at all, so an earlier comment naming the same repository would
+  // otherwise still decide it: "use github:acme/ops", then "actually not ops",
+  // and ops is taken anyway. Matched on the path AND on the bare name, because
+  // that is how a person writes a second thought, and on every repository a bare
+  // name fits when it fits more than one: taking a repository nobody wants is
+  // the failure that lasts, and leaving one out is said out loud and undone in a
+  // comment. The ticket's own words are not subject to this; they are the
+  // ticket.
+  //
+  // TWO SHAPES, because a second thought names a path about as often as it does
+  // not. A comment that keeps us out of some repository is not read at all, so
+  // every name in it counts; a comment that names no path is read, and only a
+  // refusal standing directly in front of this repository's name counts there
+  // (`segmentsRefuseByName`). The second half is what keeps "actually not ops"
+  // working now that a bare negation is no longer a refusal by itself.
+  const unreadCommentSegments: TicketTextSegment[] = ticketTextSegments(unreadCommentText);
+  const retractedKeys = new Set(
+    scopedRepositories
+      .filter(
+        (repo) =>
+          (unreadCommentText !== "" &&
+            (segmentsNamePath(unreadCommentSegments, repo.repoPath) ||
+              segmentsNamePath(unreadCommentSegments, repoShortName(repo)))) ||
+          segmentsRefuseByName(commentSegments, repo.repoPath) ||
+          segmentsRefuseByName(commentSegments, repoShortName(repo)),
+      )
+      .map((repo) => repositoryKey(repo)),
+  );
+  // AND THE TICKET'S OWN WORDS, PHRASE BY PHRASE. "Do NOT touch
   // github:acme/api, it is frozen." in a description used to attach api and say
   // nothing, so the run worked in the one repository the ticket had told it to
   // leave alone. A comment is read whole because it is one thought; a
   // description is many, and reading it whole would let one refused repository
-  // drop every other repository the ticket names. So each sentence is read on
-  // its own, and a repository whose every mention in the ticket's own words sits
-  // in a sentence that says no is not taken from them, and is said out loud
-  // below. A sentence ends at a full stop, a question mark, an exclamation mark
-  // or a line break, none of which appear inside a repository path.
-  const ownSentences = input.workScope ? sentencesOf(input.ticketText) : [];
+  // drop every other repository the ticket names. So each phrase is read on its
+  // own, and a repository whose every mention in the ticket's own words sits in
+  // a phrase that keeps us out is not taken from them, and is said out loud
+  // below.
+  //
+  // WHAT COUNTS AS KEEPING US OUT is the phrasing rather than the word "not"
+  // (`ticket-text.ts`): "Fix the login bug in github:acme/api, but do not deploy
+  // yet" asks for work in api, and the round that read any negation as a refusal
+  // reported that repository to the person as one their own ticket had said no
+  // about.
+  const ownSegments: TicketTextSegment[] = input.workScope
+    ? ticketTextSegments(input.ticketText)
+    : [];
   const takenFromOwnWords = (repo: RepositoryMetadata): boolean =>
     input.workScope
-      ? ownSentences.some(
-          (sentence) =>
-            mentionsRepositoryPath(sentence.toLowerCase(), repo.repoPath) &&
-            !commentSaysNoAboutItsPaths(sentence),
-        )
+      ? segmentsTakePath(ownSegments, repo.repoPath)
       : mentionsRepositoryPath(ownWords, repo.repoPath);
-  // Named by the ticket and taken from nowhere in it: every sentence that names
-  // it says no about something.
+  // Named by the ticket and taken from nowhere in it: every phrase that names it
+  // keeps us out of it.
   const refusedByOwnWords = (repo: RepositoryMetadata): boolean =>
     Boolean(input.workScope) &&
-    mentionsRepositoryPath(ownWords, repo.repoPath) &&
+    segmentsNamePath(ownSegments, repo.repoPath) &&
     !takenFromOwnWords(repo);
   // Scanned here, above the record, because two things read it: the selection
   // below, which decides what the ticket names, and the recorder, which decides
@@ -1258,7 +1291,7 @@ export function selectRepositoriesFromMetadata(input: {
   const exactMatches = scopedRepositories.filter(
     (repo) =>
       takenFromOwnWords(repo) ||
-      (mentionsRepositoryPath(commentWords, repo.repoPath) &&
+      (segmentsTakePath(commentSegments, repo.repoPath) &&
         !retractedKeys.has(repositoryKey(repo))),
   );
   const ticketTextMatchedKeys = exactMatches.map((repo) => repositoryKey(repo));
@@ -1270,7 +1303,7 @@ export function selectRepositoriesFromMetadata(input: {
   // enough to hold a repository back without being enough to say that.
   const unreadCommentKeys = unreadCommentText
     ? scopedRepositories
-        .filter((repo) => mentionsRepositoryPath(unreadCommentText.toLowerCase(), repo.repoPath))
+        .filter((repo) => segmentsNamePath(unreadCommentSegments, repo.repoPath))
         .map((repo) => repositoryKey(repo))
         .filter((key) => !ticketTextMatchedKeys.includes(key))
     : [];
@@ -1571,7 +1604,7 @@ export function selectRepositoriesFromMetadata(input: {
   const directAnswerSaysNo =
     input.directAnswer !== undefined &&
     input.directAnswer !== null &&
-    commentSaysNoAboutItsPaths(input.directAnswer);
+    replySaysNoAboutAnything(input.directAnswer);
   if (input.directAnswer && !record && !directAnswerSaysNo) {
     const normalizedAnswer = normalizeRepoAnswer(input.directAnswer);
     const answerExactMatches = scopedRepositories.filter(
@@ -1843,12 +1876,6 @@ function selectedRepository(
   };
 }
 
-function mentionsRepositoryPath(candidateText: string, repoPath: string): boolean {
-  const escaped = repoPath.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const boundary = "[^a-z0-9/_-]";
-  return new RegExp(`(^|${boundary})${escaped}($|${boundary})`).test(candidateText);
-}
-
 /**
  * Repositories one identity parsed out of a human answer resolves to. Matched
  * leniently on path or short name, the same two keys the whole-reply scan uses,
@@ -1946,22 +1973,6 @@ function editDistance(a: string, b: string): number {
   return dp[rows - 1]![cols - 1]!;
 }
 
-/**
- * The ticket's own words, one sentence at a time.
- *
- * A sentence ends at a full stop, a question mark, an exclamation mark or a
- * line break. None of those appear inside a repository path: a path with a dot
- * in it ("acme/foo.bar") is not split, because the split needs whitespace after
- * the stop, and a bullet list is split by its own line breaks, which is what a
- * description written as a list needs.
- */
-function sentencesOf(text: string): string[] {
-  return text
-    .split(/(?<=[.!?])\s+|\n+/u)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.length > 0);
-}
-
 /** The ticket as the path matcher reads it, in the three parts the reading of a
  *  comment splits it into. */
 interface TicketTextScan {
@@ -1993,17 +2004,21 @@ interface TicketTextScan {
  * stop being matched, which trades a question too many for a repository too
  * few.
  *
- * WHY A COMMENT IS READ FOR A REFUSAL AND THE TICKET'S OWN WORDS ARE NOT. The
- * description and the acceptance criteria are the ticket, the words every
- * question about this work is asked about, and "do not touch acme/api until the
- * freeze lifts" there describes the work rather than answering this run. A
- * comment is a person speaking, so it is read the way an answer is
- * (`commentSaysNoAboutItsPaths`), and read WHOLE: nothing can tell "not api,
- * but infra" from "not api or infra", and guessing attaches a repository
- * somebody declined. The cost is a comment that named one repository to use
- * beside one to leave alone, and it is paid out loud, never in silence: what
- * such a comment names is reported per repository with the way back beside it
- * (`leaveOut`), and what the record already holds stays (`stillNamedKeys`).
+ * WHY A COMMENT IS READ WHOLE AND THE TICKET'S OWN WORDS ARE NOT. A comment is
+ * one thought, and nothing can tell "not api, but infra" from "not api or
+ * infra", so a comment that keeps us out of any repository is not read as naming
+ * any of them; guessing attaches a repository somebody declined. The cost is a
+ * comment that named one repository to use beside one to leave alone, and it is
+ * paid out loud, never in silence: what such a comment names is reported per
+ * repository with the way back beside it (`leaveOut`), and what the record
+ * already holds stays (`stillNamedKeys`). The description is many thoughts, so
+ * it is read phrase by phrase instead (`ticketTextSegments`).
+ *
+ * WHAT KEEPS US OUT is a phrasing about repositories sharing a phrase with the
+ * path (`ticketTextExcludesARepository`), never a negation word anywhere in the
+ * text. Read the other way, "Don't forget to update github:acme/docs" was a
+ * refusal of docs, and the person was told their own comment had said no about
+ * the repository they had just asked for.
  */
 function ticketTextScan(
   ticket: {
@@ -2019,7 +2034,7 @@ function ticketTextScan(
   const comments = (ticket.comments ?? []).filter(
     (comment) => botAccountId === undefined || comment.accountId !== botAccountId,
   );
-  const saysNo = comments.filter((comment) => commentSaysNoAboutItsPaths(comment.body));
+  const saysNo = comments.filter((comment) => ticketTextExcludesARepository(comment.body));
   return {
     own: [ticket.identifier, ticket.title, ticket.description, ticket.acceptanceCriteria]
       .concat(ticket.labels ?? [])
@@ -2098,16 +2113,21 @@ function postAnswerComments(
  * Whether somebody typed a path is a fact about what they wrote, and the pin,
  * the catalog and the policy still decide what the run may do with it.
  *
- * THE NEWEST COMMENT ABOUT A REPOSITORY DECIDES, AND ONE THAT SAYS NO NAMES
- * NOTHING. "Please do not touch github:acme/api" is the opposite of taking the
- * repository back, so a comment is read with the negation reading an answer
- * gets (`commentSaysNoAboutItsPaths`), on the whole comment: the reader cannot
+ * THE NEWEST COMMENT ABOUT A REPOSITORY DECIDES, AND ONE THAT KEEPS US OUT OF
+ * ONE NAMES NOTHING. "Please do not touch github:acme/api" is the opposite of
+ * taking the repository back, so a comment is read with the ticket's reading
+ * (`ticketTextExcludesARepository`), on the whole comment: the reader cannot
  * tell "don't touch api, but infra" from "don't touch api or infra". That
  * leaves out some comments that meant yes, which costs a person one more step
  * and is said on the line the run writes for that repository
  * (`saidNoAfterAnswerKeys`); reading the other way attaches a repository
  * somebody declined. The newest comment wins, so a person who changes their
  * mind in a later comment is read as they now stand.
+ *
+ * AND WHAT THEY QUOTED IS NOT WHAT THEY WROTE. The comment is segmented before
+ * a path is matched in it, so a person quoting our sentence about a repository
+ * this work left out and agreeing underneath does not thereby name it: the
+ * quoted key is ours.
  */
 function ticketTextReading(
   postAnswer: PostAnswerComments | null,
@@ -2141,9 +2161,11 @@ function ticketTextReading(
     // failure that lasts.
     const about = postAnswer.comments.filter((comment) => {
       if (comment.createdAtMs <= anchor) return false;
-      const body = comment.body.toLowerCase();
-      if (mentionsRepositoryPath(body, path)) return true;
-      return mentionsRepositoryPath(body, name) && commentSaysNoAboutItsPaths(comment.body);
+      const segments = ticketTextSegments(comment.body);
+      if (segmentsNamePath(segments, path)) return true;
+      return (
+        segmentsNamePath(segments, name) && ticketTextExcludesARepository(comment.body)
+      );
     });
     // The newest wins, and a tie goes to the refusal. Two comments can carry
     // the same instant, and a tracker gives us no order inside one: reading
@@ -2153,10 +2175,10 @@ function ticketTextReading(
     const newest = about.reduce<{ body: string; createdAtMs: number } | null>((latest, comment) => {
       if (latest === null || comment.createdAtMs > latest.createdAtMs) return comment;
       if (comment.createdAtMs < latest.createdAtMs) return latest;
-      return commentSaysNoAboutItsPaths(comment.body) ? comment : latest;
+      return ticketTextExcludesARepository(comment.body) ? comment : latest;
     }, null);
     if (newest === null) continue;
-    if (commentSaysNoAboutItsPaths(newest.body)) saidNoAfterAnswerKeys.push(key);
+    if (ticketTextExcludesARepository(newest.body)) saidNoAfterAnswerKeys.push(key);
     else mentionedAfterAnswerKeys.push(key);
   }
   return { matchedKeys, datableKeys, mentionedAfterAnswerKeys, saidNoAfterAnswerKeys };

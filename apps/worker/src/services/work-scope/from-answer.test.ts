@@ -1041,11 +1041,13 @@ describe("recordRepositoryAnswer names why a selection question is coming back",
    *  it. The question names a repository so the ask is a real one; what makes
    *  it the selection question is the reason, which is the only thing the
    *  predicate under test looks at. */
-  async function told(answerText: string) {
-    const row = await seedPending(
-      [{ repositoryKey: "github:acme/api", askedBecause: "selection", named: true }],
-      ["Which repository should this ticket modify?"],
-    );
+  async function told(
+    answerText: string,
+    asked: WorkScopeAskedRepository[] = [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ],
+  ) {
+    const row = await seedPending(asked, ["Which repository should this ticket modify?"]);
     const stored = await getHookClarification(db, row.id);
     if (!stored) throw new Error("clarification vanished");
     const outcome = await recordRepositoryAnswer(persistence(), {
@@ -1074,6 +1076,31 @@ describe("recordRepositoryAnswer names why a selection question is coming back",
     await expect(told("> see github:acme/unknown-service\nwhichever one the team prefers")).resolves.toBe(
       "no_repository_named",
     );
+  });
+
+  // Round 6, R5. "both" under a question that listed three names nothing and is
+  // not ambiguous either: the word and the list contradict each other. The
+  // person used to read that nothing in their answer named a repository, which
+  // says nothing about the count, so the obvious second attempt is the same
+  // word and the loop runs again.
+  it("says the counting word disagreed with the list when it did", async () => {
+    const three: WorkScopeAskedRepository[] = ["api", "web", "docs"].map((name) => ({
+      repositoryKey: `github:acme/${name}`,
+      askedBecause: "selection" as const,
+      named: true,
+    }));
+    await expect(told("both", three)).resolves.toBe("counting_word_and_list_disagree");
+  });
+
+  // The control: the same word against the list it agrees with is a decision,
+  // and nobody is told anything about it.
+  it("tells nobody anything about a counting word the list agrees with", async () => {
+    const two: WorkScopeAskedRepository[] = ["api", "web"].map((name) => ({
+      repositoryKey: `github:acme/${name}`,
+      askedBecause: "selection" as const,
+      named: true,
+    }));
+    await expect(told("both", two)).resolves.toBeUndefined();
   });
 
   it('tells nobody anything about "none", which settles the question', async () => {

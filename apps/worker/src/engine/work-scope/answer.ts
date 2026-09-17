@@ -68,6 +68,14 @@ const ALL_OF_THEM = new Map<string, number | null>([
   ["both of them", 2],
   ["oba", 2],
   ["obie", 2],
+  // The forms people actually type beside those two. "obydwa" and "obydwie" are
+  // the everyday spelling of "both" in Polish, and a question listing three
+  // repositories is answered "wszystkie trzy" as readily as "all three". Missing
+  // from the map, each of them was unreadable and the question came back for a
+  // reply nobody could mistake.
+  ["obydwa", 2],
+  ["obydwie", 2],
+  ["wszystkie trzy", 3],
 ]);
 
 // The words a person says no with, compared on word boundaries against what
@@ -312,22 +320,54 @@ function namedRepositories(
 }
 
 /**
- * Does a comment written on the ticket say no about the repository paths it
- * names?
+ * Does this reply say no about anything at all?
  *
- * The same reading an answer gets, for text that is not an answer: a full path
- * a person writes after answering reopens that repository (C11g), and "please
- * do not touch github:acme/api" written there is the opposite of naming it.
- * Read on the whole comment, so a comment that says no about anything is not
- * taken as naming anything; leaving a repository out costs a person one step,
- * attaching one they declined is a decision nobody made.
+ * THE ANSWER PATH'S READING, for a caller holding a reply rather than the
+ * verdict `readRepositoryAnswer` gives one: the direct reply a run resumes on,
+ * which the run matches leniently against its listing, and the same reply asked
+ * about before a routing memory is stored. A no anywhere in it makes it
+ * unreadable, for the reason the reader above gives: the reply is threaded to
+ * our question, so the no may be about anything that question offered, and
+ * every attempt to work out which was a decision recorded against somebody who
+ * said the opposite.
  *
- * Quoted lines come out first, for the reason they do on the answer path: a
+ * NOT THE TICKET'S READING, and it used to be. The ticket's own words and its
+ * comments are not a reply to anything, and reading them this way made "fix the
+ * login bug in github:acme/api, but do not deploy yet" a refusal of api. They go
+ * through `ticketTextExcludesARepository` (`ticket-text.ts`), which asks for a
+ * phrasing that keeps us out of a repository and for the path to share a phrase
+ * with it.
+ *
+ * Quoted lines come out first, for the reason they do everywhere on this path: a
  * person replying to our comment quotes a sentence built around "not", and
  * their own word is what is being read.
  */
-export function commentSaysNoAboutItsPaths(comment: string): boolean {
-  return saysNo(withoutQuotedText(comment, []));
+export function replySaysNoAboutAnything(reply: string): boolean {
+  return saysNo(withoutQuotedText(reply, []));
+}
+
+/**
+ * Is this reply a word that counts repositories, saying a different number from
+ * the one the question listed?
+ *
+ * "both" under a question offering three is neither a choice nor a refusal: the
+ * word and the list contradict each other, so the reader records nothing
+ * (`isAllOfThem`). What the person was told, until now, was that nothing in
+ * their answer named a repository, which says nothing about the count and sends
+ * them back to the same word. Asked here so the sentence they read can name the
+ * real reason.
+ *
+ * Only a counting word, and only a disagreeing one: "all" means whatever the
+ * question listed and never reaches this, and a counting word that agrees was
+ * read as the whole list.
+ */
+export function answerCountsAgainstTheList(
+  answer: string,
+  input: { askedQuestions: string[]; askedCount: number },
+): boolean {
+  const theirWords = withoutQuotedText(answer, input.askedQuestions);
+  const means = ALL_OF_THEM.get(wholeReply(theirWords));
+  return means !== undefined && means !== null && means !== input.askedCount;
 }
 
 /**
@@ -431,8 +471,12 @@ export function withoutQuotedText(answer: string, askedQuestions: string[]): str
 
 /** The words around the repositories a text names, folded for matching. A
  *  repository key is not a sentence: "acme/no-code" carries the letters of a
- *  negation and says nothing, so only the words around the names are read. */
-function proseOf(text: string): string {
+ *  negation and says nothing, so only the words around the names are read.
+ *
+ *  Exported for the ticket's own reader (`ticket-text.ts`), which asks a
+ *  different question of the same words. One folding, so a repository whose
+ *  name carries a phrasing cannot phrase its own exclusion on either path. */
+export function proseOf(text: string): string {
   return foldPolishDiacritics(
     text
       .split(/[\s,]+/)
