@@ -1,0 +1,12 @@
+# path	ceiling_bytes	reason
+# Lowering a ceiling is always fine; raising one needs a reason in column 3.
+AGENTS.md	8192	Router loaded into every session and every subagent.
+CLAUDE.md	64	Only the @AGENTS.md import.
+apps/worker/AGENTS.md	4096	Loaded whole on the first read of any worker file.
+apps/worker/CLAUDE.md	64	Only the @AGENTS.md import.
+apps/dashboard/AGENTS.md	4096	Loaded whole on the first read of any dashboard file.
+apps/dashboard/CLAUDE.md	64	Only the @AGENTS.md import.
+packages/AGENTS.md	4096	Loaded whole on the first read of any package file.
+packages/CLAUDE.md	64	Only the @AGENTS.md import.
+.claude/rules/*.md	4096	Default for one area rule, loaded on a matching read.
+.claude/rules/	49152	All rules together; the per-file ceiling is the binding one.
