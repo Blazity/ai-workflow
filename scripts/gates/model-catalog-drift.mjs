@@ -23,6 +23,10 @@ const GENERATED_DIRECTORIES = new Set([
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { requireAnchor, requireScan } from "./shared.mjs";
+
+const SOURCE_ROOTS = ["apps", "packages"];
+const INVARIANT = "the rule that product model identifiers have one owner";
 
 function parseArgs(argv) {
   let root = process.cwd();
@@ -139,18 +143,26 @@ function withoutComments(source) {
   return result;
 }
 
-function violations(root) {
-  return ["apps", "packages"]
+function scannedFiles(root) {
+  for (const directory of SOURCE_ROOTS) {
+    requireAnchor(root, directory, "a source root this gate scans", INVARIANT);
+  }
+  const files = SOURCE_ROOTS
     .flatMap((directory) => walk(join(root, directory)))
     .map((file) => ({ file, path: relative(root, file).replaceAll("\\", "/") }))
-    .filter(({ path }) => SOURCE_FILE.test(path) && !isExcluded(path))
-    .flatMap(({ file, path }) =>
-      withoutComments(readFileSync(file, "utf8"))
-        .split("\n")
-        .flatMap((line, index) =>
-          MODEL_LITERAL.test(line) ? [`${path}:${index + 1}:${line.trim()}`] : [],
-        ),
-    );
+    .filter(({ path }) => SOURCE_FILE.test(path) && !isExcluded(path));
+  requireScan(files.length, "source files", SOURCE_ROOTS.join(", "), INVARIANT);
+  return files;
+}
+
+function violations(files) {
+  return files.flatMap(({ file, path }) =>
+    withoutComments(readFileSync(file, "utf8"))
+      .split("\n")
+      .flatMap((line, index) =>
+        MODEL_LITERAL.test(line) ? [`${path}:${index + 1}:${line.trim()}`] : [],
+      ),
+  );
 }
 
 function main() {
@@ -159,14 +171,15 @@ function main() {
     console.log(EXCLUSIONS.join("\n"));
     return;
   }
-  const found = violations(options.root);
+  const files = scannedFiles(options.root);
+  const found = violations(files);
   if (found.length > 0) {
     console.log(found.join("\n"));
     console.log("model-catalog-drift FAIL");
     process.exitCode = 1;
     return;
   }
-  console.log("model-catalog-drift PASS");
+  console.log(`model-catalog-drift PASS: ${files.length} file(s) scanned`);
 }
 
 try {

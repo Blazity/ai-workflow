@@ -33,8 +33,47 @@ const boundaryFixture = (root: string): string => {
     return root;
   },
   repoRoot = resolve(import.meta.dirname, "../.."),
+  // The gate refuses a source root it cannot find, so a fixture declares all
+  // three and puts its source in whichever one the case is about.
+  singleSchemaRoot = (prefix: string, files: Record<string, string> = {}): string => {
+    const root = makeDepsRoot(prefix, files);
+    for (const anchor of ["apps", "packages", "docs/example-workflows"]) {
+      mkdirSync(join(root, anchor), { recursive: true });
+    }
+    return root;
+  },
+  // consecutive-writes derives its coverage from apps/ and packages/, so every
+  // fixture carries both parents whether or not the case puts code in them.
+  writesRoot = (prefix: string, files: Record<string, string>): string => {
+    const root = makeDepsRoot(prefix, files);
+    mkdirSync(join(root, "apps"), { recursive: true });
+    mkdirSync(join(root, "packages"), { recursive: true });
+    return root;
+  },
+  // The fence compares against the worker's client and schema and derives its
+  // coverage from apps/ and packages/, so every fixture carries those anchors.
+  fenceRoot = (prefix: string, files: Record<string, string>): string => {
+    const root = makeDepsRoot(prefix, {
+      "apps/worker/src/db/client.ts": "export const db = 1;\n",
+      "apps/worker/src/db/schema.ts": "export const harnessTable = 1;\n",
+      ...files,
+    });
+    mkdirSync(join(root, "packages"), { recursive: true });
+    return root;
+  },
+  // A workspace holding a copy of the gates, for the gates that resolve their
+  // own root from process.cwd() or from where the script itself sits.
+  copiedGateRoot = (prefix: string, files: Record<string, string> = {}): string => {
+    const root = makeDepsRoot(prefix, files);
+    cpSync(join(repoRoot, "scripts/gates"), join(root, "scripts/gates"), { recursive: true });
+    return root;
+  },
   standaloneGateRoot = (root: string): string => {
     cpSync(join(repoRoot, "scripts/gates"), join(root, "scripts/gates"), { recursive: true });
+    // The boundary gate refuses a missing dependency-cruiser config before it
+    // looks for the tool, so the fixture carries one to keep the tool the
+    // subject of the test.
+    writeFileSync(join(root, ".dependency-cruiser.cjs"), "module.exports = { forbidden: [] };\n");
     return boundaryFixture(root);
   };
 
@@ -45,8 +84,23 @@ function gate(name: string, args: string[] = [], root: string = repoRoot) {
   });
 }
 
+// A draft carries no currency and no reachability claim, so a seeded anchor
+// adds a document to the checked set without adding a failure of its own.
+const seededAnchor = "Status: draft\nLast-verified: 2026-09-01\n\n# Seeded anchor\n";
+
 function docsStatusFixture(files: Record<string, string>): string {
-  const root = makeDepsRoot("docs-status-fixture-", files);
+  const anchors: Record<string, string> = {};
+  for (const path of [
+    "README.md",
+    "AGENTS.md",
+    "SETUP.md",
+    "CONTEXT.md",
+    "packages/AGENTS.md",
+    "docs/index.md",
+  ]) {
+    if (!(path in files)) anchors[path] = seededAnchor;
+  }
+  const root = makeDepsRoot("docs-status-fixture-", { ...anchors, ...files });
   mkdirSync(join(root, "scripts/gates"), { recursive: true });
   cpSync(
     join(repoRoot, "scripts/gates/docs-status.mjs"),
@@ -103,6 +157,369 @@ test("docs-status rejects a current document that is unreachable", () => {
   );
   assert.equal(result.status, gateFailure, result.stderr || result.stdout);
   assert.match(result.stderr, /docs\/hidden\.md: Status is current but nothing reaches it/);
+});
+
+test("docs-status refuses when the paths its checked set is built from are gone", () => {
+  const root = docsStatusFixture({ "README.md": seededAnchor });
+  spawnSync("/bin/rm", ["-rf", join(root, "docs"), join(root, "CONTEXT.md")]);
+  const result = gate("docs-status.mjs", [], root);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /docs-status: the set of checked documents is computed from paths that are missing: CONTEXT\.md, docs\./u,
+  );
+});
+
+test("docs-status refuses an empty docs tree", () => {
+  const root = docsStatusFixture({});
+  spawnSync("/bin/rm", ["-f", join(root, "docs/index.md")]);
+  const result = gate("docs-status.mjs", [], root);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stderr, /docs-status: 0 Markdown documents were found under docs\//u);
+});
+
+test("docs-status counts what it read on the way past", () => {
+  const result = gate("docs-status.mjs", [], docsStatusFixture({}));
+  assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
+  assert.match(result.stdout, /docs-status: 6 document\(s\) checked, 0 skipped for frontmatter/u);
+});
+
+test("the transactions gate refuses a workspace parent that is not there", () => {
+  const root = copiedGateRoot("transactions-missing-parent-");
+  mkdirSync(join(root, "apps/worker/src"), { recursive: true });
+  const result = gate("transactions-in-repositories.mjs", [], root);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /transactions-in-repositories FAIL: a workspace parent this gate derives its roots from is missing at packages/u,
+  );
+});
+
+test("the transactions gate refuses a workspace with no project in it", () => {
+  const root = copiedGateRoot("transactions-no-projects-");
+  mkdirSync(join(root, "apps"), { recursive: true });
+  mkdirSync(join(root, "packages"), { recursive: true });
+  const result = gate("transactions-in-repositories.mjs", [], root);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /transactions-in-repositories FAIL: 0 workspace projects were found under apps, packages/u,
+  );
+});
+
+test("the transactions gate refuses a project holding no source", () => {
+  const root = copiedGateRoot("transactions-empty-project-");
+  mkdirSync(join(root, "apps/worker/src"), { recursive: true });
+  mkdirSync(join(root, "packages"), { recursive: true });
+  const result = gate("transactions-in-repositories.mjs", [], root);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /transactions-in-repositories FAIL: 0 source files were found under apps, packages/u,
+  );
+});
+
+test("the transactions gate scans workspace packages, not only the worker", () => {
+  const root = copiedGateRoot("transactions-packages-", {
+    "apps/worker/src/index.ts": "export const value = 1;\n",
+    "packages/conditions/evaluate.ts":
+      "export const run = async (db) => db.transaction(async () => undefined);\n",
+  });
+  const result = gate("transactions-in-repositories.mjs", [], root);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /packages\/conditions\/evaluate\.ts:1/u);
+  assert.match(result.stdout, /transactions-in-repositories FAIL/u);
+});
+
+test("the db client fence scans the dashboard, not only the worker", () => {
+  const result = gate("db-client-fence.mjs", ["--root", fenceRoot("db-client-fence-dashboard-", {
+    "apps/dashboard/app/page.tsx": 'import { sql } from "drizzle-orm";\nexport const query = sql;\n',
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /apps\/dashboard\/app\/page\.tsx/u);
+});
+
+test("the db client fence scans a workspace package", () => {
+  const result = gate("db-client-fence.mjs", ["--root", fenceRoot("db-client-fence-package-", {
+    "packages/conditions/read.ts": 'import { sql } from "drizzle-orm";\nexport const query = sql;\n',
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /packages\/conditions\/read\.ts/u);
+});
+
+test("the db client fence resolves the dashboard's own alias, not the worker's", () => {
+  const result = gate("db-client-fence.mjs", ["--root", fenceRoot("db-client-fence-alias-", {
+    "apps/dashboard/lib/database.ts": 'export { sql } from "drizzle-orm";\n',
+    "apps/dashboard/app/page.tsx": 'import { sql } from "@/lib/database";\nexport const query = sql;\n',
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /apps\/dashboard\/app\/page\.tsx/u);
+});
+
+test("the db client fence leaves the excluded worker scripts alone", () => {
+  const result = gate("db-client-fence.mjs", ["--root", fenceRoot("db-client-fence-excluded-", {
+    "apps/worker/scripts/db-migrate.ts": 'import { drizzle } from "drizzle-orm/neon-http";\nexport const run = drizzle;\n',
+    "apps/worker/src/services/clean.ts": "export const value = 1;\n",
+  })]);
+  assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
+  assert.match(result.stdout, /db-client-fence PASS/u);
+});
+
+test("the db client fence refuses when the client it compares against has moved", () => {
+  const root = makeDepsRoot("db-client-fence-renamed-", {
+    "apps/worker/src/db/pool.ts": "export const db = 1;\n",
+    "apps/worker/src/db/schema.ts": "export const harnessTable = 1;\n",
+    "apps/worker/src/services/reader.ts": 'import { db } from "../db/pool.js"; void db;\n',
+  });
+  const result = gate("db-client-fence.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /db-client-fence FAIL: the database client module the fence compares against is missing at apps\/worker\/src\/db\/client\.ts/u,
+  );
+});
+
+test("the db client fence refuses when the schema it compares against has moved", () => {
+  const root = makeDepsRoot("db-client-fence-schemaless-", {
+    "apps/worker/src/db/client.ts": "export const db = 1;\n",
+    "apps/worker/src/services/reader.ts": "export const value = 1;\n",
+  });
+  const result = gate("db-client-fence.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /db-client-fence FAIL: the database schema module the fence compares against is missing at both apps\/worker\/src\/db\/schema\.ts and apps\/worker\/src\/db\/schema/u,
+  );
+});
+
+test("the ui primitives gate refuses dashboard roots that are not there", () => {
+  const result = gate("ui-primitives.mjs", ["--root", makeDepsRoot("ui-primitives-missing-root-", {})]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /ui-primitives FAIL: a dashboard source root this gate scans is missing at apps\/dashboard\/components/u,
+  );
+});
+
+test("the single schema version gate refuses a source root that is not there", () => {
+  const result = gate("single-schema-version.mjs", ["--root", makeDepsRoot("single-schema-missing-root-", {
+    "apps/worker/src/definition.ts": "export const value = 2;\n",
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /single-schema-version FAIL: a source root this gate scans is missing at packages/u,
+  );
+});
+
+test("the consecutive-writes gate refuses a workspace parent that is not there", () => {
+  const result = gate("consecutive-writes.mjs", ["--root", makeDepsRoot("consecutive-writes-missing-parent-", {
+    "apps/worker/src/index.ts": "export const value = 1;\n",
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /consecutive-writes FAIL: a workspace parent this gate derives its roots from is missing at packages/u,
+  );
+});
+
+test("the consecutive-writes gate refuses a workspace with no project in it", () => {
+  const root = writesRoot("consecutive-writes-no-projects-", {});
+  const result = gate("consecutive-writes.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /consecutive-writes FAIL: 0 workspace projects were found under apps, packages/u,
+  );
+});
+
+test("the consecutive-writes gate refuses a project holding no source", () => {
+  const root = writesRoot("consecutive-writes-empty-project-", {});
+  mkdirSync(join(root, "apps/worker/src"), { recursive: true });
+  const result = gate("consecutive-writes.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /consecutive-writes FAIL: 0 source files were found under apps, packages/u,
+  );
+});
+
+const pairOfWrites = "async function save() {\n  await db.insert(values);\n  await db.update(values);\n}\n";
+
+test("the consecutive-writes gate scans workspace packages, not only the worker", () => {
+  const result = gate("consecutive-writes.mjs", ["--root", writesRoot("consecutive-writes-package-", {
+    "apps/worker/src/index.ts": "export const value = 1;\n",
+    "packages/shared/save.ts": pairOfWrites,
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /packages\/shared\/save\.ts:2 \(2 awaited db writes\)/u);
+});
+
+test("the consecutive-writes gate scans worker tooling outside src", () => {
+  const result = gate("consecutive-writes.mjs", ["--root", writesRoot("consecutive-writes-tooling-", {
+    "apps/worker/src/index.ts": "export const value = 1;\n",
+    "apps/worker/scripts/clean.ts": pairOfWrites,
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /apps\/worker\/scripts\/clean\.ts:2 \(2 awaited db writes\)/u);
+});
+
+test("package contracts refuses a packages directory that is not there", () => {
+  const result = gate("package-contracts.mjs", ["--root", makeDepsRoot("package-contracts-missing-root-", {})]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /package-contracts FAIL: a package root this gate scans is missing at packages/u,
+  );
+});
+
+test("package contracts refuses a packages directory holding no manifest", () => {
+  const root = makeDepsRoot("package-contracts-empty-root-", {});
+  mkdirSync(join(root, "packages"), { recursive: true });
+  const result = gate("package-contracts.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /package-contracts FAIL: 0 workspace package manifests were found under packages/u,
+  );
+});
+
+test("the model catalog gate refuses a source root that is not there", () => {
+  const result = gate("model-catalog-drift.mjs", ["--root", makeDepsRoot("model-catalog-missing-root-", {
+    "apps/worker/src/thing.ts": "export const value = 1;\n",
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /model-catalog-drift FAIL: a source root this gate scans is missing at packages/u,
+  );
+});
+
+test("deps consistency refuses a workspace glob that matches no project", () => {
+  const result = gate("check-deps-consistency.mjs", ["--root", makeDepsRoot("deps-empty-glob-gate-", {
+    "apps/one/package.json": '{"name":"one","dependencies":{"zod":"^3.25.76"}}\n',
+    "apps/two/package.json": '{"name":"two","dependencies":{"zod":"^3.25.76"}}\n',
+    "package.json": '{"name":"root"}\n',
+    "pnpm-workspace.yaml": 'packages:\n  - "renamed-apps/*"\n',
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /check-deps-consistency FAIL: the pnpm-workspace\.yaml glob "renamed-apps\/\*" matches no workspace project/u,
+  );
+});
+
+test("deps consistency refuses a workspace with nothing to compare", () => {
+  const result = gate("check-deps-consistency.mjs", ["--root", makeDepsRoot("deps-single-project-gate-", {
+    "package.json": '{"name":"root","dependencies":{"zod":"^3.25.76"}}\n',
+    "pnpm-workspace.yaml": "packages: []\n",
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /check-deps-consistency FAIL: the pnpm-workspace\.yaml globs resolve to 1 workspace project\(s\)/u,
+  );
+});
+
+test("the lint gate refuses a shared root that is not there", () => {
+  const root = copiedGateRoot("lint-missing-shared-root-");
+  writeFileSync(join(root, ".oxlintrc.json"), "{}\n");
+  mkdirSync(join(root, "apps/worker"), { recursive: true });
+  mkdirSync(join(root, "scripts"), { recursive: true });
+  const result = gate("lint.mjs", [], root);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /lint FAIL: a shared lint root this gate declares is missing at packages/u,
+  );
+});
+
+test("the lint gate refuses a missing apps directory", () => {
+  const root = copiedGateRoot("lint-missing-apps-");
+  writeFileSync(join(root, ".oxlintrc.json"), "{}\n");
+  const result = gate("lint.mjs", [], root);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /lint FAIL: the directory this gate derives its app roots from is missing at apps/u,
+  );
+});
+
+test("the lint gate refuses an apps directory with no app in it", () => {
+  const root = copiedGateRoot("lint-no-apps-");
+  writeFileSync(join(root, ".oxlintrc.json"), "{}\n");
+  mkdirSync(join(root, "apps"), { recursive: true });
+  const result = gate("lint.mjs", [], root);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stderr, /lint FAIL: 0 app directories were found under apps/u);
+});
+
+test("the lint gate lints an app nobody named", () => {
+  const root = makeDepsRoot("lint-new-app-", {
+    "apps/newapp/dirty.ts": "export const last = (items: string[]) => items[items.length - 1];\n",
+  });
+  for (const directory of ["apps/worker", "scripts", "packages"]) {
+    mkdirSync(join(root, directory), { recursive: true });
+  }
+  const result = gate("lint.mjs", ["--root", root, "--config", join(repoRoot, ".oxlintrc.json")]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /apps\/newapp\/dirty\.ts:1:\d+ unicorn\(prefer-at\)/u);
+});
+
+test("the boundary gate refuses a dependency-cruiser config that is not there", () => {
+  const root = makeDepsRoot("boundary-missing-config-", {});
+  const result = gate("boundaries.mjs", ["--root", root, "--config", join(root, "absent.cjs")]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /boundaries FAIL: the dependency-cruiser configuration this gate reads is missing at .*absent\.cjs/u,
+  );
+});
+
+test("the boundary gate refuses a dependency-cruiser report with no modules", () => {
+  const root = makeDepsRoot("boundary-empty-report-", {
+    "apps/worker/src/only.test.ts": "export const value = 1;\n",
+  });
+  const result = gate("boundaries.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /boundaries FAIL: 0 modules were found under the dependency-cruiser report for apps\/worker\/src/u,
+  );
+});
+
+test("the unused-code gate refuses a configured workspace that is not there", () => {
+  const root = makeDepsRoot("unused-missing-workspace-", {
+    "knip.json": '{"workspaces":{"apps/worker":{"entry":["src/index.ts"]}}}\n',
+  });
+  const result = gate("unused-code.mjs", ["--root", root, "--config", join(root, "knip.json")]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /unused-code FAIL: the Knip workspace "apps\/worker" is missing/u,
+  );
+});
+
+test("the unused-code gate refuses a configured workspace glob that matches nothing", () => {
+  const root = makeDepsRoot("unused-empty-glob-", {
+    "knip.json": '{"workspaces":{"packages/*":{"entry":["index.ts"]}}}\n',
+  });
+  const result = gate("unused-code.mjs", ["--root", root, "--config", join(root, "knip.json")]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /unused-code FAIL: the Knip workspace glob "packages\/\*" matches no directory/u,
+  );
+});
+
+test("the no-resurrected-paths gate refuses a retired path list that is not there", () => {
+  const root = makeDepsRoot("resurrected-missing-list-", {});
+  const result = gate("no-resurrected-paths.mjs", ["--root", root, "--list", join(root, "absent.json")]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stderr,
+    /no-resurrected-paths FAIL: the retired path list this gate reads is missing at .*absent\.json/u,
+  );
 });
 
 test("every Claude bridge starts by loading AGENTS.md", () => {
@@ -272,7 +689,7 @@ test("ignored retired residue is reported but passes the no-resurrected-paths ga
 });
 
 test("two awaited database writes outside repositories fail the consecutive-writes gate", () => {
-  const root = makeDepsRoot("consecutive-writes-fail-", {
+  const root = writesRoot("consecutive-writes-fail-", {
     "apps/worker/src/services/multi.ts": [
       "async function save() {",
       "  await db.insert(values);",
@@ -288,7 +705,7 @@ test("two awaited database writes outside repositories fail the consecutive-writ
 });
 
 test("repository and allowlisted writes pass the consecutive-writes gate", () => {
-  const root = makeDepsRoot("consecutive-writes-allowed-", {
+  const root = writesRoot("consecutive-writes-allowed-", {
     "apps/worker/src/db/repositories/allowed.ts": [
       "async function save() {",
       "  await db.insert(values);",
@@ -312,7 +729,7 @@ test("repository and allowlisted writes pass the consecutive-writes gate", () =>
 });
 
 test("typed functions and arrow function properties count awaited writes", () => {
-  const root = makeDepsRoot("consecutive-writes-typed-", {
+  const root = writesRoot("consecutive-writes-typed-", {
     "apps/worker/src/services/typed.ts": [
       "async function save(): Promise<void> {",
       "  await db.insert(values);",
@@ -338,7 +755,7 @@ test("typed functions and arrow function properties count awaited writes", () =>
 });
 
 test("sibling functions, nested arrows, and select pairs are scoped independently", () => {
-  const root = makeDepsRoot("consecutive-writes-scopes-", {
+  const root = writesRoot("consecutive-writes-scopes-", {
     "apps/worker/src/services/scopes.ts": [
       "async function first() {",
       "  await db.insert(values);",
@@ -394,6 +811,8 @@ test("the db client fence rejects raw database imports and allows new type only 
     "apps/worker/src/services/comment.ts": '// import { db } from "../db/client.js";\nconst text = "db/client";\n',
     "apps/worker/src/services/ignored.test.ts": 'import { db } from "../db/client.js"; void db;\n',
   }));
+  // Coverage is derived from apps/ and packages/, so both parents are anchors.
+  mkdirSync(join(root, "packages"), { recursive: true });
   const fail = gate("db-client-fence.mjs", ["--root", root], root);
   assert.equal(fail.status, gateFailure, fail.stderr || fail.stdout);
   assert.match(fail.stdout, /services\/static\.ts/u);
@@ -425,7 +844,7 @@ test("the db client fence rejects raw database imports and allows new type only 
 });
 
 test("a reintroduced definition schema branch fails the single schema version gate", async () => {
-  const root = await mkdtemp(join(tmpdir(), "single-schema-gate-"));
+  const root = singleSchemaRoot("single-schema-gate-");
   const source = join(root, "apps/worker/src/engine/definition");
   const examples = join(root, "docs/example-workflows");
   await mkdir(source, { recursive: true });
@@ -583,7 +1002,7 @@ test("adversarial retired schema spellings each fail the single schema version g
   ];
 
   for (const [index, fixture] of fixtures.entries()) {
-    const root = makeDepsRoot(`single-schema-adversarial-${index}-`, {
+    const root = singleSchemaRoot(`single-schema-adversarial-${index}-`, {
       [fixture.file]: fixture.contents,
     });
     const result = gate("single-schema-version.mjs", ["--root", root]);
@@ -593,7 +1012,7 @@ test("adversarial retired schema spellings each fail the single schema version g
 });
 
 test("an unrelated harness profile schema version branch passes the single schema version gate", () => {
-  const root = makeDepsRoot("single-schema-harness-pass-", {
+  const root = singleSchemaRoot("single-schema-harness-pass-", {
     "apps/worker/src/harness-profiles/manifest.ts":
       "export const oldManifest = (schemaVersion: number) => schemaVersion === 1;\n",
   });
@@ -603,7 +1022,7 @@ test("an unrelated harness profile schema version branch passes the single schem
 });
 
 test("a harness profile importing a local re-export is scanned for retired version helpers", () => {
-  const root = makeDepsRoot("single-schema-harness-local-import-", {
+  const root = singleSchemaRoot("single-schema-harness-local-import-", {
     "apps/worker/src/harness-profiles/manifest.ts": [
       'import { readRevision } from "./manifest-version";',
       "export const retired = readRevision(definition) === 1;",

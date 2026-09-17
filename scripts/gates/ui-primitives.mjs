@@ -9,9 +9,10 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { parseOptions, readJson } from "./shared.mjs";
+import { parseOptions, readJson, requireAnchor, requireScan } from "./shared.mjs";
 
 const sourceRoots = ["apps/dashboard/components", "apps/dashboard/app"];
+const invariant = "the rule that dashboard screens use the shared primitives and motion tokens";
 const sourceExtension = /\.tsx?$/u;
 const testFile = /\.test\.tsx$/u;
 const primitiveRoot = "apps/dashboard/components/ui/";
@@ -458,17 +459,22 @@ function findingKey({ line, path, rule }) {
 }
 
 function collectFindings(options, allowed) {
+  for (const path of sourceRoots) {
+    requireAnchor(options.root, path, "a dashboard source root this gate scans", invariant);
+  }
   const files = sourceRoots
     .flatMap((path) => sourceFiles(join(options.root, path)))
     .map((file) => [file, relative(options.root, file).replaceAll("\\", "/")])
     .filter(([, path]) => !motionTokenOwnerPaths.has(path))
     .filter(([, path]) => !testFile.test(path));
-  return files
+  requireScan(files.length, "dashboard screen files", sourceRoots.join(" and "), invariant);
+  const findings = files
     .flatMap(([file]) => findingsForFile(file, options.root))
     .filter((entry) => !allowed.has(findingKey(entry)))
     .toSorted((left, right) =>
       left.path.localeCompare(right.path) || left.line - right.line || left.rule.localeCompare(right.rule),
     );
+  return { findings, scanned: files.length };
 }
 
 function reportFindings(findings) {
@@ -504,11 +510,11 @@ function runSelfTest(options, allowed) {
       );
     }
   }
-  const realFindings = collectFindings(options, allowed);
-  reportFindings(realFindings);
-  assert.equal(realFindings.length, 0, "the real dashboard tree must pass");
+  const real = collectFindings(options, allowed);
+  reportFindings(real.findings);
+  assert.equal(real.findings.length, 0, "the real dashboard tree must pass");
   console.log(
-    `ui-primitives self-test PASS: ${selfTestFixtures.length} fixture(s) verified; real tree has 0 violations`,
+    `ui-primitives self-test PASS: ${selfTestFixtures.length} fixture(s) verified; real tree has 0 violations in ${real.scanned} scanned file(s)`,
   );
 }
 
@@ -522,6 +528,7 @@ function main() {
   const allowlistPath = options.allowlist ?? fileURLToPath(
     new URL("./ui-primitives.allowlist.json", import.meta.url),
   );
+  requireAnchor(options.root, allowlistPath, "the allowlist this gate reads", invariant);
   const allowlist = readJson(allowlistPath);
   validateAllowlist(allowlist);
   const allowed = new Set(allowlist.map(findingKey));
@@ -529,13 +536,13 @@ function main() {
     runSelfTest(options, allowed);
     return;
   }
-  const findings = collectFindings(options, allowed);
+  const { findings, scanned } = collectFindings(options, allowed);
   reportFindings(findings);
   if (findings.length > 0) {
     console.log(`ui-primitives FAIL: ${findings.length} violation(s)`);
     process.exitCode = 1;
   } else {
-    console.log("ui-primitives PASS: 0 violations");
+    console.log(`ui-primitives PASS: 0 violations in ${scanned} scanned file(s)`);
   }
 }
 

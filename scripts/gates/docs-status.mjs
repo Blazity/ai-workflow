@@ -9,16 +9,20 @@
  * to be both fresh and findable. The taxonomy and the reasoning are
  * docs/adr/ADR-005-documentation-taxonomy.md.
  *
- * What it checks, for every Markdown document under docs/ (except docs/archive/
- * and docs/research/), under apps/<app>/docs/, for each apps/<app>/AGENTS.md,
- * and for packages/AGENTS.md, README.md, AGENTS.md and SETUP.md at the
- * repository root:
+ * What it checks, for every Markdown document under DOCS_ROOT outside
+ * SKIPPED_DOC_DIRS, under apps/<app>/docs/, for each apps/<app>/AGENTS.md, for
+ * PACKAGES_AGENTS, and for each file in ROOT_DOCUMENTS:
  *   1. the first two lines are `Status: <value>` and `Last-verified: YYYY-MM-DD`;
  *   2. `Status:` is `current`, `draft`, or `superseded-by <path>` naming a file
  *      that exists;
- *   3. a `current` document was verified within the last 90 days;
- *   4. a `current` document is reachable within two Markdown link hops from
- *      README.md or AGENTS.md (docs/index.md is the usual first hop).
+ *   3. a `current` document was verified within the last MAX_AGE_DAYS days;
+ *   4. a `current` document is reachable within MAX_HOPS Markdown link hops
+ *      from one of ENTRY_POINTS (docs/index.md is the usual first hop).
+ *
+ * The lists and limits are named here, not copied: the constants below are the
+ * only place they are written. A copy in this comment is a second list to keep
+ * in step, and it already fell out of step once, naming three root documents
+ * while ROOT_DOCUMENTS held four.
  *
  * Files that begin with YAML frontmatter are skipped: a release note or a
  * SKILL.md is a published artifact with its own required first lines and its
@@ -34,6 +38,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import nodePath from "node:path";
 
 const gate = {
+    DOCS_ROOT: "docs",
     EMPTY_COUNT: 0,
     ENTRY_HOP: 0,
     ENTRY_POINTS: ["README.md", "AGENTS.md"],
@@ -45,6 +50,7 @@ const gate = {
     MAX_HOPS: 2,
     MIN_AGE_DAYS: 0,
     MS_PER_DAY: 86_400_000,
+    PACKAGES_AGENTS: "packages/AGENTS.md",
     ROOT_DOCUMENTS: ["README.md", "AGENTS.md", "SETUP.md", "CONTEXT.md"],
     SKIPPED_DOC_DIRS: ["docs/archive", "docs/research"],
     TODAY: (() => {
@@ -79,12 +85,9 @@ const gate = {
       return docs;
     },
     checkedDocuments() {
-      const docs = gate.listMarkdown("docs").filter(
-        (path) => !gate.SKIPPED_DOC_DIRS.some((dir) => path.startsWith(`${dir}/`)),
-      );
+      const docs = gate.docsTreeDocuments();
       docs.push(...gate.appDocuments(), ...gate.rootDocuments());
-      const packagesAgents = "packages/AGENTS.md";
-      if (existsSync(nodePath.join(gate.repoRoot, packagesAgents))) docs.push(packagesAgents);
+      if (existsSync(nodePath.join(gate.repoRoot, gate.PACKAGES_AGENTS))) docs.push(gate.PACKAGES_AGENTS);
       return [...new Set(docs)].toSorted();
     },
     collectFailures(path, reachableMap) {
@@ -116,6 +119,12 @@ const gate = {
       }
       return gate.statusFailures(path, header, reachableMap);
     },
+    /** Everything under docs/ the gate is responsible for, archives aside. */
+    docsTreeDocuments() {
+      return gate.listMarkdown(gate.DOCS_ROOT).filter(
+        (path) => !gate.SKIPPED_DOC_DIRS.some((dir) => path.startsWith(`${dir}/`)),
+      );
+    },
     expandFrontier(seen, frontier, hop) {
       const next = [];
       for (const path of frontier) {
@@ -130,6 +139,10 @@ const gate = {
         }
       }
       return next;
+    },
+    /** How many of the checked documents were skipped for having frontmatter. */
+    frontmatterSkipped(paths) {
+      return paths.filter((path) => gate.parseHeader(path).skipped).length;
     },
     hasFrontmatter(text) {
       return text.startsWith("---\n") || text.startsWith("---\r\n");
@@ -190,6 +203,12 @@ const gate = {
       }
       return [...targets];
     },
+    /** The anchors that are not on disk, so the refusal can name them. */
+    missingAnchors() {
+      return gate.requiredAnchors().filter(
+        (path) => !existsSync(nodePath.join(gate.repoRoot, path)),
+      );
+    },
     parseHeader(path) {
       const text = readFileSync(nodePath.join(gate.repoRoot, path), "utf8");
       if (gate.hasFrontmatter(text)) {
@@ -226,6 +245,15 @@ const gate = {
       return seen;
     },
     repoRoot: nodePath.resolve(import.meta.dirname, "..", ".."),
+    /*
+     * The paths the checked set is computed from, built from the constants that
+     * already name them rather than written out a second time. Each one used to
+     * be dropped with existsSync, so a renamed document left the set silently
+     * and the gate reported a clean run over what remained.
+     */
+    requiredAnchors() {
+      return [...gate.ROOT_DOCUMENTS, gate.PACKAGES_AGENTS, gate.DOCS_ROOT];
+    },
     rootDocuments() {
       const docs = [];
       for (const path of gate.ROOT_DOCUMENTS) {
@@ -265,9 +293,26 @@ const gate = {
       return [];
     },
   },
-  hopMap = gate.reachableWithinHops(),
   { console: nodeConsole, process: nodeProcess } = globalThis,
-  problems = gate.checkedDocuments().flatMap((path) => gate.collectFailures(path, hopMap));
+  missing = gate.missingAnchors();
+
+if (missing.length > gate.EMPTY_COUNT) {
+  nodeConsole.error(
+    `docs-status: the set of checked documents is computed from paths that are missing: ${missing.join(", ")}. Documentation currency is unproven until each is restored or the gate is pointed at where it moved.`,
+  );
+  nodeProcess.exit(gate.EXIT_FAILURE);
+}
+
+if (gate.docsTreeDocuments().length === gate.EMPTY_COUNT) {
+  nodeConsole.error(
+    `docs-status: 0 Markdown documents were found under ${gate.DOCS_ROOT}/, so documentation currency is unproven. The gate had nothing to look at there.`,
+  );
+  nodeProcess.exit(gate.EXIT_FAILURE);
+}
+
+const hopMap = gate.reachableWithinHops(),
+  checked = gate.checkedDocuments(),
+  problems = checked.flatMap((path) => gate.collectFailures(path, hopMap));
 
 if (problems.length > gate.EMPTY_COUNT) {
   nodeConsole.error(`docs-status: ${problems.length} problem(s)`);
@@ -277,4 +322,6 @@ if (problems.length > gate.EMPTY_COUNT) {
   nodeProcess.exit(gate.EXIT_FAILURE);
 }
 
-nodeConsole.log("docs-status: every checked document has a valid, current, reachable header");
+nodeConsole.log(
+  `docs-status: ${checked.length} document(s) checked, ${gate.frontmatterSkipped(checked)} skipped for frontmatter; every checked document has a valid, current, reachable header`,
+);
