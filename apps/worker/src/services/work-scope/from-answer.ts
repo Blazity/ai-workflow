@@ -55,7 +55,7 @@ export interface RepositoryAnswerPersistence {
 
 /** How the Jira comment path composes an answer: each qualifying comment as
  *  "<author>: <body>", joined with a blank line
- *  (`services/clarifications/resume-from-comments.ts:327-328`). The space after
+ *  (`services/clarifications/resume-from-comments.ts:346-347`). The space after
  *  the colon is what keeps "github:acme/web" from reading as an author. The
  *  expansion protocol's refusal reader knows the same two shapes
  *  (`COMMENT_SEPARATOR` and `COMMENT_AUTHOR_PREFIX`,
@@ -78,11 +78,14 @@ const COMPOSED_AUTHOR_PREFIX = /^[^:\n]+: /;
  * repository, and the person is asked again about a repository they just named.
  *
  * What tells a comment from a paragraph is the author, and here the author is
- * known: only an answer no more than one person wrote is ever read (the guard
- * below declines the rest), so every comment in it opens with the SAME name.
- * Taking that name from the front of the answer gives the exact prefix each of
- * this person's comments carries, and a paragraph of their own cannot match it
- * unless they wrote their own name in front of it.
+ * known: the record only ever decides from an answer no more than one person
+ * wrote (the guard in `recordRepositoryAnswer` declines the rest), so every
+ * comment in it opens with the SAME name. Taking that name from the front of the
+ * answer gives the exact prefix each of this person's comments carries, and a
+ * paragraph of their own cannot match it unless they wrote their own name in
+ * front of it. The model reads an answer before its authors are counted, so it
+ * can be handed one several people wrote; there the first author's line comes
+ * off and a second author's stays, and the record declines those words anyway.
  */
 function withoutComposedAuthors(answer: string): string {
   const [author] = COMPOSED_AUTHOR_PREFIX.exec(answer) ?? [];
@@ -91,6 +94,40 @@ function withoutComposedAuthors(answer: string): string {
     .split(COMPOSED_COMMENT_SEPARATOR)
     .map((comment) => (comment.startsWith(author) ? comment.slice(author.length) : comment))
     .join(COMPOSED_COMMENT_SEPARATOR);
+}
+
+/**
+ * WHAT THIS PERSON WROTE, which is what every reader of an answer is handed: the
+ * model that reads it where it arrives and the record that decides from it. One
+ * rule for both, because two readers handed two different texts reach two
+ * different conclusions about one reply.
+ *
+ * The composed author line comes off ONLY where an author line was composed. On
+ * the ticket it is not the person's words: handed to the model, "Filip
+ * Maszota: <reply>" was paraphrased back to Filip as a reply that referenced
+ * Filip Maszota, and a display name like "Demo Team" puts a word in front of the
+ * reader that points at a repository nobody chose.
+ *
+ * The strip used to run on every answer, and on the two channels that compose
+ * nothing it ate the start of the person's own sentence: the prefix is
+ * "anything, then a colon and a space", which is also how somebody writes
+ * "acme/api: this is the one" into the dashboard box or sends it through MCP.
+ * That reply lost the only repository it named and was answered with "nothing
+ * in that answer named a repository", while the identical words on a ticket
+ * attached it. The other direction is worse and is why this is a defect rather
+ * than a nuisance: "api: none" became a bare "none" and declined every
+ * repository the question listed, which is a decision fabricated out of a
+ * person's words (A18).
+ *
+ * The words the channel delivered stay as they arrived everywhere else: stored
+ * on the row, compared against the next delivery, and redelivered on a retry.
+ * Only what is READ changes.
+ */
+export function answerAsWritten(
+  answer: string,
+  channel: { composedFromComments: boolean },
+): string {
+  return channel.composedFromComments ? withoutComposedAuthors(answer) : answer;
 }
 
 /**
@@ -185,22 +222,11 @@ export async function recordRepositoryAnswer(
 ): Promise<RepositoryAnswerOutcome> {
   const askedRepositories = input.row.askedRepositories ?? [];
   const authorCount = input.authorCount;
-  // WHAT THIS PERSON WROTE, with the composed author line taken off ONLY where
-  // an author line was composed.
-  //
-  // The strip used to run on every answer, and on the two channels that compose
-  // nothing it ate the start of the person's own sentence: the prefix is
-  // "anything, then a colon and a space", which is also how somebody writes
-  // "acme/api: this is the one" into the dashboard box or sends it through MCP.
-  // That reply lost the only repository it named and was answered with "nothing
-  // in that answer named a repository", while the identical words on a ticket
-  // attached it. The other direction is worse and is why this is a defect rather
-  // than a nuisance: "api: none" became a bare "none" and declined every
-  // repository the question listed, which is a decision fabricated out of a
-  // person's words.
-  const theirAnswer = input.composedFromComments
-    ? withoutComposedAuthors(input.answer)
-    : input.answer;
+  // WHAT THIS PERSON WROTE, by the same rule the model was handed it
+  // (`answerAsWritten`).
+  const theirAnswer = answerAsWritten(input.answer, {
+    composedFromComments: input.composedFromComments,
+  });
 
   // Words several people wrote together decide nothing (A50). The ticket
   // channel composes its answer out of every comment posted after the

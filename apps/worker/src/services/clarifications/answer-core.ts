@@ -17,6 +17,7 @@ import {
   listRepositoryCatalogRows,
 } from "../../db/repositories/repository-catalog.js";
 import {
+  answerAsWritten,
   recordRepositoryAnswer,
   type AnswerReadingDeps,
   type RepositoryAnswerPersistence,
@@ -348,6 +349,11 @@ async function answerClarificationAndResumeWithPersistence(
   const answerer = isResumeRetry
     ? { id: row.answeredById ?? actor.id, label: row.answeredByLabel ?? actor.label }
     : actor;
+  // Which channel this answer came from, and it is the mark the composer put on
+  // the actor rather than a guess: only the ticket path composes an answer out
+  // of comments. Three things below read it, the reading, the record and the
+  // decline sentence, so it is decided once.
+  const composedFromComments = isComposedAnswerActor(answerer.id);
 
   // Ticketless scope:any continuations have no Jira lifecycle. Ticket-backed
   // checkpoints still fail early when their ticket has been deleted. The
@@ -392,6 +398,19 @@ async function answerClarificationAndResumeWithPersistence(
   const repositoryQuestion = await repositoryQuestionOfRow(row, (subjectKey) =>
     persistence.readWorkScope(subjectKey),
   );
+  // WHAT THE READER IS HANDED IS WHAT THE PERSON WROTE, by the one rule the
+  // record reads by (`answerAsWritten`): on the ticket the composed author line
+  // comes off, and on the dashboard and MCP nothing does. Handed the line, the
+  // model paraphrased "Filip Maszota: <reply>" back to Filip as a reply that
+  // referenced Filip Maszota, and a display name like "Demo Team" points at a
+  // repository nobody chose.
+  //
+  // `answer` itself stays as the channel delivered it, and it has to. The guard
+  // below compares it with the next delivery of the same comments, the row
+  // stores it, and the cron's retry hands the stored text back in as the
+  // answer, where the record would strip it a second time and eat a person's
+  // own "acme/api: " (A18).
+  const theirWords = answerAsWritten(answer, { composedFromComments });
   // THESE EXACT WORDS, READ BEFORE, AND WE COULD NOT READ THEM. The Jira path
   // re-composes its answer out of the ticket's comments on every poll tick, so
   // without this the person would get the same sentence posted beside their
@@ -413,7 +432,7 @@ async function answerClarificationAndResumeWithPersistence(
     toldBefore?.readBy === "model"
       ? toldBefore
       : repositoryQuestion
-        ? await readAnswerForRow(row, answer, repositoryQuestion, {
+        ? await readAnswerForRow(row, theirWords, repositoryQuestion, {
             isResumeRetry,
             ...(input.answerReadingDeps ? { deps: input.answerReadingDeps } : {}),
           })
@@ -571,11 +590,6 @@ async function answerClarificationAndResumeWithPersistence(
   // Before the resume, because the resumed run reads the RECORD and never the
   // answer text: a run that died between the two would otherwise lose what a
   // person said, and the next run would ask them again.
-  // Which channel this answer came from, and it is the mark the composer put on
-  // the actor rather than a guess: only the ticket path composes an answer out
-  // of comments. Two things below read it, the record and the decline sentence,
-  // so it is decided once.
-  const composedFromComments = isComposedAnswerActor(answerer.id);
   let recorded: RepositoryAnswerOutcome = {};
   if (authorship.kind === "write") {
     recorded = await recordRepositoryAnswer(persistence, {

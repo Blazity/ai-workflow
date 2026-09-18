@@ -349,7 +349,10 @@ function reading(
  * Their reply goes in whole and unedited. It is the one thing on this path that
  * must not be pre-chewed: the defect that made this change necessary was a
  * regex stripping "api:" off the front of "api: none" as a comment author,
- * turning a reply nobody could read into a refusal of four repositories.
+ * turning a reply nobody could read into a refusal of four repositories. The
+ * one thing taken off first is not theirs: the author line the Jira comment
+ * channel composes in front of each comment, and only on that channel, by the
+ * caller (`answerAsWritten`).
  */
 function renderAnswer(answer: string, question: RepositoryQuestion): string {
   return [
