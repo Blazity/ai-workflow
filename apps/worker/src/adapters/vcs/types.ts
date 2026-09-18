@@ -1,37 +1,34 @@
 import { createHash } from "node:crypto";
+import type { ReviewThreadFeed, ReviewThreadSource, VCSAdapter } from "@integrations/sdk";
 
-export interface PullRequest {
-  id: number;
-  url: string;
-  branch: string;
-}
-
-export interface PullRequestHead {
-  headSha: string;
-  /** Provider-authoritative source branch (GitHub head / GitLab source). Comment
-   * events carry no branch name, so binding adopts this instead. */
-  headRef?: string;
-  /** Provider-authoritative target branch (GitHub base / GitLab target). */
-  baseRef: string;
-  /** Provider-neutral current PR/MR lifecycle state. */
-  state: "open" | "closed" | "merged";
-  /** GitLab's current MR head pipeline. Absent for providers without this concept. */
-  headPipelineId?: number;
-  /** GitLab's provider-authoritative current status for the MR head pipeline. */
-  headPipelineStatus?: string;
-  /** Jobs that are still failed in GitLab's current MR head pipeline. */
-  headPipelineFailedChecks?: Array<{ id: number; name: string }>;
-  /** GitHub's latest run for each check name on this exact head. */
-  latestCheckRuns?: LatestCheckRun[];
-}
-
-export interface LatestCheckRun {
-  id: number;
-  name: string;
-  appSlug: string;
-  status: string;
-  conclusion: string | null;
-}
+// The VCS port (VCSAdapter and every type it names, plus the two review ledger
+// limits an adapter applies) lives in @integrations/sdk (ADR-010), where an
+// integration can implement it. Every name core imported from here is still
+// exported from here, with the same kind, so no caller changed.
+//
+// What stays is not the port: the optional provider extensions below, whose
+// GateStatusRef still names GitHub and GitLab, the review ledger's engine
+// types, and the finding digest, which needs node:crypto and so cannot live in
+// the SDK's browser-safe entry.
+export {
+  REVIEW_LEDGER_MAX_CONTEXT_THREADS,
+  REVIEW_LEDGER_MAX_WORK_ITEMS,
+  type CheckRunResult,
+  type LatestCheckRun,
+  type PostRunFailureNoteInput,
+  type PRComment,
+  type PullRequest,
+  type PullRequestHead,
+  type ReviewThread,
+  type ReviewThreadFeed,
+  type ReviewThreadNote,
+  type ReviewThreadSource,
+  type ReviewThreadTarget,
+  type SettleReviewThreadAction,
+  type SettleReviewThreadInput,
+  type SettleReviewThreadResult,
+  type VCSAdapter,
+} from "@integrations/sdk";
 
 export interface ManualDispatchPullRequestSnapshot {
   prNumber: number;
@@ -74,67 +71,12 @@ export function hasManualDispatchPrCapability(
   );
 }
 
-export interface PRComment {
-  author: string;
-  body: string;
-  liked: boolean;
-  filePath?: string;
-  startLine?: number;
-  endLine?: number;
-}
-
 // --- Review ledger contract (types only; adapters, logic and wiring land in later stages) ---
-
-export type ReviewThreadSource = "human" | "bot" | "third_party";
-
-export interface ReviewThreadNote {
-  author: string;
-  body: string;
-  createdAt: string; // ISO 8601
-  isLedgerReply: boolean; // body carries a review ledger marker
-}
-
-/**
- * Identity and location of a thread, without a word of its conversation. This
- * is everything settlement needs, and the only part of a thread that may travel
- * through the durable event log; see {@link ReviewLedgerDurableState}.
- */
-export type ReviewThreadTarget = {
-  threadId: string; // provider id: GitLab discussion id, GitHub PRRT_ node id; for non-thread comments the comment id
-  alias: string; // "T1".."Tn", assigned by code in stable order (first note createdAt asc)
-  source: ReviewThreadSource; // bot = our own bot (vcs-bot-identity), third_party = provider bot account, else human
-  resolvable: boolean; // provider can mark it resolved
-  filePath?: string;
-  line?: number;
-};
-
-export interface ReviewThread extends ReviewThreadTarget {
-  awaitingHuman: boolean; // last note is a ledger reply: context only, not a work item
-  notes: ReviewThreadNote[];
-}
-
-export interface ReviewThreadFeed {
-  threads: ReviewThread[]; // unresolved threads only; work items are the ones isReviewLedgerWorkItem accepts, and they lead the array
-  truncated: number; // work items dropped beyond the limit (REVIEW_LEDGER_MAX_WORK_ITEMS = 20)
-  contextTruncated: number; // context threads dropped beyond REVIEW_LEDGER_MAX_CONTEXT_THREADS, so the prompt can say the background is partial
-  snapshotAt: string; // ISO 8601, when the feed was read
-}
 
 // The work-item predicate itself lives in adapters/vcs/vcs-bot-identity.ts:115: this module
 // imports node:crypto for the finding digest, so a value export from here would
 // drag Node into the workflow bundle the moment the ledger's pure logic needed
 // the predicate.
-
-export const REVIEW_LEDGER_MAX_WORK_ITEMS = 20;
-
-/**
- * Threads the ledger carries as background rather than as work: answered by the
- * bot (awaiting a human) or opened by a third-party reviewer, which the agent
- * reads but never replies to. They get their own cap so they can never crowd out
- * an unanswered human thread, and so an unbounded tail of them cannot bloat the
- * prompt.
- */
-export const REVIEW_LEDGER_MAX_CONTEXT_THREADS = 20;
 
 export type ReviewThreadDispositionKind =
   | "actionable"
@@ -227,75 +169,6 @@ export type ReviewLedgerDurableState = {
   feedLite: ReviewLedgerDurableFeedEntry[];
 };
 
-export type SettleReviewThreadAction =
-  | "replied"
-  | "replied_and_resolved"
-  | "skipped_existing_reply"
-  // Answered, not resolved, and marked stale: somebody wrote after the snapshot,
-  // so the thread comes back as a work item instead of parking on a human.
-  | "replied_stale";
-
-export interface SettleReviewThreadInput {
-  prId: number;
-  // Identity only: settlement must work from what survives the event log.
-  thread: ReviewThreadTarget;
-  body: string; // already contains the ledger marker for thread.threadId
-  resolve: boolean;
-  snapshotAt: string;
-}
-
-export interface SettleReviewThreadResult {
-  action: SettleReviewThreadAction;
-}
-
-export interface PostRunFailureNoteInput {
-  prId: number;
-  runId: string;
-  body: string;
-}
-
-export interface CheckRunResult {
-  name: string;
-  status: "completed" | "in_progress" | "queued";
-  conclusion: string | null;
-  logs?: string;
-}
-
-export interface VCSAdapter {
-  /** Create without mutating a same-named branch owned by somebody else. */
-  createBranchIfMissing(
-    name: string,
-    base: string,
-  ): Promise<"created" | "existing">;
-  /** Destructive reset; callers must prove workflow ownership before invoking. */
-  resetOwnedBranch(name: string, base: string): Promise<void>;
-  createPR(branch: string, title: string, body: string): Promise<PullRequest>;
-  /** Commits content through the provider API, bypassing the memory publication
-   * gate in trusted-workspace-publisher.ts: any future caller must run its range
-   * through verifyPublishedMemoryScope first. */
-  push(
-    branch: string,
-    files: Array<{ path: string; content: string }>,
-    options?: { mergeParentSha?: string; message?: string },
-  ): Promise<void>;
-  getPRComments(prId: number): Promise<PRComment[]>;
-  postPRComment(prId: number, body: string): Promise<{ url: string | null }>;
-  getCheckRunResults(prId: number): Promise<CheckRunResult[]>;
-  getPRConflictStatus(prId: number): Promise<boolean>;
-  /** Re-read the provider's authoritative current PR/MR head commit. */
-  getPRHeadSha(prId: number): Promise<string>;
-  findPR(branch: string): Promise<PullRequest | null>;
-  getBranchSha(branch: string): Promise<string>;
-  /** Return null only when the provider authoritatively reports no such branch. */
-  getBranchShaIfExists(branch: string): Promise<string | null>;
-  getPRHead(prId: number): Promise<PullRequestHead>;
-  /** Optional because only GitHub exposes Check Run identities. */
-  getLatestCheckRuns?(headSha: string): Promise<LatestCheckRun[]>;
-  listReviewThreads(prId: number): Promise<ReviewThreadFeed>;
-  settleReviewThread(input: SettleReviewThreadInput): Promise<SettleReviewThreadResult>;
-  postRunFailureNote(input: PostRunFailureNoteInput): Promise<void>;
-}
-
 export interface CheckRunAnnotation {
   path: string;
   startLine: number;
@@ -333,7 +206,7 @@ export type GateStatusRef =
   | { provider: "gitlab"; name: string; headSha: string };
 
 /**
- * Capability interface — *not* extended onto VCSAdapter, because GitLab
+ * Capability interface, *not* extended onto VCSAdapter, because GitLab
  * providers expose this differently. Callers check
  * `hasGateStatusCapability(adapter)` before
  * invoking these methods. Adding methods to VCSAdapter directly would

@@ -47,6 +47,7 @@
     "@better-auth/sso": "1.6.30",
     "@chat-adapter/slack": "^4.20.2",
     "@gitbeaker/rest": "^43.8.0",
+    "@integrations/sdk": "workspace:*",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@neondatabase/serverless": "^1.1.0",
     "@octokit/auth-app": "catalog:",

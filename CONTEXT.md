@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-13
+Last-verified: 2026-09-18
 
 # AI Workflow
 
@@ -177,6 +177,46 @@ A typed connection from one repository catalog profile to another. Its fixed
 kind explains how the repositories relate in prompts and discovery; an optional
 note adds operator context without becoming an instruction line.
 _Avoid_: Free-form relationship label
+
+**Integration**:
+A package under `integrations/<id>` that connects the product to one third
+party, such as an issue tracker, a chat or a version control host. Its manifest
+declares what it needs to connect and what it unlocks (capabilities, blocks,
+pages, health checks); its runtime receives only what core hands it: its
+connection, an HTTP client, a logger, and while a block runs, the run, the
+capabilities the block declared and a model. It is compiled into every build;
+a deployment decides whether it is connected and enabled.
+_Avoid_: Plugin in code and docs (fine in conversation), adapter, provider when the package is meant
+
+**Integration Capability**:
+A seam in core that an integration can fill: `issue_tracker`, `vcs`,
+`messaging`, and the reserved `memory`, `agent_tracing` and `agent_tools`. Each
+has a port the provider implements and a cardinality: one active provider per
+deployment, or many at once. It is not a Harness Capability, which is what a
+model harness advertises in the model catalog (reasoning efforts, service
+tiers).
+_Avoid_: Feature, harness capability
+
+**Connection Source**:
+Where an integration's connection values come from: the environment variables
+its fields declare, or values an admin stored from the dashboard. There is
+exactly one per integration, chosen explicitly, and values never mix across the
+two. With nothing stored, a complete environment is the source; a partial one
+makes the integration Failing.
+_Avoid_: Override, fallback
+
+**Integration Block**:
+A block that belongs to an integration. Its type is `<integration id>_<name>`,
+the palette groups it under the integration, it is available only while the
+integration is connected and enabled, and it runs as exactly one step. Waiting
+for a person, looping and sleeping stay in core blocks.
+_Avoid_: Provider block, plugin block
+
+**Generic Integration Step**:
+The one core step that runs the executor of every Integration Block. Integration
+code carries no step directive, so moving or renaming an integration never
+strands a run.
+_Avoid_: Integration step, which reads as a step inside the integration
 
 **Wiki Repository**:
 An auxiliary Git repository attached to a provider object for documentation.

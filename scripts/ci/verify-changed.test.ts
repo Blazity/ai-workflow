@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   candidateDiff,
   assertCandidate,
+  INTEGRATION_SDK_SEAM_TESTS,
   listDirectory,
   namesDiff,
   parseArgs,
@@ -65,6 +66,8 @@ const GRAPH_PACK =
   [...WORKFLOW_TESTS, ...WORKFLOW_GRAPH_TESTS].join(" ");
 const PACKAGES = ["pnpm run test:packages", "pnpm run test:packages:zod4"];
 const GRAPH_ZOD4 = "pnpm --filter @shared/workflow-graph run test:zod4";
+const SDK_SEAM =
+  "pnpm --dir apps/worker exec vitest run " + INTEGRATION_SDK_SEAM_TESTS.join(" ");
 const SDK = "pnpm run test:workflow-sdk";
 const GATES = "pnpm run gates";
 const BLOCK_CATALOG = "pnpm run gen:blocks --check";
@@ -190,6 +193,8 @@ test("scope table selects only exact narrow commands", () => {
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
     [["packages/conditions/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
     [["packages/costs/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
+    [["integrations/sdk/index.ts"], ["pnpm run typecheck", SDK_SEAM, ...PACKAGES, GATES]],
+    [["integrations/sdk/conformance.test.ts"], ["pnpm run typecheck", SDK_SEAM, ...PACKAGES, GATES]],
     [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, ...PACKAGES, GATES]],
     [["packages/workflow-graph/v2-branch.ts"], ["pnpm run typecheck", ...WB.slice(1), GRAPH_PACK, SDK, ...PACKAGES, GRAPH_ZOD4, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
@@ -213,6 +218,18 @@ test("scope table selects only exact narrow commands", () => {
     [[".dependency-cruiser.cjs"], [GATES]],
   ];
   for (const [paths, expected] of rows) assert.deepEqual(commands(paths), expected, paths.join(","));
+});
+
+test("an integration package change is a known scope that runs the SDK's own suites and its seam in the worker", () => {
+  const planned = plan(["integrations/sdk/capabilities.ts"]);
+  assert.equal(planned.status, "READY");
+  assert.deepEqual(planned.errors, []);
+  assert.equal(planned.scopes.includes("integrations"), true);
+  const shown = new Set(planned.commands.map(show));
+  for (const command of ["pnpm run typecheck", ...PACKAGES, SDK_SEAM]) {
+    assert.equal(shown.has(command), true, command);
+  }
+  assert.deepEqual(commands(["integrations/sdk/NOTES.md"]), ["pnpm run gate:docs-status"]);
 });
 
 test("a workflow graph package change plans the worker guards and the suites that import the package", () => {
@@ -344,17 +361,26 @@ test("the package test scripts name every package that owns the script they run"
   const root = JSON.parse(await readFile("package.json", "utf8")) as {
     scripts: Record<string, string>;
   };
-  const manifests = await Promise.all(
-    (await readdir("packages", { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && existsSync(`packages/${entry.name}/package.json`))
-      .map(async (entry) => {
-        const file = `packages/${entry.name}/package.json`;
-        return JSON.parse(await readFile(file, "utf8")) as {
-          name: string;
-          scripts?: Record<string, string>;
-        };
-      }),
-  );
+  // Integration packages are workspace packages too: a package there that owns
+  // a test script and is missing from the root list would never run in CI.
+  const roots = ["packages", "integrations"];
+  const manifests = (
+    await Promise.all(
+      roots.map(async (root) =>
+        Promise.all(
+          (await readdir(root, { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory() && existsSync(`${root}/${entry.name}/package.json`))
+            .map(async (entry) => {
+              const file = `${root}/${entry.name}/package.json`;
+              return JSON.parse(await readFile(file, "utf8")) as {
+                name: string;
+                scripts?: Record<string, string>;
+              };
+            }),
+        ),
+      ),
+    )
+  ).flat();
   assert.ok(manifests.length >= 7, "every workspace package carries a package.json");
 
   const owners = (script: string) =>

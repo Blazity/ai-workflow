@@ -1,0 +1,75 @@
+import type { IssueTrackerAdapter } from "./issue-tracker";
+import type { MessagingAdapter } from "./messaging";
+import type { VCSAdapter } from "./vcs";
+
+/**
+ * Integration capabilities: the seams in core that an integration can fill.
+ * Not to be confused with a harness capability, which is what a model harness
+ * advertises (reasoning efforts, service tiers) in the model catalog.
+ *
+ * `one` means one active provider per deployment, chosen by an admin when
+ * several are connected. `many` means every connected provider serves at once
+ * (for `vcs`, core picks the provider of each repository).
+ *
+ * A capability whose `reservedFor` is set has an id and a cardinality but no
+ * port yet. Declaring it is a type error and a conformance failure until the
+ * named stage designs its port; nothing here guesses that shape.
+ */
+export const INTEGRATION_CAPABILITIES = {
+  issue_tracker: { cardinality: "one", reservedFor: null },
+  vcs: { cardinality: "many", reservedFor: null },
+  messaging: { cardinality: "one", reservedFor: null },
+  /** Designed in S13 against the built-in store and two external engines. */
+  memory: { cardinality: "one", reservedFor: "S13" },
+  /** Designed in S8 from what Arthur's tracer hands to a sandbox today. */
+  agent_tracing: { cardinality: "many", reservedFor: "S8" },
+  /** MCP servers handed to sandbox agents; waits for AIW-392, a later plan. */
+  agent_tools: { cardinality: "many", reservedFor: "a later plan, after AIW-392" },
+} as const satisfies Record<
+  string,
+  { cardinality: "one" | "many"; reservedFor: string | null }
+>;
+
+export type IntegrationCapabilityId = keyof typeof INTEGRATION_CAPABILITIES;
+
+/** What a provider of each capability implements. Only ported capabilities appear. */
+export interface IntegrationCapabilityPorts {
+  issue_tracker: IssueTrackerAdapter;
+  vcs: VCSAdapter;
+  messaging: MessagingAdapter;
+}
+
+/** A capability an integration may declare and implement today. */
+export type ProvidedCapabilityId = keyof IntegrationCapabilityPorts;
+
+/** Capability ids with no port yet. See `INTEGRATION_CAPABILITIES[id].reservedFor`. */
+export type ReservedCapabilityId = Exclude<IntegrationCapabilityId, ProvidedCapabilityId>;
+
+/**
+ * The repository a `vcs` adapter is created for. Field for field the shape
+ * core already passes to its providers, so the move in S10 changes no caller.
+ */
+export interface VcsRepositoryTarget {
+  /** The provider's own path for the repository, such as `owner/name` or a project id. */
+  repoPath: string;
+  baseBranch: string;
+}
+
+/**
+ * A repository as core knows it, for a block that reaches `vcs`: the provider
+ * is the id of the integration that serves it.
+ */
+export interface VcsRepositoryRef extends VcsRepositoryTarget {
+  provider: string;
+}
+
+/**
+ * How a block reaches a capability it declared in `requires.capabilities`.
+ * A capability with one active provider is its adapter; `vcs`, with many, is a
+ * lookup by repository.
+ */
+export interface IntegrationCapabilityAccess {
+  issue_tracker: IssueTrackerAdapter;
+  vcs: (repository: VcsRepositoryRef) => VCSAdapter;
+  messaging: MessagingAdapter;
+}

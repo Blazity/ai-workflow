@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-14
+Last-verified: 2026-09-18
 
 # Documentation index
 
@@ -53,6 +53,7 @@ checking the smaller set that is left (ADR-007).
 | [adr/ADR-007-empty-scan-is-a-refusal.md](./adr/ADR-007-empty-scan-is-a-refusal.md) | Why a gate that scanned nothing refuses instead of passing, the two helpers that refuse, and the one gate that cannot |
 | [adr/ADR-008-claims-the-code-owns.md](./adr/ADR-008-claims-the-code-owns.md) | When a document may restate a list the code owns, and the test that holds the copy level in both directions |
 | [adr/ADR-009-agent-instruction-layers.md](./adr/ADR-009-agent-instruction-layers.md) | Where agent instructions live (router, per-area files, path-scoped rules, archive) and the byte ceilings a hook warns about |
+| [adr/ADR-010-integrations.md](./adr/ADR-010-integrations.md) | What an integration is and what it receives: the package layout, the capability ports, the context, connection sources, the conformance check, the inventory it was designed from, and the change log of the SDK |
 
 ## Product
 

@@ -1,0 +1,85 @@
+/**
+ * The `messaging` capability port: what an integration implements so core can
+ * tell people in a chat channel what a ticket's run is doing. One provider is
+ * active per deployment.
+ *
+ * Moved from `apps/worker/src/adapters/messaging/types.ts`, which re-exports
+ * every name, so no core caller changed. The comments still describe Slack,
+ * the only provider today; ADR-010 lists that as debt owned by S9.
+ */
+import type { RunPullRequest } from "@shared/contracts";
+
+export type TicketEvent =
+  | { kind: "started" }
+  | {
+      kind: "needs_clarification";
+      /**
+       * Deep link to the dashboard ticket view where a human answers the
+       * questions. Preferred over commentUrl when present.
+       */
+      dashboardUrl?: string;
+      /**
+       * Deep link to the posted Jira comment (e.g. `?focusedCommentId=...`).
+       * The workflow posts a best-effort questions comment on pause, so this is
+       * sent when that post succeeds. Falls back to the plain ticket link when
+       * neither url is present.
+       */
+      commentUrl?: string;
+      /** The clarification questions, rendered numbered in the thread reply. */
+      questions?: string[];
+      /** Optional suggested answers, rendered on a single "Suggested" line. */
+      suggestedAnswers?: string[];
+      usageReport?: string;
+    }
+  | {
+      /**
+       * One entry per repository the run published to, so a run spanning a
+       * GitHub repo and a GitLab repo (or two repos on one provider) links every
+       * PR/MR instead of only the first. Senders only emit this event once a
+       * publication produced at least one; the formatters still degrade to
+       * link-less copy rather than trusting that.
+       */
+      kind: "pr_ready";
+      prs: RunPullRequest[];
+      usageReport: string;
+      extraText?: string;
+    }
+  | {
+      kind: "failed";
+      phase?: "research" | "impl" | "review" | "pre-pr-checks" | "push";
+      reason?: string;
+      usageReport?: string;
+    }
+  | {
+      kind: "plan_approval_requested";
+      /** Deep link to the dashboard view where a human approves the plan. */
+      dashboardUrl?: string;
+      /** Short excerpt of the proposed plan. Not rendered in the Slack copy. */
+      planPreview?: string;
+    }
+  | { kind: "canceled"; reason: string }
+  | {
+      /**
+       * Free-form message from a `send_slack_message` block in "always" mode.
+       * Posted as a thread reply under the ticket status without touching the
+       * top-level status line (see chatsdk `notifyForTicket`).
+       */
+      kind: "note";
+      text: string;
+    };
+
+export interface MessagingAdapter {
+  /**
+   * Send a ticket-scoped notification to the configured channel.
+   *
+   * The first `started` event for a ticket posts top-level and records its
+   * Slack message id as the lifetime parent. Subsequent events post as
+   * thread replies under that parent. If the parent has been deleted, the
+   * adapter clears the mapping and retries top-level (without re-anchoring
+   * unless the new event is `started`).
+   *
+   * Never throws: failures are logged and swallowed so workflow runs are
+   * never broken by a notification error.
+   */
+  notifyForTicket(ticketKey: string, event: TicketEvent): Promise<void>;
+}

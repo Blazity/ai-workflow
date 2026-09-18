@@ -168,6 +168,9 @@ importers:
       '@gitbeaker/rest':
         specifier: ^43.8.0
         version: 43.8.0
+      '@integrations/sdk':
+        specifier: workspace:*
+        version: link:../../integrations/sdk
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(zod@3.25.76)
@@ -283,6 +286,28 @@ importers:
       vitest:
         specifier: ^3.2.6
         version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(happy-dom@20.14.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
+      zod4:
+        specifier: 'catalog:'
+        version: zod@4.3.6
+
+  integrations/sdk:
+    dependencies:
+      '@shared/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
       zod4:
         specifier: 'catalog:'
         version: zod@4.3.6
