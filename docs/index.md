@@ -81,6 +81,7 @@ checking the smaller set that is left (ADR-007).
 |---|---|
 | [qa/repository-catalog-matrix.md](./qa/repository-catalog-matrix.md) | The repository catalog's 143 scenarios and the automated test holding each one, with the rows nobody pins yet |
 | [qa/settings-enforcement-matrix.md](./qa/settings-enforcement-matrix.md) | Production evidence for settings resolution, run-start freezing, capacity enforcement, feature flags, and MCP limits |
+| [qa/integrations-scenarios.md](./qa/integrations-scenarios.md) | Draft: the integrations user journeys and edge cases, the rules for deriving tests from them, and which test holds each scenario |
 
 ## Research
 
@@ -109,6 +110,7 @@ research file records what was true on its date.
 | [plans/2026-09-11-repository-catalog-and-settings.md](./plans/2026-09-11-repository-catalog-and-settings.md) | Delivered 2026-09-11 to 2026-09-13: repository catalog and dashboard settings replacing the product-behaviour environment variables |
 | [plans/2026-09-14-product-changelog.md](./plans/2026-09-14-product-changelog.md) | The product changelog: an entry folder authors fill per pull request, a daily collation workflow, and the CI check that a product change carries an entry |
 | [plans/2026-09-15-repository-work-scope.md](./plans/2026-09-15-repository-work-scope.md) | Draft, in delivery: one durable record per subject of work for which repositories it touches, a repository policy per trigger, a decision trail readable through MCP, and a repository map in the agent's prompt (AIW-402, AIW-377, roadmap P1 repository scope per trigger) |
+| [plans/2026-09-18-integrations.md](./plans/2026-09-18-integrations.md) | Draft: every third party (Arthur, Slack, GitHub, GitLab, Jira) as one package under `integrations/` that unlocks blocks, screens, health checks and MCP tools once connected; memory as a capability; the guide for writing a new integration (AIW-395, AIW-394, AIW-396, roadmap P3) |
 
 Every other file in `plans/` is a historical delivery plan. It stays in place
 for provenance and carries `superseded-by docs/index.md`: read it as a record
