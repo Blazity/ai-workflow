@@ -118,6 +118,29 @@ test("an id core already uses is refused: webhook routes, capabilities, core wor
   }
 });
 
+test("an id a core health section still holds is refused until that section moves out", () => {
+  // The health page keeps one section per id, and an integration's checks are
+  // keyed under its id: two sections called `github` could disagree about the
+  // same deployment. Each of these rows leaves this list in the stage that
+  // moves the provider out of core.
+  for (const id of ["github", "jira", "slack", "database"]) {
+    const { manifest, runtime } = validIntegration();
+    manifest.id = id;
+    manifest.blocks[0].type = `${id}_lookup`;
+    runtime.blocks = { [`${id}_lookup`]: runtime.blocks.acme_lookup };
+    hasIssue(manifest, runtime, "id_reserved", "id");
+  }
+});
+
+test("a health check may not be called connection, which core adds itself", () => {
+  const { manifest, runtime } = validIntegration();
+  manifest.health = [
+    { id: "connection", label: "Connected", description: "Acme answers.", critical: true },
+  ];
+  runtime.health = { connection: async () => ({ status: "live" }) };
+  hasIssue(manifest, runtime, "id_reserved", "health[0].id");
+});
+
 test("a block type is the integration id, an underscore and a snake_case name", () => {
   for (const type of ["lookup", "other_lookup", "acme_Lookup", "acme_", "acmelookup"]) {
     const { manifest, runtime } = validIntegration();

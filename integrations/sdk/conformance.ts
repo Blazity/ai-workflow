@@ -44,6 +44,33 @@ export interface ConformanceIssue {
   readonly message: string;
 }
 
+/** The health check core adds to every integration's section; a manifest may
+ *  not declare one under the same id. */
+export const RESERVED_HEALTH_CHECK_ID = "connection";
+
+/**
+ * Ids core's own health sections occupy while core still reports them.
+ *
+ * The health page holds one section per id, and an integration's checks and
+ * probes are keyed under its id, so an integration called `github` would draw a
+ * second GitHub row that could disagree with core's. This list shrinks: the
+ * stage that moves a provider out of core (S8 to S12) deletes its row here in
+ * the same change that deletes core's section, which is how the provider's own
+ * integration comes to be allowed to take the name.
+ */
+export const CORE_HEALTH_SECTION_IDS: readonly string[] = [
+  "arthur",
+  "custom-webhooks",
+  "dashboard-auth",
+  "database",
+  "email",
+  "github",
+  "gitlab",
+  "jira",
+  "slack",
+  "sso",
+];
+
 /**
  * Ids an integration may not take. Each is a word core already uses as an
  * identifier or a string (a capability, a route under `/webhooks` that is not
@@ -53,6 +80,7 @@ export interface ConformanceIssue {
  */
 export const RESERVED_INTEGRATION_IDS: readonly string[] = [
   ...Object.keys(INTEGRATION_CAPABILITIES),
+  ...CORE_HEALTH_SECTION_IDS,
   // Routes under /webhooks today that belong to core, not to an integration.
   "custom",
   "resend",
@@ -465,6 +493,17 @@ function checkHealth(manifest: ParsedManifest, runtime: Runtime, report: Report)
   manifest.health.forEach((check, index) => {
     const path = `health[${index}]`;
     if (ids.has(check.id)) report("duplicate", `${path}.id`, `Health check "${check.id}" is declared twice.`);
+    // Core adds one check of its own to every integration's section, saying
+    // where the connection comes from and whether it is complete. A declared
+    // check under that id would be a second row with the same id, probed by
+    // this integration's probe.
+    if (check.id === RESERVED_HEALTH_CHECK_ID) {
+      report(
+        "id_reserved",
+        `${path}.id`,
+        `Health check id "${RESERVED_HEALTH_CHECK_ID}" belongs to core, which reports the connection itself; name this check after what it verifies.`,
+      );
+    }
     ids.add(check.id);
     if (typeof probes[check.id] !== "function") {
       report(

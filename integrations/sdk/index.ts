@@ -87,7 +87,9 @@ export {
 export { FatalError } from "./errors";
 
 export {
+  CORE_HEALTH_SECTION_IDS,
   RESERVED_ENVIRONMENT_VARIABLES,
+  RESERVED_HEALTH_CHECK_ID,
   RESERVED_INTEGRATION_IDS,
   checkIntegrationConformance,
   type ConformanceCode,

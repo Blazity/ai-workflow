@@ -296,6 +296,204 @@ describe("collectSystemHealth", () => {
     expect(JSON.stringify(result)).not.toContain("jira-secret");
   });
 
+  it("appends contributed sections without touching a single core one", async () => {
+    const probes = {
+      "database.connectivity": async () => {},
+      "jira.api": async () => {},
+      "github.app-installation": async () => {},
+      "agent.model": async () => {},
+    };
+    const now = () => new Date("2026-09-18T12:00:00.000Z");
+    const monotonicNow = () => 0;
+    const withoutIntegrations = await collectSystemHealth({
+      config: baseConfig,
+      probes,
+      now,
+      monotonicNow,
+    });
+    const withIntegrations = await collectSystemHealth({
+      config: baseConfig,
+      probes: { ...probes, "demo.auth": async () => ({ mode: "live" as const }) },
+      now,
+      monotonicNow,
+      contributed: [
+        {
+          id: "demo",
+          label: "Demo",
+          group: "integrations",
+          critical: false,
+          description: "A provider used for tests.",
+          checks: [
+            {
+              id: "auth",
+              label: "Token accepted",
+              description: "The provider accepts the token.",
+              critical: true,
+              mode: "configured",
+              envVars: [],
+              evidenceSource: "live-probe",
+            },
+          ],
+        },
+      ],
+    });
+
+    // The point of the stage: what core reports about core is untouched.
+    expect(
+      withIntegrations.integrations.filter((entry) => entry.group !== "integrations"),
+    ).toEqual(withoutIntegrations.integrations);
+    expect(
+      withIntegrations.integrations.filter((entry) => entry.group === "integrations"),
+    ).toEqual([
+      expect.objectContaining({
+        id: "demo",
+        label: "Demo",
+        description: "A provider used for tests.",
+        critical: false,
+        mode: "live",
+      }),
+    ]);
+    expect(withIntegrations.summary.total).toBe(withoutIntegrations.summary.total + 1);
+    expect(withIntegrations.summary.criticalDown).toBe(
+      withoutIntegrations.summary.criticalDown,
+    );
+  });
+
+  it("counts a disabled integration as neither down nor unconfigured", async () => {
+    const result = await collectSystemHealth({
+      config: baseConfig,
+      probes: {},
+      contributed: [
+        {
+          id: "demo",
+          label: "Demo",
+          group: "integrations",
+          critical: false,
+          checks: [
+            // The first check is deliberately not the one that decides: a
+            // section read from its first row alone would call this Not
+            // configured and send somebody to set a variable.
+            {
+              id: "auth",
+              label: "Token accepted",
+              description: "The provider accepts the token.",
+              critical: true,
+              mode: "not-configured",
+              envVars: [],
+              evidenceSource: "live-probe",
+            },
+            {
+              id: "connection",
+              label: "Connection",
+              description: "Where this integration's values come from.",
+              critical: true,
+              mode: "disabled",
+              envVars: [],
+              evidenceSource: "configuration",
+              message: "Demo is turned off on the Integrations page.",
+            },
+          ],
+        },
+      ],
+    });
+
+    const before = await collectSystemHealth({ config: baseConfig, probes: {} });
+    const demo = result.integrations.find((entry) => entry.id === "demo");
+    expect(demo).toMatchObject({ mode: "disabled", ping: null });
+    // A decision somebody made is not a state anybody has to chase, so it moves
+    // none of the counters an operator reads first.
+    expect(result.summary.down).toBe(before.summary.down);
+    expect(result.summary.notConfigured).toBe(before.summary.notConfigured);
+    expect(result.summary.criticalDown).toBe(before.summary.criticalDown);
+  });
+
+  it("never lets disabled swallow a check that is actually failing", async () => {
+    const result = await collectSystemHealth({
+      config: baseConfig,
+      probes: {},
+      contributed: [
+        {
+          id: "demo",
+          label: "Demo",
+          group: "integrations",
+          critical: false,
+          checks: [
+            {
+              id: "connection",
+              label: "Connection",
+              description: "Where this integration's values come from.",
+              critical: true,
+              mode: "disabled",
+              envVars: [],
+              evidenceSource: "configuration",
+              message: "Demo is turned off on the Integrations page.",
+            },
+            {
+              id: "auth",
+              label: "Token accepted",
+              description: "The provider accepts the token.",
+              critical: true,
+              mode: "down",
+              envVars: [],
+              evidenceSource: "live-probe",
+              message: "The provider refused the credential.",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.integrations.find((entry) => entry.id === "demo")).toMatchObject({
+      mode: "down",
+    });
+  });
+
+  it("bounds ten hanging integrations by the one probe timeout, not by their number", async () => {
+    vi.useFakeTimers();
+    const contributed = Array.from({ length: 10 }, (_, index) => ({
+      id: `demo-${index}`,
+      label: `Demo ${index}`,
+      group: "integrations" as const,
+      critical: false,
+      checks: [
+        {
+          id: "auth",
+          label: "Token accepted",
+          description: "The provider accepts the token.",
+          critical: true,
+          mode: "configured" as const,
+          envVars: [],
+          evidenceSource: "live-probe" as const,
+        },
+      ],
+    }));
+    const probes = Object.fromEntries(
+      contributed.map((definition) => [
+        `${definition.id}.auth`,
+        async () => {
+          await new Promise(() => {});
+        },
+      ]),
+    );
+
+    const pending = collectSystemHealth({ config: baseConfig, probes, contributed });
+    // One window, not ten: a scan the dashboard aborts after 15 s cannot afford
+    // to run provider probes one after another.
+    await vi.advanceTimersByTimeAsync(4_000);
+    const result = await pending;
+
+    const sections = result.integrations.filter((entry) => entry.group === "integrations");
+    expect(sections).toHaveLength(10);
+    for (const section of sections) {
+      expect(section.checks[0]).toMatchObject({
+        mode: "down",
+        message: "Health check timed out.",
+      });
+    }
+    // A provider that hangs is not the platform going down.
+    expect(result.summary.criticalDown).toBe(0);
+  });
+
   it("aborts only the timed-out capability and marks it down", async () => {
     vi.useFakeTimers();
     let signal: AbortSignal | undefined;
