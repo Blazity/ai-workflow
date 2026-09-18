@@ -484,11 +484,20 @@ export function repositoriesADelegationTakes(
   return taken;
 }
 
-/** Whether a person's own entry holds the key, which a delegated write may
- *  never replace. One predicate for the rule that takes the keys, the write
- *  that records them and the reply that names what was left alone. */
+/** Whether a person's own decision holds the key, which a delegated write may
+ *  never replace. Only a selection or an exclusion is a decision: an
+ *  unavailable entry carries their name but records that they could not give
+ *  the repository when asked, and it expires once the repository is usable.
+ *  One predicate for the rule that takes the keys, the write that records them
+ *  and the reply that names what was left alone; the store applies the same
+ *  rule (`overwriteAllowed` in `db/repositories/work-scope.ts`). */
 export function isDecidedByAPerson(entries: readonly WorkScopeEntry[], key: RepositoryKey): boolean {
-  return entries.some((entry) => entry.repositoryKey === key && entry.origin === "person");
+  return entries.some(
+    (entry) =>
+      entry.repositoryKey === key &&
+      entry.origin === "person" &&
+      (entry.state === "selected" || entry.state === "excluded"),
+  );
 }
 
 /** Allowed: the key is a candidate, or the expansion rule attaches, or the

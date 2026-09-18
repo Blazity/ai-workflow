@@ -112,12 +112,15 @@ export type AnswerClarificationOutcome =
        * delivery is unaffected either way: the answer reached the run, and this
        * is what happened to the record beside it.
        *
-       * TWO CASES, ONE FIELD. Either the answer recorded no repository decision,
-       * and this carries the same words the ticket comment does, or it declined
-       * the repositories the question listed, and this says which ones and how
-       * to bring one back. They are mutually exclusive, they are read in one
-       * place by every channel, and a reader that had to branch on which of two
-       * fields arrived would be a second rule to keep in step.
+       * ONE FIELD FOR EVERYTHING THE PERSON IS TOLD about the record. It says
+       * that the answer recorded no repository decision (the same words the
+       * ticket comment carries), or which listed repositories it declined and
+       * how to bring one back, or which repositories the workflow took when
+       * they asked it to decide, and it may add a second sentence about a
+       * repository they named that the question did not list. It is composed
+       * once and read in one place by every channel: a reader that had to
+       * branch on which of several fields arrived would be a second rule to
+       * keep in step. Show it as text; do not parse it.
        *
        * The composed TEXT rather than a code, on purpose. The code is an
        * internal classification whose only job is choosing these words, and a

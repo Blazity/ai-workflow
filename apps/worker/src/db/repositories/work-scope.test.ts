@@ -310,6 +310,33 @@ describe("origin precedence", () => {
 
       await expect(entriesOf(subjectKey)).resolves.toEqual([later]);
     });
+
+    // An unavailable row names a person without being their decision: it says
+    // they could not give the repository when asked. Once the repository is
+    // usable the run asks again, and the workflow's choice on that question
+    // must be able to land.
+    it("replaces a person's unavailable entry, which records no decision", async () => {
+      const couldNotGiveApi = entry("github:acme/api", {
+        state: "unavailable",
+        unavailableReason: "not_enabled",
+        origin: "person",
+        rationale: "Not enabled when asked.",
+        decidedBy: ada,
+      });
+      await applyRunWorkScopePlan(db, { subjectKey, runId: "run-1", plan: upsertsOnly(couldNotGiveApi) });
+
+      await applyRunWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-2",
+        plan: {
+          upserts: [{ entry: delegatedApi, replacesExpired: true }],
+          deletes: [],
+          trail: [],
+        },
+      });
+
+      await expect(entriesOf(subjectKey)).resolves.toEqual([delegatedApi]);
+    });
   });
 
   it("replaces an inferred entry with a trigger policy entry", async () => {

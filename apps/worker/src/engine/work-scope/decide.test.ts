@@ -3128,6 +3128,29 @@ describe("repositoriesADelegationTakes", () => {
 
     expect(repositoriesADelegationTakes(four, [excludedByAda, guessed])).toEqual([API, DOCS, TOOLS]);
   });
+
+  // An unavailable entry carries a person's name without being their decision:
+  // it records that they could not give the repository when they were asked.
+  // Once somebody enables it the entry expires and the run asks again, and a
+  // "you decide" to THAT question must be able to take it. Reading the old
+  // entry as a decision skipped it and told them it was already decided.
+  it("takes a repository whose only person entry says they could not give it then", () => {
+    const four = [API, WEB, DOCS, TOOLS].map((repositoryKey) => ({
+      repositoryKey,
+      askedBecause: "selection" as const,
+      named: true,
+    }));
+    const couldNotGiveApi = entry({
+      repositoryKey: API,
+      state: "unavailable",
+      unavailableReason: "not_enabled",
+      origin: "person",
+      rationale: "Not enabled when asked.",
+      decidedBy: person,
+    });
+
+    expect(repositoriesADelegationTakes(four, [couldNotGiveApi])).toEqual([API, WEB, DOCS]);
+  });
 });
 
 /**
