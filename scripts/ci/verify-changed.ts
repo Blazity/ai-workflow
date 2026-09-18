@@ -151,6 +151,7 @@ const isCi = (path: string) =>
   path.startsWith("scripts/ci/") ||
   path.startsWith(".claude/hooks/") ||
   path === ".claude/context-budget.tsv" ||
+  path.startsWith(".codex/") ||
   ROOT_CI.has(path);
 const isWorkflowGraph = (path: string) =>
   path.startsWith("packages/workflow-graph/");

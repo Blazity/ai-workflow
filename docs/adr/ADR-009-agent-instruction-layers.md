@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-17
+Last-verified: 2026-09-18
 
 # ADR-009: Agent instruction layers and their ceilings
 
@@ -15,7 +15,8 @@ Claude Code loads a nested `CLAUDE.md` in full the first time it reads any file
 below it, and a `.claude/rules/*.md` file only when a read matches its `paths:`
 list ([memory docs](https://code.claude.com/docs/en/memory)). Codex reads
 `AGENTS.md` files from the repository root down to its working directory, so a
-session started at the root sees the root file alone.
+session started at the root sees the root file alone, and it does not read
+`.claude/rules` at all.
 
 Measured at commit `1933fa8b`:
 
@@ -58,6 +59,13 @@ files, so they grew with every stage.
    the model when an edit would cross a ceiling, leave a rule without `paths:`,
    or add an em or en dash. It never blocks an edit, and no CI gate measures
    these sizes.
+6. Codex reads the same TSV through `.codex/hooks.json`, which registers
+   `.codex/hooks/context-budget-guard.mjs` on `PreToolUse` for `apply_patch`
+   and on `PostToolUse` for `apply_patch` and `Bash`. What counts as too large,
+   and the wording the model reads, live in `.claude/hooks/context-budget-core.mjs`,
+   which both guards import, so the two harnesses cannot drift apart. The
+   `PostToolUse` pass measures the files on disk, which is the only way to
+   catch a write made through the shell.
 
 ## Consequences
 
@@ -70,8 +78,19 @@ files, so they grew with every stage.
   pins what the hook tells the model.
 - A rule loads on a file read, not on a topic: a session that only runs
   commands sees none, which is why decision 3 exists.
-- The ceilings are advisory. Codex and any editor without Claude Code hooks can
-  exceed them silently. Raising a ceiling needs a reason in the TSV.
+- The ceilings are advisory in both harnesses: every message is a warning, no
+  edit is refused, and any other editor exceeds them silently. Raising a
+  ceiling needs a reason in the TSV.
+- Codex runs a project hook only once it is trusted, and skips an untrusted
+  hook without saying so. Trust it once per machine with `/hooks` in the
+  interactive CLI; an automated `codex exec` run needs
+  `--dangerously-bypass-hook-trust`. The trust `~/.codex/config.toml` records
+  is a hash of the hook entry, so changing the command in `.codex/hooks.json`
+  means granting it again.
+- A hook command is run from the session's working directory, so a Codex
+  session started in a subdirectory would lose a hook registered by a relative
+  path. Both commands resolve the repository root first, and
+  `scripts/ci/agent-hooks.test.ts` pins that.
 - A rule whose `paths:` stops matching any file stops loading without an error.
 
 ## Options considered
