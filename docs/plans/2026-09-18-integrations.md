@@ -442,9 +442,11 @@ connect it, and publishing is refused naming it.
 ### 14. The sidebar
 
 Core groups first, then an Integrations separator, then one section per
-connected, enabled integration that contributes pages (Arthur: Evals). System
-health and Users move under Settings. This is AIW-396 and AIW-290 delivered by
-the same mechanism.
+connected, enabled integration that contributes pages (Arthur: Evals). An
+integration with several pages shows them as horizontal tabs inside its
+section, as Jakub asked for Arthur on 2026-09-14. Sidebar groups collapse, and
+the sidebar fits a 1080p screen without scrolling. System health and Users move
+under Settings. This is AIW-396 and AIW-290 delivered by the same mechanism.
 
 ### 15. MCP
 
@@ -622,6 +624,11 @@ one's fate:
 
 ## Stages
 
+Jira: epic [AIW-405](https://blazity.atlassian.net/browse/AIW-405). Stage
+tickets: S0 AIW-395, S1 AIW-406, S2 AIW-407, S4 AIW-408, S5 AIW-409, S3
+AIW-410, S6 AIW-411, S7 AIW-396, S8 AIW-394, S9 AIW-412, S13 AIW-413, S10
+AIW-414, S11 AIW-415, S12 AIW-416, S14 AIW-417, S15 AIW-418, R1 AIW-419.
+
 Order and concurrency: S0, S1, S2 in sequence. S4 and S5 run in parallel after
 S2. S3 and S6 run in parallel after S4 (their files are disjoint: MCP against
 the dashboard). S7 after S6. Then S8, S9, S13, S10, S11, S12 in sequence,
@@ -649,7 +656,7 @@ before the executor writes tests.
 | S5 | Health reports integrations without core listing them | health collection | `apps/worker/src/services/system/**`, health types in `packages/contracts/api.ts`, `apps/dashboard/components/cockpit/screens/health.tsx` | opus | open | yes | yes (worker side) | no | A health scan on demo shows core checks unchanged and one section per integration, including Not connected and a partial environment naming its missing variables; the screen reads at desktop and phone width |
 | S3 | Every integration action works through MCP | MCP contract | `apps/worker/src/mcp/tools/integrations.ts`, `apps/worker/src/mcp/tools/authoring-support.ts`, `apps/worker/src/mcp/tool-catalog.ts`, `apps/worker/src/mcp/policy.ts`, tool names in `packages/contracts/domain.ts`, the contract snapshot | opus | tight | yes | yes | no | `(cd apps/worker && pnpm run mcp:contract:check)` green; policy tests: a write without a person-backed token or without a reason is refused, a member is refused; against demo `/mcp`: list, get, connect, test, set_enabled, switch source, select_provider, disconnect; `system.capabilities` lists exactly the blocks the editor palette shows for the same state; an integration tool called while unavailable returns `integration_unavailable`; no response carries a secret |
 | S6 | An admin can connect an integration from the dashboard and see what it unlocked | dashboard over the integrations API | `apps/dashboard/app/(cockpit)/settings/integrations/**`, `apps/dashboard/components/cockpit/screens/integrations/**`, `apps/dashboard/app/api/integrations/**`, `apps/dashboard/components/cockpit/flow-editor/block-palette.ts`, the canvas warning component | opus | open | yes | no (component tests for logic) | no | On demo in a browser at desktop and phone width: connect the fixture with a wrong then a right value, see status, source and unlocks, prepare stored values while the environment is the source and switch, disable, watch the palette lose and regain the block without a reload, open a workflow using it and see the named warning with a link, publish refused; a member sees status and no controls; on a preview the write controls explain why they are unavailable |
-| S7 | The sidebar separates core from integrations, and integration pages look native | dashboard chrome, host UI package | `apps/dashboard/components/cockpit/chrome.tsx`, `apps/dashboard/app/(cockpit)/cockpit-shell.tsx`, `apps/dashboard/app/(cockpit)/integrations/[id]/**`, settings navigation, moved health and users routes, the host UI package, the Tailwind entry | opus | open | yes | no | no | On demo: core groups, a separator, and a section only for connected enabled integrations; System health and Users under Settings with their old URLs redirecting; a fixture page built from a host primitive and an arbitrary-value class renders styled at desktop and phone width; the boundaries gate accepts the host UI import and still rejects `@/components/ui` from an integration |
+| S7 | The sidebar separates core from integrations, and integration pages look native | dashboard chrome, host UI package | `apps/dashboard/components/cockpit/chrome.tsx`, `apps/dashboard/app/(cockpit)/cockpit-shell.tsx`, `apps/dashboard/app/(cockpit)/integrations/[id]/**`, settings navigation, moved health and users routes, the host UI package, the Tailwind entry | opus | open | yes | no | no | On demo: core groups, a separator, and a section only for connected enabled integrations; System health and Users under Settings with their old URLs redirecting; a fixture integration with two pages shows them as horizontal tabs in its section; groups collapse and the whole sidebar fits 1920x1080 without scrolling; a fixture page built from a host primitive and an arbitrary-value class renders styled at desktop and phone width; the boundaries gate accepts the host UI import and still rejects `@/components/ui` from an integration |
 | S8 | Arthur is an integration, and core has never heard of it | the whole contract, first real use; `agent_tracing` | `integrations/arthur/**`; deletions across `apps/worker/src` (Arthur client, tracer wiring in `sandbox/agents/*`, `agent-sandbox.ts`, the Arthur task step in `prepare-workspace`, the injection block, evals collection, probes); the evals screen and nav in `apps/dashboard` | opus | open | yes | yes | no | Drain (the injection step and the `prepare_workspace` Arthur task step); guard tests green; core-reference gate green for `arthur`; on production with Arthur connected: a real agent run with traces visible in Arthur and no API key in the run log, an injection check returning a typed verdict and failing closed on a flagged prompt, the Evals section present; after disabling Arthur (it stays environment-sourced): block gone from the palette, publish refused, dispatch failing with `integration_unavailable`; `arthur.evals_summary` returns the numbers the screen shows |
 | S9 | Slack is an integration and messaging is a capability | messaging port, webhook translation | `integrations/slack/**`; new core `send_message` block; deletion of `send-slack-message` and `investigate`; `apps/worker/src/adapters/messaging/**`; `apps/worker/src/routes/webhooks/slack.post.ts` and the generic `/webhooks/[id]` route; Slack call sites in `apps/worker/src/engine/**` and `services/**` | opus | tight | yes | yes | no | Drain; guard tests green; recorded-payload tests for the slash command and message delivery; on production: a real run posts through the capability, the slash command still dispatches at the old URL, the Slack research block returns synthesised findings; core-reference gate green for `slack` |
 | S13 | Memory is a capability with a built-in provider, shaped for any memory engine | memory port | `apps/worker/src/memory/**`, memory call sites in `apps/worker/src/engine/**`, callers of `apps/worker/src/db/repositories/memory.ts`, the dashboard memory screen's data source, memory MCP tools | opus | tight | yes | yes | no | The port is designed against the built-in document store and the published APIs of at least two external engines (Mem0 and Zep/Graphiti), and the stage report shows each engine's add, search, update and delete mapped onto it; drain if a step file changes; port tests with a fake store; on demo: an agent run writes and reads memory through the port with no behaviour change, the memory screen and its MCP tools read through the port, the active provider selection lists built-in as the only choice |
@@ -664,13 +671,14 @@ before the executor writes tests.
 
 | Existing issue | Fate |
 |---|---|
-| AIW-395 plugin architecture | Becomes the epic for this plan; S0 to S7 and S14 are its children |
-| AIW-394 Arthur as a third-party settings tab | S8 |
-| AIW-396 sidebar regrouping, health and users under settings | S7 |
+| AIW-405 (new epic) | Integrations: every third party as a package that unlocks blocks, screens and tools once connected; every stage is its child |
+| AIW-395 plugin architecture | Re-cut as S0, the contract; the whole architecture now lives in the epic |
+| AIW-394 Arthur as a third-party settings tab | Re-cut as S8 |
+| AIW-396 sidebar regrouping, health and users under settings | Re-cut as S7 |
 | AIW-290 feature-flag dashboard tabs, group non-core | Closed as duplicate of AIW-396 |
 | AIW-294 injection check typed output and halt | S8 |
-| AIW-19 prompt injection detection | Closed as delivered |
-| AIW-14 Linear integration | Blocked by this plan, first candidate after S12 |
+| AIW-19 prompt injection detection | Closed as delivered; remaining work in AIW-287, AIW-294 and S8 |
+| AIW-14 Linear integration | Blocked by S12 (AIW-416), first candidate after it |
 | AIW-393 editable memory | Independent; lands on the memory port after S13 if it has not shipped before |
 | AIW-376 MCP parity for repository catalog and settings | Coordinate with S3 so the parity rule is one rule |
 | AIW-297 unify input and parameter naming for MCP | After S4, since block catalogs change shape |
