@@ -352,7 +352,7 @@ describe("runPrePrChecksWithFixes", () => {
     // The sandbox-death path collects from a sandbox already observed as not
     // running twice, and the collect step's maxRetries is 0. Letting that
     // rejection out replaces the stall sentence with an unclassified run
-    // failure: neither a run-control error nor a budget error, so agent.ts
+    // failure: neither a run-control error nor a budget error, so engine/agent-workflow.ts:4526-4543
     // kills the run with no usable cause, in the exact case this mechanism was
     // written for.
     mocks.pollPhaseUntilDone.mockImplementation(pollEnds("sandbox_stopped", 120_000));

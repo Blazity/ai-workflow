@@ -9,8 +9,8 @@ import { isTerminalRunStatus, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
-// Mirrors the dashboard's own default (parseWindow's fallback, db/queries/
-// runs-read.ts:45-49): a caller that sends no window sees the same "last 24h"
+// Mirrors the dashboard's own default (parseWindow's fallback,
+// services/run-lifecycle/dashboard-run-data.ts:33): a caller that sends no window sees the same "last 24h"
 // slice the cost view opens on.
 const DEFAULT_RUNS_STATS_WINDOW: McpStatsWindow = "24h";
 const DEFAULT_RUNS_STATS_LIMIT = 20;
@@ -37,7 +37,7 @@ type RunsStatsData = {
    *  window instead. */
   runsTruncated: boolean;
   /** The same totals, per-workflow breakdown and daily series the dashboard's
-   *  cost view reads (db/queries/runs-read.ts costAgg), computed from
+   *  cost view reads (services/run-lifecycle/dashboard-run-data.ts:274 costAgg), computed from
    *  persisted per-run cost rather than a live provider call. */
   cost: Omit<CostResponse, "generatedAt" | "available">;
 };

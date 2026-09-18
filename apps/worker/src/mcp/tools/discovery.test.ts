@@ -115,7 +115,7 @@ async function seedDefinition(over: {
     });
   }
   // Set after the version rows exist: (id, deployed_version) is a foreign key
-  // onto them (db/schema.ts:879).
+  // onto them (db/schema/definitions.ts:109-115).
   if (over.deployedVersion !== undefined) {
     await db
       .update(workflowDefinitions)
@@ -256,7 +256,7 @@ describe("workflows.list", () => {
 
   // A node id that exists only in the draft is an argument every preflight
   // refuses, because a dispatch resolves against the deployed snapshot
-  // (manual-dispatch/resolve.ts:137).
+  // (services/manual-dispatch/resolve.ts:200-211).
   it("reads the deployed version's triggers, not the draft head's", async () => {
     await seedDefinition({
       enabled: true,
@@ -508,7 +508,7 @@ describe("prompts.get", () => {
 
   it("reports an archived prompt as archived instead of hiding it", async () => {
     // Pinned references to an archived prompt still resolve
-    // (prompt-library/store.ts:441), so refusing to read one would invent a rule
+    // (findPromptBySlug, db/repositories/prompts.ts:136-139), so refusing to read one would invent a rule
     // the rest of the app does not have.
     const promptId = await seedPrompt({ slug: "retired", archived: true });
 

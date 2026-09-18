@@ -103,6 +103,16 @@ export type RepositoryWorkflowObservation =
       outcome: "continued_degraded" | "failed_closed";
     }
   | {
+      /** Repository discovery proposed a repository this work had already taken
+       *  off it, so the run left it out instead of asking about it again. On the
+       *  run rather than only in the agent's prompt because the person who
+       *  excluded it is the one who has to be able to see it: they read a
+       *  success comment on a run that touched less than the ticket names, and
+       *  nothing else on the run says why. */
+      event: "work_scope_drop";
+      repositoryKeys: string[];
+    }
+  | {
       event: "publication";
       prCount: number;
     };

@@ -43,13 +43,15 @@ import {
  * IS. So the three tools below add no rules of their own and take none away:
  *
  *   - a scope of its own (contracts.ts:12) and a role list without "service"
- *     (policy.ts), with request-context.ts stripping the scope out of an
+ *     (policy.ts), with services/mcp/actor-resolution.ts stripping the scope out of an
  *     unattended token's actor;
  *   - every graph goes through the definition schema in @shared/workflow-graph
  *     (`workflowDefinitionV2Schema`, packages/workflow-graph/schema.ts), and a
  *     publish through the deployment gate inside deployWorkflowDefinition, which is the
  *     whole of what the dashboard's Deploy button calls
- *     (routes/api/v1/workflow-definitions/[id]/deploy.post.ts:51);
+ *     (routes/api/v1/workflow-definitions/[id]/deploy.post.ts:55, through the role
+ *     checking wrapper deployWorkflowDefinitionDraft,
+ *     services/workflow-definitions/deployment.ts:44);
  *   - compare-and-set on both writes that touch existing state, enforced by the
  *     store's own SQL rather than by a read here.
  *
@@ -58,8 +60,9 @@ import {
  * here flips that switch, but workflows.publish takes any definitionId: publishing
  * into a definition an operator has ALREADY enabled replaces what the platform
  * executes for real events at once, because dispatch resolves the deployed version
- * live (store.ts:605-612) and the deploy claims that definition's trigger bindings
- * on the way past (store.ts:1178-1185). `enabled` in the reply is therefore
+ * live (engine/definition-trigger-routing.ts:95-98) and the deploy claims that
+ * definition's trigger bindings on the way past
+ * (db/repositories/definitions/atomic.ts:131-142). `enabled` in the reply is therefore
  * inherited from the definition and not a verdict on the publish, and
  * `liveOnRealEvents` is the field that says which of the two just happened.
  *
@@ -85,7 +88,8 @@ type SaveDraftData = {
   definitionId: number;
   draftRevision: number;
   // Over the version the store WROTE, read back rather than over the arguments:
-  // the store canonicalizes a graph on its way in (store.ts:859), so a digest of
+  // the store canonicalizes a graph on its way in
+  // (services/workflow-definitions/policy-operations.ts:672), so a digest of
   // the request would disagree with the digest workflows.publish reports for the
   // very same version and neither agent nor operator could tell which one moved.
   graphHash: string;
@@ -122,9 +126,11 @@ type PublishData = {
   // The trigger nodes on the other side of that check: every trigger node whose
   // ability to fire this publish could NOT establish. All of them when the
   // definition is disabled; a schedule row that is paused (a human intention a
-  // deploy has no business overriding, store.ts:1003-1004) or revoked; a webhook
-  // node with no endpoint row, which is what a deployment without
-  // WEBHOOK_TRIGGER_ENCRYPTION_KEY leaves behind (store.ts:973); and, honestly
+  // deploy has no business overriding: the redeploy upsert at
+  // db/repositories/schedule-triggers.ts:44-49 leaves paused_at out of its set)
+  // or revoked; a webhook node with no endpoint row, which is what a deployment
+  // without WEBHOOK_TRIGGER_ENCRYPTION_KEY leaves behind
+  // (services/workflow-definitions/live-trigger-sync.ts:94); and, honestly
   // rather than optimistically, every trigger node when the check itself could not
   // be run.
   dormantTriggerNodeIds: string[];
@@ -200,7 +206,7 @@ const pinsNotEnabledInCatalog = pinnedRepositoriesNotEnabled;
 /**
  * The audit row's own signal for the finding above, as one more targetRef. A flag
  * and a count and nothing else: targetRefs are stored verbatim
- * (audit-store.ts:58), so the repository paths stay in the reply and the channel,
+ * (services/mcp/audit-store.ts:62), so the repository paths stay in the reply and the channel,
  * where a person reads them once, rather than in a table kept for a year. Always
  * appended, including as ":0", so a row proves the check ran instead of leaving an
  * operator unable to tell "every pin is enabled" from "nobody looked".
@@ -229,10 +235,11 @@ function triggerNodesOf(graph: WorkflowDefinition): Array<{ id: string; type: Wo
  *   - a webhook delivery authenticates against an endpoint row. The deployment gate
  *     already refuses a webhook trigger when webhook encryption is unconfigured, so
  *     what is left for this check is a mint that failed (it is best-effort,
- *     store.ts:981) and an endpoint an operator revoked;
+ *     services/workflow-definitions/live-trigger-sync.ts:100-104) and an endpoint
+ *     an operator revoked;
  *   - every other trigger type routes through the binding table, which THIS deploy
  *     claimed in the same statement that moved the head, for an enabled definition
- *     (store.ts:1178-1185). That one is established by the deploy having succeeded.
+ *     (db/repositories/definitions/atomic.ts:131-142). That one is established by the deploy having succeeded.
  *
  * A disabled definition reaches none of them, so all of its trigger nodes are
  * dormant.
@@ -371,7 +378,8 @@ function graphDigest(definition: unknown): string {
  * are each a single SQL statement, a statement that selected nothing inserted and
  * updated nothing. Anything else is rethrown as it is, so the wrapper seals the
  * key: the 500s in this store are raised AFTER the head has already moved
- * (store.ts:1208), and a key handed back there would buy a second deployment.
+ * (services/workflow-definitions/policy-operations.ts:758), and a key handed back
+ * there would buy a second deployment.
  */
 function throwPublicStoreError(error: unknown): never {
   // Before the base class below, which it extends: a deployment gate failure is a
@@ -460,7 +468,7 @@ export function registerWorkflowAuthoringTools(
         deps,
         toolName: "workflows.save_draft",
         // Which definition, and which revision this save replaces. Never the
-        // graph: targetRefs are stored verbatim (audit-store.ts:58), and the only
+        // graph: targetRefs are stored verbatim (services/mcp/audit-store.ts:62), and the only
         // record this tool leaves of a graph is a digest.
         targetRefs: [
           String(input.definitionId),
@@ -475,7 +483,8 @@ export function registerWorkflowAuthoringTools(
         })}`,
         operation: async (): Promise<SaveDraftData> => {
           // The repo's own reader of an unknown candidate, the one the editor's
-          // validate endpoint calls (validate.post.ts:14). The catalog schema in
+          // validate endpoint builds on (validate.post.ts:27, which adds prompt
+          // authoring issues on top). The catalog schema in
           // front of this admitted the graph by SIZE only, because the transport
           // gate cannot load the block registry, so this is where the one
           // authority on a legal graph is applied, and the store then parses the
@@ -510,7 +519,7 @@ export function registerWorkflowAuthoringTools(
               definition: candidate.parsed,
               // Compare-and-set, and unlike prompts.update this one IS atomic:
               // the expected revision is a predicate inside the store's single
-              // insert statement (store.ts:868), so a draft that moved on between
+              // insert statement (db/repositories/definitions/operations.ts:373), so a draft that moved on between
               // this call and the write selects no candidate row and nothing is
               // saved. Two agents, or an agent and a person in the editor, cannot
               // silently overwrite each other's graph.
@@ -530,7 +539,8 @@ export function registerWorkflowAuthoringTools(
             saved.draftRevision,
           );
           if (!stored) {
-            // The store just wrote this row and read it back itself (store.ts:900),
+            // The store just wrote this row and read it back itself
+            // (services/workflow-definitions/policy-operations.ts:681-685),
             // so this is the row disappearing under us. Not retryable under the same
             // key, and not dressed up as a validation problem.
             //
@@ -572,7 +582,7 @@ export function registerWorkflowAuthoringTools(
         // deployment changed. What the graph pins cannot be named from the
         // arguments, so it rides the outcome row through outcomeTargetRefs below
         // instead of being read out here, in front of the rate limiter, the
-        // attempted row and the authorization check (execute-tool.ts:210-224).
+        // attempted row and the authorization check (execute-tool.ts:240-247).
         targetRefs: [
           String(input.definitionId),
           String(input.expectedDraftRevision),
@@ -596,7 +606,8 @@ export function registerWorkflowAuthoringTools(
           try {
             // deployWorkflowDefinition IS the dashboard's publish path, not a
             // layer under it: deploy.post.ts authenticates, parses the two
-            // expected versions and calls exactly this (deploy.post.ts:51). The
+            // expected versions and calls exactly this, one wrapper down
+            // (deploy.post.ts:55 into deployment.ts:44). The
             // gate, the compare-and-set on both versions, the trigger-ownership
             // claim, the webhook endpoint mint and the schedule sync all live in
             // the store, so this tool cannot be the way around any of them. Adding
@@ -782,7 +793,8 @@ export function registerWorkflowGraphTools(
           let updated: Awaited<ReturnType<typeof deps.services.updateWorkflowDefinition>>;
           try {
             // updateWorkflowDefinition IS the dashboard's PATCH path
-            // ([id].patch.ts:41): the deployable-version gate, the "one enabled owner
+            // ([id].patch.ts:30, one wrapper down through definition-authoring.ts:161):
+            // the deployable-version gate, the "one enabled owner
             // per trigger" overlap check that names the conflicting definition, the
             // compare-and-set on the definition row, and the webhook/schedule
             // arming of the live head all live in the store, so this tool cannot be

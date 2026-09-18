@@ -72,35 +72,18 @@ jobs:
       - run: pnpm --filter worker run test:zod4
       - run: pnpm run gates
       - run: pnpm run build:ci
+      # The rule, the trap the file list carries, and every case it has to
+      # answer live in `scripts/ci/changelog-entry-gate.ts` and its test, where
+      # they can be run by calling them. A copy of the logic here could only be
+      # pinned as text, which fails whenever somebody edits it and passes for
+      # every mistake it can contain.
       - name: Require a changelog entry for product changes
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" != "pull_request" ]; then
-            echo "::notice::Not a pull request event, skipping the changelog check."
-            exit 0
-          fi
-          if [ "$HEAD_IS_FORK" = "true" ]; then
-            echo "::notice::Fork pull request, skipping the changelog check."
-            exit 0
-          fi
-          pr_json="$(gh pr view "$PR_NUMBER" --json labels,files)"
-          has_skip_label="$(echo "$pr_json" | jq -r '[.labels[].name] | index("changelog: skip") != null')"
-          if [ "$has_skip_label" = "true" ]; then
-            echo "::notice::Pull request labeled changelog: skip."
-            exit 0
-          fi
-          touches_product="$(echo "$pr_json" | jq -r '[.files[].path] | any(startswith("apps/") or startswith("packages/"))')"
-          has_changelog_entry="$(echo "$pr_json" | jq -r '[.files[].path] | any(startswith("changelog/unreleased/"))')"
-          if [ "$touches_product" = "true" ] && [ "$has_changelog_entry" != "true" ]; then
-            echo "::error::This pull request changes apps/** or packages/** but adds no file under changelog/unreleased/. Add an entry (see changelog/README.md) or apply the changelog: skip label."
-            exit 1
-          fi
-          echo "changelog check passed"
+        run: node --import tsx scripts/ci/changelog-entry-gate.ts
 
   # 384 worker test files, each paying its own process and module startup, so
   # sharding buys wall-clock that the suite itself cannot give back.
@@ -241,10 +224,16 @@ jobs:
             echo "::error title=engine-canary configuration::the Vercel production target is forbidden"
             exit 1
           fi
+          # This job starts only for a same-repository pull request whose scope
+          # job succeeded and said the change needs the canary, so every path
+          # that reaches this line needs it. An unconfigured target is therefore
+          # a refusal, not an idle state: it used to warn and exit 0, which made
+          # the aggregate count a success for a job that had run no behavioural
+          # gate at all, and deleting one repository variable was enough to
+          # produce that with nothing red anywhere.
           if [ -z "$ENGINE_CANARY_TARGET" ]; then
-            echo "::warning title=engine-canary idle::no custom target declared (repository variable ENGINE_CANARY_TARGET); the behavioural gate is wired but did not run"
-            echo "armed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error title=engine-canary unconfigured::repository variable ENGINE_CANARY_TARGET is empty, so the behavioural gate did not run and this job proves nothing about this change. The job only starts when the scope job said the change needs the canary, so an unconfigured target is a refusal, not an idle state. Set ENGINE_CANARY_TARGET to the Vercel custom target the canary deploys to."
+            exit 1
           fi
           required=(
             ENGINE_CANARY_TARGET_URL
@@ -294,10 +283,8 @@ jobs:
             exit 1
           }
           echo "host=$target_host" >> "$GITHUB_OUTPUT"
-          echo "armed=true" >> "$GITHUB_OUTPUT"
       - name: Deploy engine canary target
         id: deploy
-        if: steps.target.outputs.armed == 'true'
         env:
           ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -325,7 +312,6 @@ jobs:
           echo "::error::engine-canary deployment health did not answer HTTP 200 within 5 minutes"
           exit 1
       - name: Verify deployment and database identity
-        if: steps.target.outputs.armed == 'true'
         env:
           URL: ${{ vars.ENGINE_CANARY_TARGET_URL }}
           ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
@@ -346,7 +332,6 @@ jobs:
             sleep 10
           done
       - name: Run engine canaries
-        if: steps.target.outputs.armed == 'true'
         env:
           HARNESS_CANARY_BASE_URL: ${{ vars.ENGINE_CANARY_TARGET_URL }}
           HARNESS_CANARY_EXPECTED_HOST: ${{ steps.target.outputs.host }}

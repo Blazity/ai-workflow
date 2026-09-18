@@ -5,6 +5,7 @@ import type {
   WorkflowDefinitionV2Node,
   WorkflowRepositoryScope,
   RunAnalysisReport,
+  TriggerRepositoryPolicy,
 } from "@shared/contracts";
 import type { CostProviderKind } from "@shared/costs";
 import type {
@@ -28,6 +29,9 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../../sandbox/repo-workspace.js";
 import type { WorkspacePublicationResult } from "../../steps/workspace-publication.js";
+import type { RunStartWorkScope } from "../../steps/run-start-settings.js";
+import type { RunTriggerRepositoryPolicySource } from "../../work-scope/policy.js";
+import type { TicketTextReading } from "../../work-scope/context.js";
 import type { LoadedPrompts } from "../../steps/prompts-step.js";
 import type { AgentWorkflowInput } from "../../agent-input.js";
 import type {
@@ -40,6 +44,8 @@ import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js
 import type {
   PreSandboxRepositoryDiscovery,
   PreSandboxRepositoryScopeNarrowing,
+  PreSandboxWorkScopeAsk,
+  PreSandboxWorkScopeLeftOut,
 } from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../../sandbox/agents/types.js";
 import type { RepositoryExpansionState } from "../../repository-discovery/runner.js";
@@ -48,7 +54,7 @@ import type { SettledThread } from "../../steps/review-ledger-settle.js";
 import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
 
 /**
- * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
+ * Frozen contract between the graph engine (engine/agent-workflow.ts, wired in stage C4) and
  * the block executors in this directory. The engine builds one EngineCtx per
  * run and passes the same object to every executor.
  *
@@ -84,6 +90,110 @@ export interface EngineCtx {
    * stops the next run, not this one.
    */
   repositories: RunRepositoryAccess;
+  /**
+   * Which repositories this subject's work touches and why, frozen by the same
+   * step, and whether a person has already answered the which-of-these
+   * question on the subject.
+   *
+   * Absent means no record was read: a schedule occurrence or a delivery that
+   * resolved no subject, an approved plan working from the snapshot a person
+   * approved, or a run replaying a run-start result stored before the field
+   * existed. Absent is therefore the behaviour of every run before this
+   * shipped, never an empty record standing in for one.
+   */
+  workScope?: RunStartWorkScope;
+  /**
+   * The repository policy this run's trigger stands under, resolved once from
+   * the deployed graph after it loaded. Absent for a block type that carries
+   * none, which is `trigger_plan_approved` today.
+   */
+  workScopePolicy?: TriggerRepositoryPolicy;
+  /** Which rung of the A35 ladder answered, so a status reason can say why the
+   *  run is bounded the way it is. */
+  workScopePolicySource?: RunTriggerRepositoryPolicySource;
+  /**
+   * The repositories the last selection put to a person, with the reason each
+   * one was asked about, written by prepare_workspace when it raised a
+   * which-of-these question.
+   *
+   * It exists because the answer has to land on repository keys rather than on
+   * prose: the step that records the answer reads these keys, so a person
+   * writing "the first two" still resolves to the two repositories the question
+   * named. Absent means the run asked nothing about repositories.
+   */
+  workScopeAsk?: PreSandboxWorkScopeAsk;
+  /**
+   * What the pre-sandbox selection refused, keyed, for the comment a finished
+   * run posts.
+   *
+   * On a run that HALTS the refusal is already in the halt text a person reads.
+   * On a run that does not halt it reached the agent's prompt and stopped
+   * there, which is how a ticket covering two repositories shipped a pull
+   * request covering one with nothing on the ticket saying why. Absent means
+   * the selection refused nothing.
+   */
+  workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+  /**
+   * What a person can do about those refusals, in whole sentences.
+   *
+   * Beside the field above rather than inside it, because it has a different
+   * reader: the refusals are facts about this run's workspace and the agent
+   * sees them, while this tells a human they can change their mind. It reaches
+   * the ticket comment and is never placed in the agent's instruction channel.
+   */
+  workScopeRecoveryNotes?: string[];
+  /**
+   * The pre-sandbox's reading of the ticket, as it made it, so a sentence
+   * written later in the run can say whether a path written in a comment would
+   * reach the next run and be taken (`commentPathIsTaken` in
+   * `engine/work-scope/context.ts`). Absent means no step read a ticket, and the
+   * sentence then offers the record alone.
+   */
+  workScopeTicketText?: TicketTextReading;
+  /**
+   * Did the repository question this run is waiting on give the record a
+   * repository to rule on, so that what it wrote afterwards says anything at
+   * all?
+   *
+   * The FALLBACK fact, and only that. What the record made of an answer is the
+   * record's own verdict and travels on `RunStartWorkScope.answerAttributed`;
+   * this is what the gate has to go on when that verdict is absent, which is a
+   * run replaying a result written before the field existed and a run whose
+   * trail row could not be read.
+   *
+   * The same block raises repository questions whose ask lists repositories and
+   * questions whose ask lists none (the bare "which repository should this
+   * ticket modify?" among them). An answer to either is adjudicated and writes
+   * every repository it NAMES, but only the first kind gives the record a key
+   * it can decide silence on, so only after the first kind can an unchanged
+   * record mean the record looked and refused. After the second it is equally
+   * what an unreadable answer leaves behind, which is not a refusal and must
+   * bind nothing.
+   *
+   * ABSENT MEANS NO, and it is CONSUMED where it is read, not left standing:
+   * the fact belongs to the one answer now in hand, and a flag left behind
+   * would let a question the record never saw inherit the judgement of an
+   * earlier one.
+   *
+   * It carries the repositories a PERSON had already selected when the question
+   * went out, because the fact worth having afterwards is not what the record
+   * contains, it is what this answer changed. The record can hold a person's
+   * selection that has nothing to do with the question: an earlier run's
+   * answer, or somebody editing the record on the Repositories page while the
+   * question sits unanswered. Read as "an answer was accepted", either of those
+   * speaks for an answer nobody read.
+   */
+  workScopeQuestionRecorded?: { personSelectedKeys: string[] };
+  /**
+   * The account the workflow's own ticket comments are posted under, resolved
+   * once at run start.
+   *
+   * Absent means the provider did not say, which is the behaviour every run had
+   * before this shipped: the bot's own questions are then read as evidence like
+   * anyone else's. Never a display name, because a person can be called that
+   * too.
+   */
+  botAccountId?: string;
   /**
    * The setup failures that stopped workspace creation, when one did.
    *
@@ -126,6 +236,11 @@ export interface EngineCtx {
     answer: string;
     answeredBy?: string;
     answeredAt?: string;
+    /** The run that ASKED this round. Every run on the ticket reads the whole
+     *  history, so a repository answer may only be re-applied by the run that
+     *  asked for it (A42). Absent on a round replayed from a journal written
+     *  before this field existed, which re-applies to nobody. */
+    runId?: string;
   }>;
   branchName: string;
   /** Null until prepare_workspace provisions a sandbox. */

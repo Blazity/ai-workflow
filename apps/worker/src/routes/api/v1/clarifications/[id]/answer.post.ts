@@ -71,7 +71,15 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
           cause: outcome.error,
         });
       case "answered":
-        return { clarification: outcome.clarification, runId: outcome.runId };
+        return {
+          clarification: outcome.clarification,
+          runId: outcome.runId,
+          // Present only when the answer recorded no repository decision. The
+          // person answering here may never open the ticket the same sentence
+          // is posted to, and without it they are told nothing but "answered"
+          // and then asked the same question on the next run.
+          ...(outcome.recordOutcome ? { recordOutcome: outcome.recordOutcome } : {}),
+        };
     }
   } catch (error) {
     toHttpError(error);

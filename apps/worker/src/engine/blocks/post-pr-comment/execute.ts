@@ -45,10 +45,9 @@ async function blockPostPrCommentStep(
   const comments: PostPrCommentsResult["comments"] = [];
   const errors: string[] = [];
 
-  // On schema version 1 the body is {{variable}}-substituted before it gets
-  // here, so it can carry {{change_summary}} or any agent block's output. v2
-  // gets no substitution at all and carries the same thing through a binding on
-  // the body input.
+  // The body arrives with its {{data:...}} tokens resolved (by
+  // resolveV2PromptConfiguration in executeV2Block) or bound whole through the
+  // body input, so it can carry any agent block's output.
   const scrubbed = scrubForPublication(body);
   // Every comment we post carries the marker so that even a misconfigured bot
   // login cannot let our own comments re-trigger the workflow (AIW-140).

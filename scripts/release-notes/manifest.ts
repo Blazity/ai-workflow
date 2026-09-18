@@ -17,6 +17,7 @@ const defaultRun: ManifestRunner = async (command, args) => {
   return result.stdout;
 };
 
+const PULLS_FOR_COMMIT_PAGE_SIZE = 100;
 const pullForCommitSchema = z.array(z.object({ number: z.number().int().positive() }));
 const reviewedPullSchema = z.object({
   number: z.number().int().positive(),
@@ -25,14 +26,16 @@ const reviewedPullSchema = z.object({
   mergeCommit: z.object({ oid: shaSchema }),
   baseRefName: z.string(),
   reviewDecision: z.string().nullable(),
-  reviews: z.array(
-    z.object({
-      state: z.string(),
-      author: z.object({ login: z.string().min(1) }).nullable(),
-    }),
-  ),
   files: z.array(z.object({ path: z.string() })),
 });
+const reviewPagesSchema = z.array(
+  z.array(
+    z.object({
+      state: z.string(),
+      user: z.object({ login: z.string().min(1) }).nullable(),
+    }),
+  ),
+);
 
 async function requireAncestor(
   run: ManifestRunner,
@@ -87,18 +90,31 @@ export async function validateApprovedSourceRelease(
     throw new Error("Current release notes differ from the reviewed candidate");
   }
 
+  // A commit merged into main belongs to one pull request, so there is nothing
+  // to page through here and the page size is stated rather than inherited from
+  // the API default of 30. Stating it is what makes a full page recognisable:
+  // without that, "more pull requests than fit on a page" and "exactly this many
+  // pull requests" arrive as the same number and the refusal below would name a
+  // count nobody measured.
   const pullCandidates = pullForCommitSchema.parse(
     JSON.parse(
       await run("gh", [
         "api",
-        `repos/${parsed.metadata.repository}/commits/${candidateCommit}/pulls`,
+        `repos/${parsed.metadata.repository}/commits/${candidateCommit}/pulls?per_page=${PULLS_FOR_COMMIT_PAGE_SIZE}`,
         "--method",
         "GET",
       ]),
     ),
   );
+  if (pullCandidates.length >= PULLS_FOR_COMMIT_PAGE_SIZE) {
+    throw new Error(
+      `Cannot count the pull requests introducing release candidate ${candidateCommit}: GitHub filled its page of ${PULLS_FOR_COMMIT_PAGE_SIZE} and the rest was never read. Release from a commit that belongs to one pull request into main.`,
+    );
+  }
   if (pullCandidates.length !== 1) {
-    throw new Error("Release candidate must be introduced by exactly one merged pull request");
+    throw new Error(
+      `Release candidate must be introduced by exactly one merged pull request, but GitHub associates ${pullCandidates.length} with ${candidateCommit}`,
+    );
   }
   const pullRequest = reviewedPullSchema.safeParse(
     JSON.parse(
@@ -109,7 +125,7 @@ export async function validateApprovedSourceRelease(
         "--repo",
         parsed.metadata.repository,
         "--json",
-        "number,state,mergedAt,mergeCommit,baseRefName,reviewDecision,reviews,files",
+        "number,state,mergedAt,mergeCommit,baseRefName,reviewDecision,files",
       ]),
     ),
   );
@@ -125,14 +141,34 @@ export async function validateApprovedSourceRelease(
   if (pullRequest.data.reviewDecision !== "APPROVED") {
     throw new Error("Release-note pull request has no approved review");
   }
+  // `files` comes back from the same call and carries the same cap of 100. It
+  // needs no cap handling: a capped read reports 100, never the 1 this check
+  // demands, so truncation can only refuse a release and the refusal it prints
+  // is true of a pull request that large.
   if (pullRequest.data.files.length !== 1 || pullRequest.data.files[0].path !== notesPath) {
     throw new Error("Release-note pull request is not docs-only");
   }
+  // Read the reviews on their own rather than through `gh pr view --json
+  // reviews`, which stops at 100 and says nothing: the approver names below are
+  // the release record, and a record missing a name reads exactly like a record
+  // of a smaller review.
+  const reviews = reviewPagesSchema
+    .parse(
+      JSON.parse(
+        await run("gh", [
+          "api",
+          "--paginate",
+          "--slurp",
+          `repos/${parsed.metadata.repository}/pulls/${pullRequest.data.number}/reviews?per_page=100`,
+        ]),
+      ),
+    )
+    .flat();
   const approvedBy = [
     ...new Set(
-      pullRequest.data.reviews
+      reviews
         .filter((review) => review.state === "APPROVED")
-        .flatMap((review) => (review.author ? [review.author.login] : [])),
+        .flatMap((review) => (review.user ? [review.user.login] : [])),
     ),
   ].sort();
   if (approvedBy.length === 0) throw new Error("Release-note pull request has no approved review");

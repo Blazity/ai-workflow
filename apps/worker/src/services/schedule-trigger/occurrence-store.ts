@@ -316,7 +316,8 @@ export async function supersedeConnectedPendingThenAccept(
  * A consequence the caller must be ready for: this can return false AFTER the run
  * has already been started, when the occurrence was settled in between (a pause
  * is the realistic case). That is the existing orphaned-start path, the one
- * recordAndCancelOrphanStartedRun in lib/run-start-lifecycle.ts handles, and the
+ * recordAndCancelOrphanStartedRun in services/run-lifecycle/run-start-lifecycle.ts:108
+ * handles, and the
  * honest answer here is false rather than a start written over a cancellation.
  *
  * First start wins. A second run id cannot overwrite a published start, so the
@@ -330,7 +331,8 @@ export async function supersedeConnectedPendingThenAccept(
  * the subject. It matches a live reservation under that token on ANY subject, so
  * the caller must pass the token from the reservation it made for THIS
  * occurrence. That is safe rather than lucky, because a token is minted per
- * reservation as `owner:${randomUUID()}` (lib/dispatch.ts:163) and a rebind
+ * reservation as `owner:${randomUUID()}` (services/dispatch/dispatch.ts:268, and
+ * services/manual-dispatch/service.ts:404 on the manual path) and a rebind
  * replaces the token on the subject's single row, so one token names one
  * reservation. The table is bounded by run concurrency, so scanning it by token
  * is free.
@@ -339,7 +341,7 @@ export async function supersedeConnectedPendingThenAccept(
  * pre-start reservation or this run's own bound row, so a subject that has moved
  * to cancelling, parking or parked can no longer have a start published against
  * it. That is the same boundary assertActiveRunOwner defends before an
- * irreversible provider call (lib/active-run-owner.ts:13-18).
+ * irreversible provider call (db/repositories/active-runs.ts:37).
  *
  * The run row is the second half of that fence, and it is what AIW-249 is about.
  * A claim proves ownership, NOT that the run exists: the pre-start reservation
@@ -351,7 +353,7 @@ export async function supersedeConnectedPendingThenAccept(
  * statement, which is the only atomicity available here: neon-http has no
  * transactions, so the writes cannot be wrapped, only ordered and checked. The
  * row is never the slow half of this: recordStartedRun writes it and binds the
- * claim in ONE statement (adapters/run-registry/postgres.ts:53-124), so every
+ * claim in ONE statement (PostgresRunRegistry, db/repositories/active-runs.ts:126), so every
  * caller that legitimately reaches this point already has both. A refusal
  * therefore means the run genuinely is not there, and the caller's existing
  * orphaned-start path cleans it up rather than the ledger recording a fiction.

@@ -41,7 +41,7 @@ const SEEDED_BODY = `Approve only what the ticket asked for. ${MARKER}-old`;
 const NEW_BODY = `Refuse the ticket unless its acceptance criteria name a rollback plan. ${MARKER}-new`;
 const OTHER_BODY = `Ask for a test plan before approving. ${MARKER}-other`;
 
-// The store's ceiling on a body (prompt-library/store.ts:175), restated by the
+// The store's ceiling on a body (services/prompts/prompt-library-validation.ts:6), restated by the
 // catalog so the refusal happens before the call is admitted.
 const BODY_MAX_LENGTH = 50_000;
 
@@ -360,7 +360,7 @@ describe("prompts.update", () => {
     expect(await auditedErrorCodes()).toEqual(["INSUFFICIENT_SCOPE"]);
   });
 
-  // request-context.ts strips prompts:write out of a service actor's scope set, so
+  // services/mcp/actor-resolution.ts strips prompts:write out of a service actor's scope set, so
   // this actor cannot arise from a real token; the role list is what refuses the
   // call anyway, and asserting it keeps the second lock from rotting unnoticed.
   it("refuses a service client even when its token carries prompts:write", async () => {

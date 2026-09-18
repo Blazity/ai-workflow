@@ -6,7 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "input=$(/bin/cat); if printf '%s' \"$input\" | /usr/bin/grep -Eq '\"stop_hook_active\"[[:space:]]*:[[:space:]]*true'; then exit 0; fi; if [ -z \"$(/usr/bin/git status --porcelain=v1 --untracked-files=all)\" ]; then exit 0; fi; if pnpm run verify:changed -- --base origin/main --worktree; then exit 0; fi; printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"verify:changed failed; fix the reported checks before stopping.\"}' >&2; exit 2"
+            "command": "input=$(/bin/cat); if printf '%s' \"$input\" | /usr/bin/grep -Eq '\"stop_hook_active\"[[:space:]]*:[[:space:]]*true'; then exit 0; fi; if [ -z \"$(/usr/bin/git status --porcelain=v1 --untracked-files=all)\" ]; then exit 0; fi; hint='The full gate runs in the pre-push hook, or by hand with pnpm run verify:changed.'; ws=$({ /usr/bin/git diff --check; /usr/bin/git diff --cached --check; } 2>&1 | /usr/bin/head -n 20); if [ -n \"$ws\" ]; then printf 'Quick checks failed: git diff --check found whitespace errors.\\n%s\\n%s\\n' \"$ws\" \"$hint\" >&2; exit 2; fi; if tc=$(pnpm -w run typecheck 2>&1); then exit 0; fi; errs=$(printf '%s\\n' \"$tc\" | /usr/bin/grep -E 'error TS' | /usr/bin/head -n 20); if [ -z \"$errs\" ]; then errs=$(printf '%s\\n' \"$tc\" | /usr/bin/tail -n 20); fi; printf 'Quick checks failed: pnpm -w run typecheck.\\n%s\\n%s\\n' \"$errs\" \"$hint\" >&2; exit 2",
+            "timeout": 300,
+            "statusMessage": "Quick checks: whitespace and typecheck"
           }
         ]
       }

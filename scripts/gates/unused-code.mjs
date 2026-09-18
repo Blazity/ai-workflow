@@ -5,13 +5,45 @@
  * agent fixtures, and WDK fixtures because those paths are generated, vendored,
  * or discovered by runtimes that Knip cannot model.
  */
+import { existsSync, globSync } from "node:fs";
+import { join } from "node:path";
 import {
   parseOptions,
   printTable,
+  readJson,
   repositoryRoot,
+  requireAnchor,
   runTool,
   sortedObject,
 } from "./shared.mjs";
+
+const INVARIANT = "the rule that no file, dependency, export or type is unused";
+
+/*
+ * Knip reports findings, never the size of what it read, so a config whose
+ * workspaces no longer resolve produces the same empty report as a clean tree.
+ * The workspace keys are the anchors that can be checked here.
+ */
+function requireConfiguredWorkspaces(root, config) {
+  requireAnchor(root, config, "the Knip configuration this gate reads", INVARIANT);
+  const workspaces = Object.keys(readJson(config).workspaces ?? {});
+  for (const workspace of workspaces) {
+    if (workspace.includes("*")) {
+      if (globSync(workspace, { cwd: root }).length === 0) {
+        throw new Error(
+          `the Knip workspace glob "${workspace}" matches no directory, so ${INVARIANT} is unproven for everything it was meant to cover. Fix the glob or restore the directory it names.`,
+        );
+      }
+      continue;
+    }
+    if (!existsSync(join(root, workspace))) {
+      throw new Error(
+        `the Knip workspace "${workspace}" is missing, so ${INVARIANT} is unproven for everything under it. Restore that path or point the config at where it moved.`,
+      );
+    }
+  }
+  return workspaces;
+}
 
 function workspace(file) {
   const path = file.replaceAll("\\", "/");
@@ -62,6 +94,7 @@ function main() {
     "--config": "config",
   });
   const config = options.config ?? `${repositoryRoot}/knip.json`;
+  const configuredWorkspaces = requireConfiguredWorkspaces(options.root, config);
   const result = runTool("knip", ["--reporter", "json", "--config", config], options.root);
   let report;
   try {
@@ -83,7 +116,11 @@ function main() {
     console.log("Unused code diagnostics");
     for (const finding of findingLines(report)) console.log(finding);
   }
-  console.log(failed ? "unused-code FAIL" : "unused-code PASS");
+  console.log(
+    failed
+      ? "unused-code FAIL"
+      : `unused-code PASS: ${configuredWorkspaces.length} configured workspace(s) read`,
+  );
   process.exitCode = failed ? 1 : 0;
 }
 

@@ -3,15 +3,19 @@ Last-verified: 2026-09-14
 
 # Delivery gates
 
-`pnpm run gates` runs the static gates below in table order. The
-`engine-canary` row is a path-scoped CI gate outside that local ladder. A gate
-exits non-zero when its check fails.
+The table below is every gate that can turn a pull request red. Most of its
+rows are the static ladder, which `pnpm run gates` runs in table order. Two are
+not: `engine-canary` is a path-scoped CI job, and `Changelog completeness` is a
+step of the `source-checks` job that runs on pull requests only. Both name
+their workflow in the `Script` column. A gate exits non-zero when its check
+fails.
 
 | Gate | Checks | Script | Fails when |
 |---|---|---|---|
 | Boundaries | Worker tier edges, unknown source paths, file cycles, and unlisted cross-cluster deep imports | `scripts/gates/boundaries.mjs` | A dependency crosses an unallowed edge, a path is unknown, a file cycle is found, or a deep import is unlisted |
 | Unused code | Knip findings by workspace and category | `scripts/gates/unused-code.mjs` | Any finding is reported |
 | Lint | Oxlint diagnostics for worker, dashboard, scripts, and packages | `scripts/gates/lint.mjs` | Any diagnostic is reported |
+| UI primitives | Dashboard screens against the shared primitives and motion tokens, minus the documented-constraint allowlist | `scripts/gates/ui-primitives.mjs` | A screen uses a native control or a raw motion value instead of a shared primitive or token outside the allowlist, a dashboard source root or the allowlist is missing, or zero screen files are scanned |
 | Resurrected paths | Retired paths using tracked and non-ignored files | `scripts/gates/no-resurrected-paths.mjs` | A retired path has a tracked or non-ignored file |
 | Single schema | Retired workflow schema v1 spellings and production references | `scripts/gates/single-schema-version.mjs` | A retired schema branch, helper, type, or production test import is found |
 | Transactions | Production worker source for `.transaction(` | `scripts/gates/transactions-in-repositories.mjs` | Any production transaction call is found |
@@ -20,10 +24,21 @@ exits non-zero when its check fails.
 | Package contracts | Descriptions for every package under `packages/` | `scripts/gates/package-contracts.mjs` | A package has no non-empty description |
 | Model catalog drift | Model literals outside the catalog's declared exclusions | `scripts/gates/model-catalog-drift.mjs` | A model identifier is duplicated outside an approved owner or exclusion |
 | Dependency consistency | Shared dependency versions against the pnpm catalog | `scripts/gates/check-deps-consistency.mjs` | A shared dependency is not cataloged, is split across specifiers, or is missing from the catalog |
-| Documentation status | Headers, freshness, status targets, and reachability for current documents | `scripts/gates/docs-status.mjs` | A document header is invalid, a current document is stale or unreachable, or a superseded target is missing |
-| engine-canary | Pull request changes under `apps/worker/src/engine/**`, `apps/worker/src/db/**`, or `packages/**`; idle with a green warning when no target is declared; skips deployment when `apps/worker/drizzle/**` changes; exact deployment commit and declared production database identity on the `ai-workflow-demo` custom environment | `.github/workflows/ci.yml`, `scripts/ci/engine-canary-scope.ts`, `scripts/ci/engine-canary-preflight.ts` | An armed target is incomplete, the target name is `production`, deployment identity is unproven, the database environment or fingerprint is mismatched, or either live canary fails |
+| Documentation status | Headers, freshness, status targets, and reachability for current documents; a passing run prints how many documents it checked and how many it skipped for frontmatter | `scripts/gates/docs-status.mjs` | A document header is invalid, a current document is stale or unreachable, a superseded target is missing, one of the paths the checked set is computed from is gone, or `docs/` holds no Markdown at all |
+| engine-canary | Pull request changes under the prefixes listed in `scripts/ci/engine-canary-scope.ts`: the deployed surfaces the canary drives, three directories of `apps/worker/src/services/**`, the canary's own runners and job, and the dependency inputs `pnpm-lock.yaml`, `pnpm-workspace.yaml` and `apps/worker/package.json`; skips deployment when `apps/worker/drizzle/**` changes; exact deployment commit and declared production database identity on the `ai-workflow-demo` custom environment | `.github/workflows/ci.yml`, `scripts/ci/engine-canary-scope.ts`, `scripts/ci/engine-canary-preflight.ts` | No target is declared, an armed target is incomplete, the target name is `production`, deployment identity is unproven, the database environment or fingerprint is mismatched, or either live canary fails |
+| Changelog completeness | Whether a pull request touching `apps/**` or `packages/**` leaves an entry under `changelog/unreleased/` that yields at least one bullet, unless it carries the `changelog: skip` label | `scripts/ci/changelog-entry-gate.ts`, `.github/workflows/ci.yml` | A product change adds no entry, the entry it names is deleted, blank or carries no Markdown bullet, an entry cannot be read from the checkout, or the pull request's file list comes back empty |
 
-The gate is armed with `ENGINE_CANARY_TARGET=ai-workflow-demo`,
+A gate proves an invariant over a set, and an empty set proves nothing, so a
+gate here refuses rather than passes when it finds nothing to look at: a path
+it was told to scan is gone, or a scan comes back zero. The refusal names both
+the path and the invariant it leaves unproven, and a passing gate prints how
+much it scanned, so a green line can be read against a count. The one limit is
+`Unused code`: Knip reports findings and never the size of what it read, so
+that gate can anchor the workspaces its configuration declares and no more.
+ADR-007 holds the rule and that limit; which paths each gate anchors lives in
+that gate's source and never in this table.
+
+The engine-canary gate is armed with `ENGINE_CANARY_TARGET=ai-workflow-demo`,
 `ENGINE_CANARY_DB_ENV=production`, and the
 `ENGINE_CANARY_DB_FINGERPRINT` reported by the target's `/health` response.
 The Vercel token, production `DATABASE_URL`, protection bypass, and the OAuth

@@ -31,6 +31,62 @@ describe("JiraAdapter", () => {
   });
 
   describe("fetchTicket", () => {
+    // Round 5, A2. Everything downstream that reads a person's words tells what
+    // they wrote from what they quoted by the "> " marker, and the flattener
+    // used to drop it: a person clicking Jira's quote button on our comment
+    // saying a repository was NOT taken, and writing "yes, add it" underneath,
+    // handed the reader our own refusal as their own words and was refused for
+    // agreeing.
+    it("keeps the quote marker on a blockquote a person quoted our comment with", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "10001",
+          key: "PROJ-1",
+          fields: {
+            summary: "Add login page",
+            description: { content: [{ content: [{ text: "Build a login page" }] }] },
+            comment: {
+              comments: [
+                {
+                  author: { displayName: "Ada", accountId: "acc-ada" },
+                  body: {
+                    content: [
+                      {
+                        type: "blockquote",
+                        content: [
+                          {
+                            type: "paragraph",
+                            content: [
+                              {
+                                text: "github:acme/billing is not selected on this work, so the run started without it.",
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      { type: "paragraph", content: [{ text: "yes, add it" }] },
+                    ],
+                  },
+                  created: "2026-03-20T10:00:00Z",
+                },
+              ],
+              total: 1,
+            },
+            labels: [],
+            status: { id: "10000", name: "AI" },
+            attachment: [],
+          },
+        }),
+      });
+
+      const ticket = await jiraAdapter().fetchTicket("10001");
+
+      expect(ticket.comments[0]?.body).toBe(
+        "> github:acme/billing is not selected on this work, so the run started without it.\nyes, add it",
+      );
+    });
+
     it("returns normalized ticket content", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -42,8 +98,11 @@ describe("JiraAdapter", () => {
             description: { content: [{ content: [{ text: "Build a login page" }] }] },
             comment: {
               comments: [
-                { author: { displayName: "Alice" }, body: { content: [{ content: [{ text: "Use OAuth" }] }] }, created: "2026-03-20T10:00:00Z" },
+                { author: { displayName: "Alice", accountId: "acc-alice", accountType: "atlassian" }, body: { content: [{ content: [{ text: "Use OAuth" }] }] }, created: "2026-03-20T10:00:00Z" },
+                { author: { displayName: "Automation for Jira", accountId: "acc-bot", accountType: "app" }, body: { content: [{ content: [{ text: "Moved by a rule" }] }] }, created: "2026-03-20T10:05:00Z" },
+                { author: { displayName: "Legacy" }, body: { content: [{ content: [{ text: "From before we asked" }] }] }, created: "2026-03-20T10:06:00Z" },
               ],
+              total: 3,
             },
             labels: ["frontend"],
             status: { id: "10000", name: "AI" },
@@ -58,10 +117,313 @@ describe("JiraAdapter", () => {
       expect(ticket.id).toBe("10001");
       expect(ticket.identifier).toBe("PROJ-1");
       expect(ticket.title).toBe("Add login page");
-      expect(ticket.comments).toHaveLength(1);
+      expect(ticket.comments).toHaveLength(3);
+      // The account type comes through as Jira reports it, because the readers
+      // above cannot tell an automation rule from a person without it. Absent
+      // stays absent: an author Jira says nothing about is a person, and only
+      // the field itself may say otherwise.
+      expect(ticket.comments.map((c) => c.accountType)).toEqual([
+        "atlassian",
+        "app",
+        undefined,
+      ]);
       expect(ticket.trackerStatus).toBe("AI");
       expect(ticket.trackerStatusId).toBe("10000");
       expect(ticket.attachments).toEqual([]);
+      // Jira said it had three and handed over three, so this list is the list.
+      expect(ticket.commentsComplete).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads a busy ticket with one request when no comment window is asked for", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: "10001",
+          key: "PROJ-1",
+          fields: {
+            summary: "Busy ticket",
+            description: null,
+            comment: {
+              comments: [
+                { author: { displayName: "Alice", accountId: "acc-alice" }, body: { content: [{ content: [{ text: "first" }] }] }, created: "2026-03-20T10:00:00Z" },
+              ],
+              total: 57,
+            },
+            labels: [],
+            status: { name: "AI" },
+            attachment: [],
+          },
+        }),
+      });
+
+      const adapter = jiraAdapter();
+      const ticket = await adapter.fetchTicket("10001");
+
+      // This is every ticket read in the deployment except the two that resume
+      // a clarification: the poll tick, the dispatch, the reconciler, the
+      // overview. Chasing the rest of a busy ticket's comments here would put
+      // up to twenty extra provider calls behind each of them, and a rate limit
+      // reached that way stops every run.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(ticket.comments).toHaveLength(1);
+      // And it claims nothing it did not read.
+      expect(ticket.commentsComplete).toBe(false);
+      expect(ticket.commentsCompleteFrom).toBeUndefined();
+    });
+
+    it("reads the comments the issue response left behind on later pages", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: "10001",
+            key: "PROJ-1",
+            fields: {
+              summary: "Busy ticket",
+              description: null,
+              comment: {
+                comments: [
+                  { author: { displayName: "Alice", accountId: "acc-alice" }, body: { content: [{ content: [{ text: "first" }] }] }, created: "2026-03-20T10:00:00Z" },
+                ],
+                total: 2,
+              },
+              labels: [],
+              status: { name: "AI" },
+              attachment: [],
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            total: 2,
+            comments: [
+              { author: { displayName: "Alice", accountId: "acc-alice" }, body: { content: [{ content: [{ text: "first" }] }] }, created: "2026-03-20T10:00:00Z" },
+              { author: { displayName: "Bob", accountId: "acc-bob" }, body: { content: [{ content: [{ text: "second" }] }] }, created: "2026-03-20T11:00:00Z" },
+            ],
+          }),
+        });
+
+      const adapter = jiraAdapter();
+      const ticket = await adapter.fetchTicket("10001", {
+        commentsSince: "2026-03-20T09:00:00Z",
+      });
+
+      // The answer nobody could see: the issue response carries one page of
+      // comments and says there are more, and the reader that decides whether a
+      // person answered would have been handed the page.
+      expect(ticket.comments.map((c) => c.body)).toEqual(["first", "second"]);
+      expect(ticket.commentsComplete).toBe(true);
+      // The order is asked for rather than assumed: which end of the list a
+      // page is cut from is the whole basis of the window below.
+      expect(mockFetch.mock.calls[1]?.[0]).toBe(
+        `${API_BASE}/rest/api/3/issue/10001/comment?startAt=0&maxResults=100&orderBy=created`,
+      );
+    });
+
+    it("stops at a bound on a ticket longer than one read may page through, and says the list is incomplete", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "10001",
+          key: "PROJ-1",
+          fields: {
+            summary: "Busy ticket",
+            description: null,
+            comment: { comments: [], total: 999999 },
+            labels: [],
+            status: { name: "AI" },
+            attachment: [],
+          },
+        }),
+      });
+      // Full pages, and a ticket that keeps growing while we read it, so the
+      // end never arrives. The bound is what stops this being an unbounded
+      // loop; saying the list is incomplete is what stops the readers treating
+      // what came back as the whole ticket.
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          total: 1000000,
+          comments: Array.from({ length: 100 }, (_, i) => ({
+            author: { displayName: "Alice", accountId: "acc-alice" },
+            body: { content: [{ content: [{ text: `page comment ${i}` }] }] },
+            created: "2026-03-20T10:00:00Z",
+          })),
+        }),
+      });
+
+      const adapter = jiraAdapter();
+      // A window older than every comment on it, so the walk never reaches back
+      // past the question and the bound is the only thing that stops it.
+      const ticket = await adapter.fetchTicket("10001", {
+        commentsSince: "2026-03-01T00:00:00Z",
+      });
+
+      expect(ticket.commentsComplete).toBe(false);
+      // The provider said there were more comments past where this read
+      // started, so the newest of all may be one of them.
+      expect(ticket.commentsCompleteFrom).toBeUndefined();
+      // One issue read plus the bounded number of comment pages, and not one
+      // request more.
+      expect(mockFetch).toHaveBeenCalledTimes(21);
+      // The first page read is the LAST one on the ticket, and the walk steps
+      // backwards from there: the window every reader cares about opens at a
+      // question asked recently, and Jira hands comments over oldest first.
+      expect(mockFetch.mock.calls[1]?.[0]).toBe(
+        `${API_BASE}/rest/api/3/issue/10001/comment?startAt=999899&maxResults=100&orderBy=created`,
+      );
+    });
+
+    it("reads a ticket longer than one read may page through from its newest end, and says from when the list is whole", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "10001",
+          key: "PROJ-1",
+          fields: {
+            summary: "Very busy ticket",
+            description: null,
+            comment: { comments: [], total: 2100 },
+            labels: [],
+            status: { name: "AI" },
+            attachment: [],
+          },
+        }),
+      });
+      // A ticket with a hundred more comments than one read may page through.
+      // The read skips the oldest hundred and runs to the end, so the list is
+      // not the whole ticket and IS the whole of everything written since the
+      // hundredth comment.
+      mockFetch.mockImplementation(async (url: string) => {
+        // The page the walk actually asked for, so the test cannot agree with
+        // itself about which end of the ticket is being read.
+        const start = Number(new URL(url).searchParams.get("startAt"));
+        return {
+          ok: true,
+          json: async () => ({
+            total: 2100,
+            comments: Array.from({ length: 100 }, (_, i) => ({
+              author: { displayName: "Alice", accountId: "acc-alice" },
+              body: { content: [{ content: [{ text: `comment ${start + i}` }] }] },
+              created: new Date(
+                Date.UTC(2026, 2, 20) + (start + i) * 60_000,
+              ).toISOString(),
+            })),
+          }),
+        };
+      });
+
+      const adapter = jiraAdapter();
+      const ticket = await adapter.fetchTicket("10001", {
+        // Inside the newest page, so one page answers the question.
+        commentsSince: new Date(Date.UTC(2026, 2, 20) + 2050 * 60_000).toISOString(),
+      });
+
+      // One page, not twenty: the walk stops the moment it reaches back past
+      // the instant asked about, which is what keeps a ticket this long from
+      // costing twenty requests every time somebody answers on it.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(ticket.comments).toHaveLength(100);
+      // Not the whole ticket, and honest about it.
+      expect(ticket.commentsComplete).toBe(false);
+      // The fact that saves the comment channel on a ticket this long: whatever
+      // is missing was written before this instant, so a reader whose question
+      // was asked after it holds every comment that could answer it.
+      expect(ticket.commentsCompleteFrom).toBe(
+        new Date(Date.UTC(2026, 2, 20) + 2000 * 60_000).toISOString(),
+      );
+      expect(ticket.comments[0]?.body).toBe("comment 2000");
+    });
+
+    it("reports the comment list as incomplete when the tracker hands over fewer comments than it says it has", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: "10001",
+            key: "PROJ-1",
+            fields: {
+              summary: "Busy ticket",
+              description: null,
+              comment: {
+                comments: [
+                  { author: { displayName: "Alice", accountId: "acc-alice" }, body: { content: [{ content: [{ text: "first" }] }] }, created: "2026-03-20T10:00:00Z" },
+                ],
+                total: 5,
+              },
+              labels: [],
+              status: { name: "AI" },
+              attachment: [],
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            total: 5,
+            comments: [
+              { author: { displayName: "Alice", accountId: "acc-alice" }, body: { content: [{ content: [{ text: "first" }] }] }, created: "2026-03-20T10:00:00Z" },
+              { author: { displayName: "Bob", accountId: "acc-bob" }, body: { content: [{ content: [{ text: "second" }] }] }, created: "2026-03-20T11:00:00Z" },
+            ],
+          }),
+        });
+
+      const adapter = jiraAdapter();
+      const ticket = await adapter.fetchTicket("10001", {
+        commentsSince: "2026-03-20T09:00:00Z",
+      });
+
+      // Five, it says, and two is what it gave. Three comments are unaccounted
+      // for, and one of them may be the answer somebody is waiting to be read.
+      expect(ticket.comments).toHaveLength(2);
+      expect(ticket.commentsComplete).toBe(false);
+      // It contradicted itself, so nothing it said places the missing three:
+      // claiming a window here would be claiming coverage we cannot prove.
+      expect(ticket.commentsCompleteFrom).toBeUndefined();
+    });
+
+    it("proves the comment list whole from a short page when the tracker never says how many there are", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: "10001",
+            key: "PROJ-1",
+            fields: {
+              summary: "Quiet ticket",
+              description: null,
+              comment: {
+                comments: [
+                  { author: { displayName: "Alice", accountId: "acc-alice" }, body: { content: [{ content: [{ text: "only one" }] }] }, created: "2026-03-20T10:00:00Z" },
+                ],
+              },
+              labels: [],
+              status: { name: "AI" },
+              attachment: [],
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            comments: [
+              { author: { displayName: "Alice", accountId: "acc-alice" }, body: { content: [{ content: [{ text: "only one" }] }] }, created: "2026-03-20T10:00:00Z" },
+            ],
+          }),
+        });
+
+      const adapter = jiraAdapter();
+      const ticket = await adapter.fetchTicket("10001", {
+        commentsSince: "2026-03-20T09:00:00Z",
+      });
+
+      // A page with room left on it is the end of the list, which is how a
+      // tracker that reports no count at all still gets its comments read
+      // rather than treated as a truncated page for ever.
+      expect(ticket.comments.map((c) => c.body)).toEqual(["only one"]);
+      expect(ticket.commentsComplete).toBe(true);
     });
   });
 
@@ -75,7 +437,7 @@ describe("JiraAdapter", () => {
           fields: {
             summary: "Has attachments",
             description: null,
-            comment: { comments: [] },
+            comment: { comments: [], total: 0 },
             labels: [],
             status: { name: "AI" },
             attachment: [
@@ -120,7 +482,7 @@ describe("JiraAdapter", () => {
           fields: {
             summary: "Has malformed sizes",
             description: null,
-            comment: { comments: [] },
+            comment: { comments: [], total: 0 },
             labels: [],
             status: { name: "AI" },
             attachment: [
@@ -149,7 +511,7 @@ describe("JiraAdapter", () => {
           fields: {
             summary: "Has partial attachment metadata",
             description: null,
-            comment: { comments: [] },
+            comment: { comments: [], total: 0 },
             labels: [],
             status: { name: "AI" },
             attachment: [
@@ -180,7 +542,7 @@ describe("JiraAdapter", () => {
           fields: {
             summary: "No attachments",
             description: null,
-            comment: { comments: [] },
+            comment: { comments: [], total: 0 },
             labels: [],
             status: { name: "AI" },
             // attachment field intentionally omitted
@@ -202,7 +564,7 @@ describe("JiraAdapter", () => {
           fields: {
             summary: "x",
             description: null,
-            comment: { comments: [] },
+            comment: { comments: [], total: 0 },
             labels: [],
             status: { name: "AI" },
             attachment: [],

@@ -24,7 +24,11 @@ vi.mock("../../../db/repositories/runs.js", () => ({
 }));
 
 
-vi.mock("../../../adapters/vcs/repository-directory.js", () => ({
+// Partial: the pin filter in the same module is pure and is exactly what the
+// step applies to the work scope record, so it stays real. Only the
+// network-backed directory is stubbed.
+vi.mock("../../../adapters/vcs/repository-directory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../adapters/vcs/repository-directory.js")>()),
   createRepositoryDirectoryForProviders: () => ({
     listRepositories: mocks.listRepositories,
   }),

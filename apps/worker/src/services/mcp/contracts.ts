@@ -14,8 +14,8 @@ import type { McpScope, McpToolName } from "@shared/contracts";
 export { FIRST_SLICE_TOOLS, MCP_SCOPES } from "@shared/contracts";
 export type { McpScope, McpToolName } from "@shared/contracts";
 
-// Five scopes, because an OAuth consent is granted one scope at a time and these
-// are four different things to agree to. "prompts:write" is not a subset of the
+// Seven scopes now (packages/contracts/domain.ts:864), because an OAuth consent is
+// granted one scope at a time and each is a different thing to agree to. "prompts:write" is not a subset of the
 // first two and must never be folded into either: the prompt library is the
 // instruction set every future agent run is handed, so a user who agreed to read
 // tickets (mcp:read) and to start runs (runs:dispatch) has not thereby agreed to
@@ -180,11 +180,11 @@ export type McpRunSummary = {
 };
 
 // The repo disagrees with itself about whether "awaiting" is terminal:
-// db/queries/run-detail-read.ts:23 treats it as terminal (a parked run has
-// stopped executing steps), run-observability/store.ts:309-313 does not. For
-// MCP we side with run-detail-read: "awaiting" means the run is waiting on a
-// human, so a polling agent must stop, not keep looping. Do not "fix" this
-// back to match store.ts.
+// services/run-lifecycle/durable-run-detail.ts:14 treats it as terminal (a parked
+// run has stopped executing steps), services/run-lifecycle/run-replay-read.ts:39
+// does not. For MCP we side with durable-run-detail: "awaiting" means the run is
+// waiting on a human, so a polling agent must stop, not keep looping. Do not "fix"
+// this back to match the replay set.
 export function isTerminalRunStatus(status: McpRunSummary["status"]): boolean {
   return (
     status === "success" ||

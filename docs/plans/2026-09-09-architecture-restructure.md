@@ -636,3 +636,9 @@ Skeptic (opus, fresh context, plan and code, stage 3b only): REVISE, 5 HIGH,
 | 10 | #399 |
 | 11 | #403 to #409 |
 | 12 | #411 to #429 |
+
+Correction, 2026-09-17: stage 10 made `verify:changed` the Claude `Stop` hook.
+A full gate after every response took about ten minutes and competed with the
+tests it was meant to protect, so the hook now runs only `git diff --check` and
+`pnpm -w run typecheck`; the full gate runs in the pre-push hook and by hand, as
+the Evidence section of the root `AGENTS.md` says.

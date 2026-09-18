@@ -6,6 +6,7 @@ import {
 import {
   containsMalformedPromptDataToken,
   containsMalformedPromptSlotToken,
+  containsPlaceholderOutsideTokens,
   isPromptAuthoringBlock,
   parsePromptDataTokens,
   parsePromptSlotTokens,
@@ -273,8 +274,7 @@ async function validateNonAgentPromptAuthoring(
           ));
         }
       }
-      const residual = removePromptDataTokens(resolved.text, dataTokens);
-      if (residual.includes("{{") || residual.includes("}}")) {
+      if (containsPlaceholderOutsideTokens(resolved.text, dataTokens)) {
         issues.push(nodeIssue(
           input,
           "prompt_placeholder_unresolved",
@@ -285,19 +285,6 @@ async function validateNonAgentPromptAuthoring(
     }
   }
   return dedupeWorkflowDefinitionIssues(issues);
-}
-
-function removePromptDataTokens(
-  text: string,
-  tokens: ReturnType<typeof parsePromptDataTokens>,
-): string {
-  let output = "";
-  let cursor = 0;
-  for (const token of tokens) {
-    output += text.slice(cursor, token.start);
-    cursor = token.end;
-  }
-  return output + text.slice(cursor);
 }
 
 export async function validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(

@@ -114,6 +114,38 @@ describe("clarification hook store", () => {
     });
   });
 
+  it("stores and returns the repositories a question asked about, with why", async () => {
+    const db = await createTestDb();
+    const prepared = await prepareHookClarification(db, {
+      ...input,
+      askedRepositories: [
+        { repositoryKey: "github:acme/api", askedBecause: "not_enabled" },
+        { repositoryKey: "github:acme/web", askedBecause: "selection" },
+      ],
+    });
+
+    expect(prepared.askedRepositories).toEqual([
+      { repositoryKey: "github:acme/api", askedBecause: "not_enabled" },
+      { repositoryKey: "github:acme/web", askedBecause: "selection" },
+    ]);
+    expect((await getHookClarification(db, prepared.id))?.askedRepositories).toEqual([
+      { repositoryKey: "github:acme/api", askedBecause: "not_enabled" },
+      { repositoryKey: "github:acme/web", askedBecause: "selection" },
+    ]);
+  });
+
+  it("stores null when a question names no repositories", async () => {
+    const db = await createTestDb();
+    const prepared = await prepareHookClarification(db, input);
+
+    expect(prepared.askedRepositories).toBeNull();
+    const [stored] = await db
+      .select({ askedRepositories: clarificationRequests.askedRepositories })
+      .from(clarificationRequests)
+      .where(eq(clarificationRequests.id, prepared.id));
+    expect(stored).toEqual({ askedRepositories: null });
+  });
+
   it("maps expiresAt as a Date about seven days out", async () => {
     const db = await createTestDb();
     const before = Date.now();

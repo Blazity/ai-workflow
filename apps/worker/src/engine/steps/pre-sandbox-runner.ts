@@ -38,6 +38,10 @@ export async function executePreSandboxPhase(
   let repositoryDiscovery: RunPreSandboxPhaseResult["repositoryDiscovery"];
   let repositoryScopeNarrowing: RunPreSandboxPhaseResult["repositoryScopeNarrowing"];
   let repositoryCatalogDegradation: RunPreSandboxPhaseResult["repositoryCatalogDegradation"];
+  let workScopeAsk: RunPreSandboxPhaseResult["workScopeAsk"];
+  let workScopeLeftOut: RunPreSandboxPhaseResult["workScopeLeftOut"];
+  let workScopeRecoveryNotes: RunPreSandboxPhaseResult["workScopeRecoveryNotes"];
+  let workScopeTicketText: RunPreSandboxPhaseResult["workScopeTicketText"];
 
   for (const step of config.preSandbox.steps) {
     const handler = registry[step.uses];
@@ -62,6 +66,14 @@ export async function executePreSandboxPhase(
             settings: input.settings,
             ...(input.repositoryScope ? { repositoryScope: input.repositoryScope } : {}),
             ...(input.clarification ? { clarification: input.clarification } : {}),
+            // Forwarded one by one rather than spread, so a field the caller
+            // never read stays absent here: absent is the old path, and an
+            // `undefined` that a spread turned into a present key would be a
+            // record nobody read standing in for one that was never there.
+            ...(input.workScope ? { workScope: input.workScope } : {}),
+            ...(input.workScopePolicy ? { workScopePolicy: input.workScopePolicy } : {}),
+            ...(input.workScopeActor ? { workScopeActor: input.workScopeActor } : {}),
+            ...(input.botAccountId ? { botAccountId: input.botAccountId } : {}),
           },
           config: step.with,
           step,
@@ -85,6 +97,21 @@ export async function executePreSandboxPhase(
       if (result.repositoryCatalogDegradation) {
         repositoryCatalogDegradation = result.repositoryCatalogDegradation;
       }
+      if (result.workScopeAsk) {
+        workScopeAsk = result.workScopeAsk;
+      }
+      // Carried whatever the step's status, because the surface they are for is
+      // the comment a run posts when it FINISHES, and a run that finishes came
+      // through the continue branch of a step that refused something.
+      if (result.workScopeLeftOut) {
+        workScopeLeftOut = result.workScopeLeftOut;
+      }
+      if (result.workScopeRecoveryNotes) {
+        workScopeRecoveryNotes = result.workScopeRecoveryNotes;
+      }
+      if (result.workScopeTicketText) {
+        workScopeTicketText = result.workScopeTicketText;
+      }
 
       if (result.status === "halt") {
         return {
@@ -98,6 +125,10 @@ export async function executePreSandboxPhase(
           repositoryDiscovery,
           repositoryScopeNarrowing,
           repositoryCatalogDegradation,
+          workScopeAsk,
+          workScopeLeftOut,
+          workScopeRecoveryNotes,
+          workScopeTicketText,
         };
       }
     } catch (err) {
@@ -116,6 +147,14 @@ export async function executePreSandboxPhase(
         cause: errorMessage(err),
         promptAdditions,
         selectedRepositories,
+        // A step that threw does not erase what an earlier step decided. Without
+        // these, a run whose selection refused a repository and whose next step
+        // then failed reports the failure and says nothing about the repository,
+        // and the ask that a pending question needs to land on is lost with it.
+        workScopeAsk,
+        workScopeLeftOut,
+        workScopeRecoveryNotes,
+        workScopeTicketText,
       };
     }
   }
@@ -127,6 +166,10 @@ export async function executePreSandboxPhase(
     repositoryDiscovery,
     repositoryScopeNarrowing,
     repositoryCatalogDegradation,
+    workScopeAsk,
+    workScopeLeftOut,
+    workScopeRecoveryNotes,
+    workScopeTicketText,
   };
 }
 

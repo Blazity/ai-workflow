@@ -18,7 +18,7 @@ const DEFAULT_PROMPTS_LIMIT = 50;
 
 // Membership tests over stored strings, so the two shared helpers are never
 // handed a value they would index a record with: isTriggerBlockType does exactly
-// that (workflow-graph.ts:148) and throws on an unknown type, which a retired
+// that (packages/contracts/workflow-graph.ts:123) and throws on an unknown type, which a retired
 // block in an old deployed graph would be.
 const TRIGGER_TYPES: readonly string[] = TRIGGER_BLOCK_TYPES;
 
@@ -26,7 +26,7 @@ type WorkflowTrigger = {
   triggerNodeId: string;
   triggerType: string;
   // The other half of the trigger catalog fires from an approval, a signed
-  // delivery or a clock (workflow-graph.ts:118), and a manual dispatch of one is
+  // delivery or a clock (packages/contracts/workflow-graph.ts:92), and a manual dispatch of one is
   // refused as not_eligible. Saying so here is what keeps an agent from paying a
   // preflight to find out.
   manuallyDispatchable: boolean;
@@ -72,8 +72,8 @@ type PromptGetData = {
 // would turn one retired block in one deployed version into an INTERNAL_ERROR
 // for the entire page. Both stored schema versions keep nodes as
 // { id, type, ... }, so these are the same node ids manual-dispatch resolves
-// against (manual-dispatch/resolve.ts:144). Same shape of minimal structural
-// read as prompt-library/store.ts:44.
+// against (services/manual-dispatch/resolve.ts:211). Same shape of minimal structural
+// read as services/prompts/prompt-library-service.ts:102.
 const graphScanSchema = z
   .object({ nodes: z.array(z.unknown()).catch([]) })
   .catch({ nodes: [] });
@@ -118,8 +118,9 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
           // Triggers come from the DEPLOYED version, never the draft head,
           // because that is the snapshot a dispatch resolves against: offering a
           // node id that only exists in the draft would be an argument every
-          // preflight refuses. One query for the whole page (the same
-          // (id, version) OR-set prompt-library/store.ts:355 uses for its heads),
+          // preflight refuses. One query for the whole page (an (id, version)
+          // OR-set, db/repositories/mcp.ts:186; the prompt library no longer reads
+          // its heads this way, db/repositories/prompts.ts:112 uses DISTINCT ON),
           // so the page costs two queries rather than one per definition.
           const deployed = page.filter((row) => row.deployedVersion != null);
           const versionRows = await deps.services.readDeployedDefinitionVersions(
@@ -216,7 +217,7 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
             const currentVersion = versionByPrompt.get(row.id);
             // A prompt with no version at all is an orphan row that prompts.get
             // could not serve either, so the list drops it exactly as the
-            // dashboard's own list does (prompt-library/store.ts:378).
+            // dashboard's own list does (its inner join, db/repositories/prompts.ts:119).
             if (currentVersion == null) continue;
             prompts.push({
               promptId: row.id,

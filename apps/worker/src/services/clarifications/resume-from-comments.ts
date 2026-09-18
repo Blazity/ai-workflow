@@ -2,6 +2,7 @@ import { env } from "../../infra/vcs-config.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
+  type TicketComment,
 } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/types.js";
 import type { SettingsSnapshot } from "@shared/contracts";
@@ -11,13 +12,22 @@ import {
   answerClarificationAndResume,
   answerConnectedClarificationAndResume,
   MAX_ANSWER_LENGTH,
-  retireConnectedClarificationForGoneTicket,
-  retireClarificationForGoneTicket,
 } from "./answer-core.js";
+import { retireClarificationForGoneTicket } from "./retirement.js";
+import { retireConnectedClarificationForGoneTicket } from "../../db/repositories/clarifications.js";
+import {
+  commentsCoverAnswerWindow,
+  composedAnswerActorId,
+  composedAuthorCount,
+  isComposedAnswerActor,
+  qualifyingComments,
+  readBotAccountId,
+} from "./answer-authorship.js";
 import {
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,
   formatClarificationNudgeComment,
+  formatClarificationUnreadableNudgeComment,
 } from "./comment-format.js";
 import { getHookClarification, getResumableClarificationForTicket } from "../../db/repositories/clarification-hooks.js";
 import {
@@ -64,14 +74,20 @@ export async function resumeClarificationFromComments(input: {
     getResumable: (key: string) => ReturnType<typeof getResumableClarificationForTicket>;
     claim: (row: { runId: string; subjectKey: string | null; ticketKey: string | null }) => Promise<"claimed" | "in_progress" | "resumed" | "settled">;
     finish: (runId: string, status: "awaiting" | "running" | "blocked") => Promise<void>;
-    answer: (value: any) => ReturnType<typeof answerConnectedClarificationAndResume>;
+    /** Typed against the core it calls, both halves of it. This is the one call
+     *  that decides what a person's answer means, so a field the core reads and
+     *  this path spells differently has to be a compile error here. */
+    answer: (
+      value: Parameters<typeof answerConnectedClarificationAndResume>[0],
+    ) => ReturnType<typeof answerConnectedClarificationAndResume>;
     retire: (row: Parameters<typeof retireClarificationForGoneTicket>[1]) => Promise<void>;
     getHook: (id: string) => ReturnType<typeof getHookClarification>;
   } = db ? {
     getResumable: (key: string) => getResumableClarificationForTicket(db, key),
     claim: (row: { runId: string; subjectKey: string | null; ticketKey: string | null }) => claimAnsweredClarificationResume(db, row),
     finish: (runId: string, status: "awaiting" | "running" | "blocked") => finishAnsweredClarificationResumeClaim(db, { runId, status }),
-    answer: (value: Parameters<typeof answerClarificationAndResume>[0]) => answerClarificationAndResume({ ...value, db }),
+    answer: (value: Parameters<typeof answerConnectedClarificationAndResume>[0]) =>
+      answerClarificationAndResume({ ...value, db }),
     retire: (row: Parameters<typeof retireClarificationForGoneTicket>[1]) => retireClarificationForGoneTicket(db, row),
     getHook: (id: string) => getHookClarification(db, id),
   } : {
@@ -108,6 +124,10 @@ export async function resumeClarificationFromComments(input: {
       return { status: "already_answered", runId: row.runId };
     }
 
+    // No count is passed: this delivery composed nothing. The record counts the
+    // authors of a stored answer again from the ticket, out of the read it makes
+    // anyway, and does that for every channel redelivering one rather than for
+    // this one alone.
     let outcome;
     try {
       outcome = await persistence.answer({
@@ -180,7 +200,13 @@ export async function resumeClarificationFromComments(input: {
 
   let ticket;
   try {
-    ticket = await issueTracker.fetchTicket(ticketKey);
+    // With the window, because this read is the one that decides whether a
+    // question was answered and by how many people. Every OTHER ticket read in
+    // the deployment asks for no window and costs one request; this one pays
+    // for the pages, and only back as far as the question.
+    ticket = await issueTracker.fetchTicket(ticketKey, {
+      commentsSince: row.askedAt.toISOString(),
+    });
   } catch (err) {
     if (err instanceof IssueTrackerNotFoundError) {
       await persistence.retire(row);
@@ -201,41 +227,40 @@ export async function resumeClarificationFromComments(input: {
   // Fail closed on unknowable bot identity: without it we cannot tell our own
   // questions/nudge comments from a human answer, so treat comments as zero and
   // skip nudging (the nudge-dedup scan also needs to spot bot comments).
-  let botAccountId = "";
-  let botIdentityAvailable = false;
-  try {
-    const id = (await issueTracker.getCurrentUserAccountId?.())?.trim() ?? "";
-    if (id) {
-      botAccountId = id;
-      botIdentityAvailable = true;
-    }
-  } catch {
-    // Fall through: identity unavailable.
-  }
-  if (!botIdentityAvailable) {
-    logger.warn({ ticketKey }, "clarification_resume_bot_identity_unavailable");
-  }
+  const botAccountId = await readBotAccountId(issueTracker, ticketKey);
+  const botIdentityAvailable = botAccountId !== null;
 
   const askedAtMs = row.askedAt.getTime();
-  const qualifying = botIdentityAvailable
-    ? ticket.comments.filter(
-        (c) =>
-          // Comments without an accountId cannot be proven non-bot.
-          c.accountId &&
-          c.accountId !== botAccountId &&
-          Date.parse(c.createdAt) > askedAtMs &&
-          // An empty/whitespace body (e.g. an image-only comment flattened by
-          // extractAdfText) is not an answer; treat it like no comment so the
-          // nudge rules apply instead of resuming with a junk answer.
-          c.body.trim().length > 0,
-      )
-    : [];
+  const qualifying =
+    botAccountId !== null
+      ? qualifyingComments(ticket.comments, botAccountId, { afterMs: askedAtMs })
+      : [];
+
+  // Does that read hold every comment written since the question? Everything
+  // below turns on it, because everything below reads an ABSENCE: nobody
+  // answered, or nobody has been nudged yet. A read with a gap in that window
+  // establishes neither, and acting on it nudges a person about the answer they
+  // just wrote and composes an answer out of the half of a conversation we
+  // happened to read.
+  //
+  // The window, not the whole ticket. A ticket too long to read in one go is
+  // read from its newest end, so it can still hold every comment since the
+  // question, and refusing those tickets outright would be an outage we
+  // inflicted on ourselves.
+  const commentsCoverWindow = commentsCoverAnswerWindow(ticket, askedAtMs);
 
   const noAnswer = async (): Promise<{
     status: CommentResumeStatus;
     nudged: boolean;
   }> => {
     let nudged = false;
+    // A read we cannot vouch for still gets a nudge, with a different sentence.
+    // Saying nothing is the one response that cannot be right: the run is
+    // waiting, nobody can see why, and a person who did answer learns only that
+    // the system ignored them. The cost of nudging on an unprovable read is a
+    // second nudge on a ticket whose first one we could not see, which is a
+    // duplicate comment; the cost of silence is a run that waits out its expiry
+    // in front of somebody who answered it.
     if (allowNudge && botIdentityAvailable) {
       const alreadyNudged = ticket.comments.some(
         (c) =>
@@ -247,10 +272,15 @@ export async function resumeClarificationFromComments(input: {
         try {
           await issueTracker.postComment(
             ticketKey,
-            formatClarificationNudgeComment({
-              dashboardUrl: ticketPageUrl(env.DASHBOARD_ORIGIN, ticketKey),
-              aiColumnName: aiColumn,
-            }),
+            commentsCoverWindow
+              ? formatClarificationNudgeComment({
+                  dashboardUrl: ticketPageUrl(env.DASHBOARD_ORIGIN, ticketKey),
+                  aiColumnName: aiColumn,
+                })
+              : formatClarificationUnreadableNudgeComment({
+                  dashboardUrl: ticketPageUrl(env.DASHBOARD_ORIGIN, ticketKey),
+                  aiColumnName: aiColumn,
+                }),
           );
           nudged = true;
         } catch (error) {
@@ -264,22 +294,63 @@ export async function resumeClarificationFromComments(input: {
     return { status: "no_answer_comments", nudged };
   };
 
+  // Nothing is composed out of a read with a gap where the answer should be.
+  // What we did read may hold one person's words while a second person's are on
+  // a page nobody fetched, and an answer composed from half a conversation is
+  // recorded as that one person's decision: a fabricated decision, from words
+  // nobody can be credited with. Reading again later is what fixes it, and the
+  // question stays pending until then, which the clarification expiry already
+  // bounds.
+  //
+  // THE LIMIT, SAID OUT LOUD: this is a gap in the window, not a long ticket. A
+  // ticket with more comments than one read may page through is read from its
+  // newest end and still answers here. What cannot be answered through comments
+  // is a ticket that grew by more comments than that bound SINCE THE QUESTION
+  // WAS ASKED, and a provider that claims comments it will not hand over. The
+  // dashboard and MCP still answer both; the alternative is deciding a person's
+  // repositories from a list that is missing comments by construction.
+  if (!commentsCoverWindow) {
+    logger.warn({ ticketKey, runId: row.runId }, "clarification_resume_comment_window_incomplete");
+    return noAnswer();
+  }
+
   if (qualifying.length === 0) return noAnswer();
 
-  const composed = qualifying
-    .map((c) => `${c.author}: ${c.body.trim()}`)
-    .join("\n\n")
-    .trim()
-    .slice(0, MAX_ANSWER_LENGTH);
+  // Composed and counted from the SAME comments, which is why the cap is applied
+  // per comment rather than to the joined text. Cutting the join mid-sentence
+  // leaves an answer whose words are one person's and whose count is three
+  // people's: it is then declined for words it does not contain, and attributed
+  // to whoever's text the cut landed in. A whole comment or none of it.
+  const included: TicketComment[] = [];
+  let composed = "";
+  for (const c of qualifying) {
+    const piece = `${c.author}: ${c.body.trim()}`;
+    const next = composed ? `${composed}\n\n${piece}` : piece;
+    if (next.length > MAX_ANSWER_LENGTH) break;
+    composed = next;
+    included.push(c);
+  }
+  if (included.length === 0) {
+    // One comment longer than the whole cap, so there is no whole comment to
+    // take. Their words, cut where the cap falls, and one author either way.
+    const first = qualifying[0]!;
+    composed = `${first.author}: ${first.body.trim()}`.slice(0, MAX_ANSWER_LENGTH);
+    included.push(first);
+  }
+  composed = composed.trim();
   if (!composed) return noAnswer();
 
   // Attribute to the LAST commenter: their comment completed the answer and the
-  // choice is stable across identical retries. The label lists every unique
+  // choice is stable across identical retries. It is the last INCLUDED comment,
+  // which is also where the answer's window closes when the record counts its
+  // authors again later (`composedAnswerEvidence`). The label lists every unique
   // author in first-appearance order.
-  const lastCommenter = qualifying.at(-1)!;
-  const answeredById = `jira:${lastCommenter.accountId}`;
+  const lastCommenter = included.at(-1)!;
+  // Built through the helper that the record's guard reads back, so the mark of
+  // a composed answer cannot drift between the two.
+  const answeredById = composedAnswerActorId(lastCommenter.accountId ?? "");
   const uniqueAuthors: string[] = [];
-  for (const c of qualifying) {
+  for (const c of included) {
     if (!uniqueAuthors.includes(c.author)) uniqueAuthors.push(c.author);
   }
   // Cap the label: many distinct commenters would otherwise store an unbounded
@@ -292,6 +363,12 @@ export async function resumeClarificationFromComments(input: {
     actor: { id: answeredById, label: answeredByLabel },
     issueTracker,
     skipTicketFetch: true,
+    // How many people these words came from, told to the record as a number
+    // because this is the only place that knows it: once composed, nothing
+    // downstream can tell one person's answer from three people's chatter, and
+    // the record refuses to decide anything from the latter. Of the comments
+    // that are IN the answer, never of the ones that were merely read.
+    answerAuthorCount: composedAuthorCount(included),
     // The answer is literally a comment on this ticket already, so mirroring it
     // back would echo the human's own words at them.
     skipAnswerComment: true,
@@ -320,7 +397,11 @@ export async function resumeClarificationFromComments(input: {
       // Jira comment answer; suppress noise on duplicate webhook deliveries
       // where the winner IS our own jira:* answer.
       const winner = await persistence.getHook(row.id);
-      if (!(winner?.answeredById ?? "").startsWith("jira:")) {
+      // A row we cannot read back is not somebody else's answer. Posting then
+      // tells the ticket "answered by someone" on the strength of nothing, in
+      // the one case where the winner may well be this very answer arriving
+      // twice, which is the noise this check exists to keep off the ticket.
+      if (winner && !isComposedAnswerActor(winner.answeredById)) {
         await issueTracker
           .postComment(
             ticketKey,

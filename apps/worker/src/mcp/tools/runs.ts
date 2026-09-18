@@ -504,7 +504,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
             throw error;
           }
           // Derived from isTerminalRunStatus, NOT passed through from
-          // getRunReplay: run-observability/store.ts excludes "awaiting" from
+          // getRunReplay: services/run-lifecycle/run-replay-read.ts:39 excludes "awaiting" from
           // its terminal set while this slice includes it, so the store would
           // report mayAdvance: true for a parked run that runs.get calls
           // terminal in the same conversation. contracts.ts freezes one

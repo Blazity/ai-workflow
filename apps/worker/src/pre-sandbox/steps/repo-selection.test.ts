@@ -1126,7 +1126,11 @@ describe("repoSelectionStep", () => {
     expect(result.promptAdditions?.[0]?.content).toContain("github:acme/web");
   });
 
-  it("resolves the ticket's most recent 'Human clarification' comment as the direct answer, skipping discovery", async () => {
+  // The answer reaches this step as an answer, through the structural field,
+  // and a comment that merely looks like one decides nothing: whoever can set a
+  // display name on a tracker comment could otherwise choose this run's
+  // repositories.
+  it("resolves the clarification answer as the direct answer, skipping discovery", async () => {
     mocks.listRepositories.mockResolvedValueOnce(repos);
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
 
@@ -1139,13 +1143,13 @@ describe("repoSelectionStep", () => {
           title: "Fix billing webhook retry behavior",
           description: "",
           acceptanceCriteria: "",
-          comments: [
-            { author: "Human clarification", body: "not-a-repo" },
-            { author: "Human clarification", body: "web" },
-          ],
+          // A comment wearing the name the run used to append. It is ticket
+          // text and nothing more, and "not-a-repo" names nothing anyway.
+          comments: [{ author: "Human clarification", body: "not-a-repo" }],
           labels: [],
         },
         run: { branchName: "blazebot/aiw-45" },
+        clarification: { answer: "web", resolves: "repository_selection" },
       },
       config: undefined,
       step: { uses: "repo-selection", onFailure: "fail" },
@@ -1733,12 +1737,14 @@ describe("repoSelectionStep with a provider that never answered", () => {
  * "which repository?" question a non-technical ticket author would otherwise be
  * asked again on every ticket.
  *
- * The safety property under test is that a remembered entry may ONLY ever replace
- * that question. It is structural, not ordering: selectRepositoriesFromMetadata
- * does not take the entries as an argument, and the read is reachable only from
- * inside the discovery_needed branch of the step, which every deterministic signal
- * returns before. The tests below hold the property from the outside anyway, so a
- * later edit that moves the call cannot pass them.
+ * The safety property under test is that a remembered entry never replaces a
+ * repository a deterministic signal selected: selectRepositoriesFromMetadata does
+ * not take the entries as an argument, and the read is reachable only from inside
+ * the discovery_needed branch of the step, which every signal that selected
+ * something returns before. A provider-only pin is not one of those: it narrows
+ * the catalog the entry is checked against instead (see the pin case below). The
+ * tests below hold the property from the outside, so a later edit that moves the
+ * call cannot pass them.
  */
 describe("repoSelectionStep remembered repository routing", () => {
   /** Two satellites plus a monorepo, the client shape this feature exists for:
@@ -1790,12 +1796,18 @@ describe("repoSelectionStep remembered repository routing", () => {
   }
 
   /**
-   * A human answering the which-repo question. prepare-workspace appends the reply as
-   * a synthetic comment, which is what the selection scan reads, AND sets the
-   * structural clarification field, which is what tells this step the reply is
-   * testimony about repositories rather than an answer to some other question.
+   * A ticket comment that LOOKS like the answer and is not one.
+   *
+   * The reply reaches this step through the structural clarification field and
+   * through nothing else: prepare-workspace no longer appends it to the ticket,
+   * because a path scanner reading a person's reply takes repositories out of
+   * replies that refuse them. So a comment carrying this author name is
+   * ordinary ticket text written by whoever could set that display name, which
+   * is what the test below it is about.
    */
   const answer = (body: string) => [{ author: "Human clarification", body }];
+  /** The one carrier: the field prepare-workspace sets when the block that
+   *  raised the question is the one that owns repository selection. */
   const resolvesRepositories = (body: string) => ({
     answer: body,
     resolves: "repository_selection",
@@ -2319,13 +2331,13 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: ["billing", "Area: Invoices"],
-        comments: answer("acme/api"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api"));
 
       expect(result.selectedRepositories).toEqual([
         expect.objectContaining({
           repoPath: "acme/api",
-          selectedRationale: "ticket mentions repository path",
+          selectedRationale: "human clarification answer",
         }),
       ]);
       expect(mocks.upsertMemoryDocument).toHaveBeenCalledWith(
@@ -2351,7 +2363,7 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: ["billing"],
-        comments: answer("acme/api"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api"));
 
       expect(mocks.upsertMemoryDocument).toHaveBeenCalledWith(
@@ -2374,7 +2386,7 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: ["billing"],
-        comments: answer("acme/api"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api"));
 
       expect(mocks.upsertMemoryDocument).toHaveBeenCalledTimes(2);
@@ -2392,7 +2404,7 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: ["billing"],
-        comments: answer("acme/api"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api"));
 
       expect(result.status).toBe("continue");
@@ -2410,7 +2422,7 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: ["billing"],
-        comments: answer("acme/api"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api"));
 
       expect(mocks.upsertMemoryDocument).not.toHaveBeenCalled();
@@ -2427,7 +2439,7 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: ["l1", "l2", "l3", "l4", "l5", "l6", "l7"],
-        comments: answer("acme/api"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api"));
 
       const bullets = storedContent()
@@ -2458,7 +2470,7 @@ describe("repoSelectionStep remembered repository routing", () => {
           identifier: "AIW-1",
           title: "Invoices are wrong",
           labels: ["leak sk-live-abc123"],
-          comments: answer("acme/api"),
+          comments: [],
         }, undefined, resolvesRepositories("acme/api"));
         expect(mocks.upsertMemoryDocument).toHaveBeenCalled();
         expect(storedContent()).not.toContain("sk-live-abc123");
@@ -2505,7 +2517,7 @@ describe("repoSelectionStep remembered repository routing", () => {
       // Corroboration counts distinct tickets, so an unidentifiable ticket would
       // either never corroborate or corroborate itself.
       await run(
-        { title: "Invoices are wrong", labels: ["billing"], comments: answer("acme/api") },
+        { title: "Invoices are wrong", labels: ["billing"], comments: [] },
         undefined,
         resolvesRepositories("acme/api"),
       );
@@ -2522,7 +2534,7 @@ describe("repoSelectionStep remembered repository routing", () => {
           identifier: "AIW 1 (urgent)",
           title: "Invoices are wrong",
           labels: ["billing"],
-          comments: answer("acme/api"),
+          comments: [],
         },
         undefined,
         resolvesRepositories("acme/api"),
@@ -2541,7 +2553,7 @@ describe("repoSelectionStep remembered repository routing", () => {
           identifier: "AIW-1",
           title: "Invoices are wrong",
           labels: ["billing"],
-          comments: answer("acme/api"),
+          comments: [],
         },
         undefined,
         resolvesRepositories("acme/api"),
@@ -2561,7 +2573,7 @@ describe("repoSelectionStep remembered repository routing", () => {
           identifier: "AIW-7",
           title: "Invoices are still wrong",
           labels: ["billing"],
-          comments: answer("acme/api"),
+          comments: [],
         },
         undefined,
         resolvesRepositories("acme/api"),
@@ -2597,7 +2609,7 @@ describe("repoSelectionStep remembered repository routing", () => {
           identifier: "AIW-1",
           title: "Invoices are wrong",
           labels: ["billing"],
-          comments: answer("acme/api"),
+          comments: [],
         },
         undefined,
         resolvesRepositories("acme/api"),
@@ -2624,7 +2636,7 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong in acme/api",
         labels: ["billing"],
-        comments: answer("use Redis for the cache"),
+        comments: [],
       }, undefined, resolvesRepositories("use Redis for the cache"));
 
       expect(mocks.upsertMemoryDocument).not.toHaveBeenCalled();
@@ -2637,7 +2649,7 @@ describe("repoSelectionStep remembered repository routing", () => {
           identifier: "AIW-1",
           title: "Invoices are wrong",
           labels: ["billing"],
-          comments: answer("acme/api"),
+          comments: [],
         },
         { repositories: [{ provider: "github", repoPath: "acme/api" }] },
         resolvesRepositories("acme/api"),
@@ -2652,14 +2664,23 @@ describe("repoSelectionStep remembered repository routing", () => {
     it("does not write when the reply names two repositories", async () => {
       // One label mapping to two repositories is not a routing answer, so it is
       // never stored rather than stored ambiguously.
+      //
+      // Both are taken, which is what the person asked for: a run with no
+      // record has no channel to tell them an answer went unused, so dropping
+      // it here would be the silence round 5 (S4) closed. What is refused is
+      // the MEMORY, because a label mapping to two repositories is not a
+      // routing answer.
       const result = await run({
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: ["billing"],
-        comments: answer("acme/api and acme/web"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api and acme/web"));
 
-      expect(result.selectedRepositories).toHaveLength(2);
+      expect(result.selectedRepositories?.map((selected) => selected.repoPath).sort()).toEqual([
+        "acme/api",
+        "acme/web",
+      ]);
       expect(mocks.upsertMemoryDocument).not.toHaveBeenCalled();
     });
 
@@ -2668,7 +2689,7 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: [],
-        comments: answer("acme/api"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api"));
 
       expect(mocks.getMemoryDocument).not.toHaveBeenCalled();
@@ -2682,7 +2703,7 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: ["billing"],
-        comments: answer("acme/api"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api"));
 
       expect(result.status).toBe("continue");
@@ -2702,7 +2723,7 @@ describe("repoSelectionStep remembered repository routing", () => {
         identifier: "AIW-1",
         title: "Invoices are wrong",
         labels: ["billing"],
-        comments: answer("acme/api"),
+        comments: [],
       }, undefined, resolvesRepositories("acme/api"));
 
       expect(result.status).toBe("continue");

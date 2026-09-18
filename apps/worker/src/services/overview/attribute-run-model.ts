@@ -46,8 +46,9 @@ function soleModel(manifests: HarnessRunManifestRecord[]): string | null {
  * Evidence, strongest first:
  *
  * 1. The harness manifest of a block that actually ran. Manifests are recorded
- *    once at run start, one per agent node, sorted by node id (agent.ts's
- *    `harnessManifests`), so the array's order says nothing about execution.
+ *    once at run start, one per agent node, sorted by node id
+ *    (engine/agent-workflow.ts:755, `harnessManifests`), so the array's order
+ *    says nothing about execution.
  *    `blockStatuses` does: a node that left "pending" resolved that manifest and
  *    started. A "running" node is the block executing right now, so it wins over
  *    blocks that already finished. Only used when the surviving manifests agree
@@ -57,8 +58,8 @@ function soleModel(manifests: HarnessRunManifestRecord[]): string | null {
  *    row written before block statuses existed, and it is what fixes the
  *    reported bug: a run that fails or parks in its first agent phase never
  *    reaches the terminal telemetry step, so its `model` column is either null
- *    or the org default `activeModel` was seeded with (agent.ts's
- *    `activeModel ??= defaultModel`), while its manifests hold the model the
+ *    or the org default `activeModel` was seeded with
+ *    (engine/agent-workflow.ts:2497, `activeModel ??= defaultModel`), while its manifests hold the model the
  *    sandbox really launched.
  * 3. The persisted `model` column. Ranked below the manifests precisely because
  *    it can hold that seeded default; where it is a measured terminal value (a

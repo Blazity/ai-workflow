@@ -581,7 +581,7 @@ function reviewThreadLabel(thread: ReviewThread): string {
 }
 
 /**
- * Our own HTML markers, as written by lib/vcs-bot-identity.ts. The provider
+ * Our own HTML markers, as written by adapters/vcs/vcs-bot-identity.ts:43-75. The provider
  * hands the note back with them still in the body, and the whole alias contract
  * rests on the model never seeing a provider thread id: showing it one inside a
  * marker teaches it that such ids exist and are worth quoting back.

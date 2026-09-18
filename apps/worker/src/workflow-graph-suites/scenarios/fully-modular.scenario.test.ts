@@ -12,8 +12,9 @@ import { createScenario, type Scenario } from "./harness.js";
  * The planning -> implementation handoff is NOT asserted here. That template
  * wires it as a `{{data:steps.planning.output.plan}}` token embedded in the
  * implementation node's `configuration.prompt`, with no declared `inputs`
- * binding at all. Substituting that token is `resolveV2PromptDataConfiguration`
- * in `engine/agent-workflow.ts`, called only from the production block dispatcher
+ * binding at all. Substituting that token is `compileEffectivePrompt`
+ * (packages/prompts/effective-prompt.ts), which the agent block reaches only
+ * through the production block dispatcher in `engine/agent-workflow.ts` that
  * the harness deliberately never runs (the harness's `resolvedInputs` comes
  * solely from `resolveWorkflowNodeInputsV2` over declared `inputs`/
  * `additionalInputs`, per packages/workflow-graph/scheduler.ts). Reimplementing

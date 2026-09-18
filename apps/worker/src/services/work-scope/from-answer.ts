@@ -1,0 +1,516 @@
+/**
+ * A person's answer to a repository question, as an entry in the record.
+ *
+ * The clarification channels own delivering an answer and waking the run that
+ * asked; what those words decide about which repositories a subject's work may
+ * touch is this cluster's business, and it is decided here, once, where the
+ * answer arrives.
+ */
+import {
+  repositoryCatalogKey,
+  type RepositoryKey,
+  type WorkScope,
+  type WorkScopeQuestionAnswer,
+  type WorkScopeWritePlan,
+} from "@shared/contracts";
+import type { HookClarificationRow } from "../../db/repositories/clarification-hooks.js";
+import {
+  hasNoWords,
+  parseRepositoryExpansionAnswer,
+  refusalNamesRepositories,
+} from "../../engine/repository-discovery/runner.js";
+import type { AnswerNotRecordedReason } from "../../engine/support/clarification-comment-format.js";
+import {
+  answerCountsAgainstTheList,
+  answerNamesKeptRepositories,
+  answerSaysNoAndNamesARepository,
+  readRepositoryAnswer,
+  withoutQuotedText,
+} from "../../engine/work-scope/answer.js";
+import { questionShowedKeptRepositories } from "../../engine/work-scope/context.js";
+import { decideWorkScope, isHeldSelection } from "../../engine/work-scope/decide.js";
+import { logger } from "../../infra/logger.js";
+
+/** What recording an answer needs of the tier that owns the database, and
+ *  nothing else. */
+export interface RepositoryAnswerPersistence {
+  /** Every catalog key and the enabled half of it. An answer is read against
+   *  every key, enabled or not, because a person naming back the repository
+   *  they were asked about must be understood even while the catalog refuses
+   *  it. */
+  repositoryCatalog(): Promise<{
+    activated: boolean;
+    keys: RepositoryKey[];
+    enabledKeys: RepositoryKey[];
+  }>;
+  readWorkScope(subjectKey: string): Promise<WorkScope | null>;
+  applyAnswerWorkScope(input: {
+    subjectKey: string;
+    runId: string;
+    clarificationId: string;
+    plan: WorkScopeWritePlan;
+  }): Promise<{ outcome: "applied"; version: number } | { outcome: "already_applied" }>;
+}
+
+/** How the Jira comment path composes an answer: each qualifying comment as
+ *  "<author>: <body>", joined with a blank line
+ *  (`services/clarifications/resume-from-comments.ts:327-328`). The space after
+ *  the colon is what keeps "github:acme/web" from reading as an author. The
+ *  expansion protocol's refusal reader knows the same two shapes
+ *  (`COMMENT_SEPARATOR` and `COMMENT_AUTHOR_PREFIX`,
+ *  `engine/repository-discovery/runner.ts:1470-1471`), where it asks a
+ *  different question of them: whether every part is a refusal, trying each
+ *  part with the prefix and without it, so it never drops a byte either way. */
+const COMPOSED_COMMENT_SEPARATOR = "\n\n";
+const COMPOSED_AUTHOR_PREFIX = /^[^:\n]+: /;
+
+/**
+ * The answer with the composed author taken off the front of each comment, and
+ * every other byte kept: what the person wrote is the answer. Without this a
+ * bare reply of "api, web" arrives as "Filip Maszota: api, web" and names
+ * nobody the reader knows.
+ *
+ * Per comment, never per paragraph. A blank line is a paragraph break inside
+ * one Jira comment at least as often as it is the join between two of them, so
+ * stripping a prefix from every piece eats the start of a paragraph: "Ada:
+ * Sure.\n\nacme/api: that is the backend" loses the half that names the
+ * repository, and the person is asked again about a repository they just named.
+ *
+ * What tells a comment from a paragraph is the author, and here the author is
+ * known: only an answer no more than one person wrote is ever read (the guard
+ * below declines the rest), so every comment in it opens with the SAME name.
+ * Taking that name from the front of the answer gives the exact prefix each of
+ * this person's comments carries, and a paragraph of their own cannot match it
+ * unless they wrote their own name in front of it.
+ */
+function withoutComposedAuthors(answer: string): string {
+  const [author] = COMPOSED_AUTHOR_PREFIX.exec(answer) ?? [];
+  if (author === undefined) return answer;
+  return answer
+    .split(COMPOSED_COMMENT_SEPARATOR)
+    .map((comment) => (comment.startsWith(author) ? comment.slice(author.length) : comment))
+    .join(COMPOSED_COMMENT_SEPARATOR);
+}
+
+/**
+ * What one answer did to the record, for the channel that took it.
+ *
+ * Both halves are for a person, and they are mutually exclusive: an answer
+ * either left no repository decision behind it, which is `told`, or it was read
+ * as a decline and wrote one entry per repository the question listed, which is
+ * `declined`. The caller turns either into the sentence a person reads; nothing
+ * else in a run branches on this.
+ */
+export interface RepositoryAnswerOutcome {
+  /** Why this answer recorded nothing, absent when it recorded something. */
+  told?: AnswerNotRecordedReason;
+  /** The repositories a decline left out of this work, in the order the plan
+   *  wrote them. Absent unless the answer was read as a refusal. */
+  declined?: RepositoryKey[];
+}
+
+/** What an answer we decline to attribute is handed to the decision as, which
+ *  leaves the trail row saying an answer arrived and writes no entry. Its own
+ *  kind, rather than the one that means we could not read the words: the words
+ *  here may be perfectly clear, and what is missing is whose they are. */
+const DECLINED_ANSWER: WorkScopeQuestionAnswer = { kind: "unattributed" };
+
+/**
+ * What a refusal that never says what it is refusing is handed to the decision
+ * as, when it arrived as a comment on a ticket.
+ *
+ * "unrecognised" rather than a kind of its own: it is what the decision already
+ * does with words it will not act on, it writes the trail row and no entry, and
+ * the sentence explaining this particular case goes where a person can read it,
+ * on the ticket. "unattributed" would be a lie in the other direction, because
+ * we know perfectly well who wrote this one.
+ */
+const UNADDRESSED_REFUSAL_ANSWER: WorkScopeQuestionAnswer = { kind: "unrecognised" };
+
+/**
+ * Write what the answer decided, with the authorship already established.
+ *
+ * Separate from the counting above because the two happen at different moments
+ * in a delivery: counting decides whether this delivery may go ahead at all, and
+ * must cost nothing when it cannot; writing is a side effect, and belongs where
+ * every other side effect of a committed delivery is, behind the reservation
+ * that proves this delivery is the one going ahead.
+ */
+export async function recordRepositoryAnswer(
+  persistence: RepositoryAnswerPersistence,
+  input: {
+    row: HookClarificationRow;
+    answer: string;
+    answeredAt: Date;
+    answerer: { id: string; label: string };
+    /** Whether these words were composed out of a ticket's comments, which is
+     *  the one channel the refusal guard below narrows to. Stated by the
+     *  clarification tier, which owns how an answer reaches us, rather than
+     *  worked out again here from the shape of an actor id. */
+    composedFromComments: boolean;
+    authorCount?: number;
+  },
+): Promise<RepositoryAnswerOutcome> {
+  const askedRepositories = input.row.askedRepositories ?? [];
+  const authorCount = input.authorCount;
+
+  // Words several people wrote together decide nothing (A50). The ticket
+  // channel composes its answer out of every comment posted after the
+  // question, whether or not anybody was answering, so a colleague's aside
+  // arrives inside the answer with nothing marking it apart. Read as one
+  // person's decision it writes two entries nobody can undo: the repository
+  // the aside happened to name, selected in their name, and the repository we
+  // asked about, refused for not having been named. The run resumes on the
+  // same words either way; only the entries are declined, so the next run asks
+  // again. A repeated question is a cost, a fabricated decision is a defect.
+  //
+  // The count is a number from the comments themselves. It is never recovered
+  // from the answer, because the answer does not say: a person whose own line
+  // opens "reason:" is still one person, and a display name carrying a colon is
+  // still one author.
+  //
+  // A warning rather than a note, because anything commenting after our
+  // question counts as a second author: one Jira automation rule firing on the
+  // move into the AI column would decline every answer on every ticket, and the
+  // only symptom anybody sees is the question being asked twice.
+  const declined = authorCount !== undefined && authorCount > 1;
+  if (declined) {
+    logger.warn(
+      {
+        runId: input.row.runId,
+        clarificationId: input.row.id,
+        authorCount,
+      },
+      "work_scope_answer_not_attributed_multiple_authors",
+    );
+  }
+  const catalog = await persistence.repositoryCatalog();
+  const askedKeys = askedRepositories.map((repository) => repository.repositoryKey);
+  // What counts as a repository this deployment has: the catalog, plus whatever
+  // the question itself named, because a question naming a key the catalog has
+  // since dropped is still this deployment asking about it. One list, read by
+  // the reader below and by the sentence at the end, so the two cannot disagree
+  // about which names we hold.
+  const catalogKeys = [...new Set([...catalog.keys, ...askedKeys])];
+  // There is no branch here for a subject that could not be found, and none is
+  // missing. The clarification row names the subject the question was asked
+  // under, and a row without one cannot be read at all
+  // (`db/repositories/clarification-hooks.ts:33` refuses it), so the key below
+  // always exists. A subject with no row in `work_scopes` is not a subject
+  // nobody can name either: it is one nobody has decided anything about yet,
+  // and this answer is the first decision, which is what creates the record. A
+  // gate on that emptiness would drop exactly the first answer on a ticket,
+  // which is the answer this function exists to keep.
+  const scope = await persistence.readWorkScope(input.row.subjectKey);
+  // What the question showed as already part of this work, read from the
+  // record rather than out of the question's words: what it showed is what the
+  // record holds for a reason an answer does not undo (`isHeldSelection`, the
+  // same predicate the question was built with). Read at the answer, so a
+  // repository taken off the work in between is no longer kept, and one added
+  // in between is treated as shown: the cost of that is a repeated question,
+  // never a decision.
+  //
+  // READ FROM THE QUESTION THAT SHOWED THEM, not from the reason it was asked.
+  // Repository discovery stamps `selection` on its asks too, and its question
+  // lists no kept repositories at all, so keying on the reason told a person
+  // their answer had been about repositories nobody had put in front of them.
+  // One builder writes that sentence, so its presence is the fact
+  // (`questionShowedKeptRepositories`).
+  const keptKeys =
+    askedRepositories.length > 0 &&
+    askedRepositories.every((repository) => repository.askedBecause === "selection") &&
+    questionShowedKeptRepositories(input.row.questions)
+      ? (scope?.entries ?? [])
+          .filter(isHeldSelection)
+          .map((entry) => entry.repositoryKey)
+          .filter((key) => !askedKeys.includes(key))
+      : [];
+  // What we asked is the only part of this exchange we know for certain, and
+  // the reader needs it: Jira's quote button sends our own question back inside
+  // the answer with no marker on it, and the repository key in it is ours, not
+  // the person's.
+  const reading = { catalogKeys, askedQuestions: input.row.questions, keptKeys };
+  // A declined answer is not read at all, which is the point: the words may be
+  // perfectly readable, they are simply not one person's decision to record.
+  const answerRead = declined
+    ? DECLINED_ANSWER
+    : readRepositoryAnswer(withoutComposedAuthors(input.answer), { ...reading, askedKeys });
+
+  // A PLAIN NO ON A TICKET IS NOT EVIDENCE THAT ANYBODY ANSWERED US.
+  //
+  // What a refusal writes is the heaviest thing in this feature: every
+  // repository the question named, left out in that person's name, and an
+  // exclusion never expires. What it rests on, when it arrives through the
+  // ticket, is a comment posted in a window. Nothing threads it to our
+  // question. A colleague replying "no" to the comment above ours, or a Jira
+  // rule configured to comment as a named user, is read as that person
+  // declining every repository we asked about, and nobody typed a word about
+  // repositories.
+  //
+  // So the evidence has to match the weight. A refusal that says what it
+  // refuses ("none of these", "no more repositories", "continue without it")
+  // could not be about anything else, and is recorded exactly as before. A bare
+  // "no" is recorded as nothing, the person is told why in a comment that says
+  // what to write instead, and the question comes again. That is the ordering
+  // this feature is built on: a repeated question is a cost, a decision nobody
+  // made is a defect (A34).
+  //
+  // Which phrases reach which way is decided where the phrases are declared
+  // (`REFUSAL_ANSWERS` in `engine/repository-discovery/runner.ts`), and read
+  // here rather than worked out again. There is only one list, and the type of
+  // its values is what stops a new phrase joining it undecided.
+  //
+  // Narrow on purpose, in three ways. Only the ticket channel, because the
+  // dashboard and the MCP client type into a box opened by this question and a
+  // "no" there is unmistakably an answer to it. Only a question that put
+  // repositories in front of somebody, because a refusal to any other decides
+  // nothing to begin with (`decideAnswered` writes nothing for an asked
+  // repository the question did not name, and the answered set leaves it out).
+  // A `selection` question is inside that line, not outside it: its refusal
+  // writes no entry, but it settles every repository the question named for
+  // good, through the answered set (`isUnnamedInAnswer`), and it raises the
+  // subject's selection flag, which is as permanent as an exclusion and signed
+  // by the same person (A8). And only a refusal: an answer naming
+  // repositories is its own evidence, since nobody types a repository path by
+  // accident.
+  const refusalDecidesNothing =
+    answerRead.kind === "none" &&
+    input.composedFromComments &&
+    askedRepositories.some((repository) => repository.named === true) &&
+    // Their own words, quotes out (A6). A person who clicks quote on our
+    // question and writes "none of these" underneath used the exact phrase the
+    // question teaches, and reading the quote too made that answer look like a
+    // bare no addressed to nothing, so they were told it decided nothing.
+    !refusalNamesRepositories(
+      withoutQuotedText(withoutComposedAuthors(input.answer), input.row.questions),
+    );
+  if (refusalDecidesNothing) {
+    // A warning, for the same reason the declined count is one: from the
+    // outside this looks exactly like the question being asked twice.
+    logger.warn(
+      { runId: input.row.runId, clarificationId: input.row.id },
+      "work_scope_answer_refusal_not_addressed",
+    );
+  }
+  const answer = refusalDecidesNothing ? UNADDRESSED_REFUSAL_ANSWER : answerRead;
+  const decision = decideWorkScope(
+    {
+      scope,
+      carriesRecord: true,
+      // Enabled is all this path can see: it holds no provider listing, so it
+      // cannot tell enabled from usable and says so by passing no unusable
+      // keys (A26).
+      //
+      // SO AN ENTRY WRITTEN HERE MAY NAME A REPOSITORY THIS DEPLOYMENT CANNOT
+      // REACH. Null means this path never listed the repositories rather than
+      // that it listed them and found them all usable (`engine/work-scope/
+      // context.ts`), and getting a listing would turn answering a question
+      // into a provider API call. It is the reader that keeps such a key from
+      // doing harm: a person-origin selection only closes the matter when the
+      // run can actually reach it (`decideTextAmbiguous` in
+      // `engine/work-scope/decide.ts`), so an unreachable one is recorded, the
+      // run refuses it, the question is still asked, and the person can
+      // correct it. The entry is a person's decision either way, and deleting
+      // it because today's deployment cannot act on it would be us overruling
+      // them.
+      catalog: {
+        activated: catalog.activated,
+        enabledKeys: catalog.enabledKeys,
+        unusableKeys: null,
+      },
+      // The definition pin, the trigger policy, the workspace and the selection
+      // flag each bound what a RUN may do with repositories. A person's answer
+      // is bounded by none of them, and an `answered` event reads none of them.
+      pinnedProviders: null,
+      pinnedKeys: null,
+      policy: null,
+      eventRelatedKeys: [],
+      attachedKeys: null,
+      selectionAnswered: false,
+      // An answer decides no guess, so what earlier answers left unnamed is
+      // nothing this event reads, and neither is the ticket text that a later
+      // run dates against them.
+      answeredRepositoryKeys: [],
+      postAnswerMentionedKeys: [],
+      actor: {
+        kind: "person",
+        actorId: input.answerer.id,
+        actorLabel: input.answerer.label,
+      },
+      now: input.answeredAt.toISOString(),
+    },
+    { kind: "answered", clarificationId: input.row.id, asked: askedRepositories, answer },
+  );
+  // Not caught. A swallowed write is the lost answer this record exists to
+  // prevent, wearing a smile: the caller reports the failure, the channel
+  // delivers the same answer again, and the answer-once index applies it once.
+  await persistence.applyAnswerWorkScope({
+    subjectKey: input.row.subjectKey,
+    runId: input.row.runId,
+    clarificationId: input.row.id,
+    plan: decision.plan,
+  });
+  if (refusalDecidesNothing) return { told: "unaddressed_refusal" };
+
+  // NOBODY IS ASKED SOMETHING THEY HAVE ALREADY ANSWERED WITHOUT BEING TOLD WHY.
+  //
+  // An answer can be read, be nobody's fault, and still leave the record exactly
+  // as it found it: a "no" to "which repository should this ticket modify?"
+  // names nothing, and a question that listed no repository has nothing to
+  // record a refusal against either. The run resumes, finds nothing selected,
+  // and puts the same question again. Without a sentence here the person sees
+  // their answer vanish and the question return, over and over, until the
+  // delivery attempts run out, which is the loop this feature exists to end.
+  //
+  // What silences a repository question is not a guess about the future: it is
+  // one of exactly two reads over the trail this answer just wrote
+  // (`db/repositories/work-scope.ts`). Both of them count only an answer the
+  // reader resolved to a decision, because both require the recorded answer
+  // kind to be `none` or `repositories` and take no other.
+  // `readWorkScopeSelectionAnswered` raises a permanent flag for the subject
+  // once such an answer reaches a `selection` question, so that question is
+  // settled from then on whatever it recorded, and saying otherwise would name
+  // a fault that is not there. An `unrecognised` or an `unattributed` answer
+  // raises nothing, because nobody decided anything: the flag stays down, the
+  // next run puts the same question again, and the person who answered is owed
+  // the reason. That is the case this sentence exists for, and suppressing it
+  // because a `selection` question was answered AT ALL would hide exactly the
+  // loop this feature was built to end.
+  // The kind is read off the answer written into the trail above rather than
+  // guessed from the question, so the two cannot drift apart: the question is
+  // settled here on the same fact the statement settles it on there.
+  // `readWorkScopeAnsweredRepositories` suppresses the repositories a question
+  // NAMED once it has an answer, and a question that named none suppresses
+  // nothing. So an empty-handed plan that settled nothing means the question is
+  // coming back. The sentence says MAY come back rather than WILL, which keeps
+  // it true in the one case this cannot see: a key whose entry the origin
+  // ladder refused is suppressed all the same.
+  const recordKeptNothing = decision.plan.upserts.length === 0 && decision.plan.deletes.length === 0;
+  const settledByAnsweringAtAll =
+    (answer.kind === "none" || answer.kind === "repositories") &&
+    askedRepositories.some((repository) => repository.askedBecause === "selection");
+  // WHAT A DECLINE RECORDED, for the person who typed it. A bare "no" on the
+  // dashboard or over MCP declines every repository the question listed, and
+  // until now those channels said nothing at all about it: the screen showed
+  // "answered" and the rule lived in a tool description no human reads.
+  //
+  // Read off the ASK rather than off the plan's entries, because the entry is
+  // not what the person needs told. A `selection` question writes no entry for
+  // a name left out (rule 5, `decideAnswered`) and binds it all the same
+  // through the answered set, so a list built from the upserts would be silent
+  // about exactly the question this feature exists for. `named` is the same
+  // condition the writer uses: a repository nobody was shown the name of was
+  // not declined by anybody.
+  const declinedKeys =
+    answer.kind === "none"
+      ? [
+          ...new Set(
+            askedRepositories
+              .filter((repository) => repository.named === true)
+              .map((repository) => repository.repositoryKey),
+          ),
+        ]
+      : [];
+  // Before the two branches below, not inside one of them. A decline is a
+  // decision, so it is never also a reason the record kept nothing, and putting
+  // it after a branch that can return would make whether the person hears it
+  // depend on which kind of question they answered.
+  if (declinedKeys.length > 0) return { declined: declinedKeys };
+  if (!recordKeptNothing || settledByAnsweringAtAll) return {};
+  // An answer with no word in it is its own case, because the RUN does
+  // something with it that nothing else here does: `isRefusalAnswer` takes the
+  // wordless branch and ends the asking, so the run carries on without the
+  // repository it asked about while the record writes nothing. Asked of the
+  // stored answer exactly as the run reads it, prefixes and all, so the two
+  // never disagree about which branch was taken. A thumbs up posted as a Jira
+  // comment arrives here as "Jane: (thumbs up)", which HAS words, and the run
+  // asks its follow-up instead; that one is told the ordinary sentence, which
+  // is the truthful one for it.
+  if (hasNoWords(input.answer)) return { told: "no_words" };
+  // Two unreadable replies the ordinary sentence would describe falsely, since
+  // "nothing in that answer named a repository this work should use" is not
+  // true of "this one, but not that one". A reply about a repository the
+  // question said stays gets where that repository leaves instead, and a reply
+  // that names a repository beside a no it could not be tied to is told why
+  // it was not read as a choice.
+  if (answer.kind === "unrecognised") {
+    const theirAnswer = withoutComposedAuthors(input.answer);
+    if (answerNamesKeptRepositories(theirAnswer, reading)) {
+      return { told: "names_kept_repository" };
+    }
+    if (answerSaysNoAndNamesARepository(theirAnswer, reading)) {
+      return { told: "refusal_beside_named" };
+    }
+    // "both" under a question that listed three. The reply is not ambiguous and
+    // it names nothing: it contradicts the list in front of it, so the reader
+    // records nothing (A11l). Told as its own reason, because the ordinary
+    // sentence says nothing in the answer named a repository, which is silent
+    // about the count and leaves the same word as the obvious second attempt.
+    if (
+      answerCountsAgainstTheList(theirAnswer, {
+        askedQuestions: input.row.questions,
+        askedCount: askedKeys.length,
+      })
+    ) {
+      return { told: "counting_word_and_list_disagree" };
+    }
+  }
+  // WHICH OF THE TWO WAYS AN ANSWER NAMES NOTHING. Both end here with an empty
+  // record, and only one of them leaves "write the full path in a comment" true.
+  // A person who wrote a bare or partial name can write it out in full and the
+  // next run resolves it; a person who already wrote `github:acme/thing` in
+  // full, for a repository this deployment does not hold, would write the same
+  // words for the next run to resolve to the same nothing.
+  return {
+    told: namedOnlyRepositoriesWeDoNotHold({
+      answer: withoutComposedAuthors(input.answer),
+      askedQuestions: input.row.questions,
+      catalogKeys,
+    })
+      ? "no_such_repository"
+      : "no_repository_named",
+  };
+}
+
+/**
+ * True when everything the person spelled out as a repository path names
+ * something this deployment has no record of at all.
+ *
+ * ASKED HERE RATHER THAN READ OFF THE ANSWER, and deliberately so: the reader
+ * collapses both cases into `unrecognised`, because for the RECORD they are the
+ * same fact (nothing to write). They differ only in what is true to tell
+ * somebody, which is this function's caller's question. Widening the reader's
+ * verdict would change a contract two lanes read, at freeze time, to serve one
+ * sentence.
+ *
+ * A PREDICATE, NOT A THIRD RESOLVER. It asks whether the catalog holds anything
+ * by that name, not which key it resolves to, so it cannot disagree with
+ * `resolveIdentity` in a way that matters: a bare path present on two providers
+ * is ambiguous there and held here, and held is the right answer for the
+ * sentence, because writing that one provider-scoped does resolve.
+ *
+ * No identity at all means prose or a bare word, which is the case the ordinary
+ * sentence is written for. One answer carrying both shapes gets this one, which
+ * is the fuller explanation and still true for them.
+ */
+function namedOnlyRepositoriesWeDoNotHold(input: {
+  answer: string;
+  askedQuestions: string[];
+  catalogKeys: RepositoryKey[];
+}): boolean {
+  // Our own question quoted back is not the person naming anything, and neither
+  // is any other quoted line: this is the same drop the reader makes before it
+  // reads a word, so a path sitting inside a quote cannot produce the sentence
+  // saying this deployment has no repository by that name (A7).
+  const identities = parseRepositoryExpansionAnswer(
+    withoutQuotedText(input.answer, input.askedQuestions),
+  );
+  if (identities.length === 0) return false;
+  const held = new Set(input.catalogKeys);
+  const heldPaths = new Set(input.catalogKeys.map((key) => key.slice(key.indexOf(":") + 1)));
+  return identities.every((identity) =>
+    identity.provider
+      ? !held.has(repositoryCatalogKey({ provider: identity.provider, path: identity.repoPath }))
+      : !heldPaths.has(identity.repoPath.toLowerCase()),
+  );
+}

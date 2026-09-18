@@ -77,6 +77,8 @@ describe("MCP public contracts", () => {
       "settings.get",
       "settings.set",
       "settings.reset",
+      "work_scope.get",
+      "work_scope.edit",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

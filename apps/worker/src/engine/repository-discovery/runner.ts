@@ -8,6 +8,23 @@ import {
   type RepositoryCatalogEntry,
 } from "./catalog.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
+// The transformation the ticket comment applies to a question on its way out,
+// so the drop below compares against what a person was actually shown.
+import { scrubForPublication } from "../support/publication-scrub.js";
+// One structure behind both refusal surfaces: the run start composes the same
+// facts about the same repository from the same clauses this loop does.
+import {
+  MAX_WORKSPACE_REPOSITORIES,
+  workScopeRefusalSentence,
+} from "../work-scope/refusal-sentence.js";
+import {
+  workScopeWritePlanSchema,
+  type RepositoryKey,
+  type WorkScopeActor,
+  type WorkScopeAskedRepository,
+  type WorkScopeRefusalReason,
+  type WorkScopeWritePlan,
+} from "@shared/contracts";
 
 export const REPOSITORY_DISCOVERY_SCHEMA = JSON.stringify({
   type: "object",
@@ -127,6 +144,16 @@ export type RepositoryExpansionDecision =
   // it: the second unusable answer in a row is read as "no further
   // repositories" rather than asked about again (AIW-377).
   | { kind: "unrecognised_answer"; questions: string[] }
+  // The record, or a guard rail of the protocol, answered the request. Nobody
+  // is asked: no answer could be recorded against these repositories, so the
+  // same question would come back on the next run that behaves the same way
+  // (A22). The refusals ride the next research prompt and the decision trail;
+  // whatever the record still allows attaches beside them.
+  | {
+      kind: "refused";
+      refusals: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>;
+      repositories: SelectedRepository[];
+    }
   | {
       kind: "clarification_needed";
       questions: string[];
@@ -135,6 +162,12 @@ export type RepositoryExpansionDecision =
        *  decision recognise the same request later and not put the same
        *  question to a person twice. */
       unavailable?: RepositoryIdentity[];
+      /** The repositories the record raised this question about, and why each
+       *  one was asked. Recorded when the question is ASKED, because by answer
+       *  time the clarification row is all that is left of it: an answer whose
+       *  clarification names no repository is dropped, and the next run asks
+       *  the same person the same thing. */
+      workScopeAsk?: WorkScopeAskedRepository[];
       /** Set only on a human answer every repository of which cannot be
        *  attached. The question still says why, but the answer counts toward
        *  the same bound as an unreadable one: a person who answers with the
@@ -143,8 +176,9 @@ export type RepositoryExpansionDecision =
     };
 
 // Total repositories one research workspace may ever hold. This is a hard cap:
-// no path (model round or human answer) may exceed it.
-const MAX_WORKSPACE_REPOSITORIES = 8;
+// no path (model round or human answer) may exceed it. It is declared beside
+// the refusal sentence that reports it, because a second spelling of the number
+// is how one surface starts telling a person a cap the run does not enforce.
 
 // Consecutive requests naming only repositories the workspace already holds
 // before expansion is closed for the run. The all-attached no-op keeps the run
@@ -245,6 +279,127 @@ function unavailableRepositoryClarification(
   };
 }
 
+/**
+ * The answer with our own words taken out of it, wherever they appear.
+ *
+ * BOTH READERS OF ONE ANSWER USE THIS ONE HELPER (`work-scope/answer.ts` is the
+ * other): two readers that disagreed about which words were ours would record
+ * one decision and attach another.
+ *
+ * THE COMPARISON IS AGAINST THE QUESTION AS THE PERSON RECEIVED IT, not as we
+ * stored it, which is where the first version of this was empty. The ticket
+ * comment posts each question as `${i + 1}. ${scrubForPublication(question)}`,
+ * and an answer composed from ticket comments prefixes each one with
+ * `${author}: `, so the text a person quotes, copies or forwards never equals
+ * the string in the journal, and a drop that compared against the journal fired
+ * on no real channel at all. The question side carries the stored form and the
+ * published one, because the dashboard shows a person the first and the ticket
+ * the second.
+ *
+ * TAKEN OUT WHEREVER THEY APPEAR, not only where a whole line is nothing but
+ * ours, and this is the correction that matters. The line version failed
+ * towards ATTACHING on a question that names a repository: `> ` in front of a
+ * quote, a client re-wrap, or "…please confirm" typed after a pasted question
+ * all left our own repository key in the answer, and the reader then recorded
+ * it as the person naming it, over that same person's exclusion. So a run of
+ * whitespace in our question matches whatever the channel put there, quote
+ * markers included, and the decorations a channel adds in front stay behind as
+ * the leftovers they are: what remains after this decides the answer, and an
+ * answer made of nothing but our own words carries no letter and no digit.
+ *
+ * Case insensitive, and longest form first, so a whole question is taken out
+ * before one of its own lines is.
+ */
+export function withoutQuotedQuestions(answer: string, askedQuestions: string[]): string {
+  let remaining = withPlainTypography(answer);
+  for (const pattern of askedQuestionPatterns(askedQuestions)) {
+    remaining = remaining.replace(pattern, " ");
+  }
+  return remaining;
+}
+
+/** Every form of every question we asked, as a pattern that finds it inside a
+ *  line as well as on its own. A question is matched whole and line by line:
+ *  whole because a person quotes the whole thing, line by line because they
+ *  quote one line of it. */
+function askedQuestionPatterns(askedQuestions: string[]): RegExp[] {
+  const forms = new Set<string>();
+  for (const question of askedQuestions) {
+    for (const asked of [question, scrubForPublication(question)]) {
+      const published = withPlainTypography(asked);
+      forms.add(published.trim());
+      for (const line of published.split("\n")) forms.add(line.trim());
+    }
+  }
+  return [...forms]
+    // A form with no letter in it is punctuation or a number, and taking that
+    // out of an answer wherever it appears would eat the person's own.
+    .filter((form) => /[a-z]/iu.test(form))
+    .sort((left, right) => right.length - left.length)
+    .map((form) => new RegExp(quotedQuestionPattern(form), "giu"));
+}
+
+/**
+ * The typography a channel puts on our sentence, taken back off so the copy
+ * that returns is the sentence we sent. BOTH sides pass through this, because
+ * either side can be the one carrying it: the model's rationale inside our
+ * question can arrive with typographic quotes, and a channel that flattens
+ * markdown hands back a quote of a question we asked in bold with the bold
+ * gone.
+ *
+ * Quotes: matched literally, our own sentence stopped being ours the moment a
+ * phone keyboard curled them, and the repository key inside it was then read
+ * as the person naming it, over that same person's exclusion.
+ *
+ * Emphasis: ASTERISKS ONLY, and that is a decision about repository names
+ * rather than a style choice. An underscore is legal in a repository path and
+ * `acme/my_repo` is an ordinary name, so folding underscores away would
+ * corrupt the very names this reader exists to read; an asterisk cannot appear
+ * in a repository key, so dropping it from both sides costs nothing. A person
+ * who bolds one word inside the quote ("was **excluded** on") otherwise sends
+ * a sentence that is no longer ours by one character, and the in-run reader,
+ * which has no refusal word standing between a quote and an attach, attaches
+ * the repository our own question named.
+ *
+ * Nothing else a channel substitutes is touched here: the gaps between our
+ * words already match whatever was put there, non-breaking spaces and quote
+ * markers included.
+ */
+const CURLY_DOUBLE_QUOTES = /[“”„‟]/gu;
+const CURLY_SINGLE_QUOTES = /[‘’‚‛]/gu;
+const MARKDOWN_EMPHASIS = /\*+/gu;
+
+function withPlainTypography(text: string): string {
+  return text
+    .replace(CURLY_DOUBLE_QUOTES, '"')
+    .replace(CURLY_SINGLE_QUOTES, "'")
+    .replace(MARKDOWN_EMPHASIS, "");
+}
+
+/**
+ * What a channel puts in FRONT of our words, taken out together with them: the
+ * `${i + 1}. ` the ticket comment numbers a question with, and the `>` a mail
+ * client or a markdown editor quotes with. Optional as a whole, so a question
+ * pasted into the middle of a line still matches.
+ *
+ * Together, because the leftovers decide the answer. A `1.` left behind carries
+ * a digit, and a person who quotes the question and writes "yes" underneath,
+ * the most natural reply there is, would have their yes read as "1. yes" and be
+ * asked all over again.
+ */
+const QUOTED_QUESTION_DECORATION = "(?:(?:^|\\n)[ \\t]*(?:>[ \\t]*)*(?:\\d{1,3}\\.[ \\t]*)?)?";
+
+/** One form as a pattern: the words are literal, and every gap between them
+ *  matches whatever the channel put there, including the `>` a mail client
+ *  puts at the front of each line it wrapped our sentence onto. */
+function quotedQuestionPattern(form: string): string {
+  const words = form
+    .split(/\s+/u)
+    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+    .join("[\\s>]+");
+  return `${QUOTED_QUESTION_DECORATION}${words}`;
+}
+
 /** The one shape of an expansion question: the marker, the reason it is being
  *  asked, and how to answer it. */
 function expansionQuestion(reason: string, refusal?: string): string {
@@ -286,6 +441,29 @@ export function validateRepositoryExpansionRequests(input: {
   /** The run's `askedUnavailable`: repositories a person was already asked
    *  about because the run cannot use them. Absent means none. */
   askedUnavailable?: string[];
+  /**
+   * The subject's work scope record, consulted BEFORE the catalog.
+   *
+   * It is what ends the loop this record exists for: a repository somebody
+   * already excluded or could not give on this ticket is refused here, with
+   * that reason and no question, instead of being put to them a second time.
+   * With it, the guard rails below refuse the MODEL rather than asking, because
+   * no answer to "which three are essential" can be recorded against a
+   * repository, so the same question would return on the next run that behaves
+   * the same way (A22).
+   *
+   * A callback rather than a decision already taken: a request the round limit
+   * refuses must plan nothing, so the record is consulted only once the rails
+   * above have let the request through. Absent on a run that froze no record,
+   * and every rule here is then exactly what it was.
+   */
+  workScope?: {
+    decideRequested(repositoryKeys: RepositoryKey[]): {
+      attach: RepositoryKey[];
+      ask: WorkScopeAskedRepository[];
+      refused: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>;
+    };
+  };
 }): RepositoryExpansionDecision {
   const attachedKeys = new Set(input.attached.map(repositoryCatalogKey));
   // A repository a person was already asked about has had its answer, so it is
@@ -327,6 +505,20 @@ export function validateRepositoryExpansionRequests(input: {
     ]),
   );
   if (input.completedRounds >= 2) {
+    if (input.workScope) {
+      // The round limit refuses the model and asks nobody. The question it used
+      // to raise had no answer anything could keep: the record has no reason for
+      // "we ran out of rounds", so the person's answer would be spent on this
+      // run alone and the next run would ask it again (A22).
+      return {
+        kind: "refused",
+        refusals: freshRequestKeys(requests, attachedKeys).map((repositoryKey) => ({
+          repositoryKey,
+          reason: "rounds_exhausted" as const,
+        })),
+        repositories: [],
+      };
+    }
     // The round limit is what a person is asked about, and its text stays the
     // one the resume path recognises. Every repository in the request that the
     // run cannot use is carried on it all the same, so the decision records
@@ -348,6 +540,9 @@ export function validateRepositoryExpansionRequests(input: {
     // research itself could not name one. Report the no-op so the caller keeps
     // researching with what is attached (mirrors the already_attached rule).
     return { kind: "unnamed_request" };
+  }
+  if (input.workScope) {
+    return decideAgainstWorkScope(input.workScope, requests, catalog);
   }
   if (requests.length > 3) {
     return expansionClarification(
@@ -389,6 +584,232 @@ export function validateRepositoryExpansionRequests(input: {
     );
   }
   return { kind: "attach", repositories };
+}
+
+/** Every key a request names, in request order and once each. A repository
+ *  named twice in one round is one request: the refusal vocabulary has no
+ *  reason for a repeat, so two identical lines would read as an agent that
+ *  asked twice. */
+function requestedKeys(requests: ResearchRepository[]): RepositoryKey[] {
+  return [...new Set(requests.map((request) => repositoryCatalogKey(request)))];
+}
+
+/** The keys of a request the workspace does not already hold. What a rail
+ *  refuses: a repository the run is already working in is not a request
+ *  anybody has to be told "no" about. */
+function freshRequestKeys(
+  requests: ResearchRepository[],
+  attachedKeys: Set<string>,
+): RepositoryKey[] {
+  return requestedKeys(requests).filter((key) => !attachedKeys.has(key));
+}
+
+/**
+ * The request as the record decides it: what attaches, what is refused with the
+ * reason the model is told, and what a person is asked about.
+ *
+ * The decision itself belongs to the one pure work scope module, which the
+ * caller runs in workflow scope; this only turns its answer back into the
+ * verdict the expansion loop speaks. A second copy of "excluded" or "no room"
+ * here is how two paths start disagreeing about one ticket.
+ */
+function decideAgainstWorkScope(
+  workScope: NonNullable<
+    Parameters<typeof validateRepositoryExpansionRequests>[0]["workScope"]
+  >,
+  requests: ResearchRepository[],
+  catalog: Map<string, RepositoryCatalogEntry>,
+): RepositoryExpansionDecision {
+  const rationales = new Map(
+    requests.map((request) => [repositoryCatalogKey(request), request.rationale] as const),
+  );
+  // Every key, attached ones included: the three per request bound counts what
+  // the model asked for, and the decision answers an attached key with nothing
+  // of its own accord.
+  const decision = workScope.decideRequested(requestedKeys(requests));
+  const repositories: SelectedRepository[] = [];
+  for (const key of decision.attach) {
+    const repository = catalog.get(key);
+    // The decision reads the very catalog this validator was handed, so an
+    // attached key is always in it. Guarded rather than asserted, because
+    // inventing a default branch for a repository nobody listed is how a clone
+    // fails inside a sandbox instead of here.
+    if (!repository) continue;
+    repositories.push({
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      defaultBranch: repository.defaultBranch,
+      selectedRationale: rationales.get(key) ?? "requested by research",
+    });
+  }
+  if (decision.ask.length > 0) {
+    return {
+      kind: "clarification_needed",
+      questions: [workScopeExpansionQuestion(decision.ask)],
+      workScopeAsk: decision.ask,
+    };
+  }
+  if (decision.refused.length > 0) {
+    return { kind: "refused", refusals: decision.refused, repositories };
+  }
+  return repositories.length > 0
+    ? { kind: "attach", repositories }
+    : { kind: "already_attached" };
+}
+
+/**
+ * The one question the record raises about repositories research asked for.
+ *
+ * Every repository is named by its full catalog key, because the answer is read
+ * back against those keys and a question that listed none of them could not be
+ * answered in a way anything could record. A repository the trigger policy does
+ * not hold says what declining it means: it keeps the repository off THIS
+ * ticket, never off the workflow, because the record carries no definition and
+ * a decline recorded silently per ticket would surprise the next workflow on it
+ * (A29).
+ */
+function workScopeExpansionQuestion(asked: WorkScopeAskedRepository[]): string {
+  const outsidePolicy = asked.filter((one) => one.askedBecause === "outside_policy");
+  const unavailable = asked.filter((one) => one.askedBecause !== "outside_policy");
+  const reasons: string[] = [];
+  if (unavailable.length > 0) {
+    reasons.push(
+      `Research requested ${namedInFull(unavailable)}, which this run cannot use.` +
+        ` To use ${unavailable.length > 1 ? "them" : "it"}, enable ${unavailable.length > 1 ? "them" : "it"}` +
+        ` on the Repositories page and start a new run.`,
+    );
+  }
+  if (outsidePolicy.length > 0) {
+    reasons.push(
+      `Research requested ${namedInFull(outsidePolicy)}, which this trigger does not normally work on.`,
+    );
+  }
+  const refusal =
+    outsidePolicy.length > 0
+      ? `Reply "none" to continue without ${outsidePolicy.length > 1 ? "them" : "it"};` +
+        ` that keeps ${outsidePolicy.length > 1 ? "them" : "it"} out of this ticket, not out of the workflow.`
+      : `Reply "none" to continue without ${unavailable.length > 1 ? "them" : "it"};` +
+        ` the run stops if the agent cannot plan without ${unavailable.length > 1 ? "them" : "it"}.`;
+  return expansionQuestion(reasons.join(" "), refusal);
+}
+
+/** Repository keys as a person reads them, in full. */
+function namedInFull(asked: WorkScopeAskedRepository[]): string {
+  return asked.map((one) => one.repositoryKey).join(", ");
+}
+
+/**
+ * The catalog discovery offers the model, with the repositories this work has
+ * already decided against left out.
+ *
+ * Offering one would spend a round on a decision that is already made: the
+ * model picks it, the expansion refuses it without a question, and the run is
+ * exactly where it was. Between the selection wave and this one an exclusion
+ * was advisory, because this list is filtered by the definition pin and by
+ * nothing else; here it starts to bind.
+ *
+ * Nothing is marked and nothing is said about what was left out, because a list
+ * the model may not ask for is only noise. An UNUSABLE repository stays: the
+ * catalog already says it cannot be used, and removing it would hide a
+ * repository the record has decided nothing about.
+ */
+export function offerableRepositoryCatalog(
+  catalog: RepositoryCatalogEntry[],
+  record: { decidableKeys(keys: readonly RepositoryKey[]): RepositoryKey[] } | null,
+): RepositoryCatalogEntry[] {
+  if (!record) return catalog;
+  const open = new Set(
+    record.decidableKeys(
+      catalog.filter((entry) => entry.usable).map((entry) => repositoryCatalogKey(entry)),
+    ),
+  );
+  return catalog.filter(
+    (entry) => !entry.usable || open.has(repositoryCatalogKey(entry)),
+  );
+}
+
+/**
+ * What the model is told about one repository the run refused.
+ *
+ * The clauses are not written here. They come from
+ * `work-scope/refusal-sentence.ts`, which the run start renders from as well,
+ * so the two places a repository can be refused say the same things about it:
+ * an exclusion names who decided it and when on both, and every reason carries
+ * the same way back on both. A model told only "no" asks again, and the person
+ * reading the run's status reason has to know whose decision to revisit,
+ * because a widened trigger policy does not reach back into a ticket somebody
+ * already answered about (A32).
+ *
+ * This wrapper stays because it names the surface: every caller in the
+ * expansion loop passes a refusal and, where it holds one, the record's entry,
+ * and none of them should have to remember which surface they are.
+ */
+export function repositoryExpansionRefusalSentence(
+  refusal: { repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason },
+  entry?: { decidedBy: WorkScopeActor; decidedAt: string },
+): string {
+  return workScopeRefusalSentence(refusal, "expansion", entry);
+}
+
+/**
+ * The write plan for refusals the record itself could not make.
+ *
+ * The round limit is the one rail the record knows nothing about, so its lines
+ * are the caller's to append; every other refusal was planned by the decision
+ * that made it, and planning it twice would put two identical lines in a trail
+ * whose vocabulary has no reason for a repeat.
+ */
+export function repositoryExpansionRefusalPlan(
+  refusals: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>,
+): WorkScopeWritePlan {
+  // Parsed, not trusted, exactly as a decided plan is: this is about to be
+  // spelled into one SQL statement as jsonb, where a shape the contract refuses
+  // would land as a row nothing can read back rather than as an error anyone
+  // sees.
+  const parsed = workScopeWritePlanSchema.safeParse({
+    upserts: [],
+    deletes: [],
+    trail: refusals.map(({ repositoryKey, reason }) => ({
+      kind: "request_refused",
+      repositoryKey,
+      reason,
+    })),
+  });
+  if (!parsed.success) {
+    throw new Error(
+      `repository expansion refusal plan does not match the contract: ${parsed.error.message}`,
+    );
+  }
+  return parsed.data;
+}
+
+/**
+ * The plans a verdict actually stands behind.
+ *
+ * The record decides a whole request in one call, and a question about one
+ * repository drops the attach of another: a request naming a repository the run
+ * can have beside one nobody knows returns the question and nothing else, so the
+ * repository it would have attached is never cloned and the model is never told
+ * it got it. The entry planned for it would then say this work touches a
+ * repository the run never took, which is the one thing the record may never say
+ * (A44).
+ *
+ * The entry is dropped rather than the verdict widened, and nothing stands in
+ * for it: the run parks on the question, and the pass after the answer decides
+ * the request again against whatever that answer left behind. What the request
+ * REFUSED still reaches the trail, because those repositories really were
+ * refused.
+ */
+export function repositoryExpansionPlans(
+  verdict: RepositoryExpansionDecision,
+  planned: WorkScopeWritePlan[],
+): WorkScopeWritePlan[] {
+  if (verdict.kind !== "clarification_needed") return planned;
+  return planned.map((plan) => ({
+    ...plan,
+    upserts: [],
+    trail: plan.trail.filter((event) => event.kind !== "entry_written"),
+  }));
 }
 
 export interface ParsedRepositoryIdentity {
@@ -448,9 +869,28 @@ export function validateHumanRepositoryExpansion(input: {
   catalog: RepositoryCatalogEntry[];
   attached: Array<Pick<SelectedRepository, "provider" | "repoPath">>;
   isAllowed?: (repoPath: string) => boolean;
+  /** The questions the clarification actually asked, so our own words coming
+   *  back are not read as the person's. The run's own resume path always has
+   *  them; optional for a caller reading an answer with no question at hand,
+   *  which reads it exactly as this did before. */
+  askedQuestions?: string[];
 }): RepositoryExpansionDecision {
   const isAllowed = input.isAllowed ?? (() => true);
-  const identities = parseRepositoryExpansionAnswer(input.answer);
+  // OUR OWN WORDS ARE NOT TESTIMONY. Jira's quote button flattens to text with
+  // no quote marker left on it, so a person who quotes the question and writes
+  // "no, we do not need it" underneath sends OUR repository key back to us, and
+  // parsing it attaches the repository they just declined. The record's reader
+  // drops those lines already (`work-scope/answer.ts`, `whatThePersonNamed`);
+  // this is that drop, on that comparison, so the two readers of one answer
+  // cannot disagree about which lines were ours. The other half of that reader,
+  // dropping a link that names no repository of ours, is its own defence and is
+  // deliberately not copied here.
+  //
+  // Only what the answer NAMES is read from this. Whether it is a refusal is
+  // still read from the whole answer below, exactly as the record's reader
+  // reads it, because a refusal is only itself when it is all the person sent.
+  const named = withoutQuotedQuestions(input.answer, input.askedQuestions ?? []);
+  const identities = parseRepositoryExpansionAnswer(named);
   // A repository the answer names outranks a refusal word in it: "no, use
   // github:acme/web" is an answer with a repository in it.
   if (identities.length === 0 && isRefusalAnswer(input.answer)) {
@@ -632,10 +1072,28 @@ export function decideRepositoryExpansion(input: {
         ? verdict.unavailable
         : undefined,
     );
+    // A ROUND THIS RUN ALREADY ATTACHED FROM IS SPENT. The planning block runs
+    // this pass again immediately after an attach, on the same latest round, and
+    // by then the record has nothing left to hand back: the repository is in the
+    // workspace. All that is left to read is the sentence the person wrote, and
+    // the text parser may well not recognise it ("yes please"). Asking about it
+    // would put a question to somebody seconds after they approved, about a
+    // repository already cloned, and their reply to THAT would be recorded
+    // against the repositories the first question asked about, overwriting the
+    // decision they had just made. `humanAttachRound` is what the `exhausted`
+    // branch below has read all along for the same reason; the ask branches did
+    // not read it, which is the hole.
+    const answerAlreadyAttached =
+      (input.clarificationRounds ?? 0) <= (state.humanAttachRound ?? 0);
     if (verdict.kind === "clarification_needed" && !verdict.unattachableAnswer) {
+      if (answerAlreadyAttached) return { action: { kind: "proceed" }, state };
       return { action: { kind: "ask_unrecognised", questions: verdict.questions }, state };
     }
     if (verdict.kind === "unrecognised_answer" || verdict.kind === "clarification_needed") {
+      // Before the count: an answer already consumed by an attach is not one of
+      // the two unreadable answers that close expansion either. Spending one
+      // here would close expansion on a person who answered perfectly well.
+      if (answerAlreadyAttached) return { action: { kind: "proceed" }, state };
       if (state.expansionClosed === "human") {
         // A person already said there are no further repositories: nothing is
         // left to ask about. Closed by the already-attached bound, nobody has
@@ -697,6 +1155,44 @@ export function decideRepositoryExpansion(input: {
     // over the verdict union, because the alternative is falling through to the
     // round-counting path below, which would record a round that never ran.
     return { action: { kind: "ask_unrecognised", questions: verdict.questions }, state };
+  }
+  if (verdict.kind === "refused") {
+    // Nobody is asked, so nothing can answer this. The first refusal passes
+    // through and rides the next research prompt, which is how the model is
+    // told before a repeat ends the run: that is the same bound a closed
+    // expansion uses, and for the same reason.
+    if (state.expansionClosed) {
+      const closedRequests = (state.closedRequests ?? 0) + 1;
+      if (closedRequests >= MAX_CLOSED_REQUESTS) {
+        return {
+          action: {
+            kind: "fail",
+            message: closedExpansionFailure(requests, state.askedUnavailable ?? []),
+          },
+          state,
+        };
+      }
+      return { action: { kind: "proceed" }, state: { ...state, closedRequests } };
+    }
+    const advanced: RepositoryExpansionState = {
+      ...state,
+      rounds: state.rounds + 1,
+      priorRequests: [...state.priorRequests, ...requests],
+    };
+    if (verdict.repositories.length > 0) {
+      // Some of the request was honoured, so expansion is open: the refusals
+      // beside it are about those repositories, not about the run.
+      return {
+        action: { kind: "attach", repositories: verdict.repositories },
+        state: { ...advanced, allAttachedRequests: 0 },
+      };
+    }
+    return {
+      action: { kind: "proceed" },
+      state: verdict.refusals.every((refusal) => refusal.reason === "rounds_exhausted")
+        ? { ...advanced, expansionClosed: "bound" as const }
+        : advanced,
+    };
   }
   const unavailable =
     verdict.kind === "clarification_needed" ? (verdict.unavailable ?? []) : [];
@@ -880,21 +1376,94 @@ function resolveIdentity(
   return { kind: "ambiguous", providers: matches.map((match) => match.provider) };
 }
 
+/**
+ * How far a refusal reaches: does it say WHAT it refuses?
+ *
+ * The distinction decides whether a refusal may write a permanent decision. A
+ * phrase that names repositories can only be an answer to a question about
+ * them, so a person who sends it has decided, and the record keeps that
+ * decision: every repository the question named, left out in their name, an
+ * exclusion that never expires. Ordinary ticket speech is the same word people
+ * write to each other about everything else, and a comment on a ticket is
+ * threaded to nothing: "no" may be an answer to us, or to the comment above
+ * ours, or a Jira rule posting as a named user. Written to us or not, it reads
+ * the same, so it decides nothing, the person is told why, and the question
+ * comes again. A repeated question is a cost, a decision nobody made is a
+ * defect (A34).
+ *
+ * Which channel that applies to is the caller's business, not this file's:
+ * `services/work-scope/from-answer.ts:220-226` asks only about answers composed
+ * from ticket comments (the `composedFromComments` flag that
+ * `answerClarificationAndResumeWithPersistence` sets, in
+ * services/clarifications/answer-core.ts), because the dashboard and the MCP
+ * client type into a box this question opened and a "no" there is
+ * unmistakably an answer to it.
+ */
+export type RefusalReach = "names_repositories" | "ordinary_ticket_speech";
+
 // The phrases read as "there are no further repositories", each only as the
 // whole answer. Compared after lowercasing, dropping apostrophes and the
 // punctuation around it, so "No.", "no more repositories!" and "that's all" all
 // land here, while "No, the code lives in the web repo" does not: after any of
 // these but "none" the words that follow are usually the actual answer.
-const REFUSAL_ANSWERS = new Set([
-  "no",
-  "none",
-  "no more",
-  "no more repositories",
-  "no additional repositories",
-  "nothing",
-  "that is all",
-  "thats all",
+// The second group is the sentences people send instead of the keyword the
+// question asks for. "continue without it" is the one from the incident this
+// question exists to end, and the Polish answers come from the same board, with
+// or without diacritics, so they are compared folded to ASCII.
+//
+// A MAP RATHER THAN A SET, AND THE VALUE IS A PRODUCT DECISION.
+//
+// Whether a phrase may permanently exclude repositories in somebody's name is
+// not a property a reader can work out from the words, and it was worked out
+// twice while it lived in two files: this list, and a regular expression
+// elsewhere that classified it. Add a twenty-first phrase there and it was
+// classified by nobody, silently, with no test going red either way. Here the
+// type asks: an entry cannot be written without saying how far it reaches.
+export const REFUSAL_ANSWERS: ReadonlyMap<string, RefusalReach> = new Map<string, RefusalReach>([
+  ["no", "ordinary_ticket_speech"],
+  ["none", "names_repositories"],
+  ["no more", "ordinary_ticket_speech"],
+  ["no more repositories", "names_repositories"],
+  ["no additional repositories", "names_repositories"],
+  ["nothing", "ordinary_ticket_speech"],
+  ["that is all", "ordinary_ticket_speech"],
+  ["thats all", "ordinary_ticket_speech"],
+  ["continue without it", "names_repositories"],
+  ["none of these", "names_repositories"],
+  ["none of them", "names_repositories"],
+  ["not needed", "ordinary_ticket_speech"],
+  ["no need", "ordinary_ticket_speech"],
+  ["skip it", "ordinary_ticket_speech"],
+  ["nope", "ordinary_ticket_speech"],
+  ["nie", "ordinary_ticket_speech"],
+  ["zaden", "names_repositories"],
+  ["zaden z nich", "names_repositories"],
+  ["zadne z nich", "names_repositories"],
+  // Not the counterpart of "continue without it", though it reads like one.
+  // That phrase is classified on evidence: it is what people actually wrote in
+  // answer to THIS question, in the incident the question exists to end. This
+  // one is a bare fragment with no referent of its own, so "bez tego" answering
+  // the comment above ours would exclude every repository we asked about. A
+  // Polish speaker loses nothing: "zaden" and "zadne z nich" are the ordinary
+  // decline and both name their subject. If somebody turns up a real case of
+  // this phrase answering a repository question, it moves on that evidence.
+  ["bez tego", "ordinary_ticket_speech"],
 ]);
+
+// Polish arrives with and without diacritics, depending on the keyboard
+// somebody was at, and both spellings say the same thing. Folded to ASCII once,
+// so one list of phrases and one list of words answer both. Exported because
+// the work scope reader compares the same answers against the same words.
+const POLISH_LETTERS = "ąćęłńóśźż";
+const FOLDED_LETTERS = "acelnoszz";
+
+export function foldPolishDiacritics(text: string): string {
+  return text.replace(/[ąćęłńóśźż]/gi, (letter) => {
+    const lower = letter.toLowerCase();
+    const folded = FOLDED_LETTERS[POLISH_LETTERS.indexOf(lower)];
+    return letter === lower ? folded : folded.toUpperCase();
+  });
+}
 
 // How an answer made of Jira comments is put together
 // (services/clarifications/resume-from-comments.ts): each comment as
@@ -906,36 +1475,91 @@ const COMMENT_AUTHOR_PREFIX = /^[^:\n]+: /;
 // "none" is the keyword every expansion question asks for, so it alone may be
 // followed by punctuation and more prose ("none, continue without it", "None.
 // Thanks"), never by a bare word ("none needed").
+//
+// It is not an entry in the map above and never will be, and it needs no
+// decision of its own: it begins with the keyword, so it names its subject by
+// construction. Whatever follows the punctuation is the person enlarging on a
+// word that was already about the repositories we asked about.
 const NONE_WITH_PROSE = /^none(?:$|\s*[^\sa-z0-9-])/i;
 
-/** True when the text is "none", alone or followed by punctuation and prose, or
- *  is exactly one of the other refusal phrases. */
-function isRefusalPart(text: string): boolean {
-  const bare = text.replace(/^[^a-z0-9]+/i, "");
-  if (NONE_WITH_PROSE.test(bare)) return true;
+/** How far this text reaches as a refusal, or null when it is not one: "none",
+ *  alone or followed by punctuation and prose, or exactly one of the phrases
+ *  the map holds. */
+function refusalReachOfText(text: string): RefusalReach | null {
+  // Folded before anything else: the trim below keeps only [a-z0-9], so
+  // "zaden" would lose its first letter when it was typed as "żaden".
+  const bare = foldPolishDiacritics(text).replace(/^[^a-z0-9]+/i, "");
+  if (NONE_WITH_PROSE.test(bare)) return "names_repositories";
   const whole = bare
     .toLowerCase()
     .replace(/['\u2019]/g, "")
     .replace(/[^a-z0-9]+$/, "")
     .replace(/\s+/g, " ");
-  return REFUSAL_ANSWERS.has(whole);
+  return REFUSAL_ANSWERS.get(whole) ?? null;
+}
+
+/** The same, read with or without the Jira author in front of the part. */
+function refusalReachOfPart(part: string): RefusalReach | null {
+  return refusalReachOfText(part) ?? refusalReachOfText(part.replace(COMMENT_AUTHOR_PREFIX, ""));
+}
+
+/** The comments an answer was composed from, each without its surrounding
+ *  space and with the empty ones dropped. */
+function answerParts(answer: string): string[] {
+  return answer
+    .split(COMMENT_SEPARATOR)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+/**
+ * True for an answer with no word in it at all: "", "...", a thumbs up.
+ *
+ * The one condition this file and the work scope reader branch on in opposite
+ * directions, deliberately (`saysNothingToAttach` in
+ * `engine/work-scope/answer.ts` says why). Here it ends the expansion loop, so
+ * the run carries on without the repository it asked about; there it decides
+ * nothing, because a permanent refusal in somebody's name is not a thing to
+ * read out of a thumbs up. Exported so the channel that has to explain the
+ * silence asks the same question of the words rather than keeping a third copy
+ * of it.
+ */
+export function hasNoWords(answer: string): boolean {
+  return !/[a-z0-9]/i.test(answer);
 }
 
 /** True for an empty answer or one every part of which is a phrase a person uses
  *  to say there is nothing left to attach, read with or without the Jira
  *  author in front of it. The caller checks first that the answer names no
  *  repository. Anything else is left to the parser. */
-function isRefusalAnswer(answer: string): boolean {
+export function isRefusalAnswer(answer: string): boolean {
   // No letter or digit at all ("", "...") says nothing but "nothing to add".
-  if (!/[a-z0-9]/i.test(answer)) return true;
-  return answer
-    .split(COMMENT_SEPARATOR)
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .every(
-      (part) =>
-        isRefusalPart(part) || isRefusalPart(part.replace(COMMENT_AUTHOR_PREFIX, "")),
-    );
+  if (hasNoWords(answer)) return true;
+  return answerParts(answer).every((part) => refusalReachOfPart(part) !== null);
+}
+
+/**
+ * True when a refusal says WHAT it refuses, and so may be recorded as a
+ * person's decision about the repositories a question named.
+ *
+ * Asked of an answer that already reads as a refusal; anything else is not this
+ * question. Two things it settles, because the shape of an answer composed from
+ * comments leaves both open:
+ *
+ * ONE PART NAMING THE SUBJECT IS ENOUGH FOR THE WHOLE ANSWER. Comments arrive
+ * joined, so "no" and "none of these" can reach here as one answer written by
+ * two people. The words that name the subject are the strongest evidence in the
+ * text, and a refusal that says what it refuses does not become ambiguous
+ * because a bare "no" sits beside it.
+ *
+ * AN ANSWER WITH NO WORD IN IT NAMES NOTHING. `isRefusalAnswer` calls "" and
+ * "..." a refusal, and there is no part here to read; a check mark decided
+ * nothing, so it reaches the caller as ordinary speech and the person is asked
+ * again rather than having every repository excluded in their name.
+ */
+export function refusalNamesRepositories(answer: string): boolean {
+  if (hasNoWords(answer)) return false;
+  return answerParts(answer).some((part) => refusalReachOfPart(part) === "names_repositories");
 }
 
 // Path segments that start the part of a repository URL that is not the
@@ -954,8 +1578,9 @@ const URL_PATH_AFTER_REPOSITORY = new Set([
 
 // The public hosts whose name says which provider a link points at. Any other
 // host (a self-hosted GitLab, an enterprise GitHub) could be either, so a link
-// there stays a bare path and the catalog resolves it.
-const PROVIDER_BY_HOST = new Map<string, "github" | "gitlab">([
+// there stays a bare path and the catalog resolves it. Exported because the
+// work scope reader asks the same list which links are repositories at all.
+export const PROVIDER_BY_HOST = new Map<string, "github" | "gitlab">([
   ["github.com", "github"],
   ["gitlab.com", "gitlab"],
 ]);

@@ -13,7 +13,7 @@ import { createScenario, type Scenario, type ScenarioOutcome } from "./harness.j
  * are the real ones.
  *
  * The harness performs no side effects, so the Jira evidence comment, the
- * ticket move and the Slack note that `agent.ts` sends for a real no-op are
+ * ticket move and the Slack note that `engine/agent-workflow.ts` (from :2942) sends for a real no-op are
  * not asserted here; they are covered by unit tests and a live smoke test.
  */
 

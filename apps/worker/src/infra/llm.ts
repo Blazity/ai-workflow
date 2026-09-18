@@ -5,7 +5,8 @@ import type { LlmProvider } from "./llm-provider.js";
 
 /**
  * Hard bound on a single provider call, mirroring the agent blocks' MAX_MINUTES
- * phase cap (generic-agent.ts): a module-level default, not a block param. The
+ * phase cap (engine/blocks/generic-agent/execute.ts:47): a module-level default,
+ * not a block param. The
  * callers set maxRetries = 0, so without this a hung provider has no bound at
  * all. Generous against real latency (a slow reasoning call is well under it)
  * and far below the 25-minute agent phase cap.

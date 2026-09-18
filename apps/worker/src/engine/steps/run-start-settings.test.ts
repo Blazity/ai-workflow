@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkScopeActor } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { writeManySettings } from "../../db/repositories/settings.js";
+import {
+  applyAnswerWorkScopePlan,
+  applyRunWorkScopePlan,
+} from "../../db/repositories/work-scope.js";
 import {
   activateRepositoryCatalog,
   seedRepositoryCatalogEntries,
@@ -33,6 +38,7 @@ const {
   runStartHasNoEnabledRepository,
   runStartRepositoryAccess,
   runStartSettings,
+  runStartWorkScope,
 } = await import("./run-start-settings.js");
 
 let db: Db;
@@ -59,7 +65,7 @@ beforeEach(async () => {
 
 describe("loadRunStartSettingsStep", () => {
   it("resolves the snapshot from stored rows", async () => {
-    const result = await loadRunStartSettingsStep();
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 
     expect(result.version).toBe(1);
     expect(result.settings.MAX_CONCURRENT_AGENTS).toBe(7);
@@ -73,7 +79,7 @@ describe("loadRunStartSettingsStep", () => {
       reason: "tuning",
     });
 
-    const result = await loadRunStartSettingsStep();
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 
     expect(result.settings.MAX_CONCURRENT_AGENTS).toBe(2);
     // Untouched stored keys keep their previous value.
@@ -87,7 +93,7 @@ describe("loadRunStartSettingsStep", () => {
       enabled: true,
     });
 
-    const result = await loadRunStartSettingsStep();
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 
     // Not activated, so the list is carried but the predicate ignores it: the
     // bridge is a deployment that has never opened the Repositories page.
@@ -113,7 +119,7 @@ describe("loadRunStartSettingsStep", () => {
     const web = rows.find((row) => row.path === "acme/web");
     await setRepositoryEnabled(db, { id: web!.id, enabled: false });
 
-    const result = await loadRunStartSettingsStep();
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 
     expect(result.repositories).toEqual({
       activated: true,
@@ -130,8 +136,8 @@ describe("loadRunStartSettingsStep", () => {
       enabled: true,
     });
 
-    const first = await loadRunStartSettingsStep();
-    const second = await loadRunStartSettingsStep();
+    const first = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
+    const second = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 
     expect(second).toEqual(first);
     expect(await db.select().from(repositories)).toHaveLength(1);
@@ -163,7 +169,7 @@ describe("loadRunStartSettingsStep", () => {
     // snapshot has no MAX_CONCURRENT_AGENTS must NOT pick that up: a value an
     // operator changed under a suspended run is exactly the drift the frozen
     // snapshot exists to prevent, so the gap is filled from the registry instead.
-    const fresh = await loadRunStartSettingsStep();
+    const fresh = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
     expect(fresh.settings.MAX_CONCURRENT_AGENTS).toBe(7);
 
     const stored = { settings: {} } as Parameters<typeof runStartSettings>[0];
@@ -209,7 +215,7 @@ describe("runStartHasNoEnabledRepository", () => {
     const rows = await db.select().from(repositories);
     await setRepositoryEnabled(db, { id: rows[0]!.id, enabled: false });
 
-    const stored = await loadRunStartSettingsStep();
+    const stored = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 
     expect(runStartHasNoEnabledRepository(stored)).toBe(true);
   });
@@ -225,7 +231,7 @@ describe("runStartHasNoEnabledRepository", () => {
       reason: "the bridge is over",
     });
 
-    expect(runStartHasNoEnabledRepository(await loadRunStartSettingsStep())).toBe(false);
+    expect(runStartHasNoEnabledRepository(await loadRunStartSettingsStep({ workScopeSubjectKey: null }))).toBe(false);
   });
 
   it("lets a run through on the bridge, where the catalog decides nothing", async () => {
@@ -233,7 +239,7 @@ describe("runStartHasNoEnabledRepository", () => {
     // deployment that has never opened the Repositories page: the agent sees
     // everything the installation exposes, which is what it did before the
     // catalog existed.
-    const stored = await loadRunStartSettingsStep();
+    const stored = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 
     expect(runStartRepositoryAccess(stored)).toEqual({ activated: false, enabledKeys: [] });
     expect(runStartHasNoEnabledRepository(stored)).toBe(false);
@@ -242,5 +248,309 @@ describe("runStartHasNoEnabledRepository", () => {
   it("reads a stored result from before the repositories field as the bridge too", () => {
     const stored = { settings: {} } as Parameters<typeof runStartHasNoEnabledRepository>[0];
     expect(runStartHasNoEnabledRepository(stored)).toBe(false);
+  });
+});
+
+/**
+ * The work scope the run freezes, and the one thing it decides: nothing.
+ *
+ * The record is read here because the read is pure and belongs with the other
+ * two, and because everything below must work off one frozen copy. What the
+ * entries MEAN is decided later, where the repository listing exists.
+ */
+describe("the frozen work scope", () => {
+  const runActor: WorkScopeActor = {
+    kind: "run",
+    runId: "run-1",
+    definitionId: 4,
+    definitionVersion: 7,
+  };
+  const subjectKey = "ticket:jira:AWT-1";
+
+  it("carries the subject's entries", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: {
+        upserts: [
+          {
+            entry: {
+              repositoryKey: "github:acme/api",
+              state: "selected",
+              origin: "person",
+              rationale: "Ada selected it on the ticket.",
+              decidedBy: runActor,
+              decidedAt: "2026-09-15T10:00:00.000Z",
+            },
+            replacesExpired: false,
+          },
+        ],
+        deletes: [],
+        trail: [],
+      },
+    });
+
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: subjectKey });
+
+    expect(result.workScope).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      scope: {
+        subjectKey: "ticket:jira:AWT-1",
+        version: 1,
+        entries: [
+          {
+            repositoryKey: "github:acme/api",
+            state: "selected",
+            origin: "person",
+            rationale: "Ada selected it on the ticket.",
+            decidedBy: { kind: "run", runId: "run-1", definitionId: 4, definitionVersion: 7 },
+            decidedAt: "2026-09-15T10:00:00.000Z",
+          },
+        ],
+      },
+      selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      answeredAtByKey: {},
+      narrowingAnswered: false,
+    });
+  });
+
+  it("carries the field with a null scope for a subject nobody has decided anything about", async () => {
+    // Present and empty is not the same as absent: absent is a result stored
+    // before this field existed, and puts the run on the whole old path.
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: subjectKey });
+
+    expect(result.workScope).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      scope: null,
+      selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      answeredAtByKey: {},
+      narrowingAnswered: false,
+    });
+    expect(runStartWorkScope(result)).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      scope: null,
+      selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      answeredAtByKey: {},
+      narrowingAnswered: false,
+    });
+  });
+
+  it("says a selection question was already answered on the subject", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_asked",
+            clarificationId: "clarification-1",
+            // Named, because the question this stands for put the key in front
+            // of a person: an ask whose question named nothing is not a
+            // decision about the repository and never reaches this set.
+            repositories: [
+              { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+            ],
+          },
+        ],
+      },
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId: "clarification-1",
+            answer: { kind: "none" },
+            answeredBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+          },
+        ],
+      },
+    });
+
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: subjectKey });
+
+    // The answer recorded no entry, which is exactly why the flag has to travel
+    // beside them: without it the next run asks the same question again.
+    expect(result.workScope).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      scope: null,
+      selectionAnswered: true,
+      // And beside the flag, WHICH repository that answer was about. The flag
+      // alone cannot tell this repository's question from another's, so a run
+      // holding only the flag would stop asking about every repository on this
+      // subject the moment one of them was answered (A47).
+      answeredRepositoryKeys: ["github:acme/api"],
+      // And WHEN, per repository, from the same read: the instant the run
+      // dates the ticket's later words about that repository against, so a
+      // path a person writes after answering can be told from the description
+      // that raised the question.
+      answeredAtByKey: { "github:acme/api": expect.any(String) },
+      // And the narrowing question is a different question, untouched by this
+      // answer. One fact, one read, one thing silenced.
+      narrowingAnswered: false,
+    });
+  });
+
+  it("says a narrowing question was already answered, without silencing anything else", async () => {
+    // The question that asks somebody to cut a set down names none of the
+    // repositories, so its ask is empty and nothing in the repositories it
+    // carries can say which question it was. The purpose on the event is the
+    // only record, and it must not reach `selectionAnswered`: that flag is
+    // subject-wide, and folding this into it would stop the run asking about a
+    // repository nobody ever showed this person.
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_asked",
+            clarificationId: "clarification-narrow",
+            repositories: [],
+            purpose: "narrowing",
+          },
+        ],
+      },
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-narrow",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId: "clarification-narrow",
+            answer: { kind: "repositories", repositoryKeys: ["github:acme/api"] },
+            answeredBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+          },
+        ],
+      },
+    });
+
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: subjectKey });
+
+    expect(result.workScope).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      scope: null,
+      selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      // A narrowing question names no repository, so its answer dates nothing.
+      answeredAtByKey: {},
+      narrowingAnswered: true,
+    });
+  });
+
+  it("reads nothing at all for a subject that carries no record", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: {
+        upserts: [
+          {
+            entry: {
+              repositoryKey: "github:acme/api",
+              state: "selected",
+              origin: "person",
+              rationale: "Ada selected it on the ticket.",
+              decidedBy: runActor,
+              decidedAt: "2026-09-15T10:00:00.000Z",
+            },
+            replacesExpired: false,
+          },
+        ],
+        deletes: [],
+        trail: [],
+      },
+    });
+
+    // A schedule occurrence and a subjectless delivery get a new subject key
+    // every time, so there is nothing to read and nothing to carry.
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
+
+    expect("workScope" in result).toBe(false);
+    expect(runStartWorkScope(result)).toBeNull();
+  });
+
+  it("reads a stored result from before the work scope field as no record read", () => {
+    // The `repositories` precedent. A run suspended across this deploy replays
+    // its STORED result, and an absent field must keep meaning what it means
+    // today: the whole old path, with no scope and no default pretending one
+    // was read.
+    const stored = { settings: {} } as Parameters<typeof runStartWorkScope>[0];
+
+    expect(runStartWorkScope(stored)).toBeNull();
+  });
+});
+
+/**
+ * This wave changes no repository decision.
+ *
+ * Every repository decision inside a run is made from the two values this step
+ * already froze (`ctx.settings` and `ctx.repositories`, the run context rule in
+ * apps/worker/AGENTS.md). So the proof that a record holding entries changes
+ * nothing is that those two come out identical with the record and without it,
+ * and that the refusal predicate built on them answers the same.
+ */
+describe("freezing a record decides nothing", () => {
+  it("leaves the settings, the repository access and the refusal exactly as they were", async () => {
+    await seedRepositoryCatalogEntries(db, {
+      repositories: [{ provider: "github", path: "acme/api" }],
+      source: "seeded",
+      enabled: true,
+    });
+    await activateRepositoryCatalog(db, {
+      actorId: "user_admin",
+      reason: "the bridge is over",
+    });
+    await applyRunWorkScopePlan(db, {
+      subjectKey: "ticket:jira:AWT-1",
+      runId: "run-1",
+      plan: {
+        upserts: [
+          {
+            entry: {
+              repositoryKey: "github:acme/web",
+              state: "excluded",
+              origin: "person",
+              rationale: "Ada ruled it out.",
+              decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+              decidedAt: "2026-09-15T10:00:00.000Z",
+            },
+            replacesExpired: false,
+          },
+        ],
+        deletes: [],
+        trail: [],
+      },
+    });
+
+    const withoutRecord = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
+    const withRecord = await loadRunStartSettingsStep({
+      workScopeSubjectKey: "ticket:jira:AWT-1",
+    });
+
+    expect(withRecord.workScope?.scope?.entries).toHaveLength(1);
+    expect(runStartSettings(withRecord)).toEqual(runStartSettings(withoutRecord));
+    expect(runStartRepositoryAccess(withRecord)).toEqual(
+      runStartRepositoryAccess(withoutRecord),
+    );
+    expect(runStartHasNoEnabledRepository(withRecord)).toBe(
+      runStartHasNoEnabledRepository(withoutRecord),
+    );
   });
 });

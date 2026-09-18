@@ -10,9 +10,10 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { parseOptions, printTable } from "./shared.mjs";
+import { parseOptions, printTable, requireAnchor, requireScan } from "./shared.mjs";
 
 const ROOTS = ["apps", "packages", "docs/example-workflows"];
+const INVARIANT = "the retirement of definition schema v1";
 const SCANNED = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json"]);
 const SKIPPED_DIRECTORIES = new Set([
   "node_modules",
@@ -293,10 +294,17 @@ function main() {
   const options = parseOptions(process.argv.slice(2), { "--root": "root" });
   const rows = [];
   const seen = new Set();
+  let scanned = 0;
   for (const root of ROOTS) {
     const directory = join(options.root, root);
-    if (!directoryExists(directory)) continue;
+    requireAnchor(options.root, root, "a source root this gate scans", INVARIANT);
+    if (!directoryExists(directory)) {
+      throw new Error(
+        `the source root ${root} exists but is not a directory, so ${INVARIANT} is unproven over it.`,
+      );
+    }
     for (const file of sourceFiles(options.root, directory)) {
+      scanned += 1;
       const contents = readFileSync(file.path, "utf8");
       collectProductionTestImports(rows, seen, file, contents);
       if (file.test) continue;
@@ -332,10 +340,15 @@ function main() {
       );
     }
   }
+  requireScan(scanned, "source files", ROOTS.join(", "), INVARIANT);
   console.log("Definition schema version branches");
   if (rows.length > 0) printTable(["file", "line", "match"], rows);
   else console.log("none");
-  console.log(rows.length > 0 ? "single-schema-version FAIL" : "single-schema-version PASS");
+  console.log(
+    rows.length > 0
+      ? "single-schema-version FAIL"
+      : `single-schema-version PASS: ${scanned} file(s) scanned`,
+  );
   process.exitCode = rows.length > 0 ? 1 : 0;
 }
 

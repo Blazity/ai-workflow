@@ -92,12 +92,16 @@ a `PASS`, and a later result does not erase an earlier `FAIL`.
 
 `pnpm run verify:changed` resolves the base from the branch upstream, then
 `origin/HEAD`, then `origin/main`, and never fetches; pass `-- --base <ref>` to
-override. The Claude Stop hook adds `--worktree` so committed, staged, unstaged
-and untracked paths are planned together. Enable the pre-push hook once with
+override; add `--worktree` to plan committed, staged, unstaged and untracked
+paths together before a commit. The Claude Stop hook runs only the quick checks
+(`git diff --check` and `pnpm -w run typecheck`) after each response, so the
+full gate runs in the pre-push hook or by hand. Enable the pre-push hook once with
 `git config --local core.hooksPath .githooks`, but only if that setting is
 currently empty. The gate is advisory and bypassable: `git push --no-verify` is
 an audited bypass, so record why it was used and do not report the gate as
-passed.
+passed. The run echoes each planned command with its position, stops at the
+first failure, and then names that command and lists every later one as
+unproven: a command that never started is not a command that passed.
 
 `main` carries the branch ruleset decided in ADR-004: since 2026-09-09 it
 requires the `ci` aggregator to pass, so a red `ci` job blocks the merge. The

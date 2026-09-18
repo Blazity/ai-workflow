@@ -162,7 +162,7 @@ const ENTRY_PIPE_TO_SHELL_PATTERN = /\|\s*(?:sudo\s+)?\/?(?:[\w.-]+\/)*(?:sh|bas
  * Enforced here as well as in the system prompt because a prompt rule alone is
  * measurably not enough: default-prompts.ts already forbids the agent naming the
  * memory directory in its summary, in a full sentence, and production leaked it
- * anyway, which is what lib/publication-scrub.ts exists for. This is the same
+ * anyway, which is what infra/publication-scrub.ts exists for. This is the same
  * control on this document's write path, and it is possible only because a
  * platform path is a shape rather than a judgement. Prose about what the platform
  * permits or blocks is a judgement, so it is left to the system prompt: that

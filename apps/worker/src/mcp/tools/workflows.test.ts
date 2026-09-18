@@ -611,8 +611,8 @@ describe("preflight and dispatch agree on the digest", () => {
   it("dispatches a ticket key the service upper-cases on its way through", async () => {
     const { digest, dispatched } = await preflightThenDispatch(
       { kind: "ticket", ticketKey: "proj-1" },
-      // resolve.ts:600 upper-cases the key and service.ts:62 echoes the
-      // normalized shape back in the response.
+      // resolve.ts:665 upper-cases the key and service.ts:117 echoes the
+      // normalized shape back in the preflight response.
       { input: { kind: "ticket", ticketKey: "PROJ-1" } },
     );
 
@@ -624,7 +624,7 @@ describe("preflight and dispatch agree on the digest", () => {
   it("dispatches a pull request URL the provider echoes back in another form", async () => {
     const { digest, dispatched } = await preflightThenDispatch(
       { kind: "pull_request", url: "https://github.com/acme/app/pull/12/diffs" },
-      // resolve.ts:415 returns the provider's own spelling of the URL, which the
+      // resolve.ts:478 returns the provider's own spelling of the URL, which the
       // agent has no way to predict locally.
       {
         input: { kind: "pull_request", url: "https://github.com/acme/app/pull/12" },

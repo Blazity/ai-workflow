@@ -159,8 +159,10 @@ export function OutputSchemaField({
 
 /** Rich text (Tiptap) surface for prose params: Slack messages, comment bodies.
  *  Reuses the prompt editor so these fields match the Prompt Library editor and
- *  get {{variable}} insertion + highlighting for free. Markdown is the stored
- *  value; the worker substitutes {{variables}} at runtime per VARIABLE_PARAM_KEYS. */
+ *  get token insertion + highlighting for free. Markdown is the stored value; in
+ *  the fields VARIABLE_PARAM_KEYS lists, the worker expands {{prompt:...}}
+ *  references when a run starts, resolves {{data:...}} tokens when the block
+ *  runs, and fails the block on any other placeholder the author left. */
 export function RichTextField({
   value,
   disabled,

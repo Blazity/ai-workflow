@@ -41,18 +41,18 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   // What a client_credentials grant gets when NOTHING else says otherwise, and that
   // is the whole of what it is: hygiene, not a lock. The provider prefers the
   // client's own registered scopes over this default
-  // (@better-auth/oauth-provider@1.6.20, dist/index.mjs:725), dynamic registration
+  // (@better-auth/oauth-provider@1.6.30, dist/index.mjs:725), dynamic registration
   // writes every advertised scope into those whenever the registration names none
   // (dist/index.mjs:1244), and an explicit `scope` on the token request is validated
   // against that same full list (dist/index.mjs:708-724), so a token issued to an
   // unattended client can still come out holding the authoring scopes. The place
-  // they are actually taken away is request-context.ts, where the actor's scope set
+  // they are actually taken away is services/mcp/actor-resolution.ts:124-138, where the actor's scope set
   // is materialized from the token and the client row; keeping the default narrow
   // here only means a client that registered with no scopes at all is not handed
   // more than it asked for.
   //
   // The filter names the person-only scopes rather than listing what to keep, so
-  // "tickets:write" stays in this default deliberately: the same rule request-context.ts
+  // "tickets:write" stays in this default deliberately: the same rule services/mcp/actor-resolution.ts
   // applies, for the same reason. The platform comments on and moves tickets on every
   // run it executes with nobody behind it, so an unattended client doing that is the
   // ordinary case, and dogfood automation needs it to drive a ticket at all.
@@ -61,7 +61,7 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
       scope !== "prompts:write" &&
       scope !== "workflows:write" &&
       // The catalog and the settings registry are configuration of the
-      // deployment itself, and request-context.ts strips them from a token with
+      // deployment itself, and services/mcp/actor-resolution.ts strips them from a token with
       // no `sub` for the same reason it strips the two above.
       scope !== "repositories:write" &&
       scope !== "settings:write",
@@ -69,7 +69,7 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   // offline_access is the standard OAuth2/OIDC marker a client sends to ask for a
   // refresh token, the same way Atlassian and Supabase do it. It is advertised and
   // registrable so an interactive client can opt in, but it is permission-inert:
-  // request-context.ts materializes an actor's scope set by intersecting the token's
+  // services/mcp/actor-resolution.ts:140-150 materializes an actor's scope set by intersecting the token's
   // issued scopes against MCP_SCOPES, so offline_access never becomes a permission.
   // It stays out of both defaults below, so it is opt-in and never written into an
   // unattended client's grant.

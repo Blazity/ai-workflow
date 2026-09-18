@@ -19,7 +19,27 @@ const telemetry = vi.hoisted(() => ({
     (_steps: unknown, executionError: unknown) => ({ executionError }),
   ),
 }));
-const jira = vi.hoisted(() => ({ postComment: vi.fn(async () => {}) }));
+const jira = vi.hoisted(() => ({
+  postComment: vi.fn(async () => {}),
+  // The refusal this file is about ends in the transparent-failure exit, which
+  // parks the ticket and notifies. Both read the adapters, so a mock that
+  // carries only postComment makes the failure path throw inside a test we
+  // treat as green, and a real fault there would look exactly the same.
+  fetchTicket: vi.fn(async (id: string) => ({
+    id,
+    identifier: id,
+    title: "Something to do",
+    description: "",
+    acceptanceCriteria: "",
+    comments: [],
+    labels: [],
+    trackerStatus: "AI",
+    attachments: [],
+  })),
+  moveTicket: vi.fn(async () => {}),
+  updateLabels: vi.fn(async () => {}),
+  notifyForTicket: vi.fn(async () => {}),
+}));
 /** The graph this run's trigger resolves to, swapped per test. */
 const graph = vi.hoisted(() => ({
   nodes: [] as Array<Record<string, unknown>>,
@@ -65,6 +85,20 @@ vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../db/repositories/settings.js", () => ({
   readAllConnectedSettings: async () => [],
 }));
+// The run start reads the subject's work scope beside the settings, and this
+// file's db client is a bare object. One read for the whole record, so a fact
+// added to that picture never reaches this file again. No record: what a
+// subject that has never been decided on looks like, which is every subject in
+// these cases.
+vi.mock("../../db/repositories/work-scope.js", () => ({
+  readConnectedWorkScopeFacts: async () => ({
+    scope: null,
+    selectionAnswered: false,
+    answeredRepositoryKeys: [],
+    narrowingAnswered: false,
+    answeredQuestion: null,
+  }),
+}));
 // The catalog decides access and enables nothing: the state every test here is
 // about.
 vi.mock("../../db/repositories/repository-catalog.js", () => ({
@@ -90,11 +124,22 @@ vi.mock("../steps/workflow-ticket.js", () => ({
   })),
 }));
 vi.mock("../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({ issueTracker: { postComment: jira.postComment } }),
+  createAdapters: () => ({
+    issueTracker: {
+      postComment: jira.postComment,
+      fetchTicket: jira.fetchTicket,
+      moveTicket: jira.moveTicket,
+      updateLabels: jira.updateLabels,
+    },
+    messaging: { notifyForTicket: jira.notifyForTicket },
+  }),
 }));
 vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: vi.fn(async () => {}),
   assertConnectedActiveRunOwner: vi.fn(async () => {}),
+  // Read by the park the failure exit performs, which this file reaches on
+  // every case: the refusal IS a failure exit.
+  assertActiveRunOwnerState: vi.fn(async () => {}),
 }));
 vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   markRunFailedOnSelfMove: telemetry.markRunFailedOnSelfMove,

@@ -2,12 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   buildPromptVariables,
 } from "./prompt-output.js";
-import type { WorkflowDefinitionNode } from "@shared/contracts";
 import {
   PROMPT_VARIABLES,
   substitutePromptVariables,
-  substituteNodePromptParams,
-  VARIABLE_PARAM_KEYS,
 } from "@shared/prompts";
 import type { AgentWorkflowInput } from "../agent-input.js";
 import type { WorkspacePublicationResult } from "../steps/workspace-publication.js";
@@ -282,97 +279,5 @@ describe("substitutePromptVariables", () => {
 
   it("substitutes a known variable with an empty value to an empty string", () => {
     expect(substitutePromptVariables("PR #{{pr_number}}", vars)).toBe("PR #");
-  });
-});
-
-describe("substituteNodePromptParams", () => {
-  const vars = { ticket_title: "Add dark mode" };
-
-  const makeNode = (
-    type: WorkflowDefinitionNode["type"],
-    params: WorkflowDefinitionNode["params"],
-  ): WorkflowDefinitionNode => ({ id: "n1", type, x: 0, y: 0, params, inputs: {} });
-
-  it("substitutes into a string param and returns a new node", () => {
-    const node = makeNode("planning_agent", { prompt: "Plan {{ticket_title}}" });
-    const result = substituteNodePromptParams(node, vars);
-    expect(result).not.toBe(node);
-    expect(result.params.prompt).toBe("Plan Add dark mode");
-    // Original is untouched.
-    expect(node.params.prompt).toBe("Plan {{ticket_title}}");
-  });
-
-  it("substitutes element-wise into a string[] param", () => {
-    const node = makeNode("human_question", {
-      questions: ["About {{ticket_title}}?", "Any other concerns?"],
-    });
-    const result = substituteNodePromptParams(node, vars);
-    expect(result.params.questions).toEqual([
-      "About Add dark mode?",
-      "Any other concerns?",
-    ]);
-    // Input array is not mutated.
-    expect(node.params.questions).toEqual([
-      "About {{ticket_title}}?",
-      "Any other concerns?",
-    ]);
-  });
-
-  it("preserves node identity fields on the clone", () => {
-    const node: WorkflowDefinitionNode = {
-      id: "n7",
-      type: "planning_agent",
-      name: "Plan",
-      x: 10,
-      y: 20,
-      inputs: {},
-      params: { prompt: "{{ticket_title}}" },
-      promptRefs: { prompt: { promptId: 3, version: 2 } },
-    };
-    const result = substituteNodePromptParams(node, vars);
-    expect(result).not.toBe(node);
-    expect(result.id).toBe("n7");
-    expect(result.type).toBe("planning_agent");
-    expect(result.name).toBe("Plan");
-    expect(result.x).toBe(10);
-    expect(result.y).toBe(20);
-    expect(result.promptRefs).toBe(node.promptRefs);
-  });
-
-  it("substitutes into open_pr title and body params", () => {
-    const node = makeNode("open_pr", {
-      title: "PR: {{ticket_title}}",
-      body: "Changed {{ticket_title}}",
-    });
-    const result = substituteNodePromptParams(node, vars);
-    expect(result.params.title).toBe("PR: Add dark mode");
-    expect(result.params.body).toBe("Changed Add dark mode");
-  });
-
-  it("returns the identical node for a block type with no variable params", () => {
-    const node = makeNode("finalize_workspace", { prompt: "{{ticket_title}}" });
-    expect(substituteNodePromptParams(node, vars)).toBe(node);
-  });
-
-  it("returns the identical node when a variable param has no tokens", () => {
-    const node = makeNode("planning_agent", { prompt: "Static prompt, no tokens" });
-    expect(substituteNodePromptParams(node, vars)).toBe(node);
-  });
-});
-
-describe("terminate postComment substitution", () => {
-  // The terminate hook in agent.ts is dispatched inline by the interpreter and
-  // never passes through substituteNodePromptParams, so it substitutes the
-  // comment itself via substitutePromptVariables(buildPromptVariables(ctx)).
-  // These cases pin that comment shape and the declaration the hook relies on.
-  it("keeps terminate declared as a postComment variable param", () => {
-    expect(VARIABLE_PARAM_KEYS.terminate).toEqual(["postComment"]);
-  });
-
-  it("resolves {{variables}} in a terminate comment string", () => {
-    const resolved = buildPromptVariables(makeSource());
-    expect(
-      substitutePromptVariables("Parked {{ticket_key}}: {{ticket_title}}", resolved),
-    ).toBe("Parked ABC-123: Add dark mode");
   });
 });

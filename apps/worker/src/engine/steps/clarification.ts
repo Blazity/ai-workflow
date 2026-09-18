@@ -152,6 +152,11 @@ export async function postClarificationQuestionsCommentStep(
      *  before this field existed still replays; absent falls back to the
      *  registry default for the key. */
     aiColumnName?: string;
+    /** What a person can do about a repository this run left out. Optional for
+     *  the same reason as the field above, and absent on every clarification
+     *  that is not about repositories. It reaches the ticket and nothing else:
+     *  the ruling is at the call site in `agent-workflow.ts`. */
+    repositoryRecoveryNotes?: string[];
   },
   owner: ActiveRunOwner,
 ): Promise<string | null> {
@@ -179,6 +184,9 @@ export async function postClarificationQuestionsCommentStep(
         dashboardUrl: input.dashboardUrl,
         aiColumnName: input.aiColumnName ?? defaultSettingsSnapshot().COLUMN_AI,
         expiresAtIso: input.expiresAtIso,
+        ...(input.repositoryRecoveryNotes && input.repositoryRecoveryNotes.length > 0
+          ? { repositoryRecoveryNotes: input.repositoryRecoveryNotes }
+          : {}),
       }),
     );
   } catch (err) {
@@ -193,9 +201,19 @@ export async function postClarificationQuestionsCommentStep(
 }
 postClarificationQuestionsCommentStep.maxRetries = 0;
 
+/**
+ * Every answered clarification of the TICKET, which is more than one run's own.
+ *
+ * Each round carries the run that asked it. The whole history reaches the
+ * prompt, where cross-run memory belongs, but a repository answer may only be
+ * re-applied by the run that asked for it: a previous run's "none" applied here
+ * closes a later run's expansion before its model has said a word (A42). The
+ * field is optional because a run suspended before it existed replays this
+ * step's stored result, and a round with no run id is re-applied by nobody.
+ */
 async function loadClarificationHistoryStep(
   ticketKey: string,
-): Promise<Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string }>> {
+): Promise<Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string; runId?: string }>> {
   "use step";
   const { listConnectedAnsweredClarificationsForTicket } = await import(
     "../../db/repositories/clarifications.js"
@@ -204,7 +222,7 @@ async function loadClarificationHistoryStep(
   return rows
     .filter((r) => r.answer !== null)
     .map((r) => Object.assign(
-      { questions: r.questions, answer: r.answer as string },
+      { questions: r.questions, answer: r.answer as string, runId: r.runId },
       r.answeredByLabel ? { answeredBy: r.answeredByLabel } : {},
       r.answeredAt ? { answeredAt: r.answeredAt.toISOString() } : {},
     ));

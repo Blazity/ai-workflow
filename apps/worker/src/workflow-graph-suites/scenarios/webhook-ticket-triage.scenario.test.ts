@@ -84,7 +84,7 @@ function triageScenario(): Scenario {
 
 /** The runtime shape a generic_agent with a declared object output schema emits:
  * the structured fields at the top level, the reserved runtime status, and the
- * compatibility `data` alias (see `blocks/generic-agent.ts`). */
+ * compatibility `data` alias (see `engine/blocks/generic-agent/execute.ts:527`). */
 function genericAgentOutput(data: Record<string, JsonValue>): BlockOutput {
   return { status: "completed", ...data, data };
 }

@@ -1,6 +1,10 @@
 import type {
   RunRepositoryAccess,
   SettingsSnapshot,
+  TriggerRepositoryPolicy,
+  WorkScopeActor,
+  WorkScopeAskedRepository,
+  WorkScopeQuestionPurpose,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
 import type {
@@ -8,6 +12,54 @@ import type {
   VcsProvider,
 } from "../../adapters/vcs/repository-directory.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
+import type { RunStartWorkScope } from "../steps/run-start-settings.js";
+import type { TicketTextReading } from "../work-scope/context.js";
+
+/**
+ * The repositories a question a pre-sandbox step raised named, and why each one
+ * was asked.
+ *
+ * It travels out of the step because the reason is recorded when the question
+ * is ASKED, never when it is answered: by answer time the clarification row
+ * carries prose and nothing else, and a person's "continue without it" would
+ * append a line naming no repository.
+ */
+export interface PreSandboxWorkScopeAsk {
+  subjectKey: string;
+  askedRepositories: WorkScopeAskedRepository[];
+  /**
+   * Why the question was put, where the list above cannot say.
+   *
+   * A question asking somebody to narrow a set larger than an ask may carry
+   * names none of the repositories, so its ask is empty and reads exactly like
+   * the plain "which repository should this ticket modify?". This is the only
+   * thing that tells the two apart, and telling them apart is what stops the
+   * narrowing question being asked again on every later run.
+   */
+  purpose?: WorkScopeQuestionPurpose;
+}
+
+/**
+ * What the selection refused, keyed, on its way to the comment a finished run
+ * posts.
+ *
+ * The prompt additions already carry these sentences to the agent, and until
+ * this existed they carried them nowhere else: a ticket covering two
+ * repositories, one of them excluded weeks ago, produced a green run and a pull
+ * request covering half the work with nothing on the ticket saying so. Silent
+ * partial work is the failure this record exists to end, and a person does not
+ * go looking for a problem a green run did not report.
+ *
+ * Keyed rather than the flat sentences the prompt uses, because the report
+ * renders one line per repository and a sentence with no key attached cannot be
+ * lined up with the repositories the run did open.
+ */
+export interface PreSandboxWorkScopeLeftOut {
+  /** `provider:owner/name`, the key the work scope record uses. */
+  repositoryKey: string;
+  /** Why the run left it out, as a person reads it. */
+  reason: string;
+}
 
 export interface PreSandboxRepositoryDiscovery {
   catalog: RepositoryCatalogEntry[];
@@ -53,6 +105,18 @@ export type PreSandboxStepResult =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
+      /** Keyed refusals for the comment a finished run posts. The agent may
+       *  see these: they are facts about this run's workspace. */
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      /** What a person can do about those refusals. NEVER placed in the
+       *  agent's instruction channel: see `withWorkScopeOutcome`. */
+      workScopeRecoveryNotes?: string[];
+      /** This step's reading of the ticket, carried so the surfaces that speak
+       *  after it offer the same way back it does (`commentPathIsTaken` in
+       *  `engine/work-scope/context.ts`). Absent from a run that scanned no
+       *  ticket, which offers the record alone. */
+      workScopeTicketText?: TicketTextReading;
     }
   | {
       status: "halt";
@@ -76,6 +140,18 @@ export type PreSandboxStepResult =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
+      /** Keyed refusals for the comment a finished run posts. The agent may
+       *  see these: they are facts about this run's workspace. */
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      /** What a person can do about those refusals. NEVER placed in the
+       *  agent's instruction channel: see `withWorkScopeOutcome`. */
+      workScopeRecoveryNotes?: string[];
+      /** This step's reading of the ticket, carried so the surfaces that speak
+       *  after it offer the same way back it does (`commentPathIsTaken` in
+       *  `engine/work-scope/context.ts`). Absent from a run that scanned no
+       *  ticket, which offers the record alone. */
+      workScopeTicketText?: TicketTextReading;
     };
 
 export const preSandboxTicketInputFields = [
@@ -93,7 +169,16 @@ export interface PreSandboxStepContext {
     title?: string;
     description?: string;
     acceptanceCriteria?: string;
-    comments?: Array<{ author: string; body: string; createdAt?: string }>;
+    /** `accountId` is the tracker's stable identity for the author, and it is
+     *  here for one reason: it is the only way a step can tell a comment this
+     *  installation's bot wrote from one a person wrote. Optional, because a
+     *  tracker that does not report it leaves it absent. */
+    comments?: Array<{
+      author: string;
+      accountId?: string;
+      body: string;
+      createdAt?: string;
+    }>;
     labels?: string[];
   };
   run: {
@@ -115,14 +200,47 @@ export interface PreSandboxStepContext {
    *  answer differently on a replay. */
   settings: SettingsSnapshot;
   /**
+   * Which repositories this subject's work touches and why, frozen at run
+   * start, together with whether a person has already answered the
+   * which-of-these question on it.
+   *
+   * ABSENT IS THE WHOLE OLD PATH. A run replaying a run-start result stored
+   * before the record existed, a schedule occurrence, a delivery that resolved
+   * no subject and an approved plan all arrive without it, and every decision
+   * below then behaves exactly as it did before the record shipped. There is no
+   * empty record standing in for one that was never read.
+   */
+  workScope?: RunStartWorkScope;
+  /** The repository policy this run's trigger stands under. Read beside
+   *  `workScope`: without it nothing may be decided, because treating a missing
+   *  policy as "no candidates" would start a run with no repositories and look
+   *  like a decision somebody made. */
+  workScopePolicy?: TriggerRepositoryPolicy;
+  /** Who a decision of this run is recorded as. Absent on a run whose
+   *  definition is not identified, where no entry could name its author. */
+  workScopeActor?: WorkScopeActor;
+  /**
+   * The account this installation's bot posts as on the tracker, when the run
+   * could read it.
+   *
+   * ABSENT MEANS UNKNOWN, never "there is no bot", and a step that cannot tell
+   * the two apart counts every comment exactly as it did before: a fail-closed
+   * reading here would drop a person's comments too, and a repository named
+   * only in one would stop being matched.
+   */
+  botAccountId?: string;
+  /**
    * The human reply this attempt is resuming from, present only when the block
    * that raised the clarification is the one that owns repository selection.
    *
    * A value here structurally means "this text is an answer to a which-repository
    * question", which is stronger than anything the ticket comments can establish:
-   * the synthetic comment carrying the reply is labelled with a display name, and
-   * tracker display names are user controlled, so matching on one authenticates
-   * nothing. Two facts make the flag sound instead. The interpreter only ever
+   * a comment is labelled with a display name, and tracker display names are
+   * user controlled, so matching on one authenticates nothing. It is also the
+   * ONLY carrier now. The reply used to be appended to the ticket as a comment
+   * as well, so the path scanner read it as ticket text and attached the
+   * repository a person had just refused (round 4, B1). Two facts make the flag
+   * sound instead. The interpreter only ever
    * hands a clarification answer back to the block that asked for it, and every
    * clarification prepare-workspace raises is a repository question.
    *
@@ -180,6 +298,12 @@ export interface RunPreSandboxPhaseInput {
   settings: PreSandboxStepContext["settings"];
   repositoryScope?: PreSandboxStepContext["repositoryScope"];
   clarification?: PreSandboxStepContext["clarification"];
+  /** Forwarded onto every step's context by the runner. Optional, and absent
+   *  means the whole old path: see `PreSandboxStepContext`. */
+  workScope?: PreSandboxStepContext["workScope"];
+  workScopePolicy?: PreSandboxStepContext["workScopePolicy"];
+  workScopeActor?: PreSandboxStepContext["workScopeActor"];
+  botAccountId?: PreSandboxStepContext["botAccountId"];
 }
 
 export type RunPreSandboxPhaseResult =
@@ -190,6 +314,18 @@ export type RunPreSandboxPhaseResult =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
+      /** Keyed refusals for the comment a finished run posts. The agent may
+       *  see these: they are facts about this run's workspace. */
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      /** What a person can do about those refusals. NEVER placed in the
+       *  agent's instruction channel: see `withWorkScopeOutcome`. */
+      workScopeRecoveryNotes?: string[];
+      /** This step's reading of the ticket, carried so the surfaces that speak
+       *  after it offer the same way back it does (`commentPathIsTaken` in
+       *  `engine/work-scope/context.ts`). Absent from a run that scanned no
+       *  ticket, which offers the record alone. */
+      workScopeTicketText?: TicketTextReading;
     }
   | {
       status: "halt";
@@ -204,4 +340,16 @@ export type RunPreSandboxPhaseResult =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
+      /** Keyed refusals for the comment a finished run posts. The agent may
+       *  see these: they are facts about this run's workspace. */
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      /** What a person can do about those refusals. NEVER placed in the
+       *  agent's instruction channel: see `withWorkScopeOutcome`. */
+      workScopeRecoveryNotes?: string[];
+      /** This step's reading of the ticket, carried so the surfaces that speak
+       *  after it offer the same way back it does (`commentPathIsTaken` in
+       *  `engine/work-scope/context.ts`). Absent from a run that scanned no
+       *  ticket, which offers the record alone. */
+      workScopeTicketText?: TicketTextReading;
     };

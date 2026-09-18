@@ -69,6 +69,283 @@ describe("run analysis report", () => {
     expect(report.usage.research.costKnown).toBe(false);
   });
 
+  /**
+   * A repository the run was asked to work on and did not.
+   *
+   * It goes in the section a reader already opens to find out which
+   * repositories a run touched, because a left-out repository is not a new
+   * subject, it is a repository in a state. Without it the person who excluded
+   * the repository in March reads an ordinary success comment in May, finds a
+   * pull request short one repository, and has nowhere to learn that their own
+   * decision is the reason.
+   */
+  it("tells the ticket which repositories the run left out, and why", () => {
+    const report = buildResearchAnalysisReport({
+      runId: "left-out",
+      workspaceManifest: {
+        repositories: [{
+          provider: "github",
+          repoPath: "acme/web",
+          defaultBranch: "main",
+          branchName: "arthur/AWT-1",
+          researchBaseSha: "abcdef123456",
+          access: "write",
+        }],
+      },
+      leftOutRepositories: [
+        {
+          repositoryKey: "github:acme/api",
+          reason:
+            "github:acme/api was excluded on this work by Ada Lovelace on 2026-09-10," +
+            " and this run left it out rather than asking about it again.",
+        },
+      ],
+      researchResult: { body: "Plan" },
+      usage,
+    });
+    const published = withAnalysisPublication(
+      report,
+      [{ provider: "github", repoPath: "acme/web", id: 1, url: "https://github.com/acme/web/pull/1" }],
+      "Implemented",
+      usage,
+    );
+
+    const comment = formatPublishedAnalysisComment(published, "https://dashboard.example/runs/left-out");
+
+    // In the Repositories section, beside the repository the run did open, not
+    // in a second place a reader would have to know to look at.
+    const repositories = comment.split("\n\n").find((section) => section.startsWith("Repositories"));
+    expect(repositories).toContain("- github:acme/web · write");
+    expect(repositories).toContain(
+      "- github:acme/api · left out · github:acme/api was excluded on this work by Ada Lovelace" +
+        " on 2026-09-10, and this run left it out rather than asking about it again.",
+    );
+  });
+
+  /**
+   * The one surface that reaches a person on a run that FINISHED.
+   *
+   * The pre-sandbox halt text reaches nobody when the run does not halt and the
+   * prompt additions reach the agent, so on a green run this comment is the
+   * only place the person who excluded the repository can learn that the
+   * exclusion is theirs to take back.
+   */
+  it("tells the ticket what a person can do about the repositories it left out", () => {
+    const report = buildResearchAnalysisReport({
+      runId: "recovery",
+      leftOutRepositories: [
+        { repositoryKey: "github:acme/api", reason: "somebody excluded it on this work." },
+      ],
+      repositoryRecoveryNotes: [
+        "Excluding a repository is not final: this work's repository list can be changed" +
+          " through the work scope API or the work_scope.edit tool," +
+          " and the next run starts from the changed list.",
+      ],
+      researchResult: { body: "Plan" },
+      usage,
+    });
+
+    const comment = formatResearchAnalysisComment(
+      report,
+      "https://dashboard.example/runs/recovery",
+    );
+    const repositories = comment
+      .split("\n\n")
+      .find((section) => section.startsWith("Repositories"));
+
+    // Under the line it is about, in the same section, and not as a bullet:
+    // it is not a repository, it is what the reader can do about one.
+    expect(repositories).toContain("- github:acme/api · left out · somebody excluded it");
+    expect(repositories).toContain(
+      "\nExcluding a repository is not final: this work's repository list can be changed" +
+        " through the work scope API or the work_scope.edit tool," +
+        " and the next run starts from the changed list.",
+    );
+  });
+
+  // The eight-line bound was silent, and a silent bound is worse than a short
+  // list: the reader takes the eighth line for the last repository and stops
+  // looking. The recorder's own trail bound says how many it dropped, and this
+  // section, which is the only one a person reads on a run that finished, owes
+  // the reader the same.
+  it("says how many left-out repositories the eight-line bound dropped", () => {
+    const report = buildResearchAnalysisReport({
+      runId: "left-out-bound",
+      leftOutRepositories: Array.from({ length: 11 }, (_, index) => ({
+        repositoryKey: `github:acme/left-${index}`,
+        reason: "somebody excluded it on this work.",
+      })),
+      researchResult: { body: "Plan" },
+      usage,
+    });
+
+    expect(report.leftOutRepositories).toHaveLength(8);
+    expect(report.leftOutRepositoriesOmitted).toBe(3);
+
+    const repositories = formatResearchAnalysisComment(
+      report,
+      "https://dashboard.example/runs/left-out-bound",
+    )
+      .split("\n\n")
+      .find((section) => section.startsWith("Repositories"));
+
+    expect(repositories).toContain("- github:acme/left-7 · left out");
+    expect(repositories).not.toContain("github:acme/left-8");
+    // After the lines it is about, so a reader meets it where the list stops.
+    expect(repositories).toContain(
+      "- github:acme/left-7 · left out · somebody excluded it on this work.\n" +
+        "- and 3 more, not listed here; open the full run report",
+    );
+  });
+
+  it("says nothing about a bound that dropped nothing, at exactly the bound", () => {
+    // Eight is the bound, not one past it: a run that left out exactly eight
+    // lost nothing, and a line saying otherwise sends a reader to look for a
+    // ninth repository that does not exist.
+    const report = buildResearchAnalysisReport({
+      runId: "left-out-exactly-eight",
+      leftOutRepositories: Array.from({ length: 8 }, (_, index) => ({
+        repositoryKey: `github:acme/left-${index}`,
+        reason: "somebody excluded it on this work.",
+      })),
+      researchResult: { body: "Plan" },
+      usage,
+    });
+
+    expect("leftOutRepositoriesOmitted" in report).toBe(false);
+    expect(
+      formatResearchAnalysisComment(report, "https://dashboard.example/runs/left-out-exactly-eight"),
+    ).not.toContain("more, not listed here");
+  });
+
+  it("does not count an entry it discarded as a repository somebody could go and look up", () => {
+    // The count comes from the same filter the bound applies. A malformed entry
+    // is not in the full report either, so counting it promises a reader
+    // something the full report cannot show them.
+    const report = buildResearchAnalysisReport({
+      runId: "left-out-malformed",
+      leftOutRepositories: [
+        ...Array.from({ length: 8 }, (_, index) => ({
+          repositoryKey: `github:acme/left-${index}`,
+          reason: "somebody excluded it on this work.",
+        })),
+        { repositoryKey: "github:acme/broken" } as never,
+      ],
+      researchResult: { body: "Plan" },
+      usage,
+    });
+
+    expect(report.leftOutRepositories).toHaveLength(8);
+    expect("leftOutRepositoriesOmitted" in report).toBe(false);
+  });
+
+  it("says nothing about taking an exclusion back when it left nothing out", () => {
+    // A recovery sentence with no left-out line above it answers a question the
+    // reader was never asked.
+    const report = buildResearchAnalysisReport({
+      runId: "recovery-orphan",
+      repositoryRecoveryNotes: ["Excluding a repository is not final."],
+      researchResult: { body: "Plan" },
+      usage,
+    });
+
+    expect("repositoryRecoveryNotes" in report).toBe(false);
+    expect(
+      formatResearchAnalysisComment(report, "https://dashboard.example/runs/recovery-orphan"),
+    ).not.toContain("not final");
+  });
+
+  it("does not call a repository it left out analyzed", () => {
+    // The heading said "Repositories analyzed" over lines that say a repository
+    // was left out, which is the heading asserting the opposite of what is
+    // under it. A person reading that a repository was analyzed, on a line
+    // saying it was not, learns only that one of the two is lying.
+    const report = buildResearchAnalysisReport({
+      runId: "left-out-heading",
+      leftOutRepositories: [
+        { repositoryKey: "github:acme/api", reason: "somebody excluded it on this work." },
+      ],
+      researchResult: { body: "Plan" },
+      usage,
+    });
+
+    const comment = formatResearchAnalysisComment(
+      report,
+      "https://dashboard.example/runs/left-out-heading",
+    );
+    const repositories = comment
+      .split("\n\n")
+      .find((section) => section.startsWith("Repositories"));
+
+    expect(repositories).toContain("- github:acme/api · left out · somebody excluded it");
+    expect(comment).not.toContain("Repositories analyzed");
+  });
+
+  it("says what it dropped when the comment is too long to post in full", () => {
+    // The last-resort truncation keeps the first section and the usage tail and
+    // discards everything between them, the repositories this run left out with
+    // it. A truncation nobody is told about reads as "there was nothing to say",
+    // which is the exact silence this section exists to break.
+    const repositories = Array.from({ length: 16 }, (_, index) => ({
+      provider: "github" as const,
+      repoPath: `acme/${"repository-".repeat(30)}${index}`,
+      defaultBranch: "main",
+      branchName: `arthur/AWT-${index}`,
+      researchBaseSha: "abcdef123456",
+      access: "write" as const,
+      selectedRationale: `${"why this repository matters ".repeat(60)}${index}`,
+    }));
+    const report = buildResearchAnalysisReport({
+      runId: "too-long",
+      workspaceManifest: { repositories },
+      selectedRepositories: repositories.map((repository) => ({
+        provider: repository.provider,
+        repoPath: repository.repoPath,
+        defaultBranch: repository.defaultBranch,
+        selectedRationale: repository.selectedRationale,
+      })),
+      leftOutRepositories: Array.from({ length: 8 }, (_, index) => ({
+        repositoryKey: `github:acme/left-${index}`,
+        reason: `${"somebody excluded it on this work ".repeat(15)}${index}`,
+      })),
+      repositoryRequests: Array.from({ length: 8 }, (_, index) => ({
+        provider: "github" as const,
+        repoPath: `acme/${"requested-".repeat(50)}${index}`,
+        rationale: "research asked for it",
+      })),
+      researchResult: {
+        body: "a".repeat(40_000),
+        repositoryEvidence: Array.from({ length: 40 }, (_, index) => "e".repeat(600) + index),
+      },
+      usage,
+    });
+
+    const comment = formatResearchAnalysisComment(
+      report,
+      "https://dashboard.example/runs/too-long",
+    );
+
+    // It says so, and it says which parts went, so a reader knows there was
+    // more and where to find it rather than reading the silence as an answer.
+    expect(comment).toContain("This comment was too long to post in full");
+    expect(comment).toContain("these sections were left out: Repositories");
+    expect(comment).toContain("Dashboard: https://dashboard.example/runs/too-long");
+  });
+
+  it("says nothing about left-out repositories on a run that left none out", () => {
+    // Absent rather than empty: a report that says "left out: none" on every
+    // run trains a reader to skip the line that matters.
+    const report = buildResearchAnalysisReport({
+      runId: "nothing-left-out",
+      researchResult: { body: "Plan" },
+      usage,
+    });
+
+    expect("leftOutRepositories" in report).toBe(false);
+    expect(formatResearchAnalysisComment(report, "https://dashboard.example/runs/nothing-left-out"))
+      .not.toContain("left out");
+  });
+
   it("keeps the trusted research branch separate from a later promoted branch", () => {
     const prePromotionManifest = {
       repositories: [{
@@ -264,6 +541,46 @@ describe("run analysis report", () => {
       ...delivered,
       repositories: [{}],
     })).toBeNull();
+    // Checked like every other array beside it, because these are rendered as
+    // lines in a comment on somebody's ticket. Absent stays valid: a report
+    // stored before the field existed still parses.
+    expect(parseStoredRunAnalysisReport({
+      ...delivered,
+      leftOutRepositories: [{ repositoryKey: "github:acme/api" }],
+    })).toBeNull();
+    expect(
+      parseStoredRunAnalysisReport({
+        ...delivered,
+        leftOutRepositories: [{ repositoryKey: "github:acme/api", reason: "excluded" }],
+      })?.leftOutRepositories,
+    ).toEqual([{ repositoryKey: "github:acme/api", reason: "excluded" }]);
+    expect(parseStoredRunAnalysisReport({
+      ...delivered,
+      repositoryRecoveryNotes: [{ note: "not a string" }],
+    })).toBeNull();
+    expect(
+      parseStoredRunAnalysisReport({
+        ...delivered,
+        repositoryRecoveryNotes: ["Excluding a repository is not final."],
+      })?.repositoryRecoveryNotes,
+    ).toEqual(["Excluding a repository is not final."]);
+    // The count is rendered as "and N more" on somebody's ticket, so a stored
+    // value that is not a whole number of repositories is a lie with a number
+    // in it. Zero is refused too: the field is written only when something was
+    // dropped, so a stored zero means the writer was not the builder.
+    expect(parseStoredRunAnalysisReport({
+      ...delivered,
+      leftOutRepositoriesOmitted: 1.5,
+    })).toBeNull();
+    expect(parseStoredRunAnalysisReport({
+      ...delivered,
+      leftOutRepositoriesOmitted: 0,
+    })).toBeNull();
+    expect(
+      parseStoredRunAnalysisReport({ ...delivered, leftOutRepositoriesOmitted: 3 })
+        ?.leftOutRepositoriesOmitted,
+    ).toBe(3);
+    expect(parseStoredRunAnalysisReport({ ...delivered })).not.toBeNull();
     expect(parseStoredRunAnalysisReport({
       ...delivered,
       usage: {

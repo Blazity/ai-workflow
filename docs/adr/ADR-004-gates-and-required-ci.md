@@ -128,7 +128,22 @@ PR #358 already merged the credential-free bundle and the validators into CI.
 The ruleset itself was created on 2026-09-09 (id 22668605, name "main requires
 ci") with exactly the shape above. AIW-313 is closed by it.
 
-### 5. A behavioural gate is planned, not present
+### 5. A behavioural gate joins `ci`, with its path filter on the job
+
+**Correction, 2026-09-17: stage 5b delivered this job, and this heading, which
+read "A behavioural gate is planned, not present", was renamed to state the
+decision instead of a state of the repository that stopped being true.** The
+`engine-canary` job runs on every same-repository pull request behind the
+`engine-canary-scope` job and joins the `ci` aggregator's `needs`, which retires
+the closing sentence below about stages 3 and 5 running the canaries by hand.
+Two details in the body are the record of the decision rather than a
+description of the job today: the paths that select it are owned by
+`CANARY_PREFIXES` in `scripts/ci/engine-canary-scope.ts`, which holds seventeen
+entries with the reason for each rather than the three prefixes named here (a
+list restated in a document drifts, which is ADR-008), and an unconfigured
+target no longer exits green (ADR-007). `docs/architecture/gates.md` and the behavioural gate section
+of `SETUP.md` describe the job as it runs. The decision itself did not change,
+it was carried out, so this section is corrected in place and not superseded.
 
 Static gates observe structure, not behaviour, and the failure mode they miss
 is the one this repository actually has: green locally, broken only on Vercel.

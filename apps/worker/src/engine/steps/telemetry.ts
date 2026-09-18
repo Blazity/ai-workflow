@@ -82,7 +82,7 @@ export async function recordRunTelemetryStep(payload: {
     await recordConnectedRunUsage({
       runId: payload.runId,
       // This is the agent workflow - its canonical identity (mirrors
-      // WORKFLOW_MAP.agentWorkflow in lib/overview/collect-runs.ts). Recorded here
+      // WORKFLOW_MAP.agentWorkflow in services/overview/collect-runs.ts:30). Recorded here
       // so the run is attributed even when no cron snapshot ever observes it.
       workflowId: "wf_agent",
       workflowName: "Agent",

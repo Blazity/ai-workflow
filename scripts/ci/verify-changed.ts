@@ -8,7 +8,13 @@ export type Repo = {
   exists(path: string): boolean;
   list(directory: string): readonly string[];
 };
-export type Plan = { scopes: string[]; commands: Cmd[] };
+export type PlanStatus = "NOOP" | "READY" | "INVALID_SCOPE";
+export type Plan = {
+  status: PlanStatus;
+  scopes: string[];
+  commands: Cmd[];
+  errors: string[];
+};
 
 export const WORKFLOW_TESTS = [
   "src/engine/step-registration-coverage.test.ts",
@@ -80,7 +86,13 @@ const C = {
   docsStatus: ["pnpm", "run", "gate:docs-status"],
 } as const satisfies Record<string, Cmd>;
 
-const ROOT_CI = new Set(["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]);
+const ROOT_CI = new Set([
+  ".gitattributes",
+  ".gitignore",
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+]);
 const ROOT_TYPE = new Set(["package.json", "pnpm-lock.yaml"]);
 const GATE_CONFIG = new Set([
   ".dependency-cruiser.cjs",
@@ -88,6 +100,9 @@ const GATE_CONFIG = new Set([
   "knip.json",
   "package.json",
   "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  ".gitattributes",
+  ".gitignore",
 ]);
 const RELEASE_WORKFLOWS = new Set([
   ".github/workflows/prepare-artur-release.yml",
@@ -174,6 +189,18 @@ const isBlockCatalogSource = (path: string) =>
   path === "packages/contracts/block-catalog.generated.ts" ||
   path === "apps/worker/src/engine/blocks/executors.generated.ts";
 
+const isKnownPath = (path: string) =>
+  isDocs(path) ||
+  isSkill(path) ||
+  isRelease(path) ||
+  isCi(path) ||
+  path.startsWith("apps/worker/") ||
+  path.startsWith("apps/dashboard/") ||
+  path.startsWith("packages/") ||
+  path.startsWith("scripts/") ||
+  ROOT_TYPE.has(path) ||
+  GATE_CONFIG.has(path);
+
 function discoveredTests(path: string, repo: Repo): string[] {
   if (TEST.test(path)) return repo.exists(path) ? [path] : [];
   if (!/\.tsx?$/.test(path)) return [];
@@ -189,24 +216,44 @@ function discoveredTests(path: string, repo: Repo): string[] {
 }
 
 export function plan(paths: readonly string[], repo: Repo = disk): Plan {
-  if (paths.length === 0) return { scopes: ["none"], commands: [] };
+  if (paths.length === 0) {
+    return { status: "NOOP", scopes: ["none"], commands: [], errors: [] };
+  }
   const product = any(paths, isProduct);
   const skills = any(paths, isSkill);
   const release = any(paths, isRelease);
-  if (paths.every(isDocs) && !product && !skills && !release) {
-    return { scopes: ["docs-only"], commands: [C.docsStatus] };
+  const ci = any(paths, (path) => isCi(path) && !isDocs(path));
+  const unknown = paths.filter((path) => !isKnownPath(path));
+  const errors = unknown.length > 0
+    ? [`No verification scope is defined for changed path(s): ${unknown.join(", ")}.`]
+    : [];
+  const hasFunctionalScope =
+    skills ||
+    release ||
+    ci ||
+    product ||
+    paths.some((path) =>
+      !isDocs(path) &&
+      (path.startsWith("apps/") ||
+        path.startsWith("packages/") ||
+        path.startsWith("scripts/")),
+    ) ||
+    any(paths, (path) => GATE_CONFIG.has(path));
+  if (paths.every(isDocs) && !hasFunctionalScope && errors.length === 0) {
+    return { status: "READY", scopes: ["docs-only"], commands: [C.docsStatus], errors };
   }
 
-  const worker = any(paths, (path) => path.startsWith("apps/worker/"));
-  const dashboard = any(paths, (path) => path.startsWith("apps/dashboard/"));
-  const shared = any(paths, (path) => path.startsWith("packages/"));
-  const ci = any(paths, isCi);
+  const worker = any(paths, (path) => path.startsWith("apps/worker/") && !isDocs(path));
+  const dashboard = any(paths, (path) => path.startsWith("apps/dashboard/") && !isDocs(path));
+  const shared = any(paths, (path) => path.startsWith("packages/") && !isDocs(path));
   const workflowSdk = any(paths, isWorkflowSdkSubject);
   const blockCatalog = any(paths, isBlockCatalogSource);
   const gates = any(paths, (path) =>
-    path.startsWith("apps/") ||
-    path.startsWith("packages/") ||
-    path.startsWith("scripts/") ||
+    isProduct(path) ||
+    (!isDocs(path) &&
+      (path.startsWith("apps/") ||
+        path.startsWith("packages/") ||
+        path.startsWith("scripts/"))) ||
     GATE_CONFIG.has(path),
   );
   const rootType = any(paths, (path) => ROOT_TYPE.has(path));
@@ -216,6 +263,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     ...(any(paths, isWorkflowGraph) ? WORKFLOW_GRAPH_TESTS : []),
   ]);
   const dashboardTests = new Set<string>();
+  const docs = any(paths, (path) => isDocs(path) && !isSkill(path) && !isRelease(path));
 
   for (const path of paths) {
     if (!path.startsWith("apps/worker/") && !path.startsWith("apps/dashboard/")) {
@@ -267,6 +315,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     add(C.releaseTest);
   }
   if (ci) add(C.ci);
+  if (docs) add(C.docsStatus);
   if (workerTests.size > 0) {
     const args = [...workerTests].map((path) =>
       FIXED_TESTS.has(path) ? path : `./${path}`,
@@ -299,7 +348,13 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     if (any(paths, isWorkflowGraph)) add(C.workflowGraphZod4);
   }
   if (gates) add(C.gates);
-  return { scopes: scopes.length > 0 ? scopes : ["unclassified"], commands };
+  if (errors.length > 0) scopes.push("unclassified");
+  return {
+    status: errors.length > 0 ? "INVALID_SCOPE" : "READY",
+    scopes: scopes.length > 0 ? scopes : ["unclassified"],
+    commands,
+    errors,
+  };
 }
 
 const fullSha = (output: Buffer, label: string) => {
@@ -307,16 +362,41 @@ const fullSha = (output: Buffer, label: string) => {
   if (!/^[0-9a-f]{40}$/.test(value)) throw new Error(`${label} is not a full SHA.`);
   return value;
 };
+
+const errorCode = (error: unknown): string | number | undefined => {
+  for (const candidate of [error, error instanceof Error ? error.cause : undefined]) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const code = (candidate as { code?: string | number; status?: number }).code;
+    if (typeof code === "string" || typeof code === "number") return code;
+    const status = (candidate as { status?: number }).status;
+    if (typeof status === "number") return status;
+  }
+  return undefined;
+};
+
+const errorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+const isMissingReference = (error: unknown) =>
+  errorCode(error) === 128 &&
+  /ambiguous argument|needed a single revision|unknown revision|not a valid object name|no such ref|no upstream configured/iu.test(
+    errorMessage(error),
+  );
+
 async function ref(git: Git, name: string): Promise<string | null> {
   try {
     return fullSha(
       await git(["rev-parse", "--verify", "--end-of-options", `${name}^{commit}`]),
       name,
     );
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingReference(error)) return null;
+    throw error;
   }
 }
+
+const isNoMergeBase = (error: unknown) => errorCode(error) === 1;
+
 export async function resolveBase(git: Git, explicit?: string) {
   const candidateSha = await ref(git, "HEAD");
   if (!candidateSha) throw new Error("HEAD does not resolve to a local commit.");
@@ -336,9 +416,16 @@ export async function resolveBase(git: Git, explicit?: string) {
         "merge-base",
       );
       return { source, reference, baseSha, candidateSha, mergeBaseSha };
-    } catch {
+    } catch (error) {
+      if (!isNoMergeBase(error)) {
+        throw new Error(
+          `Could not compute merge-base for ${reference}: ${errorMessage(error)}`,
+          { cause: error },
+        );
+      }
       throw new Error(
         `No merge-base for ${reference}; pass the intended local ref with --base <ref>.`,
+        { cause: error },
       );
     }
   }
@@ -346,6 +433,18 @@ export async function resolveBase(git: Git, explicit?: string) {
   throw new Error(
     `Could not resolve ${tried}; pass a local ref or SHA with --base <ref>. This command never fetches.`,
   );
+}
+
+export async function assertCandidate(git: Git, expected: string, phase: string) {
+  const actual = await ref(git, "HEAD");
+  if (!actual) {
+    throw new Error(`HEAD no longer resolves during ${phase}; rerun verification.`);
+  }
+  if (actual !== expected) {
+    throw new Error(
+      `Candidate moved during ${phase}: expected ${expected}, found ${actual}; rerun verification.`,
+    );
+  }
 }
 
 export const parseNames = (output: Buffer) =>
@@ -361,7 +460,12 @@ function capture([program, ...args]: Cmd): Promise<Buffer> {
       { encoding: "buffer", maxBuffer: 16 * 1024 * 1024, shell: false },
       (error, stdout, stderr) =>
         error
-          ? fail(new Error(`${program} failed: ${stderr.toString().trim()}`, { cause: error }))
+          ? fail(
+              new Error(
+                `${show([program, ...args])} failed: ${stderr.toString().trim() || error.message}`,
+                { cause: error },
+              ),
+            )
           : ok(stdout),
     ),
   );
@@ -369,12 +473,57 @@ function capture([program, ...args]: Cmd): Promise<Buffer> {
 function execute([program, ...args]: Cmd): Promise<void> {
   return new Promise((ok, fail) => {
     const child = spawn(program, args, { stdio: "inherit", shell: false });
-    child.once("error", fail);
+    child.once("error", (error) =>
+      fail(new Error(`${show([program, ...args])} failed to start: ${errorMessage(error)}`, { cause: error })),
+    );
     child.once("exit", (code, signal) =>
-      code === 0 ? ok() : fail(new Error(`${program} failed: ${signal ?? code}`)),
+      code === 0
+        ? ok()
+        : fail(new Error(`${show([program, ...args])} failed: ${signal ?? code}`)),
     );
   });
 }
+
+/**
+ * Runs the planned commands in order and stops at the first failure. Each one
+ * is echoed with its position in the plan before it starts, so a run that is
+ * killed still shows how far it got, and a failure names the command that
+ * failed plus every command after it that never started. The tail says those
+ * are unproven in as many words, because the danger this output exists to
+ * remove is a reader taking a command that never ran for one that passed.
+ */
+export async function runPlanned(
+  commands: readonly Cmd[],
+  run: (cmd: Cmd) => Promise<void> = execute,
+  log: (line: string) => void = (line) => console.log(line),
+): Promise<void> {
+  for (const [index, cmd] of commands.entries()) {
+    const position = `${index + 1}/${commands.length}`;
+    log(`[verify:changed] ${position} $ ${show(cmd)}`);
+    try {
+      await run(cmd);
+    } catch (error) {
+      const skipped = commands.slice(index + 1);
+      log(`[verify:changed] FAILED ${position}: ${show(cmd)}`);
+      log(
+        skipped.length === 0
+          ? "[verify:changed] NOT RUN: none, the failure was the last command in the plan."
+          : [
+              `[verify:changed] NOT RUN: ${skipped.length} command${skipped.length === 1 ? "" : "s"} after the failure never started. They are unproven, not passed.`,
+              ...skipped.map(
+                (later, offset) =>
+                  `  ${index + 2 + offset}/${commands.length} $ ${show(later)}`,
+              ),
+            ].join("\n"),
+      );
+      throw new Error(
+        `${position} ${show(cmd)} failed: ${error instanceof Error ? error.message : error}`,
+        { cause: error },
+      );
+    }
+  }
+}
+
 export function parseArgs(input: readonly string[]): string | undefined {
   return parseOptions(input).base;
 }
@@ -408,15 +557,18 @@ export async function main(input = process.argv.slice(2)) {
     console.log(`[verify:changed] $ ${show(STAGED_WORKTREE_DIFF)}`);
     await execute(STAGED_WORKTREE_DIFF);
   }
-  const resolved = await resolveBase((args) => capture(["git", ...args]), options.base);
+  const git: Git = (args) => capture(["git", ...args]);
+  const resolved = await resolveBase(git, options.base);
   console.log(
     `[verify:changed] base: ${resolved.source} ${resolved.reference} -> ${resolved.baseSha}`,
   );
   console.log(`[verify:changed] candidate: HEAD -> ${resolved.candidateSha}`);
   console.log(`[verify:changed] merge-base: ${resolved.mergeBaseSha}`);
+  await assertCandidate(git, resolved.candidateSha, "before candidate diff");
   const checks = candidateDiff(resolved.mergeBaseSha, resolved.candidateSha);
   console.log(`[verify:changed] $ ${show(checks)}`);
   await execute(checks);
+  await assertCandidate(git, resolved.candidateSha, "before changed-path scan");
   const names = options.worktree
     ? worktreeNamesDiff(resolved.mergeBaseSha, resolved.candidateSha)
     : [namesDiff(resolved.mergeBaseSha, resolved.candidateSha)];
@@ -426,15 +578,34 @@ export async function main(input = process.argv.slice(2)) {
       (await Promise.all(names.map((command) => capture(command)))).flatMap((output) => parseNames(output)),
     ),
   ];
+  await assertCandidate(git, resolved.candidateSha, "after changed-path scan");
   const next = plan(paths);
   console.log(`[verify:changed] changed files: ${JSON.stringify(paths)}`);
   console.log(`[verify:changed] scopes: ${next.scopes.join(", ")}`);
+  console.log(`[verify:changed] result: ${next.status}`);
+  if (next.errors.length > 0) {
+    throw new Error(next.errors.join(" "));
+  }
+  if (next.status === "NOOP") {
+    await assertCandidate(git, resolved.candidateSha, "before no-op result");
+    console.log("[verify:changed] NOOP: no changed paths; no scoped checks executed.");
+    return;
+  }
   console.log(
     next.commands.length > 0
       ? `[verify:changed] commands:\n${next.commands.map((cmd) => `  $ ${show(cmd)}`).join("\n")}`
       : "[verify:changed] commands: none (diff checks only)",
   );
-  for (const cmd of next.commands) await execute(cmd);
+  await assertCandidate(git, resolved.candidateSha, "before planned checks");
+  await runPlanned(
+    next.commands,
+    async (command) => {
+      await assertCandidate(git, resolved.candidateSha, `before ${show(command)}`);
+      await execute(command);
+      await assertCandidate(git, resolved.candidateSha, `after ${show(command)}`);
+    },
+  );
+  await assertCandidate(git, resolved.candidateSha, "after planned checks");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {

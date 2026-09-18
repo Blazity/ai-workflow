@@ -29,9 +29,18 @@ function reviewedPullRequest() {
     mergeCommit: { oid: candidate },
     baseRefName: "main",
     reviewDecision: "APPROVED",
-    reviews: [{ state: "APPROVED", author: { login: "zak" } }],
     files: [{ path: notesPath }],
   };
+}
+
+// The reviews are read from their own paginated endpoint, so a test that does
+// not answer it never reaches the approver list.
+function isReviewsRead(command: string, args: string[]): boolean {
+  return command === "gh" && args.some((arg) => arg.includes("/pulls/42/reviews"));
+}
+
+function reviewPages(...pages: Array<Array<{ state: string; user: { login: string } | null }>>) {
+  return JSON.stringify(pages);
 }
 
 function collectedPullRequest() {
@@ -53,6 +62,9 @@ test("validates an approved source release while main advances past the pinned t
     if (args[0] === "show") return markdown;
     if (args[0] === "rev-parse") return args[2].startsWith("a") ? "a".repeat(40) : "b".repeat(40);
     if (args[0] === "rev-list") return featureCommit;
+    if (isReviewsRead(command, args)) {
+      return reviewPages([{ state: "APPROVED", user: { login: "zak" } }]);
+    }
     if (command === "gh" && args[0] === "api" && args.includes("--paginate")) {
       return JSON.stringify([[collectedPullRequest()]]);
     }
@@ -90,6 +102,9 @@ test("rejects release notes whose exact scope omits a pull request from the Git 
     if (args[0] === "rev-list") return featureCommit;
     if (args[0] === "diff") return notesPath;
     if (args[0] === "tag") return "";
+    if (isReviewsRead(command, args)) {
+      return reviewPages([{ state: "APPROVED", user: { login: "zak" } }]);
+    }
     if (command === "gh" && args[0] === "api" && args.includes("--paginate")) {
       return JSON.stringify([[collectedPullRequest()]]);
     }
@@ -163,7 +178,7 @@ test("rejects a candidate without an approved docs-only pull request", async () 
     if (args[0] === "tag") return "";
     if (command === "gh" && args[0] === "api") return JSON.stringify([{ number: 42 }]);
     if (command === "gh" && args[0] === "pr") {
-      return JSON.stringify({ ...reviewedPullRequest(), reviewDecision: "REVIEW_REQUIRED", reviews: [] });
+      return JSON.stringify({ ...reviewedPullRequest(), reviewDecision: "REVIEW_REQUIRED" });
     }
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
@@ -185,6 +200,79 @@ test("rejects a release-note file added directly to main", async () => {
   };
   await assert.rejects(
     validateApprovedSourceRelease({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
-    /exactly one merged pull request/,
+    /exactly one merged pull request, but GitHub associates 0 with/,
   );
+});
+
+// The candidate's pull requests arrive one page at a time. A page that came
+// back full is a read that stopped, not a count, and the refusal has to say so
+// rather than report the page size as the number of pull requests.
+test("refuses a candidate whose pull-request list fills a page instead of naming the page size", async () => {
+  const run = async (command: string, args: string[]) => {
+    if (args[0] === "log") return candidate;
+    if (args[0] === "merge-base") return "";
+    if (args[0] === "show") return markdown;
+    if (command === "gh" && args[0] === "api") {
+      assert.match(args[1], /per_page=100/, "the page size has to be asked for, not inherited");
+      return JSON.stringify(Array.from({ length: 100 }, (_, index) => ({ number: index + 1 })));
+    }
+    throw new Error(`Unexpected: ${args.join(" ")}`);
+  };
+  await assert.rejects(
+    validateApprovedSourceRelease({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
+    /Cannot count the pull requests introducing release candidate .* filled its page of 100/s,
+  );
+});
+
+test("names how many pull requests GitHub associates with a candidate it cannot release", async () => {
+  const run = async (command: string, args: string[]) => {
+    if (args[0] === "log") return candidate;
+    if (args[0] === "merge-base") return "";
+    if (args[0] === "show") return markdown;
+    if (command === "gh" && args[0] === "api") {
+      return JSON.stringify([{ number: 42 }, { number: 43 }]);
+    }
+    throw new Error(`Unexpected: ${args.join(" ")}`);
+  };
+  await assert.rejects(
+    validateApprovedSourceRelease({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
+    /exactly one merged pull request, but GitHub associates 2 with/,
+  );
+});
+
+// `gh pr view --json reviews` stops at 100 reviews without saying so, and the
+// approver list it feeds is the release record. An approver on the second page
+// has to reach that record.
+test("records an approver who reviewed past the first page of reviews", async () => {
+  const run = async (command: string, args: string[]) => {
+    if (args[0] === "log") return candidate;
+    if (args[0] === "merge-base") return "";
+    if (args[0] === "show") return markdown;
+    if (args[0] === "rev-parse") return args[2].startsWith("a") ? "a".repeat(40) : "b".repeat(40);
+    if (args[0] === "rev-list") return featureCommit;
+    if (isReviewsRead(command, args)) {
+      assert.ok(args.includes("--paginate"), "the review read has to page through every review");
+      return reviewPages(
+        [{ state: "COMMENTED", user: { login: "bot" } }],
+        [{ state: "APPROVED", user: { login: "mira" } }],
+      );
+    }
+    if (command === "gh" && args[0] === "api" && args.includes("--paginate")) {
+      return JSON.stringify([[collectedPullRequest()]]);
+    }
+    if (command === "gh" && args[0] === "api") return JSON.stringify([{ number: 42 }]);
+    if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+      assert.ok(
+        !args.at(-1)?.includes("reviews"),
+        "reviews must not be read through the capped pull-request view",
+      );
+      return JSON.stringify(reviewedPullRequest());
+    }
+    throw new Error(`Unexpected: ${args.join(" ")}`);
+  };
+  const result = await validateApprovedSourceRelease(
+    { version: "2026.08.0", markdown, mainRef: "main" },
+    { run },
+  );
+  assert.deepEqual(result.releaseNotesApprovedBy, ["mira"]);
 });

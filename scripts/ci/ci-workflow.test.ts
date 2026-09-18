@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
 
@@ -75,33 +77,20 @@ const DIFF_CHECK_COMMAND = [
 
 const CHANGELOG_CHECK_STEP_NAME = "Require a changelog entry for product changes";
 
-const CHANGELOG_CHECK_COMMAND = [
-  "set -euo pipefail",
-  'if [ "$EVENT_NAME" != "pull_request" ]; then',
-  '  echo "::notice::Not a pull request event, skipping the changelog check."',
-  "  exit 0",
-  "fi",
-  'if [ "$HEAD_IS_FORK" = "true" ]; then',
-  '  echo "::notice::Fork pull request, skipping the changelog check."',
-  "  exit 0",
-  "fi",
-  'pr_json="$(gh pr view "$PR_NUMBER" --json labels,files)"',
-  "has_skip_label=\"$(echo \"$pr_json\" | jq -r '[.labels[].name] | index(\"changelog: skip\") != null')\"",
-  'if [ "$has_skip_label" = "true" ]; then',
-  '  echo "::notice::Pull request labeled changelog: skip."',
-  "  exit 0",
-  "fi",
-  "touches_product=\"$(echo \"$pr_json\" | jq -r '[.files[].path] | any(startswith(\"apps/\") or startswith(\"packages/\"))')\"",
-  "has_changelog_entry=\"$(echo \"$pr_json\" | jq -r '[.files[].path] | any(startswith(\"changelog/unreleased/\"))')\"",
-  'if [ "$touches_product" = "true" ] && [ "$has_changelog_entry" != "true" ]; then',
-  '  echo "::error::This pull request changes apps/** or packages/** but adds no file under changelog/unreleased/. Add an entry (see changelog/README.md) or apply the changelog: skip label."',
-  "  exit 1",
-  "fi",
-  'echo "changelog check passed"',
-].join("\n");
+/**
+ * The rule the step enforces is not pinned here. It used to be, as a verbatim
+ * copy of forty lines of bash, which could only fail when somebody edited the
+ * step and passed for every logic error the step could hold. The rule lives in
+ * `scripts/ci/changelog-entry-gate.ts` now and its cases are tested by calling
+ * it; what this file still owes is the wiring: that the step invokes that
+ * script, reads its event fields through env:, and cannot be skipped.
+ */
+const CHANGELOG_CHECK_SCRIPT = "scripts/ci/changelog-entry-gate.ts";
+const CHANGELOG_CHECK_COMMAND = `node --import tsx ${CHANGELOG_CHECK_SCRIPT}`;
 
 /** Every command the source gate must still run, wherever it now lives. */
 const SOURCE_COMMANDS = [
+  CHANGELOG_CHECK_COMMAND,
   "pnpm --filter @shared/workflow-graph run test:zod4",
   "pnpm --filter ai-workflow-dashboard run test",
   "pnpm --filter worker exec vitest run --shard=${{ matrix.shard }}/4",
@@ -117,7 +106,6 @@ const SOURCE_COMMANDS = [
   "pnpm run test:workflow-sdk",
   "pnpm run typecheck",
   DIFF_CHECK_COMMAND,
-  CHANGELOG_CHECK_COMMAND,
 ];
 
 interface CiJob {
@@ -218,7 +206,7 @@ test("no source job can be skipped or reach a live environment", async () => {
   }
 });
 
-test("the changelog completeness check reads the pull request's own labels and files", async () => {
+test("the changelog completeness check invokes the gate script, which holds the rule", async () => {
   const jobs = await ciJobs();
   const steps = jobs["source-checks"].steps ?? [];
   const step = steps.find((entry) => entry.name === CHANGELOG_CHECK_STEP_NAME);
@@ -226,7 +214,16 @@ test("the changelog completeness check reads the pull request's own labels and f
   assert.ok(step, "source-checks must carry the changelog completeness check");
   assert.equal(step?.if, undefined, "the check must not be conditional; it skips itself in the script");
   assert.equal(step?.["continue-on-error"], undefined);
-  assert.equal(step?.run?.trim(), CHANGELOG_CHECK_COMMAND);
+  assert.equal(
+    step?.run?.trim(),
+    CHANGELOG_CHECK_COMMAND,
+    "the step is the invocation; the rule and its cases live in the script's own test",
+  );
+  // A typo in that path would otherwise only surface on a pull request.
+  assert.ok(
+    (await readFile(CHANGELOG_CHECK_SCRIPT, "utf8")).length > 0,
+    `${CHANGELOG_CHECK_SCRIPT} must exist`,
+  );
   assert.deepEqual(step?.env, {
     EVENT_NAME: "${{ github.event_name }}",
     GH_TOKEN: "${{ github.token }}",
@@ -238,13 +235,20 @@ test("the changelog completeness check reads the pull request's own labels and f
     /\$\{\{[^}]*\bsecrets\b/,
     "the changelog check must not read a configured secret; github.token is the default, unconfigured token",
   );
-  assert.match(step?.run ?? "", /gh pr view "\$PR_NUMBER" --json labels,files/u);
-  assert.match(step?.run ?? "", /changelog: skip/u);
-  assert.match(step?.run ?? "", /changelog\/unreleased\//u);
   assert.doesNotMatch(
     step?.run ?? "",
     /\$\{\{/u,
     "the run: script must read every event field through env:, never interpolate it directly",
+  );
+});
+
+test("no CI step reads a pull request's file list through the capped gh pr view field", async () => {
+  const source = await readFile(".github/workflows/ci.yml", "utf8");
+
+  assert.doesNotMatch(
+    source,
+    /gh pr view[^\n]*--json[^\n]*\bfiles\b/u,
+    "`gh pr view --json files` returns at most 100 files, never paginates, and says nothing when it truncates",
   );
 });
 
@@ -559,8 +563,6 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
   );
   // The job runs only when the scope needs it, so the target check is unconditional.
   assert.equal(target?.if, undefined);
-  assert.match(target?.run ?? "", /engine-canary idle/u);
-  assert.match(target?.run ?? "", /armed=false/u);
   assert.match(target?.run ?? "", /missing required names/u);
   assert.equal(
     target?.env?.ENGINE_CANARY_TARGET_URL,
@@ -663,15 +665,151 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     "engine canary steps must preserve target validation, deploy, preflight, and canary order",
   );
 
+  // There is no unarmed state left to guard against. An empty
+  // ENGINE_CANARY_TARGET fails the target step and a failed step stops the job,
+  // so a step carrying `if: steps.target.outputs.armed == 'true'` would be
+  // describing a state this job can no longer reach, and an `armed=false`
+  // output would be describing a green job that gated nothing.
   for (const step of steps) {
-    if (step === target) continue;
-    if (!step.if) continue;
-    assert.match(
-      step.if ?? "",
-      /steps\.target\.outputs\.armed == 'true'/u,
-      `${step.name ?? step.run} must require an armed target`,
+    assert.equal(
+      step.if,
+      undefined,
+      `${step.name ?? step.run} must not be conditional: the job only starts when the canary is needed, and an unconfigured target refuses`,
     );
   }
+  assert.doesNotMatch(
+    JSON.stringify(canary),
+    /armed/u,
+    "the retired armed flag must leave no output, guard or message behind",
+  );
+});
+
+const CANARY_TARGET_STEP_NAME = "Validate engine canary target configuration";
+
+/**
+ * One complete, valid configuration for the target validation step, so a
+ * scenario only has to name what it changes. Every env name the step declares
+ * must appear here: a variable the step gains without a value would otherwise
+ * reach the script empty and quietly turn every scenario into the missing-name
+ * refusal.
+ */
+const TARGET_ENV: Record<string, string> = {
+  ENGINE_CANARY_TARGET: "ai-workflow-demo",
+  ENGINE_CANARY_TARGET_URL: "https://engine-canary.example.com",
+  ENGINE_CANARY_DB_ENV: "production",
+  ENGINE_CANARY_DB_FINGERPRINT: "fingerprint",
+  VERCEL_TOKEN: "vercel-token",
+  VERCEL_ORG_ID: "org",
+  VERCEL_PROJECT_ID: "project",
+  ENGINE_CANARY_MCP_CLIENT_ID: "client-id",
+  ENGINE_CANARY_MCP_CLIENT_SECRET: "client-secret",
+  VERCEL_AUTOMATION_BYPASS_SECRET: "bypass",
+  NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED: "true",
+  HARNESS_CANARY_TIMEOUT_MS: "600000",
+  REPLAY_CANARY_LOG_WAIT_MS: "120000",
+  REPLAY_CANARY_LOG_MAX_BYTES: "33554432",
+};
+
+/**
+ * The target validation step's own `run:` block, executed the way the runner
+ * executes it, with GITHUB_OUTPUT pointed at a temporary file. The block reads
+ * every value through env:, so it runs here unmodified and its verdict is the
+ * verdict the runner would reach.
+ */
+async function targetVerdict(overrides: Record<string, string>): Promise<{
+  green: boolean;
+  output: string;
+  outputs: string;
+}> {
+  const canary = (await ciJobs())["engine-canary"] as CiJob;
+  const step = (canary.steps ?? []).find(
+    (entry) => entry.name === CANARY_TARGET_STEP_NAME,
+  );
+  assert.ok(step?.run, `ci.yml must carry the "${CANARY_TARGET_STEP_NAME}" step`);
+
+  const directory = await mkdtemp(join(tmpdir(), "engine-canary-target-"));
+  const outputPath = join(directory, "github-output");
+  await writeFile(outputPath, "");
+
+  const env: Record<string, string> = {
+    PATH: process.env.PATH ?? "",
+    GITHUB_OUTPUT: outputPath,
+  };
+  for (const name of Object.keys(step.env ?? {})) {
+    const value = overrides[name] ?? TARGET_ENV[name];
+    assert.notEqual(
+      value,
+      undefined,
+      `TARGET_ENV must carry a value for ${name}, which the step declares`,
+    );
+    env[name] = value as string;
+  }
+
+  const run = spawnSync("bash", ["-c", step.run as string], {
+    encoding: "utf8",
+    env,
+  });
+  return {
+    green: run.status === 0,
+    output: `${run.stdout}${run.stderr}`,
+    outputs: await readFile(outputPath, "utf8"),
+  };
+}
+
+test("an unconfigured engine canary target refuses instead of reporting a green job", async () => {
+  const configured = await targetVerdict({});
+  assert.ok(
+    configured.green,
+    `a complete configuration must pass the target check:\n${configured.output}`,
+  );
+  assert.match(
+    configured.outputs,
+    /^host=engine-canary\.example\.com$/mu,
+    "the target check must publish the host the canary asserts against",
+  );
+
+  // The job only starts for a same-repository pull request whose scope job
+  // succeeded and said this change needs the canary, so an empty target is a
+  // refusal. It used to warn and exit 0, which reported success for a job that
+  // had run no behavioural gate, and `ci` counted that success.
+  const empty = await targetVerdict({ ENGINE_CANARY_TARGET: "" });
+  assert.equal(
+    empty.green,
+    false,
+    `an empty ENGINE_CANARY_TARGET must fail the job:\n${empty.output}`,
+  );
+  assert.match(empty.output, /::error/u, "the refusal must be an error annotation");
+  assert.doesNotMatch(
+    empty.output,
+    /::warning/u,
+    "a warning inside a green job is the trace this refusal replaces",
+  );
+  assert.match(
+    empty.output,
+    /ENGINE_CANARY_TARGET/u,
+    "the refusal must name the missing repository variable",
+  );
+  assert.match(
+    empty.output,
+    /the behavioural gate did not run and this job proves nothing/u,
+    "the refusal must say plainly that nothing was proved",
+  );
+  assert.doesNotMatch(
+    empty.outputs,
+    /armed/u,
+    "the refusal must write no step output that a later step could read as an idle state",
+  );
+
+  const production = await targetVerdict({ ENGINE_CANARY_TARGET: "production" });
+  assert.equal(production.green, false);
+  assert.match(production.output, /the Vercel production target is forbidden/u);
+
+  const incomplete = await targetVerdict({ ENGINE_CANARY_DB_FINGERPRINT: "" });
+  assert.equal(incomplete.green, false);
+  assert.match(
+    incomplete.output,
+    /missing required names: ENGINE_CANARY_DB_FINGERPRINT/u,
+  );
 });
 
 test("CI never uses pull_request_target", async () => {

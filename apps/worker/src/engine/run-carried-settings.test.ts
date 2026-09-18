@@ -116,7 +116,7 @@ describe("a run finishes under the rules it started with", () => {
     await activateRepositoryCatalog(db, { actorId: "user_admin", actorLabel: "Ada", reason: "the bridge is over" });
 
     // 14:00. The run starts and freezes the list it may touch.
-    const runStart = await loadRunStartSettingsStep();
+    const runStart = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
     const carried = runStartRepositoryAccess(runStart);
     expect(carried).toEqual({ activated: true, enabledKeys: ["github:acme/api"] });
 
@@ -125,7 +125,7 @@ describe("a run finishes under the rules it started with", () => {
     await setRepositoryEnabled(db, { id: row!.id, enabled: false });
 
     // The positive control: a run starting now would refuse this repository.
-    const nextRun = await loadRunStartSettingsStep();
+    const nextRun = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
     expect(runStartRepositoryAccess(nextRun)).toEqual({
       activated: true,
       enabledKeys: [],
@@ -144,7 +144,7 @@ describe("a run finishes under the rules it started with", () => {
     // repository enabled AFTER the run started is not reachable either.
     await activateRepositoryCatalog(db, { actorId: "user_admin", reason: "the bridge is over" });
 
-    const runStart = await loadRunStartSettingsStep();
+    const runStart = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
     const carried = runStartRepositoryAccess(runStart);
     expect(carried.enabledKeys).toEqual([]);
 
@@ -153,7 +153,7 @@ describe("a run finishes under the rules it started with", () => {
       source: "manual",
       enabled: true,
     });
-    const nextRun = await loadRunStartSettingsStep();
+    const nextRun = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
     expect(runStartRepositoryAccess(nextRun).enabledKeys).toEqual(["github:acme/api"]);
 
     await expect(openPullRequest(carried)).rejects.toThrow(
@@ -165,7 +165,7 @@ describe("a run finishes under the rules it started with", () => {
 
   it("keeps the settings snapshot it froze at run start when an operator changes a setting mid-run", async () => {
     // 14:00. The run starts and freezes its snapshot.
-    const runStart = await loadRunStartSettingsStep();
+    const runStart = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
     const carried = runStart.settings;
     expect(carried.JOB_TIMEOUT_MS).toBe(1_800_000);
 
@@ -177,7 +177,7 @@ describe("a run finishes under the rules it started with", () => {
     });
 
     // The positive control: a run starting now gets the new values.
-    const nextRun = await loadRunStartSettingsStep();
+    const nextRun = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
     expect(nextRun.settings.JOB_TIMEOUT_MS).toBe(60_000);
 
     // The run already in flight keeps the value in its carried snapshot.

@@ -6,6 +6,39 @@ export interface TicketContent {
   description: string;
   acceptanceCriteria: string;
   comments: TicketComment[];
+  /**
+   * Did this read establish that `comments` is every comment on the ticket?
+   *
+   * A tracker hands comments over a page at a time and says how many there are.
+   * The two answers a reader can get are not symmetric: a comment that is here
+   * was written, while a comment that is not here was either never written or
+   * simply not read, and only the provider's own count tells those apart.
+   *
+   * ABSENT MEANS NOT ESTABLISHED, which is the safe direction and the reason
+   * this is not spelled `commentsTruncated`. A reader that concludes "nobody
+   * answered" or "the words are deleted" from a list it cannot prove complete
+   * nudges a person who has answered and destroys an answer that is sitting on
+   * a page nobody read. Ignorance is not absence, and a field nobody set must
+   * read as ignorance.
+   */
+  commentsComplete?: boolean;
+  /**
+   * The instant from which `comments` IS every comment: nothing written at or
+   * after it is missing, whatever is missing was written before it.
+   *
+   * The narrower fact, and the one most readers actually need. A ticket too
+   * long to read in one go is read from its newest end, so a list that is not
+   * the whole list is still the whole of its recent end, and a reader whose
+   * question opens at a known moment (a clarification asked at a known time)
+   * can prove it holds every comment that could answer it. Without this a
+   * two thousand comment ticket would lose a channel it does not need to lose.
+   *
+   * ABSENT MEANS NOT ESTABLISHED. It is set only when the read ran to the end
+   * of the list, because only then is what is missing known to be older; a read
+   * that stopped short could be missing the newest comment of all, and the
+   * oldest comment in hand would say nothing about that.
+   */
+  commentsCompleteFrom?: string;
   labels: string[];
   trackerStatus: string;
   trackerStatusId?: string;
@@ -25,6 +58,16 @@ export interface TicketComment {
   author: string;
   /** Stable account id of the comment author, used to recognise the bot's own comments. */
   accountId?: string;
+  /** What kind of account wrote it, in the provider's own word. Jira reports
+   *  "atlassian", "customer" or "app"; two of those are people, and an app is
+   *  an automation rule or an integration that cannot decide anything.
+   *
+   *  Optional because it must be: a tracker that does not report it, and a
+   *  provider that adds a word we have never seen, both have to keep working.
+   *  ABSENT MEANS A PERSON. The failure directions are not equal: reading an
+   *  unknown account as an app would silently start dropping real people's
+   *  answers, which is worse than counting an automation as an author. */
+  accountType?: string;
   body: string;
   createdAt: string;
 }
@@ -73,8 +116,16 @@ export interface IssueTrackerAdapter {
   /**
    * Fetch a single ticket by key/id.
    * Throws IssueTrackerNotFoundError (code: NOT_FOUND) when the ticket does not exist.
+   *
+   * `commentsSince` asks for one thing the plain read does not promise: that
+   * `comments` holds EVERY comment written at or after that instant, paging for
+   * them if the provider handed over a page. Pass it only where that window is
+   * what the caller is reading (deciding whether a question was answered, and
+   * by how many people), because a provider that pages costs a request per page
+   * and this call sits on the poll path. Without it the read is one request and
+   * the completeness fields say what that one request could prove.
    */
-  fetchTicket(id: string): Promise<TicketContent>;
+  fetchTicket(id: string, options?: { commentsSince?: string }): Promise<TicketContent>;
   moveTicket(id: string, target: IssueTrackerMoveTarget): Promise<void>;
   /**
    * The status a move target actually lands in, resolved through the provider's

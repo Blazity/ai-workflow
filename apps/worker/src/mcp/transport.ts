@@ -326,7 +326,7 @@ async function gateRequest(input: {
   });
 
   // Scope and role are evaluated ahead of the schema, because
-  // authorization sitting behind it (execute-tool.ts:221) made the error a caller
+  // authorization sitting behind it (execute-tool.ts:244) made the error a caller
   // without permission gets a function of whether it also got its arguments
   // right: wrong ones said VALIDATION_FAILED, right ones said FORBIDDEN, for one
   // and the same permanent refusal. The decision itself is an in-memory check;

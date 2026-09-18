@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
-import type { ClarificationStatus } from "@shared/contracts";
+import type { ClarificationStatus, WorkScopeAskedRepository } from "@shared/contracts";
 import { getDb, type Db } from "../client.js";
 import { activeRuns, clarificationRequests, workflowRuns } from "../schema.js";
 
@@ -14,6 +14,7 @@ export interface HookClarificationRow {
   definitionVersion: number | null;
   questions: string[];
   suggestedAnswers: string[] | null;
+  askedRepositories: WorkScopeAskedRepository[] | null;
   status: ClarificationStatus;
   hookToken: string;
   askedAt: Date;
@@ -42,6 +43,7 @@ function mapHookRow(row: typeof clarificationRequests.$inferSelect): HookClarifi
     definitionVersion: row.definitionVersion,
     questions: row.questions,
     suggestedAnswers: row.suggestedAnswers,
+    askedRepositories: row.askedRepositories,
     status: row.status as ClarificationStatus,
     hookToken: row.hookToken,
     askedAt: row.askedAt,
@@ -68,6 +70,7 @@ export async function prepareHookClarification(
     definitionVersion: number | null;
     questions: string[];
     suggestedAnswers?: string[] | null;
+    askedRepositories?: WorkScopeAskedRepository[] | null;
   },
 ): Promise<HookClarificationRow> {
   const id = randomUUID();
@@ -84,6 +87,7 @@ export async function prepareHookClarification(
       definitionVersion: input.definitionVersion,
       questions: input.questions,
       suggestedAnswers: input.suggestedAnswers ?? null,
+      askedRepositories: input.askedRepositories ?? null,
       status: "preparing",
       hookToken,
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000),

@@ -204,9 +204,9 @@ export function recoverScriptDriftFromSteps(
  * still has a failure the operator is looking at.
  *
  * Recognised through the same shared guard as the drift recovery above.
- * Deliberately not imported from agent.ts: no production module under
- * workflows/ imports the workflow entry point, and this question is answerable
- * from the durable output alone.
+ * Deliberately not imported from the workflow entry point: no production module
+ * under engine/blocks/ imports `engine/agent-workflow.ts`, and this question is
+ * answerable from the durable output alone.
  */
 function recoverScriptsFailureFromSteps(
   steps: StepsRecord,

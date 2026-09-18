@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, readdir, stat } from "node:fs/promises";
 import test from "node:test";
 import {
   candidateDiff,
+  assertCandidate,
   listDirectory,
   namesDiff,
   parseArgs,
@@ -11,6 +13,7 @@ import {
   parseNames,
   plan,
   resolveBase,
+  runPlanned,
   show,
   stagedNamesDiff,
   STAGED_WORKTREE_DIFF,
@@ -18,6 +21,7 @@ import {
   WORKFLOW_TESTS,
   WORKTREE_DIFF,
   worktreeNamesDiff,
+  type Cmd,
   type Git,
   type Repo,
 } from "./verify-changed.js";
@@ -36,10 +40,10 @@ function fakeGit(refs: Record<string, string>, failMerge = false) {
       const ref = args[3].replace(/\^\{commit\}$/, "");
       const value = refs[ref];
       if (value) return Buffer.from(value);
-      throw new Error("missing");
+      throw Object.assign(new Error(`unknown revision ${ref}`), { code: 128 });
     }
     if (args[0] === "merge-base") {
-      if (failMerge) throw new Error("unrelated histories");
+      if (failMerge) throw Object.assign(new Error("unrelated histories"), { code: 1 });
       return Buffer.from(B);
     }
     throw new Error(`unexpected: ${args.join(" ")}`);
@@ -76,7 +80,10 @@ test("base precedence is explicit, upstream, origin/HEAD, then origin/main", asy
   ] as const;
   for (const item of cases) {
     const git = fakeGit(item.refs);
-    const result = await resolveBase(git.run, item.explicit);
+    const result = await resolveBase(
+      git.run,
+      "explicit" in item ? item.explicit : undefined,
+    );
     assert.equal(result.source, item.source);
     assert.equal(result.candidateSha, H);
     assert.deepEqual(
@@ -93,6 +100,27 @@ test("missing bases fail locally with actionable guidance", async () => {
   await assert.rejects(
     resolveBase(fakeGit({ HEAD: H, chosen: M }, true).run, "chosen"),
     /No merge-base.*--base <ref>/,
+  );
+});
+
+test("reference lookup propagates repository failures instead of treating them as missing refs", async () => {
+  const git: Git = async (args) => {
+    if (args[0] === "rev-parse") {
+      throw Object.assign(new Error("fatal: not a git repository"), { code: 128 });
+    }
+    throw new Error(`unexpected: ${args.join(" ")}`);
+  };
+  await assert.rejects(resolveBase(git), /not a git repository/);
+});
+
+test("a candidate that moves during verification is refused with both SHAs", async () => {
+  const git: Git = async (args) => {
+    if (args[0] === "rev-parse") return Buffer.from(U);
+    throw new Error(`unexpected: ${args.join(" ")}`);
+  };
+  await assert.rejects(
+    assertCandidate(git, H, "before planned checks"),
+    new RegExp(`Candidate moved during before planned checks: expected ${H}, found ${U}`),
   );
 });
 
@@ -126,6 +154,28 @@ test("worktree mode checks staged changes and unions all worktree name sources",
     ["git", "diff", "--name-only", "-z", "--no-renames", "--"],
     ["git", "ls-files", "--others", "--exclude-standard", "-z", "--"],
   ]);
+});
+
+test("an empty changed path set is an explicit no-op, while an unknown path is a scope failure", () => {
+  assert.deepEqual(plan([]), {
+    status: "NOOP",
+    scopes: ["none"],
+    commands: [],
+    errors: [],
+  });
+
+  const invalid = plan(["docs/guide.md", "tmp/agent-output.json"]);
+  assert.equal(invalid.status, "INVALID_SCOPE");
+  assert.deepEqual(invalid.scopes, ["unclassified"]);
+  assert.deepEqual(invalid.errors, [
+    "No verification scope is defined for changed path(s): tmp/agent-output.json.",
+  ]);
+  assert.deepEqual(invalid.commands, [["pnpm", "run", "gate:docs-status"]]);
+});
+
+test("documentation remains an obligation when a product change shares the plan", () => {
+  const planned = commands(["docs/guide.md", "apps/worker/src/lib/value.ts"]);
+  assert.equal(planned.includes("pnpm run gate:docs-status"), true);
 });
 
 test("scope table selects only exact narrow commands", () => {
@@ -277,4 +327,132 @@ test("CLI, package entry, and executable hook preserve the exact public contract
   );
   assert.notEqual((await stat(hook)).mode & 0o111, 0);
   execFileSync("sh", ["-n", hook], { stdio: "pipe" });
+});
+
+/**
+ * `--if-present` handed a package with no suite the meaning "passed", which is
+ * how `test:packages:zod4` came to claim seven packages while running two. The
+ * root scripts now name the packages they run, and this test is the index that
+ * keeps the named list equal to the packages that actually own the script, so a
+ * new package cannot silently opt out of the run either.
+ */
+test("the package test scripts name every package that owns the script they run", async () => {
+  const root = JSON.parse(await readFile("package.json", "utf8")) as {
+    scripts: Record<string, string>;
+  };
+  const manifests = await Promise.all(
+    (await readdir("packages", { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && existsSync(`packages/${entry.name}/package.json`))
+      .map(async (entry) => {
+        const file = `packages/${entry.name}/package.json`;
+        return JSON.parse(await readFile(file, "utf8")) as {
+          name: string;
+          scripts?: Record<string, string>;
+        };
+      }),
+  );
+  assert.ok(manifests.length >= 7, "every workspace package carries a package.json");
+
+  const owners = (script: string) =>
+    manifests.filter((pkg) => pkg.scripts?.[script]).map((pkg) => pkg.name).sort();
+  const named = (command: string) =>
+    [...command.matchAll(/--filter (\S+)/g)].map((match) => match[1]).sort();
+
+  assert.deepEqual(named(root.scripts["test:packages"]), owners("test"));
+  assert.deepEqual(named(root.scripts["test:packages:zod4"]), owners("test:zod4"));
+  assert.match(root.scripts["test:packages"], / run test$/);
+  assert.match(root.scripts["test:packages:zod4"], / run test:zod4$/);
+  for (const key of ["test:packages", "test:packages:zod4"]) {
+    assert.equal(
+      root.scripts[key].includes("--if-present"),
+      false,
+      `${key} must not count a missing script as a pass`,
+    );
+  }
+});
+
+const TYPECHECK: Cmd = ["pnpm", "run", "typecheck"];
+const TEST_CI: Cmd = ["pnpm", "run", "test:ci"];
+const RUN_GATES: Cmd = ["pnpm", "run", "gates"];
+
+test("every planned command is echoed with its position before it starts", async () => {
+  const lines: string[] = [];
+  const started: string[] = [];
+  await runPlanned(
+    [TYPECHECK, TEST_CI, RUN_GATES],
+    async (cmd) => {
+      // The echo has to precede the command, or a killed run loses the one
+      // line that says which command it died inside.
+      assert.deepEqual(lines.at(-1)?.endsWith(show(cmd)), true, show(cmd));
+      started.push(show(cmd));
+    },
+    (line) => lines.push(line),
+  );
+  assert.deepEqual(started, ["pnpm run typecheck", "pnpm run test:ci", "pnpm run gates"]);
+  assert.deepEqual(lines, [
+    "[verify:changed] 1/3 $ pnpm run typecheck",
+    "[verify:changed] 2/3 $ pnpm run test:ci",
+    "[verify:changed] 3/3 $ pnpm run gates",
+  ]);
+  assert.equal(lines.join("\n").includes("NOT RUN"), false);
+});
+
+test("a failure names the command that failed and refuses to pass off what never ran", async () => {
+  const lines: string[] = [];
+  const started: string[] = [];
+  await assert.rejects(
+    runPlanned(
+      [TYPECHECK, TEST_CI, RUN_GATES],
+      async (cmd) => {
+        started.push(show(cmd));
+        if (show(cmd) === "pnpm run test:ci") throw new Error("pnpm failed: 1");
+      },
+      (line) => lines.push(line),
+    ),
+    /^Error: 2\/3 pnpm run test:ci failed: pnpm failed: 1$/,
+  );
+  // The loop stops at the first failure, so the gates never started.
+  assert.deepEqual(started, ["pnpm run typecheck", "pnpm run test:ci"]);
+  assert.deepEqual(lines, [
+    "[verify:changed] 1/3 $ pnpm run typecheck",
+    "[verify:changed] 2/3 $ pnpm run test:ci",
+    "[verify:changed] FAILED 2/3: pnpm run test:ci",
+    "[verify:changed] NOT RUN: 1 command after the failure never started. They are unproven, not passed.\n  3/3 $ pnpm run gates",
+  ]);
+});
+
+test("the unproven list carries every later command and says so when there is none", async () => {
+  const many: Cmd[] = [TYPECHECK, TEST_CI, RUN_GATES, ["pnpm", "run", "gate:docs-status"]];
+  const lines: string[] = [];
+  await assert.rejects(
+    runPlanned(
+      many,
+      async (cmd) => {
+        if (show(cmd) === "pnpm run typecheck") throw new Error("pnpm failed: 2");
+      },
+      (line) => lines.push(line),
+    ),
+    /1\/4 pnpm run typecheck failed/,
+  );
+  assert.equal(
+    lines.at(-1),
+    "[verify:changed] NOT RUN: 3 commands after the failure never started. They are unproven, not passed." +
+      "\n  2/4 $ pnpm run test:ci\n  3/4 $ pnpm run gates\n  4/4 $ pnpm run gate:docs-status",
+  );
+
+  const tail: string[] = [];
+  await assert.rejects(
+    runPlanned(
+      [TYPECHECK],
+      async () => {
+        throw new Error("pnpm failed: 1");
+      },
+      (line) => tail.push(line),
+    ),
+    /1\/1 pnpm run typecheck failed/,
+  );
+  assert.equal(
+    tail.at(-1),
+    "[verify:changed] NOT RUN: none, the failure was the last command in the plan.",
+  );
 });

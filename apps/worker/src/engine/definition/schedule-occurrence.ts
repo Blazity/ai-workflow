@@ -11,7 +11,8 @@ import { Cron } from "croner";
  *
  * Three rules the rest of the system depends on:
  *   - no ambient clock. Every function that needs the current time takes `now`,
- *     the same way webhook-trigger/rate-limit.ts and lib/run-start-lifecycle.ts
+ *     the same way services/webhook-trigger/rate-limit.ts and
+ *     services/run-lifecycle/run-start-lifecycle.ts
  *     do, because there is no injectable clock in this codebase;
  *   - bounded work per call, always. This runs inside the once-a-minute cron
  *     route next to about twenty other phases and has no time budget of its own;

@@ -268,6 +268,64 @@ describe("executePreSandboxPhase", () => {
     });
   });
 
+  // A step that threw does not erase what an earlier step decided. Without
+  // these, a run whose selection refused a repository and whose next step then
+  // failed reports the failure and says nothing about the repository, and the
+  // ask a pending question has to land on is lost with it, so the next run puts
+  // the same question again.
+  it("preserves what the work scope decided when a later hard-failure step throws", async () => {
+    const result = await executePreSandboxPhase(
+      input,
+      config([
+        { uses: "select", onFailure: "fail" },
+        { uses: "fails", onFailure: "fail" },
+      ]),
+      {
+        select: vi.fn(async () => ({
+          status: "continue" as const,
+          workScopeAsk: {
+            subjectKey: "ticket:jira:AWT-1",
+            askedRepositories: [
+              {
+                repositoryKey: "github:acme/api",
+                askedBecause: "selection" as const,
+                named: true,
+              },
+            ],
+          },
+          workScopeLeftOut: [
+            {
+              repositoryKey: "github:acme/api",
+              reason: "github:acme/api was excluded on this work, so the run started without it.",
+            },
+          ],
+          workScopeRecoveryNotes: ["Excluding a repository is not final."],
+        })),
+        fails: vi.fn(async () => {
+          throw new Error("boom");
+        }),
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "halt",
+      outcome: "failed",
+      workScopeAsk: {
+        subjectKey: "ticket:jira:AWT-1",
+        askedRepositories: [
+          { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+        ],
+      },
+      workScopeLeftOut: [
+        {
+          repositoryKey: "github:acme/api",
+          reason: "github:acme/api was excluded on this work, so the run started without it.",
+        },
+      ],
+      workScopeRecoveryNotes: ["Excluding a repository is not final."],
+    });
+  });
+
   it("returns halt output and does not run later steps", async () => {
     const later: PreSandboxStepHandler = vi.fn(async () => ({ status: "continue" as const }));
     const halt: PreSandboxStepHandler = vi.fn(async () => ({

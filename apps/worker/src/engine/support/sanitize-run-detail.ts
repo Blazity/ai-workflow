@@ -42,7 +42,7 @@ export function sanitizeRunError(
   // that ever fired here would make the surfaces disagree about why a run failed
   // (AIW-254). Capping at the snippet length would cut the cause a second time.
   //
-  // Some step errors are NOT composed: agent.ts's truncateError path stores a
+  // Some step errors are NOT composed: the truncateError path (engine/helpers/repository-failure.ts:14) stores a
   // raw 500-character slice. Those are what the bound is actually for. It is not
   // a confidentiality control (redaction runs first and is independent of
   // length, so the surviving characters leak nothing a shorter cap would have

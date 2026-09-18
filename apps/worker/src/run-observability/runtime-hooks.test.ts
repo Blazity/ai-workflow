@@ -954,7 +954,7 @@ describe("v2 run observation hooks are replay-safe", () => {
   }
 
   /**
-   * Drives the hook sequence agent.ts drives, recording every durable write in
+   * Drives the hook sequence engine/agent-workflow.ts:4222 drives, recording every durable write in
    * creation order. `stepTurns` stands in for how long the run's OWN steps take
    * to settle: 0 is a replay serving recorded results, a high count is the
    * original run waiting on real I/O.
@@ -990,7 +990,7 @@ describe("v2 run observation hooks are replay-safe", () => {
     };
 
     await hooks.onNodeStart?.({ ...IDENTITY, startedAt: STARTED_AT });
-    // agent.ts's onNodeFinish exactly: the capture hook, then the run's own
+    // engine/agent-workflow.ts:4233-4235's onNodeFinish exactly: the capture hook, then the run's own
     // durable write. That write is the gap the detached capture chain used to
     // race through, and how many turns it lasts is what a replay changes.
     await hooks.onNodeFinish?.({

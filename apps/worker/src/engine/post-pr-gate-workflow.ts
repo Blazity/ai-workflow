@@ -4,9 +4,9 @@ import type { GateStatusCapableVCS, GateStatusRef } from "../adapters/vcs/types.
 export type { PostPrGateWorkflowInput } from "@shared/contracts";
 
 /**
- * Detached workflow triggered by the GitHub webhook. Does NOT block agent.ts
+ * Detached workflow triggered by the GitHub webhook. Does NOT block engine/agent-workflow.ts
  * and is NOT called from inside the implementation workflow. Coupling is
- * one-way: agent.ts creates a PR -> that PR fires `pull_request` -> this runs.
+ * one-way: engine/agent-workflow.ts creates a PR -> that PR fires `pull_request` -> this runs.
  */
 export async function postPrGateWorkflow(
   input: PostPrGateWorkflowInput,

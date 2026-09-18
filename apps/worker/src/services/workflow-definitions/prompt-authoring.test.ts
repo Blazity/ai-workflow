@@ -522,6 +522,47 @@ describe("v2 prompt authoring validation", () => {
     ]);
   });
 
+  it("flags braces in a literal slot value but not in a value bound to run data", async () => {
+    const load = async () => ({
+      promptId: 1,
+      promptName: "Implementation",
+      requestedVersion: 2 as const,
+      resolvedVersion: 2,
+      body: "Implement {{slot:plan}}",
+      slots: [slot()],
+    });
+    const preview = (
+      binding: NonNullable<WorkflowDefinitionV2Node["configuration"]["promptSlotBindings"]>,
+    ) =>
+      resolveNodePromptAuthoring({
+        node: node({
+          prompt: "{{prompt:implementation@2}}",
+          promptSlotBindings: { plan: binding },
+        }),
+        nodeIndex: 1,
+        availableValues: [
+          available("steps.planning.output.plan", { type: "string" }),
+        ],
+        loadPromptReference: load,
+      });
+
+    const literal = await preview({ kind: "literal", value: "Ship {{ticket_key}}" });
+    expect(literal.issues).toEqual([
+      expect.objectContaining({
+        code: "prompt_placeholder_unresolved",
+        nodeId: "implementation",
+        path: "/nodes/1/configuration/promptSlotBindings/plan",
+        message: "The prompt contains an unresolved placeholder.",
+      }),
+    ]);
+
+    const bound = await preview({
+      kind: "reference",
+      reference: "steps.planning.output.plan",
+    });
+    expect(bound.issues).toEqual([]);
+  });
+
   it("applies mixed-text compatibility to Agent prompt data tokens", async () => {
     const definition: WorkflowDefinitionV2 = {
       schemaVersion: 2,

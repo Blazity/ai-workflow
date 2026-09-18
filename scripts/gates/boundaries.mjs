@@ -11,9 +11,13 @@ import {
   printTable,
   readJson,
   repositoryRoot,
+  requireAnchor,
+  requireScan,
   runTool,
   sortedObject,
 } from "./shared.mjs";
+
+const boundaryInvariant = "the ADR-001 import and cycle boundary";
 
 // Stable report rows make a clean run auditable even when a pair has no edges.
 const reportedTierPairs = [
@@ -286,7 +290,11 @@ function sourceInputs(root) {
 
 function dependencyCounts(root, config) {
   const inputs = sourceInputs(root);
-  if (inputs.length === 0) throw new Error("No worker or dashboard source paths exist.");
+  if (inputs.length === 0) {
+    throw new Error(
+      `none of the source paths this gate scans exist under ${root}, so ${boundaryInvariant} is unproven. Restore them or point the gate at where they moved.`,
+    );
+  }
   const result = runTool("depcruise", [
     "--config",
     config,
@@ -305,13 +313,15 @@ function dependencyCounts(root, config) {
   if (![0, 1].includes(result.status)) {
     throw new Error(`dependency-cruiser exited ${result.status}: ${result.stderr.trim()}`);
   }
+  const modules = report.modules ?? report.output?.modules ?? [];
+  requireScan(modules.length, "modules", `the dependency-cruiser report for ${inputs.join(", ")}`, boundaryInvariant);
   const counts = new Map();
   const forbiddenEdges = [];
   const unknown = new Set();
   const deepImports = new Set();
   const packageDirectories = workspacePackageDirectories(root);
   const tsconfigCache = new Map();
-  for (const module of report.modules ?? report.output?.modules ?? []) {
+  for (const module of modules) {
     const fromPath = workspacePath(module.source, root);
     if (!isTrackedSource(fromPath)) continue;
     const fromTier = classify(root, fromPath);
@@ -341,6 +351,7 @@ function dependencyCounts(root, config) {
   }
   return {
     counts: sortedObject(counts),
+    moduleCount: modules.length,
     report,
     unknown: [...unknown].sort(),
     deepImports: [...deepImports].toSorted().map((entry) => JSON.parse(entry)),
@@ -425,7 +436,15 @@ function main() {
   });
   const root = realpathSync(options.root);
   const config = options.config ?? join(repositoryRoot, ".dependency-cruiser.cjs");
-  const { counts: tierPairs, report, unknown, deepImports, forbiddenEdges } = dependencyCounts(root, config);
+  requireAnchor(root, config, "the dependency-cruiser configuration this gate reads", boundaryInvariant);
+  const {
+    counts: tierPairs,
+    moduleCount,
+    report,
+    unknown,
+    deepImports,
+    forbiddenEdges,
+  } = dependencyCounts(root, config);
   // The default list belongs to this repository, so a fixture root under --root
   // neither reads nor overwrites it; a fixture passes its own with the flag.
   const ownsDefaultList = root === realpathSync(repositoryRoot);
@@ -442,6 +461,7 @@ function main() {
       ...Object.keys(tierPairs),
     ]),
   ].sort();
+  console.log(`Modules read from the dependency-cruiser report  ${moduleCount}`);
   console.log("Boundary tier pairs");
   printTable(["pair", "now"], tierKeys.map((key) => [key, tierPairs[key] ?? 0]));
   console.log("Directory cycle pairs (informational)");
@@ -469,7 +489,7 @@ function main() {
     console.log("Cross-cluster deep import edges");
     for (const [from, to] of deepImports) console.log(`${from} -> ${to}`);
   }
-  console.log(failed ? "boundaries FAIL" : "boundaries PASS");
+  console.log(failed ? "boundaries FAIL" : `boundaries PASS: ${moduleCount} module(s) read`);
   process.exitCode = failed ? 1 : 0;
 }
 

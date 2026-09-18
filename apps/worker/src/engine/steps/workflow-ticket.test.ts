@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchTicket = vi.fn();
+// Present only when the test says so: an issue tracker that exposes no "current
+// user" concept is the shape every other case here runs under, and the one the
+// step has to survive.
+let getCurrentUserAccountId: (() => Promise<string>) | undefined;
 vi.mock("../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({ issueTracker: { fetchTicket } }),
+  createAdapters: () => ({
+    issueTracker: {
+      fetchTicket,
+      ...(getCurrentUserAccountId ? { getCurrentUserAccountId } : {}),
+    },
+  }),
 }));
 
 const pr = {
@@ -19,7 +28,10 @@ const pr = {
 };
 
 describe("resolveWorkflowTicketStep", () => {
-  beforeEach(() => fetchTicket.mockReset());
+  beforeEach(() => {
+    fetchTicket.mockReset();
+    getCurrentUserAccountId = undefined;
+  });
 
   it("builds PR-only context for a synthetic subject without touching Jira", async () => {
     const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
@@ -240,6 +252,44 @@ describe("resolveWorkflowTicketStep", () => {
     expect(second!.identifier).toBe(
       "schedule-sch_a1b2c3d4e5f6a7b8c9d0e1f2-20260805T1415",
     );
+  });
+
+  const correlatedEntry = {
+    kind: "pr_trigger" as const,
+    triggerType: "trigger_pr_review" as const,
+    subjectKey: "ticket:jira:AIW-1",
+    ticketKey: "AIW-1",
+    ownerToken: "owner-a",
+    definitionId: 7,
+    definitionVersion: 11,
+    scope: "workflow_owned" as const,
+    pr,
+  };
+
+  it("carries the account the workflow posts as, so its own comments stop reading as testimony", async () => {
+    fetchTicket.mockResolvedValue({ identifier: "AIW-1", trackerStatus: "Review" });
+    getCurrentUserAccountId = vi.fn().mockResolvedValue("bot-account-1");
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+
+    const ticket = await resolveWorkflowTicketStep(correlatedEntry, "AI");
+
+    expect(ticket).toMatchObject({ identifier: "AIW-1", botAccountId: "bot-account-1" });
+  });
+
+  it("fails open when the tracker cannot say who the bot is", async () => {
+    fetchTicket.mockResolvedValue({ identifier: "AIW-1", trackerStatus: "Review" });
+    getCurrentUserAccountId = vi.fn().mockRejectedValue(new Error("Jira /myself: 403"));
+    const reported = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+
+    const ticket = await resolveWorkflowTicketStep(correlatedEntry, "AI");
+
+    // The run continues without the identity, which is how every run behaved
+    // before this field existed, and the reason is in the log rather than lost.
+    expect(ticket).toMatchObject({ identifier: "AIW-1" });
+    expect(ticket).not.toHaveProperty("botAccountId");
+    expect(reported).toHaveBeenCalled();
+    reported.mockRestore();
   });
 
   it("fetches the real correlated ticket for workflow_owned PR subjects", async () => {
