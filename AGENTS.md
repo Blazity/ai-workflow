@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-14
+Last-verified: 2026-09-17
 
 # AGENTS.md
 
@@ -11,31 +11,46 @@ Jira, GitHub, GitLab, Slack and the sandboxed coding agents; the dashboard
 (`apps/dashboard`, Next.js) authors definitions and shows runs.
 
 This file is a routing table. It says which document to open, and carries only
-the rules that bind every edit.
+the rules that bind every edit. Area knowledge goes to a rule (below), history
+to `docs/archive/agent-notes/`; size ceilings: `.claude/context-budget.tsv`.
 
 ## Where to look
 
 | When you work on | Read |
 |---|---|
 | Anything, first | [docs/index.md](docs/index.md), the only list of current documents |
-| Words that mean something specific here | [CONTEXT.md](CONTEXT.md) |
-| Visual language, tokens, shared primitives, what a screen may look like | [DESIGN.md](DESIGN.md) |
-| Evidence, closing a ticket, a release | [docs/delivery-gates.md](docs/delivery-gates.md) |
+| Project vocabulary | [CONTEXT.md](CONTEXT.md) |
+| Dashboard visual language, tokens, shared primitives | [DESIGN.md](DESIGN.md) |
+| Evidence, closing a ticket, a release | [docs/delivery-gates.md](docs/delivery-gates.md), the `gate-ladder` skill |
 | Workflow definitions, blocks, bindings, triggers, loops, validation | [docs/architecture/workflow-definition.md](docs/architecture/workflow-definition.md) |
 | Repository script groups and the checks blocks run | [docs/architecture/repository-scripts.md](docs/architecture/repository-scripts.md) |
 | Telling users what changed | [changelog/README.md](changelog/README.md) |
-| Why the code is shaped this way, or a rule you want to change | [docs/adr/README.md](docs/adr/README.md) |
+| Why the code is shaped this way | [docs/adr/README.md](docs/adr/README.md) |
 | Tiers, allowed imports, which package owns what | [docs/adr/ADR-001-layering-and-packages.md](docs/adr/ADR-001-layering-and-packages.md) |
 | Gates, CI, what may be required and what may be bypassed | [docs/adr/ADR-004-gates-and-required-ci.md](docs/adr/ADR-004-gates-and-required-ci.md) |
-| The restructure in flight, its stages and freezes | [docs/plans/2026-09-09-architecture-restructure.md](docs/plans/2026-09-09-architecture-restructure.md) |
+| The delivered restructure, its freezes and the step drain | [docs/plans/2026-09-09-architecture-restructure.md](docs/plans/2026-09-09-architecture-restructure.md) |
 | Environment variables, accounts, deployment, webhooks | [SETUP.md](SETUP.md) |
 | What the product does and what is planned | [README.md](README.md), [docs/product/roadmap-2026-08-27.md](docs/product/roadmap-2026-08-27.md) |
-| The worker: how to run it, its directories, its traps | [apps/worker/AGENTS.md](apps/worker/AGENTS.md) |
-| The dashboard: how to run it, its directories, its traps | [apps/dashboard/AGENTS.md](apps/dashboard/AGENTS.md) |
-| The shared packages: source entry, exports, their traps | [packages/AGENTS.md](packages/AGENTS.md) |
+| The worker: how to run it, its directories | [apps/worker/AGENTS.md](apps/worker/AGENTS.md) |
+| The dashboard: how to run it, its directories | [apps/dashboard/AGENTS.md](apps/dashboard/AGENTS.md) |
+| The shared packages: source entry, exports | [packages/AGENTS.md](packages/AGENTS.md) |
 
 Setting something up is a skill, not a document: `.claude/skills/init-*` walk
-the procedure and link to the SETUP.md section that holds each constraint.
+the procedure and link to the SETUP.md section with each constraint.
+
+## Area rules
+
+`.claude/rules/<name>.md` binds the files its `paths:` names: Claude Code loads
+it on a matching read, other agents open it themselves.
+
+| Rule | Covers |
+|---|---|
+| `worker-settings`, `worker-repository-catalog` | settings snapshots and what a run may read; catalog access and dispatch |
+| `worker-database`, `workflow-steps` | migrations, Drizzle, auth invariants; `"use step"` files and their fixtures |
+| `workflow-graph`, `zod-bundle`, `contracts-requests` | the graph package and the worker's definition half; schemas the bundle runs; request bodies |
+| `worker-mcp`, `worker-observability` | the MCP server; logging, telemetry, the runs API |
+| `adapters`, `sandbox-agents`, `arthur-engine`, `e2e-tests` | Jira, VCS and chat adapters; sandboxed coding agents; the Arthur client; end-to-end suites |
+| `dashboard-ui`, `dashboard-settings`, `dashboard-repositories` | the dashboard |
 
 ## How to work here
 
@@ -61,8 +76,7 @@ pnpm run typecheck
 pnpm run verify:changed  # the scope-aware gate, before pushing
 ```
 
-Pick the checks that match the surface you changed, and record the exact
-command and its outcome:
+Pick the checks that match the surface you changed and record each outcome:
 
 ```sh
 git diff --check
@@ -106,52 +120,30 @@ unproven: a command that never started is not a command that passed.
 `main` carries the branch ruleset decided in ADR-004: since 2026-09-09 it
 requires the `ci` aggregator to pass, so a red `ci` job blocks the merge. The
 only bypass is one named user account, and every use of it must open a Jira
-issue recording what was merged and why. Whether that audit happens every time
-is the remaining gap.
-
-The full gate ladder, the evidence-bundle schema, the Jira disposition rules
-and release authority live in [docs/delivery-gates.md](docs/delivery-gates.md).
-Read that when preparing evidence, closing a ticket, or working on a release,
-not on every edit.
+issue recording what was merged and why.
 
 ## Four gotchas that break production
 
-Each is quoted verbatim from the file that owns it.
-
-**neon-http has no transactions** (`apps/worker/src/db/repositories/approvals.ts`):
-
-> Production uses neon-http and cannot open an interactive transaction.
-
-Write multi-row changes as one statement (a data-modifying CTE, an
+**neon-http has no transactions.** Production uses neon-http and cannot open
+an interactive transaction (`apps/worker/src/db/client.ts`). Write multi-row changes as one statement (a data-modifying CTE, an
 insert-on-conflict) rather than `db.transaction`. The pglite test driver does
 support transactions, so unit tests will not catch this.
 
-**The Workflow DevKit discovers steps by file content**
-(`docs/research/2026-09-09-architecture-audit.md`, section 10):
-
-> Moving a `"use step"` file to a path the builder does not scan fails at
-> runtime, not at build.
-
+**The Workflow DevKit discovers steps by file content.** A `"use step"` file
+moved where the builder does not scan fails at runtime, not at build. Guards:
 `apps/worker/src/engine/workflow-import-boundary.test.ts` and
-`apps/worker/src/engine/step-registration-coverage.test.ts` are the guards. Run them in any change
-that moves engine files.
-A step's identity is its module path plus its function name, so moving or renaming a `"use step"` function also strands every run suspended inside it, and such a change merges only after the [drain described in the plan](docs/plans/2026-09-09-architecture-restructure.md).
+`apps/worker/src/engine/step-registration-coverage.test.ts`; run both when
+engine files move. A step's identity is its module path plus its function
+name, so moving or renaming one strands every run suspended in it: such a
+change merges only after the [drain](docs/plans/2026-09-09-architecture-restructure.md).
 
-**The worker build runs migrations**
-(`docs/research/2026-09-09-architecture-audit.md`, section 10):
+**The worker build runs migrations.** `build` in `apps/worker/package.json`
+calls `db:migrate` against whatever `DATABASE_URL` is set: never run it locally
+by accident, and keep that path working when you touch `db/`, or the next
+preview deploy mutates a database.
 
-> `apps/worker/package.json` `build` calls `db:migrate`. Any stage that touches
-> `db/` must keep that path working or the next preview deploy mutates a
-> database.
-
-**The invocation ceiling** (`apps/worker/src/infra/llm.ts`):
-
-> Must stay under the platform's function timeout (300s by default, and this
-> project sets no maxDuration). At exactly 300s the platform kill races the
-> abort, so the block would surface an opaque platform error instead of the
-> clean call_llm failure this bound exists to produce.
-
-The deployed step function is the exception: it ships `maxDuration` `"max"`,
-which resolves to 800 s on Pro, and the runtime kills the invocation there
-(`apps/worker/src/services/run-lifecycle/workflow-step-drain.ts`). Long work has to be resumable
-across invocations, not merely fast.
+**Invocation ceilings.** A plain function is killed at 300 s, which is why
+`apps/worker/src/infra/llm.ts` bounds a call below it. The deployed step
+function ships `maxDuration` `"max"` and is killed at 800 s on Pro
+(`apps/worker/src/services/run-lifecycle/workflow-step-drain.ts`). Long work
+has to be resumable across invocations, not merely fast.

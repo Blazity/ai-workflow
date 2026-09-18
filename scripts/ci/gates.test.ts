@@ -526,7 +526,7 @@ test("every Claude bridge starts by loading AGENTS.md", () => {
   const bridges = filesNamed(repoRoot, "CLAUDE.md");
   assert.deepEqual(
     new Set(bridges.map((path) => path.slice(repoRoot.length + 1))),
-    new Set(["CLAUDE.md", "apps/dashboard/CLAUDE.md", "apps/worker/CLAUDE.md"]),
+    new Set(["CLAUDE.md", "apps/dashboard/CLAUDE.md", "apps/worker/CLAUDE.md", "packages/CLAUDE.md"]),
   );
   for (const bridge of bridges) {
     assert.equal(readFileSync(bridge, "utf8").split("\n", 1)[0], "@AGENTS.md", bridge);

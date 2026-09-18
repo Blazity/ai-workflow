@@ -52,6 +52,7 @@ checking the smaller set that is left (ADR-007).
 | [adr/ADR-006-model-catalog.md](./adr/ADR-006-model-catalog.md) | The recognised model policy, live-advertisement intersection, stored-ID compatibility, and catalog ownership |
 | [adr/ADR-007-empty-scan-is-a-refusal.md](./adr/ADR-007-empty-scan-is-a-refusal.md) | Why a gate that scanned nothing refuses instead of passing, the two helpers that refuse, and the one gate that cannot |
 | [adr/ADR-008-claims-the-code-owns.md](./adr/ADR-008-claims-the-code-owns.md) | When a document may restate a list the code owns, and the test that holds the copy level in both directions |
+| [adr/ADR-009-agent-instruction-layers.md](./adr/ADR-009-agent-instruction-layers.md) | Where agent instructions live (router, per-area files, path-scoped rules, archive) and the byte ceilings a hook warns about |
 
 ## Product
 
@@ -130,6 +131,7 @@ so links into it keep resolving.
 | [archive/SECURUTY-OBSERVABILITY.md](./archive/SECURUTY-OBSERVABILITY.md) | An early security and observability note |
 | [archive/design-qa.md](./archive/design-qa.md) | The AIW-179 visual QA session and its verdict |
 | [archive/learnings.md](./archive/learnings.md) | The session learnings file, mined into `.claude/rules/*.md` and the root `AGENTS.md` |
+| [archive/agent-notes/](./archive/agent-notes/) | History and reasoning moved out of the `AGENTS.md` files and `.claude/rules/*.md` on 2026-09-17, one file per area |
 
 ## Artifacts, not documents
 

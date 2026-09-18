@@ -205,6 +205,8 @@ test("scope table selects only exact narrow commands", () => {
     [[".claude/skills/init-env/SKILL.md"], ["pnpm run gate:docs-status"]],
     [[".claude/settings.json"], ["pnpm run gate:docs-status"]],
     [[".claude/rules/worker-database.md"], ["pnpm run gate:docs-status"]],
+    [[".claude/hooks/context-budget-guard.mjs"], ["pnpm run test:ci"]],
+    [[".claude/context-budget.tsv"], ["pnpm run test:ci"]],
     [["apps/worker/.agents/skills/workflow/SKILL.md"], ["pnpm run gate:docs-status"]],
     [[".dependency-cruiser.cjs"], [GATES]],
   ];

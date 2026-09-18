@@ -88,6 +88,7 @@ ADR, never edited in place: the old file keeps its number, gains
 | [ADR-006](./ADR-006-model-catalog.md) | Model catalog | Accepted | Written |
 | [ADR-007](./ADR-007-empty-scan-is-a-refusal.md) | An empty scan is a refusal | Accepted | Written |
 | [ADR-008](./ADR-008-claims-the-code-owns.md) | Claims the code owns | Accepted | Written |
+| [ADR-009](./ADR-009-agent-instruction-layers.md) | Agent instruction layers and their ceilings | Accepted | Written |
 
 When a reserved ADR is written, fill its row in place: replace `Proposed` with
 the decision status the ADR lands with and change `State` to `Written`. No
