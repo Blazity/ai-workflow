@@ -6,7 +6,7 @@
  * this file; the deep imports that predate the rule are listed in
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
-export { recordRepositoryAnswer } from "./from-answer.js";
+export { answerAsWritten, recordRepositoryAnswer } from "./from-answer.js";
 export type { RepositoryAnswerPersistence, RepositoryAnswerOutcome } from "./from-answer.js";
 export {
   readRepositoryAnswerDeterministically,

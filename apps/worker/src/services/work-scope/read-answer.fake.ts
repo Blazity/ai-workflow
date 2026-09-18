@@ -79,11 +79,13 @@ function fold(text: string): string {
  * the same shape production will see.
  */
 function readFake(answer: string, question: RepositoryQuestion): FakeAnswer {
-  // THE COMPOSED AUTHOR LINE STAYS ON THE WORDS the reader is given, on purpose:
-  // stripping it before any reading is the regex that turned "api: none" into a
-  // refusal of four repositories. A real model reads "Ada: no" as a person
-  // saying no; this stand-in has to be told, and that is all this line is.
-  const words = fold(answer).replace(/^[^:\n]+: /, "");
+  // THE WORDS AS HANDED, with nothing taken off. The one channel that composes
+  // an author line takes it off before any reader sees the words
+  // (`answerAsWritten`), so a colon that reaches here is one somebody typed.
+  // Stripping again here would make the stand-in read the dashboard's "api:
+  // none" as a refusal (A18) and eat "acme/api: " from a ticket reply's second
+  // paragraph, which is the defect the real path no longer has.
+  const words = fold(answer);
   // POINTED AT, OR PUSHED AWAY. A name the reply is refusing is not a name the
   // reply is choosing, and the difference is the whole of it: "not the fixture
   // one" names the fixture and wants none of it, so reading the name as a
@@ -175,8 +177,10 @@ export function fakeAnswerReadingModel(): AnswerReadingModel {
 
 /** The reply, pulled back out of the prompt the reader built. The stand-in sees
  *  exactly what the provider would see, markers and all, so a prompt that
- *  stopped carrying the reply whole would fail here too. */
-function replyFromPrompt(prompt: string): string {
+ *  stopped carrying the reply whole would fail here too. Exported for the tests
+ *  that assert on what a reader was handed, so they pull the words out the same
+ *  way the stand-in does. */
+export function replyFromPrompt(prompt: string): string {
   return prompt.split("<<<REPLY\n")[1]?.split("\nREPLY>>>")[0] ?? "";
 }
 
