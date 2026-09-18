@@ -39,6 +39,8 @@ to show that the code does what the code does, proves nothing.
    with `prod:` and the evidence (run id, screenshot, MCP transcript) when only
    a real deployment can show it. An empty cell at a stage gate is a failed
    gate. Prior art for this shape: [the repository catalog matrix](./repository-catalog-matrix.md).
+7. **Withdrawn rows keep their id**, struck through with the date and reason,
+   so references from tickets and stage reports stay valid.
 
 ## Who is in these scenarios
 
@@ -47,7 +49,7 @@ to show that the code does what the code does, proves nothing.
 | Admin | Owner or admin role; may connect, test, switch source, enable, disable, select providers, disconnect |
 | Member | Read-only role |
 | Author | Admin working in the workflow editor |
-| Agent | A client of the product's MCP server, acting for a person with a person-backed token |
+| Agent | A client of the product's MCP server building or running workflows; it has no integration management tools (plan decision 15) |
 | Waiting person | The ticket author or reviewer whose run is in progress |
 | Developer | Someone writing a new integration, internal or in a customer's fork |
 | Provider | Jira, GitHub, GitLab, Slack, Arthur, a memory engine: the system on the other side |
@@ -62,14 +64,14 @@ to show that the code does what the code does, proves nothing.
 | INT-003 | Member | Opens Integrations | Statuses, sources, unlocks and last verified times; no form, no switch, no secret, no button that fails when clicked | S6 | |
 | INT-004 | Admin on a phone | Opens Integrations | Cards readable and statuses distinguishable without horizontal scrolling | S6 | |
 | INT-005 | Admin, an integration whose last test failed | Opens Integrations | The card is visibly failing, with the provider's reason and when it was last checked | S6 | |
-| INT-006 | Agent | `integrations.list` | The same integrations, statuses, sources and unlocks the screen shows, and no secret | S3 | |
+| INT-006 | Agent | `system.capabilities` | Which integrations are connected and enabled and which blocks they make available; no connection field, source detail or secret | S3 | |
 | INT-007 | Agent | `system.capabilities` | Exactly the blocks the editor palette shows for the same state | S3 | |
 
 ## J2. Connecting an integration
 
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
-| INT-010 | Admin, Arthur not connected | Fills engine URL and API key, saves | The connection is tested before it becomes active; Connected; the card lists what was unlocked; the palette has Arthur's block; the sidebar has Arthur's section; health shows Arthur's checks; `arthur.*` tools work | S2, S6, S8 | |
+| INT-010 | Admin, Arthur not connected | Fills engine URL and API key, saves | The connection is tested before it becomes active; Connected; the card lists what was unlocked; the palette has Arthur's block; the sidebar has Arthur's section; health shows Arthur's checks; `system.capabilities` lists Arthur's block | S2, S6, S8 | |
 | INT-011 | Admin | Saves a wrong token | Failing with the provider's own reason (for example 401 unauthorised); nothing unlocked; the non-secret fields stay filled so one field can be corrected | S2, S6 | |
 | INT-012 | Admin | Saves while the provider is unreachable | A reason that says the provider could not be reached, distinguishable from a rejected credential | S2 | |
 | INT-013 | Admin | Leaves a required field empty | Told which field before anything is sent; nothing stored | S6 | |
@@ -79,9 +81,9 @@ to show that the code does what the code does, proves nothing.
 | INT-017 | Two admins | Save the same integration at the same moment | The second is told the integration changed meanwhile and sees the current state; no silent overwrite | S2 | |
 | INT-018 | Admin | Saves, then closes the tab before the test finishes | The save completes on the server; reopening shows the result | S2 | |
 | INT-019 | Admin, only some of an integration's variables set in the environment | Opens its card | Failing, naming the missing variables, with the option to use stored values instead | S2, S6 | |
-| INT-020 | Agent | `integrations.connect` without a person-backed token, or without a reason | Refused, with which of the two is missing | S3 | |
-| INT-021 | Agent acting for a member | Any write | Refused | S3 | |
-| INT-022 | Agent | `integrations.connect` with a secret, then `integrations.get` | The secret is reported as set, never returned | S3 | |
+| INT-020 | Agent | Looks for a tool to connect, test, disable, disconnect or configure an integration | None exists; a guard test fails if one is added to the MCP catalog | S3 | |
+| INT-021 | ~~Agent acting for a member, any write~~ | | Withdrawn 2026-09-18: integration management is dashboard only and MCP covers what workflows can do (plan decision 15) | | |
+| INT-022 | Agent | Reads any MCP response after an integration was connected | No connection field, source detail or secret appears in any response | S3 | |
 | INT-023 | Anyone | Reads worker logs and run traces after any of the above | No secret value in any line | S2, S8 | |
 
 ## J3. Using an integration in workflows
@@ -107,7 +109,7 @@ to show that the code does what the code does, proves nothing.
 | INT-044 | Admin | Disables the active issue tracker | The impact names ticket dispatch stopping; on confirm, a ticket moved into the AI column starts no run and the event is recorded as ignored with the reason, visible on the health page | S2, S12 | |
 | INT-045 | Waiting person, the disabled integration is the issue tracker itself | Their run fails | The failure is visible in the run view and through MCP, and reaches them through messaging if that is connected, since the ticket comment cannot be posted | S4, S12 | |
 | INT-046 | Admin | Re-enables | Everything returns with the kept configuration; runs that failed stay failed and can be started again | S2, S6 | |
-| INT-047 | Agent | `integrations.set_enabled` false | The same impact report the screen shows is available before the change (preview) and the change needs a reason | S3 | |
+| INT-047 | ~~Agent, `integrations.set_enabled`~~ | | Withdrawn 2026-09-18: integration management is dashboard only and MCP covers what workflows can do (plan decision 15); the impact preview lives on the screen (INT-040) | | |
 | INT-048 | Admin | Disables Arthur while an agent session is being traced | The session already running keeps its tracer until the sandbox ends; the next agent start has no tracer and the run records that tracing was off | S8 | |
 
 ## J5. Changing a connection (rotation, source, reconfiguration)
@@ -132,7 +134,7 @@ to show that the code does what the code does, proves nothing.
 | INT-062 | Admin | Switches memory back to built-in | Built-in memory is exactly as it was before the switch | S13, S15 | |
 | INT-063 | Waiting person, active external memory engine down | Run starts | The run continues without memory and the run view says memory was unavailable and why; health shows the engine failing. Memory is the one capability that degrades instead of failing, because it enriches a run and does not gate it | S13 | |
 | INT-064 | Admin | Disables the integration that is the active memory engine | Told memory falls back to nothing until another provider is selected; built-in is offered | S13 | |
-| INT-065 | Agent | `integrations.select_provider` for memory | Same rules and warnings as the screen, with a reason | S3, S13 | |
+| INT-065 | ~~Agent, `integrations.select_provider`~~ | | Withdrawn 2026-09-18: integration management is dashboard only and MCP covers what workflows can do (plan decision 15) | | |
 
 ## J7. Disconnecting
 
@@ -149,7 +151,7 @@ to show that the code does what the code does, proves nothing.
 | INT-080 | Admin, Arthur connected | Opens the sidebar | Core groups, a separator, the Integrations page, then Arthur, whose area has Evals and Connection as tabs; never Arthur among core items, never Integrations inside Settings | S7, S8 | |
 | INT-081 | Member, Arthur connected | Opens Arthur, Evals | Reads the page; no settings controls | S7, S8 | |
 | INT-082 | Anyone with a bookmark to Arthur's page, Arthur disabled | Opens it | A page saying Arthur is disabled with a link to its card, not a 404 and not an empty chart | S7 | |
-| INT-083 | Agent | `arthur.evals_summary` | The numbers the page shows | S8 | |
+| INT-083 | ~~Agent, `arthur.evals_summary`~~ | | Withdrawn 2026-09-18: integration management is dashboard only and MCP covers what workflows can do (plan decision 15); whether read-only integration data may come back is an open question to Jakub | | |
 | INT-084 | Admin on a phone | Opens Arthur, Evals | Styled like the rest of the product and usable at phone width | S7, S8 | |
 
 ## J9. Health

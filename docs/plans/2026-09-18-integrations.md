@@ -61,14 +61,15 @@ From the user's side:
   ships: logo, one line of what it is, status (Connected, Not connected,
   Failing, Disabled) and where the connection comes from (the deployment's
   environment or values stored from the dashboard), when it was last verified,
-  what it unlocks (capabilities, blocks, screens, MCP tools), a connect form
+  what it unlocks (capabilities, blocks, screens), a connect form
   generated from the integration's own declaration, a test button, an enable
   switch, and a link to its documentation. When several connected integrations
   can serve a capability that has one active provider (issue tracker,
   messaging, memory), the admin picks which one is active.
 - **Connecting makes the integration appear everywhere at once**: its blocks in
   the editor palette grouped under its name, its section in the sidebar below
-  an Integrations separator, its checks on the health page, its MCP tools.
+  an Integrations separator, its checks on the health page, and its blocks in
+  what `system.capabilities` reports to agents building workflows over MCP.
   Disconnecting or disabling removes all of that; a workflow that used them
   says which integration it needs and cannot be published.
 - **Core blocks stop naming providers.** "Comment on ticket", "Open pull
@@ -76,8 +77,11 @@ From the user's side:
   provides the capability, the way pull request blocks already work for GitHub
   and GitLab. Provider-specific work (Arthur's injection check, Slack research,
   Jira research) is a block of that integration.
-- **Everything above is reachable through MCP** with the same permissions, so a
-  deployment can be configured from a chat agent rather than by hand.
+- **MCP covers what workflows can do, nothing more** (Jakub, 2026-09-18).
+  Connecting an integration, entering tokens, disabling it and choosing a
+  provider happen in the dashboard only, so no credential ever passes through a
+  chat with a model. An agent building or running workflows over MCP learns
+  which integrations are connected and which blocks it may use.
 - **A developer adds an integration by writing one package.** They copy the
   template, follow one guide, and the build finds it. Types and CI gates reject
   an integration that reaches into core internals, and core code that names a
@@ -101,9 +105,11 @@ From the user's side:
   which integration is missing rather than a run that fails later.
 - **A member (read-only role).** They see what is connected and healthy, never
   a secret and never a control that does nothing when clicked.
-- **An agent through MCP.** Lists integrations, connects with a person-backed
-  token and a reason, tests, toggles, selects providers, reads what is
-  unlocked, and never gets a secret back.
+- **An agent building or running workflows through MCP.** Learns which
+  integrations are connected and which blocks it can use, gets a draft issue
+  naming a missing integration, and sees `integration_unavailable` on a run.
+  It cannot connect, configure, disable or read the credentials of any
+  integration.
 - **A developer writing a new integration**, internal or a customer's engineer
   in a fork. They know their provider's API and nothing about our engine. They
   need one guide, one template, one command, and a failing test that explains
@@ -142,8 +148,8 @@ From the user's side:
     holds daily work.
 13. As an operator I want each connected integration's checks on the health
     page without core maintaining the list.
-14. As an agent I want every action above through MCP, with writes requiring a
-    person-backed token and a reason.
+14. As an admin I want integration management to live only in the dashboard,
+    so no token I own ever passes through a chat with an agent.
 15. As an agent I want `system.capabilities` to report the connected
     integrations, the capabilities they serve and the blocks they unlock.
 16. As a workflow author I want Slack research and Jira research as separate
@@ -176,8 +182,8 @@ From the user's side:
   files, and the guide is enough to write it.
 - Merely passing, and therefore a failure here: cards exist but an
   environment-configured production reads "Not connected"; blocks disappear but
-  old workflows die with a stack trace; the screen works and MCP has half the
-  actions; the Slack integration exists but core still reads a Slack
+  old workflows die with a stack trace; `system.capabilities` offers an agent a
+  block the editor would refuse; the Slack integration exists but core still reads a Slack
   environment variable somewhere.
 
 ## Implementation decisions
@@ -203,11 +209,10 @@ A top-level workspace folder `integrations/`:
 - `integrations/<id>` (`@integrations/<id>`): one package per integration, with
   three entry points:
   - `manifest`: pure data (identity, connection fields, declared capabilities,
-    block manifests, navigation entries, MCP tool schemas, health check
-    descriptions). Browser-safe and workflow-scope-safe: **no Node modules**,
+    block manifests, navigation entries, health check descriptions). Browser-safe and workflow-scope-safe: **no Node modules**,
     because the Workflow DevKit flow bundle fails on them.
   - `worker`: the runtime (connection test, capability adapters, block
-    executors, webhook translation, health probes, API and MCP handlers).
+    executors, webhook translation, health probes, API handlers).
     Imported only from worker step files and routes, never from `"use workflow"`
     code.
   - `dashboard`: optional React pages for the integration's own sidebar
@@ -226,8 +231,7 @@ The block catalog generator grows into an integration generator. It scans
 `integrations/*` (skipping `sdk`, `_template`, and `_fixtures` unless the
 fixture flag of decision 20 is set) and writes committed
 registries: worker runtime, dashboard pages, block catalog (each entry carrying
-its `integration` id and what it requires), MCP catalog additions, and health
-definitions. `--check` runs inside `build`, as `gen:blocks --check` does today.
+its `integration` id and what it requires), and health definitions. `--check` runs inside `build`, as `gen:blocks --check` does today.
 Nobody maintains a list by hand.
 
 ### 4. No runtime code loading
@@ -389,16 +393,16 @@ rules:
   stored secret from every past version; the audit keeps who and when.
 - **Impact before change.** Disable, disconnect, reconfigure and provider
   selection first report what depends on the integration (published
-  workflows, runs in flight, dispatch that will stop), on the screen and
-  through an MCP preview, the way repository activation has a preview.
+  workflows, runs in flight, dispatch that will stop) on the screen before the
+  admin confirms.
 - The active provider of a single-provider capability is pinned at run start
   with the connection version, so a run never writes memory to one engine and
   reads it from another.
 - A row whose integration no longer exists in the build is ignored, and
   workflows that used its blocks report an unknown integration.
-- Owner and admin connect, test, toggle, switch source and select; members read
-  status only. MCP writes require a person-backed token and a reason, as
-  repository activation does.
+- Owner and admin connect, test, toggle, switch source and select, in the
+  dashboard only; members read status only. MCP has no integration write tool
+  (decision 15).
 
 ### 10. Built-ins live in core
 
@@ -453,19 +457,31 @@ connection tab (Arthur: Evals, Connection), as Jakub asked for Arthur on
 the sidebar fits a 1080p screen without scrolling. System health and Users move
 under Settings. This is AIW-396 and AIW-290 delivered by the same mechanism.
 
-### 15. MCP
+### 15. MCP covers what workflows can do, nothing more
 
-Core tools: `integrations.list`, `integrations.get`, `integrations.connect`,
-`integrations.test`, `integrations.set_enabled`, `integrations.disconnect`,
-`integrations.select_provider`, and `system.capabilities` extended with
-integrations, their capabilities and the blocks they unlock, computed by S4's
-resolver so MCP and the editor never disagree. An integration may contribute
-its own tools, namespaced `<id>.<tool>`, generated into the catalog and covered
-by the contract snapshot and by policy. They are always listed, so an MCP
-session does not hold a stale tool list after `integrations.connect`, and a
-call while the integration is unavailable returns the typed
-`integration_unavailable`. Every screen an integration contributes has a tool
-with the same reach: Arthur's evals page ships with `arthur.evals_summary`.
+Jakub, 2026-09-18: only the actions a workflow can perform are exposed through
+MCP. For integrations that means:
+
+- No integration management tools. Connecting, entering or reading
+  credentials, testing, enabling, disabling, switching source and choosing a
+  provider are dashboard actions only. A token therefore never passes through a
+  chat with a model, where it would land in the model's context and the model
+  provider's logs.
+- `system.capabilities` reports, read-only, which integrations are connected
+  and enabled and which blocks they make available, computed by S4's resolver
+  so MCP and the editor never disagree. An agent needs this to build
+  workflows; it carries no configuration and no secret.
+- Workflow authoring over MCP gets the same issue as the editor when a draft
+  uses an unavailable integration's block, and run tools report
+  `integration_unavailable` like the run view.
+- Integrations contribute no MCP tools in this plan, and screens have no MCP
+  twin (no `arthur.evals_summary`). Whether read-only integration data may be
+  exposed later is an open question to Jakub.
+- The MCP tools that exist today (settings, repository catalog) stay as they
+  are; this decision covers integrations only (Filip, 2026-09-18).
+
+A guard test asserts the MCP catalog holds no integration management tool, so
+one cannot be added by accident.
 
 ### 16. Gates
 
@@ -558,11 +574,11 @@ cases before the happy path.
 | Webhook translation | A recorded provider payload through `/webhooks/<id>` produces the same normalized event and the same dispatch as today | `apps/worker/src/routes/webhooks/*.post.ts` and their tests |
 | Capability ports | Core behaviour (open a pull request, comment on a ticket, send a message, read and write memory) against a fake adapter, and each real adapter against recorded provider responses | `apps/worker/src/adapters/*/` and their tests |
 | Generator and boundaries | Adding a fixture integration folder appears in every registry after generation, `--check` fails while stale, and a planted core import of an integration fails the gate | `docs/architecture/blocks.md:24-46`, `scripts/gates/boundaries.mjs:139-155` |
-| MCP contract | The tool list and schemas in the snapshot, policy denying writes without a person-backed token and a reason, secrets absent from responses | `pnpm mcp:contract:check`, `apps/worker/src/mcp/policy.ts:306-378` |
+| MCP contract | `system.capabilities` lists exactly what the editor palette offers for the same state, the snapshot holds no integration management tool, no response carries integration configuration | `pnpm mcp:contract:check`, `apps/worker/src/mcp/tools/authoring-support.ts` |
 | Conformance | Every `integrations/*` package satisfies the contract | new, built in S1 |
 
 TDD applies to the resolver, connection resolution, the generic step, webhook
-translation, capability selection and MCP policy. It does not apply to screens,
+translation, capability selection and the MCP guard. It does not apply to screens,
 generated files or mechanical moves.
 
 ## Out of scope
@@ -592,8 +608,8 @@ generated files or mechanical moves.
   package as TypeScript source like `packages/*`; styling holds only with the
   host UI package and the Tailwind `@source` of decision 18, and S7 proves it
   on a fixture page.
-- **A5 (revised).** Integration MCP tools are generated into the central
-  catalog and always listed (decision 15).
+- **A5 (superseded 2026-09-18).** Integrations contribute no MCP tools in this
+  plan (decision 15), so the question of how they are listed is moot.
 - **A6 (revised).** Cancelling runs in flight before any step-changing merge is
   acceptable on production and demo, because usage is our own. The tenant is
   drained separately in R1.
@@ -605,8 +621,10 @@ generated files or mechanical moves.
 - **A9 (revised).** The Arthur tenant stays on its current release until R1,
   which drains its parked runs, warns its operator, and re-authors its
   definitions.
-- **A10.** A Mem0 API key will be available for S15. Without it, S15 moves to a
-  later plan and S14 stands on the fixture integration alone.
+- **A10 (revised).** Memory engines come after the existing providers (Jakub,
+  2026-09-18), so S13 and S15 form a later phase after R1. S14 proves the guide
+  on the fixture integration; S15 needs an engine's API key when its turn
+  comes.
 
 ## Pre-mortem triage
 
@@ -636,9 +654,12 @@ AIW-414, S11 AIW-415, S12 AIW-416, S14 AIW-417, S15 AIW-418, R1 AIW-419.
 
 Order and concurrency: S0, S1, S2 in sequence. S4 and S5 run in parallel after
 S2. S3 and S6 run in parallel after S4 (their files are disjoint: MCP against
-the dashboard). S7 after S6. Then S8, S9, S13, S10, S11, S12 in sequence,
-because each of them edits the engine's agent workflow or regenerates the same
-catalogs. S14 after S12, S15 after S14, R1 last.
+the dashboard). S7 after S6. Then S8, S9, S10, S11, S12 in sequence, because
+each of them edits the engine's agent workflow or regenerates the same
+catalogs. S14 after S12, R1 after S14.
+
+Later phase (Jakub, 2026-09-18: Arthur and the existing providers first,
+memory engines after): S13 after R1, S15 after S13.
 
 Every stage that adds, moves, renames or deletes a `"use step"` or
 `"use workflow"` file follows the drain rule of decision 5; the DoDs below say
@@ -659,10 +680,10 @@ before the executor writes tests.
 | S2 | An integration can be connected, tested and stored, safely | connection resolution | `apps/worker/src/db/schema/integrations.ts`, `apps/worker/drizzle/00XX_integrations.sql`, `apps/worker/src/services/integrations/**`, `apps/worker/src/routes/api/v1/integrations/**`, `apps/worker/src/infra/secrets-crypto.ts`, integration types in `packages/contracts/api.ts` | opus | tight | yes | yes | no | Unit tests at the resolution seam: environment complete, environment partial (Failing, missing names), stored, stored prepared while environment is the source then switched, disabled under each source, missing key, key-id mismatch, version pinning with a secret-only change and with a config change, write refused when deployment and database environments differ, secret absent from every output; migration applies on pglite and through `pnpm db:migrate`; on demo: connect the fixture with a bad value (Failing with reason) then a good one (Connected), disable and enable, and read the logs for the secret |
 | S4 | The engine decides what can run from the integration state | block contract resolver, generic step | `apps/worker/src/engine/definition/**`, the new generic integration step under `apps/worker/src/engine/steps/`, `apps/worker/src/engine/support/adapters.ts`, `apps/worker/src/services/manual-dispatch/resolve.ts`, dispatch preflight in `apps/worker/src/services/dispatch/**` | opus | tight | yes | yes | no | Resolver tests over declared deployments; publish of a workflow using an unavailable integration refused naming it; a dispatch for such a workflow produces a failed run with `integration_unavailable` and the ticket comment; a run in flight fails at its next use after a disable and after a reconfiguration, each with its reason; drain; guard tests green; engine canary green |
 | S5 | Health reports integrations without core listing them | health collection | `apps/worker/src/services/system/**`, health types in `packages/contracts/api.ts`, `apps/dashboard/components/cockpit/screens/health.tsx` | opus | open | yes | yes (worker side) | no | A health scan on demo shows core checks unchanged and one section per integration, including Not connected and a partial environment naming its missing variables; the screen reads at desktop and phone width |
-| S3 | Every integration action works through MCP | MCP contract | `apps/worker/src/mcp/tools/integrations.ts`, `apps/worker/src/mcp/tools/authoring-support.ts`, `apps/worker/src/mcp/tool-catalog.ts`, `apps/worker/src/mcp/policy.ts`, tool names in `packages/contracts/domain.ts`, the contract snapshot | opus | tight | yes | yes | no | `(cd apps/worker && pnpm run mcp:contract:check)` green; policy tests: a write without a person-backed token or without a reason is refused, a member is refused; against demo `/mcp`: list, get, connect, test, set_enabled, switch source, select_provider, disconnect; `system.capabilities` lists exactly the blocks the editor palette shows for the same state; an integration tool called while unavailable returns `integration_unavailable`; no response carries a secret |
+| S3 | An agent building workflows over MCP knows what integrations make possible, and nothing about their configuration | MCP contract | `apps/worker/src/mcp/tools/authoring-support.ts`, draft and run tool responses in `apps/worker/src/mcp/tools/**`, the contract snapshot, the MCP guard test | opus | tight | yes | yes | no | `(cd apps/worker && pnpm run mcp:contract:check)` green; `system.capabilities` lists exactly the blocks the editor palette shows for the same integration state; a draft saved over MCP with an unavailable integration's block gets the editor's issue naming it; a failed run read over MCP carries `integration_unavailable`; the guard test fails when an integration management tool is planted in the catalog; no MCP response carries integration configuration or secrets |
 | S6 | An admin can connect an integration from the dashboard and see what it unlocked | dashboard over the integrations API | `apps/dashboard/app/(cockpit)/integrations/page.tsx` and the connection tab `apps/dashboard/app/(cockpit)/integrations/[id]/connection/**`, `apps/dashboard/components/cockpit/screens/integrations/**`, `apps/dashboard/app/api/integrations/**`, `apps/dashboard/components/cockpit/flow-editor/block-palette.ts`, the canvas warning component | opus | open | yes | no (component tests for logic) | no | On demo in a browser at desktop and phone width: connect the fixture with a wrong then a right value, see status, source and unlocks, prepare stored values while the environment is the source and switch, disable, watch the palette lose and regain the block without a reload, open a workflow using it and see the named warning with a link, publish refused; a member sees status and no controls; on a preview the write controls explain why they are unavailable |
 | S7 | The sidebar separates core from integrations, and integration pages look native | dashboard chrome, host UI package | `apps/dashboard/components/cockpit/chrome.tsx`, `apps/dashboard/app/(cockpit)/cockpit-shell.tsx`, the integration area layout with its tabs `apps/dashboard/app/(cockpit)/integrations/[id]/layout.tsx` and contributed pages `apps/dashboard/app/(cockpit)/integrations/[id]/[page]/**` (not `connection/`, which is S6's), settings navigation, moved health and users routes, the host UI package, the Tailwind entry | opus | open | yes | no | no | On demo: core groups, a separator, the Integrations page entry, and an entry only for connected enabled integrations, each opening its area with horizontal tabs (its pages plus Connection); System health and Users under Settings with their old URLs redirecting; a fixture integration with two pages shows them as horizontal tabs in its section; groups collapse and the whole sidebar fits 1920x1080 without scrolling; a fixture page built from a host primitive and an arbitrary-value class renders styled at desktop and phone width; the boundaries gate accepts the host UI import and still rejects `@/components/ui` from an integration |
-| S8 | Arthur is an integration, and core has never heard of it | the whole contract, first real use; `agent_tracing` | `integrations/arthur/**`; deletions across `apps/worker/src` (Arthur client, tracer wiring in `sandbox/agents/*`, `agent-sandbox.ts`, the Arthur task step in `prepare-workspace`, the injection block, evals collection, probes); the evals screen and nav in `apps/dashboard` | opus | open | yes | yes | no | Drain (the injection step and the `prepare_workspace` Arthur task step); guard tests green; core-reference gate green for `arthur`; on production with Arthur connected: a real agent run with traces visible in Arthur and no API key in the run log, an injection check returning a typed verdict and failing closed on a flagged prompt, the Evals section present; after disabling Arthur (it stays environment-sourced): block gone from the palette, publish refused, dispatch failing with `integration_unavailable`; `arthur.evals_summary` returns the numbers the screen shows |
+| S8 | Arthur is an integration, and core has never heard of it | the whole contract, first real use; `agent_tracing` | `integrations/arthur/**`; deletions across `apps/worker/src` (Arthur client, tracer wiring in `sandbox/agents/*`, `agent-sandbox.ts`, the Arthur task step in `prepare-workspace`, the injection block, evals collection, probes); the evals screen and nav in `apps/dashboard` | opus | open | yes | yes | no | Drain (the injection step and the `prepare_workspace` Arthur task step); guard tests green; core-reference gate green for `arthur`; on production with Arthur connected: a real agent run with traces visible in Arthur and no API key in the run log, an injection check returning a typed verdict and failing closed on a flagged prompt, the Evals section present; after disabling Arthur (it stays environment-sourced): block gone from the palette, publish refused, dispatch failing with `integration_unavailable` |
 | S9 | Slack is an integration and messaging is a capability | messaging port, webhook translation | `integrations/slack/**`; new core `send_message` block; deletion of `send-slack-message` and `investigate`; `apps/worker/src/adapters/messaging/**`; `apps/worker/src/routes/webhooks/slack.post.ts` and the generic `/webhooks/[id]` route; Slack call sites in `apps/worker/src/engine/**` and `services/**` | opus | tight | yes | yes | no | Drain; guard tests green; recorded-payload tests for the slash command and message delivery; on production: a real run posts through the capability, the slash command still dispatches at the old URL, the Slack research block returns synthesised findings; core-reference gate green for `slack` |
 | S13 | Memory is a capability with a built-in provider, shaped for any memory engine | memory port | `apps/worker/src/memory/**`, memory call sites in `apps/worker/src/engine/**`, callers of `apps/worker/src/db/repositories/memory.ts`, the dashboard memory screen's data source, memory MCP tools | opus | tight | yes | yes | no | The port is designed against the built-in document store and the published APIs of at least two external engines (Mem0 and Zep/Graphiti), and the stage report shows each engine's add, search, update and delete mapped onto it; drain if a step file changes; port tests with a fake store; on demo: an agent run writes and reads memory through the port with no behaviour change, the memory screen and its MCP tools read through the port, the active provider selection lists built-in as the only choice |
 | S10 | Core talks to version control only through the capability, and GitLab is an integration | VCS port | `integrations/gitlab/**`; `apps/worker/src/adapters/vcs/**`; `apps/worker/src/engine/runtime/vcs-runtime.ts`, `pr-external-resources.ts`; `apps/worker/src/infra/vcs-config.ts`; `apps/worker/src/routes/webhooks/gitlab.post.ts`; GitLab call sites in `services/**`; the migration of decision 19 | opus | tight | yes | yes | no | Drain; guard tests green; recorded-payload tests for every GitLab event in use; importing a repository with an unregistered provider is refused by validation, not by a constraint error; on the GitLab dogfood project: a ticket run opens a merge request, a comment triggers the review path, a failed pipeline triggers the fix path; core-reference gate green for `gitlab` |
@@ -685,7 +706,7 @@ before the executor writes tests.
 | AIW-19 prompt injection detection | Closed as delivered; remaining work in AIW-287, AIW-294 and S8 |
 | AIW-14 Linear integration | Blocked by S12 (AIW-416), first candidate after it |
 | AIW-393 editable memory | Independent; lands on the memory port after S13 if it has not shipped before |
-| AIW-376 MCP parity for repository catalog and settings | Coordinate with S3 so the parity rule is one rule |
+| AIW-376 MCP parity for repository catalog and settings | Unaffected: existing MCP tools stay as they are; decision 15 covers integrations only |
 | AIW-297 unify input and parameter naming for MCP | After S4, since block catalogs change shape |
 | AIW-293 workflow builder fixes (14 children) | Held until S4 and S6; the blocks they touch move |
 | AIW-392 sandbox environment forwarding redesign | Prerequisite of the `agent_tools` slot, separate plan |
