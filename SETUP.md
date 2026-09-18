@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-14
+Last-verified: 2026-09-18
 
 # ai-workflow — Setup & Deployment Guide
 
@@ -884,6 +884,51 @@ The key is **required for the feature but optional at boot**: the worker starts 
 **Rekeying (`WEBHOOK_TRIGGER_ENCRYPTION_KEY` changed).** The key encrypts endpoint secrets at rest, so changing it makes every existing secret undecryptable. Those deliveries then fail with `decrypt_failed` (recorded in the endpoint's rejection counters, and distinct from a bad signature, which is `invalid_signature`). To recover, rotate or revive each endpoint so its secret is re-minted under the new key, then update every sender with the freshly minted secret.
 
 > **Security warning.** The shipped `webhook-ticket-triage` template feeds external input (a support ticket body) straight through to an automatically opened pull request with **no human gate**. HMAC authenticates the **channel**, not the **content**: anyone who can file a ticket into a connected Zendesk or Sentry controls the agent's prompt, and therefore the PR it opens. Before pointing a real sender at this template, add a human-approval gate before the `open_pr` block, or treat the workflow as triage-and-notify only.
+
+### Integration secrets
+
+Nothing here is required to run the bot. Every provider in this deployment can be
+configured entirely through the environment variables in the sections above, and
+a deployment that does so keeps working exactly as it did: the Integrations
+screen reports the environment as the source, and nobody has to touch anything.
+
+This key exists for the other way of connecting one: storing values from the
+dashboard, so a token can be rotated without a redeploy.
+
+| Variable                   | Value                                                               |
+| -------------------------- | ------------------------------------------------------------------- |
+| `INTEGRATION_SECRETS_KEY`  | 64 hex characters (32 bytes). Generate with `openssl rand -hex 32`. |
+
+**This is not the webhook key.** `WEBHOOK_TRIGGER_ENCRYPTION_KEY` protects the
+secrets this deployment mints for inbound webhooks; `INTEGRATION_SECRETS_KEY`
+protects the credentials an admin pastes for a third party. They are separate so
+that rotating one never silently invalidates the other's rows. Setting both to
+the same value works and is a bad idea for the same reason.
+
+**Without it**, the worker starts and everything configured through environment
+variables is unaffected. What is unavailable is storing a secret from the
+dashboard: those fields are disabled on the card, naming this variable, and an
+integration that already has stored secrets reads as Failing rather than
+crashing.
+
+**One key per database.** Every deployment that reads the same database has to
+carry the same value, because the ciphertext is what is shared, not the key. A
+deployment holding a different key reads the stored values as
+"stored under another key, enter it again" and never as a wrong credential,
+which is the difference between re-pasting a value and rotating a token at the
+provider for no reason.
+
+**Rekeying.** Changing the value makes every stored secret unreadable, and each
+affected integration says so on its card. Recover by entering the values again
+from the dashboard; there is no re-encryption path, because a key rotation with
+one is a different feature than this one.
+
+**Where writes are accepted.** Changing an integration is refused on any
+deployment that does not own the database it is connected to, and the refusal
+names both sides. The demo deployment is a preview pointed at production's Neon
+branch (`DATABASE_SHARED_WITH=production`), so a toggle there would change
+production; the same refusal catches a local worker whose `DATABASE_URL` points
+at production. Reading what is connected works everywhere.
 
 ### Remote MCP — connect your agent
 

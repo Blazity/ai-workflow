@@ -168,6 +168,9 @@ importers:
       '@gitbeaker/rest':
         specifier: ^43.8.0
         version: 43.8.0
+      '@integrations/registry':
+        specifier: workspace:*
+        version: link:../../integrations/registry
       '@integrations/sdk':
         specifier: workspace:*
         version: link:../../integrations/sdk

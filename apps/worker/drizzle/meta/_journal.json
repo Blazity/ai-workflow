@@ -491,6 +491,13 @@
       "when": 1789730757102,
       "tag": "0069_work_scope_delegated_origin",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1789768066876,
+      "tag": "0070_integration_connections",
+      "breakpoints": true
     }
   ]
 }

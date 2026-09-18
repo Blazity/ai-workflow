@@ -60,7 +60,7 @@ to show that the code does what the code does, proves nothing.
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
 | INT-001 | Admin, fresh deployment, nothing connected | Opens Integrations from the sidebar | Every integration the build ships, each Not connected, each saying in one line what it is and what it unlocks; a note saying which capabilities the core ticket-to-PR flow needs (an issue tracker, version control, an agent) | S6 | |
-| INT-002 | Admin, production, everything in environment variables | Opens Integrations | Each configured integration Connected with the environment named as its source; nothing asks them to act | S2, S6 | |
+| INT-002 | Admin, production, everything in environment variables | Opens Integrations | Each configured integration Connected with the environment named as its source; nothing asks them to act | S2, S6 | apps/worker/src/services/integrations/resolve.test.ts "is Connected when every required variable is set" |
 | INT-003 | Member | Opens Integrations | Statuses, sources, unlocks and last verified times; no form, no switch, no secret, no button that fails when clicked | S6 | |
 | INT-004 | Admin on a phone | Opens Integrations | Cards readable and statuses distinguishable without horizontal scrolling | S6 | |
 | INT-005 | Admin, an integration whose last test failed | Opens Integrations | The card is visibly failing, with the provider's reason and when it was last checked | S6 | |
@@ -71,20 +71,20 @@ to show that the code does what the code does, proves nothing.
 
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
-| INT-010 | Admin, Arthur not connected | Fills engine URL and API key, saves | The connection is tested before it becomes active; Connected; the card lists what was unlocked; the palette has Arthur's block; the sidebar has Arthur's section; health shows Arthur's checks; `system.capabilities` lists Arthur's block | S2, S6, S8 | |
-| INT-011 | Admin | Saves a wrong token | Failing with the provider's own reason (for example 401 unauthorised); nothing unlocked; the non-secret fields stay filled so one field can be corrected | S2, S6 | |
-| INT-012 | Admin | Saves while the provider is unreachable | A reason that says the provider could not be reached, distinguishable from a rejected credential | S2 | |
+| INT-010 | Admin, Arthur not connected | Fills engine URL and API key, saves | The connection is tested before it becomes active; Connected; the card lists what was unlocked; the palette has Arthur's block; the sidebar has Arthur's section; health shows Arthur's checks; `system.capabilities` lists Arthur's block | S2, S6, S8 | S2 half: apps/worker/src/services/integrations/authoring.test.ts "is Connected the moment the right token is saved, in one action" |
+| INT-011 | Admin | Saves a wrong token | Failing with the provider's own reason (for example 401 unauthorised); nothing unlocked; the non-secret fields stay filled so one field can be corrected | S2, S6 | apps/worker/src/services/integrations/authoring.test.ts "is told at once that a wrong token was refused", "keeps the non-secret fields filled" |
+| INT-012 | Admin | Saves while the provider is unreachable | A reason that says the provider could not be reached, distinguishable from a rejected credential | S2 | apps/worker/src/services/integrations/authoring.test.ts "is told apart from a provider that answered no" |
 | INT-013 | Admin | Leaves a required field empty | Told which field before anything is sent; nothing stored | S6 | |
-| INT-014 | Admin, deployment without `INTEGRATION_SECRETS_KEY` | Opens a card with a secret field | Secret fields disabled with the name of the variable to set; environment-configured integrations unaffected | S2, S6 | |
-| INT-015 | Admin on a preview deployment that reads production's database | Tries to connect or toggle | Write controls disabled with the reason; production's integrations untouched | S2, S6 | |
-| INT-016 | Admin | Double-clicks Save | One stored version and one test | S2 | |
-| INT-017 | Two admins | Save the same integration at the same moment | The second is told the integration changed meanwhile and sees the current state; no silent overwrite | S2 | |
-| INT-018 | Admin | Saves, then closes the tab before the test finishes | The save completes on the server; reopening shows the result | S2 | |
-| INT-019 | Admin, only some of an integration's variables set in the environment | Opens its card | Failing, naming the missing variables, with the option to use stored values instead | S2, S6 | |
+| INT-014 | Admin, deployment without `INTEGRATION_SECRETS_KEY` | Opens a card with a secret field | Secret fields disabled with the name of the variable to set; environment-configured integrations unaffected | S2, S6 | apps/worker/src/services/integrations/authoring.test.ts "a deployment with no secrets key" (both), apps/worker/src/services/integrations/resolve.test.ts "leaves an environment-configured integration untouched" |
+| INT-015 | Admin on a preview deployment that reads production's database | Tries to connect or toggle | Write controls disabled with the reason; production's integrations untouched | S2, S6 | apps/worker/src/services/integrations/deployment-writes.test.ts (all), apps/worker/src/services/integrations/authoring.test.ts "a deployment that does not own its database" (all), "a database that cannot say who owns it" (both) |
+| INT-016 | Admin | Double-clicks Save | One stored version and one test | S2 | apps/worker/src/db/repositories/integrations.test.ts "gives two saves racing on a fresh integration one version", "lets the database be the last word on a version number" |
+| INT-017 | Two admins | Save the same integration at the same moment | The second is told the integration changed meanwhile and sees the current state; no silent overwrite | S2 | apps/worker/src/services/integrations/authoring.test.ts "refuses a second save whose version moved", apps/worker/src/db/repositories/integrations.test.ts "refuses a save whose expected version moved" |
+| INT-018 | Admin | Saves, then closes the tab before the test finishes | The save completes on the server; reopening shows the result | S2 | apps/worker/src/services/integrations/resolve.test.ts "reports a save that failed its test without touching the live status", apps/worker/src/db/repositories/integrations.test.ts "remembers a save whose test failed" |
+| INT-019 | Admin, only some of an integration's variables set in the environment | Opens its card | Failing, naming the missing variables, with the option to use stored values instead | S2, S6 | apps/worker/src/services/integrations/resolve.test.ts "is Failing and names the missing variables" |
 | INT-020 | Agent | Looks for a tool to connect, test, disable, disconnect or configure an integration | None exists; a guard test fails if one is added to the MCP catalog | S3 | |
 | INT-021 | ~~Agent acting for a member, any write~~ | | Withdrawn 2026-09-18: integration management is dashboard only and MCP covers what workflows can do (plan decision 15) | | |
 | INT-022 | Agent | Reads any MCP response after an integration was connected | No connection field, source detail or secret appears in any response | S3 | |
-| INT-023 | Anyone | Reads worker logs and run traces after any of the above | No secret value in any line | S2, S8 | |
+| INT-023 | Anyone | Reads worker logs and run traces after any of the above | No secret value in any line | S2, S8 | apps/worker/src/services/integrations/authoring.test.ts "carry neither the token nor the envelope", "carry no token even when the provider echoed it back", apps/worker/src/services/integrations/resolve.test.ts "carries no secret value and no ciphertext" |
 
 ## J3. Using an integration in workflows
 
@@ -102,13 +102,13 @@ to show that the code does what the code does, proves nothing.
 
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
-| INT-040 | Admin, Slack posting somewhere it should not | Disables Slack | Before confirming, the impact: published workflows that depend on it and runs in flight; after: Slack's blocks leave the palette, its section and tools report disabled, health shows Disabled, configuration kept | S2, S6 | |
+| INT-040 | Admin, Slack posting somewhere it should not | Disables Slack | Before confirming, the impact: published workflows that depend on it and runs in flight; after: Slack's blocks leave the palette, its section and tools report disabled, health shows Disabled, configuration kept | S2, S6 | S2 half (configuration kept): apps/worker/src/db/repositories/integrations.test.ts "keeps the stored values so re-enabling finds them" |
 | INT-041 | Waiting person, run in flight that will send a Slack message | Admin disables Slack before that step | The run fails at that step with `integration_unavailable`, reason `disabled`, naming Slack, visible in the run view and in the ticket comment | S4, S9 | |
 | INT-042 | Waiting person, run whose Slack step has already started | Admin disables Slack | The step that already started finishes; the next use fails as INT-041 | S4 | |
-| INT-043 | Admin | Disables an environment-configured integration | Works exactly as for stored values; the environment is not touched | S2 | |
-| INT-044 | Admin | Disables the active issue tracker | The impact names ticket dispatch stopping; on confirm, a ticket moved into the AI column starts no run and the event is recorded as ignored with the reason, visible on the health page | S2, S12 | |
+| INT-043 | Admin | Disables an environment-configured integration | Works exactly as for stored values; the environment is not touched | S2 | apps/worker/src/services/integrations/resolve.test.ts "shows Disabled over an environment connection", apps/worker/src/db/repositories/integrations.test.ts "works for an integration that was never saved from the dashboard" |
+| INT-044 | Admin | Disables the active issue tracker | The impact names ticket dispatch stopping; on confirm, a ticket moved into the AI column starts no run and the event is recorded as ignored with the reason, visible on the health page | S2, S12 | S2 half (disable is live): apps/worker/src/services/integrations/authoring.test.ts "changes the answer within one process" |
 | INT-045 | Waiting person, the disabled integration is the issue tracker itself | Their run fails | The failure is visible in the run view and through MCP, and reaches them through messaging if that is connected, since the ticket comment cannot be posted | S4, S12 | |
-| INT-046 | Admin | Re-enables | Everything returns with the kept configuration; runs that failed stay failed and can be started again | S2, S6 | |
+| INT-046 | Admin | Re-enables | Everything returns with the kept configuration; runs that failed stay failed and can be started again | S2, S6 | apps/worker/src/db/repositories/integrations.test.ts "keeps the stored values so re-enabling finds them", apps/worker/src/services/integrations/resolve.test.ts "shows Disabled over stored values" |
 | INT-047 | ~~Agent, `integrations.set_enabled`~~ | | Withdrawn 2026-09-18: integration management is dashboard only and MCP covers what workflows can do (plan decision 15); the impact preview lives on the screen (INT-040) | | |
 | INT-048 | Admin | Disables Arthur while an agent session is being traced | The session already running keeps its tracer until the sandbox ends; the next agent start has no tracer and the run records that tracing was off | S8 | |
 
@@ -116,14 +116,14 @@ to show that the code does what the code does, proves nothing.
 
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
-| INT-050 | Admin, stored source | Enters a new token, saves | Tested first; on success active at once; runs in flight use the new token at their next use | S2 | |
-| INT-051 | Admin | Enters a new token that fails the test | The previous working connection stays active, the card says the new values failed and why; saving the failing values anyway is a separate, explicit action | S2, S6 | |
-| INT-052 | Admin, editing a card with a secret already set | Changes only the URL | The stored secret is kept; clearing a secret is its own explicit action | S2, S6 | |
-| INT-053 | Admin, environment is the source | Prepares stored values and tests them | Stored values are tested while the environment stays active; nothing changes for runs | S2, S6 | |
-| INT-054 | Admin, same | Switches the source to stored | One action, no redeploy; the card says environment values are present but not used | S2, S6 | |
-| INT-055 | Admin | Switches the source to environment while the environment is incomplete | Refused, naming the missing variables | S2 | |
-| INT-056 | Admin | Changes the Jira site URL | Before confirming, runs in flight are counted and told they will fail; afterwards they fail at their next use with reason `reconfigured`, never mixing the old site with the new token | S2, S4 | |
-| INT-057 | Admin, preview and production share a database with different secrets keys | Production reads a value stored under another key | Failing, "stored under another key, enter it again"; no crash, other integrations unaffected | S2 | |
+| INT-050 | Admin, stored source | Enters a new token, saves | Tested first; on success active at once; runs in flight use the new token at their next use | S2 | S2 half: apps/worker/src/services/integrations/authoring.test.ts "is Connected the moment the right token is saved, in one action"; the run half is S4 |
+| INT-051 | Admin | Enters a new token that fails the test | The previous working connection stays active, the card says the new values failed and why; saving the failing values anyway is a separate, explicit action | S2, S6 | apps/worker/src/services/integrations/authoring.test.ts "leaves the working connection in use and says why the new ones failed"; the "save anyway" half of this row is NOT implemented and will not be: an override that activates a failed version takes the working connection down (ADR-010, "there is no save it anyway") |
+| INT-052 | Admin, editing a card with a secret already set | Changes only the URL | The stored secret is kept; clearing a secret is its own explicit action | S2, S6 | apps/worker/src/services/integrations/authoring.test.ts "keeps the stored secret when only the URL changes", "clears a secret only when that is what was asked for" |
+| INT-053 | Admin, environment is the source | Prepares stored values and tests them | Stored values are tested while the environment stays active; nothing changes for runs | S2, S6 | apps/worker/src/services/integrations/resolve.test.ts "leaves the status to the environment and reports the stored values as ready", apps/worker/src/services/integrations/authoring.test.ts "leaves a deployment configured through its environment alone until asked", apps/worker/src/db/repositories/integrations.test.ts "leaves the source alone" |
+| INT-054 | Admin, same | Switches the source to stored | One action, no redeploy; the card says environment values are present but not used | S2, S6 | apps/worker/src/db/repositories/integrations.test.ts "is one action that changes no value" |
+| INT-055 | Admin | Switches the source to environment while the environment is incomplete | Refused, naming the missing variables | S2 | apps/worker/src/services/integrations/authoring.test.ts "is refused when the environment does not configure the integration", "names what is missing" |
+| INT-056 | Admin | Changes the Jira site URL | Before confirming, runs in flight are counted and told they will fail; afterwards they fail at their next use with reason `reconfigured`, never mixing the old site with the new token | S2, S4 | S2 half (what counts as a change): apps/worker/src/services/integrations/resolve.test.ts "treats a changed site as a reconfiguration" and the table around it; the run half is S4 |
+| INT-057 | Admin, preview and production share a database with different secrets keys | Production reads a value stored under another key | Failing, "stored under another key, enter it again"; no crash, other integrations unaffected | S2 | apps/worker/src/services/integrations/resolve.test.ts "reads a value stored under another key as Failing", apps/worker/src/infra/secrets-crypto.test.ts "reports a foreign key by its id", "refuses a ciphertext whose slot was rewritten in the database", apps/worker/src/services/integrations/connection-values.test.ts "refuses with the reason an admin can act on" |
 
 ## J6. Choosing the provider of a capability (memory engines, trackers)
 
@@ -140,7 +140,7 @@ to show that the code does what the code does, proves nothing.
 
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
-| INT-070 | Admin, stored source | Disconnects Slack | Impact shown first; afterwards stored values and every stored secret, in every past version, are gone; the audit keeps who and when | S2, S6 | |
+| INT-070 | Admin, stored source | Disconnects Slack | Impact shown first; afterwards stored values and every stored secret, in every past version, are gone; the audit keeps who and when | S2, S6 | apps/worker/src/db/repositories/integrations.test.ts "empties the values and every secret in every past version", "keeps who saved each version and when", apps/worker/src/services/integrations/authoring.test.ts "hands the connection back to the environment" |
 | INT-071 | Admin, environment source | Looks for Disconnect | Not offered; told the connection lives in the deployment's environment and that Disable is available | S6 | |
 | INT-072 | Author, after INT-070 | Opens workflows that used Slack | Each names Slack as missing (INT-033) | S6 | |
 
@@ -168,7 +168,7 @@ to show that the code does what the code does, proves nothing.
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
 | INT-100 | Waiting person | A run starts for a workflow whose integration is disconnected | The run fails at start with `integration_unavailable`, reason `disconnected`, the integration named in the run view and the ticket comment | S4 | |
-| INT-101 | Waiting person | Token rotated during their run | The run continues | S2, S4 | |
+| INT-101 | Waiting person | Token rotated during their run | The run continues | S2, S4 | S2 half: apps/worker/src/services/integrations/resolve.test.ts "follows a rotated secret: the fingerprint does not move"; the run half is S4 |
 | INT-102 | Waiting person | Provider outage during their run | A typed provider failure naming the integration, distinct from `integration_unavailable` | S4 | |
 | INT-103 | Waiting person, workflow with Arthur's injection check | A flagged prompt | The run stops at the check with a typed verdict; never `skipped` | S8 | |
 | INT-104 | Waiting person, parked run (waiting for a clarification) across a deploy that moved a step | Answers the clarification | Either the run resumes, or it was cancelled before the deploy with a comment telling them to start again; never silence | S8 to S12, R1 | |

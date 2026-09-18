@@ -1084,3 +1084,213 @@ export interface SystemHealthResponse {
 export interface SystemHealthLastScanResponse {
   scan: SystemHealthResponse | null;
 }
+
+// --------------------------------------------------------------------------
+// Integrations
+//
+// One vocabulary for what an integration is right now, spoken by the worker's
+// resolver, the health page (S5), the engine (S4), MCP (S3) and the dashboard
+// (S6). The shapes live here rather than in the worker so all five read one
+// description instead of five derivations of it; ADR-010 records why each
+// distinction exists.
+// --------------------------------------------------------------------------
+
+/** Where an integration's connection values come from. Never both at once. */
+export type IntegrationSource = "environment" | "stored";
+
+/** What the connection is, before the enable flag is applied. */
+export type IntegrationConnectionStatus = "connected" | "not_connected" | "failing";
+
+/**
+ * What a card, the health page and the palette show. `disabled` wins over
+ * everything else, because it is the one an admin chose deliberately and the
+ * one that explains why nothing is running.
+ */
+export type IntegrationStatus = IntegrationConnectionStatus | "disabled";
+
+/**
+ * Why an integration is not usable, in the admin's own terms. Split as finely as
+ * the ACTION differs: rotating a credential at the provider, setting a variable,
+ * restoring a key and re-entering a value are four different afternoons.
+ */
+export type IntegrationFailureReason =
+  /** Some of the declared variables are set and some are not. */
+  | "environment_incomplete"
+  /** Stored values leave a required field empty. */
+  | "stored_incomplete"
+  /** The provider answered, and refused the credential. */
+  | "credential_rejected"
+  /** The provider could not be reached at all. */
+  | "provider_unreachable"
+  /** `INTEGRATION_SECRETS_KEY` is not set on this deployment. */
+  | "secrets_key_missing"
+  /** The stored ciphertext was written under another key. */
+  | "secrets_key_mismatch"
+  /** Right key, right slot, and the bytes no longer verify. */
+  | "secret_corrupted"
+  /** The ciphertext in this slot belongs to another integration or field. */
+  | "secret_foreign";
+
+export interface IntegrationFailure {
+  readonly reason: IntegrationFailureReason;
+  /** One sentence an admin can act on. Never carries a credential. */
+  readonly message: string;
+  /** Variable names, for `environment_incomplete`. */
+  readonly missingVariables?: readonly string[];
+  /** Connection field keys, for `stored_incomplete`. */
+  readonly missingFields?: readonly string[];
+}
+
+/**
+ * What the last connection test proved, and whether it still applies.
+ *
+ * `never_tested` has no time on purpose: an environment-configured deployment
+ * that nobody ever tested is Connected because its values are complete, and
+ * saying so without inventing a verification it never had is the whole reason
+ * this is a state rather than a nullable timestamp.
+ */
+export type IntegrationVerification =
+  | { readonly state: "never_tested" }
+  /** Tested, then the values changed; the verdict says nothing about what is in use now. */
+  | { readonly state: "stale"; readonly at: string }
+  | { readonly state: "passed"; readonly at: string; readonly message?: string }
+  | { readonly state: "failed"; readonly at: string; readonly failure: IntegrationFailure };
+
+export interface IntegrationEnvironmentPresence {
+  /** Declared variables this deployment has set to a non-empty value. */
+  readonly setVariables: readonly string[];
+  /** Required variables with neither a value nor a default. */
+  readonly missingVariables: readonly string[];
+  readonly complete: boolean;
+}
+
+export interface IntegrationStoredPresence {
+  /** The highest version ever minted; 0 when nothing was ever saved. Also the
+   *  token a save carries as `expectedVersion`. */
+  readonly latestVersion: number;
+  /** The version whose values are used when `stored` is the source. */
+  readonly activeVersion: number | null;
+  /** Field keys the active version leaves empty. */
+  readonly missingFields: readonly string[];
+  readonly complete: boolean;
+  /** A save that did not become active, and why. */
+  readonly prepared: IntegrationPreparedValues | null;
+}
+
+/** Values an admin saved that failed their test, kept so the card can say why. */
+export interface IntegrationPreparedValues {
+  readonly version: number;
+  readonly at: string;
+  readonly failure: IntegrationFailure;
+}
+
+/**
+ * What a run pins when it starts, and compares at every later use.
+ *
+ * The fingerprint covers the connection's non-secret values only, so a rotated
+ * token is followed mid-run and a different site is not. It covers neither the
+ * source nor the enable flag: switching source without changing a value changes
+ * nothing a run would observe, and disabling is read live rather than pinned.
+ */
+export interface IntegrationConnectionPin {
+  readonly integrationId: string;
+  readonly configFingerprint: string;
+}
+
+/** Why a run may not use the integration it pinned. */
+export type IntegrationUnavailableReason = "disconnected" | "disabled" | "reconfigured";
+
+/** Everything the resolver decides. Carries no secret and no ciphertext: there
+ *  is nowhere in this shape to put one. */
+export interface IntegrationState {
+  readonly integrationId: string;
+  readonly enabled: boolean;
+  readonly source: IntegrationSource;
+  readonly status: IntegrationStatus;
+  /** What `status` would be if the integration were enabled. */
+  readonly connection: IntegrationConnectionStatus;
+  readonly verification: IntegrationVerification;
+  readonly failure: IntegrationFailure | null;
+  /** Enabled and connected: the one question the engine asks. */
+  readonly usable: boolean;
+  readonly environment: IntegrationEnvironmentPresence;
+  readonly stored: IntegrationStoredPresence;
+  readonly pin: IntegrationConnectionPin;
+  /** False when `INTEGRATION_SECRETS_KEY` is absent, which is what disables the
+   *  secret fields on the card rather than letting a save fail later. */
+  readonly secretsKeyAvailable: boolean;
+}
+
+/**
+ * One connection field as a screen needs it. A secret's value is never here,
+ * under any source: `storedSecretSet` says whether one exists, and that is all
+ * the screen needs to draw "leave blank to keep".
+ */
+export interface IntegrationConnectionFieldDto {
+  readonly key: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly env: string;
+  readonly secret: boolean;
+  readonly optional: boolean;
+  readonly format: "text" | "multiline" | "url" | "integer";
+  /** Whether this deployment's environment sets the variable. */
+  readonly envSet: boolean;
+  /** The stored value of a non-secret field, so one field can be corrected
+   *  without retyping the rest. Absent for a secret, always. */
+  readonly storedValue?: string;
+  readonly storedSecretSet: boolean;
+}
+
+export interface IntegrationBlockSummary {
+  readonly type: string;
+  readonly label: string;
+}
+
+export interface IntegrationPageSummary {
+  readonly id: string;
+  readonly label: string;
+}
+
+export interface IntegrationDto {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly docsUrl?: string;
+  readonly capabilities: readonly string[];
+  readonly blocks: readonly IntegrationBlockSummary[];
+  readonly pages: readonly IntegrationPageSummary[];
+  readonly fields: readonly IntegrationConnectionFieldDto[];
+  readonly state: IntegrationState;
+}
+
+/**
+ * Whether this deployment may change integrations at all. A preview that reads
+ * production's database may not, and the reason names both sides so a developer
+ * who meets it knows which of the two to change.
+ */
+export type IntegrationWriteAccess =
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly reason: string };
+
+export interface IntegrationsListResponse {
+  readonly integrations: readonly IntegrationDto[];
+  readonly writes: IntegrationWriteAccess;
+}
+
+export type IntegrationTestOutcome =
+  | { readonly ok: true; readonly message?: string }
+  | { readonly ok: false; readonly failure: IntegrationFailure };
+
+export interface IntegrationMutationResponse {
+  readonly integration: IntegrationDto;
+  /** The connection test this request ran, when it ran one. */
+  readonly test?: IntegrationTestOutcome;
+}
+
+/** A save whose `expectedVersion` no longer matches. Carries the current version
+ *  so a second tab can reload rather than guess. */
+export interface IntegrationVersionConflict {
+  readonly error: "integration_version_conflict";
+  readonly currentVersion: number;
+}

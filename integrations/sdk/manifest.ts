@@ -68,6 +68,24 @@ export interface ConnectionField {
    * shown back on a screen is the mistake this flag exists to prevent.
    */
   readonly secret: boolean;
+  /**
+   * Whether this value decides WHICH account, workspace or site the connection
+   * points at, rather than only proving who is calling.
+   *
+   * It changes nothing for a non-secret field, whose value a run already pins.
+   * It exists for a secret that carries both meanings: a Slack bot token names
+   * a workspace as much as it authenticates, so replacing it with a token for
+   * another workspace is a different connection, not a rotation, and a run that
+   * followed it would post into the wrong company's channels. Marking the field
+   * puts a digest of its value into what a run pins, so that swap stops the run
+   * with `reconfigured`.
+   *
+   * The cost is that rotating such a field also stops runs in flight. Prefer a
+   * non-secret field that names the account (a workspace id, a site URL) and
+   * leave the token unmarked; mark the secret only when the provider gives you
+   * nothing else to identify the account by.
+   */
+  readonly identity?: boolean;
   /** Absent means required: the connection is incomplete without it. */
   readonly optional?: boolean;
   /** Used when the source leaves the field unset. A secret has none. */

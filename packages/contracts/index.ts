@@ -32,6 +32,7 @@ export * from "./agent-protocol-diagnostic";
 export * from "./request-parsing";
 export * from "./requests-dashboard-auth";
 export * from "./requests-harness";
+export * from "./requests-integrations";
 export * from "./requests-json-schema";
 export * from "./requests-pre-pr-checks";
 export * from "./requests-prompt-library";

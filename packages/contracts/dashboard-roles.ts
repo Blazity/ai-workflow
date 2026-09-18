@@ -79,3 +79,13 @@ export function canEditSettings(role: DashboardRole): boolean {
 export function canManageRepositoryCatalog(role: DashboardRole): boolean {
   return role === "owner" || role === "admin";
 }
+
+/** Connecting an integration means handing this deployment a customer's
+ *  credential at a third party, and disabling one stops work everywhere, so the
+ *  same owner/admin rule as every other deployment-wide mutation. Reading which
+ *  integrations are connected stays open to every member: it carries no secret,
+ *  and a member who cannot see it cannot tell a broken deployment from a quiet
+ *  one. */
+export function canManageIntegrations(role: DashboardRole): boolean {
+  return role === "owner" || role === "admin";
+}

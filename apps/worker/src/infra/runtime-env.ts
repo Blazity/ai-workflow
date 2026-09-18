@@ -1,5 +1,6 @@
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
+import { isValidIntegrationSecretsKey } from "./secrets-key-format.js";
 
 // Environment parsing is infrastructure; higher tiers consume these resolved values.
 
@@ -125,6 +126,9 @@ export const env = createEnv({
     // making it required would break the boot of every deployment that does not
     // use the feature.
     WEBHOOK_TRIGGER_ENCRYPTION_KEY: z.string().min(1).optional(),
+    /** Encrypts the connection secrets an admin stores from the dashboard. Its
+     *  own key, never the webhook key: see infra/secrets-crypto.ts. */
+    INTEGRATION_SECRETS_KEY: z.string().min(1).optional(),
 
     // Neon Postgres (run registry + post-PR gate store) — auto-injected by
     // the Neon Vercel Marketplace integration, one branch per environment.
@@ -264,6 +268,16 @@ function isGithubProviderConfigured(): boolean {
     throw new Error(
       "Invalid environment variables:\n" +
         "  WEBHOOK_TRIGGER_ENCRYPTION_KEY must be 64 hex characters (a 32-byte AES-256 key)",
+    );
+  }
+  // Refused at boot rather than at the moment an admin presses Save: a key that
+  // cannot decrypt is the same as no key, and finding that out while connecting
+  // an integration would look like the credential being wrong. The rule comes
+  // from the module the cipher reads it from, so the two cannot drift.
+  if (env.INTEGRATION_SECRETS_KEY && !isValidIntegrationSecretsKey(env.INTEGRATION_SECRETS_KEY)) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  INTEGRATION_SECRETS_KEY must be 64 hex characters (a 32-byte AES-256 key)",
     );
   }
 }

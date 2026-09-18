@@ -579,6 +579,195 @@ Two needs are real and not yet in the context, each named with its stage:
 durable per-ticket thread state for messaging (S9) and reading an
 integration's stored settings (S9, when the Slack channel moves).
 
+## Connection state, decided in S2
+
+The one description S3, S4, S5 and S6 read instead of the code. Delivered in
+stage S2 (AIW-407) as `apps/worker/src/services/integrations/`, the tables
+`integration_connections` and `integration_connection_versions`, and the routes
+under `/api/v1/integrations`.
+
+### One resolver
+
+`resolveIntegrationState(manifest, environment, stored, secretsKey)` in
+`services/integrations/resolve.ts` is the only place a status is decided. It is
+pure, so it holds no cache: disabling an integration is the kill switch an admin
+reaches for when a bot misbehaves, and on Vercel the next request lands on a warm
+invocation, where a module-level cache would keep the bot running until the
+instance recycled. A second derivation anywhere is how the palette and the run
+come to disagree about the same deployment, so there is not one.
+
+Its output carries no secret and no ciphertext. That is a property of the type:
+`IntegrationState` has no field one could be put in.
+
+### The vocabulary
+
+| Name | Values | Means |
+|---|---|---|
+| `source` | `environment`, `stored` | Where the values come from. Never both. With no row, `environment`. |
+| `connection` | `connected`, `not_connected`, `failing` | What the connection is, before the enable flag. |
+| `status` | the above plus `disabled` | What a card, the health page and the palette show. `disabled` wins, because an admin chose it and it explains the most. |
+| `usable` | boolean | `enabled && connection === "connected"`. The one question the engine asks. |
+| `verification` | `never_tested`, `stale`, `passed`, `failed` | What the last connection test proved, and whether it still applies. |
+| `failure.reason` | nine values, see `packages/contracts/api.ts` | Split as finely as the admin's ACTION differs. |
+
+Two rules decide `connected`:
+
+- **Complete is not verified.** Stored values become the active version only when
+  their test passed, so a stored connection that is `connected` always has a
+  passing verdict behind it; the resolver states that as its own condition rather
+  than trusting the write path.
+- **Never tested is still connected, for the environment.** That is every
+  deployment on the day this lands. Telling them they are disconnected would be
+  false, and inventing a verification time would be worse, so `verification` is
+  `never_tested` and carries no time at all. S5 and S6 render that; they do not
+  build a sentence about it at the edge.
+
+A partial environment is `failing` with the missing variable NAMES, never a
+silent fall back to stored values: that would make a typo and a deliberate switch
+look the same.
+
+### Two counters, two questions
+
+`latest_version` is the concurrency token a save carries as `expectedVersion`,
+and it moves even when a save fails its test. `active_version` is the version
+actually in use when `stored` is the source, and it moves only on a pass. A save
+is therefore always minted and only sometimes activated, which is what lets an
+admin close the tab mid-test, come back to the answer, and find the previous
+working connection still running.
+
+A save builds on the LAST version, not the active one. An admin who pastes a new
+token together with a wrong URL, fails, then corrects the URL and leaves the
+secret field blank must keep the new token; carrying the active version's secret
+forward there would quietly restore the old one, pass the test, and report
+Connected until the old token was revoked.
+
+**There is no "save it anyway".** An override that activated a version whose test
+failed would make the connection read Failing at once and stop every run, so the
+escape hatch for a provider outage would take a working deployment down. If a
+real deployment is ever blocked by a broken probe, the override to add is one
+that stays usable, and its shape is decided then rather than guessed now.
+
+**The first connection is one action.** On a deployment whose environment sets
+none of an integration's declared variables there is no environment connection
+to protect, so a save whose test passed also becomes the source. Where the
+environment sets some of them, the switch stays explicit: that is the
+prepare-and-switch journey, and taking it over automatically would hide a
+half-configured environment behind stored values.
+
+### The pin: a fingerprint, not a number
+
+A run pins `{ integrationId, configFingerprint }` and re-checks it at every use
+through `checkIntegrationPin`.
+
+The fingerprint is twelve hex characters over the connection's **non-secret**
+values. Consequences, each deliberate:
+
+| Change | Verdict | Why |
+|---|---|---|
+| A rotated token | followed | The plan's decision 11: rotation has to work mid-run. |
+| A secret the manifest marks `identity` | `reconfigured` | See "An account named only by a secret" below. |
+| A different site, engine or account | `reconfigured` | Mixing the old site with the new token is unexplainable. |
+| A secret and a non-secret together | `reconfigured` | The non-secret half moved. |
+| Re-saving byte-identical values | followed | A version whose configuration is unchanged is not a reconfiguration, whatever its number. This is why it is a fingerprint and not a counter. |
+| Switching source, values identical | followed | The source is a route to values, not a value. Failing a run over it would be noise. |
+| Enabling or disabling | not a reconfiguration | Read live and reported as `disabled`, which is the more useful answer. |
+| An environment value changed by a redeploy | `reconfigured` | A row-based counter could not see this at all. |
+| A manifest gaining a field this deployment leaves empty | followed | Only fields carrying a value are fingerprinted. Otherwise S8 to S12, which each rewrite a manifest, would stop every run in flight for a connection nobody touched. |
+
+**A change to a manifest's connection fields is a drain event**, the same way a
+moved `"use step"` file is (decision 5). Renaming a field key, changing its
+`env`, or changing a default moves the fingerprint for every deployment that
+sets it, and every run in flight through that integration stops with
+`reconfigured`. Adding or removing a field nobody has set does not. A stage that
+changes a connection field drains production and demo before it merges and says
+so in its DoD.
+
+`checkIntegrationPin` answers in this order: a pin for another integration
+(a caller bug, answered rather than silently resolved against the wrong
+integration), then `disabled`, then `disconnected`, then `reconfigured`.
+Disconnecting also moves the fingerprint, so checking `reconfigured` first would
+send an admin looking for an edit nobody made. The three run-facing reasons are
+the plan's and stay three; the check also returns the resolver's own `failure`,
+so a run view can say which of "a variable is missing", "the provider refused
+the credential" and "the stored secret cannot be read" it is.
+
+### An account named only by a secret
+
+Some providers identify the account by the credential alone: a Slack bot token
+names a workspace as much as it authenticates. An integration whose fields are
+all secret would have a constant configuration fingerprint, so swapping the
+token for another workspace's would read as a rotation and a run in flight would
+post into the wrong company's channels.
+
+`ConnectionField.identity` (additive to the S0 contract, see the change log)
+marks a secret that names the account. Its value enters the configuration
+fingerprint as a digest, never in the clear, so the swap stops the run with
+`reconfigured`.
+
+Chosen over storing the account identity a connection test reported, because a
+manifest flag also works for the environment source, which may never have been
+tested, and it needs no round trip to the provider to answer "is this the same
+connection". The cost is that rotating a marked field also stops runs in flight;
+an integration should prefer a non-secret field naming the account (a workspace
+id, a site URL) and mark the secret only when the provider offers nothing else.
+
+**Where the pin lives is S4's call.** It is a value, not a row, so the cheapest
+home is the run's own workflow state, where replay restores it without a read.
+S2 adds no column to any run table.
+
+A second fingerprint, over every value including secrets, decides whether the
+last test verdict still applies. The two questions differ: a rotated token is
+exactly the change a run should follow and exactly the change that makes an old
+refusal meaningless. It is stored, never returned, and hashes each secret with
+its own slot as a salt.
+
+### Secrets
+
+AES-256-GCM under `INTEGRATION_SECRETS_KEY`, its own key and never the webhook
+key, in `apps/worker/src/infra/secrets-crypto.ts`. Envelope:
+`v1:<keyId>:<scope>:<iv>:<tag>:<ciphertext>`, where `scope` is
+`<integration id>.<field key>` and is also the GCM additional authenticated data.
+
+Unlike `webhook-crypto.ts`, which keeps its binding out of the envelope, the
+scope is stored in the clear. Neither half is a secret, and having it readable is
+what lets a read say "this row belongs to another integration" instead of "this
+row is damaged". The four failures an admin can meet are four different
+afternoons, so they are four reasons: `secrets_key_missing`,
+`secrets_key_mismatch`, `secret_foreign` and `secret_corrupted`.
+
+A secret left untouched on a save moves forward as bytes rather than being
+re-encrypted, so correcting a URL never needs the key. Disconnecting empties
+`config` and `secrets` on every past version in one statement and keeps who and
+when.
+
+Every message stored, returned or logged passes through `redactIntegrationText`
+with this connection's own secrets, because providers echo credentials in error
+bodies and that body is what an admin reads on the card.
+
+### Writes, and where they are refused
+
+Refused with **403** on any deployment whose environment differs from the
+`env_marker` the database carries, and refused outright when the marker cannot be
+read or the database cannot be reached. 403 rather than 409, because 409 on these
+routes already means "your version is stale, reload", and this one never succeeds
+from here. The refusal names both environments. The reason it is refused: an
+unclaimed database has no answer to "who owns this", and defaulting to yes is
+the wrong way to be wrong. The question is not "is this a preview": the demo
+deployment is a preview pointed at production's branch
+(`DATABASE_SHARED_WITH=production`), and a local worker with a production
+`DATABASE_URL` is the same incident with fewer witnesses. Reads work everywhere.
+
+Every write is one statement. Production runs neon-http, which cannot open an
+interactive transaction, while the pglite driver used by tests can, so a
+`db.transaction` would pass every test in this repository and 500 in production.
+
+### What S2 does not decide
+
+The impact preview before a disable or a reconfigure (decision 9) needs to count
+published workflows and runs in flight, which is the engine's knowledge: S4 and
+S6. The active provider selection for a single-provider capability is S4's, since
+it is the same question as "which integration serves this block".
+
 ## Change log
 
 Additive changes to `@integrations/sdk` after S0, newest first. Each entry
@@ -586,5 +775,6 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-18 | S2 | `ConnectionField.identity` | An integration whose fields are all secret has a constant configuration fingerprint, so replacing a Slack bot token with another workspace's would read as a rotation and a run in flight would post into the wrong company's channels. The flag marks a secret that names the account; its value enters the pin as a digest, never in the clear. Optional and absent by default, so every manifest written against S0 is unchanged. |
 | 2026-09-18 | S1 | `ErasedIntegrationRuntime` and `ErasedIntegrationCall` | The generated registry has to hold runtimes whose types come from manifests core does not know statically. `IntegrationRuntime<IntegrationManifest>` is not that type: a block executor typed against a literal block type is not assignable to one typed against `IntegrationBlockManifest`, because its parameters are contravariant, and the compiler says so. The erased interface keeps the keys and the results and erases only the parameters, so core can list an integration's blocks, health checks and capabilities and use what each call returns, and S4 narrows the call once where it builds the context. |
 | 2026-09-18 | S0 | Contract created | This record |
