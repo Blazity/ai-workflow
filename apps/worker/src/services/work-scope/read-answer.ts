@@ -122,19 +122,19 @@ const SYSTEM = [
   '- "declined_all": under a LIST question, they want none of the offered repositories.',
   '- "declined_one": under a question about ONE repository, they do not want it.',
   '- "delegated": they hand the choice to us ("your call", "you pick", "zdecyduj sam") and say nothing for or against any repository. That is an answer, not an unclear reply: that they named no repository is exactly what delegating means. Return no repositoryKeys.',
-  '- "unclear": you cannot tell what they decided. Put one short sentence in paraphrase with what they may have meant, or leave it out when that would be a guess.',
+  '- "unclear": you cannot tell what they decided. Put in paraphrase one short sentence addressed to the person who wrote the reply, as "you", saying in plain words what you understood them to want, for example "You want us to choose, as long as payments is left out." Never call their reply a contradiction, confusing or wrong, and never say anything about a repository that neither the question nor the reply says. Leave paraphrase out when even that would be a guess.',
   "",
   "Where a plain reading goes wrong:",
   "1. A question about ONE repository is a yes-or-no question, whatever words the reply uses. Any agreement (\"sure\", \"go for it\", \"fine by me\") chooses that repository. Any refusal (\"nah\", \"leave it out\", \"drop that one\") is declined_one. Handing the choice to us is delegated.",
   "2. Under a LIST question, agreement alone (\"ok\", \"sure\", a thumbs up) does not say which: unclear. A bare \"no\" does not say what it refuses: unclear. A refusal of one thing (\"drop it\", \"go without it\") cannot answer a question that offered several: unclear. A reply that refuses everything (\"none\", \"nothing from this list\", \"not any of them\", \"żadne\", and \"neither\", which people say of four as readily as of two) is declined_all, however many were offered.",
   "3. A word that chooses by count must match how many were offered: \"both\" chooses both of two, and is unclear when four were offered. \"all\" or \"every one\" chooses the whole list.",
   "4. A name the reply pushes away (\"not X\", \"anything but X\", \"without X\") is never chosen. Under ONE, pushing that repository away is declined_one. Under a LIST, a reply that only pushes names away is unclear, even when it also hands the choice to us (\"your call, just not payments\"): it says what to avoid, and the rest of the list would be our subtraction, not their choice.",
-  "5. A name the reply points at is chosen, whatever refusal or hand-over sits beside it: \"no, take payments\" chooses payments, \"storefront yes, not payments\" chooses storefront, \"your call, but payments for sure\" chooses payments.",
+  "5. An offered name the reply points at is chosen, whatever refusal or hand-over sits beside it: \"no, take payments\" chooses payments, \"storefront yes, not payments\" chooses storefront, \"your call, but payments for sure\" chooses payments. A name that was not offered is read separately, below.",
   "6. A name followed by a word that could refuse (\"payments: none\", \"payments - no\") is unclear: it could refuse that name, the others or everything.",
   "7. A lone shrug (\"whatever\", \"meh\", \"dunno\", \"nie wiem\") asks nothing of us: unclear. Once it refers to our judgment (\"whatever seems right to you\", \"use your judgment\", \"zrób jak chcesz\") it hands us the choice: delegated.",
   "8. A reply that points elsewhere (\"check the ticket\"), is empty, or uses a word like \"none\" about something other than the repositories (\"none of the tests cover this\") is unclear.",
   "",
-  "A name the reply points at that is NOT in the offered list goes in unofferedNames, copied from the reply and nothing around it, never in repositoryKeys. It does not change how the rest is read: \"payments and invoicing\", with invoicing not offered, chooses payments and puts invoicing in unofferedNames; a reply naming only outside names chose nothing offered and is unclear. Leave unofferedNames out when there is no such name, and never put in it a name the reply was pushing away.",
+  "A name the reply points at that is NOT in the offered list goes in unofferedNames, copied from the reply and nothing around it, never in repositoryKeys. You are never shown which repositories this deployment holds, so never judge whether such a name exists or can be used, and never say so in a paraphrase: our code looks it up. It does not change how the rest is read: \"payments and invoicing\", with invoicing not offered, chooses payments and puts invoicing in unofferedNames; under ONE, \"no, use invoicing instead\" is declined_one and puts invoicing in unofferedNames. A reply naming only outside names, and saying nothing about the offered ones, chose nothing offered and is unclear. Leave unofferedNames out when there is no such name, and never put in it a name the reply was pushing away.",
   "",
   "When a reply fits none of the plain readings above, choose unclear rather than guess: an unclear reading costs one more question, a wrong one records a decision the person did not make.",
 ].join("\n");
@@ -317,9 +317,10 @@ function allowlistOf(question: RepositoryQuestion): RepositoryKey[] {
  *
  * NAMES, NEVER KEYS. Nothing from here becomes a decision on the model's say:
  * the allowlist above is still the only thing a READING may choose. Where the
- * answer chose repositories, the record looks each name up in the catalog it
- * already loaded (`resolveUnofferedNames` in `from-answer.ts`) and takes the
- * ones this deployment holds as that person's own choice; a name that resolves
+ * answer chose or refused what it was offered, the record looks each name up in
+ * the catalog it already loaded (`resolveUnofferedNames` in `from-answer.ts`)
+ * and takes the ones this deployment holds as that person's own choice; a name
+ * that resolves
  * to nothing records nothing. This exists so that a person who named two
  * repositories gets both, or hears why not, instead of finding out from a pull
  * request that does half the job (A19c).

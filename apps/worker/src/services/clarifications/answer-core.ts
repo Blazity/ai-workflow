@@ -747,7 +747,9 @@ async function answerClarificationAndResumeWithPersistence(
     tell === undefined
       ? undefined
       : formatAnswerNotRecordedComment(tell, {
-          listedRepositories: (row.askedRepositories?.length ?? 0) > 0,
+          // How many repositories the question put in front of them, so a
+          // question about one is answered in the singular.
+          listedCount: new Set((row.askedRepositories ?? []).map((asked) => asked.repositoryKey)).size,
           // The second fact the sentence needs, and this row is the only place
           // that holds it: a question the run raised about a repository the
           // catalog does not enable or cannot serve offers a path route that
@@ -790,6 +792,7 @@ async function answerClarificationAndResumeWithPersistence(
     ? formatAnswerDelegatedComment({
         taken: recorded.delegated.taken,
         notTaken: recorded.delegated.notTaken,
+        notEnabled: recorded.delegated.notEnabled,
         commentPath: commentPathAfterAnUnrecordedAnswer({ questions: row.questions }),
       })
     : undefined;
@@ -804,9 +807,9 @@ async function answerClarificationAndResumeWithPersistence(
   // alternative to "your answer recorded nothing": both can be true of one
   // reply, and this is the one nothing else on this path can say.
   //
-  // AND, WHERE THE ANSWER CHOSE REPOSITORIES, WHAT BECAME OF EACH NAME ONCE IT
-  // WAS LOOKED UP: taken, recorded but not enabled, or matched to nothing. Where
-  // the answer chose nothing (a refusal or a delegation beside a name, or an
+  // AND, WHERE THE ANSWER CHOSE OR REFUSED WHAT IT WAS OFFERED, WHAT BECAME OF
+  // EACH NAME ONCE IT WAS LOOKED UP: taken, recorded but not enabled, or matched
+  // to nothing. Where the answer did neither (a delegation beside a name, or an
   // answer we declined to attribute) the name was not acted on at all, and the
   // sentence that says so is the one this path has always used.
   const notOfferedSentence = recorded.alsoNamed

@@ -393,7 +393,7 @@ export function aLaterRunCanPickUpAskedRepositories(
  * "none" too. A second phrase for the same act would teach that the exact words
  * matter and then hand the person two of them.
  *
- * `question.listedRepositories` is what they had in front of them, and it
+ * `question.listedCount` is what they had in front of them, and it
  * decides which words are offered back. A question that listed none never
  * offered "none" to anybody, and answering it that way would record nothing, so
  * that case is told to name a path instead.
@@ -415,10 +415,12 @@ export function aLaterRunCanPickUpAskedRepositories(
 export function formatAnswerNotRecordedComment(
   reason: AnswerNotRecordedReason,
   question: {
-    /** Did the question put repository keys in front of the person at all? */
-    listedRepositories: boolean;
+    /** How many repositories the question put in front of the person. None
+     *  means it listed no repository at all; one makes every sentence about
+     *  them singular, which a question about one repository needs. */
+    listedCount: number;
     /** Could a later run's path matcher pick those repositories up out of a
-     *  comment? Read only where `listedRepositories` is true. */
+     *  comment? Read only where the question listed repositories. */
     aLaterRunCanPickThemUp: boolean;
     /** What may be said about writing one of their paths in a comment. Never
      *  that it works, because nothing on this surface can prove it:
@@ -442,21 +444,25 @@ export function formatAnswerNotRecordedComment(
   // repositories it dropped are not decided against, and a later run may take
   // them. Saying only the first half reads as a decision this person made for
   // good, which is the opposite of what happened.
+  const listedRepositories = question.listedCount > 0;
   const nowThisRun =
-    reason === "no_words" && question.listedRepositories
+    reason === "no_words" && listedRepositories
       ? "Your answer reached the run, which is continuing without the repositories the question asked about." +
         " Nothing was recorded about them, so a later run may use them and may ask about them again."
       : "Your answer reached the run, which is continuing.";
 
   // The route that works, written from what the next run actually reads. The
   // middle branch is the one the run itself can close: it listed repositories,
-  // and none of them is one a written path could reach.
-  const namingWorks = question.listedRepositories
+  // and none of them is one a written path could reach. Singular where the
+  // question was about one repository: "one of their paths" about a single
+  // repository reads as if the person had missed some.
+  const one = question.listedCount === 1;
+  const namingWorks = listedRepositories
     ? question.aLaterRunCanPickThemUp
       ? question.commentPath === "too_many_open"
         ? tooManyNamedForAComment
-        : onlyTheRecordIsProven
-      : onlyTheCatalogCanOpenThese
+        : onlyTheRecordIsProven(one)
+      : onlyTheCatalogCanOpenThese(one)
     : "Write the full path of the repository this work should use in a comment here, for example github:acme/app, and the next run reads this ticket and picks it up.";
   // The route that does not exist, said plainly instead of implied. Only worth
   // saying where the question offered repositories to decline.
@@ -467,7 +473,7 @@ export function formatAnswerNotRecordedComment(
     evidence_gone: `${ASKED_AGAIN_ON_A_LATER_RUN} ${ONE_PERSON_ANSWERING_IT} ${namingWorks}`,
     uncounted: `${ASKED_AGAIN_ON_A_LATER_RUN} ${ONE_PERSON_ANSWERING_IT} ${namingWorks}`,
     unaddressed_refusal: `${ASKED_AGAIN_ON_A_LATER_RUN} ${decliningHasNoShortcut} ${namingWorks}`,
-    no_repository_named: question.listedRepositories
+    no_repository_named: listedRepositories
       ? `${ASKED_AGAIN_ON_A_LATER_RUN} ${decliningHasNoShortcut} ${namingWorks}`
       : `${ASKED_AGAIN_ON_A_LATER_RUN} ${namingWorks}`,
     // NOT `namingWorks`, and that is the point of the reason. They already
@@ -586,8 +592,17 @@ export function formatAnswerNotOfferedComment(input: {
  * WHAT IT DID NOT TAKE IS NOT LEFT OUT. A person who names three of five has
  * judged the other two, and `formatAnswerLeftOutComment` says so; a person who
  * hands the decision back has judged nothing, so the repositories we did not
- * take stay open and a later run may take them or ask. Saying "left out of this
- * work" here would be claiming a decision in their name.
+ * take stay open. Saying "left out of this work" here would be claiming a
+ * decision in their name. Open means the WORK may still take one if it needs
+ * it, and that includes this very run: on production (AWP-247) the run's own
+ * agent asked for the one left open three minutes after this note and got it,
+ * so a note naming only "a later run" was not the whole truth. What it no
+ * longer promises is a question, which nothing here can guarantee.
+ *
+ * ONE MESSAGE, AND ITS NUMBERS AGREE. It used to say a later run "may still
+ * take it or ask about it" and then that "the next run may not ask about them
+ * either", with "them" standing for one repository. Every pronoun follows the
+ * count of the list it stands for.
  *
  * THE WAY TO CHANGE IT IS THE ONE THAT WORKS ON EVERY CHANNEL: the work's
  * repository list. The ticket route is named only to shut it, and only where
@@ -596,6 +611,10 @@ export function formatAnswerNotOfferedComment(input: {
  * were open, and there a path written in a comment brings nothing in
  * (`commentPathAfterAnUnrecordedAnswer`). A person answering on the ticket
  * would otherwise try the one thing that silently does not work.
+ *
+ * ENABLING IS MENTIONED ONLY WHERE IT IS TRUE, per repository, in the sentence
+ * the run itself uses for it: a person whose repositories are all enabled has
+ * no use for a condition that does not apply to them.
  */
 export function formatAnswerDelegatedComment(input: {
   /** What the workflow took, in the order the question listed them. */
@@ -603,37 +622,54 @@ export function formatAnswerDelegatedComment(input: {
   /** What the question listed and the workflow did not take, less anything a
    *  person had already decided on, which is theirs and not left open. */
   notTaken: readonly string[];
+  /** Of the two lists above, the repositories this deployment's catalog does
+   *  not enable. Empty on a deployment that never activated its catalog. */
+  notEnabled: readonly string[];
   commentPath: UnrecordedAnswerCommentPath;
 }): string {
-  const notTakenThem = input.notTaken.length === 1 ? "it" : "them";
+  const { taken, notTaken } = input;
+  const it = notTaken.length === 1 ? "it" : "them";
   // Both empty only when a person had already selected or excluded every
   // repository the question listed (`repositoriesADelegationTakes` leaves
   // those alone), so there was nothing left to choose among.
   const opening =
-    input.taken.length > 0
-      ? `You asked the workflow to decide, so it chose ${input.taken.join(", ")} for this work${input.taken.length > 1 ? ", in the order the question listed them" : ""}.`
-      : input.notTaken.length > 0
-        ? `You asked the workflow to decide, and it continues without ${input.notTaken.join(", ")}, because this run cannot use ${notTakenThem} as things stand.`
+    taken.length > 0
+      ? `You asked the workflow to decide, so it chose ${taken.join(", ")} for this work${taken.length > 1 ? ", in the order the question listed them" : ""}.`
+      : notTaken.length > 0
+        ? `You asked the workflow to decide, and it continues without ${notTaken.join(", ")}, because this run cannot use ${it} as things stand.`
         : "You asked the workflow to decide, and every repository the question listed already carries a decision a person made on this work, so it changed none of them.";
-  const open =
-    input.notTaken.length === 0
+  // Where it took nothing, what it left is what this run cannot use, so only
+  // a later run may come back to it.
+  const leftOpen =
+    notTaken.length === 0
       ? undefined
-      : input.taken.length > 0
-        ? `It did not choose ${input.notTaken.join(", ")}, and nothing is recorded about ${notTakenThem}, so a later run may still take ${notTakenThem} or ask about ${notTakenThem}.`
-        : `Nothing is recorded about ${notTakenThem}, so a later run may ask again.`;
+      : taken.length > 0
+        ? `It left ${notTaken.join(", ")} open: nothing is recorded about ${it}, so this run's agent or a later run may still take ${it} if the work needs ${it}.`
+        : `Nothing is recorded about ${it}, so a later run may ask about ${it} again.`;
+  const commentPathShut =
+    input.commentPath === "too_many_open" && notTaken.length > 0
+      ? `Writing ${notTaken.length === 1 ? "its path" : "their paths"} in a comment here does not bring ${it} in while this ticket names more than three repositories a run could still start from.`
+      : undefined;
   return [
     opening,
-    ...(open ? [open] : []),
-    ...(input.commentPath === "too_many_open" ? [COMMENT_PATH_SHUT_WHILE_TOO_MANY_OPEN] : []),
+    ...(leftOpen ? [leftOpen] : []),
+    ...(commentPathShut ? [commentPathShut] : []),
+    ...input.notEnabled.map(notEnabledOnTheRepositoriesPage),
     theWayToChangeTheChoice,
   ].join(" ");
 }
 
 /** Changing a choice the workflow made, which is selecting or removing, on the
- *  one surface that does both whatever the ticket says. The catalog clause is
- *  the one `theWayBackIntoTheWork` carries, for the same reason. */
+ *  one surface that does both whatever the ticket says. */
 const theWayToChangeTheChoice =
-  "To change that, select or remove repositories in this work's repository list, through the work scope API or the work_scope.edit tool; a repository this deployment does not enable has to be enabled on the repositories screen first, or that selection is refused.";
+  "To change what this work uses, select or remove repositories in this work's repository list, through the work scope API or the work_scope.edit tool.";
+
+/** A repository this deployment's catalog does not enable, in the words the run
+ *  itself uses for it (`unopenableRemedy` in `engine/work-scope/context.ts`), so
+ *  the person reads one story wherever they meet it. */
+function notEnabledOnTheRepositoriesPage(key: string): string {
+  return `${key} is not enabled on the Repositories page. Somebody with access to that page can enable it, and until then no run can use it.`;
+}
 
 /**
  * WHAT HAPPENED TO THE REPOSITORIES AN ANSWER NAMED THAT THE QUESTION NEVER
@@ -646,8 +682,8 @@ const theWayToChangeTheChoice =
  * run itself uses for that repository (`unopenableRemedy` in
  * `engine/work-scope/context.ts`), so the person reads one story in two
  * places. A name that matches nothing this deployment holds recorded nothing,
- * which keeps an invented key harmless, and the way to add one is the work's
- * repository list, exactly as before.
+ * which keeps an invented key harmless, and the list cannot take it either, so
+ * the person is told to check the name or have it added to the catalog.
  */
 export function formatAnswerAlsoNamedComment(input: {
   added: readonly string[];
@@ -665,26 +701,32 @@ export function formatAnswerAlsoNamedComment(input: {
   }
   for (const key of input.notEnabled) {
     sentences.push(
-      `Your answer also named ${key}, which is recorded as your choice. ${key} is not enabled on the Repositories page. Somebody with access to that page can enable it, and until then no run can use it.`,
+      `Your answer also named ${key}, which is recorded as your choice. ${notEnabledOnTheRepositoriesPage(key)}`,
     );
   }
   const overLimit = input.overLimit ?? [];
+  // A NAME THAT MATCHED NOTHING CANNOT BE SELECTED. The work's repository list
+  // refuses a key the catalog does not hold (`work_scope.edit` writes nothing
+  // for it), so sending this person there spends their next attempt on a route
+  // that fails (AWP-252 on production). What can be wrong is how the name was
+  // written, which covers a bare word too: "web" is never resolved (A3), even
+  // where the catalog holds github:acme/web. What can fix a name written right
+  // is the catalog.
   if (input.unmatched.length > 0) {
-    const them = input.unmatched.length === 1 ? "it" : "them";
+    const one = input.unmatched.length === 1;
     sentences.push(
-      `Your answer also named ${input.unmatched.join(", ")}, which could not be matched to a repository this deployment holds, so nothing about ${them} was recorded.`,
+      `Your answer also named ${input.unmatched.join(", ")}, which could not be matched to a repository this deployment holds, so nothing about ${one ? "it" : "them"} was recorded.`,
+      one
+        ? "A repository is matched by its full path, such as github:acme/app: check how it was written, and if it is right, it has to be added to this deployment's catalog on the repositories screen before this work can use it."
+        : "A repository is matched by its full path, such as github:acme/app: check how they were written, and if a name is right, that repository has to be added to this deployment's catalog on the repositories screen before this work can use it.",
     );
   }
+  // Held here and only past what one answer records, so the list does take it.
   if (overLimit.length > 0) {
-    const them = overLimit.length === 1 ? "it" : "them";
+    const one = overLimit.length === 1;
     sentences.push(
-      `Your answer also named ${overLimit.join(", ")}, past the eight repositories one answer records at once, so nothing about ${them} was recorded.`,
-    );
-  }
-  const notRecorded = input.unmatched.length + overLimit.length;
-  if (notRecorded > 0) {
-    sentences.push(
-      `To add ${notRecorded === 1 ? "it" : "one of them"} to this work, select it in this work's repository list, through the work scope API or the work_scope.edit tool; a repository this deployment does not enable has to be enabled on the repositories screen first.`,
+      `Your answer also named ${overLimit.join(", ")}, past the eight repositories one answer records at once, so nothing about ${one ? "it" : "them"} was recorded.`,
+      `To add ${one ? "it" : "one of them"} to this work, select it in this work's repository list, through the work scope API or the work_scope.edit tool; a repository this deployment does not enable has to be enabled on the repositories screen first.`,
     );
   }
   return sentences.join(" ");
@@ -821,8 +863,11 @@ const checkTheNameOrAddIt =
  *  other channel. "The repositories screen" is the name this file has used
  *  since `checkTheNameOrAddIt`, and one name for one place is worth more here
  *  than matching the other file's word for it. */
-const onlyTheCatalogCanOpenThese =
-  "Writing one of their paths in a comment here reaches nothing, because the catalog cannot serve them as things stand: somebody with access to the repositories screen has to enable them there before any run can use one, and naming one the next time the question is asked records it then.";
+function onlyTheCatalogCanOpenThese(one: boolean): string {
+  return one
+    ? "Writing its path in a comment here reaches nothing, because the catalog cannot serve it as things stand: somebody with access to the repositories screen has to enable it there before any run can use it, and naming it the next time the question is asked records it then."
+    : "Writing one of their paths in a comment here reaches nothing, because the catalog cannot serve them as things stand: somebody with access to the repositories screen has to enable them there before any run can use one, and naming one the next time the question is asked records it then.";
+}
 
 /** The way out when the question listed more than three repositories.
  *
@@ -844,8 +889,9 @@ const tooManyNamedForAComment = `${COMMENT_PATH_SHUT_WHILE_TOO_MANY_OPEN} To use
  *  taken: a question raised mid run says nothing about how many repositories
  *  the ticket names, and a path written there can tip the next run into asking
  *  instead. Both routes named here work whatever the ticket says. */
-const onlyTheRecordIsProven =
-  "To use one of them after all, select it in this work's repository list through the work scope API or the work_scope.edit tool, which the next run starts from, or name it the next time the question is asked.";
+function onlyTheRecordIsProven(one: boolean): string {
+  return `To use ${one ? "it" : "one of them"} after all, select it in this work's repository list through the work scope API or the work_scope.edit tool, which the next run starts from, or name it the next time the question is asked.`;
+}
 
 /** What to do differently when it is asked again, for the reasons that are
  *  about HOW the answer arrived rather than what it said. */

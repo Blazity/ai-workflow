@@ -15,6 +15,7 @@ import type {
 import {
   activeRuns,
   repositories,
+  repositoryCatalogState,
   workflowRuns,
   workScopeTrail,
 } from "../../db/schema.js";
@@ -863,7 +864,10 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     });
     const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
     expect(said).toContain("could not be matched to a repository this deployment holds");
-    expect(said).toContain("work scope API or the work_scope.edit tool");
+    // A bare word is never resolved, so what they need to hear is how a
+    // repository is matched, not a list that would refuse the word as well.
+    expect(said).toContain("A repository is matched by its full path");
+    expect(said).not.toContain("work_scope.edit");
   });
 
   it("records every repository in a list of several as that one person's own decision", async () => {
@@ -1820,10 +1824,12 @@ describe("an answer that hands the decision back, or names more than it was offe
       }
       const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
       expect(said).toContain(`chose ${DOCS}, ${API}, ${WEB}`);
-      expect(said).toContain(`did not choose ${OPS}`);
+      expect(said).toContain(`It left ${OPS} open: nothing is recorded about it`);
       // The question was the ticket-text one, so the ticket route is shut and
       // the sentence says so rather than sending them to it.
-      expect(said).toContain("brings nothing into this work");
+      expect(said).toContain("Writing its path in a comment here does not bring it in");
+      // Everything here is enabled, so nothing sends them to enable anything.
+      expect(said).not.toContain("enable");
       // And the run resumes, carrying the reading that says what happened.
       expect(mocks.resumeHook).toHaveBeenCalledWith(
         "hook-token" in row ? expect.anything() : expect.anything(),
@@ -1909,6 +1915,9 @@ describe("an answer that hands the decision back, or names more than it was offe
     // of that one does to the run; unlike a decline it writes nothing permanent
     // in that person's name, because a delegation is not a refusal.
     it("continues without a repository the question was raised about because the run cannot use it", async () => {
+      // Activated, as on production: on the bridge every repository reads as
+      // enabled and there is nothing to tell anybody about enabling.
+      await db.insert(repositoryCatalogState).values({ id: 1, activated: true });
       const row = await seedPending(
         [{ repositoryKey: LEGACY, askedBecause: "not_enabled", named: true }],
         [`Repository expansion: ${LEGACY} is not enabled here. Reply "none" to continue without it.`],
@@ -1921,6 +1930,9 @@ describe("an answer that hands the decision back, or names more than it was offe
       expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
       const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
       expect(said).toContain(`continues without ${LEGACY}`);
+      // The one case where the page that enables a repository is worth naming,
+      // in the words the run itself uses for it.
+      expect(said).toContain(`${LEGACY} is not enabled on the Repositories page`);
     });
 
     it("keeps a reply that says what to avoid unclear, records nothing and does not resume", async () => {
@@ -2032,6 +2044,91 @@ describe("an answer that hands the decision back, or names more than it was offe
       const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
       expect(said).toContain("github:evil/other");
       expect(said).toContain("nothing about it was recorded");
+    });
+
+    // AWP-255 on production, replayed on the ticket channel. The question was
+    // about one repository the run cannot use; the reply turned it down and
+    // named an enabled one the question never listed. Both halves are decisions
+    // and both are recorded: the one asked about as a decline of its kind (an
+    // `unavailable` entry, since it was asked because it is not enabled), the
+    // named one as this person's choice. A bare no on a ticket records nothing
+    // (A8), and this is not one: nobody types a repository path by accident.
+    it("declines the one asked about and takes the enabled one named beside the refusal, on the ticket too", async () => {
+      const row = await seedPending(
+        [{ repositoryKey: LEGACY, askedBecause: "not_enabled", named: true }],
+        [`Repository expansion: Research requested ${LEGACY}, which this run cannot use. Reply "none" to continue without it.`],
+      );
+      const tracker = makeTracker();
+
+      const outcome = await answer(tracker, row.id, `Ada: no, but take ${WEB} as well`, VIA_JIRA);
+
+      expect(outcome.kind).toBe("answered");
+      const byKey = Object.fromEntries((await entries()).map((entry) => [entry.repositoryKey, entry]));
+      expect(byKey[WEB]).toMatchObject({
+        state: "selected",
+        origin: "person",
+        rationale: "Named in the answer to a repository question.",
+        decidedBy: { kind: "person", actorLabel: "Ada (via Jira)" },
+      });
+      expect(byKey[LEGACY]).toMatchObject({
+        state: "unavailable",
+        unavailableReason: "not_enabled",
+        origin: "person",
+      });
+      expect((await whatTheResumedRunAttaches()).attach).toEqual([WEB]);
+      const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+      expect(posted).toContain(`declining ${LEGACY}`);
+      expect(posted).toContain(`also named ${WEB}, which the question did not list`);
+      expect(posted).not.toContain("plain no");
+    });
+
+    it("reads a refusal of the whole list beside a name the question did not list as both decisions", async () => {
+      const two = [API, DOCS];
+      const row = await seedPending(selection(two), whichOfThese(two));
+      // The trail line the asking run writes beside its question, which is what
+      // the answered set joins the answer to.
+      await appendWorkScopeQuestionAsked(db, {
+        subjectKey: SUBJECT,
+        runId: RUN,
+        clarificationId: row.id,
+        asked: selection(two),
+      });
+
+      const outcome = await answer(makeTracker(), row.id, `none of these, take ${BILLING}`);
+
+      expect(outcome.kind).toBe("answered");
+      await expect(entries()).resolves.toEqual([
+        expect.objectContaining({ repositoryKey: BILLING, state: "selected", origin: "person" }),
+      ]);
+      // The two it listed are declined the way a selection question declines:
+      // no entry, bound through the answered set, so no later run takes them.
+      await expect(readWorkScopeAnsweredRepositories(db, SUBJECT)).resolves.toEqual(
+        expect.arrayContaining([API, DOCS]),
+      );
+      expect((await whatTheResumedRunAttaches()).attach).toEqual([BILLING]);
+      const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
+      expect(said).toContain(`declining ${API}, ${DOCS}`);
+      expect(said).toContain(`also named ${BILLING}`);
+    });
+
+    // The same refusal on the ticket beside a name nothing here holds. Nothing
+    // was taken, so the refusal is the bare no A8 is about and records nothing;
+    // the name is still looked up and they hear it matched nothing, rather than
+    // being sent to select a repository the list would refuse.
+    it("still records nothing for a bare no on the ticket when the name beside it matches nothing, and says the name matched nothing", async () => {
+      const row = await seedPending(
+        [{ repositoryKey: LEGACY, askedBecause: "not_enabled", named: true }],
+        [`Repository expansion: Research requested ${LEGACY}, which this run cannot use. Reply "none" to continue without it.`],
+      );
+      const tracker = makeTracker();
+
+      const outcome = await answer(tracker, row.id, "Ada: no, but take github:evil/other as well", VIA_JIRA);
+
+      expect(outcome.kind).toBe("answered");
+      await expect(entries()).resolves.toEqual([]);
+      const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
+      expect(said).toContain("plain no");
+      expect(said).toContain("github:evil/other, which could not be matched to a repository this deployment holds");
     });
 
     // The three guards that make "what this deployment holds" an acceptable
