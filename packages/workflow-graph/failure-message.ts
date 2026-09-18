@@ -50,7 +50,11 @@ const SNIPPET_MAX_LENGTH = 160;
  * every Slack message and ticket comment, so it is the one case where
  * `composeWithinBound` clamps the lead rather than keeping it whole. Recorded
  * here rather than paid. */
-const MESSAGE_MAX_LENGTH = 1_100;
+/** Exported so a consumer's test derives its fixture from the bound instead of
+ *  guessing a length that happens to exceed today's value. A test calibrated
+ *  to an old bound does not fail loudly when the bound moves: its own
+ *  precondition quietly stops holding, and it goes on asserting nothing. */
+export const MESSAGE_MAX_LENGTH = 1_100;
 
 /** Longest single-line detail written to the correlated operator log record.
  * Matches the bound `logPhaseFailure` already uses for a logged reason, so one
