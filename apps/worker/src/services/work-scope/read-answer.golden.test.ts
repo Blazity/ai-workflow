@@ -90,19 +90,20 @@ const ONE_UNAVAILABLE: RepositoryQuestion = {
  *  The real names stay because the flip depends on them: with acme names
  *  swapped in, the same prompt read the reply correctly and the row proved
  *  nothing. */
-const WHICH_OF_FOUR = ((keys: RepositoryKey[]): RepositoryQuestion => ({
-  questions: [
-    `More than 3 repositories match this ticket. Which repositories are essential for the initial research? Reply with one or more of: ${keys.join(", ")}. A repository you do not name is left out of this work from now on, and no later run takes it on its own.`,
-  ],
-  askedKeys: keys,
-  shape: "list",
-  heldKeys: [],
-}))([
+const PRODUCTION_FOUR = [
   "github:blazity/ai-workflow-demo",
   "github:blazity/ai-workflow-prod",
   "github:blazity/aiw-checks-fixture",
   "gitlab:filipmaszota3/ai-workflow-integration-test",
-] as RepositoryKey[]);
+] as RepositoryKey[];
+const WHICH_OF_FOUR: RepositoryQuestion = {
+  questions: [
+    `More than 3 repositories match this ticket. Which repositories are essential for the initial research? Reply with one or more of: ${PRODUCTION_FOUR.join(", ")}. A repository you do not name is left out of this work from now on, and no later run takes it on its own.`,
+  ],
+  askedKeys: PRODUCTION_FOUR,
+  shape: "list",
+  heldKeys: [],
+};
 
 type Expected =
   | { kind: "repositories"; repositoryKeys: RepositoryKey[] }
