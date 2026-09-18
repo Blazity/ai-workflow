@@ -65,6 +65,7 @@ const GRAPH_PACK =
   "pnpm --dir apps/worker exec vitest run " +
   [...WORKFLOW_TESTS, ...WORKFLOW_GRAPH_TESTS].join(" ");
 const PACKAGES = ["pnpm run test:packages", "pnpm run test:packages:zod4"];
+const REGISTRY = "pnpm run gen:integrations --check";
 const GRAPH_ZOD4 = "pnpm --filter @shared/workflow-graph run test:zod4";
 const SDK_SEAM =
   "pnpm --dir apps/worker exec vitest run " + INTEGRATION_SDK_SEAM_TESTS.join(" ");
@@ -193,8 +194,10 @@ test("scope table selects only exact narrow commands", () => {
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
     [["packages/conditions/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
     [["packages/costs/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
-    [["integrations/sdk/index.ts"], ["pnpm run typecheck", SDK_SEAM, ...PACKAGES, GATES]],
-    [["integrations/sdk/conformance.test.ts"], ["pnpm run typecheck", SDK_SEAM, ...PACKAGES, GATES]],
+    [["integrations/sdk/index.ts"], ["pnpm run typecheck", SDK_SEAM, REGISTRY, ...PACKAGES, GATES]],
+    [["integrations/sdk/conformance.test.ts"], ["pnpm run typecheck", SDK_SEAM, REGISTRY, ...PACKAGES, GATES]],
+    [["integrations/_fixtures/demo/manifest.ts"], ["pnpm run typecheck", SDK_SEAM, REGISTRY, ...PACKAGES, GATES]],
+    [["scripts/gates/generate-integration-registry/render.ts"], ["pnpm run test:ci", REGISTRY, GATES]],
     [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, ...PACKAGES, GATES]],
     [["packages/workflow-graph/v2-branch.ts"], ["pnpm run typecheck", ...WB.slice(1), GRAPH_PACK, SDK, ...PACKAGES, GRAPH_ZOD4, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
@@ -216,6 +219,7 @@ test("scope table selects only exact narrow commands", () => {
     [[".codex/hooks/context-budget-guard.mjs"], ["pnpm run test:ci"]],
     [["apps/worker/.agents/skills/workflow/SKILL.md"], ["pnpm run gate:docs-status"]],
     [[".dependency-cruiser.cjs"], [GATES]],
+    [["scripts/gates/boundaries.mjs"], ["pnpm run test:ci", GATES]],
   ];
   for (const [paths, expected] of rows) assert.deepEqual(commands(paths), expected, paths.join(","));
 });
@@ -226,7 +230,7 @@ test("an integration package change is a known scope that runs the SDK's own sui
   assert.deepEqual(planned.errors, []);
   assert.equal(planned.scopes.includes("integrations"), true);
   const shown = new Set(planned.commands.map(show));
-  for (const command of ["pnpm run typecheck", ...PACKAGES, SDK_SEAM]) {
+  for (const command of ["pnpm run typecheck", ...PACKAGES, SDK_SEAM, REGISTRY]) {
     assert.equal(shown.has(command), true, command);
   }
   assert.deepEqual(commands(["integrations/sdk/NOTES.md"]), ["pnpm run gate:docs-status"]);

@@ -68,6 +68,32 @@ export interface IntegrationRuntime<M extends IntegrationManifest>
   readonly manifest: M;
 }
 
+/**
+ * One runtime as the generated registry holds it. Every signature here is
+ * typed from a manifest, and core reads the manifest at run time rather than
+ * knowing it statically, so the parameters are erased and the keys and results
+ * are not: core can list an integration's blocks, health checks and
+ * capabilities and use what each call returns, and the stage that builds a
+ * context narrows the call once where it builds it.
+ *
+ * `IntegrationRuntime<IntegrationManifest>` is not that type: a block executor
+ * typed against a literal block type is not assignable to one typed against
+ * `IntegrationBlockManifest`, because its parameters are contravariant. Trying
+ * it is how this interface came to exist.
+ */
+export interface ErasedIntegrationRuntime {
+  readonly manifest: IntegrationManifest;
+  readonly testConnection: ErasedIntegrationCall<ConnectionTestResult>;
+  readonly capabilities: Readonly<Record<string, (...args: never[]) => unknown>>;
+  readonly blocks: Readonly<
+    Record<string, ErasedIntegrationCall<IntegrationBlockOutcome<IntegrationBlockManifest>>>
+  >;
+  readonly health: Readonly<Record<string, ErasedIntegrationCall<IntegrationHealthResult>>>;
+}
+
+/** A call whose arguments core builds from the manifest rather than the type. */
+export type ErasedIntegrationCall<R> = (...args: never[]) => Promise<R>;
+
 /** Core creates adapters through these, with a fresh context whenever the connection changes. */
 export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
   issue_tracker: (ctx: IntegrationContext<M>) => IssueTrackerAdapter;
@@ -169,4 +195,3 @@ export function defineIntegrationRuntime<M extends IntegrationManifest>(
 ): IntegrationRuntime<M> {
   return { ...definition, manifest };
 }
-

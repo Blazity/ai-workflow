@@ -2,6 +2,7 @@ packages:
   - "apps/*"
   - "packages/*"
   - "integrations/*"
+  - "integrations/_fixtures/*"
 
 # One version per dependency that more than one workspace project declares.
 # scripts/gates/check-deps-consistency.mjs fails when a shared dependency is

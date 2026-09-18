@@ -314,6 +314,91 @@ integration package depends on it.
   every moved name with the same kind (type or value), checked with the
   compiler API against the files at the start commit.
 
+### What S1 decided inside that frame
+
+These were open to the S1 executor. Each is a two-way door.
+
+- **The registries are a package, `integrations/registry`.** Core may import
+  an integration only through it, and that is a rule the boundaries gate can
+  state because the registry is its own tier. Two generated files, because
+  they end up in different bundles: `manifests.generated.ts` behind the root
+  entry is plain data, read by the dashboard in a browser and by the Workflow
+  DevKit inside the flow bundle; `runtimes.generated.ts` behind
+  `@integrations/registry/worker` carries provider SDKs and Node modules and
+  is server only. A rule in `tiers.json` refuses an import that crosses
+  between them, because that failure appears only in a Vercel build.
+- **No dashboard registry yet.** The manifest and runtime shapes were frozen
+  in S0; a dashboard entry has no type at all, and decision 18 leaves its host
+  UI and its page shape to S7. Generating one now would either invent a
+  contract S0 did not freeze or ship a `Record<string, unknown>` S7 would have
+  to break. The manifest registry already carries each page's id and label,
+  which is what a card and a sidebar read; only the React module needs a third
+  registry, and it arrives with the types that describe it.
+- **The manifest registry is an array in id order, and the worker registry a
+  lookup by id.** The array is the honest generated artifact: its order is
+  stable and its diff is reviewable. The indexes by id, by block type and by
+  capability are hand-written derivations in `index.ts` and `worker.ts`, where
+  they can be documented, and none of them names an id.
+- **Entries are imported by relative path, as the block catalog imports block
+  manifests.** `gen:integrations` stays a pure file write, with no dependency
+  to add to the registry's `package.json` and no lockfile change, so adding an
+  integration is a folder and one command.
+- **The fixture flag is `INTEGRATION_FIXTURES`, read at generation time.** The
+  committed registry is the one generated without it, so a production build
+  carries no import of `integrations/_fixtures` at all; CI and demo regenerate
+  with it. A runtime branch would bundle the fixture as dead code, and a
+  package export condition would ask Nitro, Next and the DevKit bundler to
+  agree on a custom resolve condition. `gen:integrations --check` runs in CI
+  without the flag, so a fixture that reached the committed registry fails
+  there.
+- **A directory under `integrations/` without a manifest is refused, not
+  skipped**, apart from `sdk` and `registry`, which the generator names. A
+  half-written integration that quietly disappears from the registry is the
+  failure this stage exists to prevent. A directory whose name starts with `_`
+  is never registered: that is how `_template` stays out of every build, and
+  `_fixtures/*` waits for its flag.
+- **The generator reads manifests with the TypeScript parser rather than
+  importing them**, so a build step never executes integration code, and it
+  walks the whole reachable graph of a manifest: a manifest may import
+  `@integrations/sdk` and files inside its own package, and each of those obeys
+  the same rule. A Node module hidden one file away would fail only the Vercel
+  build.
+- **The core-reference gate is its own script**, `scripts/gates/core-references.mjs`,
+  with `scripts/gates/core-references.json` beside it. Core is
+  `apps/worker/src`, the dashboard's `app`, `components` and `lib`, and
+  `packages`; `scripts/` is release and gate tooling, where the Arthur tenant
+  repository is not the Arthur provider, and `changelog/` and `docs/` are
+  prose. A mention is a case-insensitive substring of the id in the path or in
+  the source with comments stripped: `"github"`, `GITHUB_TOKEN` and
+  `githubClient` are one coupling written three ways, and a boundary rule that
+  caught those while sparing `githubusercontent` is a rule nobody could
+  predict. Comments are prose, so they do not count. Test files are not
+  scanned: a test cannot create production coupling, it exercises core code
+  that still names a provider, and it changes with its subject in S8 to S12;
+  listing several hundred of them would churn on every test edit and get the
+  gate switched off. A row may carry `incidental: true` when its files spell an
+  id by accident, such as a CSS keyword or a URL; the gate keeps it listed and
+  never reports it as stale, because such a hit comes and goes with ordinary
+  edits and a failure on one could not be acted on.
+- **Allowlist rows carry no counts, and a stale row fails.** The gate's job is
+  to stop a new file, a new package or a new area of core learning a provider,
+  and to make S8 to S12 shrink the list. A count per file would turn every
+  unrelated edit inside a file those stages delete anyway into a failure whose
+  fix is a meaningless number. The ratchet is the other way: a row whose file
+  stopped naming its provider fails until `--prune` removes it. Nothing adds a
+  row but a person with a reason, because a mode that adds rows is a mode that
+  switches the gate off.
+- **The watched ids are the registry's, asked of the generator through
+  `--print-ids`, plus a `plannedIntegrations` table** naming the stage that
+  takes each name away. An id in both fails, so the stage that lands an
+  integration has to delete its planned entry and its rows.
+- **Conformance runs from the registry package**, discovering packages rather
+  than listing them, so the template, the fixtures and every integration a
+  later stage adds are covered the day they land, whatever the fixture flag
+  says. It runs under zod 3 and under the `zod4` alias; the second pass earns
+  its place, a one-argument `z.record` in a block's params schema passes the
+  first and fails the second.
+
 ### The conformance check
 
 `checkIntegrationConformance(manifest, runtime)` returns every issue with a
@@ -345,32 +430,18 @@ does not declare; and a reserved runtime slot that is filled.
 - Core behaviour did not change in S0: the ports moved, and
   `apps/worker/src/adapters/{issue-tracker,vcs,messaging}/types.ts` re-export
   every name.
-- The boundaries gate now sees the SDK (`tiers.json` lists `integrations` as a
-  package root and `sdk` as a package allowed only `@shared/contracts`). It
-  reports the SDK as `packages/sdk`. S1 adds the integration rules; until then
-  an `integrations/<id>` package is classified the same way and may import
-  only `@shared/contracts`, which fails closed.
 - `verify:changed` plans a change under `integrations/` as its own scope: the
-  root typecheck, the SDK suites under zod 3 and zod 4 (the SDK is in
-  `test:packages` and `test:packages:zod4`), the worker's seam tests and the
-  gates.
+  root typecheck, the package suites under zod 3 and zod 4, the worker's seam
+  tests, `gen:integrations --check` and the gates.
 - Harder: every later change to the SDK is additive and recorded below; a
   reserved slot is filled only by the stage named for it.
-- Not covered in S0, and S1's to do list:
-  - the lint and package-contracts gates scan `packages/` only, and knip reads
-    the SDK as part of the root workspace, so S1 teaches all three about
-    `integrations/`;
-  - the generator refuses an integration block type equal to a core block
-    type; conformance can only see one package at a time, so the collision
-    between an integration and core (today `arthur_injection_check` exists in
-    both places until S8 deletes core's) is the generator's to catch;
-  - the boundaries gate labels the SDK `packages/sdk`, because
-    `scripts/gates/boundaries.mjs:117-123` hardcodes the `packages/` prefix
-    when it names a package tier;
-  - `packages/AGENTS.md:33-36` names the packages `test:packages` runs and now
-    understates it, since the SDK is in that run;
-  - an assertion that `RESERVED_ENVIRONMENT_VARIABLES` still equals the
-    core-owned names in `apps/worker/src/infra/runtime-env.ts`.
+- Everything S0 left to S1 is done: the lint, package-contracts and knip
+  scopes now cover `integrations/`; the generator refuses an integration block
+  type a core block already owns; the boundaries gate labels a package tier
+  with the root it came from; `packages/AGENTS.md` names both roots;
+  `integrations/registry/reserved-env.test.ts` holds
+  `RESERVED_ENVIRONMENT_VARIABLES` equal to what the worker declares for
+  itself.
 
 ### Debt the moved ports carry
 
@@ -515,4 +586,5 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-18 | S1 | `ErasedIntegrationRuntime` and `ErasedIntegrationCall` | The generated registry has to hold runtimes whose types come from manifests core does not know statically. `IntegrationRuntime<IntegrationManifest>` is not that type: a block executor typed against a literal block type is not assignable to one typed against `IntegrationBlockManifest`, because its parameters are contravariant, and the compiler says so. The erased interface keeps the keys and the results and erases only the parameters, so core can list an integration's blocks, health checks and capabilities and use what each call returns, and S4 narrows the call once where it builds the context. |
 | 2026-09-18 | S0 | Contract created | This record |

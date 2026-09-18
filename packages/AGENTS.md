@@ -30,19 +30,25 @@ and never application infrastructure. ADR-001 owns the tiers.
 - **Each package typechecks itself.** A package with no scripts drops silently
   out of `pnpm -r typecheck`, so each keeps a `typecheck` script and a strict
   `tsconfig.json`.
-- **The test scripts name the packages they run.** `pnpm run test:packages`
-  runs `test` in `contracts`, `costs`, `harness`, `prompts`, `skills` and
-  `workflow-graph`. `pnpm run test:packages:zod4` runs `test:zod4` in
-  `contracts` and `workflow-graph`, the two packages that carry a runtime zod
-  dependency; the other five have no such script and no zod 4 evidence. Both
-  scripts name those packages with `--filter` rather than selecting
-  `./packages/*` with `--if-present`, which reported a package that owns no
-  such script as a package that passed, so a run over seven packages proved
-  two. `conditions` has no `test` script at all and no suite in either run;
-  that is a gap, not a decision recorded here. The test in
+- **The test scripts name the packages they run**, and they reach past
+  `packages/` into `integrations/`. `pnpm run test:packages` runs `test` in
+  `contracts`, `costs`, `harness`, `prompts`, `skills`, `workflow-graph`,
+  `@integrations/sdk` and `@integrations/registry`. `pnpm run
+  test:packages:zod4` runs `test:zod4` in `contracts`, `workflow-graph`,
+  `@integrations/sdk` and `@integrations/registry`: the packages that carry a
+  runtime zod dependency, plus the registry, whose conformance sweep parses
+  every integration's schemas and so has to run under the zod production
+  loads. The registry's sweep is what covers every integration package,
+  including the template and the fixtures, so an integration owns no test
+  script of its own. Both scripts name packages with `--filter` rather than
+  selecting `./packages/*` with `--if-present`, which reported a package that
+  owns no such script as a package that passed, so a run over seven packages
+  proved two. `conditions` has no `test` script at all and no suite in either
+  run; that is a gap, not a decision recorded here. The test in
   `scripts/ci/verify-changed.test.ts` holds each named list equal to the
-  packages that own the script, so adding a package to a run is a deliberate
-  edit and leaving one out is a failing test rather than a silent opt out.
+  packages that own the script, across both roots, so adding a package to a run
+  is a deliberate edit and leaving one out is a failing test rather than a
+  silent opt out.
 - **Shared dependency versions live in the root catalog.** Anything two
   projects declare goes on `catalog:`, enforced by
   `scripts/gates/check-deps-consistency.mjs`.

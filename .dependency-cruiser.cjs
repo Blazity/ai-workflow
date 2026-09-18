@@ -23,8 +23,14 @@ function effectivePattern(tier) {
     : patternsFor(tier);
 }
 
-function packagePattern(name = "[^/]+") {
-  return `^(?:${tierMap.packageRoots.join("|")})/${name}(?:/|$)`;
+/**
+ * A package tier carries the root it came from (`packages/contracts`,
+ * `integrations/sdk`), and `<root>/*` reads as any package under that root.
+ */
+function packagePattern(tier) {
+  if (!tier) return `^(?:${tierMap.packageRoots.join("|")})/[^/]+(?:/|$)`;
+  if (tier.endsWith("/*")) return `^${tier.slice(0, -2)}/[^/]+(?:/|$)`;
+  return `^${tier}(?:/|$)`;
 }
 
 const TEST = patternsFor("testing");
@@ -36,16 +42,20 @@ const INTERNAL = [
   PACKAGES,
 ].join("|");
 
-function layerRule(name, from, allowedTiers, extraAllowed = []) {
+function layerRule(name, from, allowedTiers, extraAllowed = [], excludeFrom = []) {
   const allowed = [from, ...allowedTiers.map(effectivePattern), ...extraAllowed].join("|");
   return {
     name: `tier-${name}`,
     comment: `ADR-001 allowed edges for ${name}`,
     severity: "error",
-    from: { path: from, pathNot: TEST },
+    from: { path: from, pathNot: [TEST, ...excludeFrom].join("|") },
     to: { path: INTERNAL, pathNot: allowed },
   };
 }
+
+// A package with edges of its own is excluded from its root's wildcard rule,
+// so `packages/*` does not contradict `packages/workflow-graph`.
+const exactPackageTiers = Object.keys(tierMap.packageEdges).filter((tier) => !tier.endsWith("/*"));
 
 module.exports = {
   forbidden: [
@@ -62,7 +72,9 @@ module.exports = {
         effectivePattern(tier),
         allowed,
         [
-          ...(tierMap.packageConsumers.includes(tier) ? [PACKAGES] : []),
+          ...(tierMap.packageConsumers.includes(tier)
+            ? tierMap.corePackageTargets.map(packagePattern)
+            : []),
           ...Object.entries(tierMap.edgeExceptions)
             .filter(([edge]) => edge.startsWith(`${tier}->`))
             .flatMap(([, paths]) => paths.map((path) => `^${path}$`)),
@@ -70,14 +82,26 @@ module.exports = {
         ],
       ),
     ),
-    ...tierMap.packageTiers.map(
-      (name) => layerRule(
-        name,
-        packagePattern(name),
+    ...Object.entries(tierMap.packageEdges).map(([tier, allowed]) =>
+      layerRule(
+        tier.replaceAll("/", "-").replace("*", "any"),
+        packagePattern(tier),
         [],
-        [...tierMap.packageEdges.default, ...(tierMap.packageEdges[name] ?? [])].map(packagePattern),
+        allowed.map(packagePattern),
+        tier.endsWith("/*")
+          ? exactPackageTiers
+            .filter((exact) => exact.startsWith(`${tier.slice(0, -2)}/`))
+            .map(packagePattern)
+          : [],
       ),
     ),
+    ...(tierMap.forbiddenImports ?? []).map((rule, index) => ({
+      name: `bundle-boundary-${index}`,
+      comment: rule.reason,
+      severity: "error",
+      from: { path: rule.from, pathNot: TEST },
+      to: { path: rule.to },
+    })),
   ],
   options: {
     doNotFollow: { path: "node_modules" },

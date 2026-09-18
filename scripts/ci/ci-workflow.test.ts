@@ -99,6 +99,7 @@ const SOURCE_COMMANDS = [
   "pnpm run build:ci",
   "pnpm run gates",
   "pnpm run gen:blocks --check",
+  "pnpm run gen:integrations --check",
   "pnpm run test:ci",
   "pnpm run test:packages",
   "pnpm run test:packages:zod4",

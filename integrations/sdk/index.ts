@@ -72,6 +72,8 @@ export {
 export {
   defineIntegrationRuntime,
   type ConnectionTestResult,
+  type ErasedIntegrationCall,
+  type ErasedIntegrationRuntime,
   type IntegrationBlockExecutor,
   type IntegrationBlockInvocation,
   type IntegrationBlockOutcome,

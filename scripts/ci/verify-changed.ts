@@ -86,6 +86,7 @@ const C = {
   mcp: ["pnpm", "--dir", "apps/worker", "run", "mcp:contract:check"],
   mcpZod4: ["pnpm", "--dir", "apps/worker", "run", "test:zod4"],
   blockCatalog: ["pnpm", "run", "gen:blocks", "--check"],
+  integrationRegistry: ["pnpm", "run", "gen:integrations", "--check"],
   ci: ["pnpm", "run", "test:ci"],
   workflowSdk: ["pnpm", "run", "test:workflow-sdk"],
   packages: ["pnpm", "run", "test:packages"],
@@ -164,6 +165,9 @@ const isCi = (path: string) =>
   path.startsWith(".github/") ||
   path.startsWith(".githooks/") ||
   path.startsWith("scripts/ci/") ||
+  // A gate's own tests live under scripts/ci/, so editing a gate without
+  // running them is how a gate stops testing what it says it tests.
+  path.startsWith("scripts/gates/") ||
   path.startsWith(".claude/hooks/") ||
   path === ".claude/context-budget.tsv" ||
   path.startsWith(".codex/") ||
@@ -200,6 +204,16 @@ const isWorkflowSdkSubject = (path: string) =>
   path.startsWith("apps/worker/workflow-test-fixtures/") ||
   (path.startsWith("apps/worker/workflow-sdk-tests/") &&
     !path.startsWith("apps/worker/workflow-sdk-tests/divergence/"));
+
+/**
+ * What decides the integration registries: any integration package, and the
+ * generator and registry files themselves. A change to one of them without a
+ * regeneration is a stale registry, which is what `--check` catches.
+ */
+const isIntegrationRegistrySource = (path: string) =>
+  isIntegration(path) ||
+  path === "scripts/gates/generate-integration-registry.ts" ||
+  path.startsWith("scripts/gates/generate-integration-registry/");
 
 const isBlockCatalogSource = (path: string) =>
   path.startsWith("apps/worker/src/engine/blocks/") ||
@@ -270,6 +284,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const integrations = any(paths, (path) => isIntegration(path) && !isDocs(path));
   const workflowSdk = any(paths, isWorkflowSdkSubject);
   const blockCatalog = any(paths, isBlockCatalogSource);
+  const integrationRegistry = any(paths, isIntegrationRegistrySource);
   const gates = any(paths, (path) =>
     isProduct(path) ||
     (!isDocs(path) &&
@@ -313,6 +328,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     gates && "gates",
     workerTests.size > 0 && "worker-tests", dashboardTests.size > 0 && "dashboard-tests",
     workflowSdk && "workflow-sdk",
+    integrationRegistry && "integration-registry",
   ].filter((scope): scope is string => Boolean(scope));
   const commands: Cmd[] = [];
   const seen = new Set<string>();
@@ -349,6 +365,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   }
   if (workflowSdk) add(C.workflowSdk);
   if (blockCatalog) add(C.blockCatalog);
+  if (integrationRegistry) add(C.integrationRegistry);
   if (dashboardTests.size > 0) {
     add([
       "pnpm",

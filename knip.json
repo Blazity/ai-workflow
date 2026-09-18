@@ -8,7 +8,11 @@
     "apps/worker/src/sandbox/agents/fixtures/**",
     "apps/worker/workflow-test-fixtures/**"
   ],
-  "ignoreDependencies": ["dependency-cruiser", "oxlint", "zod4"],
+  "ignoreDependencies": [
+    "dependency-cruiser",
+    "oxlint",
+    "zod4"
+  ],
   "workspaces": {
     ".": {
       "entry": [
@@ -20,18 +24,46 @@
       ]
     },
     "apps/dashboard": {
-      "entry": ["**/*.test.ts", "**/*.test.tsx"]
+      "entry": [
+        "**/*.test.ts",
+        "**/*.test.tsx"
+      ]
     },
     "apps/worker": {
-      "entry": ["src/services/*/index.ts"]
+      "entry": [
+        "src/services/*/index.ts"
+      ]
     },
     "packages/*": {
-      "entry": ["index.ts", "*.test.ts"]
+      "entry": [
+        "index.ts",
+        "*.test.ts"
+      ]
+    },
+    "integrations/*": {
+      "entry": [
+        "index.ts",
+        "manifest.ts",
+        "worker.ts",
+        "*.test.ts"
+      ]
+    },
+    "integrations/_fixtures/*": {
+      "entry": [
+        "manifest.ts",
+        "worker.ts"
+      ]
     }
   },
   "ignoreIssues": {
-    "apps/worker/src/engine/blocks/run-checks/execute.ts": ["exports"],
-    "apps/worker/src/engine/blocks/fetch-pr-context/execute.ts": ["exports"],
-    "apps/worker/src/engine/steps/review-change-set.ts": ["exports"]
+    "apps/worker/src/engine/blocks/run-checks/execute.ts": [
+      "exports"
+    ],
+    "apps/worker/src/engine/blocks/fetch-pr-context/execute.ts": [
+      "exports"
+    ],
+    "apps/worker/src/engine/steps/review-change-set.ts": [
+      "exports"
+    ]
   }
 }

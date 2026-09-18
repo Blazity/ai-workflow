@@ -1,0 +1,24 @@
+{
+  "name": "@integrations/example",
+  "description": "The skeleton a developer copies to add a new integration.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./manifest.ts",
+  "types": "./manifest.ts",
+  "exports": {
+    ".": { "types": "./manifest.ts", "default": "./manifest.ts" },
+    "./manifest": { "types": "./manifest.ts", "default": "./manifest.ts" },
+    "./worker": { "types": "./worker.ts", "default": "./worker.ts" }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@integrations/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

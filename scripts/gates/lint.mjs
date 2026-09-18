@@ -25,7 +25,7 @@ import {
  * owns, and the repository root holds no lintable file.
  */
 const APP_PARENT = "apps";
-const SHARED_LINT_ROOTS = ["scripts", "packages"];
+const SHARED_LINT_ROOTS = ["scripts", "packages", "integrations"];
 const LINT_EXCLUSIONS = [];
 const INVARIANT = "the rule that the linted source carries no oxlint diagnostic";
 

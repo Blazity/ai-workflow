@@ -49,6 +49,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run gen:blocks --check
+      # Without INTEGRATION_FIXTURES, so the committed registry is the one a
+      # production build compiles and a fixture that reached it fails here.
+      - run: pnpm run gen:integrations --check
       - name: Check diff whitespace
         run: |
           set -euo pipefail
