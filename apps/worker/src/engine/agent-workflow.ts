@@ -2006,6 +2006,15 @@ async function agentWorkflowBody(
         );
         const record = runWorkScopeRecorder(discovery.catalog, []);
         const offered = offerableRepositoryCatalog(discovery.catalog, record);
+        // What the filter above left out because an answer on this work did not
+        // take it. The validator is handed only `offered`, so without these it
+        // could not name the repositories a run stopping on them is about.
+        const answerLeftUnnamed =
+          record?.answerLeftUnnamedKeys(
+            discovery.catalog
+              .filter((repository) => repository.usable)
+              .map(workScopeRepositoryKey),
+          ) ?? [];
         const prompt = assembleRepositoryDiscoveryPrompt({
           ticket: ctx.ticket,
           discovery: { ...discovery, catalog: offered },
@@ -2068,6 +2077,7 @@ async function agentWorkflowBody(
                 // nothing is known to have been asked, so a person is asked
                 // once more rather than told about a decision this run cannot
                 // see.
+                answerLeftUnnamed,
                 answeredRepositoryKeys: ctx.workScope.answeredRepositoryKeys ?? [],
                 recorded: ctx.workScope.scope?.entries ?? [],
                 // Whether a full path written in a comment would reach the next

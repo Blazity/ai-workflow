@@ -153,6 +153,13 @@ export function validateRepositoryDiscoveryResult(
    * old path.
    */
   settled?: {
+    /** The usable repositories this run holds that a question on this subject
+     *  named and the answer did not take (`answerLeftUnnamedKeys` on the run's
+     *  recorder). They were left off `catalog` above for exactly that reason,
+     *  so this is the only place the validator can still learn their names, and
+     *  it needs them for one sentence: the one that stops a run with nothing
+     *  left to offer rather than asking again (`nothingLeftToOffer`). */
+    answerLeftUnnamed: readonly RepositoryKey[];
     /** The repositories a question on this subject named and somebody answered
      *  for. It is the ONLY fact this file decides on, and it is per repository
      *  rather than per subject on purpose: an answer about one repository says
@@ -173,9 +180,16 @@ export function validateRepositoryDiscoveryResult(
     commentPathIsTaken: (repositoryKeys: readonly RepositoryKey[]) => boolean;
   },
 ): RepositoryDiscoveryDecision {
+  // NOTHING LEFT TO OFFER IS NOT A QUESTION (C11p), and it is decided before
+  // the model's answer is read because no answer changes it. Every clarification
+  // below names no repository, so none of them is covered by the per-repository
+  // stops further down, and each one reached a person who had just declined
+  // every repository this run could use: asked by the model which of those same
+  // repositories to put off, or asked by us which repository to use at all.
+  const nothingLeft = nothingLeftToOffer(catalog, mandatoryRepositories, settled);
   const parsed = discoveryResultSchema.safeParse(raw);
   if (!parsed.success) {
-    return clarification("Repository discovery returned an invalid response.");
+    return nothingLeft ?? clarification("Repository discovery returned an invalid response.");
   }
   const result = parsed.data;
   if (result.status === "failed") {
@@ -186,19 +200,21 @@ export function validateRepositoryDiscoveryResult(
     };
   }
   if (result.status === "clarification_needed") {
-    return {
-      kind: "clarification_needed",
-      questions:
-        result.questions && result.questions.length > 0
-          ? result.questions
-          : [whichRepositoryQuestion()],
-      reason: "model_requested_clarification",
-      about: [],
-    };
+    return (
+      nothingLeft ?? {
+        kind: "clarification_needed",
+        questions:
+          result.questions && result.questions.length > 0
+            ? result.questions
+            : [whichRepositoryQuestion()],
+        reason: "model_requested_clarification",
+        about: [],
+      }
+    );
   }
   const proposals = result.repositories ?? [];
   if (proposals.length === 0) {
-    return clarification("Repository discovery confidence was too low.");
+    return nothingLeft ?? clarification("Repository discovery confidence was too low.");
   }
   // AIW-147 IM-7: only "high" confidence auto-selects. "medium" and "low"
   // become a clarification. When the model proposed candidates, list them (with
@@ -407,6 +423,43 @@ export function validateRepositoryDiscoveryResult(
   };
 }
 
+/**
+ * The run's end when discovery has nothing left to offer anybody: every
+ * repository this run could use was named in a question on this subject and
+ * left out of the answer, and the run holds none for a reason of its own.
+ *
+ * Undefined whenever something is still open, and that bound is the point. A
+ * usable repository left in `catalog` is one nobody has declined, so a question
+ * about a capability the catalog lacks is a real question there and is asked.
+ * A repository the catalog cannot use is not open either, so it does not keep a
+ * run parked on a question whose only honest answers were already given.
+ *
+ * Only when an answer left something out, because that is the one state in
+ * which the empty offer is somebody's decision rather than a catalog nobody
+ * filled: the sentence names those repositories and the way back to them.
+ */
+function nothingLeftToOffer(
+  catalog: readonly RepositoryCatalogEntry[],
+  mandatoryRepositories: readonly SelectedRepository[],
+  settled:
+    | {
+        answerLeftUnnamed: readonly RepositoryKey[];
+        commentPathIsTaken: (repositoryKeys: readonly RepositoryKey[]) => boolean;
+      }
+    | undefined,
+): Extract<RepositoryDiscoveryDecision, { kind: "failed" }> | undefined {
+  if (!settled || settled.answerLeftUnnamed.length === 0) return undefined;
+  if (mandatoryRepositories.length > 0 || catalog.some((entry) => entry.usable)) {
+    return undefined;
+  }
+  const leftOut = [...settled.answerLeftUnnamed];
+  return {
+    kind: "failed",
+    error: nothingLeftButUnnamed(leftOut, settled.commentPathIsTaken(leftOut)),
+    blame: "work_scope",
+  };
+}
+
 /** A repository this run took out of the proposal because the record already
  *  decided it, with what the question about it WOULD have said. The question
  *  inputs are kept because dropping every proposal leaves the run with nothing,
@@ -571,8 +624,24 @@ function nothingLeftButUnnamed(
   repositoryKeys: RepositoryKey[],
   commentPathIsTaken: boolean,
 ): string {
+  // NAMED WITHIN THE CEILING THE MESSAGE BOUND WAS SIZED AT, and counted past
+  // it. A proposal never names more than three, but the offer an answer
+  // emptied (`nothingLeftToOffer`) can hold any number, and past the ceiling
+  // the surfaces elide the middle of the sentence, which is where the way back
+  // would be cut from (`execution-error-invariant.test.ts`). The count takes
+  // the room of the third name, so the longest sentence stays the one sized.
+  const named =
+    repositoryKeys.length > MAX_DISCOVERED_REPOSITORIES
+      ? repositoryKeys.slice(0, MAX_DISCOVERED_REPOSITORIES - 1)
+      : repositoryKeys;
+  const more = repositoryKeys.length - named.length;
   return [
-    ...repositoryKeys.map((key) => `${workScopeUnnamedWhy(key)}.`),
+    ...named.map((key) => `${workScopeUnnamedWhy(key)}.`),
+    ...(more > 0
+      ? [
+          `${more} more ${more === 1 ? "repository was" : "repositories were"} left out of an answer on this work the same way.`,
+        ]
+      : []),
     "Repository discovery proposed nothing else this run can use,",
     "so it has no repository to work on.",
     ...unnamedRecoveryNotes(repositoryKeys, commentPathIsTaken),
