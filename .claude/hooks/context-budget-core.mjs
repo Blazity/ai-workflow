@@ -138,8 +138,9 @@ export async function projectedRulesSize(root, sizeOverrides) {
 
 const overCeiling = (path, size, ceiling) =>
   `${path} would be ${size} bytes, over its ceiling of ${ceiling} (${BUDGET_PATH}). ` +
-  "Move history to docs/archive/agent-notes/, move area knowledge to a " +
-  ".claude/rules/<area>.md file with paths:, or raise the ceiling with a reason.";
+  "The edit is not blocked. Move history to docs/archive/agent-notes/, move area " +
+  "knowledge to a .claude/rules/<area>.md file with paths:, or raise the ceiling " +
+  "with a reason.";
 
 const overCollective = (size, ceiling) =>
   `${RULE_DEFAULT} would be ${size} bytes, over its collective ceiling of ${ceiling} ` +
