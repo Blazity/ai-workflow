@@ -10,6 +10,7 @@ import {
   repositoryCatalogKey,
   type RepositoryKey,
   type WorkScope,
+  type WorkScopeAnswerReading,
   type WorkScopeQuestionAnswer,
   type WorkScopeWritePlan,
 } from "@shared/contracts";
@@ -54,7 +55,7 @@ export interface RepositoryAnswerPersistence {
 
 /** How the Jira comment path composes an answer: each qualifying comment as
  *  "<author>: <body>", joined with a blank line
- *  (`services/clarifications/resume-from-comments.ts:327-328`). The space after
+ *  (`services/clarifications/resume-from-comments.ts:346-347`). The space after
  *  the colon is what keeps "github:acme/web" from reading as an author. The
  *  expansion protocol's refusal reader knows the same two shapes
  *  (`COMMENT_SEPARATOR` and `COMMENT_AUTHOR_PREFIX`,
@@ -77,11 +78,14 @@ const COMPOSED_AUTHOR_PREFIX = /^[^:\n]+: /;
  * repository, and the person is asked again about a repository they just named.
  *
  * What tells a comment from a paragraph is the author, and here the author is
- * known: only an answer no more than one person wrote is ever read (the guard
- * below declines the rest), so every comment in it opens with the SAME name.
- * Taking that name from the front of the answer gives the exact prefix each of
- * this person's comments carries, and a paragraph of their own cannot match it
- * unless they wrote their own name in front of it.
+ * known: the record only ever decides from an answer no more than one person
+ * wrote (the guard in `recordRepositoryAnswer` declines the rest), so every
+ * comment in it opens with the SAME name. Taking that name from the front of the
+ * answer gives the exact prefix each of this person's comments carries, and a
+ * paragraph of their own cannot match it unless they wrote their own name in
+ * front of it. The model reads an answer before its authors are counted, so it
+ * can be handed one several people wrote; there the first author's line comes
+ * off and a second author's stays, and the record declines those words anyway.
  */
 function withoutComposedAuthors(answer: string): string {
   const [author] = COMPOSED_AUTHOR_PREFIX.exec(answer) ?? [];
@@ -90,6 +94,40 @@ function withoutComposedAuthors(answer: string): string {
     .split(COMPOSED_COMMENT_SEPARATOR)
     .map((comment) => (comment.startsWith(author) ? comment.slice(author.length) : comment))
     .join(COMPOSED_COMMENT_SEPARATOR);
+}
+
+/**
+ * WHAT THIS PERSON WROTE, which is what every reader of an answer is handed: the
+ * model that reads it where it arrives and the record that decides from it. One
+ * rule for both, because two readers handed two different texts reach two
+ * different conclusions about one reply.
+ *
+ * The composed author line comes off ONLY where an author line was composed. On
+ * the ticket it is not the person's words: handed to the model, "Filip
+ * Maszota: <reply>" was paraphrased back to Filip as a reply that referenced
+ * Filip Maszota, and a display name like "Demo Team" puts a word in front of the
+ * reader that points at a repository nobody chose.
+ *
+ * The strip used to run on every answer, and on the two channels that compose
+ * nothing it ate the start of the person's own sentence: the prefix is
+ * "anything, then a colon and a space", which is also how somebody writes
+ * "acme/api: this is the one" into the dashboard box or sends it through MCP.
+ * That reply lost the only repository it named and was answered with "nothing
+ * in that answer named a repository", while the identical words on a ticket
+ * attached it. The other direction is worse and is why this is a defect rather
+ * than a nuisance: "api: none" became a bare "none" and declined every
+ * repository the question listed, which is a decision fabricated out of a
+ * person's words (A18).
+ *
+ * The words the channel delivered stay as they arrived everywhere else: stored
+ * on the row, compared against the next delivery, and redelivered on a retry.
+ * Only what is READ changes.
+ */
+export function answerAsWritten(
+  answer: string,
+  channel: { composedFromComments: boolean },
+): string {
+  return channel.composedFromComments ? withoutComposedAuthors(answer) : answer;
 }
 
 /**
@@ -107,6 +145,11 @@ export interface RepositoryAnswerOutcome {
   /** The repositories a decline left out of this work, in the order the plan
    *  wrote them. Absent unless the answer was read as a refusal. */
   declined?: RepositoryKey[];
+  /** The repositories the question listed that an answer NAMING others left
+   *  out. The same binding as a decline, and it was the silent half of it:
+   *  nobody was told. Absent unless the answer named repositories and the
+   *  question listed more than it. */
+  leftOut?: RepositoryKey[];
 }
 
 /** What an answer we decline to attribute is handed to the decision as, which
@@ -126,6 +169,32 @@ const DECLINED_ANSWER: WorkScopeQuestionAnswer = { kind: "unattributed" };
  * we know perfectly well who wrote this one.
  */
 const UNADDRESSED_REFUSAL_ANSWER: WorkScopeQuestionAnswer = { kind: "unrecognised" };
+
+/**
+ * The stored reading as the decision vocabulary the record writes in.
+ *
+ * Two of the four outcomes collapse here and they are right to: `declined_all`
+ * and `declined_one` are the same fact to a record that already knows what the
+ * question listed, namely that this person refused what they were shown. They
+ * are separate in the reading because only the question's shape can tell them
+ * apart, and telling them apart is what stops "continue without it" refusing
+ * four repositories.
+ *
+ * `unclear` maps to unrecognised for the legacy path's sake only. A question
+ * that carries a reading never gets here with one: the channel that took the
+ * answer parks the question and tells the person instead of recording anything.
+ */
+function questionAnswerOfReading(reading: WorkScopeAnswerReading): WorkScopeQuestionAnswer {
+  switch (reading.outcome.kind) {
+    case "repositories":
+      return { kind: "repositories", repositoryKeys: reading.outcome.repositoryKeys };
+    case "declined_all":
+    case "declined_one":
+      return { kind: "none" };
+    case "unclear":
+      return { kind: "unrecognised" };
+  }
+}
 
 /**
  * Write what the answer decided, with the authorship already established.
@@ -153,6 +222,11 @@ export async function recordRepositoryAnswer(
 ): Promise<RepositoryAnswerOutcome> {
   const askedRepositories = input.row.askedRepositories ?? [];
   const authorCount = input.authorCount;
+  // WHAT THIS PERSON WROTE, by the same rule the model was handed it
+  // (`answerAsWritten`).
+  const theirAnswer = answerAsWritten(input.answer, {
+    composedFromComments: input.composedFromComments,
+  });
 
   // Words several people wrote together decide nothing (A50). The ticket
   // channel composes its answer out of every comment posted after the
@@ -232,9 +306,25 @@ export async function recordRepositoryAnswer(
   const reading = { catalogKeys, askedQuestions: input.row.questions, keptKeys };
   // A declined answer is not read at all, which is the point: the words may be
   // perfectly readable, they are simply not one person's decision to record.
+  // THE READING THE ANSWER ARRIVED WITH, when it has one.
+  //
+  // It was made once, by a model, where the answer landed, against the question
+  // as the person saw it, and it is stored on the row beside their words
+  // (`services/work-scope/read-answer.ts`). Reading the sentence again here
+  // with a different set of rules is what made the record and the run disagree
+  // about one reply: "yes" to a question about one repository was a selection
+  // to the parser below and noise to the run's, so the record held a decision
+  // the run then ignored.
+  //
+  // Absent on two kinds of row and the old reader still serves both: a question
+  // that named no repository, where there is no closed set to read an answer
+  // into, and a row answered before the reading existed.
+  const stored = input.row.answerReading;
   const answerRead = declined
     ? DECLINED_ANSWER
-    : readRepositoryAnswer(withoutComposedAuthors(input.answer), { ...reading, askedKeys });
+    : stored
+      ? questionAnswerOfReading(stored)
+      : readRepositoryAnswer(theirAnswer, { ...reading, askedKeys });
 
   // A PLAIN NO ON A TICKET IS NOT EVIDENCE THAT ANYBODY ANSWERED US.
   //
@@ -273,7 +363,24 @@ export async function recordRepositoryAnswer(
   // by the same person (A8). And only a refusal: an answer naming
   // repositories is its own evidence, since nobody types a repository path by
   // accident.
+  //
+  // WHAT A READING CANNOT SETTLE IS WHETHER THESE WORDS WERE ADDRESSED TO US,
+  // and that is what this check is really about. It is not a second opinion on
+  // the reading: a reading answers "what do these words mean", and a comment on
+  // a ticket raises a prior question, "was this person talking to us at all".
+  // Nothing threads a comment to our question, so a colleague answering the
+  // comment above ours is indistinguishable from an answer, and the write at
+  // stake is permanent.
+  //
+  // NARROWED TO THE ONE SHAPE WHERE THAT DOUBT IS REAL. A reading of
+  // `declined_all` came from words that say they refuse the list ("none of
+  // these", "No. None of these."), and words like those could not be about
+  // anything else; a bare no under a list never gets here at all, because it is
+  // unclear and the channel keeps the question open. What is left is
+  // `declined_one`, where the whole reply can be the single word "no", and that
+  // one still has to say what it refuses before it writes an exclusion.
   const refusalDecidesNothing =
+    (!stored || stored.outcome.kind === "declined_one") &&
     answerRead.kind === "none" &&
     input.composedFromComments &&
     askedRepositories.some((repository) => repository.named === true) &&
@@ -281,8 +388,14 @@ export async function recordRepositoryAnswer(
     // question and writes "none of these" underneath used the exact phrase the
     // question teaches, and reading the quote too made that answer look like a
     // bare no addressed to nothing, so they were told it decided nothing.
+    // The count is the same one the counting-word rule reads, because it is the
+    // same fact: what the question put in front of this person. A phrase naming
+    // ONE repository says what it refuses under a question that asked about one,
+    // and contradicts a question that listed four, where the reader has already
+    // recorded nothing.
     !refusalNamesRepositories(
-      withoutQuotedText(withoutComposedAuthors(input.answer), input.row.questions),
+      withoutQuotedText(theirAnswer, input.row.questions),
+      askedKeys.length,
     );
   if (refusalDecidesNothing) {
     // A warning, for the same reason the declined count is one: from the
@@ -416,6 +529,29 @@ export async function recordRepositoryAnswer(
   // it after a branch that can return would make whether the person hears it
   // depend on which kind of question they answered.
   if (declinedKeys.length > 0) return { declined: declinedKeys };
+  // AND WHAT AN ANSWER THAT NAMED SOMETHING LEFT OUT, which binds exactly as a
+  // decline does and said nothing to anybody. The question listed four, the
+  // person named one, and the other three are out of this work with no later
+  // run taking them (C11); the bare "no" beside it got a full sentence and the
+  // considered answer got silence. Read off the ASK for the reason the decline
+  // is: a `selection` question writes no entry for a name left out and binds it
+  // through the answered set, so the entries cannot say this.
+  const leftOutKeys =
+    answer.kind === "repositories"
+      ? [
+          ...new Set(
+            askedRepositories
+              .filter(
+                (repository) =>
+                  repository.named === true &&
+                  !answer.repositoryKeys.includes(repository.repositoryKey) &&
+                  !keptKeys.includes(repository.repositoryKey),
+              )
+              .map((repository) => repository.repositoryKey),
+          ),
+        ]
+      : [];
+  if (leftOutKeys.length > 0) return { leftOut: leftOutKeys };
   if (!recordKeptNothing || settledByAnsweringAtAll) return {};
   // An answer with no word in it is its own case, because the RUN does
   // something with it that nothing else here does: `isRefusalAnswer` takes the
@@ -434,7 +570,6 @@ export async function recordRepositoryAnswer(
   // that names a repository beside a no it could not be tied to is told why
   // it was not read as a choice.
   if (answer.kind === "unrecognised") {
-    const theirAnswer = withoutComposedAuthors(input.answer);
     if (answerNamesKeptRepositories(theirAnswer, reading)) {
       return { told: "names_kept_repository" };
     }
@@ -463,7 +598,7 @@ export async function recordRepositoryAnswer(
   // words for the next run to resolve to the same nothing.
   return {
     told: namedOnlyRepositoriesWeDoNotHold({
-      answer: withoutComposedAuthors(input.answer),
+      answer: theirAnswer,
       askedQuestions: input.row.questions,
       catalogKeys,
     })

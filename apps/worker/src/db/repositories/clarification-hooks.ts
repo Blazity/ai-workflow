@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
-import type { ClarificationStatus, WorkScopeAskedRepository } from "@shared/contracts";
+import type {
+  ClarificationStatus,
+  WorkScopeAnswerReading,
+  WorkScopeAskedRepository,
+} from "@shared/contracts";
 import { getDb, type Db } from "../client.js";
 import { activeRuns, clarificationRequests, workflowRuns } from "../schema.js";
 
@@ -20,6 +24,10 @@ export interface HookClarificationRow {
   askedAt: Date;
   expiresAt: Date | null;
   answer: string | null;
+  /** How those words were read, made once when the answer arrived. Null on a
+   *  row answered before the reading existed and on a question that was not
+   *  about repositories. */
+  answerReading: WorkScopeAnswerReading | null;
   answeredById: string | null;
   answeredByLabel: string | null;
   answeredAt: Date | null;
@@ -49,6 +57,7 @@ function mapHookRow(row: typeof clarificationRequests.$inferSelect): HookClarifi
     askedAt: row.askedAt,
     expiresAt: row.expiresAt,
     answer: row.answer,
+    answerReading: row.answerReading,
     answeredById: row.answeredById,
     answeredByLabel: row.answeredByLabel,
     answeredAt: row.answeredAt,
@@ -242,20 +251,70 @@ export function getConnectedResumeFailedClarificationForRun(runId: string) {
   return getResumeFailedClarificationForRun(getDb(), runId);
 }
 
+/**
+ * Store the answer and, in the SAME statement, how it was read.
+ *
+ * One statement rather than two, and not because of the neon-http rule alone: a
+ * row that held the words without the reading would be an answer nobody had
+ * read, and the readers downstream would each fall back to reading it
+ * themselves, which is the disagreement this reading exists to end. A question
+ * that was not about repositories passes no reading and the column stays null,
+ * which says exactly that.
+ */
 export async function answerHookClarification(
   db: Db,
   id: string,
   answer: string,
   actor: { id: string; label: string },
+  reading?: WorkScopeAnswerReading,
 ): Promise<HookClarificationRow | null> {
   const [row] = await db.update(clarificationRequests).set({
     status: "answered",
     answer,
+    ...(reading === undefined ? {} : { answerReading: reading }),
     answeredById: actor.id,
     answeredByLabel: actor.label,
     answeredAt: new Date(),
   }).where(and(eq(clarificationRequests.id, id), eq(clarificationRequests.status, "pending"))).returning();
   return row ? mapHookRow(row) : null;
+}
+
+/**
+ * Keep the words and the reading of an answer that could not be read, WITHOUT
+ * answering the question.
+ *
+ * The status stays pending, nobody is recorded as having answered, and the hook
+ * is not spent: the question is still open and the run is still parked, which is
+ * the whole point of an unreadable answer.
+ *
+ * WHY STORE IT AT ALL. The Jira path re-composes its answer out of the ticket's
+ * comments on every poll tick, so without this the same unchanged comments would
+ * be read by the model again every few minutes and the same "I could not read
+ * this" comment posted beside them, forever, until the question expired. Stored,
+ * the next delivery of the identical words recognises itself and costs nothing.
+ *
+ * Deliberately not `answeredAt`/`answeredById`: an answer nobody could read is
+ * not an answer, and every surface that asks whether this question has been
+ * answered reads those.
+ */
+export async function recordUnreadableHookClarificationAnswer(
+  db: Db,
+  id: string,
+  answer: string,
+  reading: WorkScopeAnswerReading,
+): Promise<void> {
+  await db
+    .update(clarificationRequests)
+    .set({ answer, answerReading: reading })
+    .where(and(eq(clarificationRequests.id, id), eq(clarificationRequests.status, "pending")));
+}
+
+export function recordConnectedUnreadableHookClarificationAnswer(
+  id: string,
+  answer: string,
+  reading: WorkScopeAnswerReading,
+) {
+  return recordUnreadableHookClarificationAnswer(getDb(), id, answer, reading);
 }
 
 export async function markHookClarificationCleanup(
@@ -300,8 +359,9 @@ export function answerConnectedHookClarification(
   id: string,
   answer: string,
   actor: Parameters<typeof answerHookClarification>[3],
+  reading?: WorkScopeAnswerReading,
 ) {
-  return answerHookClarification(getDb(), id, answer, actor);
+  return answerHookClarification(getDb(), id, answer, actor, reading);
 }
 
 export function markConnectedHookClarificationCleanup(

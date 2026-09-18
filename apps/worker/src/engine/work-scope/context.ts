@@ -26,12 +26,14 @@ import {
   type WorkScope,
   type WorkScopeActor,
   type WorkScopeAskedRepository,
+  type WorkScopeRefusalReason,
   type WorkScopeWritePlan,
   type WorkflowRepositoryScope,
 } from "@shared/contracts";
 import {
   decidableWorkScopeKeys,
   decideWorkScope,
+  isUnnamedInAnswer,
   type WorkScopeDecision,
   type WorkScopeDecisionContext,
   type WorkScopeDecisionEvent,
@@ -138,6 +140,19 @@ export interface RunWorkScopeRecorder {
    * ordinary derived event, not an ambiguity.
    */
   decidableKeys(keys: readonly RepositoryKey[]): RepositoryKey[];
+  /**
+   * The keys of `keys` a question on this subject named and the answer did not
+   * take (`isUnnamedInAnswer`), in input order.
+   *
+   * Apart from `decidableKeys` because the two answer different questions and
+   * only one of them binds here. A repository left out of an answer stays
+   * DECIDABLE: a full path written in a comment afterwards takes it, and the
+   * ticket-text reader depends on that door. What it stops being is something
+   * to OFFER, so the only caller is the catalog discovery shows the model
+   * (`offerableRepositoryCatalog`): offering it spends a round on a decision
+   * somebody already made, and on a question they already answered.
+   */
+  answerLeftUnnamedKeys(keys: readonly RepositoryKey[]): RepositoryKey[];
   /** At most what one event may carry, in input order. */
   boundEventKeys(keys: readonly RepositoryKey[]): RepositoryKey[];
   /**
@@ -299,17 +314,40 @@ export function createRunWorkScopeRecorder(input: RunWorkScopeInput): RunWorkSco
             ? workScopeUnnamedSaidNoSentence(repositoryKey)
             : workScopeCommentSaidNoSentence(repositoryKey)
           : workScopeRefusalSentence(
-              {
-                repositoryKey,
-                reason: reason === "outside_pin" ? "outside_policy" : "outside_catalog",
-              },
+              // The frozen entry rides along already, so the exclusion names its
+              // author and its date exactly as the decided refusal does. That is
+              // the point of routing it through here: a person reading
+              // "somebody excluded this on the 3rd" knows whose decision to
+              // revisit, and "it was left out" does not.
+              { repositoryKey, reason: REFUSAL_OF[reason] },
               "run_start",
               entries.get(repositoryKey),
             );
       notes.push(sentence);
       leftOut.push({ repositoryKey, reason: sentence });
-      const remedy = unopenableRemedy(repositoryKey, reason);
-      if (remedy !== null) unopenableNotes.push(remedy);
+      // AN EXCLUSION'S WAY BACK IS COMPOSED, NOT FIXED, because what a person
+      // can do about it depends on what the deployment still holds: the promise
+      // that the list can be changed is withheld for a repository the catalog no
+      // longer enables, and the caveats about a repository it cannot serve or a
+      // pin that excludes it are added where they are true
+      // (`exclusionRecoveryNotes`). It is the same composition the decided
+      // refusal uses, off the same bounds, so the two cannot drift.
+      const remedies =
+        reason === "excluded"
+          ? exclusionRecoveryNotes([repositoryKey], {
+              enabledKeys: input.catalog.enabledKeys,
+              unusableKeys: input.catalog.unusableKeys,
+              pinnedProviders,
+              pinnedKeys,
+            })
+          : [unopenableRemedy(repositoryKey, reason)].filter(
+              (remedy): remedy is string => remedy !== null,
+            );
+      // Deduped on the sentence, because the exclusion's own note is generic:
+      // two excluded repositories owe a person one "it is not final", not two.
+      for (const remedy of remedies) {
+        if (!unopenableNotes.includes(remedy)) unopenableNotes.push(remedy);
+      }
     },
     get plans() {
       return plans;
@@ -337,6 +375,11 @@ export function createRunWorkScopeRecorder(input: RunWorkScopeInput): RunWorkSco
     },
     decidableKeys(keys) {
       return decidableWorkScopeKeys(decisionContext(), keys);
+    },
+    answerLeftUnnamedKeys(keys) {
+      return [...new Set(keys)].filter((key) =>
+        isUnnamedInAnswer(key, input.answeredRepositoryKeys, input.scope?.entries ?? []),
+      );
     },
     commentPathIsTaken(repositoryKeys) {
       return commentPathIsTaken(repositoryKeys);
@@ -534,9 +577,37 @@ type UnopenableReason =
   | "not_listed"
   | "unusable"
   | "outside_pin"
+  | "excluded"
   | "comment_says_no"
   | "ticket_says_no"
   | "too_many_open";
+
+/**
+ * Which refusal each unopenable reason IS, for the reasons that render one.
+ *
+ * A MAP, BECAUSE THE CHAIN OF TERNARIES IT REPLACES GUESSED. It tested two
+ * reasons by name and sent everything else down the `outside_catalog` arm, so
+ * `unusable` arrived silently as "is not on the repository catalog this run may
+ * use": false about a repository that is enabled and sitting on the Repositories
+ * page, contradicted by the very next sentence in the same comment, and durable,
+ * because the refusal half reaches the agent's prompt and the memory file. A
+ * test can spell out a false sentence and stay green, so the compiler is where
+ * this belongs: a new reason with no entry here does not build.
+ *
+ * The three reasons missing from this map are the ones with a sentence of their
+ * own above (`too_many_open`, `ticket_says_no`, `comment_says_no`), and leaving
+ * them out is what makes their absence a type error rather than a fallthrough.
+ */
+const REFUSAL_OF: Record<
+  Exclude<UnopenableReason, "too_many_open" | "ticket_says_no" | "comment_says_no">,
+  WorkScopeRefusalReason
+> = {
+  not_enabled: "outside_catalog",
+  not_listed: "outside_catalog",
+  unusable: "unusable",
+  outside_pin: "outside_policy",
+  excluded: "excluded",
+};
 
 /** What a person can do about a repository this run could not open, or null
  *  where nothing they do changes it (`leaveOut`). */
@@ -569,6 +640,12 @@ function unopenableRemedy(repositoryKey: RepositoryKey, reason: UnopenableReason
     case "too_many_open":
       return `Writing a path in a comment does not bring ${repositoryKey} into this work while this ticket names more than ${TEXT_MATCH_AMBIGUITY_LIMIT} repositories nobody has decided about: a run takes none of them from the ticket's text, and it does not ask which to start from once this work carries an answer. Select it in this work's repository list, through the work scope API or the work_scope.edit tool.`;
     case "not_listed":
+      return null;
+    // Composed by the caller from `exclusionRecoveryNotes`, because an
+    // exclusion's way back is filtered by what the deployment can still serve
+    // and by the pin. A fixed sentence here would promise a person a list they
+    // can change for a repository no run could take afterwards.
+    case "excluded":
       return null;
   }
 }
@@ -706,7 +783,12 @@ export function unnamedRecoveryNotes(
  *  and a screen to click is addressed to a person alone. */
 function catalogCannotServeNote(keys: readonly RepositoryKey[]): string {
   const them = keys.length === 1 ? "that repository" : "those repositories";
-  return `The catalog cannot serve ${keys.join(", ")} at the moment, so changing the list brings ${them} back only once the catalog can. Enable ${keys.length === 1 ? "it" : "them"} on the Repositories page.`;
+  // NOT "enable it on the Repositories page". The keys this sentence is written
+  // about come from `unusableKeys`, which is a SUBSET of the enabled ones, so
+  // that advice sent a person to a page where they found the repository already
+  // switched on, and cost them a round to learn that what has to change is the
+  // repository itself, not the catalog.
+  return `The catalog cannot serve ${keys.join(", ")} at the moment, so changing the list brings ${them} back only once the catalog can. ${keys.length === 1 ? "It is enabled here already" : "They are enabled here already"}: what the provider offers for ${them} is what has to change.`;
 }
 
 /** The third fact, and the same shape as the second. A definition pin is a

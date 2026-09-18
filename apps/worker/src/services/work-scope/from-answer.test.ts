@@ -1,4 +1,5 @@
 import { asc, eq } from "drizzle-orm";
+import { fakeAnswerReadingModel } from "./read-answer.fake.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultSettingsSnapshot,
@@ -19,6 +20,7 @@ import {
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import { answerClarificationAndResume } from "../clarifications/answer-core.js";
+import { composedAnswerActorId } from "../clarifications/answer-authorship.js";
 import {
   recordRepositoryAnswer,
   type RepositoryAnswerPersistence,
@@ -71,6 +73,19 @@ const TICKET = "AWT-9";
 const SUBJECT = "ticket:jira:AWT-9";
 const RUN = "run-asked";
 const ACTOR = { id: "user_1", label: "Ada" };
+// An answer composed out of a ticket's comments, which is the only way an author
+// line ever reaches this path: the actor id says so, and the reader takes the
+// line off for that channel alone. A test that writes "Ada: ..." with the plain
+// actor above is a shape production never delivers, and it used to pass only
+// because the strip ran on every answer.
+/** The one line that says an unreadable answer changed nothing and the question
+ *  is still waiting, which is the fact every row below turns on. */
+const UNREADABLE = "Nothing has been recorded, and this question is still open";
+
+const VIA_JIRA = {
+  actor: { id: composedAnswerActorId("human-1"), label: "Ada (via Jira)" },
+  answerAuthorCount: 1,
+};
 const BOT = "bot-account";
 
 let db: Db;
@@ -170,6 +185,10 @@ async function answer(
       IssueTrackerAdapter,
       "fetchTicket" | "moveTicket" | "postComment" | "getCurrentUserAccountId"
     >,
+    // A STAND-IN FOR THE MODEL, so these rows prove what a person gets rather
+    // than that no provider is reachable from a test. Nothing here is evidence
+    // about the real reader; that is the golden set's job.
+    answerReadingDeps: { generate: fakeAnswerReadingModel() },
     cancelSettings: defaultSettingsSnapshot(),
   });
 }
@@ -346,15 +365,22 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     });
     const tracker = makeTracker();
 
-    await answer(tracker, row.id, "whichever one the team prefers");
+    const outcome = await answer(tracker, row.id, "whichever one the team prefers");
 
+    // ROUND 5: THE QUESTION NO LONGER CLOSES BEHIND AN ANSWER NOBODY COULD
+    // READ. It used to be answered, the run resumed, and the same question came
+    // back a run later with a sentence explaining the repeat. Now the answer
+    // settles nothing and NOTHING MOVES: the row stays pending, the run stays
+    // parked on this question, and the next reply is read against it. The
+    // sentence is no longer an apology for a repeat, it is a request.
+    expect(outcome.kind).toBe("answer_unclear");
     await expect(entriesOfSubject()).resolves.toEqual([]);
     // Read from the statement rather than assumed, because the whole defect was
     // a claim about this flag that the statement does not make.
     await expect(readWorkScopeSelectionAnswered(db, SUBJECT)).resolves.toBe(false);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("Nothing in that answer named a repository this work should use");
-    expect(posted).toContain("It means the same question may be asked again on a later run.");
+    expect(posted).toContain("I could not");
+    expect(posted).toContain(UNREADABLE);
   });
 
   it('says nothing about "none" to a selection question, because that answer settles it', async () => {
@@ -428,20 +454,22 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     expect(posted).not.toContain("That answer named a repository this deployment does not have");
   });
 
-  it("records an answer whose words nobody could read as answered, and decides nothing", async () => {
+  it("leaves no mark at all from an answer whose words nobody could read", async () => {
+    // It used to write one trail row saying an answer arrived and decided
+    // nothing. Now nothing is written, because nothing happened: the row is
+    // still pending and this delivery may be repeated word for word by the next
+    // poll tick, so a row per attempt would be a history of our retries rather
+    // than of anybody's decisions. The cost is real and named here so nobody
+    // finds it by surprise: the subject's history no longer shows that somebody
+    // answered and we could not read them. Recovering that needs a trail event
+    // of its own rather than the answered one, which is a contract change.
     const row = await seedPending(asked("github:acme/api", "outside_policy"));
 
-    await answer(makeTracker(), row.id, "whichever one the team prefers");
+    const outcome = await answer(makeTracker(), row.id, "whichever one the team prefers");
 
+    expect(outcome.kind).toBe("answer_unclear");
     await expect(entriesOfSubject()).resolves.toEqual([]);
-    await expect(trailEvents()).resolves.toEqual([
-      {
-        kind: "question_answered",
-        clarificationId: row.id,
-        answer: { kind: "unrecognised" },
-        answeredBy: PERSON,
-      },
-    ]);
+    await expect(trailEvents()).resolves.toEqual([]);
   });
 
   it("tells the person when words nobody could read left the question open, offering the list back", async () => {
@@ -454,14 +482,47 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     const row = await seedPending(asked("github:acme/api", "outside_policy"));
     const tracker = makeTracker();
 
-    await answer(tracker, row.id, "whichever one the team prefers");
+    const outcome = await answer(tracker, row.id, "whichever one the team prefers");
 
+    expect(outcome.kind).toBe("answer_unclear");
     await expect(entriesOfSubject()).resolves.toEqual([]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("Nothing in that answer named a repository");
-    // The one keyword, the one the question itself teaches, and the truth about
-    // where it works: the next asking, never a reply under this closed one.
-    expect(posted).toContain('answer "none" the next time the question is asked');
+    expect(posted).toContain(UNREADABLE);
+    // THE LIST ITSELF, offered back. The question is still open, so what a
+    // person needs is the vocabulary that ends it here and now rather than a
+    // note about what will work the next time they are asked.
+    // The question offered ONE repository, so the reply that ends it is a yes
+    // or a no about that repository, in its own words.
+    expect(posted).toContain("github:acme/api");
+    expect(posted).toContain('"yes"');
+  });
+
+  // M3. This comment told people that nothing written on this ticket can record
+  // a refusal, while the same delivery posts a comment on the same ticket saying
+  // an answer was read as declining what the question listed. One of the two was
+  // false, and it was this one: a comment IS how a ticket answers a question
+  // that is still open, and "none" written there declines every repository it
+  // listed. The sentence also contradicted itself inside one line, telling a
+  // person to answer "none" on the ticket it had just said records no refusal.
+  it("does not tell a person a refusal cannot be recorded from this ticket", async () => {
+    const row = await seedPending(asked("github:acme/api", "selection"));
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "Ada: no", VIA_JIRA);
+
+    // ROUND 5 CHANGES NOTHING HERE, and that is worth a line. The reading says
+    // this bare "no" declines the one repository it was asked about, and the
+    // record still refuses to write it, because whether these words were
+    // addressed to us is a question no reading can answer: nothing threads a
+    // ticket comment to our question. What is true instead, both halves: the
+    // keyword works when the question comes back, and a bare no in a comment is
+    // the one that does not.
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    expect(posted).not.toContain("Nothing written on this ticket can record a refusal");
+    expect(posted).toContain(
+      'When the question comes back, answering "none" declines every repository it lists',
+    );
+    expect(posted).toContain('a bare "no" in a comment does not');
   });
 
   it("tells the person nothing was recorded when they named a repository this deployment does not hold", async () => {
@@ -473,25 +534,22 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     const row = await seedPending(asked("github:acme/api", "outside_policy"));
     const tracker = makeTracker();
 
-    await answer(tracker, row.id, "github:acme/unknown-service");
+    const outcome = await answer(tracker, row.id, "github:acme/unknown-service");
 
+    // ROUND 5. A key nobody offered is no longer sorted into its own diagnostic:
+    // the reading is thrown away whole, which is the boundary that stops a model
+    // writing a decision about a repository the question never showed anybody,
+    // and the same boundary catches a person's typo. What they get is the
+    // question again with the keys that are real, which is the one thing that
+    // ends this exchange; the old sentence explained a dead end without offering
+    // a way out of it.
+    expect(outcome.kind).toBe("answer_unclear");
     await expect(entriesOfSubject()).resolves.toEqual([]);
-    await expect(trailEvents()).resolves.toEqual([
-      {
-        kind: "question_answered",
-        clarificationId: row.id,
-        answer: { kind: "unrecognised" },
-        answeredBy: PERSON,
-      },
-    ]);
+    await expect(trailEvents()).resolves.toEqual([]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("named a repository this deployment does not have");
-    // The remedy that is true for a bare name is a dead end for this person:
-    // they already wrote the path, and the next run would read the same words
-    // and resolve them to the same nothing.
+    expect(posted).toContain(UNREADABLE);
+    expect(posted).toContain("github:acme/api");
     expect(posted).not.toContain("write its full path in a comment here");
-    expect(posted).not.toContain("Write the full path");
-    expect(posted).toContain("somebody with access to the repositories screen can add or enable it");
   });
 
   it("keeps the remedy that works for an answer that spelled no path out, which is not the one for a name we do not hold", async () => {
@@ -504,14 +562,17 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     const row = await seedPending(asked("github:acme/api", "selection"));
     const tracker = makeTracker();
 
-    await answer(tracker, row.id, "the billing service");
+    const outcome = await answer(tracker, row.id, "the billing service");
 
+    // ROUND 5. One sentence now serves both halves of the old fork, and it is
+    // the one neither half had: the question, put again, with the repositories
+    // it offered. Nothing here sends anybody to a route that may be shut.
+    expect(outcome.kind).toBe("answer_unclear");
     await expect(entriesOfSubject()).resolves.toEqual([]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("Nothing in that answer named a repository this work should use");
-    expect(posted).toContain("select it in this work's repository list");
+    expect(posted).toContain(UNREADABLE);
+    expect(posted).toContain("github:acme/api");
     expect(posted).not.toContain("write its full path in a comment here");
-    expect(posted).not.toContain("does not have");
   });
 
   it("sends an answer to a question raised mid run to the record, because nothing here proves a comment is read", async () => {
@@ -522,15 +583,21 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     const row = await seedPending(asked("github:acme/api", "outside_policy"));
     const tracker = makeTracker();
 
-    await answer(tracker, row.id, "the billing service");
+    const outcome = await answer(tracker, row.id, "the billing service");
 
+    // ROUND 5. Same as its neighbour: the question is still open, so the reply
+    // that ends it is the one offered, and no route that this surface cannot
+    // vouch for is named at all.
+    expect(outcome.kind).toBe("answer_unclear");
     await expect(entriesOfSubject()).resolves.toEqual([]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("Nothing in that answer named a repository this work should use");
-    expect(posted).not.toContain("in a comment here");
-    expect(posted).toContain(
-      "select it in this work's repository list through the work scope API or the work_scope.edit tool",
-    );
+    expect(posted).toContain(UNREADABLE);
+    // No route that writes a repository's path into the ticket, in any of its
+    // wordings. Replying to the still open question in a comment is a different
+    // route and a vouched one: the comment path reads replies while the question
+    // is pending (rule 6 in comment-format.test.ts), and this note names it when
+    // the ticket was just moved back to the backlog to wait for that reply.
+    expect(posted).not.toMatch(/paths? [^.]*in a comment/i);
   });
 
   // A discovery question listing four candidates, and the same question one
@@ -540,6 +607,14 @@ describe("answerClarificationAndResume records the repository answer on arrival"
   // repositories than either, and that count is the one the next run decides
   // on. Neither is sent to write a path now, and neither is told a reason for
   // the route being shut that nothing here can see.
+  /** A question that put TWO repositories in front of somebody, for the rows
+   *  about what an answer naming several of them records. The keys a reading may
+   *  return are the keys the question offered, so a row about naming two has to
+   *  be asked about two. */
+  const TWO_ASKED: WorkScopeAskedRepository[] = ["github:acme/api", "github:acme/web"].map(
+    (repositoryKey) => ({ repositoryKey, askedBecause: "selection", named: true }),
+  );
+
   const FOUR_ASKED: WorkScopeAskedRepository[] = [
     "github:acme/api",
     "github:acme/web",
@@ -554,14 +629,18 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     const row = await seedPending(list);
     const tracker = makeTracker();
 
-    await answer(tracker, row.id, "the billing service");
+    const outcome = await answer(tracker, row.id, "the billing service");
 
+    // ROUND 5. Whatever the list's length, the person is offered the list, on
+    // the question they are still being asked. Neither count is sent to write a
+    // path, and neither is told a reason for a route being shut that nothing
+    // here can see.
+    expect(outcome.kind).toBe("answer_unclear");
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("Nothing in that answer named a repository this work should use");
+    expect(posted).toContain(UNREADABLE);
     expect(posted).not.toContain("write its full path in a comment here");
     expect(posted).not.toContain("more than three repositories");
-    expect(posted).toContain("the work scope API or the work_scope.edit tool");
-    expect(posted).toContain("the next time the question is asked");
+    for (const repository of list) expect(posted).toContain(repository.repositoryKey);
   });
 
   it("gives the fuller explanation when one answer carries both a bare name and a path we do not hold", async () => {
@@ -572,11 +651,15 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     const row = await seedPending(asked("github:acme/api", "outside_policy"));
     const tracker = makeTracker();
 
-    await answer(tracker, row.id, "billing, or github:acme/unknown-service");
+    const outcome = await answer(tracker, row.id, "billing, or github:acme/unknown-service");
 
+    // ROUND 5. Neither half is sorted any more: an answer that settles nothing
+    // gets the question back with the keys that exist, which is what a person
+    // carrying either problem needs to type next.
+    expect(outcome.kind).toBe("answer_unclear");
     await expect(entriesOfSubject()).resolves.toEqual([]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("named a repository this deployment does not have");
+    expect(posted).toContain(UNREADABLE);
     expect(posted).not.toContain("write its full path in a comment here");
   });
 
@@ -591,17 +674,16 @@ describe("answerClarificationAndResume records the repository answer on arrival"
 
     const outcome = await answer(tracker, row.id, "\u{1F44D}");
 
-    expect(outcome.kind).toBe("answered");
+    // ROUND 5, AND THE THIRD HALF IS GONE. A thumbs up used to read as approval
+    // to the run and as nothing to the record, so the run carried on WITHOUT the
+    // repository somebody had just approved of. There is one reader now and it
+    // settles nothing from an emoji, so the run does not carry on at all: it
+    // waits on the question, and the person is asked for a word.
+    expect(outcome.kind).toBe("answer_unclear");
     await expect(entriesOfSubject()).resolves.toEqual([]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("continuing without the repositories the question asked about");
-    expect(posted).toContain("has no words in it");
-    // And the third half, which is why this fixture asks about a repository the
-    // catalog does not enable: the route out of here is the catalog, not a path.
-    // Telling them to write `github:acme/web` would spend their next attempt on
-    // a matcher that never sees it.
-    expect(posted).toContain("somebody with access to the repositories screen has to enable them");
-    expect(posted).not.toContain("write its full path in a comment here");
+    expect(posted).toContain(UNREADABLE);
+    expect(posted).not.toContain("continuing without the repositories the question asked about");
   });
 
   it("selects nothing when the person quoted our question and said no under it", async () => {
@@ -666,12 +748,23 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     const row = await seedPending(asked("github:acme/api", "outside_policy"));
     const tracker = makeTracker();
 
-    await answer(tracker, row.id, "not acme/api, use github:acme/web");
+    const outcome = await answer(tracker, row.id, "not acme/api, use github:acme/web");
 
-    await expect(entriesOfSubject()).resolves.toEqual([]);
-    const posted = tracker.postComment.mock.calls.map((call) => call[1]).join("\n");
-    expect(posted).toContain("names a repository and also says no");
-    expect(posted).toContain("name only the repositories to use");
+    // ROUND 5. The question offered ONE repository and the reply pushes exactly
+    // that one away, so it is the decline it plainly is and it is recorded.
+    // github:acme/web is NOT recorded, and that is the rule this reading is
+    // built on rather than an oversight: a model may never widen what was
+    // asked, and the question never put web in front of anybody. What a person
+    // wanting web does instead is edit the record, which the sentence says.
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({ repositoryKey: "github:acme/api", state: "excluded" }),
+    ]);
+    // In the reply rather than on the ticket, because this answer came from the
+    // dashboard: each person is told once, where they answered.
+    expect(outcome).toMatchObject({
+      kind: "answered",
+      recordOutcome: expect.stringContaining("read as declining github:acme/api"),
+    });
   });
 
   // Joint gate round 3, R1, as the person meets it: the question said acme/web
@@ -708,18 +801,23 @@ describe("answerClarificationAndResume records the repository answer on arrival"
 
     await answer(tracker, row.id, "github:acme/api, but not github:acme/web");
 
-    await expect(entriesOfSubject()).resolves.toEqual([
-      expect.objectContaining({ repositoryKey: "github:acme/web", origin: "ticket_text" }),
-    ]);
-    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("names a repository the question listed as already part of this work");
-    expect(posted).toContain("an exclusion in this work's repository list");
+    // ROUND 5. The reply points AT api and pushes web away, so api is selected
+    // and web is untouched: the question said web stays whatever the reply, and
+    // a name under a negation is never a selection of that name either. What the
+    // person tried to do to web still does not happen; what changed is that the
+    // half of their reply that WAS a choice is no longer thrown away with it.
+    await expect(entriesOfSubject()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ repositoryKey: "github:acme/web", origin: "ticket_text" }),
+        expect.objectContaining({ repositoryKey: "github:acme/api", state: "selected" }),
+      ]),
+    );
   });
 
   it("reads a bare list of names sent as a Jira comment, author line and all", async () => {
-    const row = await seedPending(asked("github:acme/api", "selection"));
+    const row = await seedPending(TWO_ASKED);
 
-    await answer(makeTracker(), row.id, "Ada: api, web");
+    await answer(makeTracker(), row.id, "Ada: api, web", VIA_JIRA);
 
     await expect(entriesOfSubject()).resolves.toEqual(
       expect.arrayContaining([
@@ -729,15 +827,54 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     );
   });
 
+  it("records nothing about a repository the question never offered", async () => {
+    // A MODEL MAY NEVER WIDEN WHAT WAS ASKED, and this is the row that says what
+    // that costs. The question put one repository in front of this person; they
+    // named it and one more. The one they were offered is recorded and the other
+    // is not, because a reading whose keys are not a subset of the keys we
+    // handed it is a decision about something nobody was asked about, and there
+    // is no way to tell a model's invention from a person's aside inside one
+    // sentence.
+    //
+    // THE COST IS A REAL ONE. Somebody who names a repository this deployment
+    // holds but this question did not list gets that half of their reply
+    // dropped, and the sentence they get back does not mention it. What would
+    // fix it is handing the reader the catalog as well as the asked keys, which
+    // keeps the subset rule intact and widens what a person may choose; that is
+    // a decision about how far a model's choice may reach, not a bug fix, and it
+    // is not taken here.
+    const row = await seedPending(asked("github:acme/api", "selection"));
+
+    const outcome = await answer(makeTracker(), row.id, "api and web");
+
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({ repositoryKey: "github:acme/api", state: "selected" }),
+    ]);
+    // AND THEY ARE TOLD, which is the whole of it. The decision they made
+    // clearly is honoured and the run carries on; the half we could not act on
+    // is named out loud, in the channel they answered in, with somewhere to go.
+    // Dropping it in silence is the founding complaint of this delivery wearing
+    // a different coat: they named two repositories because they believe both
+    // are needed, the run does half the job and finishes green, and they find
+    // out from a pull request that is missing the other half.
+    expect(outcome).toMatchObject({
+      kind: "answered",
+      recordOutcome: expect.stringContaining("web"),
+    });
+    const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
+    expect(said).toContain("only about github:acme/api");
+    expect(said).toContain("work scope API or the work_scope.edit tool");
+  });
+
   it("records every repository in a list of several as that one person's own decision", async () => {
     // The row is about ALL of them: each key the answer names is selected, each
     // carries the person who typed it, and the trail says so for each. Until
     // this test, origin and author for an answer naming more than one rested
     // entirely on the single-name test above, and a loop that wrote the second
     // key some other way would have kept both green.
-    const row = await seedPending(asked("github:acme/api", "selection"));
+    const row = await seedPending(TWO_ASKED);
 
-    await answer(makeTracker(), row.id, "Ada: github:acme/api and github:acme/web");
+    await answer(makeTracker(), row.id, "github:acme/api and github:acme/web");
 
     const person = {
       state: "selected",
@@ -807,7 +944,7 @@ describe("answerClarificationAndResume records the repository answer on arrival"
       { repositoryKey: "github:acme/web", askedBecause: "selection" },
     ]);
 
-    await answer(makeTracker(), row.id, "Filip Maszota: api, web");
+    await answer(makeTracker(), row.id, "Filip Maszota: api, web", VIA_JIRA);
 
     await expect(entriesOfSubject()).resolves.toEqual([
       expect.objectContaining({ repositoryKey: "github:acme/api", state: "selected" }),
@@ -824,9 +961,7 @@ describe("answerClarificationAndResume records the repository answer on arrival"
       { repositoryKey: "github:acme/web", askedBecause: "selection" },
     ]);
 
-    await answer(makeTracker(), row.id, "Filip Maszota: api\n\nFilip Maszota: web", {
-      answerAuthorCount: 1,
-    });
+    await answer(makeTracker(), row.id, "Filip Maszota: api\n\nFilip Maszota: web", VIA_JIRA);
 
     await expect(entriesOfSubject()).resolves.toEqual([
       expect.objectContaining({ repositoryKey: "github:acme/api" }),
@@ -841,9 +976,7 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     // would be asked again about a repository they had just answered with.
     const row = await seedPending(asked("github:acme/api", "not_enabled"));
 
-    await answer(makeTracker(), row.id, "Ada: Sure.\n\nacme/api: that is the backend", {
-      answerAuthorCount: 1,
-    });
+    await answer(makeTracker(), row.id, "Ada: Sure.\n\nacme/api: that is the backend", VIA_JIRA);
 
     await expect(entriesOfSubject()).resolves.toEqual([
       expect.objectContaining({
@@ -860,7 +993,7 @@ describe("answerClarificationAndResume records the repository answer on arrival"
       { repositoryKey: "github:acme/web", askedBecause: "selection" },
     ]);
 
-    await answer(makeTracker(), row.id, "Anna Kowalska / Blazity: api, web");
+    await answer(makeTracker(), row.id, "Anna Kowalska / Blazity: api, web", VIA_JIRA);
 
     await expect(entriesOfSubject()).resolves.toEqual([
       expect.objectContaining({ repositoryKey: "github:acme/api", state: "selected" }),
@@ -882,7 +1015,7 @@ describe("answerClarificationAndResume records the repository answer on arrival"
       { repositoryKey: "github:acme/tools", askedBecause: "not_enabled" },
     ]);
 
-    await answer(makeTracker(), row.id, "Filip Maszota: api\nweb: tools");
+    await answer(makeTracker(), row.id, "Filip Maszota: api\nweb: tools", VIA_JIRA);
 
     await expect(entriesOfSubject()).resolves.toEqual([
       expect.objectContaining({ repositoryKey: "github:acme/api", state: "selected" }),
@@ -1393,6 +1526,163 @@ describe("an answer that says no about a repository the question showed as kept"
   // repositories for good in that person's name (A8).
   it("records nothing from a plain no posted on the ticket, and tells the person what to write", async () => {
     const result = await record("Ada: no");
+
+    expect(result.upserts).toEqual([]);
+    expect(result.answered).toEqual([{ kind: "unrecognised" }]);
+    expect(result.told).toBe("unaddressed_refusal");
+  });
+
+  // AWP-221 on production, 2026-09-18. The same person, one comment, "no" and
+  // "none of these" in it. The bare no above is still nothing anybody can thread
+  // to our question (A8); this reply names what it refuses in its second phrase,
+  // which could not be about anything else, so it is that person's decision and
+  // the record keeps it (A17b).
+  it("records a decline from a ticket comment whose every phrase is a refusal", async () => {
+    const result = await record("Ada: no\nnone of these");
+
+    expect(result.answered).toEqual([{ kind: "none" }]);
+    expect(result.declined).toEqual(["github:acme/infra"]);
+    expect(result.told).toBeUndefined();
+  });
+
+  // The question production actually asked on AWP-221: four choices, none of
+  // them kept. The record path is read against it for the owner's ruling below,
+  // because how many repositories the question listed is what gates a refusal
+  // about one of them.
+  const FOUR_ASKED: WorkScopeAskedRepository[] = [
+    "github:acme/infra",
+    "github:acme/billing",
+    "github:acme/api",
+    "github:acme/docs",
+  ].map((repositoryKey) => ({ repositoryKey, askedBecause: "selection" as const, named: true }));
+  const FOUR_QUESTION =
+    "More than 3 repositories match this ticket. Which repositories are essential for the initial" +
+    " research? Reply with one or more of: github:acme/infra, github:acme/billing," +
+    " github:acme/api, github:acme/docs.";
+  const underFourChoices = { asked: FOUR_ASKED, questions: [FOUR_QUESTION], kept: [] };
+
+  // The production case at its real width: four repositories listed, and the
+  // answer refuses all of them in two phrases.
+  it("declines all four when the comment refuses the whole list in two phrases", async () => {
+    const result = await record("Ada: no\nnone of these", underFourChoices);
+
+    expect(result.answered).toEqual([{ kind: "none" }]);
+    expect(result.declined).toEqual([
+      "github:acme/infra",
+      "github:acme/billing",
+      "github:acme/api",
+      "github:acme/docs",
+    ]);
+    expect(result.told).toBeUndefined();
+  });
+
+  // The owner's ruling of 2026-09-18. "continue without it" refuses ONE
+  // repository, so under four choices it is one person talking about one of
+  // them, and four permanent exclusions in their name is a decision nobody made.
+  it("records nothing from a refusal about one repository when the question listed four", async () => {
+    const result = await record("Ada: no, continue without it", underFourChoices);
+
+    expect(result.upserts).toEqual([]);
+    expect(result.declined).toBeUndefined();
+    expect(result.answered).toEqual([{ kind: "unrecognised" }]);
+    // The sentence that says what to write: nothing in the answer named a
+    // repository, so name the ones to use or answer "none".
+    expect(result.told).toBe("no_repository_named");
+  });
+
+  // The same four phrases on the ticket, where the question is: do they decide,
+  // or do they fall to A8 and record nothing? They decide, because each of them
+  // says what it refuses, which is the whole list in front of that person.
+  // Before they were on the list, the answer was read as naming nothing and the
+  // person was asked the identical question again (A17d).
+  it.each(["neither", "neither of them", "neither of these", "none of the above"])(
+    "declines every repository the question listed from %o posted on the ticket",
+    async (words) => {
+      const result = await record(`Ada: ${words}`, underFourChoices);
+
+      expect(result.answered).toEqual([{ kind: "none" }]);
+      expect(result.declined).toEqual([
+        "github:acme/infra",
+        "github:acme/billing",
+        "github:acme/api",
+        "github:acme/docs",
+      ]);
+      expect(result.told).toBeUndefined();
+    },
+  );
+
+  // NOTHING COMPOSES AN AUTHOR LINE ON THE DASHBOARD OR THROUGH MCP, so a colon
+  // in the reply is the person's own. Read as an author line, "api: none" became
+  // a bare "none" and declined every repository the question listed: four
+  // permanent exclusions in somebody's name, fabricated out of punctuation.
+  it("does not read a colon in a dashboard answer as an author line", async () => {
+    const result = await record("api: none", {
+      ...underFourChoices,
+      composedFromComments: false,
+    });
+
+    expect(result.declined).toBeUndefined();
+    expect(result.upserts).toEqual([]);
+  });
+
+  // And the same strip in the other direction, which cost the person the only
+  // repository they named.
+  it("keeps the repository a dashboard answer names before a colon", async () => {
+    const result = await record("github:acme/api: this is the one", {
+      ...underFourChoices,
+      composedFromComments: false,
+    });
+
+    expect(result.upserts.map((upsert) => upsert.entry.repositoryKey)).toEqual([
+      "github:acme/api",
+    ]);
+    expect(result.told).toBeUndefined();
+  });
+
+  // A sentence about what some documents say is not a refusal of a repository,
+  // and the reply it used to get told that person their answer named a
+  // repository AND said no about it, neither of which they had done, and then
+  // taught them a rule they had not broken.
+  it("does not tell a person their prose named a repository and refused it", async () => {
+    const result = await record("Ada: none of the docs mention it", underFourChoices);
+
+    expect(result.upserts).toEqual([]);
+    expect(result.told).toBe("no_repository_named");
+  });
+
+  // The keyword rule reads a reply opening with "none" as a refusal whole,
+  // whatever follows it, so a person who wrote the keyword AND a repository was
+  // told nothing in their answer had named one. Nothing they can do with that
+  // sentence is right: it is false, and it never names the rule they fell foul
+  // of, which is that a reply saying no about anything records nothing.
+  it("tells a person who named a repository after the keyword why it was not read as a choice", async () => {
+    const result = await record("Ada: none, use github:acme/api", underFourChoices);
+
+    expect(result.upserts).toEqual([]);
+    expect(result.answered).toEqual([{ kind: "unrecognised" }]);
+    expect(result.told).toBe("refusal_beside_named");
+  });
+
+  // And the other side of the ruling, which is what the phrase is for: a
+  // question about ONE repository, where those words say exactly what they
+  // refuse and the record keeps the decision.
+  it("records a decline from the same words when the question asked about one repository", async () => {
+    const result = await record("Ada: no, continue without it", {
+      asked: [{ repositoryKey: "github:acme/infra", askedBecause: "not_enabled", named: true }],
+      questions: ["github:acme/infra is not enabled here. Should this work use it?"],
+      kept: [],
+    });
+
+    expect(result.answered).toEqual([{ kind: "none" }]);
+    expect(result.declined).toEqual(["github:acme/infra"]);
+    expect(result.told).toBeUndefined();
+  });
+
+  // The boundary between that row and A8: what lets a comment decide is a phrase
+  // naming what it refuses, never the number of phrases in it. Two bare nos in
+  // one comment are two bare nos, and the person is told what to write.
+  it("records nothing from a ticket comment whose phrases all refuse without naming the subject", async () => {
+    const result = await record("Ada: no\nnope");
 
     expect(result.upserts).toEqual([]);
     expect(result.answered).toEqual([{ kind: "unrecognised" }]);

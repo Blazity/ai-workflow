@@ -5,7 +5,7 @@ import { ticketRunUrl, hasDashboardLinkComment } from "./support/dashboard-links
 // Pure and contracts-only, like the two support modules above it, so the
 // workflow isolate stays free of Node builtins.
 import {
-  isRepositoryCatalogRefusal,
+  catalogRefusalExecutionOptions,
   workflowNeedsRepositoryAccess,
 } from "./support/repository-access.js";
 // Pure too: which subject this run freezes a record for, and the policy ladder
@@ -79,7 +79,7 @@ import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
 import { createWorkflowExecutionErrorState, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
-import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAskedRepository } from "@shared/contracts";
+import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
 import type { RunWorkScopeWrite } from "./work-scope/apply-plans.js";
 import type { RepositoryCatalogEntry } from "./repository-discovery/catalog.js";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
@@ -231,6 +231,51 @@ export function createRepositoryQuestions(carrier: { workScopeAsk?: RepositoryQu
      *  nothing either, which is a run that froze no record. */
     repeat: (questions: string[]) => raise(questions, asked),
   };
+}
+
+/**
+ * The failure a discovery decision becomes, as the person on the ticket reads
+ * it.
+ *
+ * A named function rather than three lines inside the discovery closure, because
+ * the two judgements below are the whole of what a person gets when a run stops
+ * with no repository, and a judgement nothing can call is a judgement nothing
+ * can test. The closure itself is unreachable from a test (see the header of
+ * `engine/tests/work-scope-discovery.test.ts`), so this is the seam.
+ *
+ * WHOSE FAULT, which decides where an operator is sent: a run left with nothing
+ * because somebody excluded what the model proposed is not a provider fault, and
+ * calling it one sends them to read platform logs instead of this ticket's own
+ * scope.
+ *
+ * WHOSE WORDS, which decides what the person reads. `protocol.ts` writes the
+ * record's refusals as one whole sentence per repository plus the way back, all
+ * of it for a person, so the refusal IS the message and leads. Passed as a
+ * detail alone it was clamped to 160 characters from both ends, and production
+ * run wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF reached that person as "This deployment's
+ * confi [...] o continue." with the repository, the reason and the way back in
+ * the elided middle.
+ *
+ * The other arm keeps the generic lead deliberately. There `decision.error` is
+ * the MODEL's own error string, which nobody wrote for a person and which the
+ * model controls up to 500 characters, so it rides in parentheses behind the
+ * category sentence where a snippet belongs.
+ */
+export function discoveryFailureToExecutionError(
+  /** Structural rather than the imported union, so this module keeps discovery
+   *  out of its top-level dependency surface: the closure below reaches
+   *  `repository-discovery/protocol.js` through a deferred import, which is the
+   *  only edge workflow scope may have to it. A caller passing the real decision
+   *  still typechecks against this shape, so the two cannot drift silently. */
+  decision: { error: string; blame: "provider" | "work_scope" },
+  phase: string,
+): Extract<BlockExecutionResult, { kind: "execution_error" }> {
+  const refusedByTheRecord = decision.blame === "work_scope";
+  return executionError(decision.error, {
+    category: refusedByTheRecord ? "configuration" : "provider",
+    ...(refusedByTheRecord ? { message: decision.error } : {}),
+    phase,
+  });
 }
 
 /** Entry kinds that own the ticket's main work thread and may run the re-pickup
@@ -1343,6 +1388,17 @@ async function agentWorkflowBody(
               answeredById: string;
               answeredByLabel: string;
               answeredAt: string;
+              /** HOW THOSE WORDS WERE READ, decided once by the channel that
+               *  took the answer and travelling with it rather than being
+               *  worked out again here. The run used to read the sentence for
+               *  itself and disagree with the record about what it said: "yes"
+               *  to a question about one repository was a selection there and
+               *  noise here, so the record held a decision the run ignored.
+               *
+               *  Absent on a run parked before this field existed, and absent
+               *  when the question named no repository. Both mean the same
+               *  thing below: read the words the old way. */
+              answerReading?: WorkScopeAnswerReading;
             }
           | { expired: true }
         >({ token: clarification.hookToken });
@@ -1592,6 +1648,7 @@ async function agentWorkflowBody(
             answer: answered.answer,
             answeredBy: answered.answeredByLabel,
             answeredAt: answered.answeredAt,
+            ...(answered.answerReading ? { reading: answered.answerReading } : {}),
             // Which run asked. The re-apply of a repository answer reads it and
             // takes no round but this run's own (A42).
             runId: workflowRunId,
@@ -1949,6 +2006,15 @@ async function agentWorkflowBody(
         );
         const record = runWorkScopeRecorder(discovery.catalog, []);
         const offered = offerableRepositoryCatalog(discovery.catalog, record);
+        // What the filter above left out because an answer on this work did not
+        // take it. The validator is handed only `offered`, so without these it
+        // could not name the repositories a run stopping on them is about.
+        const answerLeftUnnamed =
+          record?.answerLeftUnnamedKeys(
+            discovery.catalog
+              .filter((repository) => repository.usable)
+              .map(workScopeRepositoryKey),
+          ) ?? [];
         const prompt = assembleRepositoryDiscoveryPrompt({
           ticket: ctx.ticket,
           discovery: { ...discovery, catalog: offered },
@@ -2011,6 +2077,7 @@ async function agentWorkflowBody(
                 // nothing is known to have been asked, so a person is asked
                 // once more rather than told about a decision this run cannot
                 // see.
+                answerLeftUnnamed,
                 answeredRepositoryKeys: ctx.workScope.answeredRepositoryKeys ?? [],
                 recorded: ctx.workScope.scope?.entries ?? [],
                 // Whether a full path written in a comment would reach the next
@@ -2134,13 +2201,9 @@ async function agentWorkflowBody(
           });
           return repositoryQuestions.raise(questions, ask);
         }
-        return executionError(decision.error, {
-          // A run left with nothing because somebody excluded what the model
-          // proposed is not a provider fault, and calling it one sends an
-          // operator to read platform logs instead of this ticket's own scope.
-          category: decision.blame === "work_scope" ? "configuration" : "provider",
-          phase,
-        });
+        // Whose fault it was and whose words the person reads, both decided in
+        // one named function so a test can drive them. See its own comment.
+        return discoveryFailureToExecutionError(decision, phase);
       };
       const expandResearchWorkspace = async (
         requests: NonNullable<ResearchResult["repositories"]>,
@@ -3788,13 +3851,13 @@ async function agentWorkflowBody(
                   "Pull requests created before publication failed:",
                 );
               }
+              // A repository the catalog withholds refuses inside the PR step
+              // and surfaces as a publication failure; blaming the provider
+              // for it is what sent operators to a forge status page, and
+              // clamping its sentence is what left the person on the ticket
+              // without the repository or the way back.
               return executionError(publication.reason, {
-                // A repository the catalog withholds refuses inside the PR step
-                // and surfaces as a publication failure; blaming the provider
-                // for it is what sent operators to a forge status page.
-                category: isRepositoryCatalogRefusal(publication.reason)
-                  ? "configuration"
-                  : "provider",
+                ...catalogRefusalExecutionOptions(publication.reason, "provider"),
                 phase: "open-pr",
               });
             }

@@ -62,6 +62,13 @@ export async function moveConnectedTicketForRun(
  * evicted before the owner is released. An ambiguous move is successful only
  * when a fresh read proves the ticket left AI; otherwise the original error is
  * propagated and cancellation retains the owner.
+ *
+ * Resolves to whether THIS call moved the ticket out of AI. `true` when the
+ * move succeeded, and also when it threw but a fresh read proves the ticket
+ * left AI (the provider took the move and lost the response). `false` when
+ * there was nothing to move: the ticket is gone, or it had already left AI when
+ * it was read. Every other outcome throws, as it always has. A caller that
+ * tells a person where their ticket went says so only on `true`.
  */
 export async function withdrawTicketFromAiForRun(input: {
   db: Db;
@@ -71,7 +78,7 @@ export async function withdrawTicketFromAiForRun(input: {
   target?: IssueTrackerMoveTarget;
   owner: TicketTransitionOwner;
   requiredOwnerState: "bound" | "cancelling";
-}): Promise<void> {
+}): Promise<boolean> {
   let current: TicketContent;
   try {
     current = await input.issueTracker.fetchTicket(input.ticketKey);
@@ -81,24 +88,27 @@ export async function withdrawTicketFromAiForRun(input: {
     // the exact cancelling owner; absence alone must never authorize another
     // run's claim to be released.
     await assertActiveRunOwnerState(input.owner, input.requiredOwnerState, input.db);
-    return;
+    return false;
   }
   await assertActiveRunOwnerState(input.owner, input.requiredOwnerState, input.db);
-  if (!ticketMatchesMoveTarget(current, input.aiColumn)) return;
+  if (!ticketMatchesMoveTarget(current, input.aiColumn)) return false;
   if (!input.target) {
     throw new Error("Cannot withdraw an AI ticket without a safe move target");
   }
 
   try {
     await input.issueTracker.moveTicket(input.ticketKey, input.target);
+    return true;
   } catch (error) {
     try {
       const afterError = await input.issueTracker.fetchTicket(input.ticketKey);
-      if (!ticketMatchesMoveTarget(afterError, input.aiColumn)) return;
+      if (!ticketMatchesMoveTarget(afterError, input.aiColumn)) return true;
     } catch (readError) {
       if (isIssueTrackerNotFound(readError)) {
+        // Gone after the attempt: outside AI, but not in any column this call
+        // could name, so nothing was moved that anybody can be told about.
         await assertActiveRunOwnerState(input.owner, input.requiredOwnerState, input.db);
-        return;
+        return false;
       }
       // Preserve the original mutation error.
     }
@@ -106,30 +116,32 @@ export async function withdrawTicketFromAiForRun(input: {
   }
 }
 
+/** The same withdraw on the connected database, reporting the same boolean. */
 export async function withdrawConnectedTicketFromAiForRun(
   input: Omit<Parameters<typeof withdrawTicketFromAiForRun>[0], "db">,
-): Promise<void> {
+): Promise<boolean> {
   let current: TicketContent;
   try {
     current = await input.issueTracker.fetchTicket(input.ticketKey);
   } catch (error) {
     if (!isIssueTrackerNotFound(error)) throw error;
     await assertActiveRunOwnerState(input.owner, input.requiredOwnerState);
-    return;
+    return false;
   }
   await assertActiveRunOwnerState(input.owner, input.requiredOwnerState);
-  if (!ticketMatchesMoveTarget(current, input.aiColumn)) return;
+  if (!ticketMatchesMoveTarget(current, input.aiColumn)) return false;
   if (!input.target) throw new Error("Cannot withdraw an AI ticket without a safe move target");
   try {
     await input.issueTracker.moveTicket(input.ticketKey, input.target);
+    return true;
   } catch (error) {
     try {
       const afterError = await input.issueTracker.fetchTicket(input.ticketKey);
-      if (!ticketMatchesMoveTarget(afterError, input.aiColumn)) return;
+      if (!ticketMatchesMoveTarget(afterError, input.aiColumn)) return true;
     } catch (readError) {
       if (isIssueTrackerNotFound(readError)) {
         await assertActiveRunOwnerState(input.owner, input.requiredOwnerState);
-        return;
+        return false;
       }
     }
     throw error;

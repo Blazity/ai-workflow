@@ -1,4 +1,5 @@
 import { asc, eq } from "drizzle-orm";
+import { fakeAnswerReadingModel } from "../work-scope/read-answer.fake.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSettingsSnapshot, type WorkScopeAskedRepository } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
@@ -148,6 +149,9 @@ function run(tracker: ReturnType<typeof makeTracker>, allowNudge = false) {
     ticketKey: TICKET,
     allowNudge,
     aiColumn: "AI",
+    // A STAND-IN FOR THE MODEL, so these rows prove what the Jira channel does
+    // with a reading rather than that no provider is reachable from a test.
+    answerReadingDeps: { generate: fakeAnswerReadingModel() },
     cancelSettings: defaultSettingsSnapshot(),
   });
 }
@@ -724,34 +728,44 @@ describe("resumeClarificationFromComments writing a repository answer to the rec
 
     const result = await run(tracker);
 
-    // The run wakes on exactly the words it wakes on today.
-    expect(result).toEqual({ status: "resumed", runId: RUN });
-    expect(mocks.resumeHook).toHaveBeenCalledWith(
-      row.hookToken,
-      expect.objectContaining({
-        answer: "Jane: moving this back to AI\n\nBob: heads up, github:acme/docs will need a follow-up",
-        answeredById: "jira:human-2",
-      }),
-    );
-    expect(await getHookClarification(db, row.id)).toMatchObject({
-      status: "answered",
-      answeredByLabel: "Jane, Bob (via Jira)",
-    });
-    // And the people who answered are told why they may be asked again. Without
-    // this the whole case the record refuses is invisible from the ticket: the
-    // question comes back with no explanation in between.
+    // ROUND 5. Neither comment answers the question: one is a note about moving
+    // the ticket and the other is a heads up about a repository nobody asked
+    // about. That used to wake the run, which then asked the same question over
+    // again; now the words settle nothing, so NOTHING is decided or woken and
+    // the question this person is still being asked stays open in front of
+    // them, with the ticket back in the backlog it waited in.
+    //
+    // The authorship rule is untouched and still decides what may be recorded;
+    // what changed is that an answer nobody could read no longer spends a run
+    // cycle before saying so.
+    expect(result).toEqual({ status: "answer_unclear", runId: RUN });
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+    expect(await getHookClarification(db, row.id)).toMatchObject({ status: "pending" });
+    // And the people who commented are still told, on the ticket, that this
+    // settled nothing. THE SENTENCE THEY GET IS THE WEAKER ONE, and that is the
+    // cost of reading before counting: the words are read where they arrive,
+    // before anybody knows how many people wrote them, so a reply that is BOTH
+    // unreadable and written by two people is told it could not be read rather
+    // than that it had two authors. The more specific sentence is still the one
+    // a readable two-author answer gets, which is the case it was written for.
     const posted = tracker.postComment.mock.calls[0]?.[1] ?? "";
-    expect(posted).toContain("Your answer reached the run, which is continuing.");
-    expect(posted).toContain("More than one person wrote into this answer");
-    expect(posted).toContain("one person in a single comment is the one that gets recorded");
-    expect(tracker.moveTicket).not.toHaveBeenCalled();
+    expect(posted).toContain("Nothing has been recorded, and this question is still open");
+    // The one move is back to the backlog, and the note says so: moving the
+    // ticket into AI committed a reply that settled nothing, so the board must
+    // not go on saying the agent is working while the run waits for them.
+    const { COLUMN_BACKLOG } = defaultSettingsSnapshot();
+    expect(tracker.moveTicket.mock.calls).toEqual([[TICKET, COLUMN_BACKLOG]]);
+    expect(posted).toContain(`This ticket is back in the "${COLUMN_BACKLOG}" column while the question waits.`);
     // Neither the repository Bob happened to name nor the one nobody answered.
     await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
-    // The trail still says an answer arrived and was not applied, because the
-    // symptom a person will be explaining is the same question asked twice.
-    await expect(trailEvents()).resolves.toEqual([
-      declinedTrailRow(row.id, "jira:human-2", "Jane, Bob (via Jira)"),
-    ]);
+    // AND NO TRAIL ROW EITHER, which is a change and a loss worth naming. The
+    // row used to say an answer arrived and was not applied. Now nothing is
+    // written, because nothing happened: the question is still pending and the
+    // next poll tick may deliver these same comments again, so a row per
+    // attempt would be a history of our retries rather than of anybody's
+    // decisions. The symptom it was there to explain is also gone, because the
+    // question is no longer asked twice; it is simply still open.
+    await expect(trailEvents()).resolves.toEqual([]);
   });
 
   it("decides nothing when the second of two people wrote a clean answer, because nobody can tell which words were the answer", async () => {
@@ -950,7 +964,12 @@ describe("resumeClarificationFromComments writing a repository answer to the rec
     // The keyword the question itself teaches, and the honest place to use it,
     // which is the next asking: this clarification is answered, and answering
     // it again under this comment reaches nothing.
-    expect(posted).toContain('answer "none" the next time the question is asked');
+    // The sentence this offers moved when the old one turned out to be false:
+    // a comment IS how a ticket answers an open question, so what has no route
+    // is a refusal written under one already answered (M3).
+    expect(posted).toContain(
+      'When the question comes back, answering "none" declines every repository it lists',
+    );
     // And NOT the path route, because this question was raised about a
     // repository the catalog does not enable: the next run matches written
     // paths against the repositories it froze at its start, so a person sent to
@@ -999,11 +1018,14 @@ describe("resumeClarificationFromComments writing a repository answer to the rec
       ],
     });
 
-    expect(await run(tracker)).toEqual({ status: "resumed", runId: RUN });
+    // ROUND 5. The emoji still drops nothing, and now it does not wake the run
+    // either: one reader settles nothing from it, so the question stays open
+    // and the person is asked for a word rather than watching a run go by.
+    expect(await run(tracker)).toEqual({ status: "answer_unclear", runId: RUN });
 
     await expect(entriesOfSubject()).resolves.toEqual([]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
-    expect(posted).toContain("Your answer reached the run, which is continuing.");
+    expect(posted).toContain("Nothing has been recorded, and this question is still open");
     expect(posted).not.toContain("continuing without");
   });
 
@@ -1054,7 +1076,12 @@ describe("resumeClarificationFromComments writing a repository answer to the rec
     ]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
     expect(posted).toContain("reads as a plain no");
-    expect(posted).toContain('answer "none" the next time the question is asked');
+    // The sentence this offers moved when the old one turned out to be false:
+    // a comment IS how a ticket answers an open question, so what has no route
+    // is a refusal written under one already answered (M3).
+    expect(posted).toContain(
+      'When the question comes back, answering "none" declines every repository it lists',
+    );
   });
 
   it("records an answer the same person sent as two comments, the case the guard must not catch", async () => {

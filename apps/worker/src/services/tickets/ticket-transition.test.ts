@@ -7,6 +7,7 @@ vi.mock("../../db/repositories/active-runs.js", () => ({ assertActiveRunOwnerSta
 
 import {
   moveTicketForRun,
+  withdrawConnectedTicketFromAiForRun,
   withdrawTicketFromAiForRun,
 } from "./ticket-transition.js";
 
@@ -104,7 +105,7 @@ describe("withdrawTicketFromAiForRun", () => {
       vi.fn().mockImplementation(async () => { order.push("move"); }),
     );
 
-    await withdrawTicketFromAiForRun({
+    await expect(withdrawTicketFromAiForRun({
       db,
       issueTracker,
       ticketKey: "AIW-101",
@@ -112,7 +113,7 @@ describe("withdrawTicketFromAiForRun", () => {
       target: "Backlog",
       owner,
       requiredOwnerState: "cancelling",
-    });
+    })).resolves.toBe(true);
 
     expect(order).toEqual(["owner", "move"]);
     expect(issueTracker.moveTicket).toHaveBeenCalledWith("AIW-101", "Backlog");
@@ -123,7 +124,7 @@ describe("withdrawTicketFromAiForRun", () => {
       vi.fn().mockResolvedValue({ trackerStatus: "Review" }),
     );
 
-    await withdrawTicketFromAiForRun({
+    await expect(withdrawTicketFromAiForRun({
       db,
       issueTracker,
       ticketKey: "AIW-101",
@@ -131,7 +132,7 @@ describe("withdrawTicketFromAiForRun", () => {
       target: "Backlog",
       owner,
       requiredOwnerState: "bound",
-    });
+    })).resolves.toBe(false);
 
     expect(assertOwner).toHaveBeenCalledWith(owner, "bound", db);
     expect(issueTracker.moveTicket).not.toHaveBeenCalled();
@@ -155,7 +156,7 @@ describe("withdrawTicketFromAiForRun", () => {
           owner,
           requiredOwnerState: "cancelling",
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe(false);
 
       expect(assertOwner).toHaveBeenCalledWith(owner, "cancelling", db);
       expect(issueTracker.moveTicket).not.toHaveBeenCalled();
@@ -179,7 +180,7 @@ describe("withdrawTicketFromAiForRun", () => {
       target: "Backlog",
       owner,
       requiredOwnerState: "bound",
-    })).resolves.toBeUndefined();
+    })).resolves.toBe(true);
     expect(fetchTicket).toHaveBeenCalledTimes(2);
   });
 
@@ -210,4 +211,70 @@ describe("withdrawTicketFromAiForRun", () => {
       })).rejects.toBe(moveError);
     },
   );
+});
+
+// WHAT A WITHDRAW REPORTS, on both variants: the connected one is a second copy
+// of the same branches and is the one production uses. A caller that tells a
+// person where their ticket went reads this boolean and nothing else.
+type WithdrawInput = Omit<Parameters<typeof withdrawTicketFromAiForRun>[0], "db">;
+describe.each([
+  ["withdrawTicketFromAiForRun", (input: WithdrawInput) => withdrawTicketFromAiForRun({ db, ...input })],
+  ["withdrawConnectedTicketFromAiForRun", (input: WithdrawInput) => withdrawConnectedTicketFromAiForRun(input)],
+])("%s reports whether it moved the ticket", (_name, withdraw) => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    assertOwner.mockResolvedValue(undefined);
+  });
+
+  const notFound = () => new IssueTrackerNotFoundError("Jira issue", "AIW-101");
+
+  it.each([
+    {
+      case: "moved out of AI",
+      fetchTicket: () => vi.fn().mockResolvedValue({ trackerStatus: "AI" }),
+      moveTicket: () => vi.fn().mockResolvedValue(undefined),
+      moved: true,
+    },
+    {
+      case: "already outside AI at the read",
+      fetchTicket: () => vi.fn().mockResolvedValue({ trackerStatus: "Review" }),
+      moveTicket: () => vi.fn(),
+      moved: false,
+    },
+    {
+      case: "ticket gone at the read",
+      fetchTicket: () => vi.fn().mockRejectedValue(notFound()),
+      moveTicket: () => vi.fn(),
+      moved: false,
+    },
+    {
+      case: "move lost its response and a fresh read proves the ticket left AI",
+      fetchTicket: () =>
+        vi.fn()
+          .mockResolvedValueOnce({ trackerStatus: "AI" })
+          .mockResolvedValueOnce({ trackerStatus: "Backlog" }),
+      moveTicket: () => vi.fn().mockRejectedValue(new Error("response lost")),
+      moved: true,
+    },
+    {
+      case: "move failed and the ticket is gone at the fresh read",
+      fetchTicket: () =>
+        vi.fn()
+          .mockResolvedValueOnce({ trackerStatus: "AI" })
+          .mockRejectedValueOnce(notFound()),
+      moveTicket: () => vi.fn().mockRejectedValue(new Error("response lost")),
+      moved: false,
+    },
+  ])("$case: $moved", async ({ fetchTicket, moveTicket, moved }) => {
+    const issueTracker = tracker(fetchTicket(), moveTicket());
+
+    await expect(withdraw({
+      issueTracker,
+      ticketKey: "AIW-101",
+      aiColumn: "AI",
+      target: "Backlog",
+      owner,
+      requiredOwnerState: "bound",
+    })).resolves.toBe(moved);
+  });
 });

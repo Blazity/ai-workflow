@@ -26,7 +26,12 @@ import type {
   WorkScopeEntry,
   WorkScopeQuestionAnswer,
 } from "@shared/contracts";
-import { createRepositoryQuestions } from "../agent-workflow.js";
+import { createWorkflowExecutionErrorState } from "@shared/contracts";
+import {
+  createRepositoryQuestions,
+  discoveryFailureToExecutionError,
+} from "../agent-workflow.js";
+import { formatExecutionErrorForUser } from "../helpers/execution-error.js";
 import { makeCtx } from "../blocks/support/test-support.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import {
@@ -230,6 +235,13 @@ function decide(input: DiscoveryInput) {
     input.mandatory ?? [],
     record
       ? {
+          // What the filter above withheld for an answer, as the closure in
+          // `agent-workflow.ts` computes it.
+          answerLeftUnnamed: record.answerLeftUnnamedKeys(
+            catalog
+              .filter((repo) => repo.usable)
+              .map((repo) => `${repo.provider}:${repo.repoPath}`),
+          ),
           // Off the context, and empty when the context carries none, exactly
           // as the closure in `agent-workflow.ts` reads it.
           answeredRepositoryKeys: ctx.workScope?.answeredRepositoryKeys ?? [],
@@ -608,11 +620,12 @@ describe("a discovery question about repositories the model was unsure of", () =
       leftOut: [
         {
           repositoryKey: "github:acme/web",
+          // The pre-sandbox's wording for a guess it did not take. The record
+          // keeps the declined repository off the model's catalog, so the
+          // proposal meets it as one an answer left unnamed.
           reason:
-            "Repository discovery was not confident about github:acme/web," +
-            " and somebody on this work was already asked which repositories to start from" +
-            " and did not name it, so this run left it out rather than acting on a question" +
-            " nobody answered with it.",
+            "github:acme/web was listed in a repository question already answered on this work" +
+            " and is not selected on it, so the run started without it.",
         },
       ],
     });
@@ -633,14 +646,15 @@ describe("a discovery question about repositories the model was unsure of", () =
     expect(decision).toEqual({
       kind: "failed",
       error:
-        "Repository discovery was not confident about github:acme/web," +
-        " and somebody on this work was already asked which repositories to start from" +
-        " and did not name it. Not naming a repository is not choosing it," +
-        " so this run has no repository to work on." +
+        "github:acme/web was listed in a repository question already answered on this work" +
+        " and is not selected on it." +
+        " Repository discovery proposed nothing else this run can use," +
+        " so it has no repository to work on." +
         // A comment, not the ticket itself: a description edit is the text the
         // question was already asked about and binds nothing (C11f, R3).
-        " Write the full path of each repository this ticket should work on in a comment on this" +
-        " ticket, as github:acme/web, and start a new run.",
+        " Leaving a repository out of an answer is not final: this work's repository list can be" +
+        " changed through the work scope API or the work_scope.edit tool, or the repository's full" +
+        " path can be written in a ticket comment, as github:acme/web, and the next run reads both.",
       blame: "work_scope",
     });
     expect(consumeWorkScopeAsk(ctx)).toBeUndefined();
@@ -703,6 +717,136 @@ describe("a discovery question about repositories the model was unsure of", () =
       error: null,
     });
     expect(ctx.workScopeAsk).toBeUndefined();
+  });
+});
+
+/**
+ * The model's OWN question, on a subject whose answer left repositories out.
+ *
+ * Found on production on 2026-09-18. A person answered "No. None of these." to a
+ * question naming four repositories; the next pass showed the model the same
+ * four as usable, the model counted them against its limit of three, and asked
+ * that person which of the four to put off. The per-repository stops above
+ * cover the questions WE compose from a proposal. This one names no repository,
+ * so none of them reached it.
+ */
+describe("the model asks its own question after an answer left every repository out", () => {
+  const MODEL_ASKS = {
+    status: "clarification_needed",
+    confidence: null,
+    repositories: null,
+    questions: [
+      "The ticket requires github:acme/web and github:acme/api. Which repository should be deferred?",
+    ],
+    error: null,
+  };
+
+  it("never offers the model a repository the answer did not take", () => {
+    const record = createRunWorkScopeRecorder({
+      subjectKey: SUBJECT,
+      scope: scopeOf(),
+      selectionAnswered: true,
+      answeredRepositoryKeys: ["github:acme/api"],
+      ticketText: { matchedKeys: [], datableKeys: [], mentionedAfterAnswerKeys: [] },
+      catalog: {
+        activated: true,
+        enabledKeys: CATALOG.map((repo) => `${repo.provider}:${repo.repoPath}`),
+        unusableKeys: [],
+      },
+      policy: ANY_CATALOG,
+      actor: RUN_ACTOR,
+      now: NOW,
+    });
+
+    expect(
+      offerableRepositoryCatalog(CATALOG, record).map((repo) => repo.repoPath),
+    ).toEqual(["acme/web"]);
+  });
+
+  it("stops with the way back instead of asking about the repositories just declined", () => {
+    const { decision, ctx } = decide({
+      scope: scopeOf(),
+      selectionAnswered: true,
+      answeredRepositoryKeys: ["github:acme/web", "github:acme/api"],
+      raw: MODEL_ASKS,
+    });
+
+    expect(decision).toEqual({
+      kind: "failed",
+      error:
+        "github:acme/web was listed in a repository question already answered on this work" +
+        " and is not selected on it." +
+        " github:acme/api was listed in a repository question already answered on this work" +
+        " and is not selected on it." +
+        " Repository discovery proposed nothing else this run can use," +
+        " so it has no repository to work on." +
+        " Leaving a repository out of an answer is not final: this work's repository list can be" +
+        " changed through the work scope API or the work_scope.edit tool, or the repository's full" +
+        " path can be written in a ticket comment, as github:acme/web, and the next run reads both.",
+      blame: "work_scope",
+    });
+    expect(consumeWorkScopeAsk(ctx)).toBeUndefined();
+  });
+
+  it("stops the same way when the model proposes nothing instead of asking", () => {
+    // The generic "which repository should this ticket inspect" question is the
+    // same repeat in other words: the person was just asked that and answered.
+    const { decision } = decide({
+      scope: scopeOf(),
+      selectionAnswered: true,
+      answeredRepositoryKeys: ["github:acme/web", "github:acme/api"],
+      raw: { status: "selected", confidence: "low", repositories: [], questions: null, error: null },
+    });
+
+    expect(decision).toMatchObject({ kind: "failed", blame: "work_scope" });
+  });
+
+  it("still asks when a repository nobody declined is left to offer", () => {
+    // The stop is for an EMPTY offer. With one repository still open the model's
+    // question may be a real one, about something the catalog lacks.
+    const { decision } = decide({
+      scope: scopeOf(),
+      selectionAnswered: true,
+      answeredRepositoryKeys: ["github:acme/api"],
+      raw: MODEL_ASKS,
+    });
+
+    expect(decision).toMatchObject({
+      kind: "clarification_needed",
+      reason: "model_requested_clarification",
+      questions: MODEL_ASKS.questions,
+    });
+  });
+
+  it("still asks on a subject nobody answered about, however empty the catalog", () => {
+    // Nobody declined anything, so an empty offer is a catalog nobody filled,
+    // not somebody's decision, and there is no refusal to report.
+    const { decision } = decide({
+      scope: scopeOf(),
+      catalog: [catalogEntry("github", "acme/fresh", false)],
+      raw: MODEL_ASKS,
+    });
+
+    expect(decision).toMatchObject({ kind: "clarification_needed" });
+  });
+
+  it("still asks when the run holds a repository of its own", () => {
+    const { decision } = decide({
+      scope: scopeOf(),
+      selectionAnswered: true,
+      answeredRepositoryKeys: ["github:acme/web", "github:acme/api"],
+      mandatory: [
+        {
+          provider: "github",
+          repoPath: "acme/ops",
+          defaultBranch: "main",
+          selectedRationale: "the pull request this run was triggered by",
+        },
+      ],
+      raw: MODEL_ASKS,
+    });
+
+    expect(decision).toMatchObject({ kind: "clarification_needed" });
   });
 });
 
@@ -972,6 +1116,73 @@ describe("a subject whose selection question has already been answered", () => {
       blame: "work_scope",
     });
     expect(consumeWorkScopeAsk(ctx)).toBeUndefined();
+  });
+
+  it("hands that refusal to the person whole, not the half a bound left of it", () => {
+    // Production, 2026-09-18, run wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF. The refusal
+    // IS the record: the run's status reason and the ticket comment. It reached
+    // the closure as a DETAIL and nothing more, so the message layer led with
+    // the generic configuration sentence and appended a 160-character
+    // both-ends clamp of it. What the person read was
+    //
+    //   "This deployment's configuration does not allow this run to continue.
+    //    (Repository discovery was not confident about github:blazity/a [...]
+    //    epository list, through the work scope API or the work_scope.edit
+    //    tool, and start a new run.)"
+    //
+    // Which repository, why it was left out and the first half of the way back
+    // were all in the elided middle, and a refusal that arrives halved is this
+    // feature failing at its last step.
+    //
+    // Two halves, because the closure cannot be invoked by a test: the seam
+    // proves what a person reads, the tripwire proves the closure is what hands
+    // it over.
+    const { decision } = decide({
+      scope: scopeOf(),
+      answeredRepositoryKeys: ["github:acme/api"],
+      raw: unsureProposal(["acme/api", "the ticket names the API schema"]),
+    });
+    expect(decision.kind).toBe("failed");
+    if (decision.kind !== "failed") return;
+    // Over the snippet cap, which is what made the clamp fire at all. A refusal
+    // shorter than this would pass the old code too and prove nothing.
+    expect(decision.error.length).toBeGreaterThan(160);
+
+    const failure = discoveryFailureToExecutionError(decision, "prepare");
+    const shown = formatExecutionErrorForUser(
+      createWorkflowExecutionErrorState(
+        "wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF",
+        "prepare",
+        1,
+        failure.error,
+      ),
+    );
+    expect(shown).not.toContain("[...]");
+    expect(shown).toContain("github:acme/api");
+    // The way back, which is the refusal's last sentence.
+    expect(shown).toContain("and the next run reads both.");
+    expect(shown.startsWith(decision.error)).toBe(true);
+    // Not a provider fault. An operator sent to a forge status page over a
+    // decision somebody on this ticket made is an operator looking for an
+    // outage that never happened.
+    expect(failure.error.category).toBe("configuration");
+  });
+
+  it("does not hand the MODEL's own error string the whole message", () => {
+    // The other arm, and the reason the function asks WHOSE words before it
+    // decides. `decision.error` here is written by the model, not for a person,
+    // and the model controls it up to the 500 characters its schema allows.
+    // Leading with it would hand a model-authored string every failure surface
+    // in the product; behind the category sentence it is a snippet, which is
+    // what it is.
+    const modelError = "the agent could not read the ticket";
+    const failure = discoveryFailureToExecutionError(
+      { error: modelError, blame: "provider" },
+      "prepare",
+    );
+    expect(failure.error.category).toBe("provider");
+    expect(failure.error.message.startsWith(modelError)).toBe(false);
+    expect(failure.error.message).toContain(modelError);
   });
 
   it("asks about the excluded repository the FIRST time, because nobody has seen it yet", () => {

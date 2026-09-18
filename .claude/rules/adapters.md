@@ -4,6 +4,7 @@ paths:
   - "apps/worker/src/engine/agent-workflow.ts"
   - "apps/worker/src/engine/steps/clarification.ts"
   - "apps/worker/src/engine/steps/repository-promotion.ts"
+  - "apps/worker/src/services/run-lifecycle/cancel-run.ts"
 ---
 
 # Issue tracker, VCS and messaging adapters
@@ -21,6 +22,13 @@ paths:
   `needs_clarification` event without `commentUrl`. Awaiting state is stored in
   the database; `parkForClarificationStep` only applies the ticket label and
   move.
+- Closing a question is the second path and only that: cancelling a run that
+  published one posts a comment saying the question is no longer open and
+  removes the `needs-clarification` label
+  (`apps/worker/src/services/run-lifecycle/cancel-run.ts`). It is best effort,
+  guarded to fire once per run, and never posts for a run that asked nothing,
+  so the label is on while a question is open and gone once it closed, whichever
+  way it closed.
 - Branch creation is idempotent, not destructive. `createBranchIfMissing`
   returns `"existing"` for an already-existing ref. Only `resetOwnedBranch`
   resets a workflow-owned branch, and

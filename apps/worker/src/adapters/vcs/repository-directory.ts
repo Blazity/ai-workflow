@@ -270,7 +270,26 @@ class GitLabRepositoryDirectory implements RepositoryDirectory {
     const baseUrl = this.host.replace(/\/$/, "");
 
     while (page) {
-      const url = `${baseUrl}/api/v4/projects?membership=true&simple=true&per_page=100&page=${page}`;
+      // NOT `simple=true`, AND NOT `archived=false` EITHER.
+      //
+      // `simple=true` returns GitLab's BasicProjectDetails entity, which exposes
+      // default_branch, topics, web_url, visibility, namespace and the identity
+      // fields, and NO `archived`. So `Boolean(project.archived)` was `false`
+      // for every project we have ever listed, every archived GitLab repository
+      // counted as usable, and a run would select one, check it out and fail on
+      // push with something opaque. The full entity (Project < ProjectDetails <
+      // BasicProjectDetails < ProjectIdentity) carries `archived` as well as
+      // every field mapped below.
+      //
+      // Filtering server side with `archived=false` would make the flag honest
+      // by removing the rows it describes, and a repository in no listing is in
+      // none of the sets the selection reports from: a person naming an archived
+      // repository would be told nothing at all, which is the silence the
+      // reporting exists to end. We want them listed AND named as unusable.
+      //
+      // The cost is a larger payload on a listing already paginated at 100 per
+      // page over a repository count in the tens.
+      const url = `${baseUrl}/api/v4/projects?membership=true&per_page=100&page=${page}`;
       const response = await fetch(url, {
         headers: { "PRIVATE-TOKEN": this.token },
         signal: AbortSignal.timeout(GITLAB_PROJECTS_TIMEOUT_MS),

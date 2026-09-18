@@ -94,6 +94,81 @@ describe("readRepositoryAnswer", () => {
     },
   );
 
+  // AWP-221 on production, 2026-09-18. A person answered the which-of-these
+  // question with one comment: the word "no", a line break, "none of these".
+  // Read as one string it matched no phrase in the list, so the reply that said
+  // the same thing twice was less readable than either half of it alone, and the
+  // comment back told that person to answer "none" the next time the question
+  // was asked. They had just written it. Every phrase here is a refusal and none
+  // of them names anything else, so the reply declines every repository the
+  // question listed (A17b).
+  it.each(["no\nnone of these", "no, none of these", "nope\nnone", "none of these"])(
+    "reads %o as none, because every phrase in it is a refusal",
+    (answer) => {
+      expect(read(answer)).toEqual({ kind: "none" });
+    },
+  );
+
+  // The other half of that rule, and it does not move: a phrase that names a
+  // repository, or one carrying a word this reader would have to interpret,
+  // leaves the whole reply unreadable however plain the refusal beside it is.
+  it.each([
+    "no\nnone of these\ngithub:acme/api",
+    "no, use github:acme/api",
+    "no\nnone of these, but check with the team first",
+  ])("reads %o as unrecognised, because a phrase in it is not a refusal", (answer) => {
+    expect(read(answer)).toEqual({ kind: "unrecognised" });
+  });
+
+  // The repeat question these four used to cost. A person who wrote "none of the
+  // above" under a question listing four repositories was read as naming
+  // nothing, so the identical question came back and they answered it twice; the
+  // same for "neither". Each refuses a SET rather than a subject, so each
+  // declines the whole list exactly as "none of these" does (A17d).
+  it.each(["neither", "neither of them", "neither of these", "none of the above"])(
+    "reads %o as declining the list instead of asking again",
+    (answer) => {
+      const four = [
+        "github:acme/api",
+        "gitlab:acme/web",
+        "github:acme/shared",
+        "gitlab:acme/shared",
+      ];
+      expect(read(answer, catalogKeys, four)).toEqual({ kind: "none" });
+      // And the punctuation and capitals people actually type around them.
+      expect(read(`${answer.replace(/^n/, "N")}.`, catalogKeys, four)).toEqual({ kind: "none" });
+    },
+  );
+
+  // The owner's ruling of 2026-09-18: a refusal phrase declines only what it can
+  // be about. "continue without it" refuses ONE repository, which is what the
+  // in-run question asks about and offers those words for, and what a question
+  // listing four contradicts. Four permanent exclusions off a sentence about one
+  // repository is the decision nobody made; being asked again is the cheap
+  // failure beside it (rule 1). The gate is the question's shape, so the
+  // dashboard and the ticket read these words identically.
+  it("reads a refusal about one repository as none when the question asked about one", () => {
+    expect(read("no, continue without it", catalogKeys, ["github:acme/api"])).toEqual({
+      kind: "none",
+    });
+    expect(read("continue without it", catalogKeys, ["github:acme/api"])).toEqual({ kind: "none" });
+  });
+
+  it("reads the same words as unrecognised when the question listed four repositories", () => {
+    const four = ["github:acme/api", "gitlab:acme/web", "github:acme/shared", "gitlab:acme/shared"];
+    expect(read("no, continue without it", catalogKeys, four)).toEqual({ kind: "unrecognised" });
+    expect(read("continue without it", catalogKeys, four)).toEqual({ kind: "unrecognised" });
+    // A reply refusing the whole list still declines it, which is the half of
+    // the ruling that must not move: the phrase, not the count of phrases, is
+    // what decides.
+    expect(read("no\nnone of these", catalogKeys, four)).toEqual({ kind: "none" });
+    expect(read("none of these", catalogKeys, four)).toEqual({ kind: "none" });
+    // And a word with no subject in it is not weighed against the list at all:
+    // threaded to the question it takes that question's own subject, and which
+    // channels may thread it is A8 and A9.
+    expect(read("no", catalogKeys, four)).toEqual({ kind: "none" });
+  });
+
   it("resolves a provider scoped identity the catalog holds", () => {
     expect(read("Use github:acme/api please")).toEqual({
       kind: "repositories",
@@ -611,9 +686,39 @@ describe("answerSaysNoAndNamesARepository", () => {
   it("is false for a reply that is nothing but a refusal", () => {
     expect(says("none")).toBe(false);
     expect(says("no")).toBe(false);
+    expect(says("no\nnone of these")).toBe(false);
+  });
+
+  // The keyword rule reads "none, use github:acme/api" as a refusal whole,
+  // because it opens with the word the question asks for. That person named a
+  // repository, and the sentence they used to get back said nothing in their
+  // answer named one, which is the nonsense this predicate exists to end.
+  it("is true for a refusal keyword that names a repository after it", () => {
+    expect(says("none, use github:acme/api")).toBe(true);
+    expect(says("none, github:acme/api")).toBe(true);
   });
 
   it("is false for a reply that names a repository and says no about nothing", () => {
     expect(says("github:acme/ops")).toBe(false);
+  });
+
+  // M5. "none of the docs mention it" says no about nothing and names no
+  // repository: the word quantifies a noun that happens to share a name with
+  // one. Both halves of the sentence this predicate turns on would be false for
+  // that person, and it would teach them a rule they had not broken.
+  it("is false for prose whose negation quantifies a noun rather than refusing a repository", () => {
+    const withDocs = (answer: string) =>
+      answerSaysNoAndNamesARepository(answer, {
+        catalogKeys: [...CATALOG, "github:acme/docs"],
+        askedQuestions: [],
+      });
+
+    expect(withDocs("none of the docs mention it")).toBe(false);
+    expect(withDocs("none of the docs cover this")).toBe(false);
+    // And the refusals that really are about a repository still are: a phrase
+    // that refuses on its own beside the name, and a negation governing it.
+    expect(withDocs("no, just docs")).toBe(true);
+    expect(withDocs("not docs, ops")).toBe(true);
+    expect(withDocs("nie ruszajcie docs")).toBe(true);
   });
 });

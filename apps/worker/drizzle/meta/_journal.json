@@ -477,6 +477,13 @@
       "when": 1789521453086,
       "tag": "0067_work_scope_ask_asked_once",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1789712353618,
+      "tag": "0068_clarification_answer_reading",
+      "breakpoints": true
     }
   ]
 }

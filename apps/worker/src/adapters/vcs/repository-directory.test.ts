@@ -220,12 +220,62 @@ describe("createRepositoryDirectory", () => {
     ]);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(String(mockFetch.mock.calls[0][0])).toBe(
-      "https://gitlab.example.com/api/v4/projects?membership=true&simple=true&per_page=100&page=1",
+      "https://gitlab.example.com/api/v4/projects?membership=true&per_page=100&page=1",
     );
     expect(mockFetch.mock.calls[0][1]).toMatchObject({
       headers: { "PRIVATE-TOKEN": "glpat" },
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it("asks GitLab for the entity that carries archived, and does not ask it to hide them", async () => {
+    // `simple=true` returns BasicProjectDetails, which exposes default_branch,
+    // topics, web_url, visibility, namespace and the identity fields and NO
+    // archived, so `Boolean(project.archived)` was false for every project this
+    // deployment has ever listed and every archived GitLab repository counted as
+    // usable: a run would select one, check it out and fail on push.
+    //
+    // `archived=false` would be the other wrong fix. It makes the flag honest by
+    // dropping the rows, and a repository in no listing is in none of the sets
+    // the run reports from, so a person who names an archived one is told
+    // nothing at all. They must be listed AND named as unusable.
+    mockFetch.mockResolvedValueOnce(
+      gitLabResponse([], { headers: { "x-next-page": "" } }),
+    );
+
+    const directory = createRepositoryDirectory({
+      kind: "gitlab",
+      token: "glpat",
+      repoPath: "default/repo",
+      baseBranch: "main",
+      host: "https://gitlab.example.com",
+    });
+    await directory.listRepositories();
+
+    const requested = String(mockFetch.mock.calls[0][0]);
+    expect(requested).not.toContain("simple=true");
+    expect(requested).not.toContain("archived=");
+  });
+
+  it("reports an archived GitLab project as archived", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        gitLabResponse([{ ...gitLabProject("acme/ops"), archived: true }], {
+          headers: { "x-next-page": "" },
+        }),
+      );
+
+    const directory = createRepositoryDirectory({
+      kind: "gitlab",
+      token: "glpat",
+      repoPath: "default/repo",
+      baseBranch: "main",
+      host: "https://gitlab.example.com",
+    });
+
+    await expect(directory.listRepositories()).resolves.toEqual([
+      expect.objectContaining({ provider: "gitlab", repoPath: "acme/ops", archived: true }),
+    ]);
   });
 
   it("throws a clear error when GitLab repository discovery times out", async () => {

@@ -6,6 +6,7 @@ import {
 } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/types.js";
 import type { SettingsSnapshot } from "@shared/contracts";
+import type { AnswerReadingDeps } from "../work-scope/index.js";
 import { ticketPageUrl } from "../../engine/support/dashboard-links.js";
 import { logger } from "../../infra/logger.js";
 import {
@@ -45,6 +46,11 @@ export type CommentResumeStatus =
   | "resume_retry_pending" // CAS committed but resume failed retryably; cron heals next tick
   // Answer stored, delivery budget spent; the run is settled and the human told.
   | "resume_exhausted"
+  // The answer could not be read, so nothing was recorded and nothing resumed.
+  // The question is still pending and the person has been told on the ticket
+  // what we read and what reply ends it. Never dispatch: the run is parked on
+  // this very question and a new run would ask it again.
+  | "answer_unclear"
   | "no_answer_comments" // nudged or not; do not dispatch
   | "already_answered" // lost the CAS race to another channel
   | "ticket_gone"
@@ -68,6 +74,10 @@ export async function resumeClarificationFromComments(input: {
   allowNudge: boolean;
   aiColumn: string;
   cancelSettings: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
+  /** The model that reads a repository answer, handed down so a test can drive
+   *  the reading without a provider. Production passes nothing and the core
+   *  uses the small default model. */
+  answerReadingDeps?: AnswerReadingDeps;
 }): Promise<{ status: CommentResumeStatus; runId?: string; nudged?: boolean }> {
   const { db, issueTracker, ticketKey, allowNudge, aiColumn } = input;
   const persistence: {
@@ -139,6 +149,7 @@ export async function resumeClarificationFromComments(input: {
         },
         issueTracker,
         skipTicketFetch: false,
+        ...(input.answerReadingDeps ? { answerReadingDeps: input.answerReadingDeps } : {}),
         aiColumn,
         cancelSettings: input.cancelSettings,
       });
@@ -185,6 +196,14 @@ export async function resumeClarificationFromComments(input: {
       }
       case "resume_terminal":
         return { status: "already_answered", runId: row.runId };
+      case "answer_unclear": {
+        // Unreachable: this branch re-delivers an answer that already passed the
+        // reading gate, and the core does not put a retry through it a second
+        // time. Defensive only, and it releases the claim exactly as the other
+        // nothing-committed outcomes do.
+        await persistence.finish(row.runId, "awaiting");
+        return { status: "answer_unclear", runId: row.runId };
+      }
       case "invalid_answer": {
         await persistence.finish(row.runId, "awaiting");
         // Defensive: an answered row with an empty answer cannot resume. Do not
@@ -375,6 +394,7 @@ export async function resumeClarificationFromComments(input: {
     // The guard above already proved the ticket is live in the AI column, so the
     // core's transition could only be a no-op costing one more provider read.
     skipTicketMove: true,
+    ...(input.answerReadingDeps ? { answerReadingDeps: input.answerReadingDeps } : {}),
     aiColumn,
     cancelSettings: input.cancelSettings,
   });
@@ -420,6 +440,16 @@ export async function resumeClarificationFromComments(input: {
     }
     case "resume_terminal":
       return { status: "already_answered", runId: row.runId };
+    case "answer_unclear":
+      // The core already said so on the ticket, in the channel this answer came
+      // from. Nothing was committed, so there is no claim to settle differently
+      // and nothing for the caller to dispatch: the run is still parked on this
+      // question and the next comment is read against it.
+      logger.info(
+        { ticketKey, runId: row.runId },
+        "clarification_answer_unclear",
+      );
+      return { status: "answer_unclear", runId: row.runId };
     case "ticket_gone":
       return { status: "ticket_gone" };
     case "ticket_transition_failed":

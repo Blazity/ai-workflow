@@ -292,10 +292,38 @@ export async function applyHumanRepositoryExpansion(
   // a refusal to a selection question legitimately writes no entry, so an empty
   // record there is the answer rather than a silence. A run that froze NO
   // record keeps the old path whole, because there no better reader exists.
-  let verdict: RepositoryExpansionDecision = resolvedVerdict;
+  //
+  // AND WHERE THE ANSWER CARRIES ITS OWN READING, THAT READING IS THE TEXT
+  // PARSER'S REPLACEMENT, not its rival. The reading was made once, by a model,
+  // where the answer arrived, against the question as the person saw it, and it
+  // is stored beside the words; this run consumes it instead of parsing the
+  // sentence a second time with a different set of rules. That second parse is
+  // what made the record and the run disagree about the same reply, and it is
+  // the thing this removes.
+  //
+  // No model call happens here, and none may: this runs in workflow scope,
+  // where a replay must reach the same conclusion the first execution did. The
+  // reading is carried on the round, so a replay reads it out of the journal.
+  //
+  // Only on a run that carries a record, which is the same line drawn above: a
+  // run that froze no record has no way to turn the keys a person chose into
+  // repositories it may attach, so it keeps the old path whole.
+  const stored = resumed ? latest.reading : undefined;
+  const readVerdict: RepositoryExpansionDecision = stored
+    ? stored.outcome.kind === "declined_all" || stored.outcome.kind === "declined_one"
+      ? // The person refused. What they refused is written in the record; here
+        // it means only that this run asks for nothing further.
+        { kind: "exhausted" }
+      : // Everything else defers to the record below. A reading that named
+        // repositories is turned into attachable ones by the record and nothing
+        // else, and an unclear reading never reaches a run at all: the channel
+        // that took it parks the question instead of resuming.
+        { kind: "unrecognised_answer", questions: latest.questions }
+    : resolvedVerdict;
+  let verdict: RepositoryExpansionDecision = readVerdict;
   if (resumed && resumed.repositories.length > 0) {
     verdict = { kind: "attach", repositories: resumed.repositories };
-  } else if (resumed && resolvedVerdict.kind === "attach") {
+  } else if (resumed && readVerdict.kind === "attach") {
     // The same question again, so the next answer is still read as repositories
     // to attach: a question without the expansion marker is one whose answer is
     // thrown away (AIW-377).

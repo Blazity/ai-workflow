@@ -272,10 +272,25 @@ export function listConnectedAnsweredClarificationsForTicket(ticketKey: string) 
   return listAnsweredForTicket(getDb(), ticketKey);
 }
 
+/**
+ * Retire every live question of one subject, and report what was retired.
+ *
+ * `retiredPublished` is the narrower fact that one of them had been PUBLISHED,
+ * which is the only state in which a human was ever told the question exists:
+ * publishing is what precedes the label, the column move and the questions
+ * comment (`engine/agent-workflow.ts`). A row still `preparing` was never on
+ * anybody's ticket, so a cancel that retires only those has nothing to
+ * announce. `published_at` survives this update untouched, so the returned
+ * value is the row's own history and not a consequence of the tombstone.
+ *
+ * Because the update consumes the row (a retired one is no longer in the
+ * status list), both flags are false on every repeat: they are a consume-once
+ * token, which is what makes a cancel announcement exactly-once.
+ */
 export async function tombstoneClarificationCancellation(
   db: Db,
   input: { subjectKey: string; ownerToken: string; runId: string | null },
-): Promise<{ matched: boolean; successorOwnerToken: null }> {
+): Promise<{ matched: boolean; successorOwnerToken: null; retiredPublished: boolean }> {
   const rows = await db
     .update(clarificationRequests)
     .set({ status: "superseded" })
@@ -286,8 +301,15 @@ export async function tombstoneClarificationCancellation(
         ...(input.runId ? [eq(clarificationRequests.runId, input.runId)] : []),
       ),
     )
-    .returning({ id: clarificationRequests.id });
-  return { matched: rows.length > 0, successorOwnerToken: null };
+    .returning({
+      id: clarificationRequests.id,
+      publishedAt: clarificationRequests.publishedAt,
+    });
+  return {
+    matched: rows.length > 0,
+    successorOwnerToken: null,
+    retiredPublished: rows.some((row) => row.publishedAt !== null),
+  };
 }
 
 export function tombstoneConnectedClarificationCancellation(
