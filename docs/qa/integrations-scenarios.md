@@ -57,7 +57,7 @@ to show that the code does what the code does, proves nothing.
 
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
-| INT-001 | Admin, fresh deployment, nothing connected | Opens Settings, Integrations | Every integration the build ships, each Not connected, each saying in one line what it is and what it unlocks; a note saying which capabilities the core ticket-to-PR flow needs (an issue tracker, version control, an agent) | S6 | |
+| INT-001 | Admin, fresh deployment, nothing connected | Opens Integrations from the sidebar | Every integration the build ships, each Not connected, each saying in one line what it is and what it unlocks; a note saying which capabilities the core ticket-to-PR flow needs (an issue tracker, version control, an agent) | S6 | |
 | INT-002 | Admin, production, everything in environment variables | Opens Integrations | Each configured integration Connected with the environment named as its source; nothing asks them to act | S2, S6 | |
 | INT-003 | Member | Opens Integrations | Statuses, sources, unlocks and last verified times; no form, no switch, no secret, no button that fails when clicked | S6 | |
 | INT-004 | Admin on a phone | Opens Integrations | Cards readable and statuses distinguishable without horizontal scrolling | S6 | |
@@ -146,7 +146,7 @@ to show that the code does what the code does, proves nothing.
 
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
-| INT-080 | Admin, Arthur connected | Opens the sidebar | Core groups, a separator, then Arthur with Evals; never Arthur among core items | S7, S8 | |
+| INT-080 | Admin, Arthur connected | Opens the sidebar | Core groups, a separator, the Integrations page, then Arthur, whose area has Evals and Connection as tabs; never Arthur among core items, never Integrations inside Settings | S7, S8 | |
 | INT-081 | Member, Arthur connected | Opens Arthur, Evals | Reads the page; no settings controls | S7, S8 | |
 | INT-082 | Anyone with a bookmark to Arthur's page, Arthur disabled | Opens it | A page saying Arthur is disabled with a link to its card, not a 404 and not an empty chart | S7 | |
 | INT-083 | Agent | `arthur.evals_summary` | The numbers the page shows | S8 | |
