@@ -587,6 +587,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // explicitly declined.
       expect(
         validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, SHARED, {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: ["github:acme/app"],
           commentPathIsTaken: () => true,
           recorded: [],
@@ -600,6 +601,7 @@ describe("validateRepositoryDiscoveryResult", () => {
     it("says it left them out rather than going quiet about it", () => {
       expect(
         validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, SHARED, {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: ["github:acme/app"],
           commentPathIsTaken: () => true,
           recorded: [],
@@ -624,6 +626,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // question to the same person for the same answer.
       expect(
         validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, [], {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: ["github:acme/app"],
           commentPathIsTaken: () => true,
           recorded: [],
@@ -647,6 +650,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // same question again. The one door that works from there is the
       // repository list itself.
       const decision = validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, [], {
+        answerLeftUnnamed: [],
         answeredRepositoryKeys: ["github:acme/app"],
         commentPathIsTaken: () => false,
         recorded: [],
@@ -673,6 +677,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // one ask A44 promises without ever putting the app to anybody.
       expect(
         validateRepositoryDiscoveryResult(UNSURE_ABOUT_THE_APP, catalog, [], {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: ["gitlab:group/shared"],
           commentPathIsTaken: () => true,
           recorded: [],
@@ -698,7 +703,7 @@ describe("validateRepositoryDiscoveryResult", () => {
           },
           catalog,
           [],
-          { answeredRepositoryKeys: ["github:acme/app"], recorded: [], commentPathIsTaken: () => true },
+          { answerLeftUnnamed: [], answeredRepositoryKeys: ["github:acme/app"], recorded: [], commentPathIsTaken: () => true },
         ),
       ).toMatchObject({ kind: "clarification_needed" });
     });
@@ -789,7 +794,7 @@ describe("validateRepositoryDiscoveryResult", () => {
         },
         catalog,
         [],
-        { answeredRepositoryKeys: ["github:acme/app"], commentPathIsTaken: () => true, recorded: [] },
+        { answerLeftUnnamed: [], answeredRepositoryKeys: ["github:acme/app"], commentPathIsTaken: () => true, recorded: [] },
       );
 
       expect(decision).toMatchObject({
@@ -811,6 +816,7 @@ describe("validateRepositoryDiscoveryResult", () => {
         catalog,
         [],
         {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: [],
           commentPathIsTaken: () => true,
           recorded: [
@@ -843,6 +849,7 @@ describe("validateRepositoryDiscoveryResult", () => {
         catalog,
         [],
         {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: ["github:acme/app"],
           commentPathIsTaken: () => true,
           recorded: [
@@ -892,6 +899,7 @@ describe("validateRepositoryDiscoveryResult", () => {
     }
 
     const SETTLED = {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: ["github:acme/secret"],
       commentPathIsTaken: () => true,
       recorded: [excluded("github:acme/secret")],
@@ -1019,6 +1027,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // The first encounter is a question. Only the second is a statement.
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: [],
           commentPathIsTaken: () => true,
           recorded: [excluded("github:acme/secret")],
@@ -1036,6 +1045,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // another one, which is the ask A44 promises spent on nothing.
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: ["github:acme/app"],
           commentPathIsTaken: () => true,
           recorded: [excluded("github:acme/secret")],
@@ -1051,6 +1061,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // and the person would never learn this deployment does not hold it.
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: [],
           commentPathIsTaken: () => true,
           recorded: [],
@@ -1068,6 +1079,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // enable a repository they had just not chosen.
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: ["github:acme/secret"],
           commentPathIsTaken: () => true,
           recorded: [],
@@ -1096,6 +1108,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // expires by itself the moment the catalog can use it.
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: ["github:acme/secret"],
           commentPathIsTaken: () => true,
           recorded: [
@@ -1128,6 +1141,7 @@ describe("validateRepositoryDiscoveryResult", () => {
       // spends the one ask, so this repository is still owed it.
       expect(
         validateRepositoryDiscoveryResult(PROPOSAL_WITH_AN_EXCLUDED_REPOSITORY, catalog, [], {
+          answerLeftUnnamed: [],
           answeredRepositoryKeys: [],
           commentPathIsTaken: () => true,
           recorded: [
@@ -1543,6 +1557,7 @@ describe("a discovery proposal of a repository the answer left unnamed", () => {
   const SHARED = { provider: "gitlab" as const, repoPath: "group/shared" };
   it("leaves it out even when the model is sure, and stops with a sentence that names it", () => {
     const decision = validateRepositoryDiscoveryResult(SURE_OF(APP), catalog, [], {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: ["github:acme/app"],
       commentPathIsTaken: () => true,
       recorded: [],
@@ -1571,6 +1586,7 @@ describe("a discovery proposal of a repository the answer left unnamed", () => {
   // the door that works.
   it("offers only the record as the way back while the ticket's text is not read", () => {
     const decision = validateRepositoryDiscoveryResult(SURE_OF(APP), catalog, [], {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: ["github:acme/app"],
       commentPathIsTaken: () => false,
       recorded: [],
@@ -1593,6 +1609,7 @@ describe("a discovery proposal of a repository the answer left unnamed", () => {
   // Skeptic 4: the named one is theirs, the unnamed one is left out and said.
   it("runs with the one the answer named and lists the unnamed one as left out", () => {
     const decision = validateRepositoryDiscoveryResult(SURE_OF(APP, SHARED), catalog, [], {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: ["github:acme/app", "gitlab:group/shared"],
       commentPathIsTaken: () => true,
       recorded: [
@@ -1628,6 +1645,7 @@ describe("a discovery proposal of a repository the answer left unnamed", () => {
   // "enable it and start a new run" has to work.
   it("takes a repository an answer recorded as unavailable once the catalog can use it", () => {
     const decision = validateRepositoryDiscoveryResult(SURE_OF(APP), catalog, [], {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: ["github:acme/app"],
       commentPathIsTaken: () => true,
       recorded: [
@@ -1655,6 +1673,7 @@ describe("a discovery proposal of a repository the answer left unnamed", () => {
   it("takes a repository the answered question never named", () => {
     expect(
       validateRepositoryDiscoveryResult(SURE_OF(SHARED), catalog, [], {
+        answerLeftUnnamed: [],
         answeredRepositoryKeys: ["github:acme/app"],
         commentPathIsTaken: () => true,
         recorded: [],
@@ -1670,6 +1689,7 @@ describe("a discovery proposal of a repository the answer left unnamed", () => {
   it("takes it once a person has selected it after leaving it unnamed", () => {
     expect(
       validateRepositoryDiscoveryResult(SURE_OF(APP), catalog, [], {
+        answerLeftUnnamed: [],
         answeredRepositoryKeys: ["github:acme/app"],
         commentPathIsTaken: () => true,
         recorded: [
@@ -1694,6 +1714,7 @@ describe("a discovery proposal of a repository the answer left unnamed", () => {
     // The same sentence rides the prompt addition, so it may say what happened
     // and never how to undo it (rule 7).
     const decision = validateRepositoryDiscoveryResult(SURE_OF(APP, SHARED), catalog, [], {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: ["gitlab:group/shared"],
       commentPathIsTaken: () => true,
       recorded: [],

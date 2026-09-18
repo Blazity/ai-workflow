@@ -33,6 +33,7 @@ import {
 import {
   decidableWorkScopeKeys,
   decideWorkScope,
+  isUnnamedInAnswer,
   type WorkScopeDecision,
   type WorkScopeDecisionContext,
   type WorkScopeDecisionEvent,
@@ -139,6 +140,19 @@ export interface RunWorkScopeRecorder {
    * ordinary derived event, not an ambiguity.
    */
   decidableKeys(keys: readonly RepositoryKey[]): RepositoryKey[];
+  /**
+   * The keys of `keys` a question on this subject named and the answer did not
+   * take (`isUnnamedInAnswer`), in input order.
+   *
+   * Apart from `decidableKeys` because the two answer different questions and
+   * only one of them binds here. A repository left out of an answer stays
+   * DECIDABLE: a full path written in a comment afterwards takes it, and the
+   * ticket-text reader depends on that door. What it stops being is something
+   * to OFFER, so the only caller is the catalog discovery shows the model
+   * (`offerableRepositoryCatalog`): offering it spends a round on a decision
+   * somebody already made, and on a question they already answered.
+   */
+  answerLeftUnnamedKeys(keys: readonly RepositoryKey[]): RepositoryKey[];
   /** At most what one event may carry, in input order. */
   boundEventKeys(keys: readonly RepositoryKey[]): RepositoryKey[];
   /**
@@ -361,6 +375,11 @@ export function createRunWorkScopeRecorder(input: RunWorkScopeInput): RunWorkSco
     },
     decidableKeys(keys) {
       return decidableWorkScopeKeys(decisionContext(), keys);
+    },
+    answerLeftUnnamedKeys(keys) {
+      return [...new Set(keys)].filter((key) =>
+        isUnnamedInAnswer(key, input.answeredRepositoryKeys, input.scope?.entries ?? []),
+      );
     },
     commentPathIsTaken(repositoryKeys) {
       return commentPathIsTaken(repositoryKeys);

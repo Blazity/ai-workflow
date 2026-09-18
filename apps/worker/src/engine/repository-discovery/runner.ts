@@ -708,6 +708,13 @@ function namedInFull(asked: WorkScopeAskedRepository[]): string {
  * was advisory, because this list is filtered by the definition pin and by
  * nothing else; here it starts to bind.
  *
+ * A REPOSITORY AN ANSWER LEFT OUT IS DECIDED AGAINST TOO, although it carries no
+ * entry: a "none" to the which-of-these question writes nothing by design, and
+ * the trail is what binds it. Offered anyway, it came back as the model's own
+ * question. A person declined four repositories, the model was shown the same
+ * four as usable, counted them against its limit of three, and asked that
+ * person which of the four to put off (production, 2026-09-18).
+ *
  * Nothing is marked and nothing is said about what was left out, because a list
  * the model may not ask for is only noise. An UNUSABLE repository stays: the
  * catalog already says it cannot be used, and removing it would hide a
@@ -715,14 +722,17 @@ function namedInFull(asked: WorkScopeAskedRepository[]): string {
  */
 export function offerableRepositoryCatalog(
   catalog: RepositoryCatalogEntry[],
-  record: { decidableKeys(keys: readonly RepositoryKey[]): RepositoryKey[] } | null,
+  record: {
+    decidableKeys(keys: readonly RepositoryKey[]): RepositoryKey[];
+    answerLeftUnnamedKeys(keys: readonly RepositoryKey[]): RepositoryKey[];
+  } | null,
 ): RepositoryCatalogEntry[] {
   if (!record) return catalog;
-  const open = new Set(
-    record.decidableKeys(
-      catalog.filter((entry) => entry.usable).map((entry) => repositoryCatalogKey(entry)),
-    ),
-  );
+  const usableKeys = catalog
+    .filter((entry) => entry.usable)
+    .map((entry) => repositoryCatalogKey(entry));
+  const leftOut = new Set(record.answerLeftUnnamedKeys(usableKeys));
+  const open = new Set(record.decidableKeys(usableKeys).filter((key) => !leftOut.has(key)));
   return catalog.filter(
     (entry) => !entry.usable || open.has(repositoryCatalogKey(entry)),
   );

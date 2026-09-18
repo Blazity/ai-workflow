@@ -405,17 +405,20 @@ describe("every authored work-scope refusal reaches the person whole", () => {
       ...(state === "unavailable" ? { unavailableReason: "not_enabled" } : {}),
     })) as never;
 
+  /** `named` is what the text must name: every key, unless the case is one
+   *  that counts some of them instead. */
   function refusal(
     label: string,
     raw: unknown,
     catalog: ReturnType<typeof catalogEntry>[],
     settled: Parameters<typeof validateRepositoryDiscoveryResult>[3],
-  ): { label: string; text: string } {
+    named: readonly string[] = KEYS,
+  ): { label: string; text: string; named: readonly string[] } {
     const decision = validateRepositoryDiscoveryResult(raw, catalog, [], settled);
     if (decision.kind !== "failed") {
       throw new Error(`${label}: discovery decided ${decision.kind}, not a refusal`);
     }
-    return { label, text: decision.error };
+    return { label, text: decision.error, named };
   }
 
   const usableCatalog = KEYS.map(catalogEntry);
@@ -435,36 +438,62 @@ describe("every authored work-scope refusal reaches the person whole", () => {
    *  closing note for the long one. */
   const WORST_CASES = [
     refusal("nothingLeftToStartFrom, comment path open", lowConfidence, usableCatalog, {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: KEYS,
       recorded: [],
       commentPathIsTaken: () => true,
     }),
     refusal("nothingLeftToStartFrom, record only", lowConfidence, usableCatalog, {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: KEYS,
       recorded: [],
       commentPathIsTaken: () => false,
     }),
     refusal("nothingLeftButUnnamed, comment path open", highConfidence, usableCatalog, {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: KEYS,
       recorded: [],
       commentPathIsTaken: () => true,
     }),
     refusal("nothingLeftButUnnamed, record only", highConfidence, usableCatalog, {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: KEYS,
       recorded: [],
       commentPathIsTaken: () => false,
     }),
+    // The offer an answer emptied can hold any number, so it is driven past
+    // the ceiling: five left out, two named and three counted. The keys it
+    // does not name are why it is not checked for every key below.
+    refusal(
+      "nothingLeftToOffer, more left out than named",
+      { status: "clarification_needed", confidence: null, repositories: null, questions: null, error: null },
+      [],
+      {
+        answerLeftUnnamed: [
+          ...KEYS,
+          "github:blazity-engineering-platform/ai-workflow-fourth-left-out-fixture",
+          "github:blazity-engineering-platform/ai-workflow-fifth-left-out-fixture",
+        ],
+        answeredRepositoryKeys: KEYS,
+        recorded: [],
+        commentPathIsTaken: () => true,
+      },
+      KEYS.slice(0, 2),
+    ),
     refusal("nothingLeftToWorkOn, all excluded", highConfidence, [], {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: KEYS,
       recorded: recorded("excluded"),
       commentPathIsTaken: () => true,
     }),
     refusal("nothingLeftToWorkOn, all unavailable", highConfidence, [], {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: KEYS,
       recorded: recorded("unavailable"),
       commentPathIsTaken: () => true,
     }),
     refusal("nothingLeftToWorkOn, one excluded and two unavailable", highConfidence, [], {
+      answerLeftUnnamed: [],
       answeredRepositoryKeys: KEYS,
       recorded: [
         (recorded("excluded") as unknown as unknown[])[0],
@@ -488,7 +517,7 @@ describe("every authored work-scope refusal reaches the person whole", () => {
     expect(all).toContain("is not available to this run");
   });
 
-  for (const { label, text } of WORST_CASES) {
+  for (const { label, text, named } of WORST_CASES) {
     it(`${label} crosses every surface unclamped`, () => {
       const out = formatExecutionErrorForUser(
         createWorkflowExecutionErrorState(
@@ -510,7 +539,7 @@ describe("every authored work-scope refusal reaches the person whole", () => {
       // Said separately, because these are the two facts the person on the
       // ticket could not act without: which repositories, and the way back,
       // which is always the refusal's last sentence.
-      for (const key of KEYS) expect(out).toContain(key);
+      for (const key of named) expect(out).toContain(key);
       expect(out).toContain(text.slice(text.lastIndexOf(". ", text.length - 2) + 2));
 
       // Never the bare category line, which is the AIW-254 invariant above.
@@ -532,6 +561,7 @@ describe("every authored work-scope refusal reaches the person whole", () => {
     const absurd = "A".repeat(500);
     const [{ text }] = [
       refusal("over-long label", highConfidence, [], {
+        answerLeftUnnamed: [],
         answeredRepositoryKeys: KEYS,
         recorded: KEYS.map((repositoryKey) => ({
           repositoryKey,
