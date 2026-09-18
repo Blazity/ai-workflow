@@ -727,12 +727,16 @@ describe("what an empty derived event may and may not erase", () => {
       (result.selectedRepositories ?? []).map((selected) => selected.repoPath),
     ).toContain("acme/docs");
     // The reason reaches a person instead of an empty scope with nothing behind
-    // it.
-    expect(
-      (result.promptAdditions ?? []).find(
-        (addition) => addition.title === "Repositories left out",
-      )?.content,
-    ).toContain("could take none of them");
+    // it, and it is now the precise one: their own exclusion, with the name and
+    // the date on it. The vague restatement that used to accompany it is gone
+    // rather than doubled, because both landed in the same paragraph.
+    const leftOut = (result.promptAdditions ?? []).find(
+      (addition) => addition.title === "Repositories left out",
+    )?.content;
+    expect(leftOut).toContain(
+      "github:acme/api was excluded on this work by Ada on 2026-09-15",
+    );
+    expect(leftOut).not.toContain("could take none of them");
   });
 });
 
@@ -1366,6 +1370,790 @@ describe("what the person reads when the run leaves a repository out and carries
 });
 
 /**
+ * The production shape of 18.09. A person wrote one comment whose whole body was
+ * a repository path, that repository is a row this deployment holds and keeps
+ * disabled, and the run worked in the repository the description named and
+ * finished green. The path appeared nowhere a person could read it: not in the
+ * clarification comment, not in the analysis comment, not in the run's status.
+ *
+ * The scan that reads the ticket's text matches against the ENABLED part of the
+ * listing, so a disabled row can never match it and the mention was dropped
+ * before anything could say so.
+ */
+describe("a repository this deployment holds and this run may not open, named on the ticket", () => {
+  // The listing the providers answer with, and the one row of it the catalog
+  // enables. `acme/ops` is the disabled row: real here, off limits to this run.
+  const LISTED = [repo("acme/web"), repo("acme/ops")];
+  const ENABLED = ["github:acme/web"];
+  const NO_ANSWER: PreSandboxStepContext["workScope"] = {
+    subjectKey: SUBJECT,
+    scope: scope([]),
+    selectionAnswered: false,
+    answeredRepositoryKeys: [],
+  };
+  const human = (body: string, createdAt = "2026-09-18T08:00:00.000Z") => ({
+    author: "Ada",
+    accountId: "human-1",
+    body,
+    createdAt,
+  });
+  const ticketWith = (
+    comments: Array<ReturnType<typeof human>>,
+    description = "Fix the billing callback in acme/web.",
+  ) => ({
+    identifier: "AWT-402",
+    title: "Invoices are wrong",
+    description,
+    acceptanceCriteria: "",
+    comments,
+    labels: [] as string[],
+  });
+  const NOT_ON_THE_CATALOG =
+    "github:acme/ops is not on the repository catalog this run may use," +
+    " so the run started without it.";
+  const THE_WAY_BACK =
+    "github:acme/ops is not enabled on the Repositories page. Somebody with access to that" +
+    " page can enable it, and until then no run can use it.";
+
+  it("names it in the comment a finished run posts, and works in the repository it was given", async () => {
+    const { executePreSandboxPhase } = await import("../../engine/steps/pre-sandbox-runner.js");
+    const { buildResearchAnalysisReport, formatResearchAnalysisComment } = await import(
+      "../../engine/support/run-analysis-report.js"
+    );
+
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      ticket: ticketWith([human("acme/ops")]),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    // The run does what it did before: nobody is asked, the workspace is the
+    // repository the description named, and the run carries on.
+    expect(selection.status).toBe("continue");
+    expect(selection.workScopeAsk).toBeUndefined();
+    expect(selection.selectedRepositories?.map((chosen) => chosen.repoPath)).toEqual([
+      "acme/web",
+    ]);
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "github:acme/ops", reason: NOT_ON_THE_CATALOG },
+    ]);
+
+    const phase = await executePreSandboxPhase(
+      {
+        ticket: { identifier: "AWT-402" },
+        run: { branchName: "blazebot/awt-402" },
+        repositoryAccess: { activated: true, enabledKeys: ENABLED },
+        settings: testSettingsSnapshot(),
+      },
+      { preSandbox: { steps: [{ uses: "repo-selection", onFailure: "fail" }] } },
+      { "repo-selection": async () => selection },
+    );
+    const report = buildResearchAnalysisReport({
+      runId: "run-mention",
+      workspaceManifest: {
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "main",
+            branchName: "arthur/AWT-402",
+            researchBaseSha: "abcdef123456",
+            access: "write",
+          },
+        ],
+      },
+      ...(phase.workScopeLeftOut ? { leftOutRepositories: phase.workScopeLeftOut } : {}),
+      ...(phase.workScopeRecoveryNotes
+        ? { repositoryRecoveryNotes: phase.workScopeRecoveryNotes }
+        : {}),
+      researchResult: { body: "Plan" },
+    });
+    const repositories = formatResearchAnalysisComment(
+      report,
+      "https://dashboard.example/runs/run-mention",
+    )
+      .split("\n\n")
+      .find((section) => section.startsWith("Repositories"));
+
+    expect(repositories).toContain(`- github:acme/ops · left out · ${NOT_ON_THE_CATALOG}`);
+    expect(repositories).toContain(THE_WAY_BACK);
+    // And the repository the run DID open is not also reported as left out.
+    expect(repositories).not.toContain("github:acme/web · left out");
+  });
+
+  it("says nothing at all about a path no provider offered", async () => {
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      // A person naming somebody else's repository, a pasted URL or a quoted
+      // log. Reporting it would mean guessing the string was meant as a
+      // repository here at all.
+      ticket: ticketWith([human("compare it with otherorg/secret-thing")]),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    expect(selection.status).toBe("continue");
+    expect(selection.workScopeLeftOut).toBeUndefined();
+    expect(selection.workScopeRecoveryNotes).toBeUndefined();
+    expect(
+      selection.promptAdditions?.find((addition) => addition.title === "Repositories left out"),
+    ).toBeUndefined();
+    expect(selection.selectedRepositories?.map((chosen) => chosen.repoPath)).toEqual([
+      "acme/web",
+    ]);
+  });
+
+  it("says it once when the description and two comments all name it", async () => {
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      ticket: ticketWith(
+        [
+          human("acme/ops", "2026-09-18T08:00:00.000Z"),
+          human("still needs acme/ops", "2026-09-18T09:00:00.000Z"),
+        ],
+        "Fix the billing callback in acme/web, which calls acme/ops.",
+      ),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "github:acme/ops", reason: NOT_ON_THE_CATALOG },
+    ]);
+    const addition = selection.promptAdditions?.find(
+      (entry_) => entry_.title === "Repositories left out",
+    );
+    expect(addition?.content.match(/github:acme\/ops/g)).toHaveLength(1);
+  });
+
+  it("keeps the way back off the agent's channel and on the person's", async () => {
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      ticket: ticketWith([human("acme/ops")]),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    // Rule 7: what happened is a fact about this run's workspace and the agent
+    // reads it; how to get the repository back is a lever for a person only.
+    const addition = selection.promptAdditions?.find(
+      (entry_) => entry_.title === "Repositories left out",
+    );
+    expect(addition?.content).toContain(NOT_ON_THE_CATALOG);
+    expect(JSON.stringify(selection.promptAdditions ?? [])).not.toContain(
+      "Repositories page",
+    );
+    expect(selection.workScopeRecoveryNotes).toContain(THE_WAY_BACK);
+  });
+
+  it("writes nothing to the record about it", async () => {
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      ticket: ticketWith([human("acme/ops")]),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    // Both halves, because either one alone passes on a run that says nothing:
+    // the mention IS reported, and reporting it decided nothing. Nobody decided
+    // anything about ops, a person mentioned it and this deployment cannot serve
+    // it, so a `decide` here would write an entry a later run reads as a
+    // decision somebody took. The run DID write what it decided about web, so
+    // this is a record that was written and left ops out of it.
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "github:acme/ops", reason: NOT_ON_THE_CATALOG },
+    ]);
+    // Every statement the step applied, upserts, deletes and trail lines
+    // together, because a mention must not reach any of them.
+    const plans = JSON.stringify(appliedPlans());
+    expect(plans).toContain("github:acme/web");
+    expect(plans).not.toContain("github:acme/ops");
+  });
+});
+
+/**
+ * The same silence one bound over. A repository this deployment ENABLES, which
+ * the workflow's own pin leaves out, is a real mismatch: the person expects the
+ * work to touch it and this workflow cannot. Its reason is its own, because the
+ * two bounds are undone by different people: the catalog needs somebody with the
+ * Repositories page, the pin needs the workflow's scope changed.
+ */
+describe("a repository the catalog enables and this workflow's pin leaves out", () => {
+  // web is pinned and enabled, docs is enabled and outside the pin, ops is
+  // neither enabled nor pinned.
+  const LISTED = [repo("acme/web"), repo("acme/docs"), repo("acme/ops")];
+  const ENABLED = ["github:acme/web", "github:acme/docs"];
+  const PINNED_TO_WEB = {
+    repositories: [{ provider: "github" as const, repoPath: "acme/web" }],
+  };
+  const NO_ANSWER: PreSandboxStepContext["workScope"] = {
+    subjectKey: SUBJECT,
+    scope: scope([]),
+    selectionAnswered: false,
+    answeredRepositoryKeys: [],
+  };
+  const ticketNaming = (comment: string) => ({
+    identifier: "AWT-402",
+    title: "Invoices are wrong",
+    description: "Fix the billing callback in acme/web.",
+    acceptanceCriteria: "",
+    comments: [
+      { author: "Ada", accountId: "human-1", body: comment, createdAt: "2026-09-18T08:00:00.000Z" },
+    ],
+    labels: [] as string[],
+  });
+  const OUTSIDE_THE_PIN =
+    "github:acme/docs is outside the repositories the workflow that runs this work may take," +
+    " so the run started without it.";
+  const THE_PIN_WAY_BACK =
+    "The workflow that runs this work is limited to a fixed set of repositories, which does not" +
+    " include github:acme/docs, so no run of it can use that repository until that limit changes.";
+
+  it("names it with the pin's own reason, not the catalog's", async () => {
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      repositoryScope: PINNED_TO_WEB,
+      ticket: ticketNaming("acme/docs has the other half of this"),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    expect(selection.status).toBe("continue");
+    expect(selection.selectedRepositories?.map((chosen) => chosen.repoPath)).toEqual([
+      "acme/web",
+    ]);
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "github:acme/docs", reason: OUTSIDE_THE_PIN },
+    ]);
+    // The lever that moves this one is the workflow's scope, and saying
+    // "enable it on the Repositories page" here would send the person to a
+    // screen where the repository is already enabled.
+    expect(selection.workScopeRecoveryNotes).toContain(THE_PIN_WAY_BACK);
+    expect(JSON.stringify(selection.workScopeRecoveryNotes ?? [])).not.toContain(
+      "Repositories page",
+    );
+  });
+
+  it("says one line, the catalog's, about a repository that is disabled AND outside the pin", async () => {
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      repositoryScope: PINNED_TO_WEB,
+      ticket: ticketNaming("acme/ops has the other half of this"),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    // Two true facts, one repository, one line: a person who reads that it is
+    // not on the catalog has nothing to do with a second line about the pin.
+    expect(selection.workScopeLeftOut).toEqual([
+      {
+        repositoryKey: "github:acme/ops",
+        reason:
+          "github:acme/ops is not on the repository catalog this run may use," +
+          " so the run started without it.",
+      },
+    ]);
+    expect(JSON.stringify(selection.workScopeLeftOut)).not.toContain("may take");
+  });
+
+  it("says nothing about a pin to a workflow that has none, however many the ticket names and the run leaves", async () => {
+    const selection = await runStep({
+      // Five enabled repositories, no pin, and a ticket naming four of them: the
+      // run asks which to start from and takes NONE. The repositories it did not
+      // take are the trap, because "left out" reads as "report them all". With no
+      // pin there is nothing for any of them to be outside of, and a line saying
+      // so would be a sentence about a limit this workflow does not have, with a
+      // way back that changes nothing.
+      repositories: ALL,
+      enabledKeys: ALL.map((listed) => `github:${listed.repoPath}`),
+      ticket: {
+        identifier: "AWT-402",
+        title: "Invoices are wrong",
+        description: "Touches acme/web, acme/api, acme/docs and acme/infra.",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+      },
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    expect(JSON.stringify(selection)).not.toContain("outside the repositories");
+    expect(JSON.stringify(selection)).not.toContain("limited to a fixed set");
+  });
+
+  it("stays silent on a pinned workflow about a path no provider offered", async () => {
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      repositoryScope: PINNED_TO_WEB,
+      ticket: ticketNaming("compare it with otherorg/secret-thing"),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    expect(selection.workScopeLeftOut).toBeUndefined();
+    expect(selection.workScopeRecoveryNotes).toBeUndefined();
+  });
+
+  it("keeps the pin's way back off the agent's channel", async () => {
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      repositoryScope: PINNED_TO_WEB,
+      ticket: ticketNaming("acme/docs has the other half of this"),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    const addition = selection.promptAdditions?.find(
+      (entry_) => entry_.title === "Repositories left out",
+    );
+    expect(addition?.content).toContain(OUTSIDE_THE_PIN);
+    // Rule 7: the agent reads what the workspace holds, never the lever that
+    // would change it.
+    expect(JSON.stringify(selection.promptAdditions ?? [])).not.toContain(
+      "until that limit changes",
+    );
+  });
+
+  it("writes nothing to the record about it", async () => {
+    const selection = await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      repositoryScope: PINNED_TO_WEB,
+      ticket: ticketNaming("acme/docs has the other half of this"),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    // Both halves, because either alone passes on a run that says nothing.
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "github:acme/docs", reason: OUTSIDE_THE_PIN },
+    ]);
+    expect(JSON.stringify(appliedPlans())).not.toContain("github:acme/docs");
+  });
+});
+
+/**
+ * The third bound, and the one that looks most like a bug to the person who
+ * named it: the repository IS enabled here, so nothing on their side explains
+ * why the work came back without it. The provider offers nothing checkoutable
+ * for it, which is a durable fact it reported on a listing that SUCCEEDED
+ * (archived, or no default branch), never a provider that failed: a provider
+ * that fails contributes no repositories at all and has its own sentence.
+ */
+describe("a repository the catalog enables and no run can check out", () => {
+  const ARCHIVED = { ...repo("acme/ops"), archived: true };
+  const NO_DEFAULT_BRANCH = repo("acme/docs", "");
+  const NO_ANSWER: PreSandboxStepContext["workScope"] = {
+    subjectKey: SUBJECT,
+    scope: scope([]),
+    selectionAnswered: false,
+    answeredRepositoryKeys: [],
+  };
+  const ticketNaming = (comment: string) => ({
+    identifier: "AWT-402",
+    title: "Invoices are wrong",
+    description: "Fix the billing callback in acme/web.",
+    acceptanceCriteria: "",
+    comments: [
+      { author: "Ada", accountId: "human-1", body: comment, createdAt: "2026-09-18T08:00:00.000Z" },
+    ],
+    labels: [] as string[],
+  });
+  const run = async (
+    listed: RepositoryMetadata[],
+    comment: string,
+    repositoryScope?: PreSandboxStepContext["repositoryScope"],
+  ) =>
+    runStep({
+      repositories: listed,
+      enabledKeys: listed.map((listing) => `github:${listing.repoPath}`),
+      ...(repositoryScope ? { repositoryScope } : {}),
+      ticket: ticketNaming(comment),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+  const CANNOT_SERVE = (key: string) =>
+    `The catalog cannot serve ${key} at the moment, so no run can use it until it can.`;
+  // What is actually true: the repository is on the catalog, it is enabled, and
+  // the provider offers nothing to check out for it.
+  const UNSERVABLE = (key: string) =>
+    `${key} is enabled here, and this run could not check it out:` +
+    ` the provider listed it as archived, or offered no default branch for it,` +
+    ` so the run started without it.`;
+
+  it("names an archived repository the ticket asked for, instead of dropping it in silence", async () => {
+    const selection = await run([repo("acme/web"), ARCHIVED], "acme/ops has the other half");
+
+    expect(selection.status).toBe("continue");
+    expect(selection.selectedRepositories?.map((chosen) => chosen.repoPath)).toEqual([
+      "acme/web",
+    ]);
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "github:acme/ops", reason: UNSERVABLE("github:acme/ops") },
+    ]);
+    expect(selection.workScopeRecoveryNotes).toContain(CANNOT_SERVE("github:acme/ops"));
+    // The two sentences land in ONE comment, so they may not contradict each
+    // other. "Not on the catalog this run may use" is false about a repository
+    // that is enabled and sitting on the Repositories page looking fine, and it
+    // is the half that reaches the agent's prompt and the memory file.
+    expect(JSON.stringify(selection.workScopeLeftOut)).not.toContain(
+      "not on the repository catalog",
+    );
+  });
+
+  it("names one with no default branch the same way, because the person's question is the same", async () => {
+    const selection = await run(
+      [repo("acme/web"), NO_DEFAULT_BRANCH],
+      "acme/docs has the other half",
+    );
+
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "github:acme/docs", reason: UNSERVABLE("github:acme/docs") },
+    ]);
+    expect(selection.workScopeRecoveryNotes).toContain(CANNOT_SERVE("github:acme/docs"));
+  });
+
+  it("says one line about a repository that is both unusable and outside the pin, and it is the one that would still stand", async () => {
+    const selection = await run(
+      [repo("acme/web"), NO_DEFAULT_BRANCH],
+      "acme/docs has the other half",
+      { repositories: [{ provider: "github" as const, repoPath: "acme/web" }] },
+    );
+
+    expect(selection.workScopeLeftOut).toHaveLength(1);
+    // Widening the pin would not give this person their repository, so the pin
+    // is not what they are told about.
+    expect(selection.workScopeRecoveryNotes).toContain(CANNOT_SERVE("github:acme/docs"));
+    expect(JSON.stringify(selection.workScopeRecoveryNotes ?? [])).not.toContain(
+      "limited to a fixed set",
+    );
+  });
+
+  it("does not send a person to enable a repository that is disabled AND archived", async () => {
+    // Both bounds are true. The one that would still stand after the other
+    // moved is the archive, so enabling it on the Repositories page costs that
+    // person a round and the next run tells them the catalog cannot serve it.
+    const selection = await runStep({
+      repositories: [repo("acme/web"), ARCHIVED],
+      enabledKeys: ["github:acme/web"],
+      ticket: ticketNaming("acme/ops has the other half"),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "github:acme/ops", reason: UNSERVABLE("github:acme/ops") },
+    ]);
+    expect(JSON.stringify(selection.workScopeRecoveryNotes ?? [])).not.toContain(
+      "Repositories page",
+    );
+  });
+
+  it("names an archived GITLAB repository, which the listing could not report until it stopped asking for the reduced entity", async () => {
+    // The end of the chain the adapter change exists for: GitLab's simple
+    // listing carries no archived flag, so this repository counted as usable,
+    // a run would have selected it and failed on push, and the person would
+    // never have read the word archived anywhere.
+    const gitlabOps = {
+      ...repo("acme/ops"),
+      provider: "gitlab" as const,
+      archived: true,
+    };
+    const selection = await runStep({
+      repositories: [repo("acme/web"), gitlabOps],
+      enabledKeys: ["github:acme/web", "gitlab:acme/ops"],
+      ticket: ticketNaming("the other half is in gitlab:acme/ops"),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "gitlab:acme/ops", reason: UNSERVABLE("gitlab:acme/ops") },
+    ]);
+  });
+
+  it("says nothing about the archived repositories nobody named", async () => {
+    // A catalog full of archived rows is ordinary, and a run that listed them
+    // all as left out would bury the one line that matters under them.
+    const selection = await run(
+      [repo("acme/web"), ARCHIVED, NO_DEFAULT_BRANCH],
+      "no repository here",
+    );
+
+    expect(selection.workScopeLeftOut).toBeUndefined();
+    expect(
+      selection.promptAdditions?.find((addition) => addition.title === "Repositories left out"),
+    ).toBeUndefined();
+  });
+
+  it("keeps the way back off the agent's channel and writes nothing to the record", async () => {
+    const selection = await run([repo("acme/web"), ARCHIVED], "acme/ops has the other half");
+
+    const addition = selection.promptAdditions?.find(
+      (entry_) => entry_.title === "Repositories left out",
+    );
+    expect(addition?.content).toContain("github:acme/ops");
+    expect(JSON.stringify(selection.promptAdditions ?? [])).not.toContain("cannot serve");
+    expect(JSON.stringify(appliedPlans())).not.toContain("github:acme/ops");
+  });
+});
+
+/**
+ * Production, 18.09. A ticket whose first sentence names a repository, a person
+ * who had excluded exactly that repository through the record, and a run that
+ * asked "Which repository or repositories should this ticket inspect or
+ * modify?" and said nothing else. The exclusion held, which is right; the
+ * question read as though the ticket had never been opened, which is the half
+ * this fixes. The cause is upstream of every sentence: `decidableKeys` drops an
+ * excluded key before any event proposes it, so the refusal that names the
+ * author and the date never happens.
+ */
+describe("the ticket names a repository a person excluded, and the run has nothing else", () => {
+  const DEMO = "github:blazity/ai-workflow-demo";
+  const EXCLUDED_BY_ADA = entry({
+    repositoryKey: DEMO,
+    state: "excluded",
+    origin: "person",
+    rationale: "not this one",
+  });
+  const TICKET_NAMING_DEMO = {
+    identifier: "AWT-402",
+    title: "Fix the typo",
+    description: "Fix the typo in README.md of blazity/ai-workflow-demo",
+    acceptanceCriteria: "",
+    comments: [],
+    labels: [] as string[],
+  };
+  const LISTED = [repo("blazity/ai-workflow-demo"), repo("acme/web")];
+  const runExcluded = async (overrides: Parameters<typeof runStep>[0] = {}) =>
+    runStep({
+      repositories: LISTED,
+      enabledKeys: LISTED.map((listed) => `github:${listed.repoPath}`),
+      ticket: TICKET_NAMING_DEMO,
+      botAccountId: "bot-account",
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([EXCLUDED_BY_ADA]),
+        selectionAnswered: false,
+        answeredRepositoryKeys: [],
+      },
+      ...overrides,
+    });
+  const EXCLUSION_SENTENCE =
+    `${DEMO} was excluded on this work by Ada on 2026-09-15, so the run started without it.`;
+
+  it("says which repository was excluded, by whom and when, instead of asking as if the ticket were empty", async () => {
+    const result = await runExcluded();
+
+    // The record half is untouched: the exclusion still holds and the run still
+    // takes nothing from the ticket's text.
+    expect(result.selectedRepositories ?? []).toEqual([]);
+    expect(result.workScopeLeftOut).toEqual([
+      { repositoryKey: DEMO, reason: EXCLUSION_SENTENCE },
+    ]);
+  });
+
+  it("puts that sentence in front of the question the person actually reads", async () => {
+    const { executePreSandboxPhase } = await import("../../engine/steps/pre-sandbox-runner.js");
+    const selection = await runExcluded();
+
+    const phase = await executePreSandboxPhase(
+      {
+        ticket: { identifier: "AWT-402" },
+        run: { branchName: "blazebot/awt-402" },
+        repositoryAccess: {
+          activated: true,
+          enabledKeys: LISTED.map((listed) => `github:${listed.repoPath}`),
+        },
+        settings: testSettingsSnapshot(),
+      },
+      { preSandbox: { steps: [{ uses: "repo-selection", onFailure: "fail" }] } },
+      { "repo-selection": async () => selection },
+    );
+
+    // The question is raised by the workspace block, which leads with the
+    // refusals the pre-sandbox carried (`askWithWorkScopeRefusals`). Without a
+    // refusal to lead with, that question is the whole comment, which is what
+    // the person read in production.
+    expect(phase.workScopeLeftOut).toEqual([
+      { repositoryKey: DEMO, reason: EXCLUSION_SENTENCE },
+    ]);
+    expect(phase.workScopeRecoveryNotes).toContain(
+      "Excluding a repository is not final: this work's repository list can be changed" +
+        " through the work scope API or the work_scope.edit tool," +
+        " and the next run starts from the changed list.",
+    );
+  });
+
+  it("keeps the way back out of the questions array, which becomes the agent's memory", async () => {
+    const result = await runExcluded();
+
+    // Rule 7, and here it is not theoretical: a clarification round is rendered
+    // verbatim into the prompts and written to the memory file under "Human
+    // decisions", so a lever put in a question comes back signed by a person.
+    // Asserted over the WHOLE result minus the person's own field, so a way back
+    // that reappears in a question, a message or a prompt addition is caught
+    // wherever it lands rather than only where this test thought to look.
+    const said = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
+    const recovery = said.workScopeRecoveryNotes;
+    delete said.workScopeRecoveryNotes;
+    expect(JSON.stringify(said)).not.toContain("not final");
+    expect(JSON.stringify(recovery ?? [])).toContain("not final");
+  });
+
+  it("says nothing about exclusions the ticket does not name", async () => {
+    // The record is not a history lesson: an old exclusion for a repository
+    // this ticket never mentions stays where it is.
+    const result = await runExcluded({
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([
+          entry({
+            repositoryKey: "github:acme/web",
+            state: "excluded",
+            origin: "person",
+            rationale: "old news",
+          }),
+        ]),
+        selectionAnswered: false,
+        answeredRepositoryKeys: [],
+      },
+    });
+
+    expect(JSON.stringify(result.workScopeLeftOut ?? [])).not.toContain("github:acme/web");
+  });
+
+  it("says it although the run found another repository to work in", async () => {
+    // Run 1 answered "use acme/web", somebody excluded the demo repository
+    // afterwards, and the ticket still names it. The run has a workspace, so
+    // nothing about it being empty is true, and the person still needs to know
+    // that their own decision is why the pull request covers half the ticket.
+    const result = await runStep({
+      repositories: [...LISTED],
+      enabledKeys: LISTED.map((listed) => `github:${listed.repoPath}`),
+      ticket: {
+        ...TICKET_NAMING_DEMO,
+        description: "Fix the typo in README.md of blazity/ai-workflow-demo and in acme/web",
+      },
+      botAccountId: "bot-account",
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([
+          entry({ repositoryKey: "github:acme/web" }),
+          EXCLUDED_BY_ADA,
+        ]),
+        selectionAnswered: false,
+        answeredRepositoryKeys: [],
+      },
+    });
+
+    expect(result.selectedRepositories?.map((chosen) => chosen.repoPath)).toContain("acme/web");
+    expect(result.workScopeLeftOut).toEqual([
+      { repositoryKey: DEMO, reason: EXCLUSION_SENTENCE },
+    ]);
+  });
+
+  it("says it once, not once precisely and once vaguely", async () => {
+    const result = await runExcluded();
+
+    // Both sentences used to land in `recorder.notes`, which is joined into the
+    // first question: the person read the exclusion naming Ada and the date,
+    // then a vaguer restatement of the same fact, then the question.
+    const said = JSON.stringify(result);
+    expect(said).toContain("was excluded on this work by Ada");
+    expect(said).not.toContain("could take none of them");
+  });
+
+  it("writes nothing to the record for saying it", async () => {
+    const result = await runExcluded();
+
+    expect(result.workScopeLeftOut).toEqual([
+      { repositoryKey: DEMO, reason: EXCLUSION_SENTENCE },
+    ]);
+    // Nothing was decided here: the decision was the person's, months ago, and
+    // this run only repeated it back to them.
+    expect(appliedTrail()).toEqual([]);
+    expect(JSON.stringify(appliedPlans().flatMap((plan) => plan.upserts))).not.toContain(DEMO);
+  });
+});
+
+/**
+ * The hole a provider pin opens, which is the commoner pin shape. Pinning to
+ * providers stops the run QUERYING the others (`listedVcsProviders`), so a
+ * repository on an unqueried provider is in no listing and therefore in none of
+ * the three sets built from one. A person names it, the run works in the
+ * repositories it did find, opens a pull request covering half the work and
+ * finishes green with nothing said: the founding complaint of this delivery,
+ * arriving through the reason added to end it.
+ */
+describe("a repository on a provider this workflow's pin excludes", () => {
+  const GITHUB_ONLY = { providers: ["github" as const] };
+  const NO_ANSWER: PreSandboxStepContext["workScope"] = {
+    subjectKey: SUBJECT,
+    scope: scope([]),
+    selectionAnswered: false,
+    answeredRepositoryKeys: [],
+  };
+  const ticketNaming = (description: string) => ({
+    identifier: "AWT-402",
+    title: "Invoices are wrong",
+    description,
+    acceptanceCriteria: "",
+    comments: [],
+    labels: [] as string[],
+  });
+  const OUTSIDE_THE_PIN =
+    "gitlab:acme/ops is outside the repositories the workflow that runs this work may take," +
+    " so the run started without it.";
+
+  it("names it from the key alone, without querying the provider the pin excludes", async () => {
+    const selection = await runStep({
+      // The listing holds GitHub only, exactly as production does under this
+      // pin: the GitLab directory is never called.
+      repositories: [repo("acme/web")],
+      enabledKeys: ["github:acme/web"],
+      repositoryScope: GITHUB_ONLY,
+      ticket: ticketNaming("Fix the billing callback in acme/web. The other half is in gitlab:acme/ops."),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    expect(selection.selectedRepositories?.map((chosen) => chosen.repoPath)).toEqual([
+      "acme/web",
+    ]);
+    expect(selection.workScopeLeftOut).toEqual([
+      { repositoryKey: "gitlab:acme/ops", reason: OUTSIDE_THE_PIN },
+    ]);
+  });
+
+  it("stays silent about a path that names no provider, because that is a guess", async () => {
+    const selection = await runStep({
+      repositories: [repo("acme/web")],
+      enabledKeys: ["github:acme/web"],
+      repositoryScope: GITHUB_ONLY,
+      // "acme/ops" alone says nothing about which provider it is on, so this
+      // run cannot know it is outside the pin rather than simply unlisted.
+      ticket: ticketNaming("Fix the billing callback in acme/web. The other half is in acme/ops."),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    expect(selection.workScopeLeftOut).toBeUndefined();
+  });
+});
+
+/**
  * Label routing memory on a subject that carries a record.
  *
  * The step consults it only on the way to discovery, which is where a person
@@ -1833,6 +2621,22 @@ describe("what the ticket's text may decide after the answer it raised", () => {
   const notNamed = (repositoryKey: string) =>
     `${repositoryKey} was listed in a repository question already answered on this work` +
     " and is not selected on it, so the run started without it.";
+  /**
+   * The ticket names acme/docs in its description and this person excluded it,
+   * so every run on this subject says so, by name and by date.
+   *
+   * It appears in these expectations from the round that made the exclusion
+   * report per repository rather than only where the run had nothing else. The
+   * fixture always held it; what changed is that the person is now told about
+   * their own decision instead of reading a pull request that quietly covers
+   * less of the ticket than its text names.
+   */
+  const excludedDocs = {
+    repositoryKey: "github:acme/docs",
+    reason:
+      "github:acme/docs was excluded on this work by Ada on 2026-09-15," +
+      " so the run started without it.",
+  };
   const TICKET = {
     identifier: "AWT-402",
     title: "Invoices are wrong",
@@ -1878,6 +2682,7 @@ describe("what the ticket's text may decide after the answer it raised", () => {
     expect(appliedTrail()).toEqual([]);
     // Said as a refusal is said, keyed, and with no trail line behind it.
     expect(result.workScopeLeftOut).toEqual([
+      excludedDocs,
       { repositoryKey: "github:acme/api", reason: notNamed("github:acme/api") },
       { repositoryKey: "github:acme/infra", reason: notNamed("github:acme/infra") },
     ]);
@@ -1982,6 +2787,7 @@ describe("what the ticket's text may decide after the answer it raised", () => {
     // Only the one a person named: the other two are still just the ticket's
     // original words.
     expect(result.workScopeLeftOut).toEqual([
+      excludedDocs,
       { repositoryKey: "github:acme/infra", reason: notNamed("github:acme/infra") },
     ]);
   });
@@ -2036,7 +2842,13 @@ describe("what the ticket's text may decide after the answer it raised", () => {
     [
       "the repository is not usable",
       { repositories: [repo("acme/web"), repo("acme/api", ""), repo("acme/docs"), repo("acme/infra")] },
-      "github:acme/api is not on the repository catalog this run may use, so the run started without it.",
+      // Not "is not on the repository catalog this run may use": api IS on the
+      // catalog and enabled, and that sentence sent this person to a page where
+      // they would find it switched on, while the remedy in the same comment
+      // told them the catalog cannot serve it. One repository, two claims.
+      "github:acme/api is enabled here, and this run could not check it out:" +
+        " the provider listed it as archived, or offered no default branch for it," +
+        " so the run started without it.",
       // S17: the remedy, in the person's channel only.
       "The catalog cannot serve github:acme/api at the moment, so no run can use it until it can.",
     ],
@@ -2198,6 +3010,7 @@ describe("what the ticket's text may decide after the answer it raised", () => {
     ]);
     expect(appliedPlans().flatMap((plan) => plan.upserts)).toEqual([]);
     expect(result.workScopeLeftOut).toEqual([
+      excludedDocs,
       { repositoryKey: "github:acme/api", reason: saidNoInAComment("github:acme/api") },
       { repositoryKey: "github:acme/infra", reason: saidNoInAComment("github:acme/infra") },
     ]);
@@ -2221,13 +3034,14 @@ describe("what the ticket's text may decide after the answer it raised", () => {
     });
 
     // Written after the answer, so each path is that person naming it (C11g),
-    // and nothing is left out to be explained.
+    // and nothing is left out to be explained EXCEPT the repository this person
+    // excluded, which the ticket still names and which no comment took back.
     expect(result.selectedRepositories?.map((selected) => selected.repoPath)).toEqual([
       "acme/web",
       "acme/api",
       "acme/infra",
     ]);
-    expect(result.workScopeLeftOut ?? []).toEqual([]);
+    expect(result.workScopeLeftOut ?? []).toEqual([excludedDocs]);
   });
 
   it("takes the repository when the newest comment about it says to use it", async () => {
@@ -2346,6 +3160,7 @@ describe("what the ticket's text may decide after the answer it raised", () => {
     ]);
     expect(appliedPlans().flatMap((plan) => plan.upserts)).toEqual([]);
     expect(result.workScopeLeftOut).toEqual([
+      excludedDocs,
       { repositoryKey: "github:acme/api", reason: notNamed("github:acme/api") },
       { repositoryKey: "github:acme/infra", reason: notNamed("github:acme/infra") },
     ]);

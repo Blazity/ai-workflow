@@ -5,6 +5,7 @@ import {
   repositoryCatalogKey,
   type RepositoryKey,
   type SettingsSnapshot,
+  type WorkScopeAnswerReading,
 } from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
 import { env } from "../../infra/vcs-config.js";
@@ -16,10 +17,17 @@ import {
   listRepositoryCatalogRows,
 } from "../../db/repositories/repository-catalog.js";
 import {
+  answerAsWritten,
   recordRepositoryAnswer,
+  type AnswerReadingDeps,
   type RepositoryAnswerPersistence,
   type RepositoryAnswerOutcome,
 } from "../work-scope/index.js";
+import {
+  answerReadingConfirmMessage,
+  readAnswerForRow,
+  repositoryQuestionOfRow,
+} from "./answer-reading.js";
 import {
   commentsCoverAnswerWindow,
   isComposedAnswerActor,
@@ -35,6 +43,7 @@ import {
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
+  type IssueTrackerMoveTarget,
   type TicketComment,
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
@@ -46,16 +55,22 @@ import {
 import {
   moveConnectedTicketForRun,
   moveTicketForRun,
+  withdrawConnectedTicketFromAiForRun,
+  withdrawTicketFromAiForRun,
 } from "../tickets/index.js";
 import {
   formatAnswerNotRecordedComment,
   formatAnswerDeclinedComment,
+  formatAnswerNotOfferedComment,
+  formatAnswerLeftOutComment,
   formatClarificationAnswerComment,
   aLaterRunCanPickUpAskedRepositories,
 } from "./comment-format.js";
 import {
   answerConnectedHookClarification,
   answerHookClarification,
+  recordConnectedUnreadableHookClarificationAnswer,
+  recordUnreadableHookClarificationAnswer,
   type HookClarificationRow,
 } from "../../db/repositories/clarification-hooks.js";
 import {
@@ -111,6 +126,23 @@ export type AnswerClarificationOutcome =
       recordOutcome?: string;
     }
   | { kind: "invalid_answer" }
+  /**
+   * The answer arrived and could not be read, so NOTHING happened to it.
+   *
+   * The question is still pending, the run is still parked on its hook and no
+   * resume attempt was spent. The ticket is never moved INTO the AI column; on
+   * the first telling one that sits there is put back in the backlog, where it
+   * waited when the question was asked (`withdrawTicketWhileQuestionWaits`).
+   * `confirm` is what the person is told, in the channel they answered through:
+   * what we read, that nothing was recorded, the one reply that ends the
+   * exchange, and where the ticket waits when this delivery moved it.
+   *
+   * THE COST IS DELIBERATE and the owner chose it: an ambiguous answer leaves
+   * the run parked until that person replies or the question expires. The
+   * alternative is resuming into a run that will fail or, worse, recording a
+   * decision in the name of somebody who said something else.
+   */
+  | { kind: "answer_unclear"; confirm: string }
   | { kind: "conflict" }
   | { kind: "resume_terminal" }
   | { kind: "ticket_gone" }
@@ -118,14 +150,6 @@ export type AnswerClarificationOutcome =
   | { kind: "resume_failed_retryable"; error: unknown }
   | { kind: "resume_exhausted"; error: unknown };
 
-/**
- * Bring a parked ticket back to the configured AI column so its status matches
- * the run that is about to wake up. Rides the asking run's own subject claim:
- * the run still holds it while suspended on the hook, so the same owner fence
- * that guards every other run-driven move guards this one. A missing bound
- * claim means no run can work this ticket, so it must not be moved either;
- * that is logged, not raised, because the answer itself is still legitimate.
- */
 interface AnswerPersistence extends RepositoryAnswerPersistence {
   findBoundOwner(input: { subjectKey: string; runId: string }): Promise<{ ownerToken: string } | null>;
   transitionTicket(input: {
@@ -134,11 +158,25 @@ interface AnswerPersistence extends RepositoryAnswerPersistence {
     target: ReturnType<typeof aiColumnMoveTarget>;
     owner: { subjectKey: string; ownerToken: string; runId: string };
   }): Promise<void>;
+  /** Move the ticket out of the AI column only if a fresh read still finds it
+   *  there, behind the same owner fence, and say whether this call moved it. */
+  withdrawTicketFromAi(input: {
+    issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
+    ticketKey: string;
+    aiColumn: IssueTrackerMoveTarget;
+    target: IssueTrackerMoveTarget;
+    owner: { subjectKey: string; ownerToken: string; runId: string };
+    requiredOwnerState: "bound";
+  }): Promise<boolean>;
   answer(
     id: string,
     answer: string,
     actor: { id: string; label: string },
+    reading?: WorkScopeAnswerReading,
   ): Promise<HookClarificationRow | null>;
+  /** Keep an unreadable answer and its reading without answering the question:
+   *  the row stays pending and the run stays parked. */
+  recordUnreadable(id: string, answer: string, reading: WorkScopeAnswerReading): Promise<void>;
   reserve(id: string, answeredAt: Date): Promise<ResumeAttemptReservation | null>;
   finishFailed(input: {
     row: HookClarificationRow;
@@ -179,6 +217,14 @@ async function loadConnectedRepositoryCatalogKeys() {
   return catalogKeysOf(state.activated, entries);
 }
 
+/**
+ * Bring a parked ticket back to the configured AI column so its status matches
+ * the run that is about to wake up. Rides the asking run's own subject claim:
+ * the run still holds it while suspended on the hook, so the same owner fence
+ * that guards every other run-driven move guards this one. A missing bound
+ * claim means no run can work this ticket, so it must not be moved either;
+ * that is logged, not raised, because the answer itself is still legitimate.
+ */
 async function moveTicketToAiColumn(input: {
   persistence: AnswerPersistence;
   issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
@@ -210,6 +256,65 @@ async function moveTicketToAiColumn(input: {
       runId: input.row.runId,
     },
   });
+}
+
+/**
+ * Put the ticket of an answer nobody could read back in the backlog column,
+ * where it waited when the question was asked, and say whether it moved.
+ *
+ * Moving the ticket into the AI column after replying is the commit gesture the
+ * question asks for. A reply that commits nothing leaves the run parked, and a
+ * ticket left in AI tells everybody looking at the board that the agent is
+ * working when the run is waiting for a person.
+ *
+ * The owner fence every run-driven move rides: without a bound claim no run
+ * holds this ticket, so it is not moved, and that is logged rather than raised.
+ * Best effort in the strongest sense: the person still has to be told their
+ * answer was not read, so a failure here is logged and the note says nothing
+ * about the column.
+ *
+ * WHETHER IT MOVED, as the withdraw reports it, rather than whether it
+ * returned. It reads the ticket again inside the fence and quietly leaves alone
+ * one that has already left the AI column (a person moved it on in the
+ * meantime), and the note must not claim a move that did not happen.
+ */
+async function withdrawTicketWhileQuestionWaits(input: {
+  persistence: AnswerPersistence;
+  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
+  ticketKey: string;
+  row: HookClarificationRow;
+  columns: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
+}): Promise<boolean> {
+  const { ticketKey, row, columns } = input;
+  try {
+    const owner = await input.persistence.findBoundOwner({
+      subjectKey: row.subjectKey,
+      runId: row.runId,
+    });
+    if (!owner) {
+      logger.warn(
+        { ticketKey, runId: row.runId },
+        "work_scope_answer_unclear_withdraw_skipped_no_bound_owner",
+      );
+      return false;
+    }
+    return await input.persistence.withdrawTicketFromAi({
+      issueTracker: input.issueTracker,
+      ticketKey,
+      aiColumn: columns.COLUMN_AI,
+      target: env.JIRA_BACKLOG_TRANSITION_ID
+        ? { name: columns.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+        : columns.COLUMN_BACKLOG,
+      owner: { subjectKey: row.subjectKey, ownerToken: owner.ownerToken, runId: row.runId },
+      requiredOwnerState: "bound",
+    });
+  } catch (error) {
+    logger.warn(
+      { ticketKey, runId: row.runId, err: (error as Error).message },
+      "work_scope_answer_unclear_withdraw_failed",
+    );
+    return false;
+  }
 }
 
 /**
@@ -246,6 +351,10 @@ type AnswerClarificationInput = {
    *  delivery of a stored answer, which the record counts again from the ticket
    *  rather than believing the delivery. */
   answerAuthorCount?: number;
+  /** The model that reads a repository answer, injected so tests can drive the
+   *  reading without a provider. Production passes nothing and gets the small
+   *  default model. */
+  answerReadingDeps?: AnswerReadingDeps;
   aiColumn?: string;
   cancelSettings: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
 };
@@ -260,7 +369,10 @@ export function answerClarificationAndResume(
   return answerClarificationAndResumeWithPersistence(input, {
     findBoundOwner: (owner) => findBoundActiveRunOwner(db, owner),
     transitionTicket: (move) => moveTicketForRun({ db, ...move }),
-    answer: (id, answer, actor) => answerHookClarification(db, id, answer, actor),
+    withdrawTicketFromAi: (withdraw) => withdrawTicketFromAiForRun({ db, ...withdraw }),
+    answer: (id, answer, actor, reading) => answerHookClarification(db, id, answer, actor, reading),
+    recordUnreadable: (id, answer, reading) =>
+      recordUnreadableHookClarificationAnswer(db, id, answer, reading),
     reserve: (id, answeredAt) => reserveResumeAttempt(db, id, answeredAt),
     finishFailed: (failed) =>
       finishFailedResume({ db, settings: input.cancelSettings, ...failed }),
@@ -280,7 +392,9 @@ export function answerConnectedClarificationAndResume(
   return answerClarificationAndResumeWithPersistence(input, {
     findBoundOwner: findConnectedBoundActiveRunOwner,
     transitionTicket: moveConnectedTicketForRun,
+    withdrawTicketFromAi: withdrawConnectedTicketFromAiForRun,
     answer: answerConnectedHookClarification,
+    recordUnreadable: recordConnectedUnreadableHookClarificationAnswer,
     reserve: reserveConnectedResumeAttempt,
     finishFailed: (failed) =>
       finishConnectedFailedResume({ settings: input.cancelSettings, ...failed }),
@@ -312,6 +426,11 @@ async function answerClarificationAndResumeWithPersistence(
   const answerer = isResumeRetry
     ? { id: row.answeredById ?? actor.id, label: row.answeredByLabel ?? actor.label }
     : actor;
+  // Which channel this answer came from, and it is the mark the composer put on
+  // the actor rather than a guess: only the ticket path composes an answer out
+  // of comments. Three things below read it, the reading, the record and the
+  // decline sentence, so it is decided once.
+  const composedFromComments = isComposedAnswerActor(answerer.id);
 
   // Ticketless scope:any continuations have no Jira lifecycle. Ticket-backed
   // checkpoints still fail early when their ticket has been deleted. The
@@ -323,6 +442,10 @@ async function answerClarificationAndResumeWithPersistence(
   // read with a gap in that window can only ever say what IS on the ticket,
   // never what is not, and the count below turns on exactly that difference.
   let ticketCommentsCoverWindow = false;
+  // And the column the ticket stands in, from the same read, for the one branch
+  // below that has to know it: an answer nobody could read takes a ticket it
+  // finds in the AI column back to the backlog.
+  let ticketStatus: string | null = null;
   if (row.ticketKey && !input.skipTicketFetch) {
     try {
       // With the window: this read exists to count the people who wrote the
@@ -333,11 +456,162 @@ async function answerClarificationAndResumeWithPersistence(
       });
       ticketComments = ticket.comments;
       ticketCommentsCoverWindow = commentsCoverAnswerWindow(ticket, row.askedAt.getTime());
+      ticketStatus = ticket.trackerStatus;
     } catch (err) {
       if (!(err instanceof IssueTrackerNotFoundError)) throw err;
       await persistence.retireGoneTicket(row);
       return { kind: "ticket_gone" };
     }
+  }
+
+  // HOW THESE WORDS WERE READ, DECIDED ONCE, BEFORE ANYTHING IS COMMITTED.
+  //
+  // Here rather than beside the record, for two reasons that are really one.
+  // The record and the resumed run each used to read the answer text for
+  // themselves and reach opposite conclusions about the same sentence ("yes" to
+  // a question about one repository was a selection to one and noise to the
+  // other), so there is now one reading and both consume it. And an answer
+  // nobody can read must leave no trace at all, which is only possible while
+  // the row is still pending, the ticket has not moved and no resume attempt
+  // has been reserved.
+  //
+  // A question that named no repository gets no reading and keeps the path it
+  // has always had.
+  const repositoryQuestion = await repositoryQuestionOfRow(row, (subjectKey) =>
+    persistence.readWorkScope(subjectKey),
+  );
+  // WHAT THE READER IS HANDED IS WHAT THE PERSON WROTE, by the one rule the
+  // record reads by (`answerAsWritten`): on the ticket the composed author line
+  // comes off, and on the dashboard and MCP nothing does. Handed the line, the
+  // model paraphrased "Filip Maszota: <reply>" back to Filip as a reply that
+  // referenced Filip Maszota, and a display name like "Demo Team" points at a
+  // repository nobody chose.
+  //
+  // `answer` itself stays as the channel delivered it, and it has to. The guard
+  // below compares it with the next delivery of the same comments, the row
+  // stores it, and the cron's retry hands the stored text back in as the
+  // answer, where the record would strip it a second time and eat a person's
+  // own "acme/api: " (A18).
+  const theirWords = answerAsWritten(answer, { composedFromComments });
+  // THESE EXACT WORDS, READ BEFORE, AND WE COULD NOT READ THEM. The Jira path
+  // re-composes its answer out of the ticket's comments on every poll tick, so
+  // without this the person would get the same sentence posted beside their
+  // unchanged comments every few minutes until the question expired.
+  const toldBefore =
+    row.status === "pending" &&
+    row.answer === answer &&
+    row.answerReading?.outcome.kind === "unclear"
+      ? row.answerReading
+      : undefined;
+  // BUT ONLY A MODEL'S VERDICT IS FINAL. A reading that says `deterministic`
+  // means the provider could not be reached at all, and freezing that would
+  // make one bad minute permanent: the words would never be read again, and the
+  // person would be stuck re-typing an answer that was fine. So an unreachable
+  // provider is retried on the next delivery and only the telling is
+  // suppressed, while a model that read these exact words and could not settle
+  // them is not asked twice about the same sentence.
+  const answerReading =
+    toldBefore?.readBy === "model"
+      ? toldBefore
+      : repositoryQuestion
+        ? await readAnswerForRow(row, theirWords, repositoryQuestion, {
+            isResumeRetry,
+            ...(input.answerReadingDeps ? { deps: input.answerReadingDeps } : {}),
+          })
+        : undefined;
+  // NOT CONFIDENT MEANS ASK, NOT GUESS. Nothing is recorded, the run is not
+  // resumed, the question stays pending, and the person is told what we read
+  // and what reply ends it. The run waits until they answer or the question
+  // expires, which is the cost the owner accepted rather than resuming into a
+  // decision nobody made.
+  //
+  // Not on a resume retry: those are the same words being delivered again, and
+  // a delivery that already got past this gate must not be stopped by it on the
+  // way back.
+  if (answerReading?.outcome.kind === "unclear" && repositoryQuestion && !isResumeRetry) {
+    const firstTelling = toldBefore === undefined;
+    if (firstTelling) {
+      logger.warn(
+        { runId: row.runId, clarificationId: row.id, readBy: answerReading.readBy },
+        "work_scope_answer_reading_unclear",
+      );
+    }
+    // Stored on every pass, because the reading may have changed: the same
+    // words read by the provider this time carry a different verdict than the
+    // deterministic stand-in did last time, and the row must hold the newest
+    // one. The write is a no-op against a row that is no longer pending.
+    await persistence.recordUnreadable(row.id, answer, answerReading);
+    // AND NO TRAIL ROW, DELIBERATELY, WHICH IS A LOSS AND IS WRITTEN DOWN HERE
+    // RATHER THAN LEFT TO BE REDISCOVERED.
+    //
+    // Until this branch existed, an answer nobody could read reached the record
+    // and wrote one `question_answered` row saying so. It no longer does,
+    // because nothing here is answered: the row is still pending, the same
+    // words may arrive again on the next poll tick, and a row per delivery
+    // would be a history of our retries rather than of anybody's decisions.
+    // Worse, `applyAnswerWorkScope` is idempotent per clarification id, so a
+    // row written now would make the REAL answer to this question read as
+    // already applied and drop it.
+    //
+    // WHAT IS LOST: somebody debugging "I answered three times and nothing
+    // happened" has no record that the words arrived. Recovering it takes a
+    // trail event of its own rather than the answered one, and that is a widening
+    // of a closed set other readers switch on, over MCP. This delivery already
+    // carries a migration and a contract change and is not taking a third.
+    //
+    // BACK TO THE BACKLOG, ON THE FIRST TELLING ONLY, and before the note so the
+    // note says what actually happened. Where the ticket stands is known without
+    // another read: the comment path only commits from the AI column and says
+    // so with `skipTicketMove`, and every other path read the ticket above.
+    //
+    // NOT ON A LATER DELIVERY OF THE SAME WORDS, even with the ticket in AI
+    // again, and that is deliberate. Somebody who moves the ticket first and
+    // writes their new comment second would see it bounce back to the backlog
+    // behind them, silently, because these words were already told; left in AI,
+    // the next poll reads their new comment.
+    const ticketInAiColumn =
+      input.skipTicketMove === true ||
+      (ticketStatus !== null &&
+        ticketStatus.trim().toLowerCase() ===
+          input.cancelSettings.COLUMN_AI.trim().toLowerCase());
+    const waitsInBacklog =
+      row.ticketKey && firstTelling && ticketInAiColumn
+        ? await withdrawTicketWhileQuestionWaits({
+            persistence,
+            issueTracker,
+            ticketKey: row.ticketKey,
+            row,
+            columns: input.cancelSettings,
+          })
+        : false;
+    // Composed once, after the move, for both readers: the ticket and the
+    // channel the answer came through carry the same words.
+    const confirm = answerReadingConfirmMessage(
+      answerReading,
+      repositoryQuestion,
+      waitsInBacklog
+        ? {
+            backlogColumnName: input.cancelSettings.COLUMN_BACKLOG,
+            aiColumnName: input.cancelSettings.COLUMN_AI,
+          }
+        : undefined,
+    );
+    // To the ticket wherever there is one, exactly as the "recorded nothing"
+    // sentence goes: the question was asked in public and the fact that it is
+    // still open belongs beside it. The caller gets the same words back, so a
+    // person answering from the dashboard or an MCP client is told in the
+    // surface they used and never has to go and find the ticket.
+    if (row.ticketKey && firstTelling) {
+      const ticketKey = row.ticketKey;
+      await issueTracker.postComment(ticketKey, confirm).catch((error: unknown) => {
+        logger.warn(
+          { ticketKey, runId: row.runId, error: (error as Error).message },
+          "work_scope_answer_reading_comment_failed",
+        );
+        return null;
+      });
+    }
+    return { kind: "answer_unclear", confirm };
   }
 
   // The ticket parked itself in the backlog when the question was asked, so put
@@ -362,7 +636,7 @@ async function answerClarificationAndResumeWithPersistence(
 
   const answered = isResumeRetry
     ? row
-    : await persistence.answer(row.id, answer, answerer);
+    : await persistence.answer(row.id, answer, answerer, answerReading);
   if (!answered) {
     return { kind: "conflict" };
   }
@@ -436,15 +710,14 @@ async function answerClarificationAndResumeWithPersistence(
   // Before the resume, because the resumed run reads the RECORD and never the
   // answer text: a run that died between the two would otherwise lose what a
   // person said, and the next run would ask them again.
-  // Which channel this answer came from, and it is the mark the composer put on
-  // the actor rather than a guess: only the ticket path composes an answer out
-  // of comments. Two things below read it, the record and the decline sentence,
-  // so it is decided once.
-  const composedFromComments = isComposedAnswerActor(answerer.id);
   let recorded: RepositoryAnswerOutcome = {};
   if (authorship.kind === "write") {
     recorded = await recordRepositoryAnswer(persistence, {
-      row,
+      // THE ANSWERED ROW, not the pending one this call started with: it is the
+      // row that carries `answerReading`, which is how the record reads the one
+      // reading of these words instead of reading the text a second time. Every
+      // other field the record uses is identical on both.
+      row: answered,
       answer,
       answeredAt,
       answerer,
@@ -494,9 +767,41 @@ async function answerClarificationAndResumeWithPersistence(
     recorded.declined && recorded.declined.length > 0
       ? formatAnswerDeclinedComment(recorded.declined)
       : undefined;
-  const toTheTicket =
-    notRecorded ?? (composedFromComments && !isResumeRetry ? declinedSentence : undefined);
-  if (toTheTicket !== undefined && row.ticketKey) {
+  // AND WHAT AN ANSWER THAT NAMED SOMETHING LEFT OUT, which binds the same way
+  // and told nobody. It goes back on the answer's own reply only: on the ticket
+  // the run itself lists what it started without, keyed and with the way back
+  // (C10, C11), and posting it here as well would tell one story twice in one
+  // thread.
+  const leftOutSentence =
+    recorded.leftOut && recorded.leftOut.length > 0
+      ? formatAnswerLeftOutComment(recorded.leftOut)
+      : undefined;
+  // AND WHAT THEY NAMED THAT THIS QUESTION NEVER OFFERED, which until now went
+  // nowhere at all. The keys the question put in front of somebody are the only
+  // ones that become a decision, so "api and web" to a question about api
+  // records api and nothing else; saying nothing about web is the system
+  // quietly doing half the job, and they find out from a pull request that is
+  // missing the other half.
+  //
+  // JOINED TO THE OTHER SENTENCES RATHER THAN RANKED AGAINST THEM. It is not an
+  // alternative to "your answer recorded nothing": both can be true of one
+  // reply, and this is the one nothing else on this path can say.
+  const notOfferedSentence =
+    answerReading?.unofferedNames && answerReading.unofferedNames.length > 0 && repositoryQuestion
+      ? formatAnswerNotOfferedComment({
+          names: answerReading.unofferedNames,
+          askedKeys: repositoryQuestion.askedKeys,
+        })
+      : undefined;
+  const toTheTicket = [
+    notRecorded ?? (composedFromComments && !isResumeRetry ? declinedSentence : undefined),
+    // On the ticket too, and on a comment answer especially: that channel has no
+    // screen behind it, so a reply nobody reads is the same as saying nothing.
+    isResumeRetry ? undefined : notOfferedSentence,
+  ]
+    .filter((sentence): sentence is string => sentence !== undefined)
+    .join("\n\n");
+  if (toTheTicket.length > 0 && row.ticketKey) {
     const ticketKey = row.ticketKey;
     await issueTracker
       .postComment(ticketKey, toTheTicket)
@@ -515,6 +820,13 @@ async function answerClarificationAndResumeWithPersistence(
       answeredById: answerer.id,
       answeredByLabel: answerer.label,
       answeredAt: answeredAt.toISOString(),
+      // THE READING TRAVELS WITH THE WORDS. The resumed run used to read the
+      // sentence for itself and reach a different conclusion than the record
+      // had already written, which is how a person's "yes" became a selection
+      // nobody acted on. Sending it here means the run consumes the one reading
+      // rather than a second reader's opinion of the same text, and a replay
+      // gets it out of the journal rather than by calling anything.
+      ...(answerReading ? { answerReading } : {}),
     });
   } catch (error) {
     // If the hook still exists, the resume definitely did not commit and the
@@ -548,7 +860,9 @@ async function answerClarificationAndResumeWithPersistence(
   // words the ticket comment carries, or it declined the repositories the
   // question listed and this says which. Absent when the answer recorded what
   // it named, which is the case that needs no sentence.
-  const recordOutcome = notRecorded ?? declinedSentence;
+  const recordOutcome = [notRecorded ?? declinedSentence ?? leftOutSentence, notOfferedSentence]
+    .filter((sentence): sentence is string => sentence !== undefined)
+    .join("\n\n");
   return { kind: "answered", row: answered, ...(recordOutcome ? { recordOutcome } : {}) };
 }
 

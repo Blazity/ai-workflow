@@ -9,7 +9,7 @@ import {
 } from "../../../adapters/vcs/vcs-bot-identity.js";
 import type { SettledThread } from "../../steps/review-ledger-settle.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
-import { isRepositoryCatalogRefusal } from "../../support/repository-access.js";
+import { catalogRefusalExecutionOptions } from "../../support/repository-access.js";
 import {
   executionError,
   type BlockExecuteFn,
@@ -261,19 +261,15 @@ export const execute: BlockExecuteFn = async (
     }, ctx.repositories);
     if (errors.length > 0) {
       const detail = errors.join("; ").slice(0, 500);
-      return executionError(detail, {
-        category: isRepositoryCatalogRefusal(detail) ? "configuration" : "provider",
-      });
+      return executionError(detail, catalogRefusalExecutionOptions(detail, "provider"));
     }
     return { kind: "next", output: { status: "ok", comments } };
   } catch (err) {
     if (isRunControlError(err)) throw err;
     const detail = err instanceof Error ? err.message : String(err);
-    return executionError(detail, {
-      // A repository the catalog withholds refuses before any provider call is
-      // made, so calling it a provider failure sends an operator to a forge
-      // status page over a decision this deployment made itself.
-      category: isRepositoryCatalogRefusal(detail) ? "configuration" : "provider",
-    });
+    // A repository the catalog withholds refuses before any provider call is
+    // made, so calling it a provider failure sends an operator to a forge
+    // status page over a decision this deployment made itself.
+    return executionError(detail, catalogRefusalExecutionOptions(detail, "provider"));
   }
 };

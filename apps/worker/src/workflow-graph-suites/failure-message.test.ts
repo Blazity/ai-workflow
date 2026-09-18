@@ -409,12 +409,15 @@ describe("sanitizeFailureMessage", () => {
     const out = sanitizeFailureMessage(
       `${"pad ".repeat(500)}\nsecret sk-ant-api03-abcDEF1234567890_-token trailer`,
     );
-    // 600, raised from 400 by AIW-254: the bound now has to hold a lead
-    // sentence, a 160-character cause snippet AND the reserved diagnostic
-    // suffix, so that no message this module composes is ever clamped here.
+    // 1_100, raised from 600 once the bound had to hold a whole repository
+    // work-scope refusal as its lead (at 600 the longest one was elided through
+    // its middle and reached the ticket as half a sentence). Before that it was
+    // raised from 400 by AIW-254 to hold a lead sentence, a 160-character cause
+    // snippet AND the reserved diagnostic suffix. The property is the same in
+    // all three versions: no message this module composes is ever clamped here.
     // Slack and the ticket comment get the same string without this call, and a
     // clamp that fired only here would make the surfaces disagree.
-    expect(out.length).toBeLessThanOrEqual(600);
+    expect(out.length).toBeLessThanOrEqual(1_100);
     expect(out).not.toContain("sk-ant-api03");
     expect(out).not.toContain("\n");
   });
@@ -871,8 +874,237 @@ describe("deriveFailureMessage with agent evidence (AIW-254)", () => {
     const composed = `${message} Diagnostic ID: ${PROD_DIAGNOSTIC_ID}`;
     expect(composed.length).toBeLessThanOrEqual(600);
     expect(sanitizeFailureMessage(composed)).toBe(composed);
-    // The cause survives even at the bound: the clamp spends its budget on the
-    // lead, which is boilerplate advice, not on the reason.
+    // Both parts survive: the lead whole, because it is a sentence somebody
+    // wrote for a person, and the cause behind it.
+    expect(message).toContain(longLead);
     expect(message).toContain("the check runner refused the request");
+  });
+});
+
+/**
+ * The defect production found on 2026-09-18, on run
+ * wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF.
+ *
+ * A repository work-scope refusal is not a generic sentence with a cause
+ * attached to it. It IS the message: one authored sentence per repository saying
+ * which one was left out, why, and the way back. Composed as
+ * `clampBothEnds(lead) (snippet)` it reached the person on the ticket as "This
+ * deployment's confi [...] o continue." with all three facts in the elided
+ * middle, and every surface agreed on that same half sentence, because the
+ * refusal IS the run's status reason and the ticket comment.
+ */
+describe("an authored lead reaches the person whole", () => {
+  const CONFIGURATION_GENERIC =
+    "This deployment's configuration does not allow this run to continue.";
+  const ELISION = "[...]";
+
+  /**
+   * The refusal from that run, rebuilt by driving the real builder
+   * (`nothingLeftToStartFrom`, apps/worker/src/engine/repository-discovery/protocol.ts)
+   * with one repository and a closed comment path. 416 characters, against a
+   * 160-character snippet cap.
+   */
+  const PRODUCTION_REFUSAL =
+    "Repository discovery was not confident about github:blazity/ai-workflow," +
+    " and somebody on this work was already asked which repositories to start from" +
+    " and did not name it. Not naming a repository is not choosing it," +
+    " so this run has no repository to work on." +
+    " Select the repositories this ticket should work on in this work's repository list," +
+    " through the work scope API or the work_scope.edit tool, and start a new run.";
+
+  it("delivers the production refusal whole, repository and way back included", () => {
+    // The two facts the person needed and did not get: WHICH repository, and
+    // what to do about it. Both sat in the elided middle.
+    const out = deriveFailureMessage({
+      category: "configuration",
+      detail: PRODUCTION_REFUSAL,
+      genericMessage: CONFIGURATION_GENERIC,
+      explicitMessage: PRODUCTION_REFUSAL,
+    });
+    expect(out).not.toContain(ELISION);
+    expect(out).toContain("github:blazity/ai-workflow");
+    expect(out).toContain("start a new run");
+    expect(out).toBe(PRODUCTION_REFUSAL);
+  });
+
+  it("answers the duplicate guard on the real detail, not on the clipped copy", () => {
+    // The mechanism behind the defect, isolated. The guard compared the lead
+    // against the ALREADY-CLAMPED snippet, and a clamp drops the middle, so a
+    // lead that is word for word its own detail failed its own containment test
+    // the moment it passed 160 characters. The person then read the sentence
+    // followed by a middle-clipped copy of itself in parentheses.
+    const out = deriveFailureMessage({
+      category: "configuration",
+      detail: PRODUCTION_REFUSAL,
+      genericMessage: CONFIGURATION_GENERIC,
+      explicitMessage: PRODUCTION_REFUSAL,
+    });
+    expect(PRODUCTION_REFUSAL.length).toBeGreaterThan(160);
+    expect(out).not.toContain("(");
+    expect(out.match(/Repository discovery was not confident/g)).toHaveLength(1);
+  });
+
+  it("never renders a lead cut through its middle, however long the evidence is", () => {
+    // The general rule, not just the production shape: whatever the clause
+    // costs, the sentence in front of it is the one the call site wrote. The old
+    // composition gave the clause its budget first and clamped the lead with
+    // what was left, which is what produced "This deployment's confi [...] o
+    // continue.".
+    const lead =
+      `${CONFIGURATION_GENERIC} ` +
+      "Every repository this run could have used had already been decided about by somebody on this work, " +
+      "and this sentence is long enough that the old composition had to cut it. ".repeat(3);
+    const out = deriveFailureMessage({
+      category: "sandbox",
+      detail: `unrelated raw provider output ${"that goes on and on ".repeat(40)}`,
+      genericMessage: "The workspace environment could not complete this block.",
+      explicitMessage: lead,
+    });
+    expect(out.startsWith(lead)).toBe(true);
+    expect(out.slice(0, lead.length)).not.toContain(ELISION);
+  });
+
+  it("still clamps a raw provider snippet from both ends behind a short lead", () => {
+    // AIW-254, which must not regress: for RAW output the middle is the least
+    // informative part, git and HTTP write the verdict last, and the lead is
+    // genuinely boilerplate. Nothing above changes that case.
+    const detail =
+      "github:Blazity/ai-workflow-prod: canonical clone failed: " +
+      `Cloning into '/vercel/sandbox/publisher/0'... ${"progress noise ".repeat(20)}` +
+      "fatal: unable to access 'https://github.com/Blazity/ai-workflow-prod.git/': " +
+      "The requested URL returned error: 403";
+    const out = deriveFailureMessage({
+      category: "sandbox",
+      detail,
+      genericMessage: "The workspace environment could not complete this block.",
+      explicitMessage: "The workspace could not be prepared.",
+    });
+    expect(out).toContain(ELISION);
+    expect(out).toMatch(/\(.*\)$/);
+    expect(out.startsWith("The workspace could not be prepared. (")).toBe(true);
+    // Both ends of the raw text, which is the whole point of the both-ends clamp.
+    expect(out).toContain("github:Blazity/ai-workflow-prod");
+    expect(out).toContain("The requested URL returned error: 403");
+  });
+
+  it("redacts the lead, so the person's name reads the same on every surface", () => {
+    // A work-scope refusal names whoever took the repository off the work, and
+    // that name is a raw tracker display name: when the account has no display
+    // name set it IS an email address. The lead used to skip redaction, on the
+    // reading that a lead is a fixed operator sentence with no runtime text in
+    // it, which stopped being true the day a refusal became the lead. Unredacted
+    // it went to Slack and the ticket comment in clear while the API response
+    // redacted it at its own boundary, so one sentence read two ways depending
+    // on where you read it.
+    const lead =
+      "github:acme/api was excluded on this work by ada.lovelace@blazity.com on 2026-09-10." +
+      " Excluding a repository is not final: this work's repository list can be changed.";
+    const out = deriveFailureMessage({
+      category: "configuration",
+      detail: lead,
+      genericMessage: CONFIGURATION_GENERIC,
+      explicitMessage: lead,
+    });
+    expect(out).not.toContain("ada.lovelace@blazity.com");
+    expect(out).toContain("[redacted]");
+    // Redacted, not dropped: everything else in the sentence still arrives.
+    expect(out).toContain("github:acme/api was excluded on this work by");
+    expect(out).toContain("Excluding a repository is not final");
+    expect(out).not.toContain(ELISION);
+  });
+
+  it("falls back to the generic sentence when a lead strips away to nothing", () => {
+    // Reachable through stack frames, which are dropped WHOLE rather than
+    // replaced: a caller that passed an error's frames as its lead would
+    // otherwise leave the message with no leading sentence at all. A secret
+    // cannot reach this branch, because redaction leaves its marker behind.
+    const out = deriveFailureMessage({
+      category: "configuration",
+      detail: "the repository catalog refused",
+      genericMessage: CONFIGURATION_GENERIC,
+      explicitMessage: "    at prepare (/vercel/path/execute.js:12:3)\n    at run (/vercel/path/w.js:1:1)",
+    });
+    expect(out.startsWith(CONFIGURATION_GENERIC)).toBe(true);
+    expect(out).not.toContain("/vercel/path");
+    // Still not the bare category line: the cause it was given comes with it.
+    expect(out).toContain("the repository catalog refused");
+  });
+
+  it("redacts a secret in the lead rather than dropping the sentence around it", () => {
+    const out = deriveFailureMessage({
+      category: "configuration",
+      detail: "unrelated",
+      genericMessage: CONFIGURATION_GENERIC,
+      explicitMessage: "Refusing to prepare: the token sk-ant-api03-abcDEF1234567890_-tok was rejected.",
+    });
+    expect(out).not.toContain("sk-ant-api03");
+    expect(out).toContain("Refusing to prepare: the token [redacted] was rejected.");
+  });
+
+  it("drops a clause too short to name anything rather than gluing on noise", () => {
+    // The branch behind MIN_APPENDED_CLAUSE_LENGTH. With the lead whole and
+    // almost the entire budget spent, the remainder cannot carry both ends of a
+    // both-ends clamp: what fits is a dozen characters, the elision marker, and
+    // a dozen more, which names nothing a person can act on. The lead is a
+    // finished sentence, so it goes alone.
+    const lead = `${CONFIGURATION_GENERIC} ${"Every repository was decided about already. ".repeat(20)}`.trim();
+    const out = deriveFailureMessage({
+      category: "configuration",
+      detail: `the provider said ${"something long ".repeat(30)}`,
+      genericMessage: CONFIGURATION_GENERIC,
+      explicitMessage: lead,
+    });
+    expect(out).toBe(lead);
+    expect(out).not.toContain("(");
+    expect(out).not.toContain(ELISION);
+
+    // THE OTHER SIDE OF THE SAME THRESHOLD, which is what makes the constant
+    // load-bearing rather than arbitrary. The derived bound is 964 (the 1_100
+    // message bound less the reserved diagnostic suffix), so padding the lead to
+    // 918 leaves 45 characters: over the 40-character floor, so here the clause
+    // IS kept, clamped into what is left. Move the floor past 45 and this goes
+    // red; drop it toward zero and the case above goes red.
+    const nearlyFull = `${CONFIGURATION_GENERIC} Every repository on this work was already decided about.`.padEnd(918, ".");
+    expect(nearlyFull).toHaveLength(918);
+    const withClause = deriveFailureMessage({
+      category: "configuration",
+      detail: `the provider said ${"something long ".repeat(30)}`,
+      genericMessage: CONFIGURATION_GENERIC,
+      explicitMessage: nearlyFull,
+    });
+    expect(withClause.startsWith(nearlyFull)).toBe(true);
+    // A clause was appended, and it is clamped rather than whole: at 45
+    // characters it keeps a little of each end of the raw output, which is
+    // exactly what a both-ends clamp is for and what the floor above says is
+    // still worth printing.
+    const clause = withClause.slice(nearlyFull.length);
+    expect(clause.startsWith(" (")).toBe(true);
+    expect(clause.endsWith(")")).toBe(true);
+    expect(clause).toContain(ELISION);
+    expect(clause).toContain("the provider s");
+    expect(withClause.length).toBeLessThanOrEqual(964);
+  });
+
+  it("keeps the provider verdicts of an incomplete catalog in the message", () => {
+    // The opposite call site, and the reason the signal is carried explicitly
+    // rather than guessed at from the text. `incompleteCatalogMessage`
+    // (pre-sandbox/steps/repo-selection.ts) composes step name, then the
+    // verdicts, then advice, so its reason IS in the middle and it passes no
+    // lead: it gets the generic sentence plus its isolated cause in parentheses,
+    // exactly as before.
+    const composed =
+      "Select repositories failed: repository listing for gitlab is unavailable " +
+      "(gitlab: GitLab projects list timed out after 15000ms), so the repository catalog was incomplete. " +
+      "No deterministic repository signal resolved the selection, and choosing from a partial catalog could pick the wrong repository. " +
+      "Retry once the provider recovers, or name the repository path in the ticket.";
+    const out = deriveFailureMessage({
+      category: "sandbox",
+      detail: `pre-sandbox: ${composed}`,
+      genericMessage: "The workspace environment could not complete this block.",
+      evidence: { cause: "gitlab: GitLab projects list timed out after 15000ms" },
+    });
+    expect(out.startsWith("The workspace environment could not complete this block."))
+      .toBe(true);
+    expect(out).toContain("GitLab projects list timed out after 15000ms");
   });
 });

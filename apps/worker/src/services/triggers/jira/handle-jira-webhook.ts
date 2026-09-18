@@ -162,6 +162,7 @@ async function handleVerifiedJiraWebhook(
         ticketKey,
         adapters.runRegistry,
         adapters.issueTracker,
+        board.aiColumn,
         active,
         `Ticket left the AI column (${board.aiColumn} → ${statusChange.name ?? "unknown"}) via Jira webhook`,
       );
@@ -437,6 +438,7 @@ async function handleVerifiedJiraWebhook(
       ticketKey,
       adapters.runRegistry,
       adapters.issueTracker,
+      board.aiColumn,
       undefined,
       prematureAiReviewTransition
         ? PREMATURE_AI_REVIEW_CANCELLATION_REASON
@@ -695,6 +697,11 @@ async function cancelTrackedRun(
   ticketKey: string,
   runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
   issueTracker: ReturnType<typeof createAdapters>["issueTracker"],
+  /** The board's Ai column, so a cancel that retires a question the ticket was
+   *  shown can tell that ticket how to start over. This is a human move: the
+   *  person dragged the ticket somewhere, and if a question was open they are
+   *  the one owed an answer about it. */
+  aiColumnName: string,
   observedEntry?: Awaited<ReturnType<typeof runRegistry.get>>,
   reason?: string,
 ): Promise<"cancelled" | "not_active" | "unconfirmed" | "already_terminal"> {
@@ -710,30 +717,24 @@ async function cancelTrackedRun(
   // reached a terminal Workflow status on its own (its cancel() threw, status
   // was already completed/failed/cancelled) is a bookkeeping release, not a
   // fresh cancellation, so callers must not report it as "cancelled".
-  if (cancellationTarget.runId === null) {
-    const result = await cancelRunDetailed(
+  const cancel = () =>
+    cancelRunDetailed({
       ticketKey,
-      cancellationTarget,
+      target: cancellationTarget,
       runRegistry,
       issueTracker,
-      undefined,
-      undefined,
-      reason,
-    );
+      ...(reason ? { reason } : {}),
+      clarificationNotice: { aiColumnName },
+    });
+
+  if (cancellationTarget.runId === null) {
+    const result = await cancel();
     if (!result.cancelled) return "unconfirmed";
     return result.alreadyTerminal ? "already_terminal" : "cancelled";
   }
 
   if (!cancellationTarget.runId) return "unconfirmed";
-  const result = await cancelRunDetailed(
-    ticketKey,
-    cancellationTarget,
-    runRegistry,
-    issueTracker,
-    undefined,
-    undefined,
-    reason,
-  );
+  const result = await cancel();
   if (!result.cancelled) return "unconfirmed";
   return result.alreadyTerminal ? "already_terminal" : "cancelled";
 }

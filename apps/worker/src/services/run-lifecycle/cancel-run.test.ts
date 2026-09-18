@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   findLiveClaim: vi.fn(),
   findRunOutcome: vi.fn(),
   settleOccurrence: vi.fn(),
+  updateLabels: vi.fn(),
   warn: vi.fn(),
 }));
 
@@ -45,6 +46,9 @@ vi.mock("../../db/repositories/approvals.js", () => ({
 vi.mock("../tickets/ticket-transition.js", () => ({
   moveConnectedTicketForRun: state.moveTicket,
   withdrawConnectedTicketFromAiForRun: state.moveTicket,
+}));
+vi.mock("../tickets/ticket-label-mutation.js", () => ({
+  updateConnectedTicketLabelsForRun: state.updateLabels,
 }));
 vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   recordConnectedRunStatusReason: state.recordStatusReason,
@@ -175,11 +179,11 @@ describe("cancelRun", () => {
       status: Promise.resolve("failed"),
     });
     const runRegistry = registry();
-    await expect(cancelRunDetailed(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRunDetailed({
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-    )).resolves.toEqual({
+    })).resolves.toEqual({
       cancelled: true,
       released: true,
       alreadyTerminal: true,
@@ -219,16 +223,12 @@ describe("cancelRun", () => {
     const runRegistry = registry();
     const beforeRelease = vi.fn().mockResolvedValue(undefined);
 
-    await expect(cancelRunDetailed(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRunDetailed({
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
       beforeRelease,
-    )).resolves.toMatchObject({ cancelled: true, released: true });
+    })).resolves.toMatchObject({ cancelled: true, released: true });
 
     expect(beforeRelease).toHaveBeenCalledWith(expect.objectContaining({
       subjectKey: "ticket:jira:PROJ-1",
@@ -1331,6 +1331,298 @@ describe("cancelRunById", () => {
     ).resolves.toEqual({ outcome: "not_found" });
 
     expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Cancelling a run that is parked on a question, from the ticket's point of
+ * view. Observed on production on 2026-09-18: the run was cancelled, the ticket
+ * was told nothing, the needs-clarification label stayed on it, and the person
+ * who then answered in a comment (as the questions comment had invited them to)
+ * was answered by nobody while the next run asked the same question again.
+ *
+ * The question's own channel has to learn that the question is closed, and has
+ * to learn it exactly once, because the alternative to silence is a person
+ * reading the same notice twice on a ticket other people are watching.
+ */
+describe("cancelling a run parked on a question", () => {
+  const operatorDb = { marker: "parked" } as unknown as Db;
+  // Deliberately not the default: a comment that hard-codes a column name sends
+  // a person to a board this deployment does not have.
+  const settings = { ...cancelSettings, COLUMN_AI: "Robot lane" };
+
+  function tracker(over: Partial<IssueTrackerAdapter> = {}): IssueTrackerAdapter {
+    return {
+      postComment: vi.fn().mockResolvedValue("https://jira.example/comment/1"),
+      findCommentByMarker: vi.fn().mockResolvedValue(null),
+      updateLabels: vi.fn().mockResolvedValue(undefined),
+      ...over,
+    } as unknown as IssueTrackerAdapter;
+  }
+
+  /** What the database does for a cancel that finds a published question: the
+   *  first tombstone consumes the row, and every later one finds nothing. */
+  function parkedOnAPublishedQuestion(): void {
+    state.tombstone
+      .mockResolvedValueOnce({
+        matched: true,
+        successorOwnerToken: null,
+        retiredPublished: true,
+      })
+      .mockResolvedValue({
+        matched: false,
+        successorOwnerToken: null,
+        retiredPublished: false,
+      });
+  }
+
+  const cancel = (runRegistry: RunRegistryAdapter, issueTracker: IssueTrackerAdapter) =>
+    cancelRunById(operatorDb, "run-1", {
+      actorLabel: "operator kate",
+      runRegistry,
+      issueTracker,
+      settings,
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    state.getRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    state.listSteps.mockResolvedValue({ data: [], cursor: null, hasMore: false });
+    state.stopSandboxes.mockResolvedValue(undefined);
+    state.tombstone.mockResolvedValue({
+      matched: false,
+      successorOwnerToken: null,
+      retiredPublished: false,
+    });
+    state.retireApproval.mockResolvedValue(0);
+    state.moveTicket.mockResolvedValue(undefined);
+    state.recordStatusReason.mockResolvedValue(undefined);
+    state.markBlockedOnCancel.mockResolvedValue(undefined);
+    state.markBlockedByOperator.mockResolvedValue(undefined);
+    state.updateLabels.mockResolvedValue(undefined);
+    state.findRunOutcome.mockResolvedValue(null);
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+  });
+
+  it("closes the question on the ticket and clears the label a human reads", async () => {
+    parkedOnAPublishedQuestion();
+    const issueTracker = tracker();
+    const runRegistry = registry();
+
+    await expect(cancel(runRegistry, issueTracker)).resolves.toMatchObject({
+      outcome: "cancelled",
+    });
+
+    expect(issueTracker.postComment).toHaveBeenCalledTimes(1);
+    const [ticketKey, body] = vi.mocked(issueTracker.postComment).mock.calls[0]!;
+    expect(ticketKey).toBe("PROJ-1");
+    expect(body).toContain("no longer open");
+    // The configured column, not a constant, and the run id so a later attempt
+    // (or a second run's cancel) can tell the two apart.
+    expect(body).toContain('"Robot lane"');
+    expect(body).toContain("AI workflow clarification closed: run-1");
+    // It must not tell a person that something they already wrote will be used:
+    // the run that asked is gone and nothing delivers that answer anywhere.
+    expect(body).not.toMatch(/will be (read|picked up|delivered|answered)/iu);
+
+    expect(state.updateLabels).toHaveBeenCalledWith({
+      issueTracker,
+      ticketKey: "PROJ-1",
+      owner: { subjectKey: "ticket:jira:PROJ-1", ownerToken: "owner-a", runId: "run-1" },
+      requiredOwnerState: "cancelling",
+      changes: { remove: ["needs-clarification"] },
+    });
+  });
+
+  it("says nothing and touches no label when the run was never parked on a question", async () => {
+    const issueTracker = tracker();
+    const runRegistry = registry();
+
+    await expect(cancel(runRegistry, issueTracker)).resolves.toMatchObject({
+      outcome: "cancelled",
+    });
+
+    expect(issueTracker.postComment).not.toHaveBeenCalled();
+    expect(state.updateLabels).not.toHaveBeenCalled();
+  });
+
+  it("says nothing about a question that never reached the ticket", async () => {
+    // Cancelled while the clarification was still being prepared: no label, no
+    // column move and no questions comment happened, so closing a question here
+    // would be about one nobody was ever shown.
+    state.tombstone.mockResolvedValue({
+      matched: true,
+      successorOwnerToken: null,
+      retiredPublished: false,
+    });
+    const issueTracker = tracker();
+
+    await expect(cancel(registry(), issueTracker)).resolves.toMatchObject({
+      outcome: "cancelled",
+    });
+
+    expect(issueTracker.postComment).not.toHaveBeenCalled();
+    expect(state.updateLabels).not.toHaveBeenCalled();
+  });
+
+  it("posts no second comment when the cancel runs again", async () => {
+    parkedOnAPublishedQuestion();
+    const issueTracker = tracker();
+    const runRegistry = registry();
+
+    await cancel(runRegistry, issueTracker);
+    await cancel(runRegistry, issueTracker);
+
+    // The retired row is the token: the second attempt retires nothing, so it
+    // announces nothing, however many times the post-drain path runs.
+    expect(issueTracker.postComment).toHaveBeenCalledTimes(1);
+  });
+
+  it("posts no second comment when the tracker already carries this run's notice", async () => {
+    // The reply to the first post was lost after the tracker had written it.
+    parkedOnAPublishedQuestion();
+    const issueTracker = tracker({
+      findCommentByMarker: vi.fn().mockResolvedValue("https://jira.example/comment/1"),
+    });
+
+    await cancel(registry(), issueTracker);
+
+    expect(issueTracker.findCommentByMarker).toHaveBeenCalledWith(
+      "PROJ-1",
+      "AI workflow clarification closed: run-1",
+    );
+    expect(issueTracker.postComment).not.toHaveBeenCalled();
+    // The label is a separate promise to the reader and is still kept.
+    expect(state.updateLabels).toHaveBeenCalledTimes(1);
+  });
+
+  it("still cancels the run and still clears the label when the comment fails", async () => {
+    parkedOnAPublishedQuestion();
+    const issueTracker = tracker({
+      postComment: vi.fn().mockRejectedValue(new Error("jira 503")),
+    });
+
+    await expect(cancel(registry(), issueTracker)).resolves.toMatchObject({
+      outcome: "cancelled",
+    });
+
+    expect(state.updateLabels).toHaveBeenCalledTimes(1);
+    expect(state.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketKey: "PROJ-1" }),
+      "cancel_run_clarification_comment_unconfirmed",
+    );
+  });
+
+  it("still cancels the run and keeps the comment when the label change fails", async () => {
+    parkedOnAPublishedQuestion();
+    state.updateLabels.mockRejectedValue(new Error("jira 503"));
+    const issueTracker = tracker();
+
+    await expect(cancel(registry(), issueTracker)).resolves.toMatchObject({
+      outcome: "cancelled",
+    });
+
+    expect(issueTracker.postComment).toHaveBeenCalledTimes(1);
+    expect(state.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketKey: "PROJ-1" }),
+      "cancel_run_clarification_label_unconfirmed",
+    );
+  });
+
+  /**
+   * The three cancels nobody is watching, at the function all three call.
+   * Each caller's own suite proves it hands the notice to this function (an
+   * exact-object assertion there, so dropping it goes red); these prove what
+   * the notice then does, in the argument shape that caller actually uses.
+   */
+  describe("through cancelRunDetailed, for the paths that fire unattended", () => {
+    it("tells the ticket when a person drags it out of the column mid-question", async () => {
+      // handle-jira-webhook.ts: tracker, no column move (the park already moved
+      // the ticket to the backlog), the board's own Ai column in the notice.
+      parkedOnAPublishedQuestion();
+      const issueTracker = tracker();
+
+      await expect(cancelRunDetailed({
+        ticketKey: "PROJ-1",
+        target: { ownerToken: "owner-a", runId: "run-1" },
+        runRegistry: registry(),
+        issueTracker,
+        reason: "Ticket left the AI column (Robot lane → Done) via Jira webhook",
+        clarificationNotice: { aiColumnName: "Robot lane" },
+      })).resolves.toMatchObject({ cancelled: true });
+
+      expect(issueTracker.postComment).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(issueTracker.postComment).mock.calls[0]![1]).toContain('"Robot lane"');
+      expect(state.updateLabels).toHaveBeenCalledWith(
+        expect.objectContaining({ changes: { remove: ["needs-clarification"] } }),
+      );
+    });
+
+    it("tells the ticket when the stall watchdog kills a run that was waiting for an answer", async () => {
+      // run-stall-watchdog.ts: a column move and its own final fence as well.
+      parkedOnAPublishedQuestion();
+      const issueTracker = tracker();
+      const beforeRelease = vi.fn().mockResolvedValue(undefined);
+
+      await expect(cancelRunDetailed({
+        ticketKey: "PROJ-1",
+        target: { ownerToken: "owner-a", runId: "run-1" },
+        runRegistry: registry(),
+        issueTracker,
+        targetColumn: "Backlog",
+        reason: "Run engine stalled",
+        beforeRelease,
+        clarificationNotice: { aiColumnName: "Robot lane" },
+      })).resolves.toMatchObject({ cancelled: true });
+
+      expect(issueTracker.postComment).toHaveBeenCalledTimes(1);
+      expect(state.updateLabels).toHaveBeenCalledTimes(1);
+      // The notice lands before the fence that gives the claim up, so a fence
+      // that declines cannot be what swallows it.
+      expect(vi.mocked(issueTracker.postComment).mock.invocationCallOrder[0]!).toBeLessThan(
+        beforeRelease.mock.invocationCallOrder[0]!,
+      );
+    });
+
+    it("stays silent when the caller cannot name the configured column", async () => {
+      // The watchdog without an aiColumn, and the reconciler path whose ticket
+      // was deleted. Naming a column this deployment may not have is worse than
+      // saying nothing, so no notice means no comment and no label change.
+      parkedOnAPublishedQuestion();
+      const issueTracker = tracker();
+
+      await expect(cancelRunDetailed({
+        ticketKey: "PROJ-1",
+        target: { ownerToken: "owner-a", runId: "run-1" },
+        runRegistry: registry(),
+        issueTracker,
+        reason: "Run engine stalled",
+      })).resolves.toMatchObject({ cancelled: true });
+
+      expect(issueTracker.postComment).not.toHaveBeenCalled();
+      expect(state.updateLabels).not.toHaveBeenCalled();
+    });
+
+    it("stays silent when the cancelled run had published no question", async () => {
+      const issueTracker = tracker();
+
+      await expect(cancelRunDetailed({
+        ticketKey: "PROJ-1",
+        target: { ownerToken: "owner-a", runId: "run-1" },
+        runRegistry: registry(),
+        issueTracker,
+        reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+        clarificationNotice: { aiColumnName: "Robot lane" },
+      })).resolves.toMatchObject({ cancelled: true });
+
+      expect(issueTracker.postComment).not.toHaveBeenCalled();
+      expect(state.updateLabels).not.toHaveBeenCalled();
+    });
   });
 });
 

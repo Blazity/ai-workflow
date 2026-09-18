@@ -184,6 +184,13 @@ function throwForOutcome(
         "CONFLICT",
         "This clarification was answered, but the run could not be resumed and was stopped. Start a new run for this ticket to retry.",
       );
+    case "answer_unclear":
+      // NOTHING HAPPENED. The question is still pending, the run is still
+      // parked, and no delivery attempt was spent, so the same key may answer
+      // again with clearer words. The core's own sentence is handed back
+      // verbatim: it names what we read and what reply ends the exchange, and a
+      // second wording here would be a second story about one answer.
+      throw refused("VALIDATION_FAILED", outcome.confirm, true);
     case "ticket_gone":
       // The one outcome that changed state on its way to failing: the core
       // superseded the clarification and settled the run as blocked, so the key must

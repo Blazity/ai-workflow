@@ -115,6 +115,7 @@ import {
   sandboxLifetimeMs,
 } from "./execute.js";
 import { manifest as prepareWorkspaceManifest } from "./manifest.js";
+import { repositoryNotEnabledMessage } from "../../support/repository-access.js";
 // The three places a repository question ends up: the ticket comment a person
 // reads, the prompts the agent is given, and the ticket's memory file.
 import { formatClarificationQuestionsComment } from "../../support/clarification-comment-format.js";
@@ -1859,6 +1860,66 @@ describe("prepare_workspace execute", () => {
 
     expect(result.kind).toBe("execution_error");
     if (result.kind === "execution_error") expect(result.error.detail).toBe("pre-sandbox: step exploded");
+  });
+
+  it("puts a step's finished sentence in front of the person whole", async () => {
+    // The authorization refusal the step raises for a pinned repository the
+    // catalog withholds: one sentence naming what was refused, why, and the page
+    // that fixes it. Longer than the 160-character snippet cap, so as a mere
+    // `detail` it reached the person clipped from both ends with the repository
+    // in the elided middle, which is the shape production hit on
+    // wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF. The step says it is a finished sentence
+    // and the block leads with it.
+    const refusal = repositoryNotEnabledMessage("prepare", {
+      provider: "github",
+      repoPath: "blazity/ai-workflow",
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "halt",
+      outcome: "failed",
+      message: refusal,
+      cause: refusal,
+      messageStandsAlone: true,
+    });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null }));
+
+    expect(refusal.length).toBeGreaterThan(160);
+    expect(result.kind).toBe("execution_error");
+    if (result.kind !== "execution_error") return;
+    expect(result.error.message).toBe(refusal);
+    expect(result.error.message).not.toContain("[...]");
+    expect(result.error.message).toContain("github:blazity/ai-workflow");
+    // The operator's prefix stays on the detail and off the person's sentence.
+    expect(result.error.detail).toBe(`pre-sandbox: ${refusal}`);
+  });
+
+  it("still leads a composed halt with the category line and its cause in brackets", async () => {
+    // The opposite producer, and the reason the signal is a flag rather than a
+    // guess about the text: `incompleteCatalogMessage` composes step name, then
+    // the provider verdicts, then advice, so the reason is in the MIDDLE. It
+    // passes no `messageStandsAlone`, keeps the generic lead, and its verdicts
+    // ride behind it in parentheses, which is the AIW-254 behaviour.
+    const composed =
+      "Select repositories failed: repository listing for gitlab is unavailable " +
+      "(gitlab: GitLab projects list timed out after 15000ms), so the repository catalog was incomplete. " +
+      "No deterministic repository signal resolved the selection, and choosing from a partial catalog could pick the wrong repository. " +
+      "Retry once the provider recovers, or name the repository path in the ticket.";
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "halt",
+      outcome: "failed",
+      message: composed,
+      cause: "gitlab: GitLab projects list timed out after 15000ms",
+    });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null }));
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind !== "execution_error") return;
+    expect(result.error.message).toBe(
+      "The workspace environment could not complete this block." +
+        " (gitlab: GitLab projects list timed out after 15000ms)",
+    );
   });
 
   it("asks for a repository when none is selectable", async () => {

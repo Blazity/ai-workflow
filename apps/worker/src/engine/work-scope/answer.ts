@@ -8,6 +8,7 @@ import {
   foldPolishDiacritics,
   isRefusalAnswer,
   parseRepositoryExpansionAnswer,
+  refusalNamesOneOfSeveral,
   withoutQuotedQuestions,
   type ParsedRepositoryIdentity,
 } from "../repository-discovery/runner.js";
@@ -172,7 +173,21 @@ export function readRepositoryAnswer(
     // The one no that decides: a refusal that names no repository at all. It is
     // threaded to the question that asked it, so there is exactly one thing it
     // can be about, which is everything that question listed.
-    if (spelled === null && saysNothingToAttach(theirWords)) return { kind: "none" };
+    //
+    // UNLESS WHAT IT REFUSES IS ONE REPOSITORY AND THE QUESTION LISTED SEVERAL.
+    // "no, continue without it" under four choices is one person talking about
+    // one of them, and four permanent exclusions off those words is the decision
+    // nobody made. The word and the list contradict each other, which is the
+    // same reason a counting word is read against the count it means (A11l), and
+    // the reply is unreadable for it. The gate is the question's shape, never
+    // the channel, so the dashboard and the ticket read it identically.
+    if (
+      spelled === null &&
+      saysNothingToAttach(theirWords) &&
+      !refusalNamesOneOfSeveral(theirWords, input.askedKeys.length)
+    ) {
+      return { kind: "none" };
+    }
     // Every other no, wherever it sits and whatever else the reply says.
     // Working out what it attached to is the guess this reader no longer makes.
     return UNRECOGNISED;
@@ -236,7 +251,14 @@ export function answerNamesKeptRepositories(
     return true;
   }
   if (!saysNo(testimony)) return false;
-  return namesByBareName(testimony, input.keptKeys, input.catalogKeys);
+  // The same guard the other bare-name reader carries, and for the same
+  // sentence: "none of the docs mention it" would otherwise be answered with a
+  // paragraph about how a kept repository leaves this work, to somebody who
+  // asked for nothing of the sort.
+  return (
+    namesByBareName(testimony, input.keptKeys, input.catalogKeys) &&
+    refusalStandsBesideTheName(testimony, input.catalogKeys)
+  );
 }
 
 /**
@@ -291,14 +313,72 @@ export function answerSaysNoAndNamesARepository(
 ): boolean {
   const theirWords = withoutQuotedText(answer, input.askedQuestions);
   if (!/[a-z0-9]/iu.test(theirWords)) return false;
-  // A reply that is nothing but a refusal names nothing by definition, and it
-  // is not this: it decides, and the record keeps it.
-  if (saysNothingToAttach(theirWords)) return false;
   const testimony = whatThePersonNamed(theirWords, input.catalogKeys);
-  if (!saysNo(testimony)) return false;
   const spelled = namedRepositories(testimony, input.catalogKeys);
+  // A reply that is nothing but a refusal names nothing by definition, and it
+  // is not this. ASKED OF A REPLY THAT SPELLS OUT NO REPOSITORY, because the
+  // keyword rule reads "none, use github:acme/api" as a refusal whole: it opens
+  // with the word the question asks for, whatever follows it. That person named
+  // a repository, and "nothing in that answer named a repository this work
+  // should use" is the sentence that reads as nonsense to them, which is the
+  // failure this whole function exists to end.
+  if (spelled === null && saysNothingToAttach(theirWords)) return false;
+  if (!saysNo(testimony)) return false;
   if (spelled !== null && spelled !== "unresolved" && spelled.keys.length > 0) return true;
-  return namesByBareName(testimony, input.catalogKeys, input.catalogKeys);
+  return (
+    namesByBareName(testimony, input.catalogKeys, input.catalogKeys) &&
+    refusalStandsBesideTheName(testimony, input.catalogKeys)
+  );
+}
+
+/**
+ * Does a refusal in this reply really stand beside the repository it names?
+ *
+ * Asked only where the name is a BARE word, because that is where both halves of
+ * the sentence can be false at once. "none of the docs mention it" says no about
+ * nothing and names no repository: the word "none" quantifies a noun that
+ * happens to share a name with one, and the reply that person got back told them
+ * their answer named a repository AND said no about it, neither of which they
+ * had done, and then taught them a rule they had not broken.
+ *
+ * Two shapes count, and both are somebody writing about a repository: a phrase
+ * that is a refusal on its own standing beside the name ("no, just ops", "nie,
+ * tylko ops"), and a negation word standing directly in front of it ("not api,
+ * ops"). A negation anywhere else in a sentence is not this.
+ */
+function refusalStandsBesideTheName(testimony: string, catalogKeys: RepositoryKey[]): boolean {
+  // The same two phrase breaks the refusal reader splits a part on. A phrase of
+  // their own words, so the author tolerance is off for the reason
+  // `saysNothingToAttach` gives.
+  const phrases = testimony.split(/[\n,]/);
+  if (
+    phrases.some(
+      (phrase) =>
+        /[a-z0-9]/i.test(phrase) && isRefusalAnswer(phrase, { authorComposed: false }),
+    )
+  ) {
+    return true;
+  }
+  return phrases.some((phrase) => {
+    const tokens = phrase
+      .split(/[\s,]+/)
+      .map((token) => foldPolishDiacritics(normalizeToken(token)).toLowerCase())
+      .filter((token) => token.length > 0);
+    const namesOne = tokens.some(
+      (token) => catalogKeys.filter((key) => lastPathSegment(key) === token).length === 1,
+    );
+    if (!namesOne) return false;
+    // A negation in the same phrase as the name, and not one QUANTIFYING the
+    // words after it. "none of the docs mention it" is a sentence about what the
+    // docs say; "nie ruszajcie web" and "web is not needed" are somebody
+    // refusing a repository. The two read identically token by token until this
+    // asks what the negation governs, and "of" (or its Polish "z") is what says
+    // it governs a noun rather than the work.
+    return tokens.some(
+      (token, index) =>
+        NEGATION_WORDS.test(token) && !["of", "z"].includes(tokens[index + 1] ?? ""),
+    );
+  });
 }
 
 /** The repositories an answer spells out. Null when it spells out none;
@@ -498,7 +578,14 @@ export function proseOf(text: string): string {
  *  asked once more (A34). */
 function saysNothingToAttach(answer: string): boolean {
   if (!/[a-z0-9]/i.test(answer)) return false;
-  return isRefusalAnswer(answer);
+  // THE WORDS THAT REACH THIS READER ARE THE PERSON'S OWN. Whoever composed an
+  // answer out of ticket comments takes the author line off before any rule
+  // here runs (`withoutComposedAuthors`, and only for that channel), so a colon
+  // in what is left is a colon somebody typed. Read as an author line it was a
+  // decision made out of punctuation: "api: none", typed into the answer box,
+  // was read as a bare "none" and declined every repository the question
+  // listed.
+  return isRefusalAnswer(answer, { authorComposed: false });
 }
 
 function readRepositories(repositoryKeys: RepositoryKey[]): WorkScopeQuestionAnswer {

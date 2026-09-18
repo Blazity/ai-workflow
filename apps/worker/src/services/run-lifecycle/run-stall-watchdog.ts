@@ -207,7 +207,7 @@ interface StalledRunPersistence {
   markFailure(runId: string, reason: string): Promise<boolean>;
   withdraw(
     input: Omit<Parameters<typeof withdrawTicketFromAiForRun>[0], "db">,
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 export function reconcileStalledRun(
@@ -312,15 +312,15 @@ async function reconcileStalledRunWithPersistence(
 
   const result: CancelRunResult =
     followsJiraTicket
-      ? await cancelRunDetailed(
+      ? await cancelRunDetailed({
           ticketKey,
           target,
           runRegistry,
-          input.issueTracker,
-          moveTarget,
-          input.onSubjectReleased,
+          ...(input.issueTracker ? { issueTracker: input.issueTracker } : {}),
+          ...(moveTarget ? { targetColumn: moveTarget } : {}),
+          ...(input.onSubjectReleased ? { onReleased: input.onSubjectReleased } : {}),
           reason,
-          async (owner) => {
+          beforeRelease: async (owner) => {
             await persistence.withdraw({
               issueTracker: input.issueTracker!,
               ticketKey,
@@ -330,7 +330,15 @@ async function reconcileStalledRunWithPersistence(
               requiredOwnerState: "cancelling",
             });
           },
-        )
+          // Only when the caller actually named the deployment's column. The
+          // "AI" fallback above is a literal this file invented for a move
+          // target; putting it in a comment a person reads would send them to a
+          // board that may not exist, so a watchdog without the real name kills
+          // the run silently, exactly as it did before.
+          ...(input.aiColumn
+            ? { clarificationNotice: { aiColumnName: input.aiColumn } }
+            : {}),
+        })
       : await cancelSubjectRunDetailed(
           entry.subjectKey,
           target,

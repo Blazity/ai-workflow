@@ -5,7 +5,10 @@ import { activeRuns, workflowRuns } from "../schema.js";
 import { createTestDb } from "../test-db.js";
 import { ActiveRunOwnerError } from "../../engine/support/run-control-errors.js";
 import { getHookClarification, prepareHookClarification, publishHookClarification } from "../../db/repositories/clarification-hooks.js";
-import { reconcileClarificationPickupState } from "./clarifications.js";
+import {
+  reconcileClarificationPickupState,
+  tombstoneClarificationCancellation,
+} from "./clarifications.js";
 
 const TICKET = "AWT-1";
 const SUBJECT = `ticket:jira:${TICKET}`;
@@ -127,5 +130,71 @@ describe("reconcileClarificationPickupState", () => {
       }),
     ).rejects.toBeInstanceOf(ActiveRunOwnerError);
     expect(await runStatus(db, "run-parked")).toBe("awaiting");
+  });
+});
+
+/**
+ * The cancel path announces a retired question on the ticket, and decides
+ * whether to from what this function reports. Both flags are therefore
+ * load-bearing prose about a human: "a question this person was shown", and
+ * "this attempt is the one that closed it".
+ */
+describe("tombstoneClarificationCancellation", () => {
+  it("reports a published question as published, so the cancel can close it on the ticket", async () => {
+    const db = await createTestDb();
+    await parkPredecessor(db, "run-parked");
+
+    const result = await tombstoneClarificationCancellation(db, {
+      subjectKey: SUBJECT,
+      ownerToken: owner.ownerToken,
+      runId: "run-parked",
+    });
+
+    expect(result).toMatchObject({ matched: true, retiredPublished: true });
+  });
+
+  it("reports a question that never reached the ticket as unpublished", async () => {
+    // Cancelled during the snapshot, between the row and publishHookClarification:
+    // no label, no column move and no questions comment ever happened, so a
+    // comment telling a person their question is closed would be about a
+    // question they were never asked.
+    const db = await createTestDb();
+    await prepareHookClarification(db, {
+      ticketKey: TICKET,
+      subjectKey: SUBJECT,
+      runId: "run-preparing",
+      blockId: "question",
+      definitionId: 1,
+      definitionVersion: 4,
+      questions: ["Which repository?"],
+    });
+
+    const result = await tombstoneClarificationCancellation(db, {
+      subjectKey: SUBJECT,
+      ownerToken: owner.ownerToken,
+      runId: "run-preparing",
+    });
+
+    expect(result).toMatchObject({ matched: true, retiredPublished: false });
+  });
+
+  it("retires a question once, so a repeated cancel has nothing left to announce", async () => {
+    const db = await createTestDb();
+    const parked = await parkPredecessor(db, "run-parked");
+
+    const first = await tombstoneClarificationCancellation(db, {
+      subjectKey: SUBJECT,
+      ownerToken: owner.ownerToken,
+      runId: "run-parked",
+    });
+    const second = await tombstoneClarificationCancellation(db, {
+      subjectKey: SUBJECT,
+      ownerToken: owner.ownerToken,
+      runId: "run-parked",
+    });
+
+    expect(first).toMatchObject({ matched: true, retiredPublished: true });
+    expect(second).toMatchObject({ matched: false, retiredPublished: false });
+    expect((await getHookClarification(db, parked))?.status).toBe("superseded");
   });
 });

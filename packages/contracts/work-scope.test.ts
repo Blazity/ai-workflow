@@ -59,6 +59,7 @@ describe("work scope vocabulary", () => {
     expect(WORK_SCOPE_REFUSAL_REASONS).toEqual([
       "outside_catalog",
       "outside_policy",
+      "unusable",
       "excluded",
       "unavailable",
       "workspace_cap",

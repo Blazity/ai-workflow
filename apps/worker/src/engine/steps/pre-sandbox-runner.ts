@@ -119,6 +119,9 @@ export async function executePreSandboxPhase(
           outcome: result.outcome,
           message: result.message,
           ...(result.cause ? { cause: result.cause } : {}),
+          ...(result.messageStandsAlone
+            ? { messageStandsAlone: result.messageStandsAlone }
+            : {}),
           questions: result.questions,
           promptAdditions,
           selectedRepositories,

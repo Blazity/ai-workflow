@@ -48,6 +48,19 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
           statusMessage:
             "This clarification was answered, but the run could not be resumed and was stopped. Start a new run for this ticket to retry.",
         });
+      case "answer_unclear":
+        // 422 rather than 400: the request was perfectly well formed and the
+        // words may be too, we simply could not tell what they decided. Nothing
+        // was recorded, the question is still pending and the run is still
+        // parked, so the same box takes another answer.
+        //
+        // The core's own sentence goes back verbatim. It names what we read and
+        // the one reply that ends the exchange, and it is the same sentence the
+        // ticket carries, so a person who reads both meets one story.
+        throw createError({
+          statusCode: 422,
+          statusMessage: outcome.confirm,
+        });
       case "ticket_gone":
         throw createError({ statusCode: 410, statusMessage: "ticket_gone" });
       case "ticket_transition_failed":

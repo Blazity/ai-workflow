@@ -148,7 +148,7 @@ function warned(): string[] {
 
 function executeFinalFence() {
   mocks.cancelRunDetailed.mockImplementationOnce(async (...args: unknown[]) => {
-    const fence = args[7];
+    const fence = (args[0] as { beforeRelease?: unknown }).beforeRelease;
     if (typeof fence !== "function") throw new Error("missing final fence");
     try {
       await fence({
@@ -241,16 +241,16 @@ describe("reconcileStalledRun", () => {
     expect(row.statusReason).toContain("32 minutes");
     expect(row.statusReason).toContain("attempt 3");
     expect(row.completedAt).not.toBeNull();
-    expect(mocks.cancelRunDetailed).toHaveBeenCalledWith(
-      "UP-4765",
-      { ownerToken: "owner-a", runId: "wrun_stalled" },
-      registry,
+    expect(mocks.cancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "UP-4765",
+      target: { ownerToken: "owner-a", runId: "wrun_stalled" },
+      runRegistry: registry,
       issueTracker,
-      "Backlog",
+      targetColumn: "Backlog",
       onReleased,
-      row.statusReason,
-      expect.any(Function),
-    );
+      reason: row.statusReason,
+      beforeRelease: expect.any(Function),
+    });
     expect(mocks.cancelSubjectRunDetailed).not.toHaveBeenCalled();
     expect(warned()).toEqual(
       expect.arrayContaining([
@@ -273,16 +273,15 @@ describe("reconcileStalledRun", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(mocks.cancelRunDetailed).toHaveBeenCalledWith(
-      "UP-4765",
-      expect.anything(),
-      registry,
+    expect(mocks.cancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "UP-4765",
+      target: expect.anything(),
+      runRegistry: registry,
       issueTracker,
-      "Backlog",
-      undefined,
-      expect.stringContaining("Run engine stalled"),
-      expect.any(Function),
-    );
+      targetColumn: "Backlog",
+      reason: expect.stringContaining("Run engine stalled"),
+      beforeRelease: expect.any(Function),
+    });
     expect(mocks.info.mock.calls.map((call) => call[1] as string)).toContain(
       "stall_watchdog_preserved_ticket_destination",
     );
@@ -478,16 +477,15 @@ describe("reconcileStalledRun", () => {
       ).resolves.toBe(true);
 
       expect((await runRow()).status).toBe("failed");
-      expect(mocks.cancelRunDetailed).toHaveBeenCalledWith(
-        entry.ticketKey,
-        expect.anything(),
-        registry,
+      expect(mocks.cancelRunDetailed).toHaveBeenCalledWith({
+        ticketKey: entry.ticketKey,
+        target: expect.anything(),
+        runRegistry: registry,
         issueTracker,
-        "Backlog",
-        undefined,
-        expect.stringContaining("Run engine stalled"),
-        expect.any(Function),
-      );
+        targetColumn: "Backlog",
+        reason: expect.stringContaining("Run engine stalled"),
+        beforeRelease: expect.any(Function),
+      });
       expect(fetchTicket).toHaveBeenCalledTimes(2);
       expect(moveTicket).not.toHaveBeenCalled();
       expect(assertOwner).toHaveBeenCalledWith(
