@@ -445,10 +445,17 @@ export function formatAnswerNotRecordedComment(
   // them. Saying only the first half reads as a decision this person made for
   // good, which is the opposite of what happened.
   const listedRepositories = question.listedCount > 0;
+  // Singular where the question was about one repository: "the repositories"
+  // and "them" about a single name reads as if more than one had been asked
+  // about.
+  const one = question.listedCount === 1;
   const nowThisRun =
     reason === "no_words" && listedRepositories
-      ? "Your answer reached the run, which is continuing without the repositories the question asked about." +
-        " Nothing was recorded about them, so a later run may use them and may ask about them again."
+      ? one
+        ? "Your answer reached the run, which is continuing without the repository the question asked about." +
+          " Nothing was recorded about it, so a later run may use it and may ask about it again."
+        : "Your answer reached the run, which is continuing without the repositories the question asked about." +
+          " Nothing was recorded about them, so a later run may use them and may ask about them again."
       : "Your answer reached the run, which is continuing.";
 
   // The route that works, written from what the next run actually reads. The
@@ -456,7 +463,6 @@ export function formatAnswerNotRecordedComment(
   // and none of them is one a written path could reach. Singular where the
   // question was about one repository: "one of their paths" about a single
   // repository reads as if the person had missed some.
-  const one = question.listedCount === 1;
   const namingWorks = listedRepositories
     ? question.aLaterRunCanPickThemUp
       ? question.commentPath === "too_many_open"
@@ -629,6 +635,13 @@ export function formatAnswerDelegatedComment(input: {
 }): string {
   const { taken, notTaken } = input;
   const it = notTaken.length === 1 ? "it" : "them";
+  // Of what is left open, only the part this deployment's catalog still
+  // enables is one this run's agent or a later run could actually take: one
+  // it does not enable stays left open too, but no run can use it until
+  // somebody enables it, which is what the separate per-key sentence below
+  // says. Claiming "may still take" for that one would be false.
+  const usableLeftOpen = notTaken.filter((key) => !input.notEnabled.includes(key));
+  const usableIt = usableLeftOpen.length === 1 ? "it" : "them";
   // Both empty only when a person had already selected or excluded every
   // repository the question listed (`repositoriesADelegationTakes` leaves
   // those alone), so there was nothing left to choose among.
@@ -644,7 +657,9 @@ export function formatAnswerDelegatedComment(input: {
     notTaken.length === 0
       ? undefined
       : taken.length > 0
-        ? `It left ${notTaken.join(", ")} open: nothing is recorded about ${it}, so this run's agent or a later run may still take ${it} if the work needs ${it}.`
+        ? usableLeftOpen.length > 0
+          ? `It left ${usableLeftOpen.join(", ")} open: nothing is recorded about ${usableIt}, so this run's agent or a later run may still take ${usableIt} if the work needs ${usableIt}.`
+          : undefined
         : `Nothing is recorded about ${it}, so a later run may ask about ${it} again.`;
   const commentPathShut =
     input.commentPath === "too_many_open" && notTaken.length > 0

@@ -525,6 +525,44 @@ describe("clampBothEnds", () => {
     expect(out).toContain(GIT_CLONE_403_VERDICT);
     expect(out).toContain(PROD_DIAGNOSTIC_ID);
   });
+
+  // The marker itself is " [...] ", 7 characters. Below and at that limit
+  // there is no budget left for real text once the marker is paid for, so the
+  // old arithmetic went negative and the result grew past maxLength instead
+  // of shrinking to it (production shape: a limit this tight only ever comes
+  // from a caller-supplied cap, but nothing stopped one from being this
+  // small).
+  const MARKER_LENGTH = 7;
+  const LONG_TEXT = "The requested URL returned error: 403 while fetching github:acme/api.";
+
+  it("cuts to a plain prefix with no marker when maxLength is 0", () => {
+    const out = clampBothEnds(LONG_TEXT, 0);
+
+    expect(out).toBe("");
+    expect(out.length).toBeLessThanOrEqual(0);
+  });
+
+  it("cuts to a plain prefix with no marker when maxLength is 1", () => {
+    const out = clampBothEnds(LONG_TEXT, 1);
+
+    expect(out).toBe(LONG_TEXT.slice(0, 1));
+    expect(out).not.toContain("[...]");
+    expect(out.length).toBeLessThanOrEqual(1);
+  });
+
+  it("cuts to a plain prefix with no marker when maxLength equals the elision marker's length", () => {
+    const out = clampBothEnds(LONG_TEXT, MARKER_LENGTH);
+
+    expect(out).toBe(LONG_TEXT.slice(0, MARKER_LENGTH));
+    expect(out).not.toContain("[...]");
+    expect(out.length).toBeLessThanOrEqual(MARKER_LENGTH);
+  });
+
+  it("stays within maxLength one past the elision marker's length, where the marker returns", () => {
+    const out = clampBothEnds(LONG_TEXT, MARKER_LENGTH + 1);
+
+    expect(out.length).toBeLessThanOrEqual(MARKER_LENGTH + 1);
+  });
 });
 
 describe("operatorFailureDetail", () => {

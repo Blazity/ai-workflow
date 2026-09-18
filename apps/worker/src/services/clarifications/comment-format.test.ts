@@ -514,6 +514,22 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     expect(body).not.toContain("is not selected on it");
   });
 
+  it("uses singular wording for a wordless answer when the question named exactly one repository", () => {
+    // The same fact as above, said about one repository: "the repositories"
+    // and "them" about a single name reads as if more than one had been
+    // asked about.
+    const body = formatAnswerNotRecordedComment("no_words", {
+      listedCount: 1,
+      aLaterRunCanPickThemUp: true,
+      commentPath: "unproven",
+    });
+
+    expect(body).toContain(
+      "continuing without the repository the question asked about." +
+        " Nothing was recorded about it, so a later run may use it and may ask about it again.",
+    );
+  });
+
   it("does not send a person to write a path for a repository no run could read back", () => {
     // The run itself put these in front of the person: a question may list a
     // repository the catalog does not enable or cannot serve. The next run
@@ -708,6 +724,43 @@ describe("formatAnswerDelegatedComment", () => {
         " Nothing is recorded about it, so a later run may ask about it again." +
         ` ${API} is not enabled on the Repositories page. Somebody with access to that page can enable it, and until then no run can use it.` +
         " To change what this work uses, select or remove repositories in this work's repository list, through the work scope API or the work_scope.edit tool.",
+    );
+  });
+
+  // A left-open repository this deployment does not enable cannot be taken by
+  // any run, this one's agent included, until somebody enables it: the "may
+  // still take it" claim would be false for it, so it is left out of that
+  // claim and gets only the separate enabling sentence.
+  it("does not claim a later run may still take a left-open repository this deployment does not enable", () => {
+    const body = formatAnswerDelegatedComment({
+      taken: [API],
+      notTaken: [OPS],
+      notEnabled: [OPS],
+      commentPath: "unproven",
+    });
+
+    expect(body).not.toContain("may still take");
+    expect(body).toContain(
+      `${OPS} is not enabled on the Repositories page. Somebody with access to that page can enable it, and until then no run can use it.`,
+    );
+  });
+
+  it("splits a mixed left-open list: the usable repositories may still be taken, the rest wait on enabling", () => {
+    const body = formatAnswerDelegatedComment({
+      taken: [API],
+      notTaken: [WEB, DOCS, OPS],
+      notEnabled: [OPS],
+      commentPath: "unproven",
+    });
+
+    expect(body).toContain(
+      `It left ${WEB}, ${DOCS} open: nothing is recorded about them, so this run's agent or a later run may still take them if the work needs them.`,
+    );
+    // OPS is left open too, but never as something this run's agent or a
+    // later run may take.
+    expect(body).not.toContain(`${OPS} open`);
+    expect(body).toContain(
+      `${OPS} is not enabled on the Repositories page. Somebody with access to that page can enable it, and until then no run can use it.`,
     );
   });
 
