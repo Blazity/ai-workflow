@@ -102,7 +102,7 @@ interface ReconcilePersistence {
   retireClarification?: (row: HookClarificationRow) => Promise<void>;
   withdrawTicket(
     input: Omit<Parameters<typeof withdrawTicketFromAiForRun>[0], "db">,
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 function createReconcilePersistence(

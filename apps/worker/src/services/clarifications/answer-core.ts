@@ -159,7 +159,7 @@ interface AnswerPersistence extends RepositoryAnswerPersistence {
     owner: { subjectKey: string; ownerToken: string; runId: string };
   }): Promise<void>;
   /** Move the ticket out of the AI column only if a fresh read still finds it
-   *  there, behind the same owner fence. */
+   *  there, behind the same owner fence, and say whether this call moved it. */
   withdrawTicketFromAi(input: {
     issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
     ticketKey: string;
@@ -167,7 +167,7 @@ interface AnswerPersistence extends RepositoryAnswerPersistence {
     target: IssueTrackerMoveTarget;
     owner: { subjectKey: string; ownerToken: string; runId: string };
     requiredOwnerState: "bound";
-  }): Promise<void>;
+  }): Promise<boolean>;
   answer(
     id: string,
     answer: string,
@@ -273,10 +273,10 @@ async function moveTicketToAiColumn(input: {
  * answer was not read, so a failure here is logged and the note says nothing
  * about the column.
  *
- * WHETHER IT MOVED, not whether the call returned. The withdraw reads the
- * ticket again inside the fence and quietly leaves alone one that has already
- * left the AI column (a person moved it on in the meantime), so the only proof
- * that this delivery put it in the backlog is that it asked the tracker to.
+ * WHETHER IT MOVED, as the withdraw reports it, rather than whether it
+ * returned. It reads the ticket again inside the fence and quietly leaves alone
+ * one that has already left the AI column (a person moved it on in the
+ * meantime), and the note must not claim a move that did not happen.
  */
 async function withdrawTicketWhileQuestionWaits(input: {
   persistence: AnswerPersistence;
@@ -286,7 +286,6 @@ async function withdrawTicketWhileQuestionWaits(input: {
   columns: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
 }): Promise<boolean> {
   const { ticketKey, row, columns } = input;
-  let moved = false;
   try {
     const owner = await input.persistence.findBoundOwner({
       subjectKey: row.subjectKey,
@@ -299,14 +298,8 @@ async function withdrawTicketWhileQuestionWaits(input: {
       );
       return false;
     }
-    await input.persistence.withdrawTicketFromAi({
-      issueTracker: {
-        fetchTicket: (id, options) => input.issueTracker.fetchTicket(id, options),
-        moveTicket: (id, target) => {
-          moved = true;
-          return input.issueTracker.moveTicket(id, target);
-        },
-      },
+    return await input.persistence.withdrawTicketFromAi({
+      issueTracker: input.issueTracker,
       ticketKey,
       aiColumn: columns.COLUMN_AI,
       target: env.JIRA_BACKLOG_TRANSITION_ID
@@ -322,7 +315,6 @@ async function withdrawTicketWhileQuestionWaits(input: {
     );
     return false;
   }
-  return moved;
 }
 
 /**
