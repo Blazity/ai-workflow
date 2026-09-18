@@ -14,7 +14,9 @@
       "entry": [
         "apps/worker/src/engine/blocks/*/manifest.ts",
         "apps/worker/src/engine/blocks/*/execute.ts",
-        "docs/research/2026-09-09-import-graph.mjs"
+        "docs/research/2026-09-09-import-graph.mjs",
+        ".claude/hooks/context-budget-guard.mjs",
+        ".codex/hooks/context-budget-guard.mjs"
       ]
     },
     "apps/dashboard": {
