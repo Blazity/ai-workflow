@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunDetail, RunStep } from "@shared/contracts";
+import { MESSAGE_MAX_LENGTH } from "@shared/workflow-graph";
 
 import { sanitizeRunDetailForResponse } from "./sanitize-run-detail.js";
 
@@ -185,13 +186,25 @@ describe("sanitizeRunDetailForResponse", () => {
     // because the extraction reads the sanitized message, where the clamp has
     // elided the middle. Reading normalized.message would still find it.
     const id = "AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1";
-    const buried = `Publish failed. ${"pad ".repeat(60)}Diagnostic ID: ${id} ${"trailing noise ".repeat(20)}`;
+    // PADDED FROM THE BOUND, NOT FROM A NUMBER THAT USED TO EXCEED IT. This
+    // fixture was written as a fixed 60 words of padding, which cleared the
+    // bound of the day; raising that bound left the message unclamped, so the
+    // id survived, and the test stopped exercising elision at all while still
+    // reading as a test about it. Deriving both halves from the constant means
+    // the next person to move the bound moves this with it.
+    const pad = "pad ".repeat(Math.ceil(MESSAGE_MAX_LENGTH / 4));
+    const buried = `Publish failed. ${pad}Diagnostic ID: ${id} ${pad}`;
     const sanitized = sanitizeRunDetailForResponse({
       run: { ...run, error: { message: buried } },
       steps: [],
     });
 
     expect(buried).toContain(id);
+    // The precondition this test rests on, asserted rather than assumed: the
+    // message really was clamped. Without it the two assertions below can both
+    // pass on a message nothing ever elided.
+    expect(buried.length).toBeGreaterThan(MESSAGE_MAX_LENGTH);
+    expect(sanitized.run.error?.message?.length ?? 0).toBeLessThanOrEqual(MESSAGE_MAX_LENGTH);
     expect(sanitized.run.error?.message).not.toContain(id);
     expect(sanitized.run.error?.code).toBeUndefined();
   });

@@ -903,8 +903,33 @@ function theModelsWords(rationale: string): string {
 }
 
 /** Who decided, as a sentence names them. */
+/**
+ * Longest actor label a refusal sentence prints.
+ *
+ * A DISPLAY BOUND, NOT A VALIDATION RULE, and the distinction is the whole
+ * reason it lives here. `workScopeActorSchema` puts no maximum on `actorLabel`
+ * and must not grow one: entries are already stored, so a `.max()` added now
+ * would make a read of an existing row throw, and a record that cannot be read
+ * is worse than a sentence that is long.
+ *
+ * It is also what makes the sizing claim on MESSAGE_MAX_LENGTH
+ * (packages/workflow-graph/failure-message.ts) true rather than nearly true.
+ * That bound is measured against three repositories, and the label appears once
+ * per repository, so an unbounded label is an unbounded message however few
+ * repositories there are.
+ *
+ * 60 clears every real display name with room to spare: a double-barrelled name
+ * plus a team suffix ("Aleksandra Kowalska-Nowakowska (Platform Engineering)")
+ * is 57. A label longer than that is cut with a trailing ellipsis rather than
+ * silently, because a name shortened without a mark is a different name, and the
+ * sentence is telling somebody whose decision they would be revisiting.
+ */
+const ACTOR_LABEL_MAX_LENGTH = 60;
+
 function actorLabel(actor: WorkScopeActor): string {
-  return actor.kind === "person" ? actor.actorLabel : `run ${actor.runId}`;
+  const label = actor.kind === "person" ? actor.actorLabel : `run ${actor.runId}`;
+  if (label.length <= ACTOR_LABEL_MAX_LENGTH) return label;
+  return `${label.slice(0, ACTOR_LABEL_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
 /** The day, as a sentence says it. The record stores an instant, and a person

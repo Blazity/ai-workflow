@@ -8,7 +8,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { WorkScopeAskedRepository } from "@shared/contracts";
+import type { WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
 
 /** One human question suspended inside its asking Workflow run. */
 export const clarificationRequests = pgTable(
@@ -33,6 +33,19 @@ export const clarificationRequests = pgTable(
     publishedAt: timestamp("published_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     answer: text("answer"),
+    /**
+     * HOW THOSE WORDS WERE READ, decided once when the answer arrived.
+     *
+     * The record and the resumed run used to read `answer` separately and reach
+     * opposite conclusions about the same sentence. This is the single reading
+     * both now consume, written in the same statement as the words it reads, so
+     * a row can never hold an answer nobody has read.
+     *
+     * Null on every row answered before this column existed, and on every
+     * question that was not about repositories. Both mean the same thing to a
+     * reader: there is nothing stored here, fall back to what you did before.
+     */
+    answerReading: jsonb("answer_reading").$type<WorkScopeAnswerReading>(),
     answeredById: text("answered_by_id"),
     answeredByLabel: text("answered_by_label"),
     answeredAt: timestamp("answered_at", { withTimezone: true }),

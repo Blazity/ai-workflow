@@ -152,6 +152,47 @@ export function formatAlreadyAnsweredComment(input: { answeredByLabel: string })
 }
 
 /**
+ * Line the cancellation comment below carries verbatim, so a tracker that can
+ * search its own comments (findCommentByMarker) recognises one this deployment
+ * already posted and does not post a second. Per RUN, not per ticket: a later
+ * run that asks its own questions and is cancelled has its own silence to
+ * break, and suppressing that would be the same defect one ticket further on.
+ */
+export function clarificationCancelledCommentMarker(runId: string): string {
+  return `AI workflow clarification closed: ${runId}`;
+}
+
+/**
+ * The counterpart of formatClarificationQuestionsComment, posted when the run
+ * that asked those questions is cancelled.
+ *
+ * The questions comment is the only thing on the ticket that says a question is
+ * open, and the only thing that invited an answer here, so the ticket is where
+ * the question has to be closed too. Without this a cancelled park leaves a
+ * question that reads as open for its full week, and an answer written to it
+ * reaches nobody.
+ *
+ * It deliberately promises nothing about an answer already written. The run
+ * that asked is gone, its clarification row is retired, and the next run reads
+ * none of it as an answer, so the one sentence a person needs is that no answer
+ * can land any more.
+ */
+export function formatClarificationCancelledComment(input: {
+  runId: string;
+  aiColumnName: string;
+}): string {
+  return [
+    "The AI workflow run that asked for clarification on this ticket was stopped, so its questions are no longer open.",
+    "No answer to them can be delivered any more, including one already written on this ticket.",
+    [
+      "What you can do:",
+      `- Move this ticket back to the "${input.aiColumnName}" column. That starts a new run, which works the ticket from scratch and asks again if it still needs to know.`,
+    ].join("\n"),
+    clarificationCancelledCommentMarker(input.runId),
+  ].join("\n\n");
+}
+
+/**
  * Every way an answer that reached the run can leave no repository decision
  * behind it, each with the sentence that explains it to the person who wrote it.
  *
@@ -304,9 +345,21 @@ export function aLaterRunCanPickUpAskedRepositories(
  * does. A full repository path written in any comment here is read by the NEXT
  * run, because the path matcher takes the whole ticket including people's
  * comments (`ticketText` in `engine/pre-sandbox/steps/repo-selection.ts`, which
- * leaves out only our own). And a refusal has no such route at all: nothing
- * written on a ticket records "none", so the only honest thing to say about
- * declining is that the question comes back and answering it then records it.
+ * leaves out only our own). And a refusal has one route, which is the question
+ * itself: a comment IS how the ticket answers a question that is still open, and
+ * "none" written there declines every repository it listed, entry and all
+ * (A7, A17d). What has no route is a refusal written under a question already
+ * answered, which is when this comment is posted, so that is what the sentence
+ * says. It used to say that nothing written on this ticket can record a refusal,
+ * which was false the moment the words left the sentence: this same delivery
+ * posts `formatAnswerDeclinedComment` on this same ticket to tell somebody their
+ * comment declined four repositories.
+ *
+ * AND THE ONE THING A COMMENT CANNOT DO, said beside it, because the two look
+ * identical to whoever writes them: a bare "no" is not read as an answer to our
+ * question, since nothing threads a comment to it and the same word may be about
+ * the comment above ours (A8). The word the question teaches is the word that
+ * works, on this channel and on the two that type into a box.
  *
  * THE ONE PERSON THE PATH ROUTE IS FALSE FOR. "We could not read a repository
  * out of that" is two cases, and the remedy is only true for one of them. A
@@ -408,7 +461,7 @@ export function formatAnswerNotRecordedComment(
   // The route that does not exist, said plainly instead of implied. Only worth
   // saying where the question offered repositories to decline.
   const decliningHasNoShortcut =
-    'Nothing written on this ticket can record a refusal, so to leave them out, answer "none" the next time the question is asked.';
+    'A refusal written under this question now records nothing, because it is already answered. When the question comes back, answering "none" declines every repository it lists; a bare "no" in a comment does not, because nothing ties a comment to the question it was meant for.';
   const next: Record<AnswerNotRecordedReason, string> = {
     several_authors: `${ASKED_AGAIN_ON_A_LATER_RUN} ${ONE_PERSON_ANSWERING_IT} ${namingWorks}`,
     evidence_gone: `${ASKED_AGAIN_ON_A_LATER_RUN} ${ONE_PERSON_ANSWERING_IT} ${namingWorks}`,
@@ -473,7 +526,125 @@ export function formatAnswerDeclinedComment(repositoryKeys: readonly string[]): 
   const them = repositoryKeys.length === 1 ? "it" : "them";
   return [
     `Your answer was read as declining ${repositoryKeys.join(", ")}, which the question listed, so this work is recorded as leaving ${them} out.`,
-    `To bring ${repositoryKeys.length === 1 ? "it" : "one of them"} back, select it in this work's repository list, through the work scope API or the work_scope.edit tool; a repository this deployment does not enable has to be enabled on the repositories screen first, or that selection is refused.`,
+    theWayBackIntoTheWork(repositoryKeys.length),
+  ].join(" ");
+}
+
+/** The one way back, written once, because a person meeting it after a decline
+ *  and a person meeting it after an answer that named something else are being
+ *  told the same thing and a second wording would read as a second rule. */
+function theWayBackIntoTheWork(count: number): string {
+  return `To bring ${count === 1 ? "it" : "one of them"} back, select it in this work's repository list, through the work scope API or the work_scope.edit tool; a repository this deployment does not enable has to be enabled on the repositories screen first, or that selection is refused.`;
+}
+
+/**
+ * WHAT WE COULD NOT ACT ON, SAID OUT LOUD.
+ *
+ * A person answers "api and web" to a question that only offered api. Their
+ * decision about api is perfectly clear and is recorded; web is not, because a
+ * reading may never widen what was asked, and the keys the question put in
+ * front of somebody are the only ones that become a decision.
+ *
+ * WITHOUT THIS SENTENCE THAT IS THE SYSTEM QUIETLY DOING HALF THE JOB. They
+ * named two repositories because they believe both are needed, the run works on
+ * one of them and finishes green, and they find out when the pull request is
+ * missing the other half, with nothing anywhere saying why. That is the exact
+ * shape of the failure this whole path exists to end, so the half we could not
+ * act on is named rather than swallowed.
+ *
+ * WHAT IT IS NOT is a second question. The part they answered clearly stands,
+ * the run carries on, and this is a note beside it; turning the whole answer
+ * unclear over an extra name would throw away a decision they made perfectly
+ * well and ask them the same thing again.
+ *
+ * The names are the reply's own words, already on the ticket where that person
+ * wrote them, bounded and sanitised by the reading before they get here. They
+ * are told, never recorded.
+ */
+export function formatAnswerNotOfferedComment(input: {
+  /** The names the reply pointed at that the question never offered. */
+  names: readonly string[];
+  /** The repository keys the question DID offer. */
+  askedKeys: readonly string[];
+}): string {
+  const them = input.names.length === 1 ? "it" : "them";
+  return [
+    `Your answer also named ${input.names.join(", ")}.`,
+    `This question was only about ${input.askedKeys.join(", ")}, so ${them} ${input.names.length === 1 ? "was" : "were"} not acted on here and nothing about ${them} was recorded.`,
+    `To add ${input.names.length === 1 ? "it" : "one of them"} to this work, select it in this work's repository list, through the work scope API or the work_scope.edit tool; a repository this deployment does not enable has to be enabled on the repositories screen first.`,
+  ].join(" ");
+}
+
+/**
+ * WHAT AN ANSWER NOBODY COULD READ IS TOLD, and it is the only sentence on this
+ * path that asks for something rather than reporting something.
+ *
+ * Every other sentence here explains a decision that has already been made.
+ * This one is said while nothing has been decided: the reading could not settle
+ * what the words meant, so nothing was recorded, the run is still parked on this
+ * very question, and the next reply is read against it. Three things have to be
+ * in it and each is a defect if it is missing.
+ *
+ * WHAT WE READ, when there is anything to say. A person who is told only "I
+ * could not read that" has no idea which half of their sentence was the problem
+ * and types a variant of the same thing; a person who is shown our best reading
+ * corrects it in one line. It is offered as our reading, never as a decision,
+ * because it is not one.
+ *
+ * THAT NOTHING HAPPENED. This is the sentence's real work. An answer that
+ * vanishes silently is how somebody concludes the system took their word for it
+ * and moves on, and the question then expires with the run still waiting.
+ *
+ * THE ONE REPLY THAT ENDS IT, spelled in the vocabulary of the question they
+ * were actually asked: a yes or a no under a question about one repository, and
+ * the names or "none of these" under a list. Never a general invitation to
+ * rephrase, which is what the phrase list used to offer and what sent people
+ * round the same loop.
+ */
+export function formatAnswerUnreadableComment(input: {
+  /** Our best reading of what they may have meant, absent when even that would
+   *  be a guess. */
+  paraphrase?: string;
+  /** Whether the question offered a list or exactly one repository. */
+  shape: "list" | "one";
+  /** The repository keys the question offered, in the order it listed them. */
+  askedKeys: readonly string[];
+}): string {
+  const opening = input.paraphrase
+    ? `I could not be sure what that answer decided. My best reading is: ${input.paraphrase}`
+    : "I could not tell what that answer decided about the repositories.";
+  const ask =
+    input.shape === "one" && input.askedKeys.length === 1
+      ? `Reply "yes" to use ${input.askedKeys[0]} in this work, or "no" to continue without it.`
+      : [
+          `Reply with the repositories this work should use, from ${input.askedKeys.join(", ")},`,
+          `or "none of these" to use none of them.`,
+        ].join(" ");
+  return [
+    opening,
+    "Nothing has been recorded, and this question is still open: the run is waiting on it, and the next reply is read against it.",
+    ask,
+  ].join("\n\n");
+}
+
+/**
+ * What an answer that NAMED repositories left out, for the person who wrote it.
+ *
+ * The same binding as a decline and, until this existed, the silent half of it:
+ * a question lists four repositories, somebody names one, and the other three
+ * are left out of this work with no later run taking them on its own (C11). A
+ * bare "no" on the dashboard got a full sentence about exactly that, and the
+ * person who answered it by naming what they wanted got nothing at all, which
+ * taught the more careful answer less.
+ *
+ * It says what was left out rather than what was recorded: what they named is
+ * in front of them already, they just typed it.
+ */
+export function formatAnswerLeftOutComment(repositoryKeys: readonly string[]): string {
+  const them = repositoryKeys.length === 1 ? "it" : "them";
+  return [
+    `Your answer named other repositories, so ${repositoryKeys.join(", ")}, which the question also listed, ${repositoryKeys.length === 1 ? "is" : "are"} left out of this work, and no later run takes ${them} on its own.`,
+    theWayBackIntoTheWork(repositoryKeys.length),
   ].join(" ");
 }
 

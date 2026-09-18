@@ -371,7 +371,15 @@ const selectRepositoriesForRun = async (
   );
   if (pinnedOutsideCatalog) {
     const refusal = repositoryNotEnabledMessage("prepare", pinnedOutsideCatalog);
-    return { status: "halt", outcome: "failed", message: refusal, cause: refusal };
+    // One finished sentence: what was refused, why, and the page that fixes it.
+    // Nothing leads it and nothing is mined out of it.
+    return {
+      status: "halt",
+      outcome: "failed",
+      message: refusal,
+      cause: refusal,
+      messageStandsAlone: true,
+    };
   }
   const { listRepositoriesAcrossProviders } = await import("../../../adapters/vcs/repository-directory.js");
   const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
@@ -401,6 +409,19 @@ const selectRepositoriesForRun = async (
     context.repositoryAccess,
     listing.repositories,
   );
+  // THE OTHER HALF OF THAT FILTER, KEPT, BECAUSE A PERSON MAY HAVE NAMED ONE OF
+  // THEM. Everything the providers offered that this run may not touch. The
+  // ticket text scan reads `repositories`, the filtered list, so until this
+  // existed a person who wrote the path of a repository this deployment holds
+  // and keeps disabled got silence: no line in the report, nothing in the
+  // clarification comment, and a run that finished green without it.
+  //
+  // Empty on a bridge by construction, because `mayRunTouchRepository` answers
+  // true for everything while the catalog is not activated, which is why the
+  // one reason the selection reports for these is "not enabled".
+  const withheldRepositories = listing.repositories.filter(
+    (repository) => !mayRunTouchRepository(context.repositoryAccess, repository),
+  );
   // The catalog is on and everything the providers offered was dropped by it.
   // Discovery below would be handed an empty catalog and would ask a human
   // which repository to use, a question whose only honest answer is "none of
@@ -418,6 +439,9 @@ const selectRepositoriesForRun = async (
       outcome: "failed",
       message: NO_ENABLED_REPOSITORIES_MESSAGE,
       cause: NO_ENABLED_REPOSITORIES_MESSAGE,
+      // Its own two sentences, written for a person: the state of the catalog
+      // and what to do about it.
+      messageStandsAlone: true,
     };
   }
   const incompleteCatalogProviders = listing.failures
@@ -445,6 +469,7 @@ const selectRepositoriesForRun = async (
     ...(scan.comments ? { commentText: scan.comments } : {}),
     ...(scan.unread ? { unreadCommentText: scan.unread } : {}),
     repositories,
+    ...(withheldRepositories.length > 0 ? { withheldRepositories } : {}),
     workflowOwnedBranches,
     ...(repositoryScope ? { repositoryScope } : {}),
     ...(incompleteCatalogProviders.length > 0 ? { incompleteCatalogProviders } : {}),
@@ -485,6 +510,10 @@ const selectRepositoriesForRun = async (
     return {
       status: "halt",
       outcome: "failed",
+      // Deliberately NOT `messageStandsAlone`. This message is composed prose
+      // (step name, then the provider verdicts, then advice) and the verdicts in
+      // its middle are the cause AIW-254 exists to preserve, so it keeps the
+      // generic lead plus `cause` in parentheses that the message layer gives it.
       message: incomplete.message,
       ...(incomplete.cause ? { cause: incomplete.cause } : {}),
       ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
@@ -1167,6 +1196,16 @@ export function selectRepositoriesFromMetadata(input: {
    *  because the record is what carries the sentence that says it. */
   unreadCommentText?: string;
   repositories: RepositoryMetadata[];
+  /**
+   * The repositories this deployment offered and this run may NOT touch, which
+   * is `repositories` complement inside the same listing.
+   *
+   * Nothing here can be selected, counted, retracted or asked about: it exists
+   * for one sentence, said when a person WROTE one of these paths on the ticket
+   * (`leaveOut` below). Absent, and a mention of a repository the catalog
+   * withholds goes unanswered exactly as it did before.
+   */
+  withheldRepositories?: RepositoryMetadata[];
   workflowOwnedBranches: WorkflowOwnedBranchSelectionInput[];
   repositoryScope?: WorkflowRepositoryScope;
   /** Providers whose listing failed after retries and whose repositories could
@@ -1426,6 +1465,171 @@ export function selectRepositoriesFromMetadata(input: {
     }
   }
 
+  // AND THE PATHS A PERSON WROTE FOR A REPOSITORY THIS RUN MAY NOT OPEN.
+  //
+  // Every reader above works off `scopedRepositories`, the enabled part of the
+  // listing narrowed by the workflow's pin, so a repository outside either bound
+  // could never match one of them: the mention was dropped with nothing said, on
+  // the ticket, in the clarification comment and in the report of a run that
+  // then finished green. It is the same failure as the ones above, one step
+  // earlier, and it is said on the same two channels: the refusal sentence the
+  // agent and the person both read, and the recovery sentence only a person does
+  // (`leaveOut`, rule 7).
+  //
+  // THREE BOUNDS, THREE REASONS, BECAUSE DIFFERENT PEOPLE UNDO THEM. A
+  // repository the catalog does not enable needs somebody with the Repositories
+  // page; one the providers offer nothing checkoutable for needs the repository
+  // itself to change, and nobody here can do it; one this workflow's pin leaves
+  // out needs the workflow's own scope changed. One reason for all three would
+  // name a lever that does not move the repository the person asked for, which
+  // is the dead end rule 6 exists to prevent. `leaveOut` renders each reason's
+  // own sentence and its own remedy.
+  //
+  // THE THREE SETS CANNOT OVERLAP, so nobody reads two lines about one
+  // repository, and which one speaks falls out of the order the listing is
+  // narrowed in rather than out of a tie-break: enabled, then usable, then
+  // pinned. The withheld set is the listing minus what this run may touch, the
+  // unusable set is the enabled part minus what can be checked out, and the
+  // pinned-out set is what is left minus the pin. So a repository that is both
+  // disabled and unusable says it is not on the catalog, and one that is both
+  // unusable and outside the pin says it cannot be checked out: in each pair the
+  // bound that would still stand after the other moved is the one a person
+  // hears, because the other one alone is a fix that changes nothing.
+  //
+  // UNUSABLE IS A DURABLE FACT, NOT A FLAKY ONE, which is why it is worth a
+  // sentence. It is read from the fields the provider itself returned on a
+  // SUCCESSFUL listing: archived, which `buildRepositoryCatalogEntries` drops,
+  // and an empty default branch, which it marks `missing_default_branch`
+  // (`engine/repository-discovery/catalog.ts`). A provider that failed or timed
+  // out produces no repositories at all rather than unusable ones, so its
+  // repositories resolve to nothing here and stay silent, and the listing
+  // failure has its own sentence above (`incompleteCatalogProviders`).
+  //
+  // A PATH THAT MATCHES NOTHING THE DEPLOYMENT LISTED STAYS SILENT, AND THAT IS
+  // A DECISION, NOT AN OVERSIGHT. Do not "fix" it by reporting unmatched paths:
+  // a ticket carries pasted URLs, quoted logs, file paths and other
+  // organisations' repositories, and a line saying "owner/name is not on the
+  // repository catalog this run may use" about a string nobody meant as a
+  // repository here teaches people to ignore the whole section. Only a path
+  // this deployment can name as a repository is answered, which is also what
+  // keeps a pinned workflow's report quiet: none of those resolve to a row.
+  //
+  // Said once per repository however many times the ticket writes it, because
+  // `leaveOut` is keyed and the first sentence about a repository stands. Said
+  // before the pin returns, so the repositories a pinned workflow refuses are
+  // reported on the same exit as every other one.
+  if (record) {
+    const scopedKeys = new Set(scopedRepositories.map((repo) => repositoryKey(repo)));
+    const unopenable: Array<{
+      repository: RepositoryMetadata;
+      reason: "not_enabled" | "unusable" | "outside_pin";
+    }> = [
+      // A WITHHELD ROW THE PROVIDER OFFERS NOTHING FOR IS UNUSABLE FIRST. Both
+      // facts are true of a disabled AND archived repository, and the tie-break
+      // is the bound that would still stand after the other moved: enabling it
+      // on the Repositories page is a round of a person's time that ends with
+      // the next run telling them the catalog cannot serve it.
+      ...(input.withheldRepositories ?? []).map((repository) => ({
+        repository,
+        reason: providerOffersNoCheckout(repository)
+          ? ("unusable" as const)
+          : ("not_enabled" as const),
+      })),
+      // The enabled rows the providers offered and no run can check out. The
+      // same set the recorder carries as `catalog.unusableKeys`, off the one
+      // computation of it, so the sentence and the decision cannot disagree
+      // about which repositories those are.
+      ...input.repositories
+        .filter((repository) => !usableKeys.has(repositoryKey(repository)))
+        .map((repository) => ({ repository, reason: "unusable" as const })),
+      // Only where a pin exists at all: without one `scopedRepositories` IS the
+      // usable listing, so this is empty and an unpinned workflow reads exactly
+      // as it did before.
+      ...(input.repositoryScope
+        ? usableRepositories
+            .filter((repository) => !scopedKeys.has(repositoryKey(repository)))
+            .map((repository) => ({ repository, reason: "outside_pin" as const }))
+        : []),
+    ];
+    // The cheap test first. These lists are most of a large installation's
+    // listing, and the matcher below compiles a pattern per segment; a substring
+    // of the lowercased text is a superset of what that matcher accepts, so
+    // nothing is lost by asking it first.
+    const writtenText =
+      unopenable.length > 0
+        ? [input.ticketText, input.commentText ?? "", unreadCommentText]
+            .join("\n")
+            .toLowerCase()
+        : "";
+    // WHAT A PERSON ANSWERED IS THEIR LATEST WORD, AND THIS SENTENCE IS NOT A
+    // SECOND ONE. A repository a question on this work NAMED was put in front of
+    // them and they said what they wanted; a path they had written before that
+    // answer is the very text the question was asked about, and a line about it
+    // here answers a question they no longer have. The answer's own channels own
+    // those repositories: the unnamed-in-answer refusal where the run can still
+    // see the repository, and the post-answer block above where they wrote the
+    // path again AFTER answering, which carries these same reasons. So a
+    // mention only speaks for a repository nobody was ever asked about, which is
+    // the case this exists for.
+    const answeredKeys = new Set(input.workScope?.answeredRepositoryKeys ?? []);
+    for (const { repository, reason } of unopenable) {
+      const key = repositoryKey(repository);
+      if (answeredKeys.has(key)) continue;
+      // A repository the run IS working in is never also reported as left out,
+      // and that is a live case rather than a precaution: a workflow-owned branch
+      // for this ticket enters the workspace above and is deliberately not
+      // subject to the pin.
+      if (selected.has(key) || ticketTextMatchedKeys.includes(key)) continue;
+      if (!writtenText.includes(repository.repoPath.toLowerCase())) continue;
+      // Named anywhere a person wrote, the ticket's own words and every comment
+      // this run read or held back. What the words around the path ask for does
+      // not change this sentence: the run could not have opened the repository
+      // whichever way they meant it, and a comment that says no about some other
+      // repository is precisely the comment whose other paths go unread.
+      const named =
+        segmentsNamePath(ownSegments, repository.repoPath) ||
+        segmentsNamePath(commentSegments, repository.repoPath) ||
+        segmentsNamePath(unreadCommentSegments, repository.repoPath);
+      if (!named) continue;
+      record.leaveOut(key, reason);
+    }
+  }
+
+  // AND THE PROVIDER THE PIN NEVER QUERIED, WHICH IS IN NONE OF THOSE SETS.
+  //
+  // `listedVcsProviders` narrows the providers BEFORE any listing happens, so a
+  // workflow pinned to `providers: ["github"]` never calls GitLab and a GitLab
+  // repository is in no listing at all: not withheld, not unusable, not outside
+  // the pin, because all three are built from a listing. A person writes "the
+  // fix is in gitlab:acme/ops", the run works in the GitHub repositories it
+  // found, opens a pull request covering half the ticket and finishes green with
+  // nothing said. That is the complaint this whole delivery exists to end,
+  // arriving through the pin that was supposed to be reported.
+  //
+  // ANSWERED FROM THE KEY, NOT FROM A LISTING. `gitlab:acme/ops` says which
+  // provider it is on; querying a provider the pin excludes would be a network
+  // call to prove what the person already wrote. Only a path that NAMES its
+  // provider counts: a bare "acme/ops" could be on either, and a line claiming
+  // it is outside the pin would be a guess about a string, which is the silence
+  // rule above.
+  if (record && (input.repositoryScope?.providers?.length ?? 0) > 0) {
+    const pinnedProviders = input.repositoryScope?.providers ?? [];
+    const answeredKeys = new Set(input.workScope?.answeredRepositoryKeys ?? []);
+    const written = [ownSegments, commentSegments, unreadCommentSegments].flat();
+    for (const segment of written) {
+      for (const identity of parseRepositoryExpansionAnswer(segment.text)) {
+        if (identity.provider === undefined) continue;
+        if (pinnedProviders.includes(identity.provider)) continue;
+        const key = repositoryKey({
+          provider: identity.provider,
+          repoPath: identity.repoPath,
+        });
+        if (selected.has(key) || answeredKeys.has(key)) continue;
+        record.leaveOut(key, "outside_pin");
+      }
+    }
+  }
+
   const pinnedRepositories = input.repositoryScope?.repositories ?? [];
   if (pinnedRepositories.length > 0) {
     const scopedByKey = new Map(
@@ -1471,6 +1675,44 @@ export function selectRepositoriesFromMetadata(input: {
     // already decided is not an open choice, so five matches of which two are
     // still open is an ordinary derivation, not an ambiguity.
     const decidable = record.decidableKeys(matchedKeys);
+    // THE REPOSITORY THE TICKET NAMES AND A PERSON ALREADY EXCLUDED.
+    //
+    // `decidableKeys` drops it before any event is raised, which is right: an
+    // exclusion is a decision and a ticket that still names the repository is
+    // not a new one. But dropping it silently is how a person came to read, on a
+    // ticket whose first sentence names a repository, nothing but "Which
+    // repository or repositories should this ticket inspect or modify?". The run
+    // had a candidate, their own earlier decision removed it, and the question
+    // read as though the ticket had never been opened. Nothing else fires here:
+    // the run-start walk has no branch for an excluded entry
+    // (`decideRunStart` in `work-scope/decide.ts`), and the refusal that names
+    // the author and the date only happens when some signal PROPOSES the key,
+    // which this one never gets to.
+    //
+    // BOUNDED PER REPOSITORY: the ticket named THIS repository, and the record
+    // is why this run is not taking it. Not by the size of the selection, which
+    // is a bound about the run rather than about the repository and was wrong
+    // in both directions: a run that attached something else from the record
+    // said nothing about the exclusion (a pull request covering half the ticket,
+    // with the person's own decision invisible), and a run that found a
+    // takeable repository beside the excluded one still spoke. A record holding
+    // a dozen old exclusions the ticket never mentions stays quiet, because a
+    // question is not a history lesson.
+    //
+    // The sentence names who excluded it and when, because it is composed from
+    // the frozen entry, and the way back travels the person's channel alone
+    // (`leaveOut`, rule 7): the questions array is copied into the agent's
+    // prompts and into the memory file, and a lever put there returns as an
+    // instruction signed by a person.
+    const excludedOnThisWork = new Set(
+      (input.workScope?.scope?.entries ?? [])
+        .filter((entry) => entry.state === "excluded")
+        .map((entry) => entry.repositoryKey),
+    );
+    for (const key of matchedKeys) {
+      if (selected.has(key) || !excludedOnThisWork.has(key)) continue;
+      record.leaveOut(key, "excluded");
+    }
     // What the ticket still says and this run did not read. It decides nothing
     // and counts towards nothing; it only keeps the deletion below honest,
     // which is why it rides every ticket text event this branch raises.
@@ -1556,9 +1798,20 @@ export function selectRepositoriesFromMetadata(input: {
     } else {
       // Matches the run cannot take: nothing derived, nothing deleted, and the
       // reason said out loud instead of a silently empty scope.
-      record.note(
-        `The ticket names ${matchedKeys.join(", ")}, and this run could take none of them, so nothing was derived from its text.`,
-      );
+      //
+      // LESS WHAT HAS ALREADY BEEN SAID BY NAME. A repository reported above
+      // with its own sentence, the exclusion naming who decided and when, would
+      // otherwise be named again in this vaguer restatement of the same fact,
+      // and both land in `recorder.notes`, which is joined into the first
+      // question: the person reads the precise sentence, then a fuzzy echo of
+      // it, then the question. With nothing left to add, this says nothing.
+      const spokenFor = new Set(record.leftOut.map((left) => left.repositoryKey));
+      const unspoken = matchedKeys.filter((key) => !spokenFor.has(key));
+      if (unspoken.length > 0) {
+        record.note(
+          `The ticket names ${unspoken.join(", ")}, and this run could take none of them, so nothing was derived from its text.`,
+        );
+      }
     }
   } else {
     for (const repo of exactMatches) {
@@ -1862,6 +2115,22 @@ function incompleteCatalog(
 
 function repositoryKey(repo: Pick<RepositoryMetadata, "provider" | "repoPath">): string {
   return `${repo.provider}:${repo.repoPath.toLowerCase()}`;
+}
+
+/**
+ * Does the provider offer nothing this run could check out for this repository?
+ *
+ * The same two facts `buildRepositoryCatalogEntries` decides usability on
+ * (`engine/repository-discovery/catalog.ts`: archived rows are dropped, and an
+ * empty default branch is `missing_default_branch`), asked directly because the
+ * rows this is asked about are OUTSIDE the enabled listing the builder is given,
+ * and handing it a row the catalog never validated would throw on a path or a
+ * case collision rather than answer a question.
+ */
+function providerOffersNoCheckout(
+  repository: Pick<RepositoryMetadata, "archived" | "defaultBranch">,
+): boolean {
+  return repository.archived || repository.defaultBranch.trim().length === 0;
 }
 
 function selectedRepository(

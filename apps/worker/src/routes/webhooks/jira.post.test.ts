@@ -224,15 +224,17 @@ describe("POST /webhooks/jira", () => {
       status: "cancelled",
       reason: "left_ai_column",
     });
-    expect(state.cancel).toHaveBeenCalledWith(
-      "PROJ-42",
-      { ownerToken: "owner-1", runId: "run-1" },
-      connected.runRegistry,
-      connected.issueTracker,
-      undefined,
-      undefined,
-      "Ticket left the AI column (AI → Backlog) via Jira webhook",
-    );
+    expect(state.cancel).toHaveBeenCalledWith({
+      ticketKey: "PROJ-42",
+      target: { ownerToken: "owner-1", runId: "run-1" },
+      runRegistry: connected.runRegistry,
+      issueTracker: connected.issueTracker,
+      reason: "Ticket left the AI column (AI → Backlog) via Jira webhook",
+      // A person moved this ticket by hand. If the run was parked on a
+      // question, that person is the one owed the news, and the column they are
+      // told to move it back to is the board's own.
+      clarificationNotice: { aiColumnName: "AI" },
+    });
   });
 
   it("keeps a clarification-parked run alive when its own backlog move fires the webhook", async () => {
@@ -476,15 +478,14 @@ describe("POST /webhooks/jira", () => {
       reason: "left_ai_column",
     });
     expect(state.hasDurableRunPublication).toHaveBeenCalledWith("run-1");
-    expect(state.cancel).toHaveBeenCalledWith(
-      "PROJ-42",
-      { ownerToken: "owner-1", runId: "run-1" },
-      connected.runRegistry,
-      connected.issueTracker,
-      undefined,
-      undefined,
-      "Jira AI Review transition before durable PR publication evidence",
-    );
+    expect(state.cancel).toHaveBeenCalledWith({
+      ticketKey: "PROJ-42",
+      target: { ownerToken: "owner-1", runId: "run-1" },
+      runRegistry: connected.runRegistry,
+      issueTracker: connected.issueTracker,
+      reason: "Jira AI Review transition before durable PR publication evidence",
+      clarificationNotice: { aiColumnName: "AI" },
+    });
   });
 
   it("does not cancel a still-finalizing run when COLUMN_AI_REVIEW names the transition and the status name differs", async () => {

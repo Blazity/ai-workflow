@@ -1,0 +1,1 @@
+ALTER TABLE "clarification_requests" ADD COLUMN "answer_reading" jsonb;

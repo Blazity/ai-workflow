@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { fakeAnswerReadingModel } from "../work-scope/read-answer.fake.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSettingsSnapshot, type WorkScopeAskedRepository } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
@@ -147,6 +148,12 @@ async function answer(
       IssueTrackerAdapter,
       "fetchTicket" | "moveTicket" | "postComment" | "getCurrentUserAccountId"
     >,
+    // A STAND-IN FOR THE MODEL. Every test in this file is about what a person
+    // gets back, not about how their words were read, and without a reader here
+    // they would all run against an unreachable provider and prove only that the
+    // deterministic fallback exists. Nothing here is evidence about the real
+    // reader; that is the golden set's job.
+    answerReadingDeps: { generate: fakeAnswerReadingModel() },
     cancelSettings: defaultSettingsSnapshot(),
   });
 }
@@ -526,6 +533,29 @@ describe("answerClarificationAndResume telling a person what their decline recor
     expect(declined[0]).toContain("work_scope.edit");
   });
 
+  // AWP-221 on production, 2026-09-18. The same three words, with "no" in front
+  // of them on its own line, and the ticket heard nothing: the reply was read as
+  // prose nobody could place, and the comment back told that person to answer
+  // "none" the next time the question was asked, which is what they had just
+  // written. Every phrase in it refuses and one of them names the subject, so it
+  // decides, and this channel says what it decided.
+  it("posts the decline for a comment that refuses in every phrase it is written in", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "no\nnone of these", {
+      actor: { id: composedAnswerActorId("human-1"), label: "Ada (via Jira)" },
+      answerAuthorCount: 1,
+    });
+
+    expect(outcome.kind).toBe("answered");
+    const declined = tracker.postComment.mock.calls
+      .map(([, body]) => body)
+      .filter((body) => body.includes("was read as declining"));
+    expect(declined).toHaveLength(1);
+    expect(declined[0]).toContain("github:acme/api, github:acme/ops");
+  });
+
   // And exactly once. A lost resume redelivers the identical answer, which is
   // the same decision arriving again rather than a second one.
   it("does not post the decline again when the same answer is redelivered", async () => {
@@ -545,14 +575,38 @@ describe("answerClarificationAndResume telling a person what their decline recor
     expect(declined).toHaveLength(1);
   });
 
-  // And an answer that chose is not told it declined anything. The question
-  // listed two, the person named one, and the one left out is bound by the
-  // answered set rather than by a decline they did not make.
-  it("says nothing about a record when the answer named a repository", async () => {
+  // M4. An answer that NAMED a repository binds the rest exactly as a decline
+  // does: the question listed two, the person named one, and the other is left
+  // out of this work with no later run taking it (C11). The bare "no" beside it
+  // got the full sentence above and this person got silence, which taught the
+  // more careful answer less. It is not called a decline, because they did not
+  // make one; it says what was left out and how to bring it back.
+  it("names what an answer left out in the reply that answer gets back", async () => {
     const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
     const tracker = makeTracker();
 
     const outcome = await answer(tracker, row.id, "github:acme/api");
+
+    expect(outcome.kind).toBe("answered");
+    const said = outcome.kind === "answered" ? (outcome.recordOutcome ?? "") : "";
+    expect(said).toContain("github:acme/ops");
+    expect(said).toContain("left out of this work");
+    expect(said).toContain("work_scope.edit");
+    expect(said).not.toContain("declining");
+    // And it stays in the channel that took the answer: on the ticket the run
+    // itself lists what it started without, keyed and with the way back, so
+    // posting this as well would tell one story twice in one thread.
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body);
+    expect(posted.filter((body) => body.includes("left out of this work"))).toHaveLength(0);
+  });
+
+  // And an answer that named everything the question listed is told nothing,
+  // because nothing was left out.
+  it("says nothing about a record when the answer named every repository listed", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "github:acme/api and github:acme/ops");
 
     expect(outcome.kind === "answered" ? outcome.recordOutcome : "missing").toBeUndefined();
   });

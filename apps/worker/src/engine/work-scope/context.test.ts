@@ -224,6 +224,34 @@ describe("createRunWorkScopeRecorder", () => {
     expect(recorder.recoveryNotes[1]).toContain("cannot serve");
   });
 
+  it("does not send that person to enable a repository that is already enabled", () => {
+    const recorder = createRunWorkScopeRecorder(
+      input({
+        catalog: {
+          activated: true,
+          // Unusable keys are a SUBSET of enabled ones, so this sentence is
+          // only ever written about a repository that is enabled already.
+          // Telling the reader to enable it sends them to a page where they
+          // find it switched on, and costs them a round to learn that the
+          // repository itself is what has to change.
+          enabledKeys: ["github:acme/api", "github:acme/web"],
+          unusableKeys: ["github:acme/api"],
+        },
+        scope: scopeWith([excluded("github:acme/api")]),
+      }),
+    );
+
+    recorder.decide({
+      kind: "derived",
+      origin: "ticket_text",
+      repositoryKeys: ["github:acme/api"],
+      rationale: "ticket mentions repository path",
+    });
+
+    expect(recorder.recoveryNotes[1]).toContain("cannot serve");
+    expect(recorder.recoveryNotes.join(" ")).not.toContain("Repositories page");
+  });
+
   // The pin is the OTHER thing that outlives an edit to the list. Changing the
   // list is within reach of the person reading the sentence; changing what the
   // workflow definition is pinned to is not, and a run whose pin excludes the

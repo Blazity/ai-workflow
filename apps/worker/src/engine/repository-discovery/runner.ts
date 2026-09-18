@@ -1167,7 +1167,11 @@ export function decideRepositoryExpansion(input: {
         return {
           action: {
             kind: "fail",
-            message: closedExpansionFailure(requests, state.askedUnavailable ?? []),
+            message: closedExpansionFailure(
+              requests,
+              state.askedUnavailable ?? [],
+              verdict.refusals,
+            ),
           },
           state,
         };
@@ -1314,8 +1318,11 @@ function recordAskedUnavailable(
 /** One short, actionable sentence: what the run still needs and what to do
  *  about it. The first identity is named in full, whatever it costs, because a
  *  truncated repository path is not something a reader can act on; the rest are
- *  counted. A request names at most 3 repositories, so that keeps it inside 200
+ *  counted. A request names at most 3 repositories, so that keeps it inside 290
  *  characters for an identity of up to 80, a deeply nested GitLab path included.
+ *  The bound was 200 while the second branch said "attach it", which named no
+ *  route a person can take; naming one costs about sixty characters, and a
+ *  shorter sentence that tells nobody what to do is not the cheaper option.
  *
  *  A repository the run cannot use (one a person was asked about, or the one
  *  this verdict found unavailable) is named on its own terms: the only way
@@ -1326,9 +1333,25 @@ function recordAskedUnavailable(
 function closedExpansionFailure(
   requests: ResearchRepository[],
   unavailableKeys: string[],
+  refusals: ReadonlyArray<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }> = [],
 ): string {
+  // WHAT THE RUN WAS REFUSED FOR COUNTS AS BEING UNABLE TO USE IT, and not
+  // reading it was how one run told a person two different ways out of the same
+  // wall. The question said "enable it on the Repositories page and start a new
+  // run", which is true; this sentence then said "attach it and start a new
+  // run", which is not, because attaching is refused until somebody enables it.
+  // The later sentence is the one they read at the end, so the wrong one won.
+  // A question the WORK SCOPE raised leaves nothing in this loop's state, so
+  // `unavailableKeys` can be empty for a repository everybody involved knows
+  // this deployment does not serve; the refusal riding the request says so.
+  const cannotServe = new Set<string>([
+    ...unavailableKeys,
+    ...refusals
+      .filter((refusal) => CATALOG_CANNOT_SERVE.has(refusal.reason))
+      .map((refusal) => refusal.repositoryKey),
+  ]);
   const unavailable = requests.filter((request) =>
-    unavailableKeys.includes(repositoryCatalogKey(request)),
+    cannotServe.has(repositoryCatalogKey(request)),
   );
   const named = unavailable.length > 0 ? unavailable : requests;
   const [first, ...rest] = named.map(
@@ -1347,9 +1370,20 @@ function closedExpansionFailure(
   }
   return (
     `Repository expansion is closed for this run and the agent still needs ${subject}.` +
-    ` Attach ${them} and start a new run.`
+    ` Select ${them} in this work's repository list, through the work scope API or the` +
+    ` work_scope.edit tool, and start a new run.`
   );
 }
+
+// The refusal reasons that mean this deployment cannot serve the repository at
+// all, so the way back is the Repositories page and never a name written
+// somewhere. The rest are about this work or this run (a person's exclusion, the
+// workflow's pin, a bound, an answer that left it unnamed), and for those the
+// repository is one a run could open once something on the work says to.
+const CATALOG_CANNOT_SERVE: ReadonlySet<WorkScopeRefusalReason> = new Set([
+  "outside_catalog",
+  "unavailable",
+]);
 
 type ResolvedIdentity =
   | { kind: "entry"; entry: RepositoryCatalogEntry }
@@ -1398,8 +1432,22 @@ function resolveIdentity(
  * services/clarifications/answer-core.ts), because the dashboard and the MCP
  * client type into a box this question opened and a "no" there is
  * unmistakably an answer to it.
+ *
+ * A THIRD VALUE, because naming a subject and naming THE WHOLE LIST are not the
+ * same thing. "continue without it" names its subject, and that subject is one
+ * repository: under the in-run question, which asks about the one repository the
+ * agent wants and whose own guidance offers those very words, it says exactly
+ * what it refuses. Under a question listing four choices it is one person
+ * talking about one of them, and recording four permanent exclusions from it is
+ * a decision nobody made (owner ruling, 2026-09-18). Which of the two a phrase
+ * may do is the question's shape, never the channel, so `refusalNamesOneOfSeveral`
+ * gates it on the count the question listed, exactly as a counting word is gated
+ * on the count it means (A11l).
  */
-export type RefusalReach = "names_repositories" | "ordinary_ticket_speech";
+export type RefusalReach =
+  | "names_repositories"
+  | "names_one_repository"
+  | "ordinary_ticket_speech";
 
 // The phrases read as "there are no further repositories", each only as the
 // whole answer. Compared after lowercasing, dropping apostrophes and the
@@ -1428,9 +1476,31 @@ export const REFUSAL_ANSWERS: ReadonlyMap<string, RefusalReach> = new Map<string
   ["nothing", "ordinary_ticket_speech"],
   ["that is all", "ordinary_ticket_speech"],
   ["thats all", "ordinary_ticket_speech"],
-  ["continue without it", "names_repositories"],
+  // Its subject is one repository ("it"), which is what the in-run question
+  // offers this phrase for, and what a question listing several contradicts.
+  ["continue without it", "names_one_repository"],
   ["none of these", "names_repositories"],
   ["none of them", "names_repositories"],
+  // The rest of the English a person reaches for when they mean the whole list
+  // (owner ruling, 2026-09-18). Each refuses a SET rather than a subject, so
+  // each reaches as far as "none of these": the question closes and nothing is
+  // recorded on it. Missing from this list, "none of the above" under four
+  // choices was read as naming nothing, and that person answered the identical
+  // question twice.
+  //
+  // "neither" is a word about two, and it is deliberately NOT gated on the count
+  // the way "both" is (A11l): it refuses rather than chooses, so the cost of
+  // reading it against a longer list is a decline that closes the question
+  // rather than repositories attached in somebody's name.
+  //
+  // ENGLISH ONLY, and the absence of a Polish counterpart here is a decision:
+  // the tickets this reads are written in English, and a phrase nobody writes is
+  // a row nobody can check. The Polish entries below are here on evidence from
+  // the board that sent them.
+  ["neither", "names_repositories"],
+  ["neither of them", "names_repositories"],
+  ["neither of these", "names_repositories"],
+  ["none of the above", "names_repositories"],
   ["not needed", "ordinary_ticket_speech"],
   ["no need", "ordinary_ticket_speech"],
   ["skip it", "ordinary_ticket_speech"],
@@ -1498,10 +1568,82 @@ function refusalReachOfText(text: string): RefusalReach | null {
   return REFUSAL_ANSWERS.get(whole) ?? null;
 }
 
-/** The same, read with or without the Jira author in front of the part. */
-function refusalReachOfPart(part: string): RefusalReach | null {
-  return refusalReachOfText(part) ?? refusalReachOfText(part.replace(COMMENT_AUTHOR_PREFIX, ""));
+/** The same, read with or without the Jira author in front of the words.
+ *
+ *  `authorComposed` is false for a caller holding words nobody composed an
+ *  author line into. The tolerance is not free: the prefix it forgives is
+ *  "anything, then a colon and a space", which is also how a person types
+ *  "api: none" into an answer box, and reading that as a bare "none" declines
+ *  every repository a question listed on the strength of a colon. */
+function refusalReachOfWords(text: string, authorComposed: boolean): RefusalReach | null {
+  const own = refusalReachOfText(text);
+  if (own !== null || !authorComposed) return own;
+  return refusalReachOfText(text.replace(COMMENT_AUTHOR_PREFIX, ""));
 }
+
+// Where one person writes a refusal in two pieces: a line break, and a comma.
+// Not a full stop: it ends a sentence the keyword rule above already carries
+// whole, and splitting on it would make "None. Thanks" a refusal beside a thank
+// you.
+const PHRASE_BREAK = /[\n,]/;
+
+/**
+ * How far one part reaches: read whole first, then as the phrases it is written
+ * in.
+ *
+ * ONE COMMENT CAN HOLD BOTH HALVES OF A REFUSAL. The person answering the
+ * which-of-these question on AWP-221 wrote "no", pressed enter, and wrote "none
+ * of these". Jira delivered that as one comment, it was compared with the list
+ * whole, no entry holds those five words together, and the reply that said the
+ * same thing twice was read as prose: the comment back told that person to
+ * answer "none" the next time the question was asked, which is what they had
+ * just written. The same two halves sent as two comments decided, because the
+ * parts were read one at a time, so where somebody pressed enter decided whether
+ * their refusal was readable.
+ *
+ * THE WHOLE READ COMES FIRST and nothing it already accepted moves: "none,
+ * continue without it" and "None. Thanks" are refusals because they open with
+ * the keyword, whatever follows it. What the phrases add is the reply every part
+ * of which is itself a refusal, so nothing a reader would have to interpret can
+ * hide in one: a phrase naming a repository, or carrying a word this list does
+ * not hold, leaves the whole answer to the parser exactly as before.
+ */
+function refusalReachOfPart(part: string, authorComposed: boolean): RefusalReach | null {
+  return (
+    refusalReachOfWords(part, authorComposed) ?? refusalReachOfPhrases(part, authorComposed)
+  );
+}
+
+/** How far a part reaches when every phrase in it is a refusal, and null when
+ *  any phrase is not one. Naming the subject once settles the whole, for the
+ *  reason `refusalNamesRepositories` gives about the parts of an answer: those
+ *  words are the strongest evidence in the text, and a bare no beside them does
+ *  not weaken them. */
+function refusalReachOfPhrases(part: string, authorComposed: boolean): RefusalReach | null {
+  const phrases = part
+    .split(PHRASE_BREAK)
+    .map((phrase) => phrase.trim())
+    .filter((phrase) => phrase.length > 0);
+  // One phrase is the whole part, which the read above already judged.
+  if (phrases.length < 2) return null;
+  let reach: RefusalReach = "ordinary_ticket_speech";
+  for (const phrase of phrases) {
+    const phraseReach = refusalReachOfWords(phrase, authorComposed);
+    if (phraseReach === null) return null;
+    if (REACH_STRENGTH[phraseReach] > REACH_STRENGTH[reach]) reach = phraseReach;
+  }
+  return reach;
+}
+
+// Which phrase speaks for the part it sits in: the one that says most about the
+// subject. "no, continue without it" is a refusal of one repository and not a
+// bare no, and "none of these, continue without it" is a refusal of the list,
+// because a person who names the whole list has named it whatever they added.
+const REACH_STRENGTH: Record<RefusalReach, number> = {
+  ordinary_ticket_speech: 0,
+  names_one_repository: 1,
+  names_repositories: 2,
+};
 
 /** The comments an answer was composed from, each without its surrounding
  *  space and with the empty ones dropped. */
@@ -1530,12 +1672,20 @@ export function hasNoWords(answer: string): boolean {
 
 /** True for an empty answer or one every part of which is a phrase a person uses
  *  to say there is nothing left to attach, read with or without the Jira
- *  author in front of it. The caller checks first that the answer names no
+ *  author in front of it, and each part read whole before it is read as the
+ *  phrases it is written in. The caller checks first that the answer names no
  *  repository. Anything else is left to the parser. */
-export function isRefusalAnswer(answer: string): boolean {
+export function isRefusalAnswer(
+  answer: string,
+  options: { authorComposed?: boolean } = {},
+): boolean {
   // No letter or digit at all ("", "...") says nothing but "nothing to add".
   if (hasNoWords(answer)) return true;
-  return answerParts(answer).every((part) => refusalReachOfPart(part) !== null);
+  // Composed by default, because the callers holding a stored answer hold the
+  // composed one. A caller reading a person's own words says so, and then a
+  // colon in their sentence is their colon (`engine/work-scope/answer.ts`).
+  const authorComposed = options.authorComposed ?? true;
+  return answerParts(answer).every((part) => refusalReachOfPart(part, authorComposed) !== null);
 }
 
 /**
@@ -1548,18 +1698,65 @@ export function isRefusalAnswer(answer: string): boolean {
  *
  * ONE PART NAMING THE SUBJECT IS ENOUGH FOR THE WHOLE ANSWER. Comments arrive
  * joined, so "no" and "none of these" can reach here as one answer written by
- * two people. The words that name the subject are the strongest evidence in the
- * text, and a refusal that says what it refuses does not become ambiguous
- * because a bare "no" sits beside it.
+ * two people, and one comment can hold both of them across a line break
+ * (`refusalReachOfPart`). The words that name the subject are the strongest
+ * evidence in the text, and a refusal that says what it refuses does not become
+ * ambiguous because a bare "no" sits beside it.
  *
  * AN ANSWER WITH NO WORD IN IT NAMES NOTHING. `isRefusalAnswer` calls "" and
  * "..." a refusal, and there is no part here to read; a check mark decided
  * nothing, so it reaches the caller as ordinary speech and the person is asked
  * again rather than having every repository excluded in their name.
+ *
+ * AND THE SUBJECT IT NAMES HAS TO BE THIS QUESTION'S, which is why the count the
+ * question listed is an argument rather than something the caller may leave out:
+ * "continue without it" names one repository, so it is this question's subject
+ * when the question asked about one and contradicts it when the question listed
+ * four (`refusalNamesOneOfSeveral`).
  */
-export function refusalNamesRepositories(answer: string): boolean {
+export function refusalNamesRepositories(answer: string, askedCount: number): boolean {
   if (hasNoWords(answer)) return false;
-  return answerParts(answer).some((part) => refusalReachOfPart(part) === "names_repositories");
+  // Composed, always: its one caller asks this of an answer that arrived as
+  // ticket comments, which is the channel the author line exists on.
+  return answerParts(answer).some((part) => {
+    const reach = refusalReachOfPart(part, true);
+    return reach !== null && reach !== "ordinary_ticket_speech" && reachCoversList(reach, askedCount);
+  });
+}
+
+/**
+ * True for a refusal whose subject is ONE repository, sent to a question that
+ * listed several: the phrase and the list contradict each other, so the reply
+ * decides nothing and the person is asked again (owner ruling, 2026-09-18).
+ *
+ * The asymmetry with a phrase that names no subject at all is the point. "no"
+ * carries no subject, so threaded to a question it takes that question's own,
+ * whatever the count, and which channels may thread it is A8 and A9. "continue
+ * without it" carries one, and one is not four: reading it as four is the
+ * fabricated decision, and a repeated question is the cheap failure beside it
+ * (rule 1).
+ *
+ * Asked of the whole answer, so a reply that also holds a phrase refusing the
+ * list ("none of these, continue without it") is not caught by it: the strongest
+ * evidence in the text still settles it, exactly as it does for
+ * `refusalNamesRepositories`.
+ */
+export function refusalNamesOneOfSeveral(answer: string, askedCount: number): boolean {
+  if (askedCount <= 1 || hasNoWords(answer)) return false;
+  const reaches = answerParts(answer).map((part) => refusalReachOfPart(part, true));
+  // Not a refusal at all, so there is no subject here to weigh against the list.
+  if (reaches.some((reach) => reach === null)) return false;
+  return (
+    reaches.some((reach) => reach === "names_one_repository") &&
+    !reaches.some((reach) => reach === "names_repositories")
+  );
+}
+
+/** Can a refusal reaching this far be about every repository a question listing
+ *  `askedCount` of them offered? A singular subject cannot, once the list holds
+ *  more than one. */
+function reachCoversList(reach: RefusalReach, askedCount: number): boolean {
+  return reach !== "names_one_repository" || askedCount <= 1;
 }
 
 // Path segments that start the part of a repository URL that is not the

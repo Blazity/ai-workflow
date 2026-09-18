@@ -10,7 +10,7 @@ import type { SelectedRepositoryPromptContext } from "../../../sandbox/context.j
 import type { PrTriggerPayload } from "../../agent-input.js";
 import { selectWorkItems } from "../../helpers/review-ledger.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
-import { isRepositoryCatalogRefusal } from "../../support/repository-access.js";
+import { catalogRefusalExecutionOptions } from "../../support/repository-access.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 
 /**
@@ -433,11 +433,10 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
   } catch (err) {
     if (isRunControlError(err)) throw err;
     const detail = err instanceof Error ? err.message : String(err);
-    return executionError(detail, {
-      // A repository the catalog withholds refuses before any provider call is
-      // made, so calling it a provider failure sends an operator to a forge
-      // status page over a decision this deployment made itself.
-      category: isRepositoryCatalogRefusal(detail) ? "configuration" : "provider",
-    });
+    // A repository the catalog withholds refuses before any provider call is
+    // made, so calling it a provider failure sends an operator to a forge
+    // status page over a decision this deployment made itself, and clamping its
+    // sentence sends the person on the ticket nowhere at all.
+    return executionError(detail, catalogRefusalExecutionOptions(detail, "provider"));
   }
 };

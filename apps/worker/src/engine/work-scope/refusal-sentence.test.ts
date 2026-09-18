@@ -39,6 +39,7 @@ const SURFACES: WorkScopeRefusalSurface[] = ["run_start", "expansion"];
 const REASONS: Record<WorkScopeRefusalReason, true> = {
   outside_catalog: true,
   outside_policy: true,
+  unusable: true,
   excluded: true,
   unavailable: true,
   workspace_cap: true,

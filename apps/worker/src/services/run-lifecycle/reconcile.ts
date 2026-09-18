@@ -401,17 +401,17 @@ export async function reconcileRuns(
       }
     }
 
-    const cancellationResult = await cancelRunDetailed(
+    const cancellationResult = await cancelRunDetailed({
       ticketKey,
-      entry.runId,
+      target: entry.runId,
       runRegistry,
-      issueTracker,
-      undefined,
-      onSubjectReleased,
-      reviewDestination
+      ...(issueTracker ? { issueTracker } : {}),
+      ...(onSubjectReleased ? { onReleased: onSubjectReleased } : {}),
+      reason: reviewDestination
         ? PREMATURE_AI_REVIEW_CANCELLATION_REASON
         : "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
-    );
+      clarificationNotice: { aiColumnName: settings.COLUMN_AI },
+    });
     if (
       await finalizeTicketCancellation({
         ticketKey,
@@ -533,15 +533,17 @@ async function disposeParkedSubjectWithMissingTicketCore(
     throw new Error("Clarification retirement dependency is unavailable");
   }
   await persistence.retireClarification(row);
-  const cancellation = await cancelRunDetailed(
+  // No clarificationNotice on purpose: this path exists because the ticket is
+  // GONE from the tracker, so there is no channel left to close the question on
+  // and no settings snapshot down here to name a column with.
+  const cancellation = await cancelRunDetailed({
     ticketKey,
-    runId,
+    target: runId,
     runRegistry,
-    issueTracker,
-    undefined,
-    onSubjectReleased,
-    missingTicketCancellationReason(ticketKey),
-  );
+    ...(issueTracker ? { issueTracker } : {}),
+    ...(onSubjectReleased ? { onReleased: onSubjectReleased } : {}),
+    reason: missingTicketCancellationReason(ticketKey),
+  });
   return finalizeTicketCancellation({
     ticketKey,
     runId,
@@ -711,16 +713,17 @@ async function retryCancellingClaim(
       requiredOwnerState: "cancelling",
     });
   };
-  return cancelRunDetailed(
-    entry.ticketKey,
+  return cancelRunDetailed({
+    ticketKey: entry.ticketKey,
     target,
     runRegistry,
-    issueTracker,
-    inAiColumn ? backlogTarget : undefined,
-    onSubjectReleased,
+    ...(issueTracker ? { issueTracker } : {}),
+    ...(inAiColumn ? { targetColumn: backlogTarget } : {}),
+    ...(onSubjectReleased ? { onReleased: onSubjectReleased } : {}),
     reason,
-    finalFence,
-  );
+    beforeRelease: finalFence,
+    clarificationNotice: { aiColumnName: settings.COLUMN_AI },
+  });
 }
 
 async function readLiveTicketInAiColumn(
@@ -918,15 +921,16 @@ async function cleanStuckTicketRun(
       }
     : settings.COLUMN_BACKLOG;
 
-  const result = await cancelRunDetailed(
+  const result = await cancelRunDetailed({
     ticketKey,
-    entry.runId,
+    target: entry.runId,
     runRegistry,
     issueTracker,
-    backlogTarget,
-    onSubjectReleased,
-    STUCK_TICKET_EVICTION_REASON,
-  );
+    targetColumn: backlogTarget,
+    ...(onSubjectReleased ? { onReleased: onSubjectReleased } : {}),
+    reason: STUCK_TICKET_EVICTION_REASON,
+    clarificationNotice: { aiColumnName: settings.COLUMN_AI },
+  });
   if (!result.cancelled) {
     logger.warn(
       { ticketKey, runId: entry.runId },
