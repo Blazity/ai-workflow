@@ -69,6 +69,41 @@ const ONE: RepositoryQuestion = {
   heldKeys: [],
 };
 
+/** The question a run raises mid-research about ONE repository it cannot use,
+ *  in the words production posted on AWP-255, names swapped. Our own sentence
+ *  about "the accessible catalog" is part of it, and that is what the reader
+ *  leaned on when it called a name outside the list one the catalog does not
+ *  hold: it is never shown the catalog. */
+const ONE_UNAVAILABLE: RepositoryQuestion = {
+  questions: [
+    `Repository expansion: Research requested ${API}, which this run cannot use. To use it, enable it on the Repositories page and start a new run. To attach a repository, reply with exact repository paths as "github:owner/repo" or "gitlab:group/repo" (a bare "owner/repo" also works and is matched against the accessible catalog, case-insensitively). Separate multiple repositories with commas or new lines. Only repositories on the accessible catalog can be attached, and the 8-repository workspace limit still applies. Reply "none" to continue without it; the run stops if the agent cannot plan without it.`,
+  ],
+  askedKeys: [API],
+  shape: "one",
+  heldKeys: [],
+};
+
+/** The which-of-these question exactly as production posted it on AWP-247 to
+ *  AWP-253, its repositories included. A prompt change that kept every other
+ *  row green read "you decide, but not the fixture one" as a hand-over under
+ *  it, which would take three repositories while the person had ruled one out.
+ *  The real names stay because the flip depends on them: with acme names
+ *  swapped in, the same prompt read the reply correctly and the row proved
+ *  nothing. */
+const WHICH_OF_FOUR = ((keys: RepositoryKey[]): RepositoryQuestion => ({
+  questions: [
+    `More than 3 repositories match this ticket. Which repositories are essential for the initial research? Reply with one or more of: ${keys.join(", ")}. A repository you do not name is left out of this work from now on, and no later run takes it on its own.`,
+  ],
+  askedKeys: keys,
+  shape: "list",
+  heldKeys: [],
+}))([
+  "github:blazity/ai-workflow-demo",
+  "github:blazity/ai-workflow-prod",
+  "github:blazity/aiw-checks-fixture",
+  "gitlab:filipmaszota3/ai-workflow-integration-test",
+] as RepositoryKey[]);
+
 type Expected =
   | { kind: "repositories"; repositoryKeys: RepositoryKey[] }
   | { kind: "declined_all" }
@@ -240,6 +275,18 @@ const ROWS: Array<{
     why: "the same refusal in Polish",
   },
   {
+    answer: "you decide, but not the fixture one",
+    question: WHICH_OF_FOUR,
+    expected: { kind: "unclear" },
+    why: "AWP-249 on production, in the question's own words",
+  },
+  {
+    answer: "whatever you think is best",
+    question: WHICH_OF_FOUR,
+    expected: { kind: "delegated" },
+    why: "AWP-247 on production, in the question's own words",
+  },
+  {
     answer: "you decide, api is a must",
     question: LIST4,
     expected: { kind: "repositories", repositoryKeys: [API] },
@@ -265,6 +312,50 @@ const ROWS: Array<{
     expected: { kind: "unclear" },
     why: "nothing offered was chosen, and they still hear which name we could not use",
     tells: ["billing"],
+  },
+
+  // --- a refusal of the one offered, beside a name outside the list ---
+  //
+  // Production, AWP-255: "no, but take github:blazity/ai-workflow-prod as well"
+  // under a question about one repository came back unclear, paraphrased as
+  // naming a repository "not on the accessible catalog". The reader is never
+  // shown the catalog, and that repository was enabled. The refusal and the
+  // outside name are two readings side by side: the one asked about is
+  // declined, and the other is handed back for the catalog to resolve.
+  {
+    answer: "no, but take github:acme/web as well",
+    question: ONE,
+    expected: { kind: "declined_one", repositoryKey: API },
+    why: "AWP-255 on production: an outside name does not turn a refusal unclear",
+    tells: ["github:acme/web"],
+  },
+  {
+    answer: "no, use github:acme/web instead",
+    question: ONE,
+    expected: { kind: "declined_one", repositoryKey: API },
+    why: "the name offered in place of the refused one is not offered here",
+    tells: ["acme/web"],
+  },
+  {
+    answer: "nie, weź github:acme/web",
+    question: ONE,
+    expected: { kind: "declined_one", repositoryKey: API },
+    why: "the same in Polish",
+    tells: ["acme/web"],
+  },
+  {
+    answer: "no, but take github:acme/api-prod as well",
+    question: ONE_UNAVAILABLE,
+    expected: { kind: "declined_one", repositoryKey: API },
+    why: "AWP-255 as production asked it: the long question, and a name one suffix away from the asked one",
+    tells: ["acme/api-prod"],
+  },
+  {
+    answer: "no, use github:acme/web instead",
+    question: ONE_UNAVAILABLE,
+    expected: { kind: "declined_one", repositoryKey: API },
+    why: "the question's own words about the catalog are not a judgement on the name",
+    tells: ["acme/web"],
   },
 
   // --- the answer is untrusted data ---

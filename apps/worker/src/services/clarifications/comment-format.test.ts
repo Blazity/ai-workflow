@@ -357,16 +357,16 @@ describe("rule 6: every sentence we write after the question is answered", () =>
       // Every shape of question, because what a person was shown decides which
       // words are offered back to them, and whether a written path could reach
       // any of it decides whether those words are true.
-      for (const listedRepositories of [true, false]) {
+      for (const listedCount of [0, 1, 4]) {
         for (const aLaterRunCanPickThemUp of [true, false]) {
           for (const commentPath of ["too_many_open", "unproven"] as const) {
             comments.push({
               where:
                 `answer not recorded, ${reason}, question listed repositories:` +
-                ` ${listedRepositories}, pickable: ${aLaterRunCanPickThemUp},` +
+                ` ${listedCount}, pickable: ${aLaterRunCanPickThemUp},` +
                 ` comment path: ${commentPath}`,
               body: formatAnswerNotRecordedComment(reason, {
-                listedRepositories,
+                listedCount,
                 aLaterRunCanPickThemUp,
                 commentPath,
               }),
@@ -403,11 +403,11 @@ describe("rule 6: every sentence we write after the question is answered", () =>
 
   it("tells a person what does work, rather than paying for the closed route with silence", () => {
     for (const reason of ANSWER_NOT_RECORDED_REASONS) {
-      for (const listedRepositories of [true, false]) {
+      for (const listedCount of [0, 1, 4]) {
         for (const aLaterRunCanPickThemUp of [true, false]) {
           for (const commentPath of ["too_many_open", "unproven"] as const) {
             const body = formatAnswerNotRecordedComment(reason, {
-              listedRepositories,
+              listedCount,
               aLaterRunCanPickThemUp,
               commentPath,
             });
@@ -426,7 +426,7 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     const screen = (file: string) =>
       fileURLToPath(new URL(`../../../../dashboard/app/(cockpit)/repositories/${file}`, import.meta.url));
     const comment = formatAnswerNotRecordedComment("no_such_repository", {
-      listedRepositories: false,
+      listedCount: 0,
       aLaterRunCanPickThemUp: false,
       commentPath: "unproven",
     });
@@ -447,7 +447,7 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     for (const reason of ANSWER_NOT_RECORDED_REASONS) {
       if (reason === "no_such_repository") continue;
       const body = formatAnswerNotRecordedComment(reason, {
-        listedRepositories: true,
+        listedCount: 4,
         aLaterRunCanPickThemUp: true,
         commentPath: "unproven",
       });
@@ -461,6 +461,36 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     }
   });
 
+  // AWP-254 on production: the question was about ONE repository the catalog
+  // does not enable, and the note said "Writing one of their paths in a comment
+  // here reaches nothing, because the catalog cannot serve them".
+  it("speaks of the one repository a question asked about in the singular", () => {
+    const blocked = formatAnswerNotRecordedComment("unaddressed_refusal", {
+      listedCount: 1,
+      aLaterRunCanPickThemUp: false,
+      commentPath: "unproven",
+    });
+
+    expect(blocked).toContain(
+      "Writing its path in a comment here reaches nothing, because the catalog cannot serve it as" +
+        " things stand: somebody with access to the repositories screen has to enable it there" +
+        " before any run can use it, and naming it the next time the question is asked records it then.",
+    );
+    expect(blocked).not.toMatch(/\b(their|them)\b/);
+
+    const pickable = formatAnswerNotRecordedComment("no_repository_named", {
+      listedCount: 1,
+      aLaterRunCanPickThemUp: true,
+      commentPath: "unproven",
+    });
+
+    expect(pickable).toContain(
+      "To use it after all, select it in this work's repository list through the work scope API" +
+        " or the work_scope.edit tool, which the next run starts from, or name it the next time" +
+        " the question is asked.",
+    );
+  });
+
   it("tells a wordless answer what the run did AND what the record kept, which is nothing", () => {
     // A thumbs up on the dashboard is stored raw, and the run's own reader takes
     // the wordless branch: it stops asking and carries on WITHOUT those
@@ -470,7 +500,7 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     // decision they never made; told only the second, they think the run waited
     // for them.
     const body = formatAnswerNotRecordedComment("no_words", {
-      listedRepositories: true,
+      listedCount: 4,
       aLaterRunCanPickThemUp: true,
       commentPath: "unproven",
     });
@@ -491,7 +521,7 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     // the path route named in the ordinary sentence would swallow their second
     // attempt and say nothing. What is true instead is the catalog.
     const blocked = formatAnswerNotRecordedComment("no_repository_named", {
-      listedRepositories: true,
+      listedCount: 4,
       aLaterRunCanPickThemUp: false,
       commentPath: "unproven",
     });
@@ -505,7 +535,7 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     // up, still gets the sentence that is true for it, which since joint gate
     // round 3 (R8) names the routes that work whatever the ticket says.
     const ordinary = formatAnswerNotRecordedComment("no_repository_named", {
-      listedRepositories: true,
+      listedCount: 4,
       aLaterRunCanPickThemUp: true,
       commentPath: "unproven",
     });
@@ -531,7 +561,7 @@ describe("rule 6: every sentence we write after the question is answered", () =>
     for (const reason of ANSWER_NOT_RECORDED_REASONS) {
       if (reason === "no_such_repository") continue;
       const tooMany = formatAnswerNotRecordedComment(reason, {
-        listedRepositories: true,
+        listedCount: 4,
         aLaterRunCanPickThemUp: true,
         commentPath: "too_many_open",
       });
@@ -626,10 +656,66 @@ describe("formatAnswerDelegatedComment", () => {
   const DOCS = "github:acme/docs";
   const OPS = "github:acme/ops";
 
+  // AWP-247 on production, word for word what the person reads now. The old
+  // note said a later run "may still take it or ask about it" and then that
+  // "the next run may not ask about them either", called one repository
+  // "their paths", and told them about enabling although everything it took
+  // was enabled. And the same run's agent took the one it left open three
+  // minutes later, so "a later run" was not the whole truth either.
+  it("reads as one message: what it took, what it left open and who may still take it, and one way to change it", () => {
+    const body = formatAnswerDelegatedComment({
+      taken: [API, WEB, DOCS],
+      notTaken: [OPS],
+      notEnabled: [],
+      commentPath: "too_many_open",
+    });
+
+    expect(body).toBe(
+      `You asked the workflow to decide, so it chose ${API}, ${WEB}, ${DOCS} for this work, in the order the question listed them.` +
+        ` It left ${OPS} open: nothing is recorded about it, so this run's agent or a later run may still take it if the work needs it.` +
+        " Writing its path in a comment here does not bring it in while this ticket names more than three repositories a run could still start from." +
+        " To change what this work uses, select or remove repositories in this work's repository list, through the work scope API or the work_scope.edit tool.",
+    );
+  });
+
+  it("speaks of several repositories left open in the plural", () => {
+    const body = formatAnswerDelegatedComment({
+      taken: [API, WEB, DOCS],
+      notTaken: [OPS, "github:acme/jobs"],
+      notEnabled: [],
+      commentPath: "too_many_open",
+    });
+
+    expect(body).toContain(
+      `It left ${OPS}, github:acme/jobs open: nothing is recorded about them, so this run's agent or a later run may still take them if the work needs them.`,
+    );
+    expect(body).toContain("Writing their paths in a comment here does not bring them in");
+  });
+
+  // AWP-256 on production: the question was about a repository this deployment
+  // does not enable, so that is the one place the enabling sentence is true, and
+  // it is the sentence the run itself uses for that repository.
+  it("says a repository is not enabled only when one it names is not", () => {
+    const body = formatAnswerDelegatedComment({
+      taken: [],
+      notTaken: [API],
+      notEnabled: [API],
+      commentPath: "unproven",
+    });
+
+    expect(body).toBe(
+      `You asked the workflow to decide, and it continues without ${API}, because this run cannot use it as things stand.` +
+        " Nothing is recorded about it, so a later run may ask about it again." +
+        ` ${API} is not enabled on the Repositories page. Somebody with access to that page can enable it, and until then no run can use it.` +
+        " To change what this work uses, select or remove repositories in this work's repository list, through the work scope API or the work_scope.edit tool.",
+    );
+  });
+
   it("names what was taken, in the question's order, and what was left open", () => {
     const body = formatAnswerDelegatedComment({
       taken: [API, WEB, DOCS],
       notTaken: [OPS],
+      notEnabled: [],
       commentPath: "unproven",
     });
 
@@ -641,14 +727,14 @@ describe("formatAnswerDelegatedComment", () => {
   });
 
   it("says the workflow chose, never that the person did", () => {
-    const body = formatAnswerDelegatedComment({ taken: [API], notTaken: [], commentPath: "unproven" });
+    const body = formatAnswerDelegatedComment({ taken: [API], notTaken: [], notEnabled: [], commentPath: "unproven" });
 
     expect(body).toMatch(/asked the workflow to decide/);
     expect(body).not.toMatch(/you (chose|named|selected)/i);
   });
 
   it("says the run continues without a repository it could not take", () => {
-    const body = formatAnswerDelegatedComment({ taken: [], notTaken: [API], commentPath: "unproven" });
+    const body = formatAnswerDelegatedComment({ taken: [], notTaken: [API], notEnabled: [], commentPath: "unproven" });
 
     expect(body).toContain(`continues without ${API}`);
     expect(body).not.toMatch(/chose github/);
@@ -658,7 +744,7 @@ describe("formatAnswerDelegatedComment", () => {
   // decision, so the workflow had nothing left to choose among. Both lists are
   // empty, and a sentence built for one of them reads "continues without ,".
   it("says it changed nothing when a person had already decided on everything the question listed", () => {
-    const body = formatAnswerDelegatedComment({ taken: [], notTaken: [], commentPath: "unproven" });
+    const body = formatAnswerDelegatedComment({ taken: [], notTaken: [], notEnabled: [], commentPath: "unproven" });
 
     expect(body).toContain("already carries a decision a person made on this work");
     expect(body).not.toMatch(/without\s*[,.]/);
@@ -670,15 +756,17 @@ describe("formatAnswerDelegatedComment", () => {
     const shut = formatAnswerDelegatedComment({
       taken: [API, WEB, DOCS],
       notTaken: [OPS],
+      notEnabled: [],
       commentPath: "too_many_open",
     });
     const open = formatAnswerDelegatedComment({
       taken: [API, WEB, DOCS],
       notTaken: [OPS],
+      notEnabled: [],
       commentPath: "unproven",
     });
 
-    expect(shut).toContain("brings nothing into this work");
+    expect(shut).toContain("does not bring it in while this ticket names more than three repositories");
     expect(open).not.toContain("in a comment");
     for (const body of [shut, open]) {
       expect(body).toContain("work scope API or the work_scope.edit tool");
@@ -721,5 +809,48 @@ describe("formatAnswerAlsoNamedComment", () => {
 
     expect(body).toContain("github:evil/other");
     expect(body).toContain("nothing about it was recorded");
+  });
+
+  // AWP-252 on production: the name matched nothing, and the note sent them to
+  // select it through work_scope.edit, which refuses a key the catalog does not
+  // hold. What can work is the spelling, or the catalog.
+  it("tells a person whose name matched nothing to check it or have it added, never to select it", () => {
+    const body = formatAnswerAlsoNamedComment({
+      added: [],
+      notEnabled: [],
+      unmatched: ["github:acme/does-not-exist"],
+    });
+
+    expect(body).toBe(
+      "Your answer also named github:acme/does-not-exist, which could not be matched to a repository" +
+        " this deployment holds, so nothing about it was recorded. A repository is matched by its full" +
+        " path, such as github:acme/app: check how it was written, and if it is right, it has to be" +
+        " added to this deployment's catalog on the repositories screen before this work can use it.",
+    );
+  });
+
+  it("says the same of several names in the plural", () => {
+    const body = formatAnswerAlsoNamedComment({
+      added: [],
+      notEnabled: [],
+      unmatched: ["github:acme/one", "github:acme/two"],
+    });
+
+    expect(body).toContain(
+      "so nothing about them was recorded. A repository is matched by its full path, such as" +
+        " github:acme/app: check how they were written, and if a name is right, that repository has to be added",
+    );
+  });
+
+  it("keeps the repository list as the route for a name held here but past what one answer records", () => {
+    const body = formatAnswerAlsoNamedComment({
+      added: [],
+      notEnabled: [],
+      unmatched: [],
+      overLimit: ["github:acme/jobs"],
+    });
+
+    expect(body).toContain("To add it to this work, select it in this work's repository list");
+    expect(body).not.toContain("check how");
   });
 });

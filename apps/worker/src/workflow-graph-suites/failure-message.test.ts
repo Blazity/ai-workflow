@@ -451,6 +451,80 @@ describe("clampBothEnds", () => {
   it("is a no-op below the limit", () => {
     expect(clampBothEnds("short summary", 255)).toBe("short summary");
   });
+
+  /** Every piece of the clamped text is a run of whole words of the original:
+   *  the head ends where a word of the original ends, and the tail starts where
+   *  one starts. */
+  function cutBetweenWords(original: string, clamped: string): boolean {
+    const [head, tail] = clamped.split(" [...] ");
+    if (head === undefined || tail === undefined) return false;
+    const headEndsAWord = original.startsWith(head) && /\s/.test(original[head.length] ?? " ");
+    const tailStartsAWord =
+      original.endsWith(tail) && /\s/.test(original[original.length - tail.length - 1] ?? " ");
+    return headEndsAWord && tailStartsAWord;
+  }
+
+  /**
+   * D5, D8 and D10 on production, 2026-09-18: the sentence the expansion loop
+   * writes when it closes arrives as raw detail, longer than the snippet cap,
+   * and the status reason and the ticket comment both read "the agent sti [...]
+   * epository list".
+   */
+  const CLOSED_EXPANSION =
+    "Repository expansion is closed for this run and the agent still needs github:Blazity/ai-workflow." +
+    " Select it in this work's repository list, through the work scope API or the work_scope.edit tool," +
+    " and start a new run.";
+
+  it("never cuts a word in half, on the sentence production cut", () => {
+    const out = deriveFailureMessage({
+      category: "engine",
+      detail: CLOSED_EXPANSION,
+      genericMessage: "The workflow engine could not continue.",
+    });
+    const snippet = out.slice(out.indexOf("(") + 1, out.lastIndexOf(")"));
+
+    expect(CLOSED_EXPANSION.length).toBeGreaterThan(160);
+    expect(snippet.length).toBeLessThanOrEqual(160);
+    expect(snippet).toContain("[...]");
+    expect(snippet).not.toContain("sti [...]");
+    expect(cutBetweenWords(CLOSED_EXPANSION, snippet)).toBe(true);
+  });
+
+  it("cuts between sentences where a sentence boundary keeps most of that end", () => {
+    const text =
+      "Cloning github:acme/api failed after the checkout step. " +
+      "The runner printed a long stretch of progress output that says nothing about why, ".repeat(3) +
+      "and then it stopped. The requested URL returned error: 403 while fetching github:acme/api.";
+    const out = clampBothEnds(text, 160);
+
+    expect(out.length).toBeLessThanOrEqual(160);
+    // The tail starts at the sentence that carries the verdict, not a word into
+    // the sentence before it, and the head ends where its sentence does.
+    expect(out).toBe(
+      "Cloning github:acme/api failed after the checkout step. [...] The requested URL returned error: 403 while fetching github:acme/api.",
+    );
+    expect(cutBetweenWords(text, out)).toBe(true);
+  });
+
+  it("still cuts through a single token too long to cut between words", () => {
+    const token = `https://example.invalid/${"a".repeat(300)}`;
+    const out = clampBothEnds(token, 160);
+
+    expect(out.length).toBeLessThanOrEqual(160);
+    expect(out).toContain(" [...] ");
+    expect(out.startsWith("https://example.invalid/")).toBe(true);
+  });
+
+  it("does not stack its marker against one an earlier clamp left", () => {
+    const summary =
+      `An external service could not complete this block. (${sanitizeDetail(GIT_CLONE_403_DETAIL)})` +
+      ` Diagnostic ID: ${PROD_DIAGNOSTIC_ID}`;
+    const out = clampBothEnds(summary, 255);
+
+    expect(out).not.toContain("[...] [...]");
+    expect(out).toContain(GIT_CLONE_403_VERDICT);
+    expect(out).toContain(PROD_DIAGNOSTIC_ID);
+  });
 });
 
 describe("operatorFailureDetail", () => {

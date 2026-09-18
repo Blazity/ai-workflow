@@ -496,9 +496,10 @@ export const workScopeAnswerReadingSchema = z
      *
      * NAMES, NEVER KEYS. The reading's own outcome stays inside the keys the
      * question put in front of the person, and nothing here is a key. Where the
-     * answer chose repositories, the record looks each name up in the
-     * deployment's catalog and takes the ones it holds as that person's own
-     * choice (`services/work-scope/from-answer.ts`, A19c); a name that resolves
+     * answer chose or refused what it was offered, the record looks each name
+     * up in the deployment's catalog and takes the ones it holds as that
+     * person's own choice (`services/work-scope/from-answer.ts`, A19c); a name
+     * that resolves
      * to nothing records nothing, which is what keeps an invented or injected
      * key harmless. The bound is therefore what the catalog holds, guarded by
      * where the name came from: a person's answer on an authenticated channel,
