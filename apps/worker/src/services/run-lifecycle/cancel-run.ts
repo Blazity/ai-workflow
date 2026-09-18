@@ -52,11 +52,29 @@ interface ObservedRunClaim {
 
 export type CancelRunTarget = string | ObservedRunClaim;
 
-export type CancelBeforeRelease = (owner: {
+type CancelBeforeRelease = (owner: {
   subjectKey: string;
   ownerToken: string;
   runId: string | null;
 }) => Promise<void>;
+
+/**
+ * What a cancel needs in order to close, on the tracker, a question the run had
+ * asked there. Optional everywhere: a caller that holds neither a tracker nor
+ * the deployment's column names cancels exactly as it did before, silently, and
+ * a subject with no ticket has no such channel at all.
+ *
+ * The column name is passed in rather than read here for the reason every other
+ * settings value on this path is: a service loads no settings of its own, and a
+ * comment naming a column this deployment is not configured with would send a
+ * person to a board that does not exist.
+ */
+export interface ClarificationCancelNotice {
+  issueTracker: IssueTrackerAdapter;
+  /** The board column the comment tells a person to move the ticket back to, so
+   *  it reads the same as the questions comment it answers. */
+  aiColumnName: string;
+}
 
 /**
  * Result of a cancellation attempt. `alreadyTerminal` distinguishes a run
@@ -111,16 +129,48 @@ export async function cancelRun(
   reason?: string,
 ): Promise<boolean> {
   return (
-    await cancelRunDetailed(
+    await cancelRunDetailed({
       ticketKey,
       target,
       runRegistry,
-      issueTracker,
-      targetColumn,
-      onReleased,
-      reason,
-    )
+      ...(issueTracker ? { issueTracker } : {}),
+      ...(targetColumn ? { targetColumn } : {}),
+      ...(onReleased ? { onReleased } : {}),
+      ...(reason ? { reason } : {}),
+    })
   ).cancelled;
+}
+
+/**
+ * Everything a ticket-subject cancellation can be told, as one object.
+ *
+ * It was eight positional parameters, four of them optional and three of them
+ * undefined at most call sites, which is unreadable at the call site and is why
+ * a ninth was not an option. Every field is named here instead.
+ */
+export interface CancelRunDetailedInput {
+  /** Jira ticket key; its subject key is derived here. */
+  ticketKey: string;
+  target: CancelRunTarget;
+  runRegistry: RunRegistryAdapter;
+  issueTracker?: IssueTrackerAdapter;
+  /** Column the ticket is moved to under the cancelling owner, before the claim
+   *  is released. Without it the cron finds the ticket still in the Ai column on
+   *  the next tick and dispatches a fresh run. */
+  targetColumn?: IssueTrackerMoveTarget;
+  onReleased?: (subjectKey: string) => Promise<void> | void;
+  reason?: string;
+  /** Replaces the plain column move with the caller's own final fence. */
+  beforeRelease?: CancelBeforeRelease;
+  /**
+   * Set this when the caller knows the deployment's Ai column name, and a
+   * cancel that retires a question the ticket was shown will say so on the
+   * ticket. Ignored without `issueTracker`, and never a reason to invent a
+   * column name: a caller that cannot name the configured column leaves this
+   * out and stays silent rather than sending a person to a board that does not
+   * exist.
+   */
+  clarificationNotice?: { aiColumnName: string };
 }
 
 /**
@@ -130,15 +180,9 @@ export async function cancelRun(
  * own.
  */
 export async function cancelRunDetailed(
-  ticketKey: string,
-  target: CancelRunTarget,
-  runRegistry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
-  targetColumn?: IssueTrackerMoveTarget,
-  onReleased?: (subjectKey: string) => Promise<void> | void,
-  reason?: string,
-  beforeRelease?: CancelBeforeRelease,
+  input: CancelRunDetailedInput,
 ): Promise<CancelRunResult> {
+  const { ticketKey, issueTracker, targetColumn } = input;
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const confirmTicketMove = issueTracker && targetColumn
     ? async (owner: { subjectKey: string; ownerToken: string; runId: string | null }) => {
@@ -154,11 +198,14 @@ export async function cancelRunDetailed(
     : undefined;
   return cancelOwnedSubject(
     subjectKey,
-    target,
-    runRegistry,
-    onReleased,
-    beforeRelease ?? confirmTicketMove,
-    reason,
+    input.target,
+    input.runRegistry,
+    input.onReleased,
+    input.beforeRelease ?? confirmTicketMove,
+    input.reason,
+    issueTracker && input.clarificationNotice
+      ? { issueTracker, aiColumnName: input.clarificationNotice.aiColumnName }
+      : undefined,
   );
 }
 
@@ -184,8 +231,17 @@ export async function cancelSubjectRunDetailed(
   runRegistry: RunRegistryAdapter,
   onReleased?: (subjectKey: string) => Promise<void> | void,
   reason?: string,
+  notice?: ClarificationCancelNotice,
 ): Promise<CancelRunResult> {
-  return cancelOwnedSubject(subjectKey, target, runRegistry, onReleased, undefined, reason);
+  return cancelOwnedSubject(
+    subjectKey,
+    target,
+    runRegistry,
+    onReleased,
+    undefined,
+    reason,
+    notice,
+  );
 }
 
 /**
@@ -284,6 +340,13 @@ export async function cancelRunById(
       if (answer) return answer;
     }
     const reason = `cancelled by ${actorLabel}`;
+    // An operator cancel is the one cancel a person triggers and then walks
+    // away from, so it is the one that most owes the ticket an explanation. It
+    // is also the only cancel path that already carries both a tracker and the
+    // deployment's column names, which is what the comment needs.
+    const clarificationNotice: ClarificationCancelNotice | undefined = opts.issueTracker
+      ? { issueTracker: opts.issueTracker, aiColumnName: opts.settings.COLUMN_AI }
+      : undefined;
     if (claim.kind === "manual_ticket" && (!claim.ticketKey || !opts.issueTracker)) {
       logger.warn(
         { subjectKey: claim.subjectKey, runId },
@@ -317,6 +380,7 @@ export async function cancelRunById(
             });
           },
           reason,
+          clarificationNotice,
         )
       : await cancelSubjectRunDetailed(
           claim.subjectKey,
@@ -324,6 +388,7 @@ export async function cancelRunById(
           runRegistry,
           undefined,
           reason,
+          clarificationNotice,
         );
     // alreadyTerminal implies cancelled, so it must be checked first: the run
     // reached a terminal Workflow status on its own and keeps that outcome, so
@@ -766,6 +831,7 @@ async function cancelOwnedSubject(
     runId: string | null;
   }) => Promise<void>,
   reason?: string,
+  notice?: ClarificationCancelNotice,
 ): Promise<CancelRunResult> {
   let observed: ObservedRunClaim;
   if (typeof target === "string") {
@@ -787,7 +853,11 @@ async function cancelOwnedSubject(
   // This closes both answer races: pending->answered cannot proceed after the
   // tombstone, and an answer that already minted a successor token cannot be
   // recreated by reconciliation while cancellation follows the handoff.
-  let tombstone: { matched: boolean; successorOwnerToken: string | null };
+  let tombstone: {
+    matched: boolean;
+    successorOwnerToken: string | null;
+    retiredPublished: boolean;
+  };
   try {
     const { tombstoneConnectedClarificationCancellation } =
       await import("../../db/repositories/clarifications.js");
@@ -911,15 +981,27 @@ async function cancelOwnedSubject(
     return { cancelled: false, released: false, tornDown };
   }
 
-  if (
-    closed.runId &&
-    !(await retirePostDrainContinuations(subjectKey, closed, closed.runId))
-  ) {
-    return { cancelled: false, released: false, tornDown };
-  }
-
+  // Whether THIS attempt retired a question a human had been shown. Both
+  // tombstones contribute: the first retires the park this cancel found, the
+  // post-drain one retires a question a still-executing step published after
+  // it. Either way the row is consumed here, so a later attempt reads false and
+  // the announcement below happens at most once per cancelled question.
+  let retiredPublishedQuestion = tombstone.retiredPublished;
   if (closed.runId) {
+    const postDrain = await retirePostDrainContinuations(subjectKey, closed, closed.runId);
+    if (!postDrain.retired) {
+      return { cancelled: false, released: false, tornDown };
+    }
+    retiredPublishedQuestion = retiredPublishedQuestion || postDrain.retiredPublished;
+
     await settleCancelledPark(subjectKey, closed.runId);
+
+    // Ahead of the ticket move and the claim release on purpose: both of those
+    // can decline and leave the caller to retry, and a retry finds the question
+    // already retired and would say nothing at all.
+    if (retiredPublishedQuestion) {
+      await announceRetiredClarification(subjectKey, closed, closed.runId, notice);
+    }
   }
 
   if (beforeRelease && !(await confirmBeforeRelease(subjectKey, closed, beforeRelease))) {
@@ -1001,7 +1083,7 @@ async function retirePostDrainContinuations(
   subjectKey: string,
   closed: ActiveRunEntry,
   runId: string,
-): Promise<boolean> {
+): Promise<{ retired: boolean; retiredPublished: boolean }> {
   try {
     const [
       { tombstoneConnectedClarificationCancellation },
@@ -1010,7 +1092,7 @@ async function retirePostDrainContinuations(
       import("../../db/repositories/clarifications.js"),
       import("../../db/repositories/approvals.js"),
     ]);
-    await tombstoneConnectedClarificationCancellation({
+    const tombstone = await tombstoneConnectedClarificationCancellation({
       subjectKey,
       ownerToken: closed.ownerToken,
       runId,
@@ -1021,13 +1103,92 @@ async function retirePostDrainContinuations(
         runId,
       });
     }
-    return true;
+    return { retired: true, retiredPublished: tombstone.retiredPublished === true };
   } catch (error) {
     logger.warn(
       { subjectKey, runId, error: (error as Error).message },
       "cancel_run_post_drain_continuation_cleanup_unconfirmed",
     );
-    return false;
+    return { retired: false, retiredPublished: false };
+  }
+}
+
+/**
+ * Tell the tracker the question was asked on that it is no longer open.
+ *
+ * A cancel retires the clarification in the database and moves the ticket out
+ * of the Ai column, and until this existed it said nothing on the ticket at
+ * all: the questions comment and the needs-clarification label both stayed,
+ * inviting an answer for the week the expiry sentence promised, and the answer
+ * a person then wrote reached nobody (observed on production, 2026-09-18).
+ *
+ * Best effort in both halves, like every other tracker write on this path. The
+ * run is already torn down and its claim is about to go; a tracker that refuses
+ * a write must not turn a cancel into a failure, and must not stop the other
+ * half either, so the two are guarded separately. The comment goes first
+ * because a ticket carrying the explanation and a stale label is still
+ * readable, while a ticket carrying neither is the defect itself.
+ *
+ * Exactly-once rests on the caller: this runs only when THIS attempt's
+ * tombstone was the one that retired a published question, and a retired row
+ * cannot be retired twice. The marker lookup is the second line of defence, for
+ * the post whose reply was lost after the tracker had already written it.
+ */
+async function announceRetiredClarification(
+  subjectKey: string,
+  closed: ActiveRunEntry,
+  runId: string,
+  notice: ClarificationCancelNotice | undefined,
+): Promise<void> {
+  const ticketKey = closed.ticketKey;
+  if (!notice || !ticketKey) return;
+  const { issueTracker, aiColumnName } = notice;
+
+  try {
+    const { clarificationCancelledCommentMarker, formatClarificationCancelledComment } =
+      await import("../../engine/support/clarification-comment-format.js");
+    const marker = clarificationCancelledCommentMarker(runId);
+    const alreadyPosted = issueTracker.findCommentByMarker
+      ? (await issueTracker.findCommentByMarker(ticketKey, marker)) !== null
+      : false;
+    if (!alreadyPosted) {
+      await issueTracker.postComment(
+        ticketKey,
+        formatClarificationCancelledComment({ runId, aiColumnName }),
+      );
+    }
+  } catch (error) {
+    logger.warn(
+      { subjectKey, runId, ticketKey, error: (error as Error).message },
+      "cancel_run_clarification_comment_unconfirmed",
+    );
+  }
+
+  // The label is the one signal a human scanning the board reads, and after a
+  // cancel it says something untrue. Removing it is idempotent, and the helper
+  // skips the write entirely when the label is already gone.
+  if (typeof issueTracker.updateLabels !== "function") return;
+  try {
+    const [{ NEEDS_CLARIFICATION_LABEL }, { updateConnectedTicketLabelsForRun }] =
+      await Promise.all([
+        import("../../engine/support/ticket-labels.js"),
+        import("../tickets/ticket-label-mutation.js"),
+      ]);
+    await updateConnectedTicketLabelsForRun({
+      issueTracker,
+      ticketKey,
+      owner: { subjectKey, ownerToken: closed.ownerToken, runId },
+      // The claim was closed by beginCancellation and is not released until
+      // this call returns, so the fence is the cancelling owner, exactly as it
+      // is for the ticket move that follows.
+      requiredOwnerState: "cancelling",
+      changes: { remove: [NEEDS_CLARIFICATION_LABEL] },
+    });
+  } catch (error) {
+    logger.warn(
+      { subjectKey, runId, ticketKey, error: (error as Error).message },
+      "cancel_run_clarification_label_unconfirmed",
+    );
   }
 }
 

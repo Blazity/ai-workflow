@@ -19,11 +19,38 @@ const SNIPPET_MAX_LENGTH = 160;
  * to clamp. That matters beyond aesthetics: the run header runs the composed
  * message through this bound while Slack and the ticket comment receive it
  * unclamped, so any message longer than this makes the surfaces disagree, which
- * is the cross-surface guarantee AIW-254 has to hold. The worst legitimate
- * message is a hand-authored operator sentence (the longest in the tree is
- * ~250 characters, leak_review's) plus a 162-character wrapped snippet plus the
- * diagnostic suffix reserved below. */
-const MESSAGE_MAX_LENGTH = 600;
+ * is the cross-surface guarantee AIW-254 has to hold.
+ *
+ * THE WORST LEGITIMATE MESSAGE IS A REPOSITORY WORK-SCOPE REFUSAL, and at 600
+ * it did not fit. Production run wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF told the person
+ * on the ticket "This deployment's confi [...] o continue.", which names neither
+ * the repository nor the way back, because the claim above had stopped being
+ * true: those refusals are longer than the sentences it was sized for.
+ *
+ * They are still bounded BY CONSTRUCTION, on two of their three inputs. Their
+ * length is a count of repositories and the count is capped: a discovery result
+ * carries at most MAX_DISCOVERED_REPOSITORIES (3), so each of the three builders
+ * in `apps/worker/src/engine/repository-discovery/protocol.ts`
+ * (`nothingLeftToWorkOn`, `nothingLeftButUnnamed`, `nothingLeftToStartFrom`)
+ * writes at most three sentences plus one closing note. The actor label inside
+ * those sentences is capped where they compose it (`ACTOR_LABEL_MAX_LENGTH`, 60,
+ * a display bound rather than a schema rule, for the reason recorded there).
+ *
+ * Measured at three repositories, a 70-character repository key and a label at
+ * its 60-character cap, the longest any of them can author is 909 characters;
+ * 1_100 leaves that 55 characters of room under the derived bound below.
+ * `apps/worker/src/engine/execution-error-invariant.test.ts` drives the real
+ * builders and fails when one of them stops fitting, so this number is measured
+ * rather than asserted.
+ *
+ * THE THIRD INPUT, THE KEY, IS NOT BOUNDED. `repositoryKeySchema` admits a
+ * 207-character key and the longest refusal repeats one four times, so a
+ * deployment holding one would need ~1_600 here. None does (GitHub caps an owner
+ * at 39 characters), and buying that case would put a 1_600-character failure in
+ * every Slack message and ticket comment, so it is the one case where
+ * `composeWithinBound` clamps the lead rather than keeping it whole. Recorded
+ * here rather than paid. */
+const MESSAGE_MAX_LENGTH = 1_100;
 
 /** Longest single-line detail written to the correlated operator log record.
  * Matches the bound `logPhaseFailure` already uses for a logged reason, so one
@@ -315,7 +342,7 @@ function redactSecrets(text: string): string {
  * cap. Redaction runs over the whole text BEFORE the cap, so no part that
  * survives the cap can carry a secret the cap happened to spare. Empty or
  * whitespace-only input yields an empty string. */
-function sanitizeSingleLine(text: string, maxLength: number): string {
+function redactedSingleLine(text: string): string {
   if (!text || !text.trim()) return "";
   // Drop a leading generic JS error-class prefix ("Error:", "TypeError:", ...)
   // so the snippet leads with the actual cause, not the error class name.
@@ -324,7 +351,11 @@ function sanitizeSingleLine(text: string, maxLength: number): string {
     "",
   );
   const redacted = redactSecrets(withoutErrorClass);
-  const collapsed = redacted.replace(/\s+/g, " ").trim();
+  return redacted.replace(/\s+/g, " ").trim();
+}
+
+function sanitizeSingleLine(text: string, maxLength: number): string {
+  const collapsed = redactedSingleLine(text);
   if (!collapsed) return "";
   return clampBothEnds(collapsed, maxLength);
 }
@@ -554,14 +585,69 @@ function unclassifiedClause(evidence: FailureEvidence | undefined): string {
   return `${opening} Likely causes: ${candidates}. The raw session is in the failed attempt's LOGS tab.`;
 }
 
-/** Join a lead sentence and a trailing clause within the derived bound, giving
- * the clause the budget it needs first. Clamping the lead rather than the whole
- * is what makes the cause survive: the lead is boilerplate advice, the clause
- * is the reason. */
-function composeWithinBound(lead: string, clause: string): string {
-  const budget = DERIVED_MESSAGE_MAX_LENGTH - clause.length - 1;
-  if (budget <= 0) return clampBothEnds(clause, DERIVED_MESSAGE_MAX_LENGTH);
-  return `${clampBothEnds(lead, budget)} ${clause}`;
+/** Shortest clause worth gluing onto a whole lead.
+ *
+ * `clampBothEnds` spends 7 characters on the elision marker and gives 60% of
+ * what is left to the tail, so under this the head is down to about a dozen
+ * characters ("(the check ru [...] ong repository)") and the clause names
+ * nothing a person can act on. The lead is a
+ * finished sentence on its own, so dropping such a clause costs a person less
+ * than appending it. */
+const MIN_APPENDED_CLAUSE_LENGTH = 40;
+
+/** The lead by itself.
+ *
+ * The clamp is the out-of-contract case and only that: a call site whose
+ * authored sentence is longer than MESSAGE_MAX_LENGTH was sized for. There is no
+ * better answer once it happens (the alternative is no message at all), so it
+ * stays reachable, and the worst-case measurement over the real refusal builders
+ * is what keeps it unreached. */
+function leadWithinBound(lead: string): string {
+  return lead.length > DERIVED_MESSAGE_MAX_LENGTH
+    ? clampBothEnds(lead, DERIVED_MESSAGE_MAX_LENGTH)
+    : lead;
+}
+
+/**
+ * Join a lead sentence and a trailing clause within the derived bound, KEEPING
+ * THE LEAD WHOLE.
+ *
+ * This used to do the opposite: the clause was given its budget first and the
+ * lead absorbed the loss, on the reading that a lead is boilerplate advice and
+ * the clause is the reason. That reading is right for a raw provider snippet and
+ * wrong for every call site that authored its own sentence, because eliding the
+ * middle of a sentence written for a person produces boilerplate nonsense. On
+ * production run wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF the whole refusal WAS the lead,
+ * and what reached the ticket was "This deployment's confi [...] o continue." with
+ * the repository, the reason and the way back all in the elided middle.
+ *
+ * So the lead is used whole and the clause gets what is left of the budget.
+ * `clauseSurvivesClamping` decides what happens when that is not enough, and the
+ * two answers are the two kinds of clause. Raw provider or CLI output survives a
+ * both-ends clamp, which is the case `clampBothEnds` exists for, so it is
+ * clamped into the remainder. Prose this module wrote has the same
+ * middle-elision problem as the lead, so it is appended whole or not at all.
+ */
+function composeWithinBound(
+  lead: string,
+  clause: string,
+  clauseSurvivesClamping: boolean,
+): string {
+  const bounded = leadWithinBound(lead);
+  const budget = DERIVED_MESSAGE_MAX_LENGTH - bounded.length - 1;
+  if (clause.length <= budget) return `${bounded} ${clause}`;
+  if (!clauseSurvivesClamping || budget < MIN_APPENDED_CLAUSE_LENGTH) return bounded;
+  return `${bounded} ${clampBothEnds(clause, budget)}`;
+}
+
+/** Lead plus a parenthesised snippet of raw evidence. */
+function composeWithSnippet(lead: string, snippet: string): string {
+  return composeWithinBound(lead, `(${snippet})`, true);
+}
+
+/** Lead plus a clause this module authored, which is never elided. */
+function composeWithAuthoredClause(lead: string, clause: string): string {
+  return composeWithinBound(lead, clause, false);
 }
 
 /**
@@ -584,12 +670,32 @@ export function deriveFailureMessage(params: {
   detail: string;
   genericMessage: string;
   /** Safe sentence the call site authored. Sets the lead; never suppresses the
-   *  cause. */
+   *  cause, and is never elided through its middle: a call site that passes a
+   *  whole sentence gets a whole sentence in front of the person. Pass the
+   *  authored refusal here, not only as `detail`, wherever the refusal IS the
+   *  user-facing message. */
   explicitMessage?: string;
   evidence?: FailureEvidence;
 }): string {
   const { category, detail, genericMessage, explicitMessage, evidence } = params;
-  const lead = explicitMessage?.trim() || genericMessage;
+  // THE LEAD IS REDACTED LIKE EVERYTHING ELSE IN THE MESSAGE, and it did not
+  // used to be, because a lead used to be a fixed operator sentence with no
+  // runtime text in it. It is not one any more: a repository work-scope refusal
+  // names the person who took the repository off the work, from `actorLabel`,
+  // which is a raw tracker display name and IS AN EMAIL ADDRESS when the account
+  // has no display name set. Unredacted it reached Slack and the ticket comment
+  // in clear while the API response redacted it at its own boundary, so one
+  // sentence read two ways depending on where you read it. The clamp is left to
+  // `leadWithinBound`, which is where the bound is documented; this is redaction
+  // and whitespace only.
+  //
+  // The fallback is for a lead that STRIPS to nothing, which is a lead made
+  // only of stack frames: those are dropped whole, unlike a secret, which is
+  // replaced by a marker and so always leaves something behind. Falling back to
+  // the generic sentence rather than to the raw lead, because printing the
+  // original because the pipeline emptied it would publish exactly what the
+  // pipeline removed.
+  const lead = redactedSingleLine(explicitMessage?.trim() || genericMessage) || genericMessage;
   const candidates = orderedEvidence(evidence, detail);
 
   if (category === "provider") {
@@ -617,12 +723,27 @@ export function deriveFailureMessage(params: {
       // it here is what sends such a failure to the candidate-cause clause
       // instead of back to the bare category line.
       if (normalizedGeneric.includes(normalizeForComparison(snippet))) continue;
-      if (leadAlreadyStates(lead, snippet)) {
-        return clampBothEnds(lead, DERIVED_MESSAGE_MAX_LENGTH);
-      }
-      return composeWithinBound(lead, `(${snippet})`);
+      // Asked of the candidate's OWN text as well, not only of the snippet.
+      // `sanitizeDetail` clamps at SNIPPET_MAX_LENGTH, and a clamp drops the
+      // middle, so a call site whose lead IS its detail fails its own
+      // containment test the moment that detail passes 160 characters: the
+      // normalized snippet is a head glued to a tail and the lead contains no
+      // such string. What the person then reads is the sentence followed by a
+      // middle-clipped copy of itself in parentheses, which is how the
+      // production defect rendered. The unclamped text answers the question the
+      // guard is actually asking.
+      //
+      // Only for a candidate that is not a captured tail. A tail's informative
+      // part is its trailing lines, which the snippet already holds whole; its
+      // earlier lines are stream noise no lead ever states, so comparing them
+      // could only answer "no" more slowly.
+      const statedAlready =
+        leadAlreadyStates(lead, snippet) ||
+        (!candidate.isTail && leadAlreadyStates(lead, candidate.text));
+      if (statedAlready) return leadWithinBound(lead);
+      return composeWithSnippet(lead, snippet);
     }
-    return composeWithinBound(lead, unclassifiedClause(evidence));
+    return composeWithAuthoredClause(lead, unclassifiedClause(evidence));
   })();
 
   // The AIW-254 invariant, enforced here rather than trusted at ~90 call sites:
@@ -632,7 +753,7 @@ export function deriveFailureMessage(params: {
   // whose text is already inside the generic sentence, which `leadAlreadyStates`
   // legitimately suppresses. Both fall back to naming candidate causes.
   if (normalizeForComparison(composed) === normalizedGeneric) {
-    return composeWithinBound(lead, unclassifiedClause(evidence));
+    return composeWithAuthoredClause(lead, unclassifiedClause(evidence));
   }
   return composed;
 }

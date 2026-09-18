@@ -26,7 +26,12 @@ import type {
   WorkScopeEntry,
   WorkScopeQuestionAnswer,
 } from "@shared/contracts";
-import { createRepositoryQuestions } from "../agent-workflow.js";
+import { createWorkflowExecutionErrorState } from "@shared/contracts";
+import {
+  createRepositoryQuestions,
+  discoveryFailureToExecutionError,
+} from "../agent-workflow.js";
+import { formatExecutionErrorForUser } from "../helpers/execution-error.js";
 import { makeCtx } from "../blocks/support/test-support.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import {
@@ -972,6 +977,72 @@ describe("a subject whose selection question has already been answered", () => {
       blame: "work_scope",
     });
     expect(consumeWorkScopeAsk(ctx)).toBeUndefined();
+  });
+
+  it("hands that refusal to the person whole, not the half a bound left of it", () => {
+    // Production, 2026-09-18, run wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF. The refusal
+    // IS the record: the run's status reason and the ticket comment. It reached
+    // the closure as a DETAIL and nothing more, so the message layer led with
+    // the generic configuration sentence and appended a 160-character
+    // both-ends clamp of it. What the person read was
+    //
+    //   "This deployment's configuration does not allow this run to continue.
+    //    (Repository discovery was not confident about github:blazity/a [...]
+    //    epository list, through the work scope API or the work_scope.edit
+    //    tool, and start a new run.)"
+    //
+    // Which repository, why it was left out and the first half of the way back
+    // were all in the elided middle, and a refusal that arrives halved is this
+    // feature failing at its last step.
+    //
+    // Two halves, because the closure cannot be invoked by a test: the seam
+    // proves what a person reads, the tripwire proves the closure is what hands
+    // it over.
+    const { decision } = decide({
+      scope: scopeOf(),
+      answeredRepositoryKeys: ["github:acme/api"],
+      raw: unsureProposal(["acme/api", "the ticket names the API schema"]),
+    });
+    expect(decision.kind).toBe("failed");
+    if (decision.kind !== "failed") return;
+    // Over the snippet cap, which is what made the clamp fire at all. A refusal
+    // shorter than this would pass the old code too and prove nothing.
+    expect(decision.error.length).toBeGreaterThan(160);
+
+    const failure = discoveryFailureToExecutionError(decision, "prepare");
+    const shown = formatExecutionErrorForUser(
+      createWorkflowExecutionErrorState(
+        "wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF",
+        "prepare",
+        1,
+        failure.error,
+      ),
+    );
+    expect(shown).not.toContain("[...]");
+    expect(shown).toContain("github:acme/api");
+    expect(shown).toContain("start a new run");
+    expect(shown.startsWith(decision.error)).toBe(true);
+    // Not a provider fault. An operator sent to a forge status page over a
+    // decision somebody on this ticket made is an operator looking for an
+    // outage that never happened.
+    expect(failure.error.category).toBe("configuration");
+  });
+
+  it("does not hand the MODEL's own error string the whole message", () => {
+    // The other arm, and the reason the function asks WHOSE words before it
+    // decides. `decision.error` here is written by the model, not for a person,
+    // and the model controls it up to the 500 characters its schema allows.
+    // Leading with it would hand a model-authored string every failure surface
+    // in the product; behind the category sentence it is a snippet, which is
+    // what it is.
+    const modelError = "the agent could not read the ticket";
+    const failure = discoveryFailureToExecutionError(
+      { error: modelError, blame: "provider" },
+      "prepare",
+    );
+    expect(failure.error.category).toBe("provider");
+    expect(failure.error.message.startsWith(modelError)).toBe(false);
+    expect(failure.error.message).toContain(modelError);
   });
 
   it("asks about the excluded repository the FIRST time, because nobody has seen it yet", () => {

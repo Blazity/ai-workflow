@@ -95,7 +95,19 @@ export function workScopeOriginRank(origin: WorkScopeOrigin): number {
 export const WORK_SCOPE_REFUSAL_REASONS = [
   "outside_catalog",
   "outside_policy",
+  // Enabled here, and the provider offered nothing this run could check out for
+  // it. Deliberately NOT `outside_catalog`: that sentence says the repository is
+  // off the catalog this run may use, which is false about a row sitting enabled
+  // on the Repositories page, and a person sent there on the strength of it
+  // finds it looking fine.
+  "unusable",
   "excluded",
+  // Read this one BESIDE `unusable` above, because the two names are close and
+  // they mean different things. `unusable` is a fact about the provider right
+  // now: it listed the repository and offered nothing to check out. This one is
+  // a fact about the RECORD: an entry on this work already says the repository
+  // was unavailable, whoever wrote it and whenever. One can be true without the
+  // other, and the sentences a person reads say so.
   "unavailable",
   "workspace_cap",
   // More than three repositories were requested at once; the extras are
@@ -297,6 +309,156 @@ export const workScopeQuestionAnswerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("unattributed") }).strict(),
 ]);
 export type WorkScopeQuestionAnswer = z.infer<typeof workScopeQuestionAnswerSchema>;
+
+/**
+ * What a repository question put in front of a person: a LIST to choose from,
+ * or exactly ONE repository to say yes or no to.
+ *
+ * The shape is what makes a refusal readable. "no" under a question about one
+ * repository refuses that repository and nothing else; the same word under a
+ * list of four refuses nothing in particular, because it does not say which.
+ * The reader is told the shape rather than counting the keys, so a list that
+ * happens to hold one entry is still read as a list.
+ */
+export const WORK_SCOPE_QUESTION_SHAPES = ["list", "one"] as const;
+export const workScopeQuestionShapeSchema = z.enum(WORK_SCOPE_QUESTION_SHAPES);
+export type WorkScopeQuestionShape = z.infer<typeof workScopeQuestionShapeSchema>;
+
+/**
+ * THE CLOSED SET a person's answer may be read into. Nothing outside this is
+ * accepted, from a model or from anything else.
+ *
+ * `declined_all` and `declined_one` are separate because the questions they
+ * can answer are separate: a phrase that refuses one thing cannot settle a
+ * question that offered four, and a phrase that refuses a whole list cannot be
+ * the answer to a question about one repository. Collapsing them into a single
+ * "no" is exactly the reading that turned "continue without it" into four
+ * permanent exclusions.
+ *
+ * `unclear` carries the reader's own best paraphrase, and carrying it is the
+ * point: it is what the person is shown when we ask them to confirm, so the
+ * next reply is a yes or a name rather than the same sentence again.
+ */
+export const workScopeAnswerOutcomeSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("repositories"),
+      repositoryKeys: z
+        .array(repositoryKeySchema)
+        .min(1)
+        .max(WORK_SCOPE_ASKED_REPOSITORIES_MAX)
+        .refine(hasUniqueValues, { message: "Answered repositories must be unique." }),
+    })
+    .strict(),
+  z.object({ kind: z.literal("declined_all") }).strict(),
+  z.object({ kind: z.literal("declined_one"), repositoryKey: repositoryKeySchema }).strict(),
+  z
+    .object({
+      kind: z.literal("unclear"),
+      /** One sentence saying what we think they may have meant, or nothing when
+       *  even that would be a guess. */
+      paraphrase: z.string().trim().min(1).max(400).optional(),
+    })
+    .strict(),
+]);
+export type WorkScopeAnswerOutcome = z.infer<typeof workScopeAnswerOutcomeSchema>;
+
+/**
+ * ONE READING OF ONE ANSWER, MADE ONCE, STORED BESIDE THE WORDS.
+ *
+ * Two readers of the same answer used to exist, the record's and the run's,
+ * and they disagreed: "yes" to a question about one repository was a selection
+ * to one and unreadable to the other, so the record said the person had chosen
+ * and the run carried on without the repository. This is the single reading
+ * both now consume. A replay reads it back rather than reading the words
+ * again, so a resumed run cannot reach a different conclusion than the
+ * execution that took the answer.
+ *
+ * `readBy` says which reader produced it. `model` is the ordinary path.
+ * `deterministic` means the provider could not be reached and the surviving
+ * unambiguous reading answered instead (a repository path written out, or the
+ * bare word "none"); it is also what an unclear outcome carries when that
+ * reading had nothing to say, which is the worst case this path had before a
+ * model was involved at all.
+ */
+export const workScopeAnswerReadingSchema = z
+  .object({
+    /** Bumped when the meaning of a stored reading changes. A row carrying a
+     *  version this build does not know is not read at all, and the question is
+     *  put again, because acting on a reading we cannot interpret is the one
+     *  thing this whole path exists to prevent. */
+    version: z.literal(1),
+    outcome: workScopeAnswerOutcomeSchema,
+    readBy: z.enum(["model", "deterministic"]),
+    /** The model that read it, absent on the deterministic path. */
+    model: z.string().min(1).optional(),
+    /** ISO 8601, so the stored reading says when it was made without the reader
+     *  having to join back to the row it sits on. */
+    readAt: z.string().min(1),
+    /**
+     * REPOSITORY NAMES THE REPLY POINTED AT THAT THE QUESTION NEVER OFFERED.
+     *
+     * Something we TELL, never something we WRITE. Nothing here may become an
+     * entry, a selection or a refusal, and no reader may treat it as one: the
+     * allowlist stays exactly the keys the question put in front of the person,
+     * because that is what an injected instruction runs into and the worst it
+     * may reach must stay an option they were already being shown.
+     *
+     * It exists because the alternative is worse than the risk. Somebody
+     * answering "api and web" to a question about api named two repositories
+     * because they believe both are needed; recording api and saying nothing
+     * about web is the system quietly doing half the job, which is the failure
+     * this whole path exists to end. So the name comes back to them, in the
+     * channel they answered in, with somewhere to go.
+     *
+     * BOUNDED AND SANITISED, never a span the model composed: at most four
+     * names, each at most 100 characters and made only of the characters a
+     * repository name can contain. The words themselves are already on the
+     * ticket where that person wrote them, so echoing a name back exposes
+     * nothing new; echoing free text would.
+     */
+    unofferedNames: z.array(z.string().min(1).max(100)).max(4).optional(),
+  })
+  .strict();
+export type WorkScopeAnswerReading = z.infer<typeof workScopeAnswerReadingSchema>;
+
+/**
+ * The same closed set as a JSON schema, for the provider's structured output,
+ * and it is deliberately FLAT rather than the discriminated union above.
+ *
+ * Providers answer a flat object with an enum reliably and a nested union
+ * badly, and the union is not what keeps us safe here anyway: every field the
+ * model returns is checked against the keys we handed it before it becomes a
+ * reading. Normalising the flat answer into the union is that check.
+ *
+ * **No `$schema` key**, for the reason `REPOSITORY_SUGGESTION_ANSWER_JSON_SCHEMA`
+ * gives: this object goes to the AI SDK as-is and the providers refuse or
+ * ignore a dialect marker.
+ */
+export const WORK_SCOPE_ANSWER_READING_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["outcome"],
+  properties: {
+    outcome: {
+      type: "string",
+      enum: ["repositories", "declined_all", "declined_one", "unclear"],
+    },
+    /** Only for `repositories`. Every value must be one of the keys the prompt
+     *  listed; anything else throws the whole reading away. */
+    repositoryKeys: {
+      type: "array",
+      maxItems: WORK_SCOPE_ASKED_REPOSITORIES_MAX,
+      items: { type: "string" },
+    },
+    /** Only for `unclear`: one sentence on the best reading, shown to the
+     *  person when we ask them to confirm. */
+    paraphrase: { type: "string" },
+    /** Repository names the reply pointed at that are NOT in the offered list.
+     *  Told back to the person, never recorded. */
+    unofferedNames: { type: "array", maxItems: 4, items: { type: "string" } },
+  },
+} as const;
 
 export const workScopeTrailEventSchema = z.discriminatedUnion("kind", [
   z

@@ -398,15 +398,16 @@ describe("reconcileRuns owner-CAS recovery", () => {
         onReleased,
       ),
     ).toEqual({ cancelled: 0, cleaned: 1 });
-    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
-      "PROJ-1",
-      "run-1",
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "PROJ-1",
+      target: "run-1",
       runRegistry,
-      tracker,
-      "Backlog",
+      issueTracker: tracker,
+      targetColumn: "Backlog",
       onReleased,
-      expect.stringContaining("moved this ticket to Backlog"),
-    );
+      reason: expect.stringContaining("moved this ticket to Backlog"),
+      clarificationNotice: { aiColumnName: "AI" },
+    });
     // Genuinely a "done"/success outcome for the injection-block scenario, so
     // it must not be reported to operators as a cancellation.
     expect(onTicketCancelled).not.toHaveBeenCalled();
@@ -762,15 +763,14 @@ describe("reconcileRuns owner-CAS recovery", () => {
         new Set(),
       ),
     ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
-      "PROJ-1",
-      "run-1",
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "PROJ-1",
+      target: "run-1",
       runRegistry,
-      expect.anything(),
-      undefined,
-      undefined,
-      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
-    );
+      issueTracker: expect.anything(),
+      reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      clarificationNotice: { aiColumnName: "AI" },
+    });
     expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
@@ -835,15 +835,16 @@ describe("reconcileRuns owner-CAS recovery", () => {
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockRetireClarificationForGoneTicket).toHaveBeenCalledWith(mockDb, clarification);
-    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
-      "PROJ-1",
-      "run-1",
+    // No clarificationNotice: the ticket is gone, so there is nothing to post a
+    // closing comment on. Asserted as an exact object so adding one here fails.
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "PROJ-1",
+      target: "run-1",
       runRegistry,
-      tracker,
-      undefined,
+      issueTracker: tracker,
       onReleased,
-      "Orphaned run cancelled by reconciler: ticket PROJ-1 could not be found (deleted or no longer visible to the integration)",
-    );
+      reason: "Orphaned run cancelled by reconciler: ticket PROJ-1 could not be found (deleted or no longer visible to the integration)",
+    });
     expect(onCancelled).toHaveBeenCalledTimes(1);
     expect(onCancelled).toHaveBeenCalledWith("PROJ-1", "orphaned_run");
   });
@@ -1000,15 +1001,14 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(
       await reconcileRuns(new Set(), runRegistry, tracker),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
-      "PROJ-1",
-      "run-1",
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "PROJ-1",
+      target: "run-1",
       runRegistry,
-      tracker,
-      undefined,
-      undefined,
-      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
-    );
+      issueTracker: tracker,
+      reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      clarificationNotice: { aiColumnName: "AI" },
+    });
   });
 
   it("warns when a closing claim fails to converge again instead of staying silent", async () => {
@@ -1104,16 +1104,17 @@ describe("reconcileRuns owner-CAS recovery", () => {
         new Set([closing.subjectKey]),
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-      tracker,
-      "Backlog",
+      issueTracker: tracker,
+      targetColumn: "Backlog",
       onReleased,
-      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
-      expect.any(Function),
-    );
+      reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      beforeRelease: expect.any(Function),
+      clarificationNotice: { aiColumnName: "AI" },
+    });
   });
 
   it("passes Jira to a closing ticket retry outside AI so durable post-drain cleanup can finish", async () => {
@@ -1127,16 +1128,16 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(
       await reconcileRuns(new Set(), runRegistry, tracker, undefined, onReleased),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-      tracker,
-      undefined,
+      issueTracker: tracker,
       onReleased,
-      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
-      expect.any(Function),
-    );
+      reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      beforeRelease: expect.any(Function),
+      clarificationNotice: { aiColumnName: "AI" },
+    });
   });
 
   it("rechecks a closing ticket before release when AI moved to Review", async () => {
@@ -1162,7 +1163,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     mockCancelRunDetailed
       .mockReset()
       .mockImplementationOnce(async (...args: any[]) => {
-        const fence = args[7] as (owner: {
+        const fence = args[0].beforeRelease as (owner: {
           subjectKey: string;
           ownerToken: string;
           runId: string | null;
@@ -1224,7 +1225,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     mockCancelRunDetailed
       .mockReset()
       .mockImplementationOnce(async (...args: any[]) => {
-        const fence = args[7] as (owner: {
+        const fence = args[0].beforeRelease as (owner: {
           subjectKey: string;
           ownerToken: string;
           runId: string | null;
@@ -1273,7 +1274,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     mockCancelRunDetailed
       .mockReset()
       .mockImplementationOnce(async (...args: any[]) => {
-        const fence = args[7] as (owner: {
+        const fence = args[0].beforeRelease as (owner: {
           subjectKey: string;
           ownerToken: string;
           runId: string | null;
@@ -1384,7 +1385,8 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const tracker = issueTracker("Done");
     const onReleased = vi.fn();
     mockCancelRunDetailed.mockImplementation(async (...args: unknown[]) => {
-      const releaseCallback = args[5] as (subjectKey: string) => Promise<void>;
+      const releaseCallback = (args[0] as { onReleased: (subjectKey: string) => Promise<void> })
+        .onReleased;
       await releaseCallback(bound.subjectKey);
       return { cancelled: true, released: true };
     });
@@ -1393,15 +1395,15 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(
       await reconcileRuns(new Set(), runRegistry, tracker, undefined, onReleased),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
-      "PROJ-1",
-      "run-1",
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "PROJ-1",
+      target: "run-1",
       runRegistry,
-      tracker,
-      undefined,
+      issueTracker: tracker,
       onReleased,
-      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
-    );
+      reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      clarificationNotice: { aiColumnName: "AI" },
+    });
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
   });
 
@@ -1414,15 +1416,14 @@ describe("reconcileRuns owner-CAS recovery", () => {
     await expect(
       reconcileRuns(new Set(), runRegistry, issueTracker("Done")),
     ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
-      "PROJ-1",
-      "run-1",
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "PROJ-1",
+      target: "run-1",
       runRegistry,
-      expect.anything(),
-      undefined,
-      undefined,
-      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
-    );
+      issueTracker: expect.anything(),
+      reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      clarificationNotice: { aiColumnName: "AI" },
+    });
   });
 
   it("retains a bound run whose ticket sits in the AI Review column while it still executes", async () => {
@@ -1503,15 +1504,14 @@ describe("reconcileRuns owner-CAS recovery", () => {
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockHasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
-    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
-      "PROJ-1",
-      "run-1",
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      ticketKey: "PROJ-1",
+      target: "run-1",
       runRegistry,
-      expect.anything(),
-      undefined,
-      undefined,
-      "Jira AI Review transition before durable PR publication evidence",
-    );
+      issueTracker: expect.anything(),
+      reason: "Jira AI Review transition before durable PR publication evidence",
+      clarificationNotice: { aiColumnName: "AI" },
+    });
   });
 
   it("retains an AI Review transition when the exact run's success is recorded", async () => {

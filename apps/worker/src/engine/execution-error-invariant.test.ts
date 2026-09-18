@@ -15,6 +15,7 @@ import {
   SAFE_EXECUTION_ERROR_MESSAGES,
 } from "@shared/workflow-graph";
 import { sanitizeDetail, sanitizeFailureMessage } from "@shared/workflow-graph";
+import { validateRepositoryDiscoveryResult } from "./repository-discovery/protocol.js";
 
 /**
  * AIW-254's headline acceptance criterion, as an executable invariant:
@@ -337,5 +338,228 @@ describe("execution error invariant: every surface shows the same message", () =
     );
     expect(withSandboxPath).toContain("read-only");
     expect(scrubForPublication(withSandboxPath)).not.toBe(withSandboxPath);
+  });
+});
+
+/**
+ * MESSAGE_MAX_LENGTH is a claim, and this is what makes it true: "sized so
+ * `deriveFailureMessage` can never produce a message this boundary has to
+ * clamp". A bound that does not fit the worst message this code can author is
+ * not a bound, it is a truncation, and on 2026-09-18 it truncated: run
+ * wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF told the person on the ticket "This
+ * deployment's confi [...] o continue.".
+ *
+ * So the worst case is MEASURED here against the real builders rather than
+ * asserted in a comment. It is measurable at all because the count is capped:
+ * a discovery result carries at most MAX_DISCOVERED_REPOSITORIES (3)
+ * repositories, so each builder writes at most three sentences and one closing
+ * note. The other two inputs have no schema bound worth trusting, so the test
+ * pins the realistic ceiling it claims: a 70-character repository key (GitHub
+ * caps an owner at 39 characters and no real repository name approaches the
+ * rest) and a 60-character actor label.
+ *
+ * What fails this test: raising a refusal's length past the bound, whether by
+ * lengthening a sentence, adding a fourth, or raising MAX_DISCOVERED_REPOSITORIES,
+ * without moving MESSAGE_MAX_LENGTH with it.
+ */
+describe("every authored work-scope refusal reaches the person whole", () => {
+  /** Exactly 70 characters each, the ceiling this bound is sized against. */
+  const KEYS = [
+    "github:blazity-engineering-platform/ai-workflow-worker-canary-fixtures",
+    "gitlab:blazity-engineering-platform/ai-workflow-dashboard-e2e-fixtures",
+    "github:blazity-engineering-platform/ai-workflow-arthur-release-fixture",
+  ];
+  /** 60 characters: a display name with a team suffix, the long end of real. */
+  const ACTOR = {
+    kind: "person" as const,
+    actorId: "u-1",
+    actorLabel: "Aleksandra Kowalska-Nowakowska (Platform Engineering Team)".padEnd(60, "."),
+  };
+  const DECIDED_AT = "2026-09-18T08:30:00.000Z";
+  const CONFIGURATION_GENERIC =
+    SAFE_EXECUTION_ERROR_MESSAGES.configuration as string;
+
+  const catalogEntry = (key: string) => ({
+    provider: key.slice(0, key.indexOf(":")) as "github" | "gitlab",
+    repoPath: key.slice(key.indexOf(":") + 1),
+    name: "fixture",
+    defaultBranch: "main",
+    description: "",
+    topics: [],
+    relationships: [],
+    usable: true,
+  });
+  const proposals = KEYS.map((key) => ({
+    provider: key.slice(0, key.indexOf(":")),
+    repoPath: key.slice(key.indexOf(":") + 1),
+    rationale: "the ticket names it",
+  }));
+  const recorded = (state: "excluded" | "unavailable") =>
+    KEYS.map((repositoryKey) => ({
+      repositoryKey,
+      state,
+      origin: "person",
+      rationale: "decided on this work",
+      decidedBy: ACTOR,
+      decidedAt: DECIDED_AT,
+      ...(state === "unavailable" ? { unavailableReason: "not_enabled" } : {}),
+    })) as never;
+
+  function refusal(
+    label: string,
+    raw: unknown,
+    catalog: ReturnType<typeof catalogEntry>[],
+    settled: Parameters<typeof validateRepositoryDiscoveryResult>[3],
+  ): { label: string; text: string } {
+    const decision = validateRepositoryDiscoveryResult(raw, catalog, [], settled);
+    if (decision.kind !== "failed") {
+      throw new Error(`${label}: discovery decided ${decision.kind}, not a refusal`);
+    }
+    return { label, text: decision.error };
+  }
+
+  const usableCatalog = KEYS.map(catalogEntry);
+  const lowConfidence = {
+    status: "selected",
+    confidence: "low",
+    repositories: proposals,
+    questions: null,
+    error: null,
+  };
+  const highConfidence = { ...lowConfidence, confidence: "high" };
+
+  /** The three builders, each driven at three repositories, in every variant
+   *  whose length differs. A mix of one exclusion and two unavailable entries is
+   *  the longest `nothingLeftToWorkOn` can write: the unavailable sentence is
+   *  the longer of its two, and a single exclusion is enough to swap the short
+   *  closing note for the long one. */
+  const WORST_CASES = [
+    refusal("nothingLeftToStartFrom, comment path open", lowConfidence, usableCatalog, {
+      answeredRepositoryKeys: KEYS,
+      recorded: [],
+      commentPathIsTaken: () => true,
+    }),
+    refusal("nothingLeftToStartFrom, record only", lowConfidence, usableCatalog, {
+      answeredRepositoryKeys: KEYS,
+      recorded: [],
+      commentPathIsTaken: () => false,
+    }),
+    refusal("nothingLeftButUnnamed, comment path open", highConfidence, usableCatalog, {
+      answeredRepositoryKeys: KEYS,
+      recorded: [],
+      commentPathIsTaken: () => true,
+    }),
+    refusal("nothingLeftButUnnamed, record only", highConfidence, usableCatalog, {
+      answeredRepositoryKeys: KEYS,
+      recorded: [],
+      commentPathIsTaken: () => false,
+    }),
+    refusal("nothingLeftToWorkOn, all excluded", highConfidence, [], {
+      answeredRepositoryKeys: KEYS,
+      recorded: recorded("excluded"),
+      commentPathIsTaken: () => true,
+    }),
+    refusal("nothingLeftToWorkOn, all unavailable", highConfidence, [], {
+      answeredRepositoryKeys: KEYS,
+      recorded: recorded("unavailable"),
+      commentPathIsTaken: () => true,
+    }),
+    refusal("nothingLeftToWorkOn, one excluded and two unavailable", highConfidence, [], {
+      answeredRepositoryKeys: KEYS,
+      recorded: [
+        (recorded("excluded") as unknown as unknown[])[0],
+        ...((recorded("unavailable") as unknown as unknown[]).slice(1)),
+      ] as never,
+      commentPathIsTaken: () => true,
+    }),
+  ];
+
+  it("drives all three builders at the ceiling it claims", () => {
+    // Guards the loop below against silently passing on a list that stopped
+    // reaching one of the three, or on keys that quietly shrank: each builder
+    // writes a sentence only it writes, and the ceiling is the whole basis for
+    // the number below.
+    for (const key of KEYS) expect(key).toHaveLength(70);
+    expect(ACTOR.actorLabel).toHaveLength(60);
+    const all = WORST_CASES.map((worst) => worst.text).join("\n");
+    expect(all).toContain("Not naming a repository is not choosing it");
+    expect(all).toContain("was listed in a repository question already answered");
+    expect(all).toContain("was excluded on this work by");
+    expect(all).toContain("is not available to this run");
+  });
+
+  for (const { label, text } of WORST_CASES) {
+    it(`${label} crosses every surface unclamped`, () => {
+      const out = formatExecutionErrorForUser(
+        createWorkflowExecutionErrorState(
+          RUN_ID,
+          "prepare",
+          1,
+          // Exactly what the discovery closure in agent-workflow.ts passes: the
+          // refusal as the lead AND as the detail.
+          executionError(text, { category: "configuration", message: text }).error,
+        ),
+      );
+
+      // Whole, to the character: the refusal the builder wrote, then the
+      // diagnostic ID, and nothing removed from between them. The elision check
+      // is redundant against that equality and stays because it names the
+      // defect: it is the marker production put where the repository was.
+      expect(out, `${label} was elided: ${out}`).not.toContain("[...]");
+      expect(out).toBe(`${text} Diagnostic ID: AIW-DIAG-${RUN_ID}-prepare-1`);
+      // Said separately, because these are the two facts the person on the
+      // ticket could not act without: which repositories, and the way back,
+      // which is always the refusal's last sentence.
+      for (const key of KEYS) expect(out).toContain(key);
+      expect(out).toContain(text.slice(text.lastIndexOf(". ", text.length - 2) + 2));
+
+      // Never the bare category line, which is the AIW-254 invariant above.
+      expect(out.startsWith(CONFIGURATION_GENERIC)).toBe(false);
+
+      // The cross-surface guarantee: the run header applies this bound, Slack
+      // and the ticket comment do not, so a clamp here would make them disagree.
+      expect(sanitizeFailureMessage(out), `${label} was clamped at the boundary`).toBe(out);
+    });
+  }
+
+  it("cuts an actor label no real display name reaches, and marks the cut", () => {
+    // The third input to the sizing above, and the one with no schema bound:
+    // `workScopeActorSchema` is `z.string().min(1)` with no maximum, and the
+    // label appears once per repository, so an unbounded label is an unbounded
+    // message however few repositories there are. The cap is a DISPLAY bound at
+    // composition, not a `.max()` on the contract: entries are already stored
+    // and a read that throws on one of them is worse than a long sentence.
+    const absurd = "A".repeat(500);
+    const [{ text }] = [
+      refusal("over-long label", highConfidence, [], {
+        answeredRepositoryKeys: KEYS,
+        recorded: KEYS.map((repositoryKey) => ({
+          repositoryKey,
+          state: "excluded",
+          origin: "person",
+          rationale: "decided on this work",
+          decidedBy: { kind: "person", actorId: "u-1", actorLabel: absurd },
+          decidedAt: DECIDED_AT,
+        })) as never,
+        commentPathIsTaken: () => true,
+      }),
+    ];
+    expect(text).not.toContain(absurd);
+    // Marked, not silently shortened: a name cut without a mark is a different
+    // name, and this sentence is telling somebody whose decision it was.
+    expect(text).toContain(`${"A".repeat(57)}...`);
+    // And the sizing claim survives the worst label anybody could store.
+    expect(text.length).toBeLessThanOrEqual(909);
+  });
+
+  it("keeps the longest of them inside the bound with room to spare", () => {
+    // The measurement the constant's comment quotes. 909 characters at this
+    // ceiling, against a derived bound of 964. If this number moves, the comment
+    // on MESSAGE_MAX_LENGTH is stale and the margin has to be re-decided rather
+    // than quietly spent.
+    const longest = WORST_CASES.reduce((worst, candidate) =>
+      candidate.text.length > worst.text.length ? candidate : worst,
+    );
+    expect(longest.text.length, `longest is now ${longest.label}`).toBe(909);
   });
 });

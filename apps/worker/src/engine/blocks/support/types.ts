@@ -6,6 +6,7 @@ import type {
   WorkflowRepositoryScope,
   RunAnalysisReport,
   TriggerRepositoryPolicy,
+  WorkScopeAnswerReading,
 } from "@shared/contracts";
 import type { CostProviderKind } from "@shared/costs";
 import type {
@@ -241,6 +242,12 @@ export interface EngineCtx {
      *  asked for it (A42). Absent on a round replayed from a journal written
      *  before this field existed, which re-applies to nobody. */
     runId?: string;
+    /** How the answer was read, made once where it arrived and stored beside
+     *  the words. The run consumes it instead of reading the sentence again,
+     *  which is what makes the record and the run one reader. Absent on a
+     *  round replayed from a journal written before this field existed, and on
+     *  a question that named no repository. */
+    reading?: WorkScopeAnswerReading;
   }>;
   branchName: string;
   /** Null until prepare_workspace provisions a sandbox. */

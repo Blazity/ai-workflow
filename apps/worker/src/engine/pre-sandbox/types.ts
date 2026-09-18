@@ -134,6 +134,27 @@ export type PreSandboxStepResult =
        * so it says so here rather than leaving the message layer to guess.
        */
       cause?: string;
+      /**
+       * True when `message` is already the whole thing to put in front of a
+       * person: a complete sentence the step authored, not prose with a reason
+       * buried in it.
+       *
+       * The two are opposites for the message layer and nothing downstream can
+       * tell them apart. `incompleteCatalogMessage` composes step name, then the
+       * provider verdicts, then advice, so its reason is in the middle and it
+       * wants the generic lead plus its `cause` in parentheses. The work-scope
+       * and authorization refusals beside it are one finished sentence, and
+       * giving one of those a generic lead and then clamping it is how a person
+       * ends up reading half of it. The step knows which it built; a string
+       * comparison downstream would only guess, so the fact travels as a fact.
+       *
+       * Absent means composed prose, which is every producer that predates this
+       * field and the only safe default: treating unknown prose as a finished
+       * sentence would put a middle-clipped message in front of a person, while
+       * treating a finished sentence as prose costs at worst a generic lead in
+       * front of it.
+       */
+      messageStandsAlone?: boolean;
       questions?: string[];
       promptAdditions?: PreSandboxPromptAddition[];
       selectedRepositories?: SelectedRepository[];
@@ -334,6 +355,9 @@ export type RunPreSandboxPhaseResult =
       /** See `PreSandboxStepResult`: the reason inside `message`, isolated so it
        *  survives the user-facing bounds. */
       cause?: string;
+      /** See `PreSandboxStepResult`: true when `message` is a finished sentence
+       *  for a person rather than composed prose. */
+      messageStandsAlone?: boolean;
       questions?: string[];
       promptAdditions: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];

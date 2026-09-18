@@ -114,6 +114,15 @@ const WHY: Record<
     `${repositoryKey} is not on the repository catalog this run may use`,
   outside_policy: (repositoryKey) =>
     `${repositoryKey} is outside the repositories the workflow that runs this work may take`,
+  // WHAT WE RECEIVED, NOT WHAT THE REPOSITORY IS. Three things produce this and
+  // only two are about the repository: it is archived, it has no default branch
+  // (an empty repository), or the token cannot read its code, which is how
+  // GitLab withholds `default_branch` (`Ability.allowed?(:read_code)` on its
+  // BasicProjectDetails entity). "Offered no default branch for it" is true in
+  // all three; "the repository is empty" would be a guess in the third, and the
+  // person would go looking for a fault that is ours.
+  unusable: (repositoryKey) =>
+    `${repositoryKey} is enabled here, and this run could not check it out: the provider listed it as archived, or offered no default branch for it`,
   // Named, when the record holds the entry. A reader told only "no" has to
   // guess whose decision to revisit, and a widened trigger policy does not
   // reach back into a subject somebody already answered about (A32).

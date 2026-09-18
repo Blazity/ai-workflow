@@ -25,6 +25,7 @@
  */
 import {
   isRepositoryAccessible,
+  type ExecutionErrorCategory,
   type RunRepositoryAccess,
   type VcsProviderKind,
   type WorkflowDefinitionV2Node,
@@ -113,6 +114,44 @@ export function isRepositoryCatalogRefusal(text: string): boolean {
     text.includes(REPOSITORY_NOT_ENABLED_MARKER) ||
     text.includes(NO_ENABLED_REPOSITORIES_MESSAGE)
   );
+}
+
+/**
+ * The `executionError` options a caught failure earns, for the several blocks
+ * that catch a catalog refusal thrown deep inside a step.
+ *
+ * TWO DECISIONS FROM ONE ANSWER, and that is the point. Every caller already
+ * asked `isRepositoryCatalogRefusal` to pick the CATEGORY, which decides where
+ * an operator is sent. This adds the second consequence of the same answer: a
+ * refusal is a finished sentence somebody wrote for a person (what was refused,
+ * why, and the page that fixes it), so it leads the user-facing message instead
+ * of being mined for a 160-character snippet. Passed as a detail alone it
+ * reached people clamped from both ends with the repository in the elided
+ * middle, which is the defect production hit on
+ * wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF.
+ *
+ * WHY THE SUBSTRING TEST IS GOOD ENOUGH HERE, stated plainly because it is the
+ * obvious objection. The refusal crossed a `throw`, which erases every type, so
+ * matching the marker is all that is left (see the marker's own comment above).
+ * It is a containment test, so it also fires on a message that WRAPS a refusal
+ * in other prose. That is accepted deliberately: the cost when it does is that a
+ * person reads a whole sentence with a prefix in front of it, and the cost of
+ * not trusting it is the clipped half-sentence this exists to end. We already
+ * trust this predicate for the category, which is just as visible to that
+ * person, so trusting it for one and not the other would be a distinction
+ * without a difference.
+ *
+ * `otherwise` stays with the caller because it is genuinely local: the same
+ * non-refusal failure is a sandbox fault in the workspace block and a provider
+ * fault in the pull-request blocks.
+ */
+export function catalogRefusalExecutionOptions(
+  detail: string,
+  otherwise: ExecutionErrorCategory,
+): { category: ExecutionErrorCategory; message?: string } {
+  return isRepositoryCatalogRefusal(detail)
+    ? { category: "configuration", message: detail }
+    : { category: otherwise };
 }
 
 /**

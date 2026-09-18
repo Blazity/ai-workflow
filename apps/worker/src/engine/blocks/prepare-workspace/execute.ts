@@ -20,7 +20,10 @@ import { isRunControlError } from "../../helpers/run-control-error.js";
 // Pure, contracts-only: a static import pulls in nothing a dynamic one would
 // have kept out, and the classifier is needed in catch blocks that are not
 // inside a step and cannot await an import without swallowing the error.
-import { isRepositoryCatalogRefusal } from "../../support/repository-access.js";
+import {
+  catalogRefusalExecutionOptions,
+  isRepositoryCatalogRefusal,
+} from "../../support/repository-access.js";
 import {
   isChecksCeilingExceededError,
   propagateInvocationInterruption,
@@ -123,6 +126,11 @@ type PreSandboxOutcome =
       /** The reason inside `message`, isolated by the step so it survives the
        *  user-facing bounds. See PreSandboxStepResult. */
       cause?: string;
+      /** True when `message` is a finished sentence for a person rather than
+       *  composed prose. See PreSandboxStepResult. Optional, so a run replaying a
+       *  result recorded before this field existed reads it as absent, which is
+       *  the behaviour it was recorded under. */
+      messageStandsAlone?: boolean;
       questions?: string[];
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
@@ -1185,6 +1193,12 @@ export async function ensureWorkspace(
           category: isRepositoryCatalogRefusal(preSandbox.message)
             ? "configuration"
             : "sandbox",
+          // A step that authored a finished sentence for a person leads with it,
+          // whole. Only that step can say so, which is why it travels as a flag
+          // rather than being guessed at from the text here. The "pre-sandbox: "
+          // prefix stays on the detail, where operators read it, and off the
+          // sentence the person reads.
+          ...(preSandbox.messageStandsAlone ? { message: preSandbox.message } : {}),
           // The reason the step reported, handed over separately so it leads the
           // user-facing message instead of being clamped out of its middle.
           ...(preSandbox.cause ? { evidence: { cause: preSandbox.cause } } : {}),
@@ -1467,12 +1481,10 @@ export async function ensureWorkspace(
     if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
     propagateInvocationInterruption(err);
     const detail = err instanceof Error ? err.message : String(err);
-    return executionError(detail, {
-      // Same rule as the pre-sandbox halt above: the approved-scope refusal and
-      // the PR-context refusal both reach this catch, and neither is a sandbox
-      // fault.
-      category: isRepositoryCatalogRefusal(detail) ? "configuration" : "sandbox",
-    });
+    // Same rule as the pre-sandbox halt above: the approved-scope refusal and
+    // the PR-context refusal both reach this catch, neither is a sandbox fault,
+    // and both are finished sentences that lead rather than being clamped.
+    return executionError(detail, catalogRefusalExecutionOptions(detail, "sandbox"));
   }
 }
 
@@ -1545,10 +1557,10 @@ export async function promoteWorkspaceWrites(
   } catch (error) {
     if (isRunControlError(error)) throw error;
     const detail = error instanceof Error ? error.message : String(error);
+    // The write-scope promotion rechecks the catalog (repository-promotion.ts),
+    // so its refusal arrives here.
     return executionError(detail, {
-      // The write-scope promotion rechecks the catalog (repository-promotion.ts),
-      // so its refusal arrives here.
-      category: isRepositoryCatalogRefusal(detail) ? "configuration" : "sandbox",
+      ...catalogRefusalExecutionOptions(detail, "sandbox"),
       phase: "research",
     });
   }

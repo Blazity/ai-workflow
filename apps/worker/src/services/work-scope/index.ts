@@ -9,6 +9,15 @@
 export { recordRepositoryAnswer } from "./from-answer.js";
 export type { RepositoryAnswerPersistence, RepositoryAnswerOutcome } from "./from-answer.js";
 export {
+  readRepositoryAnswerDeterministically,
+  readRepositoryAnswerWithModel,
+} from "./read-answer.js";
+export type {
+  AnswerReadingDeps,
+  AnswerReadingModel,
+  RepositoryQuestion,
+} from "./read-answer.js";
+export {
   applyConnectedWorkScopeEdit,
   applyWorkScopeEdit,
   readConnectedWorkScopeRecord,

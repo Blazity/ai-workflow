@@ -9,6 +9,7 @@ import {
   isExpansionLimitClarification,
   isRefusalAnswer,
   isRepositoryExpansionClarification,
+  refusalNamesOneOfSeveral,
   refusalNamesRepositories,
   parseRepositoryExpansionAnswer,
   validateHumanRepositoryExpansion,
@@ -796,6 +797,32 @@ describe("validateHumanRepositoryExpansion", () => {
     ).toEqual({ kind: "exhausted" });
   });
 
+  it.each(
+    ["No, continue without it", "no, none of these", "nope\nnone"].flatMap((answer) => [
+      answer,
+      `Filip Maszota: ${answer}`,
+    ]),
+  )("reads %o, a refusal written in two phrases, as no further repositories", (answer) => {
+    // One line holding two phrases, each of them in the list. "None, continue
+    // without it" already ended the asking, because the keyword carries whatever
+    // follows it; the same sentence opening with "No," raised a second question
+    // that asked this person to say again what they had just said, which is the
+    // loop the phrase itself was added to end. Nothing that carries a word this
+    // list does not hold moves: those are still unrecognised, below.
+    //
+    // THE RUN'S READING, not the record's. Ending the asking lets this run carry
+    // on without a repository it could not have; the record writes nothing off a
+    // singular phrase under a question that listed several, and the next run may
+    // ask again (A17c, `refusalNamesOneOfSeveral`).
+    expect(
+      validateHumanRepositoryExpansion({
+        answer,
+        catalog: humanCatalog,
+        attached: [{ provider: "github", repoPath: "acme/api" }],
+      }),
+    ).toEqual({ kind: "exhausted" });
+  });
+
   it("reads several Jira comments that each say none as no further repositories", () => {
     // Several comments are joined with a blank line, each with its author.
     expect(
@@ -864,9 +891,9 @@ describe("validateHumanRepositoryExpansion", () => {
     [
       "nonexistent-repo",
       "nobody knows",
-      // Only "none" may carry more words: after any other refusal word they
-      // are usually the actual answer.
-      "No, continue without it",
+      // Words after a refusal that this list does not hold are usually the
+      // actual answer, and reading them as part of the refusal would end the
+      // asking on somebody who was naming a repository.
       "No, the code lives in the web repo, attach that",
     ].flatMap((answer) => [answer, `Filip Maszota: ${answer}`]),
   )("does not read %o as a refusal", (answer) => {
@@ -1208,7 +1235,11 @@ describe("decideRepositoryExpansion", () => {
         expect(decision.action.kind).toBe("fail");
         if (decision.action.kind === "fail") {
           expect(decision.action.message).toContain("kept asking for repositories");
-          expect(decision.action.message.length).toBeLessThanOrEqual(200);
+          // The bound the message's own comment states. It moved from 200 when
+        // the branch that does not name the Repositories page started naming a
+        // route instead of saying "attach it", which was a shorter way of
+        // telling the person nothing.
+        expect(decision.action.message.length).toBeLessThanOrEqual(290);
         }
         expect(decision.state).toEqual(closed);
       },
@@ -1248,7 +1279,11 @@ describe("decideRepositoryExpansion", () => {
       expect(decision.action.kind).toBe("fail");
       if (decision.action.kind === "fail") {
         expect(decision.action.message).toContain("gitlab:acme/shared/contracts");
-        expect(decision.action.message.length).toBeLessThanOrEqual(200);
+        // The bound the message's own comment states. It moved from 200 when
+        // the branch that does not name the Repositories page started naming a
+        // route instead of saying "attach it", which was a shorter way of
+        // telling the person nothing.
+        expect(decision.action.message.length).toBeLessThanOrEqual(290);
       }
       expect(decision.state).toEqual(closed);
     });
@@ -1270,7 +1305,11 @@ describe("decideRepositoryExpansion", () => {
         // A truncated repository path is not something a reader can act on, so
         // the first identity is always whole and the rest are counted.
         expect(decision.action.message).toContain("gitlab:acme/shared/contracts and 2 more");
-        expect(decision.action.message.length).toBeLessThanOrEqual(200);
+        // The bound the message's own comment states. It moved from 200 when
+        // the branch that does not name the Repositories page started naming a
+        // route instead of saying "attach it", which was a shorter way of
+        // telling the person nothing.
+        expect(decision.action.message.length).toBeLessThanOrEqual(290);
       }
     });
   });
@@ -1852,18 +1891,54 @@ describe("decideRepositoryExpansion", () => {
       );
     });
 
-    it("advises attaching only a repository the run can use but did not attach", () => {
+    // Production, ten minutes after the round before this one. The run asked
+    // "Research requested github:blazity/ai-workflow, which this run cannot use.
+    // To use it, enable it on the Repositories page and start a new run.", the
+    // person answered "none", the agent could not plan without it, and the
+    // failure told them to attach it, which is refused until somebody enables
+    // it. The question was raised by the work scope, which leaves nothing in
+    // this loop's state, so the sentence had no unavailable key to read and took
+    // the wrong branch; the refusal riding the repeated request says it plainly.
+    it("sends a repository this deployment does not enable to the Repositories page", () => {
+      const decision = decideRepositoryExpansion({
+        origin: "model",
+        verdict: {
+          kind: "refused",
+          refusals: [
+            { repositoryKey: "github:blazity/ai-workflow", reason: "outside_catalog" },
+          ],
+          repositories: [],
+        },
+        // Nothing in `askedUnavailable`, which is the state production was in,
+        // and the request spelled with the capital the model used.
+        state: state({ expansionClosed: "human", closedRequests: 1 }),
+        requests: [
+          { provider: "github", repoPath: "Blazity/ai-workflow", rationale: "the workflow" },
+        ],
+      });
+
+      expect(decision.action.kind).toBe("fail");
+      if (decision.action.kind !== "fail") return;
+      expect(decision.action.message).toContain("Enable it on the Repositories page");
+      expect(decision.action.message).not.toContain("this work's repository list");
+    });
+
+    it("names the route back for a repository the run can use but did not attach", () => {
+      // NOT "attach it", which is what this said while the other branch told a
+      // person to enable it on the Repositories page: one run, two ways out of
+      // one wall, and the one they read last named no action they could take.
       const decision = modelPass(state({ expansionClosed: "human" }), [service], [contractsRequest]);
 
       expect(decision.action.kind).toBe("fail");
       if (decision.action.kind !== "fail") return;
       expect(decision.action.message).toBe(
         "Repository expansion is closed for this run and the agent still needs" +
-          " gitlab:acme/shared/contracts. Attach it and start a new run.",
+          " gitlab:acme/shared/contracts. Select it in this work's repository list," +
+          " through the work scope API or the work_scope.edit tool, and start a new run.",
       );
     });
 
-    it("keeps the failure inside 200 characters for a long nested GitLab path and 2 more", () => {
+    it("keeps the failure inside its bound for a long nested GitLab path and 2 more", () => {
       // An 80-character identity, the bound the message comment states, with
       // the most a request can add to it: a request names at most 3.
       const nested = (suffix: string) => {
@@ -1893,7 +1968,11 @@ describe("decideRepositoryExpansion", () => {
         expect(decision.action.kind).toBe("fail");
         if (decision.action.kind !== "fail") continue;
         expect(decision.action.message).toContain(`gitlab:${requests[0].repoPath} and 2 more`);
-        expect(decision.action.message.length).toBeLessThanOrEqual(200);
+        // The bound the message's own comment states. It moved from 200 when
+        // the branch that does not name the Repositories page started naming a
+        // route instead of saying "attach it", which was a shorter way of
+        // telling the person nothing.
+        expect(decision.action.message.length).toBeLessThanOrEqual(290);
       }
       if (unusable.action.kind === "fail") {
         expect(unusable.action.message).toContain("Enable them on the Repositories page");
@@ -1956,18 +2035,27 @@ describe("decideRepositoryExpansion", () => {
 });
 
 describe("how far a refusal reaches", () => {
-  // The partition, written out so it can be read rather than worked out. Each
-  // phrase on the left may permanently exclude every repository a question
-  // named, in the name of whoever wrote it; each phrase on the right is what
-  // people write to each other on a ticket about anything at all, so it decides
-  // nothing and the question comes again.
+  // The partition, written out so it can be read rather than worked out. A
+  // phrase in the first list may permanently exclude every repository a question
+  // named, in the name of whoever wrote it; one in the last is what people write
+  // to each other on a ticket about anything at all, so it decides nothing and
+  // the question comes again; the one between them refuses a single repository
+  // and is read against the number the question listed.
   const NAMES_REPOSITORIES = [
     "none",
     "no more repositories",
     "no additional repositories",
     "none of these",
     "none of them",
-    "continue without it",
+    // The English a person reaches for when they mean the whole list. Each
+    // refuses a set rather than a subject, so each carries the same reach as
+    // "none of these", and the mistake each of them ends is the question coming
+    // back for an answer that was already unambiguous (owner ruling,
+    // 2026-09-18).
+    "neither",
+    "neither of them",
+    "neither of these",
+    "none of the above",
     "zaden",
     "zaden z nich",
     "zadne z nich",
@@ -1986,40 +2074,118 @@ describe("how far a refusal reaches", () => {
     "bez tego",
   ];
 
+  // A phrase whose subject is one repository. It may say what it refuses under
+  // the question that asks about ONE, whose own guidance offers these very
+  // words, and it contradicts a question that listed several.
+  const NAMES_ONE_REPOSITORY = ["continue without it"];
+
+  // The question every assertion below is read against unless it says
+  // otherwise: four choices, the shape production asked on AWP-221.
+  const LISTED_FOUR = 4;
+  const LISTED_ONE = 1;
+  const names = (answer: string, askedCount: number = LISTED_FOUR) =>
+    refusalNamesRepositories(answer, askedCount);
+
   it("covers every phrase the refusal list holds, and no other", () => {
     // The point of the map: a twenty-first phrase cannot join the list without
-    // somebody deciding whether it may exclude repositories in a person's name.
-    // The type asks at the declaration, and this asks again here, out loud.
+    // somebody deciding whether it may exclude repositories in a person's name,
+    // and since the owner's ruling, how much it may exclude. The type asks at
+    // the declaration, and this asks again here, out loud.
     expect([...REFUSAL_ANSWERS.keys()].sort()).toEqual(
-      [...NAMES_REPOSITORIES, ...ORDINARY_TICKET_SPEECH].sort(),
+      [...NAMES_REPOSITORIES, ...NAMES_ONE_REPOSITORY, ...ORDINARY_TICKET_SPEECH].sort(),
     );
   });
 
-  it.each(NAMES_REPOSITORIES)("%o says what it refuses", (phrase) => {
+  it.each(NAMES_REPOSITORIES)("%o says what it refuses, however many were listed", (phrase) => {
     expect(REFUSAL_ANSWERS.get(phrase)).toBe("names_repositories");
-    expect(refusalNamesRepositories(phrase)).toBe(true);
+    expect(names(phrase)).toBe(true);
+    expect(names(phrase, LISTED_ONE)).toBe(true);
+  });
+
+  it.each(NAMES_ONE_REPOSITORY)("%o says what it refuses only under a question listing one", (phrase) => {
+    expect(REFUSAL_ANSWERS.get(phrase)).toBe("names_one_repository");
+    expect(names(phrase, LISTED_ONE)).toBe(true);
+    // Four exclusions in somebody's name off a phrase about one repository is
+    // the decision nobody made (owner ruling, 2026-09-18).
+    expect(names(phrase)).toBe(false);
+    expect(refusalNamesOneOfSeveral(phrase, LISTED_FOUR)).toBe(true);
+    expect(refusalNamesOneOfSeveral(phrase, LISTED_ONE)).toBe(false);
   });
 
   it.each(ORDINARY_TICKET_SPEECH)("%o is ordinary ticket speech", (phrase) => {
     expect(REFUSAL_ANSWERS.get(phrase)).toBe("ordinary_ticket_speech");
-    expect(refusalNamesRepositories(phrase)).toBe(false);
+    expect(names(phrase)).toBe(false);
+    // It carries no subject at all, so it never contradicts a list: threaded to
+    // the question it takes that question's own subject, and which channels may
+    // thread it is A8 and A9, not this.
+    expect(refusalNamesOneOfSeveral(phrase, LISTED_FOUR)).toBe(false);
   });
 
   it("reads the keyword with prose after it as naming its subject", () => {
     // "None. Thanks" is not a map entry and never will be. It begins with the
     // word the question asks for, so it is about the repositories by
     // construction, whatever the person went on to write.
-    expect(refusalNamesRepositories("None. Thanks")).toBe(true);
-    expect(refusalNamesRepositories("none, continue without it")).toBe(true);
+    expect(names("None. Thanks")).toBe(true);
+    expect(names("none, continue without it")).toBe(true);
+    // And the keyword outranks the singular phrase beside it: the strongest
+    // evidence in the text settles the whole reply.
+    expect(refusalNamesOneOfSeveral("none, continue without it", LISTED_FOUR)).toBe(false);
   });
 
   it("reads one part naming the subject as enough for the whole answer", () => {
     // Comments arrive joined, so a refusal written by two people can disagree
     // with itself. The words that name the subject are the strongest evidence
     // in the text and are not weakened by a bare no sitting beside them.
-    expect(refusalNamesRepositories("Jane: no\n\nBob: none of these")).toBe(true);
-    expect(refusalNamesRepositories("Jane: none of these\n\nBob: no")).toBe(true);
-    expect(refusalNamesRepositories("Jane: no\n\nBob: nope")).toBe(false);
+    expect(names("Jane: no\n\nBob: none of these")).toBe(true);
+    expect(names("Jane: none of these\n\nBob: no")).toBe(true);
+    expect(names("Jane: no\n\nBob: nope")).toBe(false);
+  });
+
+  it("reads one comment written in several phrases the same way", () => {
+    // AWP-221 on production: one comment holding "no", a line break and "none of
+    // these". Read as one string it matched nothing, so where a person pressed
+    // enter decided whether their refusal was readable: the same two halves sent
+    // as two comments always decided. Every phrase is a refusal here too, and
+    // the one naming the subject settles the whole.
+    expect(isRefusalAnswer("no\nnone of these")).toBe(true);
+    expect(names("no\nnone of these")).toBe(true);
+    expect(names("no, none of these")).toBe(true);
+    expect(names("Jane: no\nnone of these")).toBe(true);
+    // The naming phrase is what decides, never the number of them: two bare nos
+    // in one comment are still two bare nos, and decide nothing (A8).
+    expect(isRefusalAnswer("no\nnope")).toBe(true);
+    expect(names("no\nnope")).toBe(false);
+  });
+
+  it("weighs a singular phrase written beside a bare no against the list", () => {
+    // The owner's ruling, on the words it was given: "no, continue without it".
+    // Both phrases are refusals, so the reply is one, and what it refuses is one
+    // repository. Under the question that asked about one it says exactly that;
+    // under four it is one person talking about one of them.
+    expect(isRefusalAnswer("no, continue without it")).toBe(true);
+    expect(names("no, continue without it", LISTED_ONE)).toBe(true);
+    expect(names("no, continue without it")).toBe(false);
+    expect(refusalNamesOneOfSeveral("no, continue without it", LISTED_FOUR)).toBe(true);
+    expect(refusalNamesOneOfSeveral("no\ncontinue without it", LISTED_FOUR)).toBe(true);
+    // And a reply that also refuses the whole list is not caught by it.
+    expect(refusalNamesOneOfSeveral("none of these, continue without it", LISTED_FOUR)).toBe(false);
+    // Nor is a reply that is not a refusal at all: there is no subject in it to
+    // weigh against anything.
+    expect(refusalNamesOneOfSeveral("continue without it, use github:acme/api", LISTED_FOUR)).toBe(
+      false,
+    );
+  });
+
+  it("leaves a part holding a phrase this list does not know to the parser", () => {
+    // What keeps the phrase reading from deciding anything somebody would have
+    // to interpret: one phrase that is not itself a refusal and the whole answer
+    // is prose again.
+    expect(isRefusalAnswer("no\nuse github:acme/api")).toBe(false);
+    expect(isRefusalAnswer("none of these, but check with the team first")).toBe(false);
+    expect(names("no\nuse github:acme/api")).toBe(false);
+    // And nothing the whole read already accepted moves: the keyword carries
+    // whatever follows it.
+    expect(isRefusalAnswer("None. Thanks")).toBe(true);
   });
 
   it("reads an answer with no word in it as naming nothing, though it is still a refusal", () => {
@@ -2029,12 +2195,13 @@ describe("how far a refusal reaches", () => {
     // name.
     for (const wordless of ["", "...", "\u2705"]) {
       expect(isRefusalAnswer(wordless)).toBe(true);
-      expect(refusalNamesRepositories(wordless)).toBe(false);
+      expect(names(wordless)).toBe(false);
+      expect(refusalNamesOneOfSeveral(wordless, LISTED_FOUR)).toBe(false);
     }
   });
 
   it("reads the author line off a part before judging it", () => {
-    expect(refusalNamesRepositories("Jane Doe: none of these")).toBe(true);
-    expect(refusalNamesRepositories("Jane Doe: no")).toBe(false);
+    expect(names("Jane Doe: none of these")).toBe(true);
+    expect(names("Jane Doe: no")).toBe(false);
   });
 });
