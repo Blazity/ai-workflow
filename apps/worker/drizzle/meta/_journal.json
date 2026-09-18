@@ -463,6 +463,20 @@
       "when": 1789382400000,
       "tag": "0065_repository_relationship_kinds",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1789506086241,
+      "tag": "0066_work_scopes",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1789521453086,
+      "tag": "0067_work_scope_ask_asked_once",
+      "breakpoints": true
     }
   ]
 }

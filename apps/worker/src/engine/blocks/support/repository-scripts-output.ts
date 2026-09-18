@@ -265,7 +265,8 @@ type RepositoryScriptDirtied = {
  * It lives here rather than beside the block that builds it because three
  * different readers recover it from a walk's durable steps, and a reader that
  * imported the workflow entry point would invert this package's one structural
- * rule: nothing under blocks/ imports agent.ts.
+ * rule: nothing under blocks/ imports the workflow entry point
+ * (`engine/agent-workflow.ts`).
  */
 export type RepositoryScriptsOutput = {
   ok: boolean;
@@ -297,7 +298,7 @@ export type RepositoryScriptsOutput = {
  * By shape, never by node id: a definition names its nodes whatever it likes,
  * and both script blocks publish this same output. The check is the FULL field
  * set because the emitter writes every field on every path
- * (agent.ts repositoryScriptsOutput), so a partial match means the output came
+ * (`repositoryScriptsOutput` in this file), so a partial match means the output came
  * from something else and reading it would attribute another block's data to
  * the scripts.
  *
@@ -467,7 +468,8 @@ function runKey(repo: string, command: string): string {
  * record was answering a question nobody asked: the operator needs the command,
  * and the gate sentence never named one on any surface.
  *
- * The precedence is the ticket comment's (agent.ts repositoryScriptFailureClass)
+ * The precedence is the ticket comment's (`repositoryScriptFailureClass`,
+ * `engine/helpers/repository-failure.ts:366`)
  * and has to stay that way, because the two sentences land in the same comment:
  * an ordinary failing command first, then a timeout, then the budget, then an
  * abandoned batch, then anything that never started.

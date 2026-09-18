@@ -23,7 +23,14 @@ import { loadSettingsSnapshot } from "../settings/index.js";
 export type AnswerClarificationRequestOutcome =
   | Exclude<AnswerClarificationOutcome, { kind: "answered" }>
   | { kind: "unknown_clarification" }
-  | { kind: "answered"; clarification: ClarificationAnswerResponse["clarification"]; runId: string };
+  | {
+      kind: "answered";
+      clarification: ClarificationAnswerResponse["clarification"];
+      runId: string;
+      /** What the answer did to the repository record, carried straight through
+       *  so the dashboard shows the same words every other channel does. */
+      recordOutcome?: string;
+    };
 
 /**
  * dispatchedRunId is always null here: answering resumes the run that asked,
@@ -69,7 +76,12 @@ export async function answerClarificationRequest(input: {
   });
 
   if (outcome.kind === "answered") {
-    return { kind: "answered", clarification: serialize(outcome.row), runId: outcome.row.runId };
+    return {
+      kind: "answered",
+      clarification: serialize(outcome.row),
+      runId: outcome.row.runId,
+      ...(outcome.recordOutcome ? { recordOutcome: outcome.recordOutcome } : {}),
+    };
   }
   return outcome;
 }

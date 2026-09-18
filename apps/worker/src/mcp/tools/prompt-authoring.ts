@@ -20,7 +20,7 @@ import {
  * suspicion: a prompt body is the instruction set every future run is handed, so a
  * client that can write one can change how other agents behave from then on. Four
  * separate locks sit in front of it and each one is here for its own reason:
- * a scope of its own (contracts.ts:4), a role list without "service" (policy.ts),
+ * a scope of its own (services/mcp/contracts.ts:17-23), a role list without "service" (policy.ts),
  * a refusal for built-in prompts, and a compare-and-set on the version.
  *
  * None of those four addresses the path where the client is legitimate: an admin
@@ -36,7 +36,8 @@ type PromptUpdateData = {
   slug: string;
   version: number;
   // False when the body was byte-identical to the head: savePromptVersion stores
-  // no second copy of the same text (store.ts:681), so `version` is then still the
+  // no second copy of the same text (services/prompts/prompt-library-service.ts:288,
+  // which also needs the slots unchanged; this tool sends none), so `version` is then still the
   // version the caller sent as expectedVersion. Without this field that answer is
   // indistinguishable from a write that did not happen.
   changed: boolean;
@@ -45,7 +46,7 @@ type PromptUpdateData = {
 
 /** The identity of an edit: which prompt, which version it replaces, and the text
  * that replaces it, hashed. This value becomes the audit row's inputHash
- * (execute-tool.ts:291), and a prompt body is precisely what an operator does not
+ * (execute-tool.ts:331), and a prompt body is precisely what an operator does not
  * want to find sitting in an audit table for a year, so it is hashed and never
  * carried. The idempotency key is deliberately outside the hash: it is the thing
  * this payload is compared FOR, so folding it in would make every key agree with
@@ -70,8 +71,10 @@ function bodyDigest(body: string): string {
  * because the catalog schema already enforces the body bounds the store checks and
  * this tool sends no slots, and both mapped ones leave the library untouched (404
  * is the prompt disappearing under us, 409 is either an archive or a version
- * number another writer took, and store.ts:691 only reaches that 409 once the
- * unique index has rejected every insert). Anything else is rethrown as it is, so
+ * number another writer took: with an expectedVersion, which this tool always sends,
+ * services/prompts/prompt-library-service.ts:285-302 does not retry, and a stale
+ * head, a unique index rejection or an insert that matched no row each becomes that
+ * 409 with nothing written). Anything else is rethrown as it is, so
  * the wrapper seals the key and hides the text: an unexpected failure may have
  * left the version written. */
 function throwPublicStoreError(error: unknown): never {
@@ -94,7 +97,7 @@ export function registerPromptAuthoringTools(
         deps,
         toolName: "prompts.update",
         // Which prompt, and which version the edit replaces. Never the body:
-        // targetRefs are stored verbatim (audit-store.ts:58), and the only record
+        // targetRefs are stored verbatim (services/mcp/audit-store.ts:62), and the only record
         // this tool leaves of the text is a digest.
         targetRefs: [String(input.promptId), String(input.expectedVersion)],
         idempotencyKey: input.idempotencyKey,
@@ -111,7 +114,7 @@ export function registerPromptAuthoringTools(
           // what it IS, and telling such a caller to re-read the version would
           // send it round a loop that can never end in a write. The slug is the
           // marker, the same one the drift report resolves the shipped constant
-          // through (builtin-prompt-drift.ts:629) and the same one a resync
+          // through (builtin-prompt-drift.ts:490) and the same one a resync
           // migration targets, so the three cannot disagree about which rows are
           // the platform's.
           if (builtInPromptNameForSlug(prompt.slug) !== null) {
@@ -145,7 +148,7 @@ export function registerPromptAuthoringTools(
               body: input.body,
               expectedVersion: input.expectedVersion,
               // Slots left alone on purpose: passing none carries the head's slots
-              // over unchanged (store.ts:677), and editing a prompt's slot
+              // over unchanged (services/prompts/prompt-library-service.ts:284), and editing a prompt's slot
               // contract is a different decision from editing its text.
               actor,
             });

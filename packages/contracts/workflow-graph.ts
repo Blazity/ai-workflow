@@ -124,11 +124,11 @@ export function isTriggerBlockType(type: WorkflowBlockType): boolean {
 }
 
 export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
-  trigger_ticket_ai: ["rateLimitMax", "rateLimitWindow"],
+  trigger_ticket_ai: ["rateLimitMax", "rateLimitWindow", "repositoryPolicy"],
   trigger_plan_approved: [],
-  trigger_pr_created: ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
-  trigger_pr_ready: ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
-  trigger_pr_updated: ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
+  trigger_pr_created: ["providers", "scope", "rateLimitMax", "rateLimitWindow", "repositoryPolicy"],
+  trigger_pr_ready: ["providers", "scope", "rateLimitMax", "rateLimitWindow", "repositoryPolicy"],
+  trigger_pr_updated: ["providers", "scope", "rateLimitMax", "rateLimitWindow", "repositoryPolicy"],
   trigger_pr_checks_failed: [
     "providers",
     "scope",
@@ -139,9 +139,18 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
     "maxFixAttemptsPerPr",
     "rateLimitMax",
     "rateLimitWindow",
+    "repositoryPolicy",
   ],
-  trigger_pr_review: ["providers", "scope", "on", "maxRunsPerPr", "rateLimitMax", "rateLimitWindow"],
-  trigger_pr_merged: ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
+  trigger_pr_review: [
+    "providers",
+    "scope",
+    "on",
+    "maxRunsPerPr",
+    "rateLimitMax",
+    "rateLimitWindow",
+    "repositoryPolicy",
+  ],
+  trigger_pr_merged: ["providers", "scope", "rateLimitMax", "rateLimitWindow", "repositoryPolicy"],
   trigger_webhook: [
     "provider",
     "sourceIdPath",
@@ -159,6 +168,7 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
     "mapPriority",
     "rateLimitMax",
     "rateLimitWindow",
+    "repositoryPolicy",
   ],
   trigger_schedule: [
     "cron",
@@ -169,6 +179,7 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
     "taskDescription",
     "rateLimitMax",
     "rateLimitWindow",
+    "repositoryPolicy",
   ],
   planning_agent: ["provider", "model", "prompt"],
   implementation_agent: ["provider", "model", "prompt"],

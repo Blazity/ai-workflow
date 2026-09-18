@@ -2,7 +2,7 @@ import type { IssueTrackerMoveTarget } from "../../adapters/issue-tracker/types.
 
 /**
  * Move target for the AI column. Mirrors the inline backlogMoveTarget in
- * agent.ts: prefer an explicit workflow transition id when one is configured
+ * engine/agent-workflow.ts:519: prefer an explicit workflow transition id when one is configured
  * (some Jira boards require a specific transition to change status), otherwise
  * fall back to the plain status name.
  */

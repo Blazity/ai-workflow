@@ -28,9 +28,9 @@ describe("MCP OAuth provider options", () => {
 
     // Pins the DECLARED default and nothing more. The provider only reaches it when
     // neither the token request nor the client registration names a scope
-    // (@better-auth/oauth-provider@1.6.20, dist/index.mjs:725), so this assertion is
+    // (@better-auth/oauth-provider@1.6.30, dist/index.mjs:725), so this assertion is
     // not evidence about what an unattended token ends up carrying. The property
-    // that matters lives in request-context.ts, which strips both authoring scopes
+    // that matters lives in services/mcp/actor-resolution.ts, which strips both authoring scopes
     // out of a service actor's set, and request-context.test.ts asserts it there by
     // reading the actor rather than this option.
     expect(options.clientCredentialGrantDefaultScopes).not.toContain("prompts:write");
@@ -43,7 +43,7 @@ describe("MCP OAuth provider options", () => {
     // tickets:write is IN this default, and that is the intended asymmetry: writing to a
     // tracker is what the platform already does unattended on every run, so it is not a
     // class of action a fresh consent screen guards, unlike authoring a prompt or a
-    // workflow. request-context.ts records the same distinction by not stripping it.
+    // workflow. services/mcp/actor-resolution.ts records the same distinction by not stripping it.
     expect(options.clientCredentialGrantDefaultScopes).toEqual([
       "mcp:read",
       "runs:dispatch",
@@ -80,7 +80,7 @@ describe("MCP OAuth provider options", () => {
     expect(options.scopes).toContain("offline_access");
     expect(options.clientRegistrationAllowedScopes).toContain("offline_access");
     // Never a default, so it is opt-in and is never written into an unattended
-    // client's grant. request-context.ts drops it from the actor's permission set.
+    // client's grant. services/mcp/actor-resolution.ts:140-150 drops it from the actor's permission set.
     expect(options.clientRegistrationDefaultScopes).not.toContain("offline_access");
     expect(options.clientCredentialGrantDefaultScopes).not.toContain("offline_access");
   });

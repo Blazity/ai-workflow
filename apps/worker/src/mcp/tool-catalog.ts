@@ -7,6 +7,11 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 // Zod 3 dialect used by the committed contract artifact.
 import {
   MAX_CLARIFICATION_ANSWER_LENGTH,
+  WORK_SCOPE_EDIT_CHANGES_MAX,
+  WORK_SCOPE_INT4_MAX,
+  WORK_SCOPE_RATIONALE_MAX_LENGTH,
+  WORK_SCOPE_SUBJECT_KEY_MAX_LENGTH,
+  WORK_SCOPE_TRAIL_PAGE_MAX,
   REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES,
   REPOSITORY_CATALOG_LABEL_MAX_LENGTH,
   REPOSITORY_CATALOG_MARKDOWN_MAX_LENGTH,
@@ -65,9 +70,11 @@ const PROMPT_SLUG_MAX_LENGTH = 200;
 // The prompt id columns are int4, so anything past this cannot exist. Capped
 // here rather than left to the driver, which answers an overflow with a numeric
 // error that would reach the agent as INTERNAL_ERROR instead of NOT_FOUND
-// (prompt-library/store.ts:405 guards its own reads the same way).
+// (services/prompts/prompt-library-identifiers.ts:11-20, MAX_PROMPT_INT4, guards
+// its own reads the same way).
 const PROMPT_ID_MAX = 2_147_483_647;
-// Exactly the ceiling the store already enforces on a body (prompt-library/store.ts,
+// Exactly the ceiling the prompt service already enforces on a body
+// (services/prompts/prompt-library-validation.ts:6,
 // PROMPT_BODY_MAX_LENGTH), deliberately neither higher nor lower. Lower would leave
 // an agent able to READ a prompt through prompts.get that it can never write back,
 // which is the shape of bug that looks like data loss. Restating it here rather than
@@ -80,7 +87,7 @@ const PROMPT_ID_MAX = 2_147_483_647;
 // equality is a claim a test has to hold: tool-catalog.test.ts asserts it against
 // the store's exported constant, where importing the store costs nothing.
 export const PROMPT_BODY_MAX_LENGTH = 50_000;
-// workflow_definitions.name is unbounded text (db/schema.ts:855) and the audit row
+// workflow_definitions.name is unbounded text (db/schema/definitions.ts:85) and the audit row
 // keeps a created definition's name verbatim in targetRefs, so the cap belongs
 // here rather than nowhere. Same order as a prompt slug, because it is the same
 // kind of thing: a label a person reads in a list.
@@ -113,6 +120,10 @@ const ATTEMPT_ID_MAX = 2_147_483_647;
 // Clarification ids are generated (`cl_...`); this only keeps a pathological input
 // out of targetRefs and the audit row.
 const CLARIFICATION_ID_MAX_LENGTH = 200;
+// A subject key is bounded by the published constant rather than a number of this
+// file's own, so this surface and the HTTP route accept exactly the same keys for
+// one record; the bound itself earns its place the way the run id's does, keeping
+// a pathological input out of targetRefs and the audit row.
 // The limit the answer path judges by, read from the contracts package rather
 // than repeated: this module is loaded by the transport gate before a call is
 // known to be servable, so it still must not import the clarification core and
@@ -141,7 +152,7 @@ const TRIGGER_NODE_ID_MAX_LENGTH = 200;
 // authority on whether a type is real is blocks.get's own lookup, which answers
 // an unknown one with NOT_FOUND instead of a catalog-level VALIDATION_FAILED.
 const BLOCK_TYPE_MAX_LENGTH = 64;
-// Mirrors WINDOWS in db/queries/runs-read.ts (a literal, not imported, for the
+// Mirrors WINDOWS in services/run-lifecycle/dashboard-run-data.ts:24 (a literal, not imported, for the
 // reason the module doc above gives): tool-catalog.test.ts asserts the two stay
 // equal.
 const RUN_STATS_WINDOWS = ["24h", "7d", "30d", "all"] as const;
@@ -243,7 +254,7 @@ const dispatchSubjectSchema = z.discriminatedUnion("kind", [
 
 const preflightInputSchema = z
   .object({
-    // Named as the preflight response names it (api.ts:247), so an agent can
+    // Named as the preflight response names it (packages/contracts/api.ts:306), so an agent can
     // copy the field straight back into a dispatch.
     definitionId: z.number().int().positive(),
     triggerNodeId: z.string().trim().min(1).max(TRIGGER_NODE_ID_MAX_LENGTH),
@@ -450,7 +461,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "runs.answer_clarification": {
     description:
-      "Answer the question a run parked on and resume that same run. Read it first with runs.get_clarification: `answer` is free text that goes to the agent verbatim, and for a which-repository question the deterministic path needs a full \"owner/repo\" path, not a description. Pass `clarificationId` to bind the answer to the exact question you read, so a run that moved on to a different question is refused instead of answered by accident. Idempotent per idempotencyKey, and resending the identical answer is safe by construction: the run's answer is recorded once and a lost resume is retried rather than delivered twice. A CONFLICT means somebody else answered first, so read the run again instead of retrying. Requires a token with a person behind it: a client-credentials token is refused, because a run parks on this question precisely when it needs a human decision.",
+      "Answer the question a run parked on and resume that same run. Read it first with runs.get_clarification: `answer` is free text that goes to the agent verbatim, and for a which-repository question the deterministic path needs a full \"owner/repo\" path, not a description. Pass `clarificationId` to bind the answer to the exact question you read, so a run that moved on to a different question is refused instead of answered by accident. Idempotent per idempotencyKey, and resending the identical answer is safe by construction: the run's answer is recorded once and a lost resume is retried rather than delivered twice. A CONFLICT means somebody else answered first, so read the run again instead of retrying. A bare \"no\" to a which-repository question declines every repository that question listed, because this answer is threaded to that question and there is nothing else for it to refuse; to keep some of them, name those and leave the rest out, and to decline all of them answer \"none\". `recordOutcome` comes back when the answer did something other than record what it named: either it left no repository decision behind it, in the same words posted to the ticket, and says why and what to do instead, or it declined repositories the question listed and names them and the way back. It is absent when the answer recorded what it named, and the run resumes either way. Requires a token with a person behind it: a client-credentials token is refused, because a run parks on this question precisely when it needs a human decision.",
     inputSchema: runIdInputSchema
       .extend({
         clarificationId: z
@@ -771,6 +782,43 @@ export const MCP_TOOL_CATALOG = {
       .strict(),
     annotations: policyFor("settings.reset").annotations,
   },
+  "work_scope.get": {
+    description:
+      "The durable record of which repositories one subject's work may touch, and the trail of how that was decided. `subjectKey` is the key a run is claimed under: `ticket:<provider>:<KEY>` for a ticket, `pr:<provider>:<owner/name>#<number>` for a pull request, `webhook:<endpointId>:<subjectId>` for a webhook delivery that resolved a subject. Every entry says its `state` (`selected`, `excluded`, or `unavailable` with the reason), the `origin` that decided it, and `decidedBy`/`decidedAt`. `version` is the concurrency token work_scope.edit expects: a subject nothing was ever recorded for answers version 0 with no entries, which is not an error and is exactly the version an edit of it must send. The trail is paged newest first, so the decision somebody is about to undo is the first line: `trailLimit` defaults to 50 and caps at 200, `nextTrailBeforeId` is the `trailBefore` of the next page and null at the end of it. `carriesRecord` is false for a key of any other shape, a schedule occurrence for instance: that subject kind keeps no record and never will, because every tick is a new key, so the empty answer beside it is final rather than a record waiting to be written, and work_scope.edit refuses it.",
+    inputSchema: z
+      .object({
+        subjectKey: z.string().trim().min(1).max(WORK_SCOPE_SUBJECT_KEY_MAX_LENGTH),
+        trailLimit: z.number().int().positive().max(WORK_SCOPE_TRAIL_PAGE_MAX).optional(),
+        trailBefore: z.number().int().positive().max(WORK_SCOPE_INT4_MAX).optional(),
+      })
+      .strict(),
+    annotations: policyFor("work_scope.get").annotations,
+  },
+  "work_scope.edit": {
+    description:
+      "Change which repositories one subject's work may touch, as a person: `select` records the repository as chosen, `exclude` records it as kept out, and `remove` drops the entry so the next run decides again. This is how an exclusion is taken back. A repository excluded on a ticket is excluded for every later run on it, and until this existed nothing could undo that, so a ticket whose every repository had been excluded could only be replaced by a new one. `remove` and `select` are both recoveries; `exclude` is the sticky one. One thing a removal does not reopen: a repository a which-of-these question on this subject listed, and whose answer left it out, is not taken by any guess while it has no entry (remembered routing, repository discovery, an agent's expansion request), while a full path somebody writes in the ticket still is, as long as the ticket names no more than three repositories; `select` takes such a repository back in every case. The whole call is one change set: if any `select` names a repository the repository catalog does not enable, NOTHING is written and the refusal names every offending key, because a catalog the deployment refuses is not something an edit may override (change the catalog with repositories.set_enabled first). `expectedVersion` is the `version` from work_scope.get: a run or another person writing in between is refused as CONFLICT naming the version now in force, and nothing is written; there is no force. Read work_scope.get again and decide against what it now says, rather than resending. Every selection is recorded without checking that a run can reach the repository, and a later run may still refuse it: this path lists no repositories, so it knows the catalog enables the key and not whether the provider can serve it. Idempotent per idempotencyKey.",
+    inputSchema: z
+      .object({
+        subjectKey: z.string().trim().min(1).max(WORK_SCOPE_SUBJECT_KEY_MAX_LENGTH),
+        /** 0 for a subject that carries no record yet. */
+        expectedVersion: z.number().int().min(0).max(WORK_SCOPE_INT4_MAX),
+        changes: z
+          .array(
+            z
+              .object({
+                repositoryKey: z.string().trim().min(1).max(REPOSITORY_KEY_MAX_LENGTH),
+                action: z.enum(["select", "exclude", "remove"]),
+                rationale: z.string().max(WORK_SCOPE_RATIONALE_MAX_LENGTH).optional(),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(WORK_SCOPE_EDIT_CHANGES_MAX),
+        idempotencyKey: z.string().uuid(),
+      })
+      .strict(),
+    annotations: policyFor("work_scope.edit").annotations,
+  },
 } satisfies Record<McpToolName, McpToolDefinition>;
 
 export const MCP_ENABLED_DOMAINS = [
@@ -782,6 +830,7 @@ export const MCP_ENABLED_DOMAINS = [
   "blocks",
   "repositories",
   "settings",
+  "work_scope",
 ] as const;
 
 const CATALOG: Record<McpToolName, McpToolDefinition> = MCP_TOOL_CATALOG;

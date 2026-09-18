@@ -77,6 +77,8 @@ const CATALOGUED = [
   "settings.get",
   "settings.set",
   "settings.reset",
+  "work_scope.get",
+  "work_scope.edit",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

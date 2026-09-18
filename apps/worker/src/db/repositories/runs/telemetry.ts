@@ -719,7 +719,8 @@ export function markConnectedRunBlockedByOperator(runId: string, reason: string)
 }
 
 /**
- * Settles a run the stall watchdog found dead (lib/run-stall-watchdog.ts) as
+ * Settles a run the stall watchdog found dead
+ * (services/run-lifecycle/run-stall-watchdog.ts) as
  * "failed" with the reason, in one write, BEFORE the watchdog cancels the
  * Workflow run. The cancel path's own writers never overwrite a terminal
  * status (markRunBlockedByOperator is guarded on awaiting/running and the

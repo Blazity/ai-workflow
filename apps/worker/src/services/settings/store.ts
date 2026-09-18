@@ -110,11 +110,15 @@ export async function readSettingsHistory(
 /**
  * The bounds no single key can check on its own.
  *
- * `runtime-env.ts` refines that the MCP result limit stays at or below the
- * request limit, and a deployment whose environment breaks that rule refuses
- * to boot. Without the same check here an admin could store, through the API,
- * a pair the very same deployment would not start with, and find that out only
- * at the next deploy. The pair is judged as it would stand after the write
+ * THIS IS THE ONLY PLACE THE PAIR IS ENFORCED. The rule is that the MCP result
+ * limit stays at or below the request limit. It used to be a boot-time
+ * refinement in `runtime-env.ts`, and that is gone: both keys are ordinary
+ * stored settings now (`packages/contracts/settings-registry.ts:287` and
+ * `:297`), `runtime-env.ts` does not mention either of them, and nothing
+ * refuses to start on a bad pair. So a write accepted here is a write the
+ * deployment will run with, and removing this check removes the rule.
+ * `settings-registry.ts:302` states the rule in a description only, which
+ * enforces nothing. The pair is judged as it would stand after the write
  * (the patched value where there is one, the value in force otherwise), and
  * only when the patch touches one of the two, so an unrelated change is never
  * refused for a state it did not create.

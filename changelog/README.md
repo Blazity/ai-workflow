@@ -24,6 +24,14 @@ documentation move) gets no entry at all. Apply the label `changelog: skip` to
 the pull request instead; a completeness check in CI otherwise fails a pull
 request that touches `apps/**` or `packages/**` without either.
 
+That check counts an entry only when the entry reaches a reader. A file the
+pull request deletes is not an entry it adds, and a file that yields no bullet
+is not an entry either: the check asks the collation's own question through the
+collation's own code, so a blank file and a file of bullet-less prose both fail
+for the single reason that neither puts a line into `CHANGELOG.md`. That is why
+the bullet above is the format and not a preference. The rule, and the sentence
+each way of failing prints, live in `scripts/ci/changelog-entry-gate.ts`.
+
 ## Tone rule
 
 Describe what a user can do now, or what is better, and name the surface it

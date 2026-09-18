@@ -1906,7 +1906,7 @@ describe("repository scripts failure comment", () => {
 describe("v2 terminal failure exit", () => {
   /**
    * The three expressions the v2 call site composes, in the order it composes
-   * them. This is deliberately not a helper in agent.ts: what the gate found
+   * them (engine/agent-workflow.ts:4362-4371). This is deliberately not a helper there: what the gate found
    * broken was the composition, and a helper would only move the same three
    * calls somewhere a test could not tell them apart from production.
    */
@@ -2075,7 +2075,7 @@ describe("v2 terminal failure exit", () => {
             },
           };
         }
-        // Exactly what blocks/finalize-workspace.ts returns for unmet checks:
+        // Exactly what engine/blocks/finalize-workspace/execute.ts:338-340 returns for unmet checks:
         // the category is "checks" and there is NO phase, which is the whole
         // reason the fallback in failureExitPhase exists.
         return executionError("required checks not satisfied: checks", {

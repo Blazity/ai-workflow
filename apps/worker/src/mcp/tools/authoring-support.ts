@@ -57,8 +57,10 @@ export function storeActor(actor: McpActorContext) {
  * The messaging adapter is ticket-scoped: notifyForTicket looks a thread parent up
  * by this key and replies under it, or posts top-level when there is none. An
  * authoring change belongs to no ticket, so it travels under a key that is not a
- * ticket key and that nothing ever anchors a parent to (only a `started` event
- * does, chatsdk.ts:113): every announcement is then its own top-level message
+ * ticket key and that nothing ever anchors a parent to. Not because only a
+ * `started` event anchors one: every event except a note does (chatsdk.ts:113,
+ * persisted at :184), and this key is only ever sent notes (below), whose branch
+ * (chatsdk.ts:80) never creates a parent. Every announcement is then its own top-level message
  * instead of a reply buried under some run's status line.
  */
 const AUTHORING_SUBJECT_KEY = "mcp-authoring";
@@ -115,7 +117,7 @@ export function announcementLabel(raw: string): string {
 /**
  * Whether an authoring announcement can actually reach anybody on this deployment.
  * Reported by system.capabilities, because a client is entitled to know when it is
- * unobserved: with no chat credentials configured lib/adapters.ts hands every tool
+ * unobserved: with no chat credentials configured engine/support/adapters.ts:69 hands every tool
  * the no-op adapter, and the announcement then goes nowhere. The audit row is
  * written either way, which is what keeps "none" an honest answer rather than a
  * confession that nothing is recorded.
@@ -144,7 +146,7 @@ export function authoringAnnouncementDelivery(
  *
  * Every caller-supplied label inside `what` must already have been through
  * announcementLabel above. The adapter's note branch defangs broadcast tokens in
- * the whole string (format.ts:161), which stops a channel-wide ping and NOTHING
+ * the whole string (format.ts:165), which stops a channel-wide ping and NOTHING
  * else: it leaves `<url|label>`, `<@user>` and newlines intact, so an unsanitized
  * name can forge a clickable link or a second line inside this message. That is
  * enforced at the interpolation sites rather than here, because the deep links the

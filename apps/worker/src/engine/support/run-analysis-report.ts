@@ -1,5 +1,6 @@
 import type {
   RunAnalysisCommentDelivery,
+  RunAnalysisLeftOutRepository,
   RunAnalysisPhaseUsage,
   RunAnalysisReport,
   RunAnalysisRepository,
@@ -58,6 +59,15 @@ interface AnalysisInputBase {
   expansionRounds?: number;
   repositoryRequests?: RunAnalysisRepositoryRequest[];
   writeRepositories?: RunAnalysisRepositoryRequest[];
+  /** Repositories the run was asked to work on and did not, decided where the
+   *  decision was made (repository discovery) and carried down, because nothing
+   *  further along can tell a repository that was left out from one the model
+   *  never proposed. */
+  leftOutRepositories?: RunAnalysisLeftOutRepository[];
+  /** What a person can do about the repositories above. Composed from the work
+   *  scope record by the caller, because only the caller knows whether a person
+   *  excluded a repository or the catalog never offered it. */
+  repositoryRecoveryNotes?: string[];
   researchResult?: {
     body?: string;
     plan?: string;
@@ -397,6 +407,9 @@ export function buildResearchAnalysisReport(input: BuildResearchAnalysisReportIn
         ? value.rationales[index] as string
         : "Selection rationale was not retained.",
   }));
+  const leftOut = safeLeftOutRepositories(input.leftOutRepositories);
+  const leftOutOmitted = leftOutRepositoriesOmitted(input.leftOutRepositories, leftOut.length);
+  const recoveryNotes = safeRecoveryNotes(input.repositoryRecoveryNotes);
   return {
     version: 1,
     runId: input.runId,
@@ -408,6 +421,15 @@ export function buildResearchAnalysisReport(input: BuildResearchAnalysisReportIn
     stage: noChangeNeeded ? "no_change" : "research_complete",
     researchCompletedAt: input.researchCompletedAt ?? capturedAt,
     repositories,
+    // Absent rather than empty when the run left nothing out, so a report says
+    // nothing instead of saying "left out: none".
+    ...(leftOut.length > 0 ? { leftOutRepositories: leftOut } : {}),
+    // Only alongside a repository they are about. A recovery sentence with no
+    // left-out line above it answers a question the reader was never asked.
+    ...(leftOutOmitted > 0 ? { leftOutRepositoriesOmitted: leftOutOmitted } : {}),
+    ...(leftOut.length > 0 && recoveryNotes.length > 0
+      ? { repositoryRecoveryNotes: recoveryNotes }
+      : {}),
     expansionRounds: input.expansionRounds ?? input.repositoryExpansion?.rounds ?? 0,
     repositoryRequests: (value.repositoryRequests as RunAnalysisRepositoryRequest[]) ?? requests,
     writeRepositories: (value.writeRepositories as RunAnalysisRepositoryRequest[]) ?? writes,
@@ -613,10 +635,100 @@ function usageLines(snapshot: RunAnalysisUsageSnapshot): string[] {
   return [`Total: ${costLabel(snapshot)} · ${tokens}`, ...phaseLines];
 }
 
+/**
+ * The repositories section of the comment: the ones the run worked on, then the
+ * ones it was asked to work on and did not.
+ *
+ * One section rather than two, because a repository that was left out is not a
+ * new subject, it is a repository in a state, and this is the section a reader
+ * already opens to find out which repositories a run touched. Split across two
+ * places, the person who excluded a repository in March reads an ordinary
+ * success comment in May, finds a pull request short one repository, and has
+ * nowhere to learn that their own decision is why.
+ */
 function repositoryLines(report: RunAnalysisReport): string[] {
-  return report.repositories.length > 0
+  const worked = report.repositories.length > 0
     ? report.repositories.map((repo) => `- ${repo.provider}:${repo.repoPath} · ${repo.access} · ${repo.researchBranch}@${repo.researchBaseSha ? repo.researchBaseSha.slice(0, 8) : "unknown SHA"} · ${repo.rationale}`)
     : ["- No repository manifest was retained."];
+  return [
+    ...worked,
+    ...(report.leftOutRepositories ?? []).map(
+      (repository) => `- ${repository.repositoryKey} · left out · ${repository.reason}`,
+    ),
+    // The bound, said out loud. Eight lines and ten lines look identical to a
+    // reader, so a list that was cut says so rather than letting the reader
+    // take its last line for the last repository.
+    ...(report.leftOutRepositoriesOmitted
+      ? [
+          `- and ${report.leftOutRepositoriesOmitted} more, not listed here; open the full run report`,
+        ]
+      : []),
+    // Unbulleted and last, because they are not repositories: they are what the
+    // reader can do about the lines above, and a person who excluded a
+    // repository months ago is reading this comment precisely because the run
+    // came back short. This is the only surface that reaches them on a run that
+    // finished, so the sentence lives or dies here.
+    ...(report.repositoryRecoveryNotes ?? []),
+  ];
+}
+
+/**
+ * The left-out repositories as the report may store them.
+ *
+ * Bounded the way the rationales beside them are: the list comes from a model's
+ * proposal, and the report has a storage bound and the comment a byte cap that
+ * this section is not trimmed by. The sentences are OURS, composed from the
+ * record rather than from model text, so they are length-limited rather than
+ * sanitized as untrusted text would be.
+ */
+function safeLeftOutRepositories(
+  value: RunAnalysisLeftOutRepository[] | undefined,
+): RunAnalysisLeftOutRepository[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (repository) =>
+        typeof repository?.repositoryKey === "string" && typeof repository?.reason === "string",
+    )
+    .slice(0, 8)
+    .map((repository) => ({
+      repositoryKey: limitUtf8(repository.repositoryKey, 256),
+      reason: limitUtf8(repository.reason, 512),
+    }));
+}
+
+/**
+ * The recovery sentences as the report may store them.
+ *
+ * Bounded like the left-out list beside it, and for the same reason: the report
+ * has a storage bound and this section is not among the ones the comment
+ * trimmer shortens. Two is the most the composer can produce (the exclusion can
+ * be taken back, and the catalog cannot serve it today), so a longer list means
+ * a caller that has started repeating itself.
+ */
+function safeRecoveryNotes(value: string[] | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((note) => typeof note === "string" && note.trim().length > 0)
+    .slice(0, 2)
+    .map((note) => limitUtf8(note, 512));
+}
+
+/** How many of the caller's left-out repositories the bound above dropped.
+ *
+ *  Counted from the same filter the bound applies, so a malformed entry the
+ *  builder discarded is not reported as a repository somebody could go and look
+ *  up in the full report. */
+function leftOutRepositoriesOmitted(
+  value: RunAnalysisLeftOutRepository[] | undefined,
+  kept: number,
+): number {
+  if (!Array.isArray(value)) return 0;
+  const valid = value.filter(
+    (repository) =>
+      typeof repository?.repositoryKey === "string" && typeof repository?.reason === "string",
+  ).length;
+  return Math.max(0, valid - kept);
 }
 
 function sliceUtf8(value: string, maxBytes: number, direction: "head" | "tail"): string {
@@ -652,7 +764,12 @@ export function formatResearchAnalysisComment(report: RunAnalysisReport, dashboa
   const marker = analysisCommentMarker(report.runId, "research");
   const sections = [
     `Arthur research complete\nRun: ${report.runId}`,
-    `Repositories analyzed\n${repositoryLines(report).join("\n")}`,
+    // NOT "analyzed". The section carries the repositories this run left out as
+    // well as the ones it opened, and a heading that calls all of them analyzed
+    // says the opposite of the lines under it: a person reading that a
+    // repository was analyzed, on a line saying it was left out, learns nothing
+    // except that one of the two is lying.
+    `Repositories\n${repositoryLines(report).join("\n")}`,
     `What was checked\n${report.evidenceStatus === "not_retained" ? "Source evidence was not retained." : report.evidence.length > 0 ? report.evidence.map((item, i) => `${i + 1}. ${item}`).join("\n") : "No evidence items were captured."}`,
     ...(report.noChangeNeeded
       ? [`Resolution evidence\n${report.resolutionEvidence.length > 0 ? report.resolutionEvidence.map((item, i) => `${i + 1}. ${item}`).join("\n") : "No resolution evidence was captured."}`]
@@ -693,7 +810,21 @@ function fitFormattedComment(sections: string[], dashboardUrl: string, marker: s
   }
   const usage = mutable.find((section) => section.startsWith("Usage")) ?? "";
   const tail = `${usage}\n\nDashboard: ${dashboardUrl}\n\n${marker}`;
-  const separator = `\n\n${OMITTED}\n\n`;
+  // WHAT IT DROPPED, BY NAME. Everything between the first section and the usage
+  // tail is gone at this point, the repositories this run left out with it, and
+  // a truncation nobody is told about reads as "there was nothing to say": the
+  // exact silence this comment exists to break. The headings are cheap, they are
+  // this file's own words rather than anything a model wrote, and they tell a
+  // reader which part of the run to go and look at.
+  const droppedHeadings = mutable
+    .slice(1)
+    .filter((section) => section !== usage)
+    .map((section) => section.split("\n")[0]?.trim() ?? "")
+    .filter((heading) => heading.length > 0);
+  const separator =
+    droppedHeadings.length > 0
+      ? `\n\n${OMITTED}. This comment was too long to post in full, so these sections were left out: ${droppedHeadings.join(", ")}.\n\n`
+      : `\n\n${OMITTED}\n\n`;
   const budget = COMMENT_MAX_BYTES - utf8Bytes(tail) - utf8Bytes(separator);
   const heading = sliceUtf8(mutable[0] ?? "Arthur report", Math.max(0, budget), "head");
   return `${heading}${separator}${tail}`;

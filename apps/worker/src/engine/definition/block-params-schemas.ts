@@ -19,6 +19,7 @@ import {
   WEBHOOK_AUTH_SCHEMES,
   isSafeWorkflowInputName,
   repositoryScriptGroupNameSchema,
+  triggerRepositoryPolicySchema,
   type WorkflowBlockType,
 } from "@shared/contracts";
 import {
@@ -63,11 +64,21 @@ const triggerRateLimitParams = {
   rateLimitWindow: z.enum(["minute", "hour", "day", "month"]).optional(),
 };
 
+/** Optional per-node repository policy. Absent means the trigger kind's
+ * default, resolved by `resolveTriggerRepositoryPolicy`, and it stays absent:
+ * a default here would rewrite the canonical JSON, and so the graph hash, of
+ * every definition saved before the policy existed. Which policy a trigger type
+ * may carry is checked at publish, not here. */
+const triggerRepositoryPolicyParams = {
+  repositoryPolicy: triggerRepositoryPolicySchema.optional(),
+};
+
 const v2TriggerPrCreatedConfiguration = z
   .object({
     providers: vcsProviderSelection.default(["github", "gitlab"]),
     scope: prTriggerScope.default("workflow_owned"),
     ...triggerRateLimitParams,
+    ...triggerRepositoryPolicyParams,
   })
   .strict();
 const v2TriggerPrReadyConfiguration = z
@@ -75,6 +86,7 @@ const v2TriggerPrReadyConfiguration = z
     providers: vcsProviderSelection.default(["github", "gitlab"]),
     scope: prTriggerScope.default("any"),
     ...triggerRateLimitParams,
+    ...triggerRepositoryPolicyParams,
   })
   .strict();
 const v2TriggerPrUpdatedConfiguration = v2TriggerPrReadyConfiguration;
@@ -96,6 +108,7 @@ const v2TriggerPrChecksFailedConfiguration = z
       .default(["merge_request_event"]),
     maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
     ...triggerRateLimitParams,
+    ...triggerRepositoryPolicyParams,
   })
   .strict();
 const v2TriggerPrReviewConfiguration = z
@@ -105,6 +118,7 @@ const v2TriggerPrReviewConfiguration = z
     scope: prTriggerScope.default("workflow_owned"),
     maxRunsPerPr: z.number().int().min(1).max(30).default(10),
     ...triggerRateLimitParams,
+    ...triggerRepositoryPolicyParams,
   })
   .strict();
 const v2TriggerPrMergedConfiguration = z
@@ -112,6 +126,7 @@ const v2TriggerPrMergedConfiguration = z
     providers: vcsProviderSelection.default(["github", "gitlab"]),
     scope: prTriggerScope.default("workflow_owned"),
     ...triggerRateLimitParams,
+    ...triggerRepositoryPolicyParams,
   })
   .strict();
 /** Dot-path into the delivered JSON body ("ticket.subject"). Reuses the shared
@@ -165,6 +180,7 @@ const v2TriggerWebhookConfiguration = z
     mapRequester: webhookPayloadPath.optional(),
     mapPriority: webhookPayloadPath.optional(),
     ...triggerRateLimitParams,
+    ...triggerRepositoryPolicyParams,
   })
   .strict()
   // Replay protection folds the timestamp into the HMAC signed message, so it is
@@ -213,6 +229,7 @@ const v2TriggerScheduleConfiguration = z
     taskTitle: z.string().default(""),
     taskDescription: z.string().default(""),
     ...triggerRateLimitParams,
+    ...triggerRepositoryPolicyParams,
   })
   .strict();
 /** Accepted and ignored. The repair loop maxFixCycles bounded is gone, but
@@ -291,7 +308,9 @@ const v2PromptAuthoringConfiguration = {
  * corresponding v1 executor. Transform and Branch keep their own typed
  * configuration validators, which the definition schema also parses directly. */
 export const BLOCK_PARAMS_SCHEMAS = {
-  trigger_ticket_ai: z.object(triggerRateLimitParams).strict(),
+  trigger_ticket_ai: z
+    .object({ ...triggerRateLimitParams, ...triggerRepositoryPolicyParams })
+    .strict(),
   trigger_plan_approved: emptyParams,
   trigger_pr_created: v2TriggerPrCreatedConfiguration,
   trigger_pr_ready: v2TriggerPrReadyConfiguration,

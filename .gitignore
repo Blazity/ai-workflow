@@ -12,5 +12,9 @@ dist/
 .workflow-vitest/
 .env.e2e
 .worktrees/
+# Agent worktrees, briefs and evidence. They live inside the repository on
+# purpose, because a scratchpad under /tmp is wiped mid-session, and they are
+# never repository content.
+lanes/
 .superpowers/
 *.tsbuildinfo

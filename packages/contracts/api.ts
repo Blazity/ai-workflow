@@ -866,6 +866,14 @@ export interface ClarificationAnswerResponse {
   clarification: ClarificationRequest;
   /** The same asking run resumed by the answer. */
   runId: string | null;
+  /** What this answer did to the repository record, in one sentence, and absent
+   *  when it recorded exactly what it named. Either it left no repository
+   *  decision behind it, in the words the ticket comment uses, or it declined
+   *  the repositories the question listed and this names them and the way back.
+   *  The answer itself reached the run either way: this is what happened to the
+   *  record beside it, told in the channel the person answered in rather than
+   *  only on a ticket they may never open. */
+  recordOutcome?: string;
 }
 
 // --- Prompt library (dashboard-authored reusable prompts) ---

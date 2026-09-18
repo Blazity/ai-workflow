@@ -16,7 +16,7 @@
  * about the same run. The other two are of one kind: the per-category
  * sentences this file matches on live in exactly one place each
  * (`SAFE_EXECUTION_ERROR_MESSAGES` in packages/workflow-graph/interpreter.ts,
- * the repository scripts classes in workflows/blocks/repository-scripts-
+ * the repository scripts classes in engine/blocks/support/repository-scripts-
  * output.ts) and the repository enforces the first with
  * `engine/execution-error-invariant.test.ts`: a copy of the table
  * is how the scheduler path once drifted into producing a right-looking
@@ -190,24 +190,25 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
 // reconciler", "Cancelled via Slack /ai-workflow cancel"), so this can only ever
 // be low confidence, and only fires for the "blocked" status that carries it.
 // DiagnoseRunInput's status union has no "cancelled" member (RunStatus,
-// @shared/contracts domain.ts:1, has none either; STATUS_MAP, lib/overview/
-// collect-run-detail.ts:65-71, maps the raw world "cancelled" to "blocked"), so
+// @shared/contracts domain.ts:21, has none either; STATUS_MAP, engine/support/
+// collect-run-detail.ts:67-73, maps the raw world "cancelled" to "blocked"), so
 // do not add a structured high-confidence rule keyed on a "cancelled" status.
 const CANCELLED_REASON_PATTERN = /cancel/i;
 
-// STARTUP_TIMEOUT_REASON (lib/run-start-lifecycle.ts:16-17), written verbatim
-// as statusReason by markStartupFailure (run-start-lifecycle.ts:364-379), which
+// STARTUP_TIMEOUT_REASON (services/run-lifecycle/run-start-lifecycle.ts:25),
+// written verbatim as statusReason by the startup sweep's persistence.markFailure
+// call (run-start-lifecycle.ts:285), which
 // sets status "failed". The run never started, so `steps` is empty by
 // construction; no status/step guard is required to keep this precise, since
 // the sentence is unique to this one path.
 const NEVER_STARTED_MESSAGE = "Workflow did not start within 10 minutes.";
 
-// NO_DEFINITION_BLOCKED_REASON (lib/run-start-lifecycle.ts:153-154), recorded
-// with status "blocked" (run-start-lifecycle.ts:190-192).
+// NO_DEFINITION_BLOCKED_REASON (services/run-lifecycle/run-start-lifecycle.ts:150),
+// recorded with status "blocked" by the insert in db/repositories/runs/startup.ts:156.
 const NO_WORKFLOW_MATCHED_MESSAGE =
   "No enabled workflow definition currently handles the trigger_ticket_ai trigger, so this ticket was never picked up. Enable a workflow definition whose trigger is the AI column.";
 
-// leak-review.ts:668-674 sets an explicit options.message overriding the
+// engine/blocks/leak-review/execute.ts:665 sets an explicit options.message overriding the
 // generic "checks" category sentence, so it needs its own rule.
 const LEAK_REVIEW_GATE_PREFIX = "Leak review blocked publication before the branch was pushed:";
 
@@ -215,8 +216,8 @@ const LEAK_REVIEW_GATE_PREFIX = "Leak review blocked publication before the bran
 // (packages/workflow-graph/interpreter.ts) whenever a block reports
 // `category: "checks"`. The pre-pr-gate failure (AIW-223) is one of two sources
 // of that category; the other is an unrelated unmet-checks message, so a keyword
-// from the WorkspaceGateError messages (workflows/workspace-gate.ts:122-137) is
-// required too.
+// from the WorkspaceGateError messages (engine/steps/workspace-gate.ts:290 and
+// :327) is required too.
 const WORKSPACE_GATE_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.checks;
 const WORKSPACE_GATE_KEYWORDS = ["Run Workspace", "pre-publication check"];
 // The gate having no record leads with its own sentence rather than the checks
@@ -228,9 +229,10 @@ const WORKSPACE_GATE_KEYWORDS = ["Run Workspace", "pre-publication check"];
 
 // The two ways a repository scripts verdict ends a run, both system-composed
 // and neither of them the gate. finalize_workspace refuses an unmet `checks.*`
-// input with the first (workflows/blocks/finalize-workspace.ts), and a scripts
-// block that could not run at all throws the second (engine/agent-workflow.ts
-// prePrChecksFailureReport). Matched as substrings, not prefixes: both are
+// input with the first (engine/blocks/finalize-workspace/execute.ts), and a scripts
+// block that could not run at all throws the second (prePrChecksFailureReport,
+// engine/helpers/repository-failure.ts:147, reached through
+// engine/steps/repository-failure.ts:32). Matched as substrings, not prefixes: both are
 // wrapped in a category lead before they reach a run reason.
 const REPOSITORY_SCRIPTS_KEYWORDS = [
   "required checks not satisfied",
@@ -262,15 +264,15 @@ const SOURCE_PULL_REQUEST_MOVED_KEYWORDS = [
 // stopped by a budget check (engine/agent-workflow.ts).
 const BUDGET_EXHAUSTED_PREFIX = "Run stopped on budget:";
 
-// WATCHDOG_FAILURE_REASON_PREFIX (lib/telemetry/run-telemetry.ts:116), written
+// WATCHDOG_FAILURE_REASON_PREFIX (db/repositories/runs/telemetry.ts:117), written
 // only by the engine-stall watchdog as a durable failed-run reason.
 const ENGINE_STALLED_PREFIX = "Run engine stalled:";
 
-// fallbackTerminalError's "blocked" lead (lib/overview/sanitize-run-detail.ts:
-// 104-113): the observed face of three silent stop paths that record no
+// fallbackTerminalError's "blocked" lead (engine/support/sanitize-run-detail.ts:
+// 106): the observed face of three silent stop paths that record no
 // statusReason: markRunBlockedOnCancel and sweepOrphanedAwaitingRuns
-// (lib/telemetry/run-telemetry.ts:528-533, 581-602) and
-// retireClarificationForGoneTicket (clarifications/answer-core.ts:111-119).
+// (db/repositories/runs/telemetry.ts:661 and :821) and
+// retireClarificationForGoneTicket (services/clarifications/retirement.ts).
 const STOPPED_WITHOUT_REASON_PREFIX =
   "This run was stopped before it finished, but no specific reason was recorded.";
 
@@ -314,10 +316,11 @@ const PROVIDER_SPEND_LIMIT_ACTIONS = [
 // (same table), the uncurated fallback for a "provider"-category failure
 // that matched none of those. Plus
 // the agent-CLI runtime-prep/execution sentences set directly as
-// `options.message` (protocol.ts:122/131/243/418 "The agent runtime could not
-// be prepared."; protocol.ts:173/185 "The current agent phase could not be
-// completed."): both are AgentRuntimeError category "provider" (sandbox/agents/
-// types.ts:467), and the exposed text cannot distinguish "missing credentials"
+// `options.message` (protocol.ts:138/147/259/453 "The agent runtime could not
+// be prepared."; protocol.ts:189/201 "The current agent phase could not be
+// completed."): both are AgentRuntimeError (sandbox/agents/runtime-error.ts:11)
+// with category "provider" (AgentProtocolFailureCategory, sandbox/agents/
+// types.ts:529), and the exposed text cannot distinguish "missing credentials"
 // from "CLI install/exit failed", so they land here rather than under
 // dependency_auth. All describe an external/tooling dependency being
 // unreachable or broken right now, distinct from a rejected credential.
@@ -332,13 +335,13 @@ const DEPENDENCY_UNAVAILABLE_PREFIXES = [
 ];
 
 // SAFE_EXECUTION_ERROR_MESSAGES.timeout (packages/workflow-graph/interpreter.ts),
-// composed whenever a block reports `category: "timeout"` (e.g. workflows/blocks/
-// generic-agent.ts:470, engine/agent-workflow.ts).
+// composed whenever a block reports `category: "timeout"` (e.g. engine/blocks/
+// generic-agent/execute.ts:461, engine/agent-workflow.ts).
 const SANDBOX_TIMEOUT_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.timeout;
 
 // SAFE_EXECUTION_ERROR_MESSAGES.sandbox (same table), the generic
-// "sandbox"-category sentence (e.g. workflows/blocks/prepare-workspace.ts's
-// outer catches, `category: "sandbox"`).
+// "sandbox"-category sentence (e.g. engine/blocks/prepare-workspace/execute.ts's
+// outer catches at :947 and :1486, `category: "sandbox"`).
 const WORKSPACE_UNAVAILABLE_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.sandbox;
 
 // SAFE_EXECUTION_ERROR_MESSAGES.engine (same table), used for
@@ -597,7 +600,7 @@ const RULES: readonly Rule[] = [
   {
     // Placed after every message rule above: most block failures return an
     // executionError rather than throwing (the WDK step itself completes; only
-    // the later `throw new WorkflowExecutionError`, agent.ts:2913, fails the
+    // the later `throw new WorkflowExecutionError`, engine/agent-workflow.ts:453, fails the
     // run), so a genuinely "failed" step is a narrow case, not a broad
     // catch-all, and must never shadow a more specific message-based
     // classification for the same failure.

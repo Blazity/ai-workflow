@@ -921,5 +921,11 @@ export const FIRST_SLICE_TOOLS = [
   "settings.get",
   "settings.set",
   "settings.reset",
+  // Appended for the same reason as the fourteen above. The record of which
+  // repositories a subject's work may touch was written by every run and read
+  // back by nothing: these two are a person's read of it and a person's change
+  // to it, which is what makes an exclusion recoverable.
+  "work_scope.get",
+  "work_scope.edit",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];

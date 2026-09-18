@@ -205,7 +205,7 @@ describe("PR trigger semantic dedup at the coalesce boundary", () => {
   }
 
   // Faithful model of dispatchTriggerEvent's accept-then-coalesce decision
-  // (dispatch-trigger.ts:148-153 and :288): a duplicate (semantic or exact)
+  // (dispatch-trigger.ts:357-361 and :770): a duplicate (semantic or exact)
   // short-circuits without ever coalescing; a fresh delivery either becomes the
   // run on an idle subject or coalesces into the one pending successor while the
   // subject is busy.

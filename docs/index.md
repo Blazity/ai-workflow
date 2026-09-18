@@ -12,7 +12,9 @@ Every document outside `archive/` and `research/` starts with two lines,
 [ADR-005](./adr/ADR-005-documentation-taxonomy.md), and
 `scripts/gates/docs-status.mjs` enforces them over `docs/`, `apps/*/docs/`,
 each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
-`SETUP.md` and `CONTEXT.md` at the root.
+`SETUP.md` and `CONTEXT.md` at the root. Those paths are required rather than
+opportunistic: when one of them moves the gate refuses, instead of quietly
+checking the smaller set that is left (ADR-007).
 
 ## Start here
 
@@ -48,6 +50,8 @@ each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
 | [adr/ADR-004-gates-and-required-ci.md](./adr/ADR-004-gates-and-required-ci.md) | The gate ladder, one shape per gate, and what has to be true before a check can be required |
 | [adr/ADR-005-documentation-taxonomy.md](./adr/ADR-005-documentation-taxonomy.md) | This taxonomy: the status header, the currency rule, the reachability rule, per-app agent files |
 | [adr/ADR-006-model-catalog.md](./adr/ADR-006-model-catalog.md) | The recognised model policy, live-advertisement intersection, stored-ID compatibility, and catalog ownership |
+| [adr/ADR-007-empty-scan-is-a-refusal.md](./adr/ADR-007-empty-scan-is-a-refusal.md) | Why a gate that scanned nothing refuses instead of passing, the two helpers that refuse, and the one gate that cannot |
+| [adr/ADR-008-claims-the-code-owns.md](./adr/ADR-008-claims-the-code-owns.md) | When a document may restate a list the code owns, and the test that holds the copy level in both directions |
 | [adr/ADR-009-agent-instruction-layers.md](./adr/ADR-009-agent-instruction-layers.md) | Where agent instructions live (router, per-area files, path-scoped rules, archive) and the byte ceilings a hook warns about |
 
 ## Product
@@ -56,6 +60,7 @@ each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
 |---|---|
 | [product/SPEC.md](./product/SPEC.md) | What the system does: behaviour, states, ticket lifecycle, delivery rules |
 | [product/user-stories.md](./product/user-stories.md) | The user stories the behaviour is measured against |
+| [product/repository-record-behaviour.md](./product/repository-record-behaviour.md) | What a person may do about which repositories a piece of work touches, and what the system must do in every case, including the ones nobody wants to think about |
 | [product/roadmap-2026-08-27.md](./product/roadmap-2026-08-27.md) | Priorities and milestones. It beats the README wherever the two disagree |
 
 ## Runbooks
@@ -103,6 +108,7 @@ research file records what was true on its date.
 | [plans/2026-09-14-p0-run-completion-and-planning.md](./plans/2026-09-14-p0-run-completion-and-planning.md) | Second P0 package after the restructure: completion fields at the status flip with an honest `runs.result` (AIW-369) and the planning expansion loop on an already-attached repository (AIW-377) |
 | [plans/2026-09-11-repository-catalog-and-settings.md](./plans/2026-09-11-repository-catalog-and-settings.md) | Delivered 2026-09-11 to 2026-09-13: repository catalog and dashboard settings replacing the product-behaviour environment variables |
 | [plans/2026-09-14-product-changelog.md](./plans/2026-09-14-product-changelog.md) | The product changelog: an entry folder authors fill per pull request, a daily collation workflow, and the CI check that a product change carries an entry |
+| [plans/2026-09-15-repository-work-scope.md](./plans/2026-09-15-repository-work-scope.md) | Draft, in delivery: one durable record per subject of work for which repositories it touches, a repository policy per trigger, a decision trail readable through MCP, and a repository map in the agent's prompt (AIW-402, AIW-377, roadmap P1 repository scope per trigger) |
 
 Every other file in `plans/` is a historical delivery plan. It stays in place
 for provenance and carries `superseded-by docs/index.md`: read it as a record
@@ -138,4 +144,4 @@ have no status header and the docs gate skips them.
 | `docs/example-skill/SKILL.md` | The example agent skill referenced from SETUP.md |
 | `docs/example-workflows/loop-branch-workflow.json` | An importable example definition |
 | `CHANGELOG.md` | The daily collation workflow (`.github/workflows/changelog.yml`) writes it; readers consume it directly |
-| `changelog/unreleased/*.md` | The daily collation workflow reads and deletes them |
+| `changelog/unreleased/*.md` | The daily collation workflow reads and deletes them; the CI completeness check (`scripts/ci/changelog-entry-gate.ts`) reads them too, to see whether a pull request's entry yields a bullet |

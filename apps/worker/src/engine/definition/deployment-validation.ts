@@ -28,7 +28,12 @@ import type {
   WorkflowDefinitionValidationIssue,
   WorkflowParamValue,
 } from "@shared/contracts";
-import { isHarnessProfileReference } from "@shared/contracts";
+import {
+  isHarnessProfileReference,
+  isTriggerBlockType,
+  triggerRepositoryPolicySchema,
+  validateTriggerRepositoryPolicy,
+} from "@shared/contracts";
 import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import {
   analyzeWorkflowValues,
@@ -307,6 +312,7 @@ function validateWorkflowV2BlockDeploymentIssues(
         ),
       );
     }
+    issues.push(...repositoryPolicyPublishIssues(node, nodeIndex, params));
     // Schedule semantics come from the schedule-trigger evaluator and are never
     // re-implemented here. The deployment gate, the editor's preview and the
     // once-a-minute dispatcher have to agree about when a schedule fires, and
@@ -430,6 +436,41 @@ function validateWorkflowV2BlockDeploymentIssues(
   }
   issues.push(...workflowScheduleGraphIssues(def));
   return issues;
+}
+
+/**
+ * A trigger's repository policy may be well shaped and still say something its
+ * trigger type cannot honour. A draft keeps it, like an incomplete schedule;
+ * publishing refuses it. A policy that does not parse is left alone here: the
+ * configuration pass already reported it, and a second complaint about the same
+ * field would be noise. So is a policy on `trigger_plan_approved`, which that
+ * pass refuses as an unsupported key.
+ */
+function repositoryPolicyPublishIssues(
+  node: WorkflowDefinitionV2Node,
+  nodeIndex: number,
+  params: Record<string, WorkflowParamValue>,
+): WorkflowDefinitionValidationIssue[] {
+  if (
+    node.configuration.repositoryPolicy === undefined ||
+    node.type === "trigger_plan_approved" ||
+    !isTriggerBlockType(node.type)
+  ) {
+    return [];
+  }
+  const policy = triggerRepositoryPolicySchema.safeParse(node.configuration.repositoryPolicy);
+  if (!policy.success) return [];
+  const webhookHasSubjectPath =
+    typeof params.subjectPath === "string" && params.subjectPath.trim() !== "";
+  return validateTriggerRepositoryPolicy(node.type, policy.data, {
+    webhookHasSubjectPath,
+  }).map((issue) =>
+    workflowDefinitionIssue(
+      `Block "${node.id}" (${node.type}) has a repository policy it cannot publish: ${issue.message}`,
+      node.id,
+      `/nodes/${nodeIndex}/configuration/repositoryPolicy/${issue.path.join("/")}`,
+    ),
+  );
 }
 
 /**

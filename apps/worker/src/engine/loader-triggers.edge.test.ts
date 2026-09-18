@@ -217,7 +217,8 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
 
 // ---------------------------------------------------------------------------
 // Durable trigger dispatch and owner-CAS reconciliation now have dedicated
-// focused suites: lib/dispatch-trigger.test.ts and lib/reconcile.test.ts.
+// focused suites: services/dispatch/dispatch-trigger.test.ts and
+// services/run-lifecycle/reconcile.test.ts.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Area 5: POST /webhooks/github route

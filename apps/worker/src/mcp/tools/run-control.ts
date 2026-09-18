@@ -62,6 +62,14 @@ type AnswerClarificationData = {
   // caller can see the attribution the resumed agent and the ticket will show.
   answeredByLabel: string;
   ticketKey: string | null;
+  // What the answer did to the repository record, and absent when it recorded
+  // exactly what it named: either it left no repository decision behind it, in
+  // the same words the ticket comment uses, or it declined the repositories the
+  // question listed and this names them and the way back. The answer reached
+  // the run either way; without this a caller answering over MCP sees
+  // "answered" and learns neither that four repositories were just left out nor
+  // that the same question is coming back on the next run.
+  recordOutcome?: string;
 };
 
 type CancelRunData = {
@@ -311,6 +319,7 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
             answeredAt: (outcome.row.answeredAt ?? deps.now()).toISOString(),
             answeredByLabel: outcome.row.answeredByLabel ?? `MCP ${deps.actor.clientId}`,
             ticketKey: outcome.row.ticketKey,
+            ...(outcome.recordOutcome ? { recordOutcome: outcome.recordOutcome } : {}),
           };
         },
       });

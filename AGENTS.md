@@ -28,7 +28,7 @@ to `docs/archive/agent-notes/`; size ceilings: `.claude/context-budget.tsv`.
 | Why the code is shaped this way | [docs/adr/README.md](docs/adr/README.md) |
 | Tiers, allowed imports, which package owns what | [docs/adr/ADR-001-layering-and-packages.md](docs/adr/ADR-001-layering-and-packages.md) |
 | Gates, CI, what may be required and what may be bypassed | [docs/adr/ADR-004-gates-and-required-ci.md](docs/adr/ADR-004-gates-and-required-ci.md) |
-| The delivered restructure: its stages, freezes and the step drain | [docs/plans/2026-09-09-architecture-restructure.md](docs/plans/2026-09-09-architecture-restructure.md) |
+| The delivered restructure, its freezes and the step drain | [docs/plans/2026-09-09-architecture-restructure.md](docs/plans/2026-09-09-architecture-restructure.md) |
 | Environment variables, accounts, deployment, webhooks | [SETUP.md](SETUP.md) |
 | What the product does and what is planned | [README.md](README.md), [docs/product/roadmap-2026-08-27.md](docs/product/roadmap-2026-08-27.md) |
 | The worker: how to run it, its directories | [apps/worker/AGENTS.md](apps/worker/AGENTS.md) |
@@ -36,24 +36,20 @@ to `docs/archive/agent-notes/`; size ceilings: `.claude/context-budget.tsv`.
 | The shared packages: source entry, exports | [packages/AGENTS.md](packages/AGENTS.md) |
 
 Setting something up is a skill, not a document: `.claude/skills/init-*` walk
-the procedure and link to the SETUP.md section that holds each constraint.
+the procedure and link to the SETUP.md section with each constraint.
 
 ## Area rules
 
-`.claude/rules/<name>.md` binds the files its `paths:` list names. Claude Code
-loads it on a matching read; other agents open it before editing those files.
+`.claude/rules/<name>.md` binds the files its `paths:` names: Claude Code loads
+it on a matching read, other agents open it themselves.
 
 | Rule | Covers |
 |---|---|
-| `worker-settings` | settings snapshots, what a run may read |
-| `worker-repository-catalog` | catalog access and dispatch decisions |
-| `worker-database` | migrations, Drizzle schema, auth invariants |
-| `workflow-steps` | `"use step"` and `"use workflow"` files, their fixtures |
-| `workflow-graph` | `packages/workflow-graph` and the worker's definition half |
-| `zod-bundle`, `contracts-requests` | schemas the worker bundle runs, request bodies |
+| `worker-settings`, `worker-repository-catalog` | settings snapshots and what a run may read; catalog access and dispatch |
+| `worker-database`, `workflow-steps` | migrations, Drizzle, auth invariants; `"use step"` files and their fixtures |
+| `workflow-graph`, `zod-bundle`, `contracts-requests` | the graph package and the worker's definition half; schemas the bundle runs; request bodies |
 | `worker-mcp`, `worker-observability` | the MCP server; logging, telemetry, the runs API |
-| `adapters`, `sandbox-agents` | Jira, VCS and chat adapters; the sandboxed coding agents |
-| `arthur-engine`, `e2e-tests` | the Arthur client; the end-to-end suites |
+| `adapters`, `sandbox-agents`, `arthur-engine`, `e2e-tests` | Jira, VCS and chat adapters; sandboxed coding agents; the Arthur client; end-to-end suites |
 | `dashboard-ui`, `dashboard-settings`, `dashboard-repositories` | the dashboard |
 
 ## How to work here
@@ -80,8 +76,7 @@ pnpm run typecheck
 pnpm run verify:changed  # the scope-aware gate, before pushing
 ```
 
-Pick the checks that match the surface you changed, and record the exact
-command and its outcome:
+Pick the checks that match the surface you changed and record each outcome:
 
 ```sh
 git diff --check
@@ -111,12 +106,16 @@ a `PASS`, and a later result does not erase an earlier `FAIL`.
 
 `pnpm run verify:changed` resolves the base from the branch upstream, then
 `origin/HEAD`, then `origin/main`, and never fetches; pass `-- --base <ref>` to
-override. The Claude Stop hook adds `--worktree` so committed, staged, unstaged
-and untracked paths are planned together. Enable the pre-push hook once with
+override; add `--worktree` to plan committed, staged, unstaged and untracked
+paths together before a commit. The Claude Stop hook runs only the quick checks
+(`git diff --check` and `pnpm -w run typecheck`) after each response, so the
+full gate runs in the pre-push hook or by hand. Enable the pre-push hook once with
 `git config --local core.hooksPath .githooks`, but only if that setting is
 currently empty. The gate is advisory and bypassable: `git push --no-verify` is
 an audited bypass, so record why it was used and do not report the gate as
-passed.
+passed. The run echoes each planned command with its position, stops at the
+first failure, and then names that command and lists every later one as
+unproven: a command that never started is not a command that passed.
 
 `main` carries the branch ruleset decided in ADR-004: since 2026-09-09 it
 requires the `ci` aggregator to pass, so a red `ci` job blocks the merge. The

@@ -214,7 +214,7 @@ export function normalizeClarificationOrigin(
   if (entry.kind === "schedule") {
     // Unreachable because the run fails before it can park: the deployment gate
     // refuses the two blocks whose whole purpose is waiting for a person, and
-    // assertScheduledRunMayNotPark in agent.ts fails any scheduled run that
+    // assertScheduledRunMayNotPark in engine/agent-workflow.ts:350 fails any scheduled run that
     // reaches a clarification at execution time (a park is a runtime outcome of
     // several ordinary blocks, not a property of a block type). Loud here, so
     // that if either of those is ever loosened this surfaces instead of quietly

@@ -36,7 +36,7 @@ describe("repository memory distill model", () => {
       model: REPO_MEMORY_DISTILL_MODEL_CODEX,
     });
     // The claude path keeps call_llm's own cheap default. Asserted as "not the
-    // agent model" so this does not restate call-llm.ts's constant.
+    // agent model" so this does not restate CALL_LLM_DEFAULT_MODEL (packages/harness/model-catalog.ts:34).
     const claude = repoMemoryDistillTarget("claude", DEFAULTS);
     expect(claude.provider).toBe("claude");
     expect(claude.model).not.toBe(DEFAULTS.claude);

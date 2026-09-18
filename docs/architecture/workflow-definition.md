@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-12
+Last-verified: 2026-09-17
 
 # Workflow definitions (schema v2)
 
@@ -154,6 +154,16 @@ Prompt-bearing fields may embed the same references as `{{data:<reference>}}`
 tokens; `resolveWorkflowPromptDataTokensV2` in `v2-bindings.ts` resolves them
 again at invocation time so a stale checkpoint cannot leak a raw placeholder
 into an agent prompt.
+
+**A literal token an author wants to WRITE ABOUT: deferred, 2026-09-17.** Today
+there is no way to put an example of a token in a prompt: publish refuses a
+`${{ ... }}` an author typed as prose, so a prompt cannot teach anybody the
+syntax it uses, and the dashboard editor and the runtime disagree about a token
+inside code (the editor shows it as code, the runtime still treats it as a
+reference). The shape decided for later, and not built here: a token inside
+Markdown inline code or a fenced block is literal, so the runtime resolves
+nothing there and validation refuses nothing there, which is what the editor
+already shows the person. No parser, validation or copy changed for it now.
 
 Which references an author may pick is computed per node by
 `analyzeWorkflowValues` in

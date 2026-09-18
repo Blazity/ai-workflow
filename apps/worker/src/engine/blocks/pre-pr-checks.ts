@@ -278,7 +278,8 @@ async function emitRepositoryScriptsProgress(
   if (!observations) return;
   try {
     // A LOG, not metadata. The metadata envelope is a latest-value cell that
-    // the store overwrites on every write (run-observability/store.ts), so a
+    // the store overwrites on every write (applyReplayAttemptObservations,
+    // run-observability/runtime-hooks.ts:191), so a
     // forty minute batch left exactly one raw-millisecond JSON blob in a tab
     // nobody watches. Logs append, so this reads as the progress trail it is,
     // in the place an operator already looks at a running block.
@@ -578,7 +579,8 @@ const SETUP_MESSAGE_COMMAND_MAX_CHARS = 100;
  * everything an operator needs to know which line of the configuration to open.
  * The output tail is deliberately absent, because this string is carried by the
  * run header, the run list and Slack, and it is the ticket comment that has
- * room for evidence (agent.ts repositoryScriptsFailureComment).
+ * room for evidence (`repositoryScriptsFailureComment`,
+ * `engine/helpers/repository-failure.ts:446`).
  */
 export function setupFailureMessage(outcome: RepositorySetupOutcome): string {
   const first = outcome.failures[0];
@@ -888,7 +890,8 @@ function batchesResult(
     // multi-line per-command report, and folding sentences into it would run
     // them onto the tail of an output block; the ticket comment carries the
     // same sentences as a section of their own under a failing run
-    // (agent.ts repositoryScriptsFailureComment), so the gap is never lost.
+    // (`repositoryScriptsFailureComment`, `engine/helpers/repository-failure.ts:446`),
+    // so the gap is never lost.
     summary:
       failures.length > 0
         ? formatPrePrCheckFailures(failures)

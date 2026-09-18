@@ -153,6 +153,8 @@ const PUBLISHED = [
   "settings.get",
   "settings.set",
   "settings.reset",
+  "work_scope.get",
+  "work_scope.edit",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

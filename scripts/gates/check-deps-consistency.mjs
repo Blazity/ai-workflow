@@ -64,6 +64,29 @@ const ARGV_START = 2,
       }
     }
   },
+  /*
+   * A glob that resolves to nothing leaves every dependency under it compared
+   * to nobody, and one project on its own can share nothing, so both cases
+   * report a clean run over an empty set. Both are refusals instead.
+   */
+  assertGlobCoverage = (root, projects) => {
+    for (const pattern of includePatterns(root)) {
+      if (pattern.startsWith("!")) {
+        continue;
+      }
+      if (!globSync(pattern, { cwd: root }).some((directory) => projects.includes(directory))) {
+        throw new Error(
+          `the pnpm-workspace.yaml glob "${pattern}" matches no workspace project, so one version per shared dependency is unproven for everything it was meant to cover. Fix the glob or restore the directory it names.`,
+        );
+      }
+    }
+    if (projects.length < MINIMUM_SHARED_PROJECTS) {
+      throw new Error(
+        `the pnpm-workspace.yaml globs resolve to ${projects.length} workspace project(s), so no dependency can be shared and one version per shared dependency is unproven. The gate had nothing to compare.`,
+      );
+    }
+    return projects;
+  },
   // Classifies one shared dependency against the catalog.
   assessDependency = (catalog, name, specifiers) => {
     if (specifiers.length > SINGLE_SPECIFIER) {
@@ -101,16 +124,24 @@ const ARGV_START = 2,
     }
     return readFileSync(workspaceFile, "utf8");
   },
+  // Every glob listed under `packages:` in pnpm-workspace.yaml, in file order.
+  includePatterns = (root) => {
+    const patterns = [],
+      packagesBlock = getWorkspaceFile(root).split(CATALOG_OR_CATALOGS_HEADING).at(FIRST_BLOCK);
+    for (const match of packagesBlock.matchAll(GLOB_PATTERN)) {
+      patterns.push(match.groups.entry);
+    }
+    return patterns;
+  },
   // True when the workspace directory actually holds a package.json.
   isProject = (root, directory) =>
     existsSync(path.join(root, directory, "package.json")) &&
     statSync(path.join(root, directory)).isDirectory(),
   // Every directory the `packages` globs resolve to, plus the workspace root.
   listProjects = (root) => {
-    const directories = new Set([WORKSPACE_ROOT]),
-      packagesBlock = getWorkspaceFile(root).split(CATALOG_OR_CATALOGS_HEADING).at(FIRST_BLOCK);
-    for (const match of packagesBlock.matchAll(GLOB_PATTERN)) {
-      applyGlob(directories, root, match.groups.entry);
+    const directories = new Set([WORKSPACE_ROOT]);
+    for (const pattern of includePatterns(root)) {
+      applyGlob(directories, root, pattern);
     }
     return [...directories].filter((directory) => isProject(root, directory)).toSorted();
   },
@@ -147,7 +178,8 @@ const ARGV_START = 2,
   },
   main = () => {
     const options = parseOptions(process.argv.slice(ARGV_START), { "--root": "root" }),
-      rows = buildRows(loadCatalog(options.root), loadDeclarations(options.root, listProjects(options.root))),
+      projects = assertGlobCoverage(options.root, listProjects(options.root)),
+      rows = buildRows(loadCatalog(options.root), loadDeclarations(options.root, projects)),
       violations = rows.some((row) => row[VERDICT_COLUMN] !== "ok");
     process.stdout.write("Shared dependency versions\n");
     printTable(["dependency", "projects", "specifiers", "verdict"], rows);
@@ -155,7 +187,9 @@ const ARGV_START = 2,
       process.stdout.write("check-deps-consistency FAIL\n");
       process.exitCode = FAILURE_CODE;
     } else {
-      process.stdout.write("check-deps-consistency PASS\n");
+      process.stdout.write(
+        `check-deps-consistency PASS: ${rows.length} shared dependency row(s) across ${projects.length} project(s)\n`,
+      );
       process.exitCode = SUCCESS_CODE;
     }
   };

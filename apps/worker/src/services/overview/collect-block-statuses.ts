@@ -20,6 +20,13 @@ export interface CollectBlockStatusesOptions {
 }
 
 /**
+ * ORPHANED DOC BLOCK: the terminal-status constant it describes is no longer in
+ * this file, and `RUN_STATUSES` above is NOT it (that set deliberately includes
+ * "running" and "awaiting"). Left in place rather than deleted because the
+ * counterpart it names is still real and still the thing to compare against:
+ * apps/dashboard/lib/merge-live-runs.ts:9, TERMINAL_STATUSES, which holds
+ * "success", "failed" and "blocked".
+ *
  * Statuses `workflow_runs.status` reports once a run has finished; mirrors
  * apps/dashboard/lib/merge-live-runs.ts's TERMINAL_STATUSES. The run registry
  * unregisters a run asynchronously, so a still-bound/parking/parked entry can

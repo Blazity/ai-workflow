@@ -2,29 +2,57 @@
 // would bypass the module mock and hit the real Workflow runtime.
 import {
   MAX_CLARIFICATION_ANSWER_LENGTH,
+  repositoryCatalogKey,
+  type RepositoryKey,
   type SettingsSnapshot,
 } from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
 import { env } from "../../infra/vcs-config.js";
 import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../../db/types.js";
+import { loadRepositoryCatalogEntries } from "../repository-catalog/index.js";
+import {
+  getRepositoryCatalogStateRow,
+  listRepositoryCatalogRows,
+} from "../../db/repositories/repository-catalog.js";
+import {
+  recordRepositoryAnswer,
+  type RepositoryAnswerPersistence,
+  type RepositoryAnswerOutcome,
+} from "../work-scope/index.js";
+import {
+  commentsCoverAnswerWindow,
+  isComposedAnswerActor,
+  readAnswerAuthorship,
+  UNCOUNTED_AUTHORS_ERROR,
+} from "./answer-authorship.js";
+import {
+  applyAnswerWorkScopePlan,
+  applyConnectedAnswerWorkScopePlan,
+  readConnectedWorkScope,
+  readWorkScope,
+} from "../../db/repositories/work-scope.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
+  type TicketComment,
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
 import { aiColumnMoveTarget } from "../tickets/index.js";
 import {
-  markConnectedRunBlockedOnCancel,
   markConnectedRunResumed,
-  markRunBlockedOnCancel,
   markRunResumed,
 } from "../../db/repositories/runs/telemetry.js";
 import {
   moveConnectedTicketForRun,
   moveTicketForRun,
 } from "../tickets/index.js";
-import { formatClarificationAnswerComment } from "./comment-format.js";
+import {
+  formatAnswerNotRecordedComment,
+  formatAnswerDeclinedComment,
+  formatClarificationAnswerComment,
+  aLaterRunCanPickUpAskedRepositories,
+} from "./comment-format.js";
 import {
   answerConnectedHookClarification,
   answerHookClarification,
@@ -38,16 +66,13 @@ import {
   RESUME_FAILED_STATUS,
   type ResumeAttemptReservation,
 } from "./resume-attempts.js";
-import {
-  supersedeConnectedClarification,
-  supersedeConnectedPendingClarificationsForTicket,
-  supersedeClarification,
-  supersedePendingForTicket,
-} from "../../db/repositories/clarifications.js";
+import { retireConnectedClarificationForGoneTicket } from "../../db/repositories/clarifications.js";
+import { commentPathAfterAnUnrecordedAnswer } from "../../engine/work-scope/context.js";
 import {
   findBoundActiveRunOwner,
   findConnectedBoundActiveRunOwner,
 } from "../../db/repositories/active-runs.js";
+import { retireClarificationForGoneTicket } from "./retirement.js";
 
 /** Re-exported under the name this cluster has always used. The number itself
  *  belongs to the contracts package, which is also what the request schema and
@@ -56,7 +81,35 @@ import {
 export const MAX_ANSWER_LENGTH = MAX_CLARIFICATION_ANSWER_LENGTH;
 
 export type AnswerClarificationOutcome =
-  | { kind: "answered"; row: HookClarificationRow }
+  | {
+      kind: "answered";
+      row: HookClarificationRow;
+      /**
+       * What this answer did to the repository record, in one sentence for the
+       * person who wrote it, and absent when it recorded exactly what it named.
+       *
+       * THE PERSON WHO ANSWERED HAS TO LEARN IT IN THE CHANNEL THEY ANSWERED
+       * IN. The ticket comment reaches the ticket's readers, and somebody
+       * answering from the dashboard or an MCP client may never open it; they
+       * see "answered", and the next run asks them the same question. The
+       * delivery is unaffected either way: the answer reached the run, and this
+       * is what happened to the record beside it.
+       *
+       * TWO CASES, ONE FIELD. Either the answer recorded no repository decision,
+       * and this carries the same words the ticket comment does, or it declined
+       * the repositories the question listed, and this says which ones and how
+       * to bring one back. They are mutually exclusive, they are read in one
+       * place by every channel, and a reader that had to branch on which of two
+       * fields arrived would be a second rule to keep in step.
+       *
+       * The composed TEXT rather than a code, on purpose. The code is an
+       * internal classification whose only job is choosing these words, and a
+       * second vocabulary on the wire is a second thing to keep in step: a
+       * surface rendering its own sentence per code would drift from the ticket,
+       * and a person reading both would meet two stories about one answer.
+       */
+      recordOutcome?: string;
+    }
   | { kind: "invalid_answer" }
   | { kind: "conflict" }
   | { kind: "resume_terminal" }
@@ -73,7 +126,7 @@ export type AnswerClarificationOutcome =
  * claim means no run can work this ticket, so it must not be moved either;
  * that is logged, not raised, because the answer itself is still legitimate.
  */
-interface AnswerPersistence {
+interface AnswerPersistence extends RepositoryAnswerPersistence {
   findBoundOwner(input: { subjectKey: string; runId: string }): Promise<{ ownerToken: string } | null>;
   transitionTicket(input: {
     issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
@@ -95,6 +148,35 @@ interface AnswerPersistence {
   }): Promise<"retryable" | "exhausted" | "lost">;
   retireGoneTicket(row: HookClarificationRow): Promise<void>;
   markResumed(runId: string): Promise<void>;
+}
+
+/** The catalog as the answer reader and the decision want it, from whichever
+ *  tier owns it on this path. */
+function catalogKeysOf(
+  activated: boolean,
+  rows: Array<{ provider: string; path: string; enabled: boolean }>,
+) {
+  const keys: RepositoryKey[] = [];
+  const enabledKeys: RepositoryKey[] = [];
+  for (const row of rows) {
+    const key = repositoryCatalogKey({ provider: row.provider, path: row.path });
+    keys.push(key);
+    if (row.enabled) enabledKeys.push(key);
+  }
+  return { activated, keys, enabledKeys };
+}
+
+async function readRepositoryCatalogKeys(db: Db) {
+  const [state, rows] = await Promise.all([
+    getRepositoryCatalogStateRow(db),
+    listRepositoryCatalogRows(db),
+  ]);
+  return catalogKeysOf(state.activated, rows);
+}
+
+async function loadConnectedRepositoryCatalogKeys() {
+  const { state, entries } = await loadRepositoryCatalogEntries();
+  return catalogKeysOf(state.activated, entries);
 }
 
 async function moveTicketToAiColumn(input: {
@@ -142,15 +224,28 @@ async function moveTicketToAiColumn(input: {
  * not pay a second provider read for a move that could only be a no-op.
  * `skipAnswerComment` is for callers whose answer already exists as a ticket
  * comment, so mirroring it back would duplicate what a human just wrote.
+ * `answerAuthorCount` is how many people the caller composed these words from,
+ * which only the Jira comment path can say and only the record below reads.
  */
 type AnswerClarificationInput = {
   row: HookClarificationRow;
   rawAnswer: string;
   actor: { id: string; label: string };
-  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment">;
+  issueTracker: Pick<
+    IssueTrackerAdapter,
+    "fetchTicket" | "moveTicket" | "postComment" | "getCurrentUserAccountId"
+  >;
   skipTicketFetch?: boolean;
   skipTicketMove?: boolean;
   skipAnswerComment?: boolean;
+  /** The number of distinct people whose words this answer is made of, as the
+   *  fact and never as something to read back out of the text. Set by the one
+   *  channel that composes an answer out of several comments, at the moment it
+   *  composes it. Left out by the channels that compose nothing (the dashboard
+   *  and MCP each deliver one person's answer as they typed it) and by any
+   *  delivery of a stored answer, which the record counts again from the ticket
+   *  rather than believing the delivery. */
+  answerAuthorCount?: number;
   aiColumn?: string;
   cancelSettings: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
 };
@@ -171,6 +266,9 @@ export function answerClarificationAndResume(
       finishFailedResume({ db, settings: input.cancelSettings, ...failed }),
     retireGoneTicket: (row) => retireClarificationForGoneTicket(db, row),
     markResumed: (runId) => markRunResumed(db, runId),
+    repositoryCatalog: () => readRepositoryCatalogKeys(db),
+    readWorkScope: (subjectKey) => readWorkScope(db, subjectKey),
+    applyAnswerWorkScope: (plan) => applyAnswerWorkScopePlan(db, plan),
   });
 }
 
@@ -188,6 +286,9 @@ export function answerConnectedClarificationAndResume(
       finishConnectedFailedResume({ settings: input.cancelSettings, ...failed }),
     retireGoneTicket: retireConnectedClarificationForGoneTicket,
     markResumed: markConnectedRunResumed,
+    repositoryCatalog: loadConnectedRepositoryCatalogKeys,
+    readWorkScope: readConnectedWorkScope,
+    applyAnswerWorkScope: applyConnectedAnswerWorkScopePlan,
   });
 }
 
@@ -213,10 +314,25 @@ async function answerClarificationAndResumeWithPersistence(
     : actor;
 
   // Ticketless scope:any continuations have no Jira lifecycle. Ticket-backed
-  // checkpoints still fail early when their ticket has been deleted.
+  // checkpoints still fail early when their ticket has been deleted. The
+  // comments come back with that read, and the record below counts the authors
+  // of a stored answer from them rather than paying a second read for the same
+  // bytes; every delivery that can need the count makes this fetch.
+  let ticketComments: readonly TicketComment[] | null = null;
+  // Whether that read holds every comment that could be part of this answer. A
+  // read with a gap in that window can only ever say what IS on the ticket,
+  // never what is not, and the count below turns on exactly that difference.
+  let ticketCommentsCoverWindow = false;
   if (row.ticketKey && !input.skipTicketFetch) {
     try {
-      await issueTracker.fetchTicket(row.ticketKey);
+      // With the window: this read exists to count the people who wrote the
+      // answer, which is a question about the comments since the question was
+      // asked and about nothing else.
+      const ticket = await issueTracker.fetchTicket(row.ticketKey, {
+        commentsSince: row.askedAt.toISOString(),
+      });
+      ticketComments = ticket.comments;
+      ticketCommentsCoverWindow = commentsCoverAnswerWindow(ticket, row.askedAt.getTime());
     } catch (err) {
       if (!(err instanceof IssueTrackerNotFoundError)) throw err;
       await persistence.retireGoneTicket(row);
@@ -251,8 +367,46 @@ async function answerClarificationAndResumeWithPersistence(
     return { kind: "conflict" };
   }
 
-  if (!answered.answeredAt) return { kind: "conflict" };
-  const reservation = await persistence.reserve(answered.id, answered.answeredAt);
+  const answeredAt = answered.answeredAt;
+  if (!answeredAt) return { kind: "conflict" };
+
+  // Counted BEFORE the resume attempt is reserved, because the only thing that
+  // can stop here is our own bookkeeping. The three attempts are the person's
+  // budget for getting their answer delivered; spending one of them on a moment
+  // when WE could not count the authors cancels a run over a perfectly good
+  // answer after three unlucky identity reads. A hold takes nothing from that
+  // budget, and its own bound is inside the count.
+  //
+  // Counting only. Nothing is written and nothing is posted until the
+  // reservation below proves this delivery is the one going ahead, exactly as
+  // before: a delivery that loses that race must leave the ticket and the
+  // record as it found them.
+  const authorship = await readAnswerAuthorship({
+    row,
+    answeredAt,
+    answerer,
+    authorCount: input.answerAuthorCount,
+    issueTracker,
+    ticketComments,
+    ticketCommentsCoverWindow,
+  });
+  if (authorship.kind === "hold") {
+    // Nothing is wrong with the answer: what could not be done, right now, is
+    // telling how many people wrote it. Fail the delivery the way a failed
+    // resume fails, BEFORE the hook is spent. Resuming here would consume the
+    // hook, take the row out of the resumable set with it, and leave a good
+    // single person's answer unrecorded for good, with no delivery left that
+    // could ever record it. Retryable costs a repeated delivery; the
+    // alternative costs the answer.
+    //
+    // Only while a later delivery could do better. When the comments the answer
+    // was composed from are gone for good, and when the counting has had its own
+    // window and spent it, nothing is written and the delivery goes through: see
+    // `readAnswerAuthorship`.
+    return { kind: "resume_failed_retryable", error: new Error(UNCOUNTED_AUTHORS_ERROR) };
+  }
+
+  const reservation = await persistence.reserve(answered.id, answeredAt);
   if (!reservation) return { kind: "conflict" };
 
   // Mirror the answer into the ticket. The question was posted there publicly,
@@ -279,12 +433,88 @@ async function answerClarificationAndResumeWithPersistence(
       });
   }
 
+  // Before the resume, because the resumed run reads the RECORD and never the
+  // answer text: a run that died between the two would otherwise lose what a
+  // person said, and the next run would ask them again.
+  // Which channel this answer came from, and it is the mark the composer put on
+  // the actor rather than a guess: only the ticket path composes an answer out
+  // of comments. Two things below read it, the record and the decline sentence,
+  // so it is decided once.
+  const composedFromComments = isComposedAnswerActor(answerer.id);
+  let recorded: RepositoryAnswerOutcome = {};
+  if (authorship.kind === "write") {
+    recorded = await recordRepositoryAnswer(persistence, {
+      row,
+      answer,
+      answeredAt,
+      answerer,
+      composedFromComments,
+      ...(authorship.authorCount === undefined ? {} : { authorCount: authorship.authorCount }),
+    });
+  }
+  // Why this answer left no repository decision behind it, said out loud where
+  // the person who answered can see it, because the next run may ask them the
+  // same thing. Best effort, and never able to fail a delivery that is going
+  // ahead: the answer is the run's, whatever the ticket ends up saying.
+  //
+  // One sentence, never two. Counting the authors decides whether the words are
+  // read at all, so when that count has something to say it is the more
+  // specific of the two and goes first: an answer several people wrote is told
+  // that, not that it named no repository.
+  const tell = authorship.tell ?? recorded.told;
+  // Composed once, for both readers. The ticket comment and the reply this call
+  // returns carry the same words, so a person who reads both meets one story
+  // about one answer, and a wording change lands on both at once.
+  const notRecorded =
+    tell === undefined
+      ? undefined
+      : formatAnswerNotRecordedComment(tell, {
+          listedRepositories: (row.askedRepositories?.length ?? 0) > 0,
+          // The second fact the sentence needs, and this row is the only place
+          // that holds it: a question the run raised about a repository the
+          // catalog does not enable or cannot serve offers a path route that
+          // the next run cannot honour.
+          aLaterRunCanPickThemUp: aLaterRunCanPickUpAskedRepositories(row.askedRepositories),
+          // And the third: what may be said about writing a path in a
+          // comment. Never that it works: whether the next run takes it is a
+          // count of the ticket's open repositories, and this surface has no
+          // run behind it to count them.
+          commentPath: commentPathAfterAnUnrecordedAnswer({ questions: row.questions }),
+        });
+  // AND WHAT A DECLINE DECIDED, IN THE CHANNEL THAT TOOK IT. "none of these"
+  // written as a ticket comment leaves every repository the question listed out
+  // of this work for good, one permanent entry each in that person's name, and
+  // the ticket said nothing about it: the sentence went back as the answer
+  // call's reply, which on this path nobody ever sees, because the answer WAS a
+  // comment and there is no screen behind it. The other two channels keep the
+  // reply and get no ticket comment (C11s), so each person is told once, where
+  // they answered. Not on a resume retry, which is the same answer arriving
+  // again rather than a second decision.
+  const declinedSentence =
+    recorded.declined && recorded.declined.length > 0
+      ? formatAnswerDeclinedComment(recorded.declined)
+      : undefined;
+  const toTheTicket =
+    notRecorded ?? (composedFromComments && !isResumeRetry ? declinedSentence : undefined);
+  if (toTheTicket !== undefined && row.ticketKey) {
+    const ticketKey = row.ticketKey;
+    await issueTracker
+      .postComment(ticketKey, toTheTicket)
+      .catch((error: unknown) => {
+        logger.warn(
+          { ticketKey, runId: row.runId, error: (error as Error).message },
+          "work_scope_answer_not_counted_comment_failed",
+        );
+        return null;
+      });
+  }
+
   try {
     await resumeHook(answered.hookToken, {
       answer,
       answeredById: answerer.id,
       answeredByLabel: answerer.label,
-      answeredAt: answered.answeredAt?.toISOString() ?? new Date().toISOString(),
+      answeredAt: answeredAt.toISOString(),
     });
   } catch (error) {
     // If the hook still exists, the resume definitely did not commit and the
@@ -313,7 +543,13 @@ async function answerClarificationAndResumeWithPersistence(
   // best-effort: a status write must never fail a delivered answer.
   await persistence.markResumed(row.runId).catch(() => {});
 
-  return { kind: "answered", row: answered };
+  // WHAT THIS ANSWER DID TO THE RECORD, in one field and one wording for every
+  // channel that took it. Either it recorded nothing and this says why, in the
+  // words the ticket comment carries, or it declined the repositories the
+  // question listed and this says which. Absent when the answer recorded what
+  // it named, which is the case that needs no sentence.
+  const recordOutcome = notRecorded ?? declinedSentence;
+  return { kind: "answered", row: answered, ...(recordOutcome ? { recordOutcome } : {}) };
 }
 
 /** Finish a failed reserved delivery and report whether anything is left. */
@@ -330,35 +566,4 @@ async function failedResumeOutcome(
     : attempt === "lost"
       ? { kind: "conflict" }
       : { kind: "resume_failed_retryable", error };
-}
-
-/**
- * Best-effort teardown when a clarification's Jira ticket has been deleted:
- * supersede sibling questions, supersede this row, and settle the parked run so
- * it does not stay awaiting forever. Each step swallows its own error.
- *
- * The run is settled as "blocked", not "success": it is still suspended on a
- * hook whose question was just superseded, so nobody can answer it and it will
- * never reach a PR. Recording success would freeze that dead run into a green
- * result the cron can no longer correct.
- */
-export async function retireClarificationForGoneTicket(
-  db: Db,
-  row: HookClarificationRow,
-): Promise<void> {
-  if (row.ticketKey) {
-    await supersedePendingForTicket(db, row.ticketKey).catch(() => {});
-  }
-  await supersedeClarification(db, row.id).catch(() => {});
-  await markRunBlockedOnCancel(db, row.runId).catch(() => {});
-}
-
-export async function retireConnectedClarificationForGoneTicket(
-  row: HookClarificationRow,
-): Promise<void> {
-  if (row.ticketKey) {
-    await supersedeConnectedPendingClarificationsForTicket(row.ticketKey).catch(() => {});
-  }
-  await supersedeConnectedClarification(row.id).catch(() => {});
-  await markConnectedRunBlockedOnCancel(row.runId).catch(() => {});
 }

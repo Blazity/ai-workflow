@@ -162,8 +162,9 @@ export function registerTicketWriteTools(
           }
 
           // A tracker has no idempotency key, so a lost reply would otherwise leave a
-          // duplicate comment in a customer's ticket. Same shape as the welcome-comment
-          // check in lib/dashboard-links.ts: read what is there and skip the write.
+          // duplicate comment in a customer's ticket: read what is there and skip the
+          // write. (This once mirrored a welcome-comment check in lib/dashboard-links.ts;
+          // that tier and that check are both gone, and nothing replaced them.)
           const botAccountId = await issueTracker
             .getCurrentUserAccountId?.()
             .catch(() => null);

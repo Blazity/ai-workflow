@@ -1,0 +1,1972 @@
+import { asc, sql } from "drizzle-orm";
+import { beforeEach, describe, expect, it } from "vitest";
+import type {
+  WorkScopeActor,
+  WorkScopeAskedRepository,
+  WorkScopeEntry,
+  WorkScopeWritePlan,
+} from "@shared/contracts";
+import type { Db } from "../client.js";
+import { workScopeEntries, workScopes, workScopeTrail } from "../schema.js";
+import { createTestDb } from "../test-db.js";
+import {
+  appendWorkScopeQuestionAsked,
+  applyAnswerWorkScopePlan,
+  applyPersonWorkScopeEdit,
+  applyRunWorkScopePlan,
+  listWorkScopeTrail,
+  readWorkScope,
+  readWorkScopeAnsweredAtByKey,
+  readWorkScopeAnsweredQuestion,
+  readWorkScopeAnsweredRepositories,
+  readWorkScopeFacts,
+  readWorkScopeNarrowingAnswered,
+  readWorkScopeSelectionAnswered,
+} from "./work-scope.js";
+
+let db: Db;
+const subjectKey = "ticket:jira:AWT-1";
+const runActor: WorkScopeActor = {
+  kind: "run",
+  runId: "run-1",
+  definitionId: 4,
+  definitionVersion: 7,
+};
+
+function entry(repositoryKey: string, overrides: Partial<WorkScopeEntry> = {}): WorkScopeEntry {
+  return {
+    repositoryKey,
+    state: "selected",
+    origin: "ticket_text",
+    rationale: "The ticket names it.",
+    decidedBy: runActor,
+    decidedAt: "2026-09-15T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function upsertsOnly(...entries: WorkScopeEntry[]): WorkScopeWritePlan {
+  return {
+    upserts: entries.map((value) => ({ entry: value, replacesExpired: false })),
+    deletes: [],
+    trail: [],
+  };
+}
+
+async function entriesOf(key: string) {
+  return (await readWorkScope(db, key))?.entries ?? [];
+}
+
+beforeEach(async () => {
+  db = await createTestDb();
+});
+
+describe("readWorkScope", () => {
+  it("returns null for a subject with no record", async () => {
+    await expect(readWorkScope(db, "ticket:jira:AWT-1")).resolves.toBeNull();
+  });
+});
+
+describe("applyRunWorkScopePlan", () => {
+  it("creates version 1, its entries and its trail rows on a new subject", async () => {
+    const api = entry("github:acme/api");
+    const web = entry("github:acme/web", {
+      state: "unavailable",
+      unavailableReason: "not_enabled",
+      origin: "trigger_policy",
+      rationale: "Listed by the trigger, not enabled in the catalog.",
+    });
+
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        plan: {
+          upserts: [
+            { entry: web, replacesExpired: false },
+            { entry: api, replacesExpired: false },
+          ],
+          deletes: [],
+          trail: [
+            { kind: "entry_written", entry: api, previousState: null },
+            {
+              kind: "map_shown",
+              text: "api, web",
+              repositoryKeys: ["github:acme/api", "github:acme/web"],
+            },
+          ],
+        },
+      }),
+    ).resolves.toEqual({ version: 1 });
+
+    await expect(readWorkScope(db, subjectKey)).resolves.toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      version: 1,
+      entries: [
+        {
+          repositoryKey: "github:acme/api",
+          state: "selected",
+          origin: "ticket_text",
+          rationale: "The ticket names it.",
+          decidedBy: { kind: "run", runId: "run-1", definitionId: 4, definitionVersion: 7 },
+          decidedAt: "2026-09-15T10:00:00.000Z",
+        },
+        {
+          repositoryKey: "github:acme/web",
+          state: "unavailable",
+          unavailableReason: "not_enabled",
+          origin: "trigger_policy",
+          rationale: "Listed by the trigger, not enabled in the catalog.",
+          decidedBy: { kind: "run", runId: "run-1", definitionId: 4, definitionVersion: 7 },
+          decidedAt: "2026-09-15T10:00:00.000Z",
+        },
+      ],
+    });
+
+    await expect(
+      listWorkScopeTrail(db, { subjectKey }, { limit: 10 }),
+    ).resolves.toEqual({
+      rows: [
+        {
+          id: 2,
+          subjectKey: "ticket:jira:AWT-1",
+          runId: "run-1",
+          at: expect.any(String),
+          event: {
+            kind: "map_shown",
+            text: "api, web",
+            repositoryKeys: ["github:acme/api", "github:acme/web"],
+          },
+        },
+        {
+          id: 1,
+          subjectKey: "ticket:jira:AWT-1",
+          runId: "run-1",
+          at: expect.any(String),
+          event: { kind: "entry_written", entry: api, previousState: null },
+        },
+      ],
+      nextBeforeId: null,
+    });
+    await expect(
+      db
+        .select({
+          id: workScopeTrail.id,
+          kind: workScopeTrail.kind,
+          repositoryKey: workScopeTrail.repositoryKey,
+        })
+        .from(workScopeTrail)
+        .orderBy(asc(workScopeTrail.id)),
+    ).resolves.toEqual([
+      { id: 1, kind: "entry_written", repositoryKey: "github:acme/api" },
+      { id: 2, kind: "map_shown", repositoryKey: null },
+    ]);
+  });
+});
+
+describe("origin precedence", () => {
+  it("leaves a person's entry when an inferred entry arrives for the same repository", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(
+        entry("github:acme/api", { origin: "person", rationale: "Ada chose it." }),
+      ),
+    });
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-2",
+      plan: upsertsOnly(
+        entry("github:acme/api", { state: "excluded", origin: "inferred", rationale: "Guessed." }),
+      ),
+    });
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "selected",
+        origin: "person",
+        rationale: "Ada chose it.",
+        decidedBy: runActor,
+        decidedAt: "2026-09-15T10:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("replaces a ticket text entry with a newer ticket text entry", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/api", { rationale: "The old text names it." })),
+    });
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-2",
+      plan: upsertsOnly(
+        entry("github:acme/api", {
+          state: "excluded",
+          rationale: "The corrected text rules it out.",
+          decidedAt: "2026-09-15T11:00:00.000Z",
+        }),
+      ),
+    });
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "excluded",
+        origin: "ticket_text",
+        rationale: "The corrected text rules it out.",
+        decidedBy: runActor,
+        decidedAt: "2026-09-15T11:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("replaces an inferred entry with a trigger policy entry", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/api", { origin: "inferred", rationale: "Guessed." })),
+    });
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-2",
+      plan: upsertsOnly(
+        entry("github:acme/api", { origin: "trigger_policy", rationale: "The trigger lists it." }),
+      ),
+    });
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "selected",
+        origin: "trigger_policy",
+        rationale: "The trigger lists it.",
+        decidedBy: runActor,
+        decidedAt: "2026-09-15T10:00:00.000Z",
+      },
+    ]);
+  });
+});
+
+describe("replacesExpired", () => {
+  const personActor: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function seedPersonEntry(overrides: Partial<WorkScopeEntry>) {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(
+        entry("github:acme/api", {
+          origin: "person",
+          rationale: "Ada could not give it.",
+          decidedBy: personActor,
+          ...overrides,
+        }),
+      ),
+    });
+  }
+
+  async function attachEnabled() {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-2",
+      plan: {
+        upserts: [
+          {
+            entry: entry("github:acme/api", {
+              origin: "inferred",
+              rationale: "Enabled since, attached.",
+              decidedAt: "2026-09-15T12:00:00.000Z",
+            }),
+            replacesExpired: true,
+          },
+        ],
+        deletes: [],
+        trail: [],
+      },
+    });
+  }
+
+  it("replaces an unavailable entry whose reason was not_enabled", async () => {
+    await seedPersonEntry({ state: "unavailable", unavailableReason: "not_enabled" });
+    await attachEnabled();
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "selected",
+        origin: "inferred",
+        rationale: "Enabled since, attached.",
+        decidedBy: runActor,
+        decidedAt: "2026-09-15T12:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("replaces an unavailable entry whose reason was unusable", async () => {
+    await seedPersonEntry({ state: "unavailable", unavailableReason: "unusable" });
+    await attachEnabled();
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "selected",
+        origin: "inferred",
+        rationale: "Enabled since, attached.",
+        decidedBy: runActor,
+        decidedAt: "2026-09-15T12:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("leaves a selected entry", async () => {
+    await seedPersonEntry({ rationale: "Ada chose it." });
+    await attachEnabled();
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "selected",
+        origin: "person",
+        rationale: "Ada chose it.",
+        decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+        decidedAt: "2026-09-15T10:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("leaves an excluded entry", async () => {
+    await seedPersonEntry({ state: "excluded", rationale: "Ada ruled it out." });
+    await attachEnabled();
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "excluded",
+        origin: "person",
+        rationale: "Ada ruled it out.",
+        decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+        decidedAt: "2026-09-15T10:00:00.000Z",
+      },
+    ]);
+  });
+});
+
+describe("compare-and-delete", () => {
+  async function seedTicketTextEntry() {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/api")),
+    });
+  }
+
+  function removal(origin: WorkScopeEntry["origin"]): WorkScopeWritePlan {
+    return {
+      upserts: [],
+      deletes: [{ repositoryKey: "github:acme/api", origin }],
+      trail: [
+        {
+          kind: "entry_removed",
+          entry: entry("github:acme/api", { origin }),
+          removedBy: { kind: "run", runId: "run-2", definitionId: 4, definitionVersion: 7 },
+        },
+      ],
+    };
+  }
+
+  it("leaves the row, the version and the trail when its origin no longer matches", async () => {
+    await seedTicketTextEntry();
+
+    await expect(
+      applyRunWorkScopePlan(db, { subjectKey, runId: "run-2", plan: removal("inferred") }),
+    ).resolves.toEqual({ version: 1 });
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "selected",
+        origin: "ticket_text",
+        rationale: "The ticket names it.",
+        decidedBy: runActor,
+        decidedAt: "2026-09-15T10:00:00.000Z",
+      },
+    ]);
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+  });
+
+  it("removes the row when its origin matches, and appends the removal", async () => {
+    await seedTicketTextEntry();
+
+    await expect(
+      applyRunWorkScopePlan(db, { subjectKey, runId: "run-2", plan: removal("ticket_text") }),
+    ).resolves.toEqual({ version: 2 });
+
+    await expect(readWorkScope(db, subjectKey)).resolves.toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      version: 2,
+      entries: [],
+    });
+    await expect(
+      listWorkScopeTrail(db, { subjectKey }, { limit: 10 }),
+    ).resolves.toEqual({
+      rows: [
+        {
+          id: 1,
+          subjectKey: "ticket:jira:AWT-1",
+          runId: "run-2",
+          at: expect.any(String),
+          event: {
+            kind: "entry_removed",
+            entry: {
+              repositoryKey: "github:acme/api",
+              state: "selected",
+              origin: "ticket_text",
+              rationale: "The ticket names it.",
+              decidedBy: { kind: "run", runId: "run-1", definitionId: 4, definitionVersion: 7 },
+              decidedAt: "2026-09-15T10:00:00.000Z",
+            },
+            removedBy: { kind: "run", runId: "run-2", definitionId: 4, definitionVersion: 7 },
+          },
+        },
+      ],
+      nextBeforeId: null,
+    });
+    await expect(
+      db.select({ repositoryKey: workScopeTrail.repositoryKey }).from(workScopeTrail),
+    ).resolves.toEqual([{ repositoryKey: "github:acme/api" }]);
+  });
+});
+
+// pglite runs one statement at a time, so the Promise.all cases below prove the
+// statements compose, not that they are safe under real concurrency.
+describe("two runs on one subject", () => {
+  it("keeps both runs' entries and moves the version once per write", async () => {
+    await expect(
+      Promise.all([
+        applyRunWorkScopePlan(db, {
+          subjectKey,
+          runId: "run-1",
+          plan: upsertsOnly(entry("github:acme/api")),
+        }),
+        applyRunWorkScopePlan(db, {
+          subjectKey,
+          runId: "run-2",
+          plan: upsertsOnly(entry("github:acme/web", { origin: "inferred", rationale: "Guessed." })),
+        }),
+      ]),
+    ).resolves.toHaveLength(2);
+
+    const scope = await readWorkScope(db, subjectKey);
+    expect(scope?.version).toBe(2);
+    expect(scope?.entries.map((value) => [value.repositoryKey, value.origin])).toEqual([
+      ["github:acme/api", "ticket_text"],
+      ["github:acme/web", "inferred"],
+    ]);
+  });
+});
+
+describe("applyPersonWorkScopeEdit", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+  const adaSelectsWeb = entry("github:acme/web", {
+    origin: "person",
+    rationale: "Ada needs the web app.",
+    decidedBy: ada,
+    decidedAt: "2026-09-15T13:00:00.000Z",
+  });
+
+  async function seedRunScope() {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(
+        entry("github:acme/api"),
+        entry("github:acme/docs", { origin: "inferred", rationale: "Guessed." }),
+        entry("github:acme/infra", { origin: "trigger_policy", rationale: "Listed." }),
+      ),
+    });
+  }
+
+  it("refuses a stale version and writes no entry and no trail row", async () => {
+    await seedRunScope();
+
+    await expect(
+      applyPersonWorkScopeEdit(db, {
+        subjectKey,
+        expectedVersion: 0,
+        plan: {
+          upserts: [{ entry: adaSelectsWeb, replacesExpired: false }],
+          deletes: [{ repositoryKey: "github:acme/api", origin: "ticket_text" }],
+          trail: [{ kind: "entry_written", entry: adaSelectsWeb, previousState: null }],
+        },
+      }),
+    ).resolves.toEqual({ outcome: "conflict", currentVersion: 1 });
+
+    const scope = await readWorkScope(db, subjectKey);
+    expect(scope?.version).toBe(1);
+    expect(scope?.entries.map((value) => value.repositoryKey)).toEqual([
+      "github:acme/api",
+      "github:acme/infra",
+      "github:acme/docs",
+    ]);
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+  });
+
+  it("applies on the current version, moves it by one and records no run", async () => {
+    await seedRunScope();
+    const adaExcludesDocs = entry("github:acme/docs", {
+      state: "excluded",
+      origin: "person",
+      rationale: "Ada ruled it out.",
+      decidedBy: ada,
+      decidedAt: "2026-09-15T13:00:00.000Z",
+    });
+
+    const outcome = await applyPersonWorkScopeEdit(db, {
+      subjectKey,
+      expectedVersion: 1,
+      plan: {
+        upserts: [
+          { entry: adaSelectsWeb, replacesExpired: false },
+          { entry: adaExcludesDocs, replacesExpired: false },
+        ],
+        deletes: [{ repositoryKey: "github:acme/api", origin: "ticket_text" }],
+        trail: [
+          { kind: "entry_written", entry: adaSelectsWeb, previousState: null },
+          { kind: "entry_written", entry: adaExcludesDocs, previousState: "selected" },
+        ],
+      },
+    });
+
+    const expectedScope = {
+      subjectKey: "ticket:jira:AWT-1",
+      version: 2,
+      entries: [
+        {
+          repositoryKey: "github:acme/docs",
+          state: "excluded",
+          origin: "person",
+          rationale: "Ada ruled it out.",
+          decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+          decidedAt: "2026-09-15T13:00:00.000Z",
+        },
+        {
+          repositoryKey: "github:acme/web",
+          state: "selected",
+          origin: "person",
+          rationale: "Ada needs the web app.",
+          decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+          decidedAt: "2026-09-15T13:00:00.000Z",
+        },
+        {
+          repositoryKey: "github:acme/infra",
+          state: "selected",
+          origin: "trigger_policy",
+          rationale: "Listed.",
+          decidedBy: { kind: "run", runId: "run-1", definitionId: 4, definitionVersion: 7 },
+          decidedAt: "2026-09-15T10:00:00.000Z",
+        },
+      ],
+    };
+    expect(outcome).toEqual({ outcome: "applied", scope: expectedScope });
+    await expect(readWorkScope(db, subjectKey)).resolves.toEqual(expectedScope);
+    await expect(
+      db
+        .select({
+          subjectKey: workScopeTrail.subjectKey,
+          runId: workScopeTrail.runId,
+          repositoryKey: workScopeTrail.repositoryKey,
+        })
+        .from(workScopeTrail)
+        .orderBy(asc(workScopeTrail.id)),
+    ).resolves.toEqual([
+      { subjectKey: "ticket:jira:AWT-1", runId: null, repositoryKey: "github:acme/web" },
+      { subjectKey: "ticket:jira:AWT-1", runId: null, repositoryKey: "github:acme/docs" },
+    ]);
+  });
+});
+
+describe("a run with no subject", () => {
+  const refusal = {
+    kind: "request_refused",
+    repositoryKey: "github:acme/api",
+    reason: "outside_policy",
+  } as const;
+
+  it("writes a trail readable by its run and by no subject, and no version", async () => {
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey: null,
+        runId: "run-schedule-1",
+        plan: { upserts: [], deletes: [], trail: [refusal] },
+      }),
+    ).resolves.toEqual({ version: null });
+
+    await expect(
+      listWorkScopeTrail(db, { runId: "run-schedule-1" }, { limit: 10 }),
+    ).resolves.toEqual({
+      rows: [
+        {
+          id: 1,
+          subjectKey: null,
+          runId: "run-schedule-1",
+          at: expect.any(String),
+          event: { kind: "request_refused", repositoryKey: "github:acme/api", reason: "outside_policy" },
+        },
+      ],
+      nextBeforeId: null,
+    });
+    await expect(
+      db.select({ repositoryKey: workScopeTrail.repositoryKey }).from(workScopeTrail),
+    ).resolves.toEqual([{ repositoryKey: "github:acme/api" }]);
+    await expect(
+      listWorkScopeTrail(db, { subjectKey: "ticket:jira:AWT-1" }, { limit: 10 }),
+    ).resolves.toEqual({ rows: [], nextBeforeId: null });
+    await expect(db.select().from(workScopes)).resolves.toEqual([]);
+  });
+
+  it("throws on an upsert and writes nothing", async () => {
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey: null,
+        runId: "run-schedule-1",
+        plan: {
+          upserts: [{ entry: entry("github:acme/api"), replacesExpired: false }],
+          deletes: [],
+          trail: [refusal],
+        },
+      }),
+    ).rejects.toThrow("A run with no subject writes no entry and no entry event.");
+
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+    await expect(db.select().from(workScopeEntries)).resolves.toEqual([]);
+  });
+
+  it("throws on an entry event and writes nothing", async () => {
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey: null,
+        runId: "run-schedule-1",
+        plan: {
+          upserts: [],
+          deletes: [],
+          trail: [
+            refusal,
+            {
+              kind: "entry_removed",
+              entry: entry("github:acme/web"),
+              removedBy: runActor,
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow("A run with no subject writes no entry and no entry event.");
+
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+  });
+});
+
+describe("listWorkScopeTrail paging", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  // Ids 1 to 6 in this order; the answers go through the only path that may
+  // write them.
+  async function seedSixRows() {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_asked",
+            clarificationId: "clarification-1",
+            repositories: [{ repositoryKey: "github:acme/api", askedBecause: "selection" }],
+          },
+          { kind: "map_shown", text: "api", repositoryKeys: ["github:acme/api"] },
+        ],
+      },
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId: "clarification-1",
+            answer: { kind: "none" },
+            answeredBy: ada,
+          },
+        ],
+      },
+    });
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-2",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_asked",
+            clarificationId: "clarification-2",
+            repositories: [{ repositoryKey: "github:acme/web", askedBecause: "not_enabled" }],
+          },
+          { kind: "map_shown", text: "api, web", repositoryKeys: ["github:acme/api"] },
+        ],
+      },
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-2",
+      clarificationId: "clarification-2",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId: "clarification-2",
+            answer: { kind: "repositories", repositoryKeys: ["github:acme/web"] },
+            answeredBy: ada,
+          },
+        ],
+      },
+    });
+  }
+
+  function idsAndKinds(result: Awaited<ReturnType<typeof listWorkScopeTrail>>) {
+    return {
+      rows: result.rows.map((row) => [row.id, row.event.kind]),
+      nextBeforeId: result.nextBeforeId,
+    };
+  }
+
+  it("pages newest first with limit and beforeId", async () => {
+    await seedSixRows();
+
+    const first = await listWorkScopeTrail(db, { subjectKey }, { limit: 4 });
+    expect(idsAndKinds(first)).toEqual({
+      rows: [
+        [6, "question_answered"],
+        [5, "map_shown"],
+        [4, "question_asked"],
+        [3, "question_answered"],
+      ],
+      nextBeforeId: 3,
+    });
+    const second = await listWorkScopeTrail(db, { subjectKey }, { limit: 4, beforeId: 3 });
+    expect(idsAndKinds(second)).toEqual({
+      rows: [
+        [2, "map_shown"],
+        [1, "question_asked"],
+      ],
+      nextBeforeId: null,
+    });
+    const exact = await listWorkScopeTrail(db, { subjectKey, kinds: [] }, { limit: 6 });
+    expect(exact.rows.map((row) => row.id)).toEqual([6, 5, 4, 3, 2, 1]);
+    expect(exact.nextBeforeId).toBeNull();
+  });
+
+  it("filters to the kinds asked for and pages within them", async () => {
+    await seedSixRows();
+    const kinds = ["question_asked", "question_answered"] as const;
+
+    const first = await listWorkScopeTrail(db, { subjectKey, kinds: [...kinds] }, { limit: 3 });
+    expect(idsAndKinds(first)).toEqual({
+      rows: [
+        [6, "question_answered"],
+        [4, "question_asked"],
+        [3, "question_answered"],
+      ],
+      nextBeforeId: 3,
+    });
+    const second = await listWorkScopeTrail(
+      db,
+      { subjectKey, kinds: [...kinds] },
+      { limit: 3, beforeId: 3 },
+    );
+    expect(idsAndKinds(second)).toEqual({
+      rows: [[1, "question_asked"]],
+      nextBeforeId: null,
+    });
+  });
+
+  it("refuses a limit outside 1 to 200", async () => {
+    await expect(listWorkScopeTrail(db, { subjectKey }, { limit: 0 })).rejects.toThrow(RangeError);
+    await expect(listWorkScopeTrail(db, { subjectKey }, { limit: 201 })).rejects.toThrow(
+      RangeError,
+    );
+  });
+});
+
+describe("applyAnswerWorkScopePlan", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+  const adaSelectsWeb = entry("github:acme/web", {
+    origin: "person",
+    rationale: "Ada answered with the web app.",
+    decidedBy: ada,
+    decidedAt: "2026-09-15T14:00:00.000Z",
+  });
+
+  function answerPlan(clarificationId: string): WorkScopeWritePlan {
+    return {
+      upserts: [{ entry: adaSelectsWeb, replacesExpired: false }],
+      deletes: [],
+      trail: [
+        {
+          kind: "question_answered",
+          clarificationId,
+          answer: { kind: "repositories", repositoryKeys: ["github:acme/web"] },
+          answeredBy: ada,
+        },
+        { kind: "entry_written", entry: adaSelectsWeb, previousState: null, clarificationId },
+      ],
+    };
+  }
+
+  async function seedRunScope() {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/api")),
+    });
+  }
+
+  async function counts() {
+    return {
+      entries: (await db.select().from(workScopeEntries)).length,
+      trail: (await db.select().from(workScopeTrail)).length,
+      version: (await readWorkScope(db, subjectKey))?.version ?? null,
+    };
+  }
+
+  it("applies the first time: entries, every trail row, version moved by one", async () => {
+    await seedRunScope();
+
+    await expect(
+      applyAnswerWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        clarificationId: "clarification-1",
+        plan: answerPlan("clarification-1"),
+      }),
+    ).resolves.toEqual({ outcome: "applied", version: 2 });
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/web",
+        state: "selected",
+        origin: "person",
+        rationale: "Ada answered with the web app.",
+        decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+        decidedAt: "2026-09-15T14:00:00.000Z",
+      },
+      {
+        repositoryKey: "github:acme/api",
+        state: "selected",
+        origin: "ticket_text",
+        rationale: "The ticket names it.",
+        decidedBy: { kind: "run", runId: "run-1", definitionId: 4, definitionVersion: 7 },
+        decidedAt: "2026-09-15T10:00:00.000Z",
+      },
+    ]);
+    await expect(
+      db
+        .select({
+          subjectKey: workScopeTrail.subjectKey,
+          runId: workScopeTrail.runId,
+          kind: workScopeTrail.kind,
+          repositoryKey: workScopeTrail.repositoryKey,
+        })
+        .from(workScopeTrail)
+        .orderBy(asc(workScopeTrail.id)),
+    ).resolves.toEqual([
+      {
+        subjectKey: "ticket:jira:AWT-1",
+        runId: "run-1",
+        kind: "question_answered",
+        repositoryKey: null,
+      },
+      {
+        subjectKey: "ticket:jira:AWT-1",
+        runId: "run-1",
+        kind: "entry_written",
+        repositoryKey: "github:acme/web",
+      },
+    ]);
+  });
+
+  it("writes nothing when the same answer is applied again", async () => {
+    await seedRunScope();
+    const apply = () =>
+      applyAnswerWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        clarificationId: "clarification-1",
+        plan: answerPlan("clarification-1"),
+      });
+    await apply();
+    await expect(counts()).resolves.toEqual({ entries: 2, trail: 2, version: 2 });
+
+    await expect(apply()).resolves.toEqual({ outcome: "already_applied" });
+
+    await expect(counts()).resolves.toEqual({ entries: 2, trail: 2, version: 2 });
+  });
+
+  it("applies exactly once when two identical answers start together", async () => {
+    await seedRunScope();
+    const apply = () =>
+      applyAnswerWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        clarificationId: "clarification-1",
+        plan: answerPlan("clarification-1"),
+      });
+
+    const outcomes = await Promise.all([apply(), apply()]);
+
+    expect(outcomes.map((outcome) => outcome.outcome).sort()).toEqual([
+      "already_applied",
+      "applied",
+    ]);
+    await expect(counts()).resolves.toEqual({ entries: 2, trail: 2, version: 2 });
+  });
+
+  it("throws before any SQL when the plan carries no answer for the clarification", async () => {
+    await seedRunScope();
+
+    await expect(
+      applyAnswerWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        clarificationId: "clarification-1",
+        plan: answerPlan("clarification-2"),
+      }),
+    ).rejects.toThrow(
+      'An answer plan carries exactly one question_answered event for "clarification-1".',
+    );
+
+    await expect(counts()).resolves.toEqual({ entries: 1, trail: 0, version: 1 });
+  });
+
+  it("applies an answer to a different clarification on the same subject", async () => {
+    await seedRunScope();
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-1",
+      plan: answerPlan("clarification-1"),
+    });
+
+    await expect(
+      applyAnswerWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-2",
+        clarificationId: "clarification-2",
+        plan: answerPlan("clarification-2"),
+      }),
+    ).resolves.toEqual({ outcome: "applied", version: 3 });
+
+    await expect(counts()).resolves.toEqual({ entries: 2, trail: 4, version: 3 });
+  });
+});
+
+describe("the trail records only what the record took", () => {
+  it("appends no entry_written for a refused upsert and no entry_removed for a missed delete", async () => {
+    const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(
+        entry("github:acme/api", { origin: "person", rationale: "Ada chose it.", decidedBy: ada }),
+        entry("github:acme/web"),
+      ),
+    });
+    const guessedApi = entry("github:acme/api", {
+      state: "excluded",
+      origin: "inferred",
+      rationale: "Guessed.",
+      decidedBy: { kind: "run", runId: "run-2", definitionId: 4, definitionVersion: 7 },
+    });
+
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-2",
+        plan: {
+          upserts: [{ entry: guessedApi, replacesExpired: false }],
+          deletes: [{ repositoryKey: "github:acme/web", origin: "inferred" }],
+          trail: [
+            { kind: "entry_written", entry: guessedApi, previousState: "selected" },
+            {
+              kind: "entry_removed",
+              entry: entry("github:acme/web", { origin: "inferred" }),
+              removedBy: { kind: "run", runId: "run-2", definitionId: 4, definitionVersion: 7 },
+            },
+            { kind: "request_refused", repositoryKey: "github:acme/docs", reason: "outside_policy" },
+          ],
+        },
+      }),
+    ).resolves.toEqual({ version: 1 });
+
+    await expect(
+      db
+        .select({ kind: workScopeTrail.kind, repositoryKey: workScopeTrail.repositoryKey })
+        .from(workScopeTrail),
+    ).resolves.toEqual([{ kind: "request_refused", repositoryKey: "github:acme/docs" }]);
+  });
+});
+
+describe("the version moves only when an entry changed", () => {
+  it("keeps the version for a run plan that carries only trail rows", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/api")),
+    });
+
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-2",
+        plan: {
+          upserts: [],
+          deletes: [],
+          trail: [
+            { kind: "request_refused", repositoryKey: "github:acme/web", reason: "outside_policy" },
+            { kind: "map_shown", text: "api", repositoryKeys: ["github:acme/api"] },
+          ],
+        },
+      }),
+    ).resolves.toEqual({ version: 1 });
+
+    expect((await readWorkScope(db, subjectKey))?.version).toBe(1);
+    expect((await db.select().from(workScopeTrail)).map((row) => row.kind)).toEqual([
+      "request_refused",
+      "map_shown",
+    ]);
+  });
+
+  it("applies a person edit that changes nothing and keeps the version", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/api")),
+    });
+
+    await expect(
+      applyPersonWorkScopeEdit(db, {
+        subjectKey,
+        expectedVersion: 1,
+        plan: {
+          upserts: [],
+          deletes: [{ repositoryKey: "github:acme/api", origin: "person" }],
+          trail: [],
+        },
+      }),
+    ).resolves.toEqual({
+      outcome: "applied",
+      scope: {
+        subjectKey: "ticket:jira:AWT-1",
+        version: 1,
+        entries: [
+          {
+            repositoryKey: "github:acme/api",
+            state: "selected",
+            origin: "ticket_text",
+            rationale: "The ticket names it.",
+            decidedBy: { kind: "run", runId: "run-1", definitionId: 4, definitionVersion: 7 },
+            decidedAt: "2026-09-15T10:00:00.000Z",
+          },
+        ],
+      },
+    });
+    expect((await readWorkScope(db, subjectKey))?.version).toBe(1);
+  });
+});
+
+describe("answer rows only through the answer path", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+  const answeredNone = {
+    kind: "question_answered",
+    clarificationId: "clarification-1",
+    answer: { kind: "none" },
+    answeredBy: ada,
+  } as const;
+
+  it("throws on a run plan carrying an answer and writes nothing", async () => {
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        plan: { ...upsertsOnly(entry("github:acme/api")), trail: [answeredNone] },
+      }),
+    ).rejects.toThrow("A question_answered event is written only through the answer path.");
+
+    await expect(db.select().from(workScopes)).resolves.toEqual([]);
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+  });
+
+  it("throws on a person plan carrying an answer and writes nothing", async () => {
+    await expect(
+      applyPersonWorkScopeEdit(db, {
+        subjectKey,
+        expectedVersion: 0,
+        plan: { upserts: [], deletes: [], trail: [answeredNone] },
+      }),
+    ).rejects.toThrow("A question_answered event is written only through the answer path.");
+
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+  });
+
+  it("throws on an answer plan carrying a second, different answer", async () => {
+    await expect(
+      applyAnswerWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        clarificationId: "clarification-1",
+        plan: {
+          upserts: [],
+          deletes: [],
+          trail: [answeredNone, { ...answeredNone, clarificationId: "clarification-2" }],
+        },
+      }),
+    ).rejects.toThrow(
+      'An answer plan carries exactly one question_answered event for "clarification-1".',
+    );
+
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+  });
+});
+
+describe("a subject with no record", () => {
+  it("gets no record from a plan that carries only trail rows", async () => {
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        plan: {
+          upserts: [],
+          deletes: [],
+          trail: [
+            { kind: "request_refused", repositoryKey: "github:acme/api", reason: "outside_policy" },
+          ],
+        },
+      }),
+    ).resolves.toEqual({ version: 0 });
+
+    await expect(db.select().from(workScopes)).resolves.toEqual([]);
+    await expect(readWorkScope(db, subjectKey)).resolves.toBeNull();
+    expect((await db.select().from(workScopeTrail)).map((row) => row.subjectKey)).toEqual([
+      "ticket:jira:AWT-1",
+    ]);
+  });
+
+  it("gets version 1 from a person edit expecting version 0", async () => {
+    const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+    await expect(
+      applyPersonWorkScopeEdit(db, {
+        subjectKey,
+        expectedVersion: 0,
+        plan: {
+          upserts: [
+            {
+              entry: entry("github:acme/api", {
+                state: "excluded",
+                origin: "person",
+                rationale: "Ada ruled it out.",
+                decidedBy: ada,
+              }),
+              replacesExpired: false,
+            },
+          ],
+          deletes: [],
+          trail: [],
+        },
+      }),
+    ).resolves.toEqual({
+      outcome: "applied",
+      scope: {
+        subjectKey: "ticket:jira:AWT-1",
+        version: 1,
+        entries: [
+          {
+            repositoryKey: "github:acme/api",
+            state: "excluded",
+            origin: "person",
+            rationale: "Ada ruled it out.",
+            decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+            decidedAt: "2026-09-15T10:00:00.000Z",
+          },
+        ],
+      },
+    });
+    expect((await readWorkScope(db, subjectKey))?.version).toBe(1);
+  });
+});
+
+/**
+ * Whether a person has already answered the "which of these repositories"
+ * question on this subject.
+ *
+ * It lives in the trail rather than in the entries because that answer can
+ * record nothing: "none of these" writes no entry by design, so the entries
+ * alone cannot say the question was ever asked, and a run that could not tell
+ * would ask it again on the next start.
+ */
+describe("readWorkScopeSelectionAnswered", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function askSelection(
+    key: string,
+    clarificationId: string,
+    askedBecause: "selection" | "not_enabled" = "selection",
+  ) {
+    await applyRunWorkScopePlan(db, {
+      subjectKey: key,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_asked",
+            clarificationId,
+            repositories: [{ repositoryKey: "github:acme/api", askedBecause }],
+          },
+        ],
+      },
+    });
+  }
+
+  async function answer(
+    key: string,
+    clarificationId: string,
+    given: { kind: "none" } | { kind: "unrecognised" } | { kind: "repositories"; repositoryKeys: string[] },
+  ) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey: key,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId,
+            answer: given,
+            answeredBy: ada,
+          },
+        ],
+      },
+    });
+  }
+
+  it("is false for a subject with no trail at all", async () => {
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("is false while the selection question is asked and unanswered", async () => {
+    await askSelection(subjectKey, "clarification-1");
+
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("is false when nobody could read the answer", async () => {
+    await askSelection(subjectKey, "clarification-1");
+    await answer(subjectKey, "clarification-1", { kind: "unrecognised" });
+
+    // Nobody decided anything, so the question may be asked once more.
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it('is true once a person answered "none of these"', async () => {
+    await askSelection(subjectKey, "clarification-1");
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(true);
+  });
+
+  it("is true once a person named repositories", async () => {
+    await askSelection(subjectKey, "clarification-1");
+    await answer(subjectKey, "clarification-1", {
+      kind: "repositories",
+      repositoryKeys: ["github:acme/web"],
+    });
+
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(true);
+  });
+
+  it("ignores a question asked for another reason, however it was answered", async () => {
+    await askSelection(subjectKey, "clarification-1", "not_enabled");
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("does not let one subject read another subject's answer", async () => {
+    await askSelection(subjectKey, "clarification-1");
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeSelectionAnswered(db, "ticket:jira:AWT-2")).resolves.toBe(false);
+  });
+});
+
+/**
+ * Which repositories this subject was asked about and got an answer for.
+ *
+ * The flag above answers "has a person chosen for this work at all", which is
+ * the right shape for deciding whether to put the which-of-these question
+ * again, and the wrong shape for "was THIS repository already put to somebody":
+ * a question about one repository must not silence the first question about
+ * another. This is that second fact, and the reason narrowing is deliberately
+ * gone from it.
+ */
+describe("readWorkScopeAnsweredRepositories", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function ask(
+    key: string,
+    clarificationId: string,
+    repositories: WorkScopeAskedRepository[],
+  ) {
+    await applyRunWorkScopePlan(db, {
+      subjectKey: key,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_asked", clarificationId, repositories }],
+      },
+    });
+  }
+
+  async function answer(
+    key: string,
+    clarificationId: string,
+    given: { kind: "none" } | { kind: "unrecognised" } | { kind: "repositories"; repositoryKeys: string[] },
+  ) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey: key,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_answered", clarificationId, answer: given, answeredBy: ada }],
+      },
+    });
+  }
+
+  it("is empty for a subject with no trail at all", async () => {
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it("is empty while the question is asked and unanswered", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it("is empty when nobody could read the answer", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "unrecognised" });
+
+    // Nobody decided anything, so this repository may be put to a person again.
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it('names the repository once a person answered "none of these"', async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("names every repository the answered question put, not only the ones named back", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+      { repositoryKey: "github:acme/web", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", {
+      kind: "repositories",
+      repositoryKeys: ["github:acme/web"],
+    });
+
+    // Both were put to a person and a person replied, which is the fact the
+    // caller needs: neither is worth asking about a second time.
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+      "github:acme/web",
+    ]);
+  });
+
+  it("names a repository asked about for any reason, not only selection", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "outside_policy", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("leaves out a repository whose own question is still unanswered", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+    await ask(subjectKey, "clarification-2", [
+      { repositoryKey: "github:acme/web", askedBecause: "outside_policy", named: true },
+    ]);
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("names a repository once however many answered questions put it", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+    await ask(subjectKey, "clarification-2", [
+      { repositoryKey: "github:acme/api", askedBecause: "outside_policy", named: true },
+    ]);
+    await answer(subjectKey, "clarification-2", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("leaves out a repository the question never named, however it was answered", async () => {
+    // The ask still carries the key, because the trail should show that
+    // somebody was asked something. It is not a decision about this repository:
+    // its name was never in front of the person, so their "none" says nothing
+    // about it and a later run still owes them the question.
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "not_enabled", named: false },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it("leaves out an ask written before the question recorded what it named", async () => {
+    // Absent is not "named": the safe reading of a fact nobody recorded is the
+    // one that costs a question asked again rather than a decision invented.
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection" },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it("names only the repositories the question named, when one ask carries both", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+      { repositoryKey: "github:acme/web", askedBecause: "selection", named: false },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("does not let one subject read another subject's answer", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(
+      readWorkScopeAnsweredRepositories(db, "ticket:jira:AWT-2"),
+    ).resolves.toEqual([]);
+  });
+
+  it("does not let another subject's reply answer this subject's question", async () => {
+    // The record is per subject, and a clarification id is the only thing the
+    // question row and the answer row share, so the two must be joined on the
+    // subject as well. The database makes a `question_asked` id unique on its
+    // own, and nothing does that for the answer, so this is the direction a
+    // reused id can actually arrive from.
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer("ticket:jira:AWT-2", "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+});
+
+/**
+ * Joint gate F2. The anchor a comment about a repository is dated against is
+ * the newest answer to a question that NAMED that repository, never the newest
+ * answer on the subject: a "none" to an expansion question about something else
+ * must not turn a path a person wrote on our instructions into text that
+ * predates the answer.
+ */
+describe("readWorkScopeAnsweredAtByKey", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+  const subjectKey = "ticket:jira:AWT-777";
+
+  async function askAndAnswer(
+    clarificationId: string,
+    repositories: WorkScopeAskedRepository[],
+    given: { kind: "none" } | { kind: "repositories"; repositoryKeys: string[] },
+    at: string,
+  ) {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_asked", clarificationId, repositories }],
+      },
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_answered", clarificationId, answer: given, answeredBy: ada }],
+      },
+    });
+    // The trail stamps its own instant; the scenario needs three that are far
+    // enough apart to put a comment between two of them.
+    await db.execute(sql`
+      UPDATE ${workScopeTrail} SET at = ${at}::timestamptz
+      WHERE subject_key = ${subjectKey} AND kind = 'question_answered'
+        AND event ->> 'clarificationId' = ${clarificationId}
+    `);
+  }
+
+  it("dates a repository against the answer that named it, not a later answer about another one", async () => {
+    // T1: the which-of-these question named api and web, and the answer was "none".
+    await askAndAnswer(
+      "clarification-selection",
+      [
+        { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+        { repositoryKey: "github:acme/web", askedBecause: "selection", named: true },
+      ],
+      { kind: "none" },
+      "2026-09-16T09:00:00.000Z",
+    );
+    // T3: an expansion question about ops, answered "none" an hour later.
+    await askAndAnswer(
+      "clarification-expansion",
+      [{ repositoryKey: "github:acme/ops", askedBecause: "outside_policy", named: true }],
+      { kind: "none" },
+      "2026-09-16T11:00:00.000Z",
+    );
+
+    expect(await readWorkScopeAnsweredAtByKey(db, subjectKey)).toEqual({
+      "github:acme/api": "2026-09-16T09:00:00.000Z",
+      "github:acme/ops": "2026-09-16T11:00:00.000Z",
+      "github:acme/web": "2026-09-16T09:00:00.000Z",
+    });
+  });
+
+  it("takes the newer of two answers that both named the repository", async () => {
+    await askAndAnswer(
+      "clarification-1",
+      [{ repositoryKey: "github:acme/api", askedBecause: "selection", named: true }],
+      { kind: "none" },
+      "2026-09-16T09:00:00.000Z",
+    );
+    await askAndAnswer(
+      "clarification-2",
+      [{ repositoryKey: "github:acme/api", askedBecause: "outside_policy", named: true }],
+      { kind: "none" },
+      "2026-09-16T10:00:00.000Z",
+    );
+
+    expect(await readWorkScopeAnsweredAtByKey(db, subjectKey)).toEqual({
+      "github:acme/api": "2026-09-16T10:00:00.000Z",
+    });
+  });
+});
+
+describe("appendWorkScopeQuestionAsked", () => {
+  const asked: WorkScopeAskedRepository[] = [
+    { repositoryKey: "github:acme/web", askedBecause: "not_enabled" },
+    { repositoryKey: "github:acme/api", askedBecause: "outside_policy" },
+  ];
+
+  function ask(clarificationId: string) {
+    return appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      asked,
+    });
+  }
+
+  it("writes the question once however often the asking step is retried", async () => {
+    await expect(ask("clarification-1")).resolves.toBe(true);
+    await expect(ask("clarification-1")).resolves.toBe(false);
+
+    await expect(listWorkScopeTrail(db, { subjectKey }, { limit: 10 })).resolves.toEqual({
+      rows: [
+        {
+          id: 1,
+          subjectKey: "ticket:jira:AWT-1",
+          runId: "run-1",
+          at: expect.any(String),
+          event: {
+            kind: "question_asked",
+            clarificationId: "clarification-1",
+            repositories: [
+              { repositoryKey: "github:acme/web", askedBecause: "not_enabled" },
+              { repositoryKey: "github:acme/api", askedBecause: "outside_policy" },
+            ],
+          },
+        },
+      ],
+      nextBeforeId: null,
+    });
+  });
+
+  it("writes one row per clarification", async () => {
+    await expect(ask("clarification-1")).resolves.toBe(true);
+    await expect(ask("clarification-2")).resolves.toBe(true);
+
+    const rows = await db.select().from(workScopeTrail).orderBy(asc(workScopeTrail.id));
+    expect(rows.map((row) => row.event)).toEqual([
+      { kind: "question_asked", clarificationId: "clarification-1", repositories: asked },
+      { kind: "question_asked", clarificationId: "clarification-2", repositories: asked },
+    ]);
+  });
+
+  it("touches no entry and leaves the version where it was, because asking decides nothing", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/api")),
+    });
+
+    await ask("clarification-1");
+
+    await expect(readWorkScope(db, subjectKey)).resolves.toEqual({
+      subjectKey,
+      version: 1,
+      entries: [
+        {
+          repositoryKey: "github:acme/api",
+          state: "selected",
+          origin: "ticket_text",
+          rationale: "The ticket names it.",
+          decidedBy: runActor,
+          decidedAt: "2026-09-15T10:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("records a question on a subject that has no record yet", async () => {
+    await expect(ask("clarification-1")).resolves.toBe(true);
+
+    await expect(readWorkScope(db, subjectKey)).resolves.toBeNull();
+  });
+
+  it("records why a question that could name no repository was asked", async () => {
+    // The set is larger than an ask may carry, so the question names none of
+    // them and this row is otherwise indistinguishable from the plain "which
+    // repository should this ticket modify?".
+    await expect(
+      appendWorkScopeQuestionAsked(db, {
+        subjectKey,
+        runId: "run-1",
+        clarificationId: "clarification-narrow",
+        asked: [],
+        purpose: "narrowing",
+      }),
+    ).resolves.toBe(true);
+
+    const rows = await db.select().from(workScopeTrail).orderBy(asc(workScopeTrail.id));
+    expect(rows.map((row) => row.event)).toEqual([
+      {
+        kind: "question_asked",
+        clarificationId: "clarification-narrow",
+        repositories: [],
+        purpose: "narrowing",
+      },
+    ]);
+  });
+});
+
+describe("readWorkScopeNarrowingAnswered", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function answer(
+    clarificationId: string,
+    given: { kind: "none" } | { kind: "unrecognised" } | { kind: "repositories"; repositoryKeys: string[] },
+  ) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_answered", clarificationId, answer: given, answeredBy: ada }],
+      },
+    });
+  }
+
+  it("is true once a person named the repositories that matter", async () => {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-narrow",
+      asked: [],
+      purpose: "narrowing",
+    });
+    await answer("clarification-narrow", {
+      kind: "repositories",
+      repositoryKeys: ["github:acme/api"],
+    });
+
+    await expect(readWorkScopeNarrowingAnswered(db, subjectKey)).resolves.toBe(true);
+  });
+
+  it("is false while the question is asked and unanswered", async () => {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-narrow",
+      asked: [],
+      purpose: "narrowing",
+    });
+
+    await expect(readWorkScopeNarrowingAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("is false when nobody could read the answer", async () => {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-narrow",
+      asked: [],
+      purpose: "narrowing",
+    });
+    await answer("clarification-narrow", { kind: "unrecognised" });
+
+    // Nobody decided anything, so the question may be asked once more.
+    await expect(readWorkScopeNarrowingAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("is false for an answered question that was some other question", async () => {
+    // ONE FACT, ONE READ, ONE THING SILENCED. A person who answered the
+    // which-of-these question has said nothing about a set they were never
+    // shown, and reading their answer as a narrowing would silence the only
+    // question that would ever have shown it to them.
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-1",
+      asked: [{ repositoryKey: "github:acme/api", askedBecause: "selection", named: true }],
+    });
+    await answer("clarification-1", { kind: "repositories", repositoryKeys: ["github:acme/api"] });
+
+    await expect(readWorkScopeNarrowingAnswered(db, subjectKey)).resolves.toBe(false);
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(true);
+  });
+});
+
+describe("readWorkScopeAnsweredQuestion", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function record(clarificationId: string) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId,
+            answer: { kind: "none" },
+            answeredBy: ada,
+          },
+        ],
+      },
+    });
+  }
+
+  it("is null while the question is unanswered", async () => {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-1",
+      asked: [{ repositoryKey: "github:acme/web", askedBecause: "selection" }],
+    });
+
+    await expect(readWorkScopeAnsweredQuestion(db, "clarification-1")).resolves.toBeNull();
+  });
+
+  it("returns the answer as it was read, for that clarification only", async () => {
+    await record("clarification-1");
+
+    await expect(readWorkScopeAnsweredQuestion(db, "clarification-1")).resolves.toEqual({
+      id: 1,
+      subjectKey: "ticket:jira:AWT-1",
+      runId: "run-1",
+      at: expect.any(String),
+      event: {
+        kind: "question_answered",
+        clarificationId: "clarification-1",
+        answer: { kind: "none" },
+        answeredBy: ada,
+      },
+    });
+    await expect(readWorkScopeAnsweredQuestion(db, "clarification-2")).resolves.toBeNull();
+  });
+});
+
+/**
+ * The one read against the five it stands for.
+ *
+ * The combined read exists so no caller has to know the five names and combine
+ * them in the right order, and the five stay exported because the run start and
+ * the pre-sandbox selection read subsets of the picture and the tests above sit
+ * on them one at a time. That is two descriptions of the same facts, and this is
+ * the guard that keeps them one: whatever the five answer for a subject, the
+ * combined read answers the same, field by field. A later rewrite of the
+ * combined read into a single statement stays honest here or it fails here.
+ */
+describe("readWorkScopeFacts", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function ask(
+    clarificationId: string,
+    asked: WorkScopeAskedRepository[],
+    purpose?: "narrowing",
+  ) {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      asked,
+      ...(purpose === undefined ? {} : { purpose }),
+    });
+  }
+
+  async function answer(
+    clarificationId: string,
+    given: { kind: "none" } | { kind: "repositories"; repositoryKeys: string[] },
+  ) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          { kind: "question_answered", clarificationId, answer: given, answeredBy: ada },
+        ],
+      },
+    });
+  }
+
+  /** A subject every one of the six reads has something to say about, so a
+   *  combined read that dropped a fact could not pass by answering the default
+   *  everywhere. */
+  async function subjectWithEveryFact() {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/web")),
+    });
+    await ask("clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer("clarification-1", {
+      kind: "repositories",
+      repositoryKeys: ["github:acme/api"],
+    });
+    await ask("clarification-2", [], "narrowing");
+    await answer("clarification-2", { kind: "none" });
+  }
+
+  it("answers exactly what the six reads answer for the same subject", async () => {
+    await subjectWithEveryFact();
+
+    const facts = await readWorkScopeFacts(db, subjectKey, "clarification-1");
+
+    expect(facts).toEqual({
+      scope: await readWorkScope(db, subjectKey),
+      selectionAnswered: await readWorkScopeSelectionAnswered(db, subjectKey),
+      answeredRepositoryKeys: await readWorkScopeAnsweredRepositories(db, subjectKey),
+      answeredAtByKey: await readWorkScopeAnsweredAtByKey(db, subjectKey),
+      narrowingAnswered: await readWorkScopeNarrowingAnswered(db, subjectKey),
+      answeredQuestion: await readWorkScopeAnsweredQuestion(db, "clarification-1"),
+    });
+    // And not by agreeing on nothing: every field carries the non-default
+    // answer, so dropping any one of them fails the comparison above.
+    expect(facts.scope?.entries).toHaveLength(1);
+    expect(facts.selectionAnswered).toBe(true);
+    expect(facts.answeredRepositoryKeys).toEqual(["github:acme/api"]);
+    // The instant the ticket's later words about that repository are dated
+    // against, and it is the trail's own, which is why it is read rather than
+    // passed in.
+    expect(Object.keys(facts.answeredAtByKey)).toEqual(["github:acme/api"]);
+    expect(Date.parse(facts.answeredAtByKey["github:acme/api"] ?? "")).not.toBeNaN();
+    expect(facts.narrowingAnswered).toBe(true);
+    expect(facts.answeredQuestion?.event.kind).toBe("question_answered");
+  });
+
+  it("reads no verdict when the caller names no question", async () => {
+    await subjectWithEveryFact();
+
+    const facts = await readWorkScopeFacts(db, subjectKey);
+
+    // The per-question fact is the only one keyed on a clarification rather
+    // than on the subject, so a caller that woke on nothing gets null rather
+    // than whichever answered question happens to be newest.
+    expect(facts.answeredQuestion).toBeNull();
+    expect(facts.selectionAnswered).toBe(true);
+  });
+
+  it("answers the six defaults for a subject nobody ever decided on", async () => {
+    const facts = await readWorkScopeFacts(db, "ticket:jira:AWT-404", "clarification-1");
+
+    expect(facts).toEqual({
+      scope: null,
+      selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      answeredAtByKey: {},
+      narrowingAnswered: false,
+      answeredQuestion: null,
+    });
+  });
+});

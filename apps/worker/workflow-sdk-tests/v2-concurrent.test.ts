@@ -190,7 +190,13 @@ describe("executeV2Graph fan-out against the real Workflow runtime", () => {
 
     const result = (await run.returnValue) as ProbeResult;
     expectCompleted(result);
-  });
+    // Parking three blocks in the real runtime and resuming them out of order
+    // costs about what the in-VM sibling above costs, and that one is given the
+    // same budget. On the default 30 s this went red on a loaded machine while
+    // passing in isolation, which reads as a regression in whatever changed that
+    // day rather than as a slow test, and a red that lies is worse than a slow
+    // suite.
+  }, 120_000);
 
   // The deployed graph fans three reviewers straight back into one block, so on
   // the all-success path every consumption order leads to the same next step

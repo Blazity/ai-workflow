@@ -277,7 +277,8 @@ export class GateStore {
   /**
    * Physically delete expired rows. Reads already treat them as absent;
    * this is housekeeping so tables don't grow forever. Called from the
-   * poll cron (src/routes/cron/poll.get.ts), best-effort.
+   * poll cron (src/routes/cron/poll.get.ts, through the poll pass at
+   * services/triggers/polling/poll-pass.ts:337), best-effort.
    */
   async purgeExpired(): Promise<void> {
     await this.db.execute(sql`

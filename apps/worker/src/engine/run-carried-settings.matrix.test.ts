@@ -119,7 +119,7 @@ describe("a stored run-start result with no repositories field", () => {
       actorLabel: "Ada",
       reason: "the bridge is over",
     });
-    const today = await loadRunStartSettingsStep();
+    const today = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
     expect(runStartRepositoryAccess(today)).toEqual({
       activated: true,
       enabledKeys: [],
@@ -167,7 +167,7 @@ describe("a stored run-start result with no repositories field", () => {
     const [row] = await db.select().from(repositories);
     await setRepositoryEnabled(db, { id: row!.id, enabled: false });
 
-    const today = await loadRunStartSettingsStep();
+    const today = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
     expect(runStartRepositoryAccess(today).enabledKeys).toEqual([]);
 
     const carried = runStartRepositoryAccess({ settings: today.settings });

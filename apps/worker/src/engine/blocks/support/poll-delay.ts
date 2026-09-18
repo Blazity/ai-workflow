@@ -29,8 +29,9 @@
  *
  * WHAT THIS COSTS. A wait is scheduled by the platform and holds nothing open; a
  * step is a live function invocation for its whole duration. At the 30s ceiling
- * in poll-phase.ts and the 25 minute phase cap (MAX_MINUTES in generic-agent.ts,
- * DEFAULT_MAX_MINUTES in fix-agent.ts) that is up to 50 invocations per phase per
+ * in poll-phase.ts and the 25 minute phase cap (MAX_MINUTES in
+ * blocks/generic-agent/execute.ts:47, DEFAULT_MAX_MINUTES in
+ * blocks/fix-agent/execute.ts:65) that is up to 50 invocations per phase per
  * block, and up to three blocks poll at once. An idle step burns almost no active
  * CPU, so the bill is invocations plus provisioned memory for the span, not
  * compute. There is no timeout risk because the deployed step function ships
@@ -40,15 +41,16 @@
  * without checking the other is how this starts failing.
  *
  * RETRIES ARE DELIBERATELY THE SDK DEFAULT, NOT 0. Do not pin maxRetries = 0 for
- * symmetry with killPhaseCommand in poll-phase.ts. Sleeping again is idempotent,
+ * symmetry with stopPhaseCommand in poll-phase.ts (poll-phase.ts:283 pins that
+ * one to 0). Sleeping again is idempotent,
  * so a tick whose invocation the platform kills should poll later rather than
  * fail the whole run. Know the accounting that follows, and do not "fix" it: the
- * SDK default is 3 retries, so 4 attempts, and poll-phase.ts:70 advances
+ * SDK default is 3 retries, so 4 attempts, and poll-phase.ts:208 advances
  * phaseElapsedMs by the requested tick exactly once however many attempts it
  * took. A fully retried tick therefore burns up to four times its wall clock
  * against one tick of the phase budget, which makes maxMinutes a floor rather
  * than a ceiling. That is intentional: the real bound is the run-global duration
- * budget, re-read every iteration at poll-phase.ts:34 and :76, and it is measured
+ * budget, re-read every iteration at poll-phase.ts:178 and :222, and it is measured
  * from the clock rather than counted in ticks, so it already covers the overrun.
  */
 export async function delayPhasePollStep(ms: number): Promise<void> {

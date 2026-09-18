@@ -168,6 +168,8 @@ const PUBLISHED = [
   "settings.get",
   "settings.set",
   "settings.reset",
+  "work_scope.get",
+  "work_scope.edit",
 ];
 
 const READ_ANNOTATIONS = {
@@ -323,6 +325,12 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
     destructiveHint: false,
     openWorldHint: true,
   },
+  // Reading one subject's repository record changes nothing.
+  "work_scope.get": READ_ANNOTATIONS,
+  // An edit replaces what a person or a run decided before it, and an exclusion
+  // takes a repository away from every later run on the subject: destructive,
+  // and closed world because no run is started and no ticket moved.
+  "work_scope.edit": DEPLOYMENT_CONFIG_ANNOTATIONS,
 };
 
 const DOMAINS = [
@@ -334,6 +342,7 @@ const DOMAINS = [
   "blocks",
   "repositories",
   "settings",
+  "work_scope",
 ];
 
 // The committed artifact, read as a file. This is the independent source for the
@@ -412,7 +421,8 @@ const AUTHORED_TRIGGER_NODE_ID = "authored-ticket";
 const AUTHORED_GRAPH_MARKER = "E2E-GRAPH-4a9d31";
 
 /** The smallest graph this deployment deploys: one manually dispatchable trigger,
- *  the same shape the store's own v2 tests deploy (store-v2.test.ts:36). */
+ *  the same shape the store's own v2 tests deploy
+ *  (services/workflow-definitions/persistence-v2.test.ts:35). */
 function authoredGraph() {
   return {
     schemaVersion: 2,
@@ -894,7 +904,7 @@ describe("A. the client cycle and the published surface", () => {
       // A messaging adapter is configured for this deployment, so the announcement a
       // successful authoring write sends can actually reach somebody. The honest
       // "none" is what a deployment with no chat credentials reports, where
-      // lib/adapters.ts hands every tool the no-op adapter.
+      // engine/support/adapters.ts:81 hands every tool the no-op adapter.
       authoringAnnouncements: "chat",
     });
     // The envelope's own hash and the one inside the payload are produced by two

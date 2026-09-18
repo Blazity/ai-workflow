@@ -33,11 +33,11 @@ type GeneratedColumnFixture = {
   unique: boolean;
 };
 
-// Captured from the Drizzle schema generated while loading the installed
-// @better-auth/oauth-provider@1.6.20 plugin. SQL identifiers are mapped to
-// this repository's snake_case convention; property keys remain Better Auth's
+// Captured from the Drizzle schema generated while loading
+// @better-auth/oauth-provider@1.6.20. SQL identifiers are mapped to this
+// repository's snake_case convention; property keys remain Better Auth's
 // generated camelCase adapter contract.
-const OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE = {
+const OAUTH_PROVIDER_GENERATOR_FIXTURE = {
   oauthClient: {
     tableName: "oauth_client",
     defaults: { disabled: false },
@@ -369,14 +369,39 @@ describe("Better Auth organization and SSO schema", () => {
   });
 });
 
-describe("Better Auth OAuth provider 1.6.20 schema", () => {
+// The Better Auth versions the OAuth provider fixture above and the jwks table
+// were last compared with, field by field (2026-09-17: no difference from the
+// 1.6.20 capture). The fixture is a snapshot, so on its own it stays green
+// through an upgrade that changes the plugin's tables, and a missing table
+// only shows up in production. Moving a pin is the promise that the comparison
+// was repeated for the new version.
+const SCHEMA_LAST_COMPARED_WITH = {
+  "better-auth": "1.6.30",
+  "@better-auth/oauth-provider": "1.6.30",
+} as const;
+
+describe("Better Auth OAuth provider schema", () => {
+  it("was last compared with the Better Auth versions this app installs", () => {
+    const manifest = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
+    ) as { dependencies: Record<string, string> };
+    const installed = Object.fromEntries(
+      Object.keys(SCHEMA_LAST_COMPARED_WITH).map((name) => [name, manifest.dependencies[name]]),
+    );
+
+    expect(
+      installed,
+      "Better Auth was upgraded: regenerate its schema, compare it with db/auth-schema.ts, then move SCHEMA_LAST_COMPARED_WITH",
+    ).toEqual(SCHEMA_LAST_COMPARED_WITH);
+  });
+
   it.each([
     ["oauthClient", oauthClient],
     ["oauthRefreshToken", oauthRefreshToken],
     ["oauthAccessToken", oauthAccessToken],
     ["oauthConsent", oauthConsent],
   ] as const)("matches the generated %s Drizzle shape", (fixtureKey, table) => {
-    const fixture = OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE[fixtureKey];
+    const fixture = OAUTH_PROVIDER_GENERATOR_FIXTURE[fixtureKey];
 
     expect(getTableName(table)).toBe(fixture.tableName);
     expect(generatedColumnConfig(table)).toEqual(fixtureColumns(fixture.columns));

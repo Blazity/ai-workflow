@@ -90,7 +90,7 @@ describe("requireMcpActor", () => {
 
   // offline_access is the refresh-token marker, never a permission. Both the token
   // claim and the client row carry it here, so the only thing that can remove it is
-  // the MCP_SCOPES intersection in request-context.ts, which is the mechanism the
+  // the MCP_SCOPES intersection in services/mcp/actor-resolution.ts:140-150, which is the mechanism the
   // whole "permission-inert" argument rests on.
   it("never lets offline_access leak into the actor's permission scopes", async () => {
     await db
@@ -154,8 +154,9 @@ describe("requireMcpActor", () => {
   });
 
   // The property the deployment actually depends on, asserted here because this is
-  // where the actor's scope set is materialized. oauth.ts only declares a DEFAULT
-  // for the client_credentials grant, and @better-auth/oauth-provider@1.6.20 reads
+  // where the actor's scope set is materialized (requireMcpActor, through
+  // services/mcp/actor-resolution.ts). oauth.ts only declares a DEFAULT
+  // for the client_credentials grant, and @better-auth/oauth-provider@1.6.30 reads
   // the client's own registered scopes ahead of it (dist/index.mjs:725) while
   // dynamic registration fills those with every advertised scope
   // (dist/index.mjs:1244), so a token minted for an unattended client really can

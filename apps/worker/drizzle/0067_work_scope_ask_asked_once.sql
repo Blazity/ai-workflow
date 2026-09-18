@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "work_scope_trail_asked_once" ON "work_scope_trail" USING btree (("event" ->> 'clarificationId')) WHERE "work_scope_trail"."kind" = 'question_asked';

@@ -1,17 +1,31 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultSettingsSnapshot } from "@shared/contracts";
+import { defaultSettingsSnapshot, type WorkScopeAskedRepository } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
-import type { IssueTrackerAdapter, TicketContent } from "../../adapters/issue-tracker/types.js";
-import { activeRuns, clarificationRequests, workflowRuns } from "../../db/schema.js";
+import {
+  IssueTrackerNotFoundError,
+  type IssueTrackerAdapter,
+  type TicketComment,
+  type TicketContent,
+} from "../../adapters/issue-tracker/types.js";
+import {
+  activeRuns,
+  clarificationRequests,
+  workflowRuns,
+} from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import { logger } from "../../infra/logger.js";
 import { answerClarificationAndResume } from "./answer-core.js";
+import { composedAnswerActorId } from "./answer-authorship.js";
 import {
   getHookClarification,
   prepareHookClarification,
   publishHookClarification,
 } from "../../db/repositories/clarification-hooks.js";
+import {
+  appendWorkScopeQuestionAsked,
+  applyAnswerWorkScopePlan,
+} from "../../db/repositories/work-scope.js";
 
 const mocks = vi.hoisted(() => ({
   resumeHook: vi.fn(),
@@ -34,10 +48,14 @@ const TICKET = "AWT-9";
 const SUBJECT = "ticket:jira:AWT-9";
 const RUN = "run-asked";
 const ACTOR = { id: "user_1", label: "Ada" };
+const BOT = "bot-account";
 
 let db: Db;
 
-async function seedPending() {
+async function seedPending(
+  askedRepositories?: WorkScopeAskedRepository[],
+  questions: string[] = ["What framework?"],
+) {
   const prepared = await prepareHookClarification(db, {
     ticketKey: TICKET,
     subjectKey: SUBJECT,
@@ -45,7 +63,8 @@ async function seedPending() {
     blockId: "question",
     definitionId: 1,
     definitionVersion: 1,
-    questions: ["What framework?"],
+    questions,
+    ...(askedRepositories ? { askedRepositories } : {}),
   });
   const published = await publishHookClarification(db, prepared.id);
   await db.insert(activeRuns).values({
@@ -65,7 +84,14 @@ async function seedPending() {
   return published;
 }
 
-function makeTracker() {
+function makeTracker(
+  opts: {
+    comments?: TicketComment[];
+    botId?: string;
+    commentsComplete?: boolean;
+    commentsCompleteFrom?: string;
+  } = {},
+) {
   const ticket: TicketContent = {
     id: "1",
     identifier: TICKET,
@@ -73,7 +99,16 @@ function makeTracker() {
     title: "Title",
     description: "Description",
     acceptanceCriteria: "",
-    comments: [],
+    comments: opts.comments ?? [],
+    // What a real read reports once it has paged to the end of the ticket. A
+    // test that asks what happens when it could not passes false.
+    commentsComplete: opts.commentsComplete ?? true,
+    // The narrower fact a read of a very long ticket still establishes: from
+    // this instant on, the list is whole. Absent on the ordinary ticket above,
+    // which has no need of it.
+    ...(opts.commentsCompleteFrom === undefined
+      ? {}
+      : { commentsCompleteFrom: opts.commentsCompleteFrom }),
     labels: [],
     trackerStatus: "AI",
     attachments: [],
@@ -82,21 +117,35 @@ function makeTracker() {
     fetchTicket: vi.fn(() => Promise.resolve(ticket)),
     moveTicket: vi.fn(() => Promise.resolve()),
     postComment: vi.fn((_id: string, _comment: string) => Promise.resolve(null as string | null)),
+    // An empty id is how a provider that will not say who we are reads here,
+    // and it is the one thing that makes a ticket's comments uncountable
+    // without making the ticket itself unreadable.
+    getCurrentUserAccountId: vi.fn(() => Promise.resolve(opts.botId ?? BOT)),
   };
 }
 
-/** One delivery attempt of `answer`, always against the row as it stands now. */
-async function answer(tracker: ReturnType<typeof makeTracker>, id: string, text: string) {
+/** One delivery attempt of `answer`, always against the row as it stands now.
+ *  `extra` is how a channel differs from the dashboard: who is answering, and
+ *  how many people the channel composed the words from. */
+async function answer(
+  tracker: ReturnType<typeof makeTracker>,
+  id: string,
+  text: string,
+  extra: { actor?: { id: string; label: string }; answerAuthorCount?: number } = {},
+) {
   const row = await getHookClarification(db, id);
   if (!row) throw new Error("clarification vanished");
   return answerClarificationAndResume({
     db,
     row,
     rawAnswer: text,
-    actor: ACTOR,
+    actor: extra.actor ?? ACTOR,
+    ...(extra.answerAuthorCount === undefined
+      ? {}
+      : { answerAuthorCount: extra.answerAuthorCount }),
     issueTracker: tracker as unknown as Pick<
       IssueTrackerAdapter,
-      "fetchTicket" | "moveTicket" | "postComment"
+      "fetchTicket" | "moveTicket" | "postComment" | "getCurrentUserAccountId"
     >,
     cancelSettings: defaultSettingsSnapshot(),
   });
@@ -213,5 +262,298 @@ describe("answerClarificationAndResume after a spent resume budget", () => {
     expect(stored?.status).toBe("resume_failed");
     expect(stored?.answer).toBe("Use Next.js");
     expect(stored?.resumeAttempts).toBe(3);
+  });
+});
+
+describe("answerClarificationAndResume when the ticket is gone", () => {
+  it("supersedes the question and settles the run blocked, not success", async () => {
+    const row = await seedPending();
+    const tracker = makeTracker();
+    tracker.fetchTicket.mockRejectedValueOnce(new IssueTrackerNotFoundError("issue", TICKET));
+
+    const result = await answer(tracker, row.id, "Use Next.js");
+
+    expect(result.kind).toBe("ticket_gone");
+    const [stored] = await db
+      .select()
+      .from(clarificationRequests)
+      .where(eq(clarificationRequests.id, row.id));
+    expect(stored?.status).toBe("superseded");
+    const [runRow] = await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN));
+    expect(runRow?.status).toBe("blocked");
+  });
+});
+
+/**
+ * The way back the comment offers, and whether it opens.
+ *
+ * A path written in a ticket comment is only picked up while the next run still
+ * takes repositories from that ticket's text, and that is a count of the open
+ * repositories the ticket names, which this surface cannot see
+ * (`commentPathAfterAnUnrecordedAnswer` in `engine/work-scope/context.ts`). So
+ * the route is never offered here: the which-of-these question about the
+ * ticket's text is told why it is shut, and every other question is sent only
+ * to the routes that work whatever the ticket says. Joint gate round 3, R8: the
+ * earlier rule counted a discovery question's list with the subject's answered
+ * set and offered the comment within three, while the ticket could name four
+ * more open repositories and take nothing from a written path.
+ */
+describe("answerClarificationAndResume telling a person what to write next", () => {
+  const ANSWERED_EARLIER = "clarification-earlier";
+  const FIVE_KEYS = [
+    "github:acme/api",
+    "github:acme/docs",
+    "github:acme/infra",
+    "github:acme/ops",
+    "github:acme/web",
+  ];
+  /** Two proposals, which is all a discovery question ever puts to a person. */
+  const TWO_ASKED: WorkScopeAskedRepository[] = [
+    { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    { repositoryKey: "github:acme/ops", askedBecause: "selection", named: true },
+  ];
+  const COMMENT_PATH_WORKS = "write its full path in a comment here";
+  // Round 5, S2. It read "does not settle it ... because the next run then asks
+  // which of them to start from instead", and the clause after the comma is a
+  // question this surface cannot promise: once something on this work has
+  // answered it, a path in a comment is neither taken nor asked about. What the
+  // person can count on is that the comment brings nothing in.
+  const COMMENT_PATH_IS_A_DEAD_END =
+    "brings nothing into this work while this ticket names more than three repositories";
+  const ONLY_THE_RECORD =
+    "select it in this work's repository list through the work scope API or the work_scope.edit tool";
+
+  /** An earlier which-of-these question on the same subject, answered. */
+  async function earlierSelectionAnswered() {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey: SUBJECT,
+      runId: "run-earlier",
+      clarificationId: ANSWERED_EARLIER,
+      asked: FIVE_KEYS.map((repositoryKey) => ({
+        repositoryKey,
+        askedBecause: "selection" as const,
+        named: true,
+      })),
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey: SUBJECT,
+      runId: "run-earlier",
+      clarificationId: ANSWERED_EARLIER,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId: ANSWERED_EARLIER,
+            answer: { kind: "none" },
+            answeredBy: { kind: "person", actorId: "u-1", actorLabel: "Ada" },
+          },
+        ],
+      },
+    });
+  }
+
+  /** The comment posted because the answer left no repository decision behind
+   *  it, which is the only one this scenario adds to the ticket. */
+  function notRecordedComment(tracker: ReturnType<typeof makeTracker>): string {
+    const posted = tracker.postComment.mock.calls
+      .map(([, body]) => body)
+      .filter((body) => body.includes("It means the same question may be asked again"));
+    expect(posted).toHaveLength(1);
+    return posted[0] ?? "";
+  }
+
+  beforeEach(() => {
+    // The resume itself is not what this is about, and a failing one would spend
+    // the delivery budget and post a second comment.
+    mocks.resumeHook.mockResolvedValue(undefined);
+  });
+
+  it("does not offer the comment path when an earlier, larger question silenced the ticket's text", async () => {
+    await earlierSelectionAnswered();
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "acme/api and acme/ops", { answerAuthorCount: 2 });
+
+    const comment = notRecordedComment(tracker);
+    expect(comment).not.toContain(COMMENT_PATH_WORKS);
+    // This question is not the one about the ticket's text, so it cannot say
+    // the route is shut for that reason either; it names the routes that work.
+    expect(comment).toContain(ONLY_THE_RECORD);
+  });
+
+  // R8. Before, an unsilenced subject and a two-repository discovery question
+  // counted two and offered the comment; nothing here can tell whether the
+  // ticket names three open repositories besides.
+  it("does not offer it for a discovery question even when nothing on this work silenced that text", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "acme/api and acme/ops", { answerAuthorCount: 2 });
+
+    const comment = notRecordedComment(tracker);
+    expect(comment).not.toContain(COMMENT_PATH_WORKS);
+    expect(comment).not.toContain(COMMENT_PATH_IS_A_DEAD_END);
+    expect(comment).toContain(ONLY_THE_RECORD);
+  });
+
+  // Joint gate F4. The same two repositories, asked about mid run because the
+  // workflow's policy keeps them out. Nothing on this surface can tell how many
+  // repositories the ticket names, and a path written into a ticket that already
+  // names three would tip the next run into asking instead, so the comment route
+  // is not offered even though this work has silenced nothing.
+  it("offers only the record for a question raised mid run, silenced text or not", async () => {
+    const row = await seedPending(
+      TWO_ASKED.map((asked) => ({ ...asked, askedBecause: "outside_policy" as const })),
+      ["Does this ticket also touch github:acme/api or github:acme/ops?"],
+    );
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "acme/api and acme/ops", { answerAuthorCount: 2 });
+
+    const comment = notRecordedComment(tracker);
+    expect(comment).not.toContain(COMMENT_PATH_WORKS);
+    expect(comment).not.toContain(COMMENT_PATH_IS_A_DEAD_END);
+    expect(comment).toContain(ONLY_THE_RECORD);
+  });
+
+  // And the which-of-these question about the ticket's text, however few it
+  // offered: it is raised only while more than three open repositories stand,
+  // and with the ones the work already holds left out of its choices it may list
+  // two. The count of its own list proves nothing there.
+  it("never offers it for the which-of-these question about the ticket's text", async () => {
+    const row = await seedPending(TWO_ASKED, [
+      "More than 3 repositories match this ticket. Which repositories are essential for the initial research?" +
+        " Reply with one or more of: github:acme/api, github:acme/ops.",
+    ]);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "acme/api and acme/ops", { answerAuthorCount: 2 });
+
+    const comment = notRecordedComment(tracker);
+    expect(comment).not.toContain(COMMENT_PATH_WORKS);
+    expect(comment).toContain(COMMENT_PATH_IS_A_DEAD_END);
+  });
+});
+
+// Round 5, A4. A person types "no" into the dashboard box, or sends it through
+// `runs.answer_clarification`, and every repository that question listed is
+// left out of this work from then on. Both channels used to answer "answered"
+// and nothing else, so the most consequential thing a one word answer can do
+// was the only thing the person who typed it never saw.
+describe("answerClarificationAndResume telling a person what their decline recorded", () => {
+  const TWO_ASKED: WorkScopeAskedRepository[] = [
+    { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    { repositoryKey: "github:acme/ops", askedBecause: "selection", named: true },
+  ];
+
+  beforeEach(() => {
+    mocks.resumeHook.mockResolvedValue(undefined);
+  });
+
+  it("names the declined repositories and the way back in the answer's own reply", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "no");
+
+    expect(outcome.kind).toBe("answered");
+    const said = outcome.kind === "answered" ? (outcome.recordOutcome ?? "") : "";
+    expect(said).toContain("github:acme/api, github:acme/ops");
+    expect(said).toContain("declining");
+    expect(said).toContain("work_scope.edit");
+  });
+
+  // The other half of the same promise: a person who asked for nothing to
+  // happen is not sent to a route that will refuse them. A which-of-these
+  // question lists repositories the catalog enables and ones it does not, and
+  // selecting one of the latter is written nowhere.
+  it("says the catalog has to enable a repository before selecting it works", async () => {
+    const row = await seedPending(
+      [{ repositoryKey: "github:acme/api", askedBecause: "not_enabled", named: true }],
+      ["github:acme/api is not enabled here. Should this work use it?"],
+    );
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "no");
+
+    const said = outcome.kind === "answered" ? (outcome.recordOutcome ?? "") : "";
+    expect(said).toContain("github:acme/api");
+    expect(said).toContain("enabled on the repositories screen first");
+  });
+
+  // It is the channel that took the answer that owes this sentence. An answer
+  // typed on the dashboard or sent over MCP gets it in the reply that comes
+  // back, and the ticket has the run itself, which names every repository it
+  // started without and why, so posting it there too would tell one story twice
+  // in one thread.
+  it("does not post the decline to the ticket when the answer came from a screen", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "no");
+
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body);
+    expect(posted.filter((body) => body.includes("was read as declining"))).toHaveLength(0);
+  });
+
+  // Round 6, R4, and it is the same rule read from the other channel. "none of
+  // these" written as a ticket COMMENT leaves both repositories out of this work
+  // for good, one permanent entry each in that person's name. The sentence
+  // existed and went back as the answer call's reply, which on this path nobody
+  // ever sees: the answer was a comment, and there is no screen behind it. So
+  // the ticket heard nothing at all about the most consequential thing three
+  // words can do here.
+  it("posts the decline to the ticket when the answer arrived as a comment", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "none of these", {
+      actor: { id: composedAnswerActorId("human-1"), label: "Ada (via Jira)" },
+      answerAuthorCount: 1,
+    });
+
+    expect(outcome.kind).toBe("answered");
+    const declined = tracker.postComment.mock.calls
+      .map(([, body]) => body)
+      .filter((body) => body.includes("was read as declining"));
+    expect(declined).toHaveLength(1);
+    // The same words the other channels carry, so a person reading the ticket
+    // and a person reading the screen meet one story.
+    expect(declined[0]).toContain("github:acme/api, github:acme/ops");
+    expect(declined[0]).toContain("work_scope.edit");
+  });
+
+  // And exactly once. A lost resume redelivers the identical answer, which is
+  // the same decision arriving again rather than a second one.
+  it("does not post the decline again when the same answer is redelivered", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+    const asJira = {
+      actor: { id: composedAnswerActorId("human-1"), label: "Ada (via Jira)" },
+      answerAuthorCount: 1,
+    };
+
+    await answer(tracker, row.id, "none of these", asJira);
+    await answer(tracker, row.id, "none of these", asJira);
+
+    const declined = tracker.postComment.mock.calls
+      .map(([, body]) => body)
+      .filter((body) => body.includes("was read as declining"));
+    expect(declined).toHaveLength(1);
+  });
+
+  // And an answer that chose is not told it declined anything. The question
+  // listed two, the person named one, and the one left out is bound by the
+  // answered set rather than by a decline they did not make.
+  it("says nothing about a record when the answer named a repository", async () => {
+    const row = await seedPending(TWO_ASKED, ["Which of these two should this work use?"]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "github:acme/api");
+
+    expect(outcome.kind === "answered" ? outcome.recordOutcome : "missing").toBeUndefined();
   });
 });

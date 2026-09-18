@@ -197,7 +197,7 @@ describe("POST /api/v1/runs/:runId/cancel", () => {
     // The schedule-ledger settle moved into cancelRunForOperator, so that a second
     // caller (the MCP tool) cannot skip it the way the production bug in AIW-240
     // skipped it. Its behaviour, including the warn on an unsettled occurrence and
-    // the swallowed settle failure, is asserted in lib/cancel-run.test.ts. What
+    // the swallowed settle failure, is asserted in services/run-lifecycle/cancel-run.test.ts. What
     // stays this route's business is the status and the body, and that a settle
     // result of any kind never changes either.
   });

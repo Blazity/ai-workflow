@@ -3,10 +3,39 @@
  * consistent. This helper throws on malformed input or unreadable tool output.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const repositoryRoot = resolve(import.meta.dirname, "../..");
+
+/**
+ * An anchor is a path a gate was told to look at: the root it walks, the file
+ * it compares against, the list it reads. When an anchor moves, the gate scans
+ * an empty set and reports zero violations, which reads exactly like a clean
+ * run. requireAnchor turns the lost anchor into a refusal that names the path
+ * and the invariant it leaves unproven.
+ */
+export function requireAnchor(root, relativePath, label, invariant) {
+  const absolute = isAbsolute(relativePath) ? relativePath : join(root, relativePath);
+  if (!existsSync(absolute)) {
+    throw new Error(
+      `${label} is missing at ${relativePath}, so ${invariant} is unproven. Restore that path or point the gate at where it moved.`,
+    );
+  }
+  return absolute;
+}
+
+/**
+ * The second half of the same rule: an anchor can exist and still hold nothing
+ * the gate recognizes. A scan of zero files proves nothing, so say so instead
+ * of passing.
+ */
+export function requireScan(count, noun, where, invariant) {
+  if (count > 0) return count;
+  throw new Error(
+    `0 ${noun} were found under ${where}, so ${invariant} is unproven. The gate had nothing to look at; check that the paths it scans still hold the code.`,
+  );
+}
 
 export function parseOptions(argv, definitions = {}) {
   const options = { root: repositoryRoot };

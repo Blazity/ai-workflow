@@ -794,6 +794,24 @@ function AnswerPanel({
           </div>
         )}
 
+        {/* What happened to the record beside the answer: either nothing was
+            recorded, in the same words the ticket comment carries, or the
+            answer declined the repositories the question listed. One block for
+            both, because the person reading it wants one thing, what their
+            answer did. The answer reached the run either way; a person who only
+            ever sees this screen would otherwise be told nothing and meet the
+            same question on the next run. */}
+        {result?.recordOutcome ? (
+          <div className="flex flex-col gap-1.5">
+            <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
+              What this answer recorded
+            </span>
+            <p className="m-0 whitespace-pre-wrap break-words rounded-[3px] border border-neutral-200 bg-off-white p-3 font-body text-[13px] leading-[1.5] text-coal">
+              {result.recordOutcome}
+            </p>
+          </div>
+        ) : null}
+
         {legacyRunId ? (
           <div className="font-mono text-[11px] text-success-fg">
             Resumed as{" "}

@@ -8,7 +8,9 @@ import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseOptions, printTable, readJson } from "./shared.mjs";
+import { parseOptions, printTable, readJson, requireAnchor } from "./shared.mjs";
+
+const INVARIANT = "the rule that a completed move stays undone";
 
 function repositoryFiles(root) {
   const result = spawnSync(
@@ -37,6 +39,7 @@ function main() {
     "--list": "list",
   });
   const listPath = options.list ?? fileURLToPath(new URL("./no-resurrected-paths.json", import.meta.url));
+  requireAnchor(options.root, listPath, "the retired path list this gate reads", INVARIANT);
   const paths = readJson(listPath);
   if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !path)) {
     throw new Error("The resurrected path list must be a list of non-empty strings.");
@@ -51,7 +54,9 @@ function main() {
     }
   }
   const failed = rows.some((row) => row[1] === "exists");
-  console.log(failed ? "no-resurrected-paths FAIL" : "no-resurrected-paths PASS");
+  console.log(
+    failed ? "no-resurrected-paths FAIL" : `no-resurrected-paths PASS: ${rows.length} retired path(s) checked`,
+  );
   process.exitCode = failed ? 1 : 0;
 }
 

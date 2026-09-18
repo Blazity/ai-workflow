@@ -298,12 +298,23 @@ jobs:
             "$RUN_URL" "$RESULT_ORCHESTRATION" "$RESULT_CAPACITY" "$RESULT_AGENT")
           # Matched on the exact title rather than a label, so this needs no
           # label to exist in the repository before it can run for the first time.
-          number=$(gh issue list --state open --search "$title in:title" \
-            --json number,title \
-            --jq "[.[] | select(.title == \"$title\")] | .[0].number // empty")
+          # Search matches words, not whole titles, so the exact title is picked
+          # out here. `gh issue list` answers with one page and never says that
+          # it stopped, so the bound is named rather than inherited from the
+          # default 30. A hit is trustworthy whichever page it came from; only a
+          # miss can be a page that ran out, so only a miss on a full page stops
+          # the job instead of filing the duplicate it cannot rule out.
+          limit=100
+          candidates=$(gh issue list --state open --search "\"$title\" in:title" \
+            --limit "$limit" --json number,title)
+          number=$(jq -r --arg title "$title" \
+            '[.[] | select(.title == $title)] | .[0].number // empty' <<<"$candidates")
           if [ -n "$number" ]; then
             gh issue comment "$number" --body "$body"
             echo "commented on #$number"
+          elif [ "$(jq 'length' <<<"$candidates")" -ge "$limit" ]; then
+            echo "Cannot tell whether the nightly e2e issue is already open: the open-issue search for \"$title\" filled its page of $limit and GitHub offers no further page. Close the stale issues whose titles match those words, or comment on the open nightly issue by hand, before trusting this step again." >&2
+            exit 1
           else
             gh issue create --title "$title" --body "$body"
           fi

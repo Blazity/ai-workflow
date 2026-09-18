@@ -115,6 +115,11 @@ import {
   sandboxLifetimeMs,
 } from "./execute.js";
 import { manifest as prepareWorkspaceManifest } from "./manifest.js";
+// The three places a repository question ends up: the ticket comment a person
+// reads, the prompts the agent is given, and the ticket's memory file.
+import { formatClarificationQuestionsComment } from "../../support/clarification-comment-format.js";
+import { renderHumanDecisionsSection } from "../../support/human-decisions-memory.js";
+import { assembleResearchPlanContext } from "../../../sandbox/context.js";
 import type { WorkspaceManifestV2 } from "../../../sandbox/repo-workspace.js";
 import { teardownSandboxes } from "../../steps/sandbox-poll-agent.js";
 import { checksCeilingExceededError } from "../../helpers/run-budget.js";
@@ -301,6 +306,40 @@ describe("prepare_workspace execute", () => {
         },
       };
     });
+  });
+
+  /**
+   * The silent case: the selection refused a repository and the run did NOT
+   * halt, so nothing in the halt text ever reaches anybody. Both fields have to
+   * land on the run context here, or the report the finished run builds has
+   * nothing to say and the person reads a green run that shipped half the work.
+   */
+  it("carries what the selection left out, and what to do about it, onto the run", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+      workScopeLeftOut: [
+        {
+          repositoryKey: "github:acme/web",
+          reason: "github:acme/web was excluded on this work, so the run started without it.",
+        },
+      ],
+      workScopeRecoveryNotes: ["Excluding a repository is not final."],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await ensureWorkspace(ctx, undefined, {});
+
+    expect(result.kind).toBe("next");
+    expect(ctx.workScopeLeftOut).toEqual([
+      {
+        repositoryKey: "github:acme/web",
+        reason: "github:acme/web was excluded on this work, so the run started without it.",
+      },
+    ]);
+    expect(ctx.workScopeRecoveryNotes).toEqual(["Excluding a repository is not final."]);
   });
 
   // Memory is an optimization. Even an error crossing the step boundary must not
@@ -503,7 +542,15 @@ describe("prepare_workspace execute", () => {
     },
   );
 
-  it("passes the clarification answer back into pre-sandbox repository selection", async () => {
+  // THE ANSWER IS AN ANSWER, AND NEVER PART OF THE TICKET.
+  //
+  // It used to travel as both: a synthetic comment appended to the ticket the
+  // selection reads, beside the field that says these words are a reply. The
+  // comment put a person's words in front of the path scanner, which knows
+  // nothing about who said what and matches any path it sees, so a reply the
+  // careful reader had refused, "not github:acme/billing", still handed billing
+  // to the run and wrote it into the record as chosen by the ticket.
+  it("passes the clarification answer back as an answer and not as ticket text", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",
       promptAdditions: { research: [], implementation: [], review: [] },
@@ -519,18 +566,688 @@ describe("prepare_workspace execute", () => {
       { clarificationAnswer: "Use github:acme/api" },
     );
 
-    expect(mocks.runPreSandboxPhase).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ticket: expect.objectContaining({
-          comments: expect.arrayContaining([
-            expect.objectContaining({
-              author: "Human clarification",
-              body: "Use github:acme/api",
-            }),
-          ]),
-        }),
-      }),
+    const input = mocks.runPreSandboxPhase.mock.calls[0]![0];
+    expect(input.clarification).toEqual({
+      answer: "Use github:acme/api",
+      resolves: "repository_selection",
+    });
+    expect(JSON.stringify(input.ticket.comments)).not.toContain("Use github:acme/api");
+  });
+
+  it("keeps an answer the record declined to attribute out of the selection scan and the routing memory", async () => {
+    // Two executions of the one block, which is what really happens: the first
+    // raises a question the record is told about, the second comes back with
+    // the answer, carrying the record's verdict on it.
+    mocks.runPreSandboxPhase.mockResolvedValueOnce({
+      status: "halt",
+      outcome: "needs_clarification",
+      message: "which repository",
+      questions: ["Does this ticket also touch github:acme/api?"],
+      workScopeAsk: {
+        subjectKey: "ticket:jira:AWT-1",
+        askedRepositories: [
+          { repositoryKey: "github:acme/api", askedBecause: "selection" },
+        ],
+      },
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const ctx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: { subjectKey: "ticket:jira:AWT-1", version: 1, entries: [] },
+        selectionAnswered: false,
+      },
+    });
+    const asked = await (execute as any)(makeNode("prepare_workspace"), {}, ctx);
+    expect(asked.kind).toBe("needs_human_input");
+
+    // The record as the answer left it, which is what the run re-reads before
+    // the block runs again. It read these words against the catalog, the policy
+    // and the question actually asked, and declined to attribute them: two
+    // people wrote them together, so nobody can be credited with the decision
+    // they would add up to. That verdict is the fact, and the untouched entries
+    // below could equally mean an answer it read and found nothing in.
+    ctx.workScope = {
+      subjectKey: "ticket:jira:AWT-1",
+      scope: { subjectKey: "ticket:jira:AWT-1", version: 1, entries: [] },
+      selectionAnswered: false,
+      answerAttributed: false,
+    };
+
+    await (execute as any)(
+      makeNode("prepare_workspace"),
+      {},
+      ctx,
+      {},
+      { clarificationAnswer: "Jane: use github:acme/api\n\nBob: agreed" },
     );
+
+    const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
+    // Neither route in: the text scan below would read a repository key out of
+    // those same words and credit it to whoever this run names, which is the
+    // decision the record refused to make.
+    expect(
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
+    expect(input.clarification).toBeUndefined();
+  });
+
+  it("withholds without a verdict when only a person's earlier edit sits in the record", async () => {
+    // The older reading, which is all a run replaying a result written before
+    // the verdict field existed has. The door the Repositories page opened: an
+    // edit writes a person-origin selected entry and answers no question at
+    // all. A gate reading "does the record hold a person's selection" would see
+    // that edit, call this muddled answer accepted, and hand the prose to the
+    // text scan. What this answer CHANGED is the only thing that can say, and
+    // it changed nothing.
+    mocks.runPreSandboxPhase.mockResolvedValueOnce({
+      status: "halt",
+      outcome: "needs_clarification",
+      message: "which repository",
+      questions: ["Does this ticket also touch github:acme/api?"],
+      workScopeAsk: {
+        subjectKey: "ticket:jira:AWT-1",
+        askedRepositories: [
+          { repositoryKey: "github:acme/api", askedBecause: "selection" },
+        ],
+      },
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const ctx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: {
+          subjectKey: "ticket:jira:AWT-1",
+          version: 3,
+          entries: [
+            {
+              repositoryKey: "github:acme/web",
+              state: "selected",
+              origin: "person",
+              rationale: "selected on the Repositories page",
+              decidedBy: { kind: "person", actorId: "user_7", actorLabel: "Ada" },
+              decidedAt: "2026-07-20T12:30:00.000Z",
+            },
+          ],
+        },
+        selectionAnswered: false,
+      },
+    });
+    expect((await (execute as any)(makeNode("prepare_workspace"), {}, ctx)).kind).toBe(
+      "needs_human_input",
+    );
+
+    await (execute as any)(
+      makeNode("prepare_workspace"),
+      {},
+      ctx,
+      {},
+      { clarificationAnswer: "Jane: use github:acme/api\n\nBob: agreed" },
+    );
+
+    const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
+    expect(
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
+    expect(input.clarification).toBeUndefined();
+  });
+
+  it("answers a fresh ticket's bare repository question instead of asking it again", async () => {
+    // The seam the gate broke. A fresh ticket carries a record with nothing in
+    // it, and the first question it asks is the bare one, raised with no ask
+    // behind it, so the record never sees the answer and writes nothing. Read
+    // as a refusal that is a run which asks, is answered, hides the answer from
+    // itself and asks again until the budget kills it, with nobody told why.
+    mocks.runPreSandboxPhase.mockResolvedValueOnce({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [],
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const ctx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: null,
+        selectionAnswered: false,
+      },
+    });
+    const asked = await (execute as any)(makeNode("prepare_workspace"), {}, ctx);
+    expect(asked).toMatchObject({
+      kind: "needs_human_input",
+      questions: ["Which repository should this ticket modify?"],
+    });
+    // The question goes on the record as an ask that lists no repository, which
+    // is what makes the answer to it something the record reads at all. An ask
+    // naming nothing is a different fact from no ask, and this is the door that
+    // keeps them apart.
+    expect(ctx.workScopeAsk).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      askedRepositories: [],
+    });
+    // So the answer is adjudicated, the person's own path is written as their
+    // selection, and this is the record the run re-reads before the block runs
+    // again. The loop is closed by the record accepting the answer, not by the
+    // gate looking away.
+    ctx.workScope = {
+      subjectKey: "ticket:jira:AWT-1",
+      scope: {
+        subjectKey: "ticket:jira:AWT-1",
+        version: 1,
+        entries: [
+          {
+            repositoryKey: "github:acme/api",
+            state: "selected",
+            origin: "person",
+            rationale: "named by the person answering the question",
+            decidedBy: {
+              kind: "person",
+              actorId: "jira:human-1",
+              actorLabel: "Jane (via Jira)",
+            },
+            decidedAt: "2026-07-20T13:00:00.000Z",
+          },
+        ],
+      },
+      selectionAnswered: false,
+    };
+
+    await (execute as any)(
+      makeNode("prepare_workspace"),
+      {},
+      ctx,
+      {},
+      { clarificationAnswer: "github:acme/api" },
+    );
+
+    const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
+    // The answer rides `clarification` and nothing else. Appended to the ticket
+    // it would reach the path scanner too, which takes a repository out of a
+    // reply that refused it.
+    expect(
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
+    expect(input.clarification).toEqual({
+      answer: "github:acme/api",
+      resolves: "repository_selection",
+    });
+  });
+
+  it("answers a bare repository question no verdict ever came back for", async () => {
+    // The same bare question, on the run the deploy suspended: it replays a
+    // result written before the record carried a verdict, so nothing can say
+    // what happened to these words. An empty record after a question that
+    // showed the record NOTHING says only that nobody was ever shown anything,
+    // and reading it as a refusal is the forever loop again, this time on the
+    // runs least able to survive it.
+    mocks.runPreSandboxPhase.mockResolvedValueOnce({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [],
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const bareCtx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: null,
+        selectionAnswered: false,
+      },
+    });
+    expect((await (execute as any)(makeNode("prepare_workspace"), {}, bareCtx)).kind).toBe(
+      "needs_human_input",
+    );
+    expect(bareCtx.workScopeAsk).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      askedRepositories: [],
+    });
+
+    // The record untouched and no verdict on it, which is what the answer path
+    // leaves behind when the clarification row carries no asked repositories.
+    await (execute as any)(
+      makeNode("prepare_workspace"),
+      {},
+      bareCtx,
+      {},
+      { clarificationAnswer: "github:acme/api" },
+    );
+
+    const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
+    // The answer rides `clarification` and nothing else. Appended to the ticket
+    // it would reach the path scanner too, which takes a repository out of a
+    // reply that refused it.
+    expect(
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
+    // And it does reach the step, on the channel that says it is an answer:
+    // withholding it is the forever loop this test is named for.
+    expect(input.clarification).toEqual({
+      answer: "github:acme/api",
+      resolves: "repository_selection",
+    });
+  });
+
+  it("does not ask a person to narrow a set they have already narrowed", async () => {
+    // THE OWNER'S RED LINE. Discovery rebuilds this list from the ticket on
+    // every run, so it comes back at twelve however carefully somebody cut it
+    // to three, and until the record could say the subject had been narrowed
+    // the identical question went out again and the person had been ignored.
+    // Driven as two executions of the block rather than read off a field,
+    // because the behaviour that must never come back is the question.
+    const twelve: SelectedRepository[] = Array.from({ length: 12 }, (_, index) => ({
+      provider: "github",
+      repoPath: `acme/service-${index}`,
+      defaultBranch: "main",
+      selectedRationale: "ticket mentions the platform",
+    }));
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: twelve,
+    });
+    mocks.blockFetchPrContextsStep.mockImplementation(
+      async (repositories: SelectedRepository[]) =>
+        repositories.map((repository) => ({
+          repository,
+          prComments: [],
+          checkResults: [],
+          hasConflicts: false,
+        })),
+    );
+
+    const narrowCtx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: null,
+        selectionAnswered: false,
+      },
+    });
+    const asked = await (execute as any)(makeNode("prepare_workspace"), {}, narrowCtx);
+    expect(asked).toMatchObject({
+      kind: "needs_human_input",
+      questions: [
+        "More than 8 repositories are in scope. Which repositories are essential for this ticket?",
+      ],
+    });
+    // The question names none of the twelve, so the ask lists none of them and
+    // the purpose is the only thing that says which question this was.
+    expect(narrowCtx.workScopeAsk).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      askedRepositories: [],
+      purpose: "narrowing",
+    });
+
+    // The record as the answer left it, which is what the run re-reads before
+    // the block runs again: the three they named are their own decision, and
+    // the nine they did not name have no entry at all, because nobody ever put
+    // those names in front of them.
+    narrowCtx.workScope = {
+      subjectKey: "ticket:jira:AWT-1",
+      scope: {
+        subjectKey: "ticket:jira:AWT-1",
+        version: 1,
+        entries: ["acme/service-1", "acme/service-4", "acme/service-7"].map((repoPath) => ({
+          repositoryKey: `github:${repoPath}`,
+          state: "selected" as const,
+          origin: "person" as const,
+          rationale: "named by the person answering the question",
+          decidedBy: {
+            kind: "person" as const,
+            actorId: "jira:human-1",
+            actorLabel: "Jane (via Jira)",
+          },
+          decidedAt: "2026-07-20T13:00:00.000Z",
+        })),
+      },
+      selectionAnswered: false,
+      narrowingAnswered: true,
+    };
+
+    const resumed = await (execute as any)(
+      makeNode("prepare_workspace"),
+      {},
+      narrowCtx,
+      {},
+      { clarificationAnswer: "service-1, service-4 and service-7" },
+    );
+
+    expect(resumed.kind).not.toBe("needs_human_input");
+    // And it works on exactly what they named, rather than on whatever
+    // discovery turned up again.
+    expect(narrowCtx.selectedRepositories.map((r: SelectedRepository) => r.repoPath)).toEqual([
+      "acme/service-1",
+      "acme/service-4",
+      "acme/service-7",
+    ]);
+  });
+
+  it("asks the plain question when nothing a person narrowed to is in front of this run", async () => {
+    // They answered, and this run can see none of what they named: a repository
+    // renamed away, or one this workflow's pin does not cover. Proceeding would
+    // prepare a workspace holding nothing, and re-asking them to narrow the
+    // same set would be the question they already answered. So the run asks the
+    // plain question instead, which is a DIFFERENT one and records no purpose.
+    const twelve: SelectedRepository[] = Array.from({ length: 12 }, (_, index) => ({
+      provider: "github",
+      repoPath: `acme/service-${index}`,
+      defaultBranch: "main",
+      selectedRationale: "ticket mentions the platform",
+    }));
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: twelve,
+    });
+
+    const goneCtx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: {
+          subjectKey: "ticket:jira:AWT-1",
+          version: 1,
+          entries: [
+            {
+              repositoryKey: "github:acme/retired",
+              state: "selected",
+              origin: "person",
+              rationale: "named by the person answering the question",
+              decidedBy: {
+                kind: "person",
+                actorId: "jira:human-1",
+                actorLabel: "Jane (via Jira)",
+              },
+              decidedAt: "2026-07-20T13:00:00.000Z",
+            },
+          ],
+        },
+        selectionAnswered: false,
+        narrowingAnswered: true,
+      },
+    });
+
+    const asked = await (execute as any)(makeNode("prepare_workspace"), {}, goneCtx);
+
+    // AND IT SAYS WHAT BECAME OF THEIR ANSWER. A bare question here reads, from
+    // where the person sits, as being asked what they already answered, which
+    // is the complaint this whole stage exists to end. Their three were read and
+    // accepted; what changed is that this run cannot reach them, and the
+    // question has to carry that or it is the old behaviour wearing a new name.
+    expect(asked).toMatchObject({
+      kind: "needs_human_input",
+      questions: [
+        "The repositories chosen for this work are not available to this run:" +
+          " github:acme/retired. Which repository should this ticket modify?",
+      ],
+    });
+    expect(goneCtx.workScopeAsk).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      askedRepositories: [],
+    });
+  });
+
+  it("counts the repositories it cannot name rather than printing a wall of them", async () => {
+    // The sentence is read by a person in a ticket comment. Seven keys spelled
+    // out is a wall they skip, and skipping it puts them back in front of a
+    // question that looks like one they already answered.
+    const twelve: SelectedRepository[] = Array.from({ length: 12 }, (_, index) => ({
+      provider: "github",
+      repoPath: `acme/service-${index}`,
+      defaultBranch: "main",
+      selectedRationale: "ticket mentions the platform",
+    }));
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: twelve,
+    });
+
+    const manyCtx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: {
+          subjectKey: "ticket:jira:AWT-1",
+          version: 1,
+          entries: Array.from({ length: 7 }, (_, index) => ({
+            repositoryKey: `github:acme/gone-${index}`,
+            state: "selected" as const,
+            origin: "person" as const,
+            rationale: "named by the person answering the question",
+            decidedBy: {
+              kind: "person" as const,
+              actorId: "jira:human-1",
+              actorLabel: "Jane (via Jira)",
+            },
+            decidedAt: "2026-07-20T13:00:00.000Z",
+          })),
+        },
+        selectionAnswered: false,
+        narrowingAnswered: true,
+      },
+    });
+
+    const asked = await (execute as any)(makeNode("prepare_workspace"), {}, manyCtx);
+
+    expect(asked).toMatchObject({
+      kind: "needs_human_input",
+      questions: [
+        "The repositories chosen for this work are not available to this run:" +
+          " github:acme/gone-0, github:acme/gone-1, github:acme/gone-2," +
+          " github:acme/gone-3, github:acme/gone-4, and 2 more." +
+          " Which repository should this ticket modify?",
+      ],
+    });
+  });
+
+  it("asks the plain question with nothing to report when a person narrowed to nothing", async () => {
+    // "None of these are essential" is an answer, and it records no repository
+    // by design. There is nothing that became unreachable, so a sentence about
+    // the repositories they chose would name none of them.
+    const twelve: SelectedRepository[] = Array.from({ length: 12 }, (_, index) => ({
+      provider: "github",
+      repoPath: `acme/service-${index}`,
+      defaultBranch: "main",
+      selectedRationale: "ticket mentions the platform",
+    }));
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: twelve,
+    });
+
+    const noneCtx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: { subjectKey: "ticket:jira:AWT-1", version: 1, entries: [] },
+        selectionAnswered: false,
+        narrowingAnswered: true,
+      },
+    });
+
+    const asked = await (execute as any)(makeNode("prepare_workspace"), {}, noneCtx);
+
+    expect(asked).toMatchObject({
+      kind: "needs_human_input",
+      questions: ["Which repository should this ticket modify?"],
+    });
+  });
+
+  it("passes an answer the record accepted as a person's selection", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValueOnce({
+      status: "halt",
+      outcome: "needs_clarification",
+      message: "which repository",
+      questions: ["Does this ticket also touch github:acme/api?"],
+      workScopeAsk: {
+        subjectKey: "ticket:jira:AWT-1",
+        askedRepositories: [
+          { repositoryKey: "github:acme/api", askedBecause: "selection" },
+        ],
+      },
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    // Nothing decided yet when the question goes out, which is what makes the
+    // entry below this answer's doing rather than somebody else's.
+    const acceptedCtx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: null,
+        selectionAnswered: false,
+      },
+    });
+    expect((await (execute as any)(makeNode("prepare_workspace"), {}, acceptedCtx)).kind).toBe(
+      "needs_human_input",
+    );
+    // The record as the answer left it, which is what the run re-reads before
+    // the block runs again (`agent-workflow.ts:1576-1585`).
+    acceptedCtx.workScope = {
+      subjectKey: "ticket:jira:AWT-1",
+      scope: {
+        subjectKey: "ticket:jira:AWT-1",
+        version: 2,
+        entries: [
+          {
+            repositoryKey: "github:acme/api",
+            state: "selected",
+            origin: "person",
+            rationale: "named by the person answering the question",
+            decidedBy: {
+              kind: "person",
+              actorId: "jira:human-1",
+              actorLabel: "Jane (via Jira)",
+            },
+            decidedAt: "2026-07-20T13:00:00.000Z",
+          },
+        ],
+      },
+      selectionAnswered: true,
+    };
+
+    await (execute as any)(
+      makeNode("prepare_workspace"),
+      {},
+      acceptedCtx,
+      {},
+      { clarificationAnswer: "Jane: use github:acme/api" },
+    );
+
+    const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
+    // The careful reader accepted these words, so the looser one is not being
+    // asked to decide anything the record has not already decided.
+    // The answer rides `clarification` and nothing else. Appended to the ticket
+    // it would reach the path scanner too, which takes a repository out of a
+    // reply that refused it.
+    expect(
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
+    expect(input.clarification).toEqual({
+      answer: "Jane: use github:acme/api",
+      resolves: "repository_selection",
+    });
+  });
+
+  it("passes an answer the record read and could not act on", async () => {
+    // The wide half of the rule, and the half an empty record cannot express.
+    // The record read these words, attributed them to the one person who wrote
+    // them, and still wrote nothing: it could not make a repository out of
+    // "yes, that one", or the key it recognised was selected already. Neither
+    // is anybody's refusal, and the looser text scan downstream is exactly the
+    // reader that might get something out of prose the strict one could not.
+    // Withheld, this is the same forever loop as the bare question.
+    mocks.runPreSandboxPhase.mockResolvedValueOnce({
+      status: "halt",
+      outcome: "needs_clarification",
+      message: "which repository",
+      questions: ["Does this ticket also touch github:acme/api?"],
+      workScopeAsk: {
+        subjectKey: "ticket:jira:AWT-1",
+        askedRepositories: [
+          { repositoryKey: "github:acme/api", askedBecause: "selection" },
+        ],
+      },
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const unreadableCtx = makeCtx({
+      sandboxId: null,
+      workScope: {
+        subjectKey: "ticket:jira:AWT-1",
+        scope: { subjectKey: "ticket:jira:AWT-1", version: 1, entries: [] },
+        selectionAnswered: false,
+      },
+    });
+    expect(
+      (await (execute as any)(makeNode("prepare_workspace"), {}, unreadableCtx)).kind,
+    ).toBe("needs_human_input");
+    // Entries untouched, exactly as in the declined case above. Only the
+    // verdict separates the two, which is why the verdict is what is read.
+    unreadableCtx.workScope = {
+      subjectKey: "ticket:jira:AWT-1",
+      scope: { subjectKey: "ticket:jira:AWT-1", version: 1, entries: [] },
+      selectionAnswered: false,
+      answerAttributed: true,
+    };
+
+    await (execute as any)(
+      makeNode("prepare_workspace"),
+      {},
+      unreadableCtx,
+      {},
+      { clarificationAnswer: "yes, that one" },
+    );
+
+    const input = mocks.runPreSandboxPhase.mock.calls[1]![0];
+    // The answer rides `clarification` and nothing else. Appended to the ticket
+    // it would reach the path scanner too, which takes a repository out of a
+    // reply that refused it.
+    expect(
+      input.ticket.comments.some((c: { author: string }) => c.author === "Human clarification"),
+    ).toBe(false);
+    expect(input.clarification).toEqual({
+      answer: "yes, that one",
+      resolves: "repository_selection",
+    });
   });
 
   it("marks conflicted repositories with a mergeBase", async () => {
@@ -1159,6 +1876,104 @@ describe("prepare_workspace execute", () => {
     });
   });
 
+  /**
+   * The founding complaint of this feature, end to end.
+   *
+   * Somebody excluded a repository weeks ago. Selection refuses it and does NOT
+   * halt, so the halt text that names it is never composed, discovery finds
+   * nothing else, and the run asks a bare "which repository should this ticket
+   * modify?" of the same person whose own decision emptied the list.
+   *
+   * The invariant, on the line the ruling in `agent-workflow.ts` draws: what was
+   * left out rides the question, because it is a fact about this run's workspace
+   * and the person cannot answer without it; the sentence about taking the
+   * exclusion back rides the ticket comment only, because the questions become
+   * the agent's prompts and its "Human decisions" memory, and that is the
+   * channel this system PLACES text in. Each absence assertion is paired with a
+   * positive control, so an assertion cannot pass on an empty surface.
+   */
+  it("names what the selection refused in the bare question, and takes the reversal to the ticket only", async () => {
+    const refusal =
+      "github:acme/api was excluded on this work, so the run started without it.";
+    const reversal =
+      "Excluding a repository is not final: this work's repository list can be changed" +
+      " through the work scope API or the work_scope.edit tool," +
+      " and the next run starts from the changed list.";
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      selectedRepositories: [],
+      workScopeLeftOut: [{ repositoryKey: "github:acme/api", reason: refusal }],
+      workScopeRecoveryNotes: [reversal],
+    });
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(result.kind).toBe("needs_human_input");
+    const questions = result.kind === "needs_human_input" ? result.questions : [];
+    expect(questions).toEqual([
+      `${refusal} Which repository should this ticket modify?`,
+    ]);
+    expect(questions.join(" ")).not.toContain("not final");
+
+    // The ticket comment, which is where the sentence does ship.
+    const comment = formatClarificationQuestionsComment({
+      questions,
+      suggestedAnswers: null,
+      dashboardUrl: "https://app/ticket/AWT-402?run=wrun_1",
+      aiColumnName: "AI",
+      expiresAtIso: null,
+      repositoryRecoveryNotes: ctx.workScopeRecoveryNotes,
+    });
+    expect(comment).toContain(refusal);
+    expect(comment).toContain(reversal);
+
+    // Answered, the same question becomes a clarification round, and the round
+    // is rendered verbatim into the agent's research prompt.
+    const round = { questions, answer: "Use acme/web." };
+    const prompt = assembleResearchPlanContext({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Rename the client",
+        description: "Touches acme/api and acme/web.",
+        acceptanceCriteria: "",
+        comments: [],
+        clarifications: [round],
+      },
+      prompt: "Plan the work.",
+      branchName: "blazebot/awt-402",
+    });
+    expect(prompt).toContain("## Clarifications (Q&A)");
+    expect(prompt).toContain(refusal);
+    expect(prompt).not.toContain("not final");
+
+    // And into ai-workflow/memory/AWT-402.md, under a heading that tells the
+    // agent a person decided this and not to edit it.
+    const memory = renderHumanDecisionsSection([round]);
+    expect(memory).toContain("## Human decisions (from the dashboard)");
+    expect(memory).toContain(refusal);
+    expect(memory).not.toContain("not final");
+  });
+
+  it("asks the bare question unchanged when the selection refused nothing", async () => {
+    // The prefix is not decoration. A run with nothing to explain asks the
+    // question it always asked, so the sentence in front of it always means
+    // something happened.
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      selectedRepositories: [],
+      workScopeLeftOut: [],
+      workScopeRecoveryNotes: [],
+    });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null }));
+
+    expect(result).toMatchObject({
+      kind: "needs_human_input",
+      questions: ["Which repository should this ticket modify?"],
+    });
+  });
+
   it("selects the PR repository for pr_trigger entries without the pre-sandbox phase", async () => {
     mocks.blockPrTriggerRepositoriesStep.mockResolvedValue([repo]);
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
@@ -1184,6 +1999,7 @@ describe("prepare_workspace execute", () => {
       "run-1",
       pr,
       ctx.repositories,
+      { workScope: null },
     );
     expect(mocks.runPreSandboxPhase).not.toHaveBeenCalled();
     expect(result.kind).toBe("next");
@@ -1736,6 +2552,7 @@ describe("prepare_workspace execute", () => {
       "run-1",
       pr,
       ctx.repositories,
+      { workScope: null },
     );
     expect(result.kind).toBe("next");
   });

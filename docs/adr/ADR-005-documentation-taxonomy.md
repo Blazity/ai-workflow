@@ -92,9 +92,17 @@ currency.
 
 The checked set is every Markdown file under `docs/` outside `archive/` and
 `research/`, every file under `apps/<app>/docs/`, each `apps/<app>/AGENTS.md`,
-and `README.md`, `AGENTS.md`, `SETUP.md` and `CONTEXT.md` at the repository
-root. A document the gate does not check is a document that can rot while the
-gate stays green, so the set is written down here.
+`packages/AGENTS.md`, and `README.md`, `AGENTS.md`, `SETUP.md` and `CONTEXT.md`
+at the repository root. A document the gate does not check is a document that
+can rot while the gate stays green, so the set is written down here.
+
+**Correction, 2026-09-17: `packages/AGENTS.md` was missing from that list.**
+`scripts/gates/docs-status.mjs` has checked it all along, so the error was in
+this record and not in the code, and the paths the set is computed from are
+required rather than opportunistic (ADR-007). A decision that changes is
+superseded by a new ADR and never edited in place; a factual error about an
+unchanged decision is corrected here, and left visible rather than fixed
+silently.
 
 ### 4. Root `AGENTS.md` is a routing table
 

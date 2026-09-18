@@ -107,7 +107,7 @@ export async function resolveMcpActor(
  *
  * This is where the narrowing has to happen, because it is where the actor's scope
  * set is materialized. oauth.ts declares clientCredentialGrantDefaultScopes, but
- * that is only a DEFAULT: @better-auth/oauth-provider@1.6.20 prefers the client's
+ * that is only a DEFAULT: @better-auth/oauth-provider@1.6.30 prefers the client's
  * own registered scopes over it (dist/index.mjs:725), dynamic registration writes
  * every advertised scope into those when the request names none
  * (dist/index.mjs:1244), and an explicit `scope` on the token request is checked

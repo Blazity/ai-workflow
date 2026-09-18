@@ -120,7 +120,7 @@ export interface ReviewThreadFeed {
   snapshotAt: string; // ISO 8601, when the feed was read
 }
 
-// The work-item predicate itself lives in lib/vcs-bot-identity.ts: this module
+// The work-item predicate itself lives in adapters/vcs/vcs-bot-identity.ts:115: this module
 // imports node:crypto for the finding digest, so a value export from here would
 // drag Node into the workflow bundle the moment the ledger's pure logic needed
 // the predicate.

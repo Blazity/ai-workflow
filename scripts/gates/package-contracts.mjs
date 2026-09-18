@@ -5,12 +5,15 @@
  */
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { parseOptions, printTable, readJson } from "./shared.mjs";
+import { parseOptions, printTable, readJson, requireAnchor, requireScan } from "./shared.mjs";
+
+const PACKAGE_ROOTS = ["packages"];
+const INVARIANT = "the rule that every shared workspace states its architecture contract";
 
 function packageFiles(root) {
-  return ["packages"].flatMap((parent) => {
+  return PACKAGE_ROOTS.flatMap((parent) => {
     const directory = join(root, parent);
-    if (!existsSync(directory)) return [];
+    requireAnchor(root, parent, "a package root this gate scans", INVARIANT);
     return readdirSync(directory, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && existsSync(join(directory, entry.name, "package.json")))
       .map((entry) => join(directory, entry.name, "package.json"));
@@ -23,10 +26,11 @@ function main() {
     const description = readJson(file).description;
     return [relative(options.root, file), typeof description === "string" && description.trim() ? "present" : "missing"];
   });
+  requireScan(rows.length, "workspace package manifests", PACKAGE_ROOTS.join(", "), INVARIANT);
   console.log("Package contracts");
   printTable(["package", "description"], rows);
   const failed = rows.some((row) => row[1] === "missing");
-  console.log(failed ? "package-contracts FAIL" : "package-contracts PASS");
+  console.log(failed ? "package-contracts FAIL" : `package-contracts PASS: ${rows.length} package(s) checked`);
   process.exitCode = failed ? 1 : 0;
 }
 

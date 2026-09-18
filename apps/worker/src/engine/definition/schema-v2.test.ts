@@ -2065,6 +2065,141 @@ describe("schedule graphs run unattended", () => {
   });
 });
 
+describe("trigger repository policy at publish", () => {
+  const triggerDefinition = (
+    type: WorkflowBlockType,
+    configuration: Record<string, JsonValue>,
+  ): WorkflowDefinitionV2 => ({
+    schemaVersion: 2,
+    nodes: [
+      {
+        id: "trigger",
+        type,
+        x: 0,
+        y: 0,
+        configuration,
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [],
+  });
+  const publishIssues = (type: WorkflowBlockType, configuration: Record<string, JsonValue>) =>
+    testDeploymentIssues(triggerDefinition(type, configuration), ...blockData);
+  const completeSchedule = {
+    cron: "0 9 * * 1",
+    taskTitle: "Weekly dependency refresh",
+    taskDescription: "Check and update outdated dependencies.",
+  };
+
+  it("refuses the event repository on a trigger that is not a pull request trigger", () => {
+    const configuration = {
+      repositoryPolicy: {
+        candidates: { kind: "event_repository_and_related" },
+        expansion: "attach",
+      },
+    };
+    expect(
+      workflowDefinitionV2Schema.safeParse(triggerDefinition("trigger_ticket_ai", configuration)).success,
+    ).toBe(true);
+    expect(publishIssues("trigger_ticket_ai", configuration)).toEqual([
+      {
+        code: "deployment",
+        severity: "error",
+        nodeId: "trigger",
+        path: "/nodes/0/configuration/repositoryPolicy/candidates/kind",
+        message:
+          'Block "trigger" (trigger_ticket_ai) has a repository policy it cannot publish: Only a pull request trigger has an event repository, so this trigger cannot take its candidates from one.',
+      },
+    ]);
+  });
+
+  it("refuses ask_once on a schedule", () => {
+    expect(
+      publishIssues("trigger_schedule", {
+        ...completeSchedule,
+        repositoryPolicy: { candidates: { kind: "enabled_catalog" }, expansion: "ask_once" },
+      }),
+    ).toEqual([
+      {
+        code: "deployment",
+        severity: "error",
+        nodeId: "trigger",
+        path: "/nodes/0/configuration/repositoryPolicy/expansion",
+        message:
+          'Block "trigger" (trigger_schedule) has a repository policy it cannot publish: A schedule cannot ask about repositories, because nobody is there to answer.',
+      },
+    ]);
+  });
+
+  it("refuses ask_once on a webhook that configures no subject path", () => {
+    expect(
+      publishIssues("trigger_webhook", {
+        repositoryPolicy: { candidates: { kind: "enabled_catalog" }, expansion: "ask_once" },
+      }),
+    ).toEqual([
+      {
+        code: "deployment",
+        severity: "error",
+        nodeId: "trigger",
+        path: "/nodes/0/configuration/repositoryPolicy/expansion",
+        message:
+          'Block "trigger" (trigger_webhook) has a repository policy it cannot publish: A webhook can ask about repositories only when it configures a subject path, because without one every delivery is a new subject.',
+      },
+    ]);
+  });
+
+  it("publishes a valid policy", () => {
+    expect(
+      publishIssues("trigger_webhook", {
+        subjectPath: "ticket.id",
+        repositoryPolicy: { candidates: { kind: "enabled_catalog" }, expansion: "ask_once" },
+      }),
+    ).toEqual([]);
+    expect(
+      publishIssues("trigger_pr_review", {
+        repositoryPolicy: { candidates: { kind: "event_repository_and_related" }, expansion: "attach" },
+      }),
+    ).toEqual([]);
+    expect(
+      publishIssues("trigger_ticket_ai", {
+        repositoryPolicy: {
+          candidates: { kind: "listed", repositoryKeys: ["github:blazity/ai-workflow-demo"] },
+          expansion: "never",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports a malformed policy once, as configuration, not again as a publish refusal", () => {
+    expect(
+      publishIssues("trigger_ticket_ai", {
+        repositoryPolicy: { candidates: { kind: "event_repository_and_related" }, expansion: "sometimes" },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        code: "invalid_configuration",
+        nodeId: "trigger",
+        path: "/nodes/0/configuration/repositoryPolicy/expansion",
+      }),
+    ]);
+  });
+
+  it("refuses a policy on an approved plan as an unsupported key", () => {
+    expect(
+      publishIssues("trigger_plan_approved", {
+        repositoryPolicy: { candidates: { kind: "enabled_catalog" }, expansion: "attach" },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        code: "invalid_configuration",
+        nodeId: "trigger",
+        path: "/nodes/0/configuration/repositoryPolicy",
+      }),
+    ]);
+  });
+});
+
 describe("stored definition reader", () => {
   it("returns malformed historical v1 content exactly as stored", () => {
     const stored = {

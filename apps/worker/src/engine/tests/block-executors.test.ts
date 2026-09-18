@@ -8,8 +8,9 @@ import {
 import { detachScratchSandboxesForClarification, planningClarificationResult } from "../agent-workflow.js";
 import { blockTypesMissingExecutor, implementationChangeSummary, resolveOpenPrBody, resolveOpenPrTitle, resolveSlackMessageInput, resolveTicketStatusInput } from "../helpers/prompt-output.js";
 
-// Exhaustiveness guard for the v1 block dispatch in agent.ts. V2-only action
-// types are executed by the v2 scheduler once that runtime is enabled.
+// Exhaustiveness guard for BLOCK_EXECUTORS and INLINE_EXECUTED_BLOCK_TYPES
+// (engine/blocks/executors.generated.ts:24 and :44), through blockTypesMissingExecutor
+// (engine/helpers/prompt-output.ts:238). The v1 dispatch in agent.ts is gone.
 describe("block executor exhaustiveness", () => {
   it("keeps map, inline, and graph execution sets exact", () => {
     const mapTypes = [
