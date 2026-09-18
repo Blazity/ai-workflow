@@ -6,6 +6,8 @@ import {
   ANSWER_NOT_RECORDED_REASONS,
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,
+  formatAnswerAlsoNamedComment,
+  formatAnswerDelegatedComment,
   formatAnswerNotRecordedComment,
   formatAnswerUnreadableComment,
   formatClarificationNudgeComment,
@@ -608,5 +610,116 @@ describe("formatAnswerUnreadableComment", () => {
 
     expect(body.split("\n\n").at(-1)).toBe(THE_ASK);
     expect(body).not.toContain("column");
+  });
+});
+
+/**
+ * WHAT A PERSON WHO HANDED THE DECISION BACK IS TOLD.
+ *
+ * Three things, and each is a defect when missing: what the workflow took, what
+ * it left and that nothing binds those, and a way to change it that works on
+ * the channel they answered in.
+ */
+describe("formatAnswerDelegatedComment", () => {
+  const API = "github:acme/api";
+  const WEB = "github:acme/web";
+  const DOCS = "github:acme/docs";
+  const OPS = "github:acme/ops";
+
+  it("names what was taken, in the question's order, and what was left open", () => {
+    const body = formatAnswerDelegatedComment({
+      taken: [API, WEB, DOCS],
+      notTaken: [OPS],
+      commentPath: "unproven",
+    });
+
+    expect(body).toContain(`${API}, ${WEB}, ${DOCS}`);
+    expect(body).toContain(OPS);
+    // A delegation binds only what it took, and the sentence may not claim more.
+    expect(body).toContain("nothing is recorded about it");
+    expect(body).not.toContain("left out of this work");
+  });
+
+  it("says the workflow chose, never that the person did", () => {
+    const body = formatAnswerDelegatedComment({ taken: [API], notTaken: [], commentPath: "unproven" });
+
+    expect(body).toMatch(/asked the workflow to decide/);
+    expect(body).not.toMatch(/you (chose|named|selected)/i);
+  });
+
+  it("says the run continues without a repository it could not take", () => {
+    const body = formatAnswerDelegatedComment({ taken: [], notTaken: [API], commentPath: "unproven" });
+
+    expect(body).toContain(`continues without ${API}`);
+    expect(body).not.toMatch(/chose github/);
+  });
+
+  // Every repository the question listed already carries a person's own
+  // decision, so the workflow had nothing left to choose among. Both lists are
+  // empty, and a sentence built for one of them reads "continues without ,".
+  it("says it changed nothing when a person had already decided on everything the question listed", () => {
+    const body = formatAnswerDelegatedComment({ taken: [], notTaken: [], commentPath: "unproven" });
+
+    expect(body).toContain("already carries a decision a person made on this work");
+    expect(body).not.toMatch(/without\s*[,.]/);
+  });
+
+  // With more than three open the comment route is shut, so a person answering
+  // on the ticket must not be sent to write a path there.
+  it("tells a ticket reader that a path in a comment brings nothing in while too many are open", () => {
+    const shut = formatAnswerDelegatedComment({
+      taken: [API, WEB, DOCS],
+      notTaken: [OPS],
+      commentPath: "too_many_open",
+    });
+    const open = formatAnswerDelegatedComment({
+      taken: [API, WEB, DOCS],
+      notTaken: [OPS],
+      commentPath: "unproven",
+    });
+
+    expect(shut).toContain("brings nothing into this work");
+    expect(open).not.toContain("in a comment");
+    for (const body of [shut, open]) {
+      expect(body).toContain("work scope API or the work_scope.edit tool");
+    }
+  });
+});
+
+/**
+ * WHAT A PERSON WHO NAMED A REPOSITORY THE QUESTION NEVER LISTED IS TOLD.
+ */
+describe("formatAnswerAlsoNamedComment", () => {
+  it("says a name the catalog holds and enables is now part of this work as their choice", () => {
+    const body = formatAnswerAlsoNamedComment({
+      added: ["github:acme/billing"],
+      notEnabled: [],
+      unmatched: [],
+    });
+
+    expect(body).toContain("github:acme/billing");
+    expect(body).toContain("as your choice");
+  });
+
+  it("names the repository this deployment does not enable, and the page that enables it", () => {
+    const body = formatAnswerAlsoNamedComment({
+      added: [],
+      notEnabled: ["github:acme/legacy"],
+      unmatched: [],
+    });
+
+    expect(body).toContain("github:acme/legacy is not enabled on the Repositories page");
+    expect(body).toContain("until then no run can use it");
+  });
+
+  it("says a name that matched nothing recorded nothing", () => {
+    const body = formatAnswerAlsoNamedComment({
+      added: [],
+      notEnabled: [],
+      unmatched: ["github:evil/other"],
+    });
+
+    expect(body).toContain("github:evil/other");
+    expect(body).toContain("nothing about it was recorded");
   });
 });

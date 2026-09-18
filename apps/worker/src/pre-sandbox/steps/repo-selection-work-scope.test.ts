@@ -961,6 +961,78 @@ describe("what a finished run says about the repositories an answer left out", (
   });
 });
 
+/**
+ * THE RUN THAT ASKED, WOKEN BY "whatever you think is best".
+ *
+ * The answer path wrote the workflow's choice as `delegated` entries and
+ * resumed the run; the selection step now runs again from the top against the
+ * same ticket, which still names every repository it named. What the person is
+ * owed: the run works on exactly what was chosen for them, and nobody asks them
+ * the question they just handed back.
+ */
+describe("the selection a delegation resumes into", () => {
+  const delegated = (repositoryKey: string) =>
+    entry({
+      repositoryKey,
+      origin: "delegated",
+      rationale: "Chosen by the workflow because Ada asked it to decide.",
+    });
+
+  it("takes exactly the three the workflow chose and asks nothing", async () => {
+    const result = await runStep({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Fix the thing",
+        description: "Touches acme/web, acme/api, acme/docs and acme/infra.",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+      },
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([
+          delegated("github:acme/web"),
+          delegated("github:acme/api"),
+          delegated("github:acme/docs"),
+        ]),
+        // A delegation raises neither: it binds only what it took.
+        selectionAnswered: false,
+        answeredRepositoryKeys: [],
+      },
+    });
+
+    expect(result.status).toBe("continue");
+    expect(result.workScopeAsk).toBeUndefined();
+    expect(result.selectedRepositories?.map((each) => each.repoPath).sort()).toEqual([
+      "acme/api",
+      "acme/docs",
+      "acme/web",
+    ]);
+  });
+
+  it("does not describe the delegated choice as repositories taken without asking", async () => {
+    const result = await runStep({
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([
+          delegated("github:acme/web"),
+          delegated("github:acme/api"),
+          delegated("github:acme/docs"),
+          entry({ repositoryKey: "github:acme/ops", origin: "trigger_policy" }),
+        ]),
+        selectionAnswered: false,
+        answeredRepositoryKeys: [],
+      },
+    });
+
+    expect(result.status).toBe("continue");
+    const leftOut =
+      result.promptAdditions?.find((addition) => addition.title === "Repositories left out")
+        ?.content ?? "";
+    expect(leftOut).not.toContain("github:acme/web");
+  });
+});
+
 describe("what a person reads when the run stops to ask", () => {
   it("puts the refusal in front of the question, where the halt message never reaches", async () => {
     const result = await runStep({

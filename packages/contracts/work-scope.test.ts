@@ -10,9 +10,12 @@ import {
   resolveTriggerRepositoryPolicy,
   triggerRepositoryPolicySchema,
   validateTriggerRepositoryPolicy,
+  WORK_SCOPE_ANSWER_READING_JSON_SCHEMA,
+  workScopeAnswerOutcomeSchema,
   workScopeAskedRepositoriesSchema,
   workScopeAskReasonSchema,
   workScopeEditRequestSchema,
+  workScopeQuestionAnswerSchema,
   workScopeEntrySchema,
   workScopeOriginRank,
   workScopeSchema,
@@ -45,12 +48,17 @@ const PULL_REQUEST_TRIGGER_TYPES = [
 ] as const;
 
 describe("work scope vocabulary", () => {
-  it("freezes the states, reasons and origins, with origins in precedence order", () => {
+  it("freezes the states, reasons and origins", () => {
     expect(WORK_SCOPE_ENTRY_STATES).toEqual(["selected", "excluded", "unavailable"]);
     expect(WORK_SCOPE_UNAVAILABLE_REASONS).toEqual(["not_enabled", "unusable"]);
     expect(WORK_SCOPE_ASK_REASONS).toEqual(["not_enabled", "unusable", "outside_policy", "selection"]);
+    // The closed set only: precedence is `WORK_SCOPE_ORIGIN_RANKS`, not this
+    // order. `delegated` is a decision a person asked for and NOT a guess, so
+    // anything that reads `inferred` as "no entry at all" must keep reading
+    // this one as an entry.
     expect(WORK_SCOPE_ORIGINS).toEqual([
       "person",
+      "delegated",
       "workflow_owned_branch",
       "ticket_text",
       "trigger_policy",
@@ -142,12 +150,90 @@ describe("asked repositories", () => {
 });
 
 describe("workScopeOriginRank", () => {
-  it("ranks each origin by its precedence, person first", () => {
+  // Literal values, not positions: every stored row already carries its number,
+  // so the five that predate `delegated` keep the ranks they had.
+  it("ranks each origin by the number it declares, person first", () => {
     expect(workScopeOriginRank("person")).toBe(0);
+    expect(workScopeOriginRank("delegated")).toBe(0);
     expect(workScopeOriginRank("workflow_owned_branch")).toBe(1);
     expect(workScopeOriginRank("ticket_text")).toBe(2);
     expect(workScopeOriginRank("trigger_policy")).toBe(3);
     expect(workScopeOriginRank("inferred")).toBe(4);
+  });
+
+  // The stored rank is what the write statement compares, so a guess, a policy,
+  // a text match and a workflow-owned branch must never take a delegated entry
+  // back. The tie with `person` is refused in one direction by the store.
+  it("puts everything derived below a decision the workflow was asked to make", () => {
+    for (const origin of ["workflow_owned_branch", "ticket_text", "trigger_policy", "inferred"] as const) {
+      expect(workScopeOriginRank("delegated") < workScopeOriginRank(origin)).toBe(true);
+    }
+    expect(workScopeOriginRank("delegated")).toBe(workScopeOriginRank("person"));
+  });
+});
+
+/**
+ * A PERSON WHO HANDS THE DECISION BACK IS ANSWERING.
+ *
+ * "whatever you think is best" asked us to choose, so the reading says so and
+ * the record writes what the workflow then took. It is not `unclear`, which
+ * records nothing and parks the run, and it is not `repositories`, which would
+ * claim the person named them.
+ */
+describe("a delegated answer", () => {
+  it("reads as its own outcome, separate from unclear", () => {
+    expect(workScopeAnswerOutcomeSchema.safeParse({ kind: "delegated" }).success).toBe(true);
+  });
+
+  it("carries no repository keys of its own: what was taken is the record's business", () => {
+    expect(
+      workScopeAnswerOutcomeSchema.safeParse({
+        kind: "delegated",
+        repositoryKeys: ["github:acme/api"],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("is a word the provider may return", () => {
+    const outcomes: readonly string[] = WORK_SCOPE_ANSWER_READING_JSON_SCHEMA.properties.outcome.enum;
+    expect(outcomes.includes("delegated")).toBe(true);
+  });
+
+  // What the trail says: the person delegated, and these are the repositories
+  // the workflow took at their request. Readable afterwards on the dashboard and
+  // over MCP without replaying anything.
+  it("records in the trail which repositories the workflow took", () => {
+    expect(
+      workScopeQuestionAnswerSchema.safeParse({
+        kind: "delegated",
+        repositoryKeys: ["github:acme/api", "github:acme/web"],
+      }).success,
+    ).toBe(true);
+  });
+
+  // A delegation on a question the run cannot honour takes none, and that is a
+  // delegation too: it continues without the repository and says so.
+  it("accepts a delegation that took nothing", () => {
+    expect(
+      workScopeQuestionAnswerSchema.safeParse({ kind: "delegated", repositoryKeys: [] }).success,
+    ).toBe(true);
+  });
+
+  it("refuses a delegation that took the same repository twice", () => {
+    expect(
+      workScopeQuestionAnswerSchema.safeParse({
+        kind: "delegated",
+        repositoryKeys: ["github:acme/api", "github:acme/api"],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("a delegated entry", () => {
+  it("is an origin an entry may carry", () => {
+    expect(
+      workScopeEntrySchema.safeParse({ ...selectedEntry, origin: "delegated" }).success,
+    ).toBe(true);
   });
 });
 

@@ -310,7 +310,14 @@ export async function applyHumanRepositoryExpansion(
   // repositories it may attach, so it keeps the old path whole.
   const stored = resumed ? latest.reading : undefined;
   const readVerdict: RepositoryExpansionDecision = stored
-    ? stored.outcome.kind === "declined_all" || stored.outcome.kind === "declined_one"
+    ? stored.outcome.kind === "declined_all" ||
+      stored.outcome.kind === "declined_one" ||
+      // The person asked us to decide, and we did: what the workflow took is
+      // written in the record and attaches through the branch below, and what
+      // it did not take is a choice to continue without it. Either way this run
+      // asks for nothing further, because asking again is putting the question
+      // back to somebody who just handed it to us.
+      stored.outcome.kind === "delegated"
       ? // The person refused. What they refused is written in the record; here
         // it means only that this run asks for nothing further.
         { kind: "exhausted" }

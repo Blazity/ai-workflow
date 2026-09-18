@@ -223,6 +223,122 @@ describe("origin precedence", () => {
     ]);
   });
 
+  describe("a delegated entry, which ranks beside a person's own", () => {
+    const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+    const delegatedApi = entry("github:acme/api", {
+      origin: "delegated",
+      rationale: "Chosen by the workflow because Ada asked it to decide.",
+      decidedBy: ada,
+      decidedAt: "2026-09-18T10:00:00.000Z",
+    });
+
+    // The way back the delegation's own reply points them to.
+    it("gives way to that person's own edit", async () => {
+      await applyRunWorkScopePlan(db, { subjectKey, runId: "run-1", plan: upsertsOnly(delegatedApi) });
+      const adaExcludesApi = entry("github:acme/api", {
+        state: "excluded",
+        origin: "person",
+        rationale: "Not this one after all.",
+        decidedBy: ada,
+        decidedAt: "2026-09-18T11:00:00.000Z",
+      });
+
+      await expect(
+        applyPersonWorkScopeEdit(db, {
+          subjectKey,
+          expectedVersion: 1,
+          plan: {
+            upserts: [{ entry: adaExcludesApi, replacesExpired: false }],
+            deletes: [],
+            trail: [{ kind: "entry_written", entry: adaExcludesApi, previousState: "selected" }],
+          },
+        }),
+      ).resolves.toMatchObject({ outcome: "applied" });
+
+      await expect(entriesOf(subjectKey)).resolves.toEqual([adaExcludesApi]);
+    });
+
+    // The one overwrite the tie would open: "you decide" is not permission to
+    // undo what somebody decided themselves. Refused in the statement, so the
+    // version does not move either: the prediction reads the same rule.
+    it("never overwrites a person's own entry, and leaves the version where it was", async () => {
+      const adaExcludedApi = entry("github:acme/api", {
+        state: "excluded",
+        origin: "person",
+        rationale: "Ada ruled it out.",
+        decidedBy: ada,
+      });
+      await applyRunWorkScopePlan(db, { subjectKey, runId: "run-1", plan: upsertsOnly(adaExcludedApi) });
+
+      await expect(
+        applyAnswerWorkScopePlan(db, {
+          subjectKey,
+          runId: "run-2",
+          clarificationId: "clarification-delegated",
+          plan: {
+            upserts: [{ entry: delegatedApi, replacesExpired: false }],
+            deletes: [],
+            trail: [
+              {
+                kind: "question_answered",
+                clarificationId: "clarification-delegated",
+                answer: { kind: "delegated", repositoryKeys: ["github:acme/api"] },
+                answeredBy: ada,
+              },
+              {
+                kind: "entry_written",
+                entry: delegatedApi,
+                previousState: "excluded",
+                clarificationId: "clarification-delegated",
+              },
+            ],
+          },
+        }),
+      ).resolves.toEqual({ outcome: "applied", version: 1 });
+
+      await expect(entriesOf(subjectKey)).resolves.toEqual([adaExcludedApi]);
+      await expect(
+        db.select({ kind: workScopeTrail.kind }).from(workScopeTrail),
+      ).resolves.toEqual([{ kind: "question_answered" }]);
+    });
+
+    it("replaces an earlier delegated entry, like any origin its own kind", async () => {
+      await applyRunWorkScopePlan(db, { subjectKey, runId: "run-1", plan: upsertsOnly(delegatedApi) });
+      const later = { ...delegatedApi, rationale: "Chosen by the workflow because Bo asked it to decide." };
+
+      await applyRunWorkScopePlan(db, { subjectKey, runId: "run-2", plan: upsertsOnly(later) });
+
+      await expect(entriesOf(subjectKey)).resolves.toEqual([later]);
+    });
+
+    // An unavailable row names a person without being their decision: it says
+    // they could not give the repository when asked. Once the repository is
+    // usable the run asks again, and the workflow's choice on that question
+    // must be able to land.
+    it("replaces a person's unavailable entry, which records no decision", async () => {
+      const couldNotGiveApi = entry("github:acme/api", {
+        state: "unavailable",
+        unavailableReason: "not_enabled",
+        origin: "person",
+        rationale: "Not enabled when asked.",
+        decidedBy: ada,
+      });
+      await applyRunWorkScopePlan(db, { subjectKey, runId: "run-1", plan: upsertsOnly(couldNotGiveApi) });
+
+      await applyRunWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-2",
+        plan: {
+          upserts: [{ entry: delegatedApi, replacesExpired: true }],
+          deletes: [],
+          trail: [],
+        },
+      });
+
+      await expect(entriesOf(subjectKey)).resolves.toEqual([delegatedApi]);
+    });
+  });
+
   it("replaces an inferred entry with a trigger policy entry", async () => {
     await applyRunWorkScopePlan(db, {
       subjectKey,

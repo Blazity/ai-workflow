@@ -977,6 +977,44 @@ describe("a resumed run reads the record, never the answer text", () => {
     expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
   });
 
+  // "whatever you think is best" to a question about a repository this run
+  // cannot use: the workflow's only choice is to continue without it, which is
+  // what a decline of that one does. Read as anything else the run asks the
+  // same person the same question it was just told to stop asking.
+  it("continues without asking when a delegation took nothing", async () => {
+    const ctx = makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: v2Manifest,
+      selectedRepositories: [repository("github", "acme/web")],
+      clarifications: [
+        {
+          questions: ["Repository expansion: github:acme/db is not enabled. Continue without it?"],
+          answer: "whatever you think is best",
+          runId: "run-1",
+          reading: {
+            version: 1,
+            outcome: { kind: "delegated" },
+            readBy: "model",
+            readAt: "2026-09-18T08:02:00.000Z",
+          },
+        },
+      ],
+    });
+
+    const result = await applyHumanRepositoryExpansion(ctx, {
+      resolve: async () => ({
+        decision: { kind: "unrecognised_answer", questions: ["say it again"] },
+        workScope: { repositories: [] },
+      }),
+      attach: vi.fn(),
+      fetchContexts: vi.fn(),
+    });
+
+    expect(result.kind).toBe("noop");
+    expect(ctx.repositoryExpansion.expansionClosed).toBe("human");
+    expect(ctx.repositoryExpansion.unrecognisedAnswers).toBeUndefined();
+  });
+
   it("honours a refusal the record wrote no entry for", async () => {
     // "none" to a question asked with reason selection legitimately writes no
     // entry, so the empty record beside `exhausted` is the answer rather than a

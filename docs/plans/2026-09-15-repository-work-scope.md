@@ -251,7 +251,7 @@ type WorkScopeWritePlan = {
   deletes: Array<{ repositoryKey: RepositoryKey; origin: WorkScopeOrigin }>; // at most 16, compare-and-delete on the origin the writer saw
   trail: WorkScopeTrailEvent[];                                         // at most 32
 };
-/** workScopeOriginRank(origin) is the index in WORK_SCOPE_ORIGINS. */
+/** workScopeOriginRank(origin) reads WORK_SCOPE_ORIGIN_RANKS, a fixed number per origin that never changes once shipped (person and delegated share 0). */
 
 /** A person's edit. One write, whole change set, one version. */
 type WorkScopeEditRequest = {

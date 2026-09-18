@@ -31,8 +31,28 @@ const EVENT_KEYS_MAX = 8;
 const PLAN_TRAIL_MAX = 32;
 const RATIONALE_MAX_LENGTH = 500;
 
+/**
+ * How many repositories a delegation may take, and it is the SAME number that
+ * made the question get asked.
+ *
+ * The which-of-these question exists because more than `TEXT_MATCH_AMBIGUITY_LIMIT`
+ * repositories were open (`engine/work-scope/context.ts`), so taking more than
+ * that on somebody's behalf would work around the very bound the question was
+ * raised to respect. Spelled here rather than imported, because `context.ts`
+ * imports this module and the import back would close a cycle; the two are
+ * pinned to each other by a test.
+ */
+export const DELEGATION_REPOSITORIES_MAX = 3;
+
 const REQUESTED_RATIONALE = "Requested by the agent.";
 const NAMED_RATIONALE = "Named in the answer to a repository question.";
+/** Whose request this choice was made at. The name is theirs and the decision
+ *  is ours, which is exactly what the origin `delegated` says and what a
+ *  `person` origin would get wrong. */
+function delegatedRationale(actor: WorkScopeActor): string {
+  const who = actor.kind === "person" ? actor.actorLabel : `run ${actor.runId}`;
+  return `Chosen by the workflow because ${who} asked it to decide.`;
+}
 const LEFT_OUT_RATIONALE: Record<Exclude<WorkScopeAskReason, "selection">, string> = {
   not_enabled: "Left out of the answer to a question asked because it was not enabled.",
   unusable: "Left out of the answer to a question asked because it could not be used.",
@@ -291,7 +311,12 @@ function assertDecidable(context: WorkScopeDecisionContext, event: WorkScopeDeci
         : event.kind === "answered"
           ? [
               ["asked", event.asked.length],
-              ["named", event.answer.kind === "repositories" ? event.answer.repositoryKeys.length : 0],
+              [
+                "named",
+                event.answer.kind === "repositories" || event.answer.kind === "delegated"
+                  ? event.answer.repositoryKeys.length
+                  : 0,
+              ],
             ]
           : [];
   for (const [what, count] of counts) {
@@ -404,9 +429,75 @@ function readFacts(context: WorkScopeDecisionContext) {
 }
 
 /** A person outranks a default made for machines, and a workflow owned branch
- *  must never strand its open pull request. */
+ *  must never strand its open pull request. A delegated choice rides with the
+ *  person's: it was made over repositories they were shown, at their request,
+ *  so a later run that narrowed its policy may not quietly drop it while
+ *  keeping the identical choice they had typed themselves. */
 function isExemptOrigin(origin: WorkScopeOrigin): boolean {
-  return origin === "person" || origin === "workflow_owned_branch";
+  return origin === "person" || origin === "delegated" || origin === "workflow_owned_branch";
+}
+
+/**
+ * WHICH REPOSITORIES A DELEGATION TAKES, decided by us and never by a model.
+ *
+ * The rule in one place, read by the decision that writes the entries and by
+ * the sentence that tells the person what happened, so the two cannot come to
+ * disagree about one reply.
+ *
+ * Four bounds, each of them a thing a person did not ask for:
+ *
+ * - THE QUESTION'S OWN ORDER AND NOTHING ELSE. A delegation is an instruction
+ *   to choose among what was put in front of them, so the candidates are the
+ *   question's, in the order it listed them. No ranking of our own invention:
+ *   a preference nobody can see is a decision nobody can argue with.
+ * - `named` ONLY. A key the question's words never spelled out is a key nobody
+ *   was shown, so it is not part of what they handed over (rule 3).
+ * - WHAT THE RUN COULD ACTUALLY USE. `selection` is the one ask reason that
+ *   means the run could have taken the repository; `not_enabled`, `unusable`
+ *   and `outside_policy` each mean it could not, and choosing one of those on
+ *   somebody's behalf would record a decision that cannot be acted on. A
+ *   question made entirely of those takes nothing, which is the honest answer:
+ *   the run continues without them, exactly as a decline of one would have it
+ *   continue, and nothing permanent is written in that person's name.
+ * - NOTHING A PERSON ALREADY DECIDED. The question was asked before somebody
+ *   selected or excluded one of its repositories themselves (on the panel, or
+ *   answering another run's question on the same ticket), and "you decide"
+ *   hands over what is still open, not that decision. Such a key is skipped
+ *   without counting towards the limit, whatever its state; the store refuses
+ *   the overwrite as well (`overwriteAllowed` in `db/repositories/work-scope.ts`),
+ *   and this is what keeps the reply from claiming a choice the record did not
+ *   take.
+ */
+export function repositoriesADelegationTakes(
+  asked: readonly WorkScopeAskedRepository[],
+  entries: readonly WorkScopeEntry[],
+): RepositoryKey[] {
+  const taken: RepositoryKey[] = [];
+  for (const repository of asked) {
+    if (repository.named !== true) continue;
+    if (repository.askedBecause !== "selection") continue;
+    if (isDecidedByAPerson(entries, repository.repositoryKey)) continue;
+    if (taken.includes(repository.repositoryKey)) continue;
+    taken.push(repository.repositoryKey);
+    if (taken.length === DELEGATION_REPOSITORIES_MAX) break;
+  }
+  return taken;
+}
+
+/** Whether a person's own decision holds the key, which a delegated write may
+ *  never replace. Only a selection or an exclusion is a decision: an
+ *  unavailable entry carries their name but records that they could not give
+ *  the repository when asked, and it expires once the repository is usable.
+ *  One predicate for the rule that takes the keys, the write that records them
+ *  and the reply that names what was left alone; the store applies the same
+ *  rule (`overwriteAllowed` in `db/repositories/work-scope.ts`). */
+export function isDecidedByAPerson(entries: readonly WorkScopeEntry[], key: RepositoryKey): boolean {
+  return entries.some(
+    (entry) =>
+      entry.repositoryKey === key &&
+      entry.origin === "person" &&
+      (entry.state === "selected" || entry.state === "excluded"),
+  );
 }
 
 /** Allowed: the key is a candidate, or the expansion rule attaches, or the
@@ -634,7 +725,10 @@ function compareKeys(left: string, right: string): number {
 
 /**
  * Run start, and a resume after an answer for the keys it names. Walks by
- * origin rank, then key, so a person's entries take the room first.
+ * origin rank, then key, so a person's entries take the room first. Rank 0 is
+ * shared with `delegated`, so inside it a person's own entries go before the
+ * choices they delegated: the tie decides overwrites in the store, and it must
+ * not hand the last seat to whichever key sorts first.
  */
 function decideRunStart(
   context: WorkScopeDecisionContext,
@@ -647,6 +741,7 @@ function decideRunStart(
     .sort(
       (left, right) =>
         workScopeOriginRank(left.origin) - workScopeOriginRank(right.origin) ||
+        Number(right.origin === "person") - Number(left.origin === "person") ||
         compareKeys(left.repositoryKey, right.repositoryKey),
     );
   for (const entry of walk) {
@@ -835,10 +930,18 @@ function decideTextAmbiguous(
   matchedKeys: RepositoryKey[],
 ): void {
   if (!context.carriesRecord) return;
+  // A DELEGATION SILENCES THE QUESTION TOO. The person was asked this, answered
+  // "you decide", and the run that asked wakes up and runs this very block
+  // again against the same ticket: counting only their own named entries here
+  // puts the identical question back in front of them seconds after they told
+  // us to stop asking. What it does NOT do is bind the repositories it left:
+  // those are outside the answered set (a `delegated` answer is not counted
+  // there), so the text scan, a guess, a proposal or an agent request may still
+  // take them later.
   const personSelected = (context.scope?.entries ?? []).some(
     (entry) =>
       entry.state === "selected" &&
-      entry.origin === "person" &&
+      (entry.origin === "person" || entry.origin === "delegated") &&
       facts.isReachable(entry.repositoryKey),
   );
   if (context.selectionAnswered || personSelected) {
@@ -990,6 +1093,29 @@ function decideAnswered(
   // decision, that is the exact inversion of what it says, and no typecheck
   // catches it. Add a kind here, or return it above.
   if (answer.kind === "unrecognised" || answer.kind === "unattributed") return;
+  // THE WORKFLOW'S OWN CHOICE, and nothing more. The caller took these keys
+  // through `repositoriesADelegationTakes`, and this writes exactly them, as
+  // the workflow's decision at this person's request. It writes nothing for a
+  // repository it did not take: no exclusion, no unavailable entry, no guess
+  // removed. The person judged none of them; the workflow judged the ones it
+  // took, so everything else stays open for a later run, which is what makes
+  // this different from somebody naming three of five. It also returns before
+  // the loop below, which would otherwise read every untaken repository as
+  // this person's own silence.
+  if (answer.kind === "delegated") {
+    for (const key of unique(answer.repositoryKeys)) {
+      // The rule above already leaves these out; checked again here because
+      // the keys arrive from the caller, and a write the store will refuse
+      // must not sit in the plan as if it were taken.
+      if (isDecidedByAPerson(context.scope?.entries ?? [], key)) continue;
+      decision.write(
+        key,
+        { state: "selected", origin: "delegated", rationale: delegatedRationale(context.actor) },
+        clarificationId,
+      );
+    }
+    return;
+  }
   const named = answer.kind === "repositories" ? answer.repositoryKeys : [];
   const askedKeys = new Set<RepositoryKey>();
   for (const asked of event.asked) {

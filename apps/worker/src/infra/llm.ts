@@ -30,6 +30,9 @@ export interface GenerateProviderTextInput {
   prompt: string;
   timeoutMs?: number;
   schema?: unknown;
+  /** Sent only when set, so a caller that leaves it out sends the same request
+   *  it always did and gets the provider's default. */
+  temperature?: number;
   credentials: LlmProviderCredentials;
 }
 
@@ -63,8 +66,9 @@ export async function generateProviderText(
     prompt: input.prompt,
     abortSignal: AbortSignal.timeout(timeoutMs),
   };
-  const providerInput: typeof base & { system?: string } = { ...base };
+  const providerInput: typeof base & { system?: string; temperature?: number } = { ...base };
   if (input.system !== undefined) providerInput.system = input.system;
+  if (input.temperature !== undefined) providerInput.temperature = input.temperature;
   if (input.schema !== undefined) {
     const result = await generateText({
       ...providerInput,

@@ -21,7 +21,7 @@ import type { AnswerReadingModel, RepositoryQuestion } from "./read-answer.js";
 /** The flat object the real provider returns, so the stand-in exercises the
  *  same normalisation and the same allowlist the product depends on. */
 interface FakeAnswer {
-  outcome: "repositories" | "declined_all" | "declined_one" | "unclear";
+  outcome: "repositories" | "declined_all" | "declined_one" | "delegated" | "unclear";
   repositoryKeys?: string[];
   paraphrase?: string;
   unofferedNames?: string[];
@@ -49,6 +49,24 @@ const REFUSALS = [
   "continue without it",
   "skip it",
 ];
+
+/** Handing the choice back, as the WHOLE reply. A delegation that says
+ *  anything about the repositories is not one (the prompt's rule), so these
+ *  match only when nothing else was written; a refusal or a name beside them
+ *  is read by the branches above first. */
+const DELEGATIONS = new Set([
+  "whatever you think is best",
+  "whatever you think",
+  "you decide",
+  "up to you",
+  "your call",
+  "rób jak uważasz",
+  "wybierz sam",
+  "zdecyduj sam",
+]);
+
+/** Not knowing is not refusing: "nie wiem" opens with the Polish no. */
+const UNSURE = new Set(["nie wiem", "i don't know", "not sure"]);
 
 const AFFIRMATIVES = new Set([
   "yes",
@@ -100,8 +118,8 @@ function readFake(answer: string, question: RepositoryQuestion): FakeAnswer {
     else pushedAway.push(key);
   }
   // NAMES THE QUESTION NEVER OFFERED, pointed at rather than pushed away. They
-  // are told back to the person and never recorded, which is the whole reason
-  // the reader reports them separately from the keys.
+  // are reported separately from the keys because they are never keys: the
+  // record looks each one up in the catalog, and only what it finds is taken.
   const offered = new Set(question.askedKeys.map((key) => lastName(key)));
   const unofferedNames = phrases
     .filter((phrase) => !NEGATION.test(phrase))
@@ -110,6 +128,18 @@ function readFake(answer: string, question: RepositoryQuestion): FakeAnswer {
         (name) => !offered.has(name) && new RegExp(`(^|[\\s,])${name}([\\s,.]|$)`).test(phrase),
       ),
     );
+  // And a full path written out, "github:acme/billing" or "acme/billing", which
+  // is how a person names a repository the question never listed and the shape
+  // a real model copies into the field as written.
+  const offeredKeys = new Set(question.askedKeys.map((key) => key.toLowerCase()));
+  const offeredPaths = new Set(question.askedKeys.map((key) => pathOf(key).toLowerCase()));
+  for (const phrase of phrases.filter((candidate) => !NEGATION.test(candidate))) {
+    for (const token of answerTokensOf(answer, phrase)) {
+      const lower = token.toLowerCase();
+      if (offeredKeys.has(lower) || offeredPaths.has(lower.slice(lower.indexOf(":") + 1))) continue;
+      unofferedNames.push(token);
+    }
+  }
   const told = unofferedNames.length > 0 ? { unofferedNames: [...new Set(unofferedNames)] } : {};
   if (pointedAt.length > 0) {
     return { outcome: "repositories", repositoryKeys: pointedAt, ...told };
@@ -122,13 +152,22 @@ function readFake(answer: string, question: RepositoryQuestion): FakeAnswer {
       ? { outcome: "declined_one" }
       : { outcome: "unclear", paraphrase: `"${answer.slice(0, 60)}" says what to avoid, not what to use` };
   }
+  if (UNSURE.has(words)) {
+    return { outcome: "unclear", paraphrase: `"${answer.slice(0, 60)}" says they are not sure` };
+  }
+  if (DELEGATIONS.has(words)) {
+    return question.askedKeys.length > 0 ? { outcome: "delegated", ...told } : { outcome: "unclear" };
+  }
   if (REFUSALS.some((phrase) => words === phrase || words.startsWith(`${phrase} `) || words.startsWith(`${phrase},`))) {
     return question.shape === "one"
       ? { outcome: "declined_one", ...told }
       : { outcome: "declined_all", ...told };
   }
-  if (question.shape === "one" && AFFIRMATIVES.has(words)) {
-    return { outcome: "repositories", repositoryKeys: [question.askedKeys[0]] };
+  // "yes" alone, or "yes, and github:acme/billing as well": the first phrase
+  // says yes to the one repository asked about, and anything after it is a
+  // name the question did not offer, reported beside the choice.
+  if (question.shape === "one" && (AFFIRMATIVES.has(words) || AFFIRMATIVES.has(phrases[0]?.trim() ?? ""))) {
+    return { outcome: "repositories", repositoryKeys: [question.askedKeys[0]], ...told };
   }
   if (question.shape === "list" && ["all", "all of them", "wszystkie"].includes(words)) {
     return { outcome: "repositories", repositoryKeys: question.askedKeys };
@@ -141,6 +180,24 @@ function readFake(answer: string, question: RepositoryQuestion): FakeAnswer {
 }
 
 const NEGATION = /(^|\s)(not|no|nie|without|except|skip|avoid|exclude|bez|pomin|oprocz)(\s|$)/;
+
+/** The repository paths in one phrase, spelled as the person wrote them. The
+ *  phrase has been folded to lower case, so the spelling is recovered from the
+ *  original answer: a real model copies the name as written. */
+function answerTokensOf(answer: string, phrase: string): string[] {
+  const paths = phrase.match(/(?:(?:github|gitlab):)?[a-z0-9._-]+\/[a-z0-9._/-]+/g) ?? [];
+  const lower = answer.toLowerCase();
+  return paths.flatMap((path) => {
+    // Only what the person actually wrote, and never the tail of a link: the
+    // fold drops full stops, so a URL's host would otherwise come back as a
+    // repository nobody named.
+    const at = lower.indexOf(path);
+    if (at < 0) return [];
+    const before = at > 0 ? lower[at - 1] : " ";
+    if (before === "/" || before === ".") return [];
+    return [answer.slice(at, at + path.length)];
+  });
+}
 
 function pathOf(key: RepositoryKey): string {
   return key.slice(key.indexOf(":") + 1);
