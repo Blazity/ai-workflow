@@ -731,8 +731,9 @@ describe("resumeClarificationFromComments writing a repository answer to the rec
     // ROUND 5. Neither comment answers the question: one is a note about moving
     // the ticket and the other is a heads up about a repository nobody asked
     // about. That used to wake the run, which then asked the same question over
-    // again; now the words settle nothing, so NOTHING moves and the question
-    // this person is still being asked stays open in front of them.
+    // again; now the words settle nothing, so NOTHING is decided or woken and
+    // the question this person is still being asked stays open in front of
+    // them, with the ticket back in the backlog it waited in.
     //
     // The authorship rule is untouched and still decides what may be recorded;
     // what changed is that an answer nobody could read no longer spends a run
@@ -749,7 +750,12 @@ describe("resumeClarificationFromComments writing a repository answer to the rec
     // a readable two-author answer gets, which is the case it was written for.
     const posted = tracker.postComment.mock.calls[0]?.[1] ?? "";
     expect(posted).toContain("Nothing has been recorded, and this question is still open");
-    expect(tracker.moveTicket).not.toHaveBeenCalled();
+    // The one move is back to the backlog, and the note says so: moving the
+    // ticket into AI committed a reply that settled nothing, so the board must
+    // not go on saying the agent is working while the run waits for them.
+    const { COLUMN_BACKLOG } = defaultSettingsSnapshot();
+    expect(tracker.moveTicket.mock.calls).toEqual([[TICKET, COLUMN_BACKLOG]]);
+    expect(posted).toContain(`This ticket is back in the "${COLUMN_BACKLOG}" column while the question waits.`);
     // Neither the repository Bob happened to name nor the one nobody answered.
     await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
     // AND NO TRAIL ROW EITHER, which is a change and a loss worth naming. The

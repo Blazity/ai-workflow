@@ -92,6 +92,9 @@ function makeTracker(
     botId?: string;
     commentsComplete?: boolean;
     commentsCompleteFrom?: string;
+    /** The column the ticket sits in whenever it is read. The AI column unless
+     *  a test is about a ticket somewhere else. */
+    trackerStatus?: string;
   } = {},
 ) {
   const ticket: TicketContent = {
@@ -112,12 +115,12 @@ function makeTracker(
       ? {}
       : { commentsCompleteFrom: opts.commentsCompleteFrom }),
     labels: [],
-    trackerStatus: "AI",
+    trackerStatus: opts.trackerStatus ?? "AI",
     attachments: [],
   };
   return {
     fetchTicket: vi.fn(() => Promise.resolve(ticket)),
-    moveTicket: vi.fn(() => Promise.resolve()),
+    moveTicket: vi.fn((_id: string, _target: unknown) => Promise.resolve()),
     postComment: vi.fn((_id: string, _comment: string) => Promise.resolve(null as string | null)),
     // An empty id is how a provider that will not say who we are reads here,
     // and it is the one thing that makes a ticket's comments uncountable
@@ -138,6 +141,12 @@ async function answer(
     actor?: { id: string; label: string };
     answerAuthorCount?: number;
     generate?: AnswerReadingModel;
+    /** What the Jira comment path tells the core (`resume-from-comments.ts`):
+     *  it already read the ticket, proved it live in the AI column, and the
+     *  answer is a comment on it already. */
+    skipTicketFetch?: boolean;
+    skipTicketMove?: boolean;
+    skipAnswerComment?: boolean;
   } = {},
 ) {
   const row = await getHookClarification(db, id);
@@ -150,6 +159,11 @@ async function answer(
     ...(extra.answerAuthorCount === undefined
       ? {}
       : { answerAuthorCount: extra.answerAuthorCount }),
+    ...(extra.skipTicketFetch === undefined ? {} : { skipTicketFetch: extra.skipTicketFetch }),
+    ...(extra.skipTicketMove === undefined ? {} : { skipTicketMove: extra.skipTicketMove }),
+    ...(extra.skipAnswerComment === undefined
+      ? {}
+      : { skipAnswerComment: extra.skipAnswerComment }),
     issueTracker: tracker as unknown as Pick<
       IssueTrackerAdapter,
       "fetchTicket" | "moveTicket" | "postComment" | "getCurrentUserAccountId"
@@ -762,5 +776,166 @@ describe("answerClarificationAndResume: what the answer reader is handed", () =>
     expect(
       postedBodies(tracker).filter((body) => body.includes("I could not be sure")),
     ).toHaveLength(1);
+  });
+});
+
+// THE BOARD HAS TO SAY WHAT THE RUN IS DOING. Moving the ticket into the AI
+// column after replying is the commit gesture the question asks for. When that
+// reply cannot be read the run stays parked on the question, and a ticket left
+// in the AI column tells everybody looking at the board that the agent is
+// working when it is in fact waiting for a person. So the first telling puts
+// the ticket back where it waited when the question was asked, and says so.
+describe("answerClarificationAndResume: where an unclear answer leaves the ticket", () => {
+  const settings = defaultSettingsSnapshot();
+  const TWO_ASKED: WorkScopeAskedRepository[] = [
+    { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    { repositoryKey: "github:acme/ops", askedBecause: "selection", named: true },
+  ];
+  const QUESTION = "Which of these two should this work use?";
+  const UNCLEAR = "Ada: whatever you think is best";
+  const BACK_IN_BACKLOG = `This ticket is back in the "${settings.COLUMN_BACKLOG}" column while the question waits.`;
+  const HAND_IT_BACK = `Reply in a comment here and move it to the "${settings.COLUMN_AI}" column again, or answer in the dashboard.`;
+
+  /** What `resume-from-comments.ts` hands the core: one person's composed
+   *  comments, a ticket it already proved is live in the AI column, and an
+   *  answer that is a comment on the ticket already. */
+  const JIRA_COMMENT = {
+    actor: { id: composedAnswerActorId("human-1"), label: "Ada (via Jira)" },
+    answerAuthorCount: 1,
+    skipTicketFetch: true,
+    skipTicketMove: true,
+    skipAnswerComment: true,
+  };
+
+  function movesToBacklog(tracker: ReturnType<typeof makeTracker>) {
+    return tracker.moveTicket.mock.calls.filter(([, target]) => target === settings.COLUMN_BACKLOG);
+  }
+
+  function notes(tracker: ReturnType<typeof makeTracker>): string[] {
+    return tracker.postComment.mock.calls.map(([, body]) => body);
+  }
+
+  beforeEach(() => {
+    mocks.resumeHook.mockResolvedValue(undefined);
+  });
+
+  it("puts the ticket back in the backlog and says so when a comment answer cannot be read", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, UNCLEAR, JIRA_COMMENT);
+
+    expect(outcome.kind).toBe("answer_unclear");
+    expect(tracker.moveTicket).toHaveBeenCalledTimes(1);
+    expect(tracker.moveTicket).toHaveBeenCalledWith(TICKET, settings.COLUMN_BACKLOG);
+    const posted = notes(tracker);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toContain(`${BACK_IN_BACKLOG} ${HAND_IT_BACK}`);
+    // One story in both channels: what the caller is handed is what the ticket
+    // says, word for word.
+    expect(outcome.kind === "answer_unclear" ? outcome.confirm : "").toBe(posted[0]);
+    // And nothing else changed: the question is open and the run still waits.
+    expect((await getHookClarification(db, row.id))?.status).toBe("pending");
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+  });
+
+  // Somebody who moves the ticket first and writes their new comment second
+  // must not see it bounce back to the backlog behind them: left in AI, the
+  // next poll reads the new comment.
+  it("does not move the ticket again when the same comments arrive again", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, UNCLEAR, JIRA_COMMENT);
+    // The tracker still reads AI: the person has moved it back already.
+    const again = await answer(tracker, row.id, UNCLEAR, JIRA_COMMENT);
+
+    expect(again.kind).toBe("answer_unclear");
+    expect(movesToBacklog(tracker)).toHaveLength(1);
+    expect(notes(tracker)).toHaveLength(1);
+  });
+
+  it("leaves a ticket that is already in the backlog where it is and says nothing about columns", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker({ trackerStatus: settings.COLUMN_BACKLOG });
+
+    const outcome = await answer(tracker, row.id, "whatever you think is best");
+
+    expect(outcome.kind).toBe("answer_unclear");
+    expect(tracker.moveTicket).not.toHaveBeenCalled();
+    const posted = notes(tracker);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).not.toContain("back in the");
+  });
+
+  // The dashboard and MCP do not prove the column for the core; the core's own
+  // read of the ticket does, compared the way the comment path compares it.
+  it("withdraws a ticket its own read finds in the AI column when the answer came from a screen", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker({ trackerStatus: ` ${settings.COLUMN_AI.toLowerCase()} ` });
+
+    const outcome = await answer(tracker, row.id, "whatever you think is best");
+
+    expect(outcome.kind).toBe("answer_unclear");
+    expect(movesToBacklog(tracker)).toHaveLength(1);
+    expect(notes(tracker)[0]).toContain(BACK_IN_BACKLOG);
+  });
+
+  // The same owner fence every run-driven move rides: a run that no longer
+  // holds its ticket must not move it.
+  it("does not move the ticket when the run no longer holds it", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    await db.update(activeRuns).set({ state: "cancelling" }).where(eq(activeRuns.subjectKey, SUBJECT));
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, UNCLEAR, JIRA_COMMENT);
+
+    expect(outcome.kind).toBe("answer_unclear");
+    expect(tracker.moveTicket).not.toHaveBeenCalled();
+    const posted = notes(tracker);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).not.toContain("back in the");
+  });
+
+  it("still tells the person when the move to the backlog fails, without claiming it happened", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+    tracker.moveTicket.mockRejectedValueOnce(new Error("Jira transition denied"));
+    const warn = vi.spyOn(logger, "warn");
+
+    const outcome = await answer(tracker, row.id, UNCLEAR, JIRA_COMMENT);
+
+    expect(outcome.kind).toBe("answer_unclear");
+    const posted = notes(tracker);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).not.toContain("back in the");
+    expect(warn).toHaveBeenCalledWith(
+      { ticketKey: TICKET, runId: RUN, err: "Jira transition denied" },
+      "work_scope_answer_unclear_withdraw_failed",
+    );
+  });
+
+  // Between the comment path's read and this one the person moved the ticket
+  // somewhere else. Nothing was moved, so nothing may be said about a column.
+  it("says nothing about the backlog when the ticket had already left the AI column", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker({ trackerStatus: "In Progress" });
+
+    const outcome = await answer(tracker, row.id, UNCLEAR, JIRA_COMMENT);
+
+    expect(outcome.kind).toBe("answer_unclear");
+    expect(tracker.moveTicket).not.toHaveBeenCalled();
+    expect(notes(tracker)[0]).not.toContain("back in the");
+  });
+
+  it("does not send a readable comment answer to the backlog", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "Ada: github:acme/api and github:acme/ops", JIRA_COMMENT);
+
+    expect(outcome.kind).toBe("answered");
+    expect(movesToBacklog(tracker)).toHaveLength(0);
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
   });
 });

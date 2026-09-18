@@ -117,6 +117,7 @@ export async function readAnswerForRow(
 export function answerReadingConfirmMessage(
   reading: WorkScopeAnswerReading,
   question: RepositoryQuestion,
+  waiting?: { backlogColumnName: string; aiColumnName: string },
 ): string {
   const paraphrase =
     reading.outcome.kind === "unclear" && reading.outcome.paraphrase
@@ -126,5 +127,6 @@ export function answerReadingConfirmMessage(
     ...(paraphrase ? { paraphrase } : {}),
     shape: question.shape,
     askedKeys: question.askedKeys,
+    ...(waiting ? { waiting } : {}),
   });
 }

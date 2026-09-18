@@ -207,7 +207,7 @@ interface StalledRunPersistence {
   markFailure(runId: string, reason: string): Promise<boolean>;
   withdraw(
     input: Omit<Parameters<typeof withdrawTicketFromAiForRun>[0], "db">,
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 export function reconcileStalledRun(
