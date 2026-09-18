@@ -43,6 +43,7 @@ import {
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
+  type IssueTrackerMoveTarget,
   type TicketComment,
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
@@ -54,6 +55,8 @@ import {
 import {
   moveConnectedTicketForRun,
   moveTicketForRun,
+  withdrawConnectedTicketFromAiForRun,
+  withdrawTicketFromAiForRun,
 } from "../tickets/index.js";
 import {
   formatAnswerNotRecordedComment,
@@ -126,10 +129,13 @@ export type AnswerClarificationOutcome =
   /**
    * The answer arrived and could not be read, so NOTHING happened to it.
    *
-   * The question is still pending, the run is still parked on its hook, the
-   * ticket has not moved and no resume attempt was spent. `confirm` is what the
-   * person is told, in the channel they answered through: what we read, that
-   * nothing was recorded, and the one reply that ends the exchange.
+   * The question is still pending, the run is still parked on its hook and no
+   * resume attempt was spent. The ticket is never moved INTO the AI column; on
+   * the first telling one that sits there is put back in the backlog, where it
+   * waited when the question was asked (`withdrawTicketWhileQuestionWaits`).
+   * `confirm` is what the person is told, in the channel they answered through:
+   * what we read, that nothing was recorded, the one reply that ends the
+   * exchange, and where the ticket waits when this delivery moved it.
    *
    * THE COST IS DELIBERATE and the owner chose it: an ambiguous answer leaves
    * the run parked until that person replies or the question expires. The
@@ -144,14 +150,6 @@ export type AnswerClarificationOutcome =
   | { kind: "resume_failed_retryable"; error: unknown }
   | { kind: "resume_exhausted"; error: unknown };
 
-/**
- * Bring a parked ticket back to the configured AI column so its status matches
- * the run that is about to wake up. Rides the asking run's own subject claim:
- * the run still holds it while suspended on the hook, so the same owner fence
- * that guards every other run-driven move guards this one. A missing bound
- * claim means no run can work this ticket, so it must not be moved either;
- * that is logged, not raised, because the answer itself is still legitimate.
- */
 interface AnswerPersistence extends RepositoryAnswerPersistence {
   findBoundOwner(input: { subjectKey: string; runId: string }): Promise<{ ownerToken: string } | null>;
   transitionTicket(input: {
@@ -159,6 +157,16 @@ interface AnswerPersistence extends RepositoryAnswerPersistence {
     ticketKey: string;
     target: ReturnType<typeof aiColumnMoveTarget>;
     owner: { subjectKey: string; ownerToken: string; runId: string };
+  }): Promise<void>;
+  /** Move the ticket out of the AI column only if a fresh read still finds it
+   *  there, behind the same owner fence. */
+  withdrawTicketFromAi(input: {
+    issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
+    ticketKey: string;
+    aiColumn: IssueTrackerMoveTarget;
+    target: IssueTrackerMoveTarget;
+    owner: { subjectKey: string; ownerToken: string; runId: string };
+    requiredOwnerState: "bound";
   }): Promise<void>;
   answer(
     id: string,
@@ -209,6 +217,14 @@ async function loadConnectedRepositoryCatalogKeys() {
   return catalogKeysOf(state.activated, entries);
 }
 
+/**
+ * Bring a parked ticket back to the configured AI column so its status matches
+ * the run that is about to wake up. Rides the asking run's own subject claim:
+ * the run still holds it while suspended on the hook, so the same owner fence
+ * that guards every other run-driven move guards this one. A missing bound
+ * claim means no run can work this ticket, so it must not be moved either;
+ * that is logged, not raised, because the answer itself is still legitimate.
+ */
 async function moveTicketToAiColumn(input: {
   persistence: AnswerPersistence;
   issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
@@ -240,6 +256,73 @@ async function moveTicketToAiColumn(input: {
       runId: input.row.runId,
     },
   });
+}
+
+/**
+ * Put the ticket of an answer nobody could read back in the backlog column,
+ * where it waited when the question was asked, and say whether it moved.
+ *
+ * Moving the ticket into the AI column after replying is the commit gesture the
+ * question asks for. A reply that commits nothing leaves the run parked, and a
+ * ticket left in AI tells everybody looking at the board that the agent is
+ * working when the run is waiting for a person.
+ *
+ * The owner fence every run-driven move rides: without a bound claim no run
+ * holds this ticket, so it is not moved, and that is logged rather than raised.
+ * Best effort in the strongest sense: the person still has to be told their
+ * answer was not read, so a failure here is logged and the note says nothing
+ * about the column.
+ *
+ * WHETHER IT MOVED, not whether the call returned. The withdraw reads the
+ * ticket again inside the fence and quietly leaves alone one that has already
+ * left the AI column (a person moved it on in the meantime), so the only proof
+ * that this delivery put it in the backlog is that it asked the tracker to.
+ */
+async function withdrawTicketWhileQuestionWaits(input: {
+  persistence: AnswerPersistence;
+  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
+  ticketKey: string;
+  row: HookClarificationRow;
+  columns: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
+}): Promise<boolean> {
+  const { ticketKey, row, columns } = input;
+  let moved = false;
+  try {
+    const owner = await input.persistence.findBoundOwner({
+      subjectKey: row.subjectKey,
+      runId: row.runId,
+    });
+    if (!owner) {
+      logger.warn(
+        { ticketKey, runId: row.runId },
+        "work_scope_answer_unclear_withdraw_skipped_no_bound_owner",
+      );
+      return false;
+    }
+    await input.persistence.withdrawTicketFromAi({
+      issueTracker: {
+        fetchTicket: (id, options) => input.issueTracker.fetchTicket(id, options),
+        moveTicket: (id, target) => {
+          moved = true;
+          return input.issueTracker.moveTicket(id, target);
+        },
+      },
+      ticketKey,
+      aiColumn: columns.COLUMN_AI,
+      target: env.JIRA_BACKLOG_TRANSITION_ID
+        ? { name: columns.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+        : columns.COLUMN_BACKLOG,
+      owner: { subjectKey: row.subjectKey, ownerToken: owner.ownerToken, runId: row.runId },
+      requiredOwnerState: "bound",
+    });
+  } catch (error) {
+    logger.warn(
+      { ticketKey, runId: row.runId, err: (error as Error).message },
+      "work_scope_answer_unclear_withdraw_failed",
+    );
+    return false;
+  }
+  return moved;
 }
 
 /**
@@ -294,6 +377,7 @@ export function answerClarificationAndResume(
   return answerClarificationAndResumeWithPersistence(input, {
     findBoundOwner: (owner) => findBoundActiveRunOwner(db, owner),
     transitionTicket: (move) => moveTicketForRun({ db, ...move }),
+    withdrawTicketFromAi: (withdraw) => withdrawTicketFromAiForRun({ db, ...withdraw }),
     answer: (id, answer, actor, reading) => answerHookClarification(db, id, answer, actor, reading),
     recordUnreadable: (id, answer, reading) =>
       recordUnreadableHookClarificationAnswer(db, id, answer, reading),
@@ -316,6 +400,7 @@ export function answerConnectedClarificationAndResume(
   return answerClarificationAndResumeWithPersistence(input, {
     findBoundOwner: findConnectedBoundActiveRunOwner,
     transitionTicket: moveConnectedTicketForRun,
+    withdrawTicketFromAi: withdrawConnectedTicketFromAiForRun,
     answer: answerConnectedHookClarification,
     recordUnreadable: recordConnectedUnreadableHookClarificationAnswer,
     reserve: reserveConnectedResumeAttempt,
@@ -365,6 +450,10 @@ async function answerClarificationAndResumeWithPersistence(
   // read with a gap in that window can only ever say what IS on the ticket,
   // never what is not, and the count below turns on exactly that difference.
   let ticketCommentsCoverWindow = false;
+  // And the column the ticket stands in, from the same read, for the one branch
+  // below that has to know it: an answer nobody could read takes a ticket it
+  // finds in the AI column back to the backlog.
+  let ticketStatus: string | null = null;
   if (row.ticketKey && !input.skipTicketFetch) {
     try {
       // With the window: this read exists to count the people who wrote the
@@ -375,6 +464,7 @@ async function answerClarificationAndResumeWithPersistence(
       });
       ticketComments = ticket.comments;
       ticketCommentsCoverWindow = commentsCoverAnswerWindow(ticket, row.askedAt.getTime());
+      ticketStatus = ticket.trackerStatus;
     } catch (err) {
       if (!(err instanceof IssueTrackerNotFoundError)) throw err;
       await persistence.retireGoneTicket(row);
@@ -447,8 +537,8 @@ async function answerClarificationAndResumeWithPersistence(
   // a delivery that already got past this gate must not be stopped by it on the
   // way back.
   if (answerReading?.outcome.kind === "unclear" && repositoryQuestion && !isResumeRetry) {
-    const confirm = answerReadingConfirmMessage(answerReading, repositoryQuestion);
-    if (toldBefore === undefined) {
+    const firstTelling = toldBefore === undefined;
+    if (firstTelling) {
       logger.warn(
         { runId: row.runId, clarificationId: row.id, readBy: answerReading.readBy },
         "work_scope_answer_reading_unclear",
@@ -476,12 +566,50 @@ async function answerClarificationAndResumeWithPersistence(
     // trail event of its own rather than the answered one, and that is a widening
     // of a closed set other readers switch on, over MCP. This delivery already
     // carries a migration and a contract change and is not taking a third.
+    //
+    // BACK TO THE BACKLOG, ON THE FIRST TELLING ONLY, and before the note so the
+    // note says what actually happened. Where the ticket stands is known without
+    // another read: the comment path only commits from the AI column and says
+    // so with `skipTicketMove`, and every other path read the ticket above.
+    //
+    // NOT ON A LATER DELIVERY OF THE SAME WORDS, even with the ticket in AI
+    // again, and that is deliberate. Somebody who moves the ticket first and
+    // writes their new comment second would see it bounce back to the backlog
+    // behind them, silently, because these words were already told; left in AI,
+    // the next poll reads their new comment.
+    const ticketInAiColumn =
+      input.skipTicketMove === true ||
+      (ticketStatus !== null &&
+        ticketStatus.trim().toLowerCase() ===
+          input.cancelSettings.COLUMN_AI.trim().toLowerCase());
+    const waitsInBacklog =
+      row.ticketKey && firstTelling && ticketInAiColumn
+        ? await withdrawTicketWhileQuestionWaits({
+            persistence,
+            issueTracker,
+            ticketKey: row.ticketKey,
+            row,
+            columns: input.cancelSettings,
+          })
+        : false;
+    // Composed once, after the move, for both readers: the ticket and the
+    // channel the answer came through carry the same words.
+    const confirm = answerReadingConfirmMessage(
+      answerReading,
+      repositoryQuestion,
+      waitsInBacklog
+        ? {
+            backlogColumnName: input.cancelSettings.COLUMN_BACKLOG,
+            aiColumnName: input.cancelSettings.COLUMN_AI,
+          }
+        : undefined,
+    );
     // To the ticket wherever there is one, exactly as the "recorded nothing"
     // sentence goes: the question was asked in public and the fact that it is
     // still open belongs beside it. The caller gets the same words back, so a
     // person answering from the dashboard or an MCP client is told in the
     // surface they used and never has to go and find the ticket.
-    if (row.ticketKey && toldBefore === undefined) {
+    if (row.ticketKey && firstTelling) {
       const ticketKey = row.ticketKey;
       await issueTracker.postComment(ticketKey, confirm).catch((error: unknown) => {
         logger.warn(

@@ -7,6 +7,7 @@ import {
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,
   formatAnswerNotRecordedComment,
+  formatAnswerUnreadableComment,
   formatClarificationNudgeComment,
   formatClarificationQuestionsComment,
   formatClarificationResumeFailedComment,
@@ -579,5 +580,33 @@ describe("rule 6: every sentence we write after the question is answered", () =>
       expect(body).toContain("reply in a comment here");
       expect(body).toContain(DASHBOARD);
     }
+  });
+});
+
+describe("formatAnswerUnreadableComment", () => {
+  const ONE_REPOSITORY = { shape: "one" as const, askedKeys: ["github:acme/api"] };
+  const THE_ASK = 'Reply "yes" to use github:acme/api in this work, or "no" to continue without it.';
+
+  // The wording is the owner's, written out here rather than rebuilt from the
+  // formatter: a person whose unclear reply sent the ticket back learns where it
+  // waits and the one gesture that hands it to the run again.
+  it("says where the ticket waits and how to hand it back, after the ask, when the ticket was moved", () => {
+    const body = formatAnswerUnreadableComment({
+      ...ONE_REPOSITORY,
+      waiting: { backlogColumnName: "Backlog", aiColumnName: "AI" },
+    });
+
+    const paragraphs = body.split("\n\n");
+    expect(paragraphs.at(-2)).toBe(THE_ASK);
+    expect(paragraphs.at(-1)).toBe(
+      'This ticket is back in the "Backlog" column while the question waits. Reply in a comment here and move it to the "AI" column again, or answer in the dashboard.',
+    );
+  });
+
+  it("says nothing about a column when the ticket was not moved", () => {
+    const body = formatAnswerUnreadableComment(ONE_REPOSITORY);
+
+    expect(body.split("\n\n").at(-1)).toBe(THE_ASK);
+    expect(body).not.toContain("column");
   });
 });

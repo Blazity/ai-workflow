@@ -600,6 +600,11 @@ export function formatAnswerNotOfferedComment(input: {
  * the names or "none of these" under a list. Never a general invitation to
  * rephrase, which is what the phrase list used to offer and what sent people
  * round the same loop.
+ *
+ * AND WHERE THE TICKET WAITS, only when this answer's delivery moved it there.
+ * A person who replied and moved the ticket into the AI column finds it back in
+ * the backlog, and without a word about why that reads as the system losing
+ * their answer. Said only after the move happened, so it never claims one.
  */
 export function formatAnswerUnreadableComment(input: {
   /** Our best reading of what they may have meant, absent when even that would
@@ -609,6 +614,9 @@ export function formatAnswerUnreadableComment(input: {
   shape: "list" | "one";
   /** The repository keys the question offered, in the order it listed them. */
   askedKeys: readonly string[];
+  /** The columns, present only when the ticket was just moved back to the
+   *  backlog to wait for the reply. */
+  waiting?: { backlogColumnName: string; aiColumnName: string };
 }): string {
   const opening = input.paraphrase
     ? `I could not be sure what that answer decided. My best reading is: ${input.paraphrase}`
@@ -620,10 +628,14 @@ export function formatAnswerUnreadableComment(input: {
           `Reply with the repositories this work should use, from ${input.askedKeys.join(", ")},`,
           `or "none of these" to use none of them.`,
         ].join(" ");
+  const waiting = input.waiting
+    ? `This ticket is back in the "${input.waiting.backlogColumnName}" column while the question waits. Reply in a comment here and move it to the "${input.waiting.aiColumnName}" column again, or answer in the dashboard.`
+    : undefined;
   return [
     opening,
     "Nothing has been recorded, and this question is still open: the run is waiting on it, and the next reply is read against it.",
     ask,
+    ...(waiting ? [waiting] : []),
   ].join("\n\n");
 }
 

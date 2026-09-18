@@ -592,7 +592,12 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     await expect(entriesOfSubject()).resolves.toEqual([]);
     const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
     expect(posted).toContain(UNREADABLE);
-    expect(posted).not.toContain("in a comment here");
+    // No route that writes a repository's path into the ticket, in any of its
+    // wordings. Replying to the still open question in a comment is a different
+    // route and a vouched one: the comment path reads replies while the question
+    // is pending (rule 6 in comment-format.test.ts), and this note names it when
+    // the ticket was just moved back to the backlog to wait for that reply.
+    expect(posted).not.toMatch(/paths? [^.]*in a comment/i);
   });
 
   // A discovery question listing four candidates, and the same question one
