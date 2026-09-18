@@ -75,9 +75,32 @@ export const WORK_SCOPE_ASK_REASONS = ["not_enabled", "unusable", "outside_polic
 export const workScopeAskReasonSchema = z.enum(WORK_SCOPE_ASK_REASONS);
 export type WorkScopeAskReason = z.infer<typeof workScopeAskReasonSchema>;
 
-/** Index order IS precedence: index 0 wins. */
+/** The closed set of origins. Precedence is NOT this order: it is declared
+ *  per origin in `WORK_SCOPE_ORIGIN_RANKS`. */
 export const WORK_SCOPE_ORIGINS = [
   "person",
+  /**
+   * THE WORKFLOW CHOSE, BECAUSE A PERSON ASKED IT TO.
+   *
+   * "whatever you think is best" is an answer, not a silence, and what it
+   * decides is that we decide. The entry is therefore neither the person's own
+   * naming (they named nothing, and recording it as theirs would put words in
+   * their mouth) nor a guess (`inferred`, which every reader treats as no entry
+   * at all: run start will not furnish a workspace from it, `isGuessEntry` lets
+   * the next answer take it back, and the next guess may take the repository
+   * again). Both readings are wrong about the same fact, so this is its own
+   * origin, and the rationale names whoever asked.
+   *
+   * IT RANKS 0, TIED WITH A PERSON'S OWN WORD. It is a decision somebody asked
+   * for, so nothing derived, no trigger policy and above all no guess may
+   * overwrite it. The tie would also let it overwrite a person's own entry,
+   * and that one overwrite is refused by the store (`overwriteAllowed` in
+   * `apps/worker/src/db/repositories/work-scope.ts`): "you decide" is not
+   * permission to undo what somebody decided themselves. The other direction
+   * stays open, because a person who later names repositories outranks the
+   * choice they once handed over, and that is exactly the way back they need.
+   */
+  "delegated",
   "workflow_owned_branch",
   "ticket_text",
   "trigger_policy",
@@ -86,10 +109,31 @@ export const WORK_SCOPE_ORIGINS = [
 export const workScopeOriginSchema = z.enum(WORK_SCOPE_ORIGINS);
 export type WorkScopeOrigin = z.infer<typeof workScopeOriginSchema>;
 
-/** Lower wins. Persisted beside the entry so the database itself can refuse a
- *  lower origin overwriting a higher one. */
+/**
+ * Precedence, lower wins. Persisted beside the entry as `origin_rank` so the
+ * database itself can refuse a lower origin overwriting a higher one.
+ *
+ * A NUMBER DECLARED PER ORIGIN, NEVER A POSITION IN A LIST. Every stored row
+ * carries the rank it was written with, and during a rollout the previous
+ * deployment keeps writing its own numbers beside the new one's, so a rank
+ * that moves inverts precedence between rows that already exist and between
+ * two live deployments. A new origin gets a number of its own, a tie if it
+ * must share one; an existing number never changes
+ * (`work-scope-origin-ladder.test.ts` holds the five that predate `delegated`
+ * to the values their rows carry). Typed against `WorkScopeOrigin`, so an
+ * origin added to the list without a rank does not compile.
+ */
+export const WORK_SCOPE_ORIGIN_RANKS = {
+  person: 0,
+  delegated: 0,
+  workflow_owned_branch: 1,
+  ticket_text: 2,
+  trigger_policy: 3,
+  inferred: 4,
+} as const satisfies Record<WorkScopeOrigin, number>;
+
 export function workScopeOriginRank(origin: WorkScopeOrigin): number {
-  return WORK_SCOPE_ORIGINS.indexOf(origin);
+  return WORK_SCOPE_ORIGIN_RANKS[origin];
 }
 
 export const WORK_SCOPE_REFUSAL_REASONS = [
@@ -299,6 +343,39 @@ export const workScopeQuestionAnswerSchema = z.discriminatedUnion("kind", [
         .refine(hasUniqueValues, { message: "Answered repositories must be unique." }),
     })
     .strict(),
+  /**
+   * The person handed the decision back, and these are the repositories the
+   * workflow then took at their request.
+   *
+   * THE KEYS ARE OURS, NOT THEIRS, which is the whole reason this is not
+   * `repositories`. A reader of the trail sees who asked (`answeredBy`), that
+   * they asked us to choose (this kind), and what we chose (these keys), which
+   * is everything the dashboard and MCP need to explain the run afterwards
+   * without replaying anything.
+   *
+   * MAY BE EMPTY, and an empty one is still an answer: a question about a
+   * repository this deployment cannot use, handed back to us, is answered by
+   * continuing without it. Nothing is taken and nothing is recorded in that
+   * person's name.
+   *
+   * WHAT IT DELIBERATELY DOES NOT DO is settle the repositories it did not
+   * take. The two readers that close a question over a subject
+   * (`readWorkScopeSelectionAnswered` and `readWorkScopeAnsweredRepositories`
+   * in `db/repositories/work-scope.ts`) count `none` and `repositories` only,
+   * so a delegation binds exactly what it took and leaves the rest open for a
+   * later run to take or to ask about. A person who names three of five has
+   * judged the other two; a person who hands the decision back has judged
+   * nothing, and we may not claim otherwise in their name.
+   */
+  z
+    .object({
+      kind: z.literal("delegated"),
+      repositoryKeys: z
+        .array(repositoryKeySchema)
+        .max(WORK_SCOPE_ASKED_REPOSITORIES_MAX)
+        .refine(hasUniqueValues, { message: "Delegated repositories must be unique." }),
+    })
+    .strict(),
   z.object({ kind: z.literal("unrecognised") }).strict(),
   // An answer that arrived and was deliberately not read: more than one person's
   // words reached the record as one answer, so it is nobody's decision to
@@ -352,6 +429,25 @@ export const workScopeAnswerOutcomeSchema = z.discriminatedUnion("kind", [
     .strict(),
   z.object({ kind: z.literal("declined_all") }).strict(),
   z.object({ kind: z.literal("declined_one"), repositoryKey: repositoryKeySchema }).strict(),
+  /**
+   * THEY ASKED US TO DECIDE, which is an answer and not a failure to give one.
+   *
+   * Production, AWP-236: "whatever you think is best" was read as unclear, so
+   * nothing was recorded, the run kept waiting, and the person was asked the
+   * same question again. They had already answered it.
+   *
+   * IT IS NOT `unclear` AND THE DIFFERENCE IS EXACT. "not the fixture one" says
+   * something about the repositories without saying what to use, so the
+   * remainder would be our subtraction; this says nothing about the
+   * repositories and everything about who chooses. The first records nothing,
+   * the second records what we chose, in our own name.
+   *
+   * IT CARRIES NO KEYS. A reading may not choose repositories: which ones a
+   * delegation takes is a rule over what the question offered
+   * (`repositoriesADelegationTakes` in `engine/work-scope/decide.ts`), applied
+   * by our code where the record is written, so a model cannot widen it.
+   */
+  z.object({ kind: z.literal("delegated") }).strict(),
   z
     .object({
       kind: z.literal("unclear"),
@@ -398,18 +494,22 @@ export const workScopeAnswerReadingSchema = z
     /**
      * REPOSITORY NAMES THE REPLY POINTED AT THAT THE QUESTION NEVER OFFERED.
      *
-     * Something we TELL, never something we WRITE. Nothing here may become an
-     * entry, a selection or a refusal, and no reader may treat it as one: the
-     * allowlist stays exactly the keys the question put in front of the person,
-     * because that is what an injected instruction runs into and the worst it
-     * may reach must stay an option they were already being shown.
+     * NAMES, NEVER KEYS. The reading's own outcome stays inside the keys the
+     * question put in front of the person, and nothing here is a key. Where the
+     * answer chose repositories, the record looks each name up in the
+     * deployment's catalog and takes the ones it holds as that person's own
+     * choice (`services/work-scope/from-answer.ts`, A19c); a name that resolves
+     * to nothing records nothing, which is what keeps an invented or injected
+     * key harmless. The bound is therefore what the catalog holds, guarded by
+     * where the name came from: a person's answer on an authenticated channel,
+     * never ticket text, never our own bot, never words several people wrote.
      *
      * It exists because the alternative is worse than the risk. Somebody
-     * answering "api and web" to a question about api named two repositories
-     * because they believe both are needed; recording api and saying nothing
-     * about web is the system quietly doing half the job, which is the failure
-     * this whole path exists to end. So the name comes back to them, in the
-     * channel they answered in, with somewhere to go.
+     * answering "api and github:acme/web" to a question about api named two
+     * repositories because they believe both are needed; recording api and
+     * saying nothing about web is the system quietly doing half the job, which
+     * is the failure this whole path exists to end. Every name comes back to
+     * them, in the channel they answered in, with what became of it.
      *
      * BOUNDED AND SANITISED, never a span the model composed: at most four
      * names, each at most 100 characters and made only of the characters a
@@ -442,7 +542,7 @@ export const WORK_SCOPE_ANSWER_READING_JSON_SCHEMA = {
   properties: {
     outcome: {
       type: "string",
-      enum: ["repositories", "declined_all", "declined_one", "unclear"],
+      enum: ["repositories", "declined_all", "declined_one", "delegated", "unclear"],
     },
     /** Only for `repositories`. Every value must be one of the keys the prompt
      *  listed; anything else throws the whole reading away. */
@@ -455,7 +555,8 @@ export const WORK_SCOPE_ANSWER_READING_JSON_SCHEMA = {
      *  person when we ask them to confirm. */
     paraphrase: { type: "string" },
     /** Repository names the reply pointed at that are NOT in the offered list.
-     *  Told back to the person, never recorded. */
+     *  Never keys: our code looks them up in the catalog, and the model's
+     *  choice stays inside the offered list. */
     unofferedNames: { type: "array", maxItems: 4, items: { type: "string" } },
   },
 } as const;

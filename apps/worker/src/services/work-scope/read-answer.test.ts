@@ -496,3 +496,107 @@ describe("readRepositoryAnswerDeterministically", () => {
     expect(readRepositoryAnswerDeterministically(quoted, LIST)).toEqual({ kind: "unclear" });
   });
 });
+
+/**
+ * A PERSON WHO HANDS THE DECISION BACK IS ANSWERING.
+ *
+ * Production, AWP-236 at 08:02Z: "whatever you think is best" was read as
+ * unclear, nothing was recorded, and the person was asked again. The reading
+ * now has an outcome for it. What it must NOT swallow is a reply that says
+ * something about the repositories: "not the fixture one" (AWP-234) stays
+ * unclear, and so does a delegation that carries a refusal, because the
+ * remainder would be our subtraction, not their choice.
+ */
+describe("readRepositoryAnswerWithModel: the person asked us to decide", () => {
+  it("reads a delegation as its own outcome", async () => {
+    const reading = await readRepositoryAnswerWithModel("whatever you think is best", LIST, {
+      ...DEPS,
+      generate: fakeModel({ outcome: "delegated" }),
+    });
+
+    expect(reading.outcome).toEqual({ kind: "delegated" });
+    expect(reading.readBy).toBe("model");
+  });
+
+  // The keys a delegation takes are OUR rule over what the question offered.
+  // A model that tries to choose them has stopped reading a delegation.
+  it("never lets the model choose the repositories of a delegation", async () => {
+    const reading = await readRepositoryAnswerWithModel("you decide", LIST, {
+      ...DEPS,
+      generate: fakeModel({ outcome: "delegated", repositoryKeys: [OPS] }),
+    });
+
+    expect(reading.outcome).toEqual({ kind: "delegated" });
+  });
+
+  // A16: a question that told a count and showed no names has no list to take
+  // in order, so there is nothing to hand back.
+  it("is unclear when the question showed no repository to choose from", async () => {
+    const reading = await readRepositoryAnswerWithModel(
+      "you decide",
+      { ...LIST, askedKeys: [] },
+      { ...DEPS, generate: fakeModel({ outcome: "delegated" }) },
+    );
+
+    expect(reading.outcome).toEqual({ kind: "unclear" });
+  });
+
+  it("tells the reader what a delegation is and what it is not", async () => {
+    const model = fakeModel({ outcome: "unclear" });
+    await readRepositoryAnswerWithModel("you decide", LIST, { ...DEPS, generate: model });
+
+    expect(model.calls[0].system).toContain('"delegated"');
+    expect(model.calls[0].system).toContain("your call, just not payments");
+  });
+
+  // Point 10: a delegation needs the model. The fallback reads a path and the
+  // bare word none, and nothing else, so the run parks and the person is told
+  // we could not settle it. It never claims we chose.
+  it("does not read a delegation when the provider is down", async () => {
+    const reading = await readRepositoryAnswerWithModel("whatever you think is best", LIST, {
+      ...DEPS,
+      generate: async () => {
+        throw new Error("connect ECONNREFUSED");
+      },
+    });
+
+    expect(reading.outcome).toEqual({ kind: "unclear" });
+    expect(reading.readBy).toBe("deterministic");
+  });
+});
+
+describe("readRepositoryAnswerWithModel: delegation through the stand-in", () => {
+  const model = { ...DEPS, generate: fakeAnswerReadingModel() };
+
+  for (const answer of ["whatever you think is best", "you decide", "up to you", "rób jak uważasz", "wybierz sam"]) {
+    it(`reads ${JSON.stringify(answer)} as a delegation`, async () => {
+      const reading = await readRepositoryAnswerWithModel(answer, LIST, model);
+
+      expect(reading.outcome).toEqual({ kind: "delegated" });
+    });
+  }
+
+  for (const answer of [
+    "not the api one",
+    "you decide, but not the api one",
+    "rób jak uważasz, byle nie web",
+    "whatever",
+    "ok",
+    "see the description",
+    "nie wiem",
+    "👍",
+  ]) {
+    it(`keeps ${JSON.stringify(answer)} unclear`, async () => {
+      const reading = await readRepositoryAnswerWithModel(answer, LIST, model);
+
+      expect(reading.outcome).toMatchObject({ kind: "unclear" });
+    });
+  }
+
+  // Naming beats delegating: a reply that points at a repository has chosen it.
+  it("reads a delegation that also names a repository as a selection of it", async () => {
+    const reading = await readRepositoryAnswerWithModel("you decide, api is a must", LIST, model);
+
+    expect(reading.outcome).toEqual({ kind: "repositories", repositoryKeys: [API] });
+  });
+});

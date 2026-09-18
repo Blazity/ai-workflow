@@ -272,6 +272,29 @@ describe("resumeClarificationFromComments", () => {
     });
   });
 
+  // One of the three guards that let a named repository outside the question's
+  // list be taken (A19c): words our own account wrote never become an answer,
+  // so neither a hand-over nor a repository name in them can reach the record.
+  it("never reads a delegation or a repository name out of a comment our bot wrote", async () => {
+    const row = await seedPending();
+    const tracker = makeTracker({
+      comments: [
+        {
+          author: "Bot",
+          accountId: BOT,
+          body: "whatever you think is best, and github:acme/billing as well",
+          createdAt: AFTER,
+        },
+        { author: "Cara", accountId: "human-2", body: "github:acme/api", createdAt: AFTER_LATER },
+      ],
+    });
+
+    await run(tracker);
+
+    const stored = await getHookClarification(db, row.id);
+    expect(stored?.answer).toBe("Cara: github:acme/api");
+  });
+
   it("ignores comments without an account id", async () => {
     const row = await seedPending();
     const tracker = makeTracker({

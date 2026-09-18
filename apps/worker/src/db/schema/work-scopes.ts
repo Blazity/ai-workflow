@@ -77,7 +77,7 @@ export const workScopeEntries = pgTable(
     ),
     check(
       "work_scope_entries_origin_check",
-      sql`${t.origin} in ('person', 'workflow_owned_branch', 'ticket_text', 'trigger_policy', 'inferred')`,
+      sql`${t.origin} in ('person', 'delegated', 'workflow_owned_branch', 'ticket_text', 'trigger_policy', 'inferred')`,
     ),
     check("work_scope_entries_origin_rank_check", sql`${t.originRank} between 0 and 4`),
   ],

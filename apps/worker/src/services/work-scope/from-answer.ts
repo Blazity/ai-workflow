@@ -11,6 +11,8 @@ import {
   type RepositoryKey,
   type WorkScope,
   type WorkScopeAnswerReading,
+  type WorkScopeAskedRepository,
+  type WorkScopeEntry,
   type WorkScopeQuestionAnswer,
   type WorkScopeWritePlan,
 } from "@shared/contracts";
@@ -29,7 +31,12 @@ import {
   withoutQuotedText,
 } from "../../engine/work-scope/answer.js";
 import { questionShowedKeptRepositories } from "../../engine/work-scope/context.js";
-import { decideWorkScope, isHeldSelection } from "../../engine/work-scope/decide.js";
+import {
+  decideWorkScope,
+  isDecidedByAPerson,
+  isHeldSelection,
+  repositoriesADelegationTakes,
+} from "../../engine/work-scope/decide.js";
 import { logger } from "../../infra/logger.js";
 
 /** What recording an answer needs of the tier that owns the database, and
@@ -64,6 +71,12 @@ export interface RepositoryAnswerPersistence {
  *  part with the prefix and without it, so it never drops a byte either way. */
 const COMPOSED_COMMENT_SEPARATOR = "\n\n";
 const COMPOSED_AUTHOR_PREFIX = /^[^:\n]+: /;
+
+/** How many repositories one answer may record at once: the contract's bound
+ *  on an answer (`workScopeQuestionAnswerSchema`) and the decision's bound on
+ *  one event. A name that resolves past it is told, never dropped in silence
+ *  and never allowed to throw the whole answer away. */
+const ANSWER_REPOSITORIES_MAX = 8;
 
 /**
  * The answer with the composed author taken off the front of each comment, and
@@ -150,6 +163,29 @@ export interface RepositoryAnswerOutcome {
    *  nobody was told. Absent unless the answer named repositories and the
    *  question listed more than it. */
   leftOut?: RepositoryKey[];
+  /**
+   * What the workflow chose when the person handed the decision back, and what
+   * the question listed that it did not choose. Nothing binds the second list:
+   * the person judged none of it (see `repositoriesADelegationTakes`). A
+   * repository a person had already decided on is in neither. Absent unless
+   * the answer was a delegation.
+   */
+  delegated?: { taken: RepositoryKey[]; notTaken: RepositoryKey[] };
+  /**
+   * The repositories the answer named that the question never listed, as the
+   * catalog resolved them: `added` are enabled and now selected as this
+   * person's choice, `notEnabled` are held but not enabled and are selected as
+   * their choice all the same (the run refuses them at start, A5), `unmatched`
+   * resolved to nothing and recorded nothing, and `overLimit` resolved but did
+   * not fit in one answer. Absent unless the answer named repositories and the
+   * reading carried a name the question never offered.
+   */
+  alsoNamed?: {
+    added: RepositoryKey[];
+    notEnabled: RepositoryKey[];
+    unmatched: string[];
+    overLimit: RepositoryKey[];
+  };
 }
 
 /** What an answer we decline to attribute is handed to the decision as, which
@@ -184,16 +220,61 @@ const UNADDRESSED_REFUSAL_ANSWER: WorkScopeQuestionAnswer = { kind: "unrecognise
  * that carries a reading never gets here with one: the channel that took the
  * answer parks the question and tells the person instead of recording anything.
  */
-function questionAnswerOfReading(reading: WorkScopeAnswerReading): WorkScopeQuestionAnswer {
+function questionAnswerOfReading(
+  reading: WorkScopeAnswerReading,
+  asked: readonly WorkScopeAskedRepository[],
+  entries: readonly WorkScopeEntry[],
+): WorkScopeQuestionAnswer {
   switch (reading.outcome.kind) {
     case "repositories":
       return { kind: "repositories", repositoryKeys: reading.outcome.repositoryKeys };
     case "declined_all":
     case "declined_one":
       return { kind: "none" };
+    // Which repositories a delegation takes is decided HERE, by our rule over
+    // what the question listed, and never by the reader: the reading says only
+    // that the person handed the choice back.
+    case "delegated":
+      return { kind: "delegated", repositoryKeys: repositoriesADelegationTakes(asked, entries) };
     case "unclear":
       return { kind: "unrecognised" };
   }
+}
+
+/**
+ * The names an answer pointed at that the question never offered, looked up in
+ * the catalog this answer path already loaded.
+ *
+ * THE MODEL NEVER CHOOSES THESE. It copies a name out of the reply and that is
+ * all; whether the name is a repository is this function's question, answered
+ * against the deployment's own catalog, so an invented key resolves to nothing
+ * and records nothing. The rule is the one the deterministic reader and the
+ * "no such repository" sentence already use: a path written out, provider
+ * scoped or an owner/name that is unique across providers. A bare short name is
+ * not resolved (A3), because "web" is a word before it is a repository.
+ */
+function resolveUnofferedNames(
+  names: readonly string[],
+  catalogKeys: readonly RepositoryKey[],
+): { held: RepositoryKey[]; unmatched: string[] } {
+  const held: RepositoryKey[] = [];
+  const unmatched: string[] = [];
+  for (const name of names) {
+    const identities = parseRepositoryExpansionAnswer(name);
+    const identity = identities.length === 1 ? identities[0] : undefined;
+    let key: RepositoryKey | undefined;
+    if (identity?.provider) {
+      const candidate = repositoryCatalogKey({ provider: identity.provider, path: identity.repoPath });
+      if (catalogKeys.includes(candidate)) key = candidate;
+    } else if (identity) {
+      const path = identity.repoPath.toLowerCase();
+      const matches = catalogKeys.filter((candidate) => candidate.slice(candidate.indexOf(":") + 1) === path);
+      if (matches.length === 1) key = matches[0];
+    }
+    if (key === undefined) unmatched.push(name);
+    else if (!held.includes(key)) held.push(key);
+  }
+  return { held, unmatched };
 }
 
 /**
@@ -320,11 +401,66 @@ export async function recordRepositoryAnswer(
   // that named no repository, where there is no closed set to read an answer
   // into, and a row answered before the reading existed.
   const stored = input.row.answerReading;
-  const answerRead = declined
+  const readAnswer = declined
     ? DECLINED_ANSWER
     : stored
-      ? questionAnswerOfReading(stored)
+      ? questionAnswerOfReading(stored, askedRepositories, scope?.entries ?? [])
       : readRepositoryAnswer(theirAnswer, { ...reading, askedKeys });
+
+  // A REPOSITORY THEY NAMED THAT THE QUESTION DID NOT LIST IS TAKEN WHEN THIS
+  // DEPLOYMENT HOLDS IT (AWP-221: "demo please, and github:Blazity/ai-workflow as
+  // well" recorded demo and told them the other was not acted on).
+  //
+  // THE BOUND MOVES, and this is where. It used to be the keys the question put
+  // in front of the person, which is the argument A19c made for safety. It is
+  // now the repositories this deployment's catalog holds, and three guards
+  // keep that acceptable, each of them enforced before this line: the name
+  // comes only from a person's ANSWER (the reading of the words they delivered,
+  // never the ticket's own text), the ticket channel reads no comment our own
+  // bot account wrote as an answer, and an answer several people wrote is
+  // `DECLINED_ANSWER` above and never reaches the branch below. An invented or
+  // injected key still resolves to nothing, so the worst an instruction hidden
+  // in a reply can reach is a repository this deployment already holds, named
+  // back to the person in the note they get.
+  //
+  // Only where the answer CHOSE repositories. A refusal or a delegation beside a
+  // name is a reply the reader was told to read as a selection instead (naming
+  // beats refusing and delegating), so a name surviving beside one is an aside,
+  // and it is told back exactly as before rather than acted on.
+  //
+  // Enabled or not, it is recorded as THEIR choice (A5): the run refuses one it
+  // cannot use at start and says why, and once somebody enables it the next run
+  // takes it without asking again. Writing it `unavailable` in their name would
+  // record a refusal nobody made.
+  const unofferedNames = stored?.unofferedNames ?? [];
+  let alsoNamed: RepositoryAnswerOutcome["alsoNamed"];
+  let answerRead = readAnswer;
+  if (readAnswer.kind === "repositories" && unofferedNames.length > 0) {
+    const { held, unmatched } = resolveUnofferedNames(unofferedNames, catalog.keys);
+    // What the reading already decided about stays decided: a key the question
+    // offered, or one it showed as kept, is not the reading's to widen.
+    const outside = held.filter(
+      (key) => !askedKeys.includes(key) && !keptKeys.includes(key),
+    );
+    const room = Math.max(0, ANSWER_REPOSITORIES_MAX - readAnswer.repositoryKeys.length);
+    const taken = outside.filter((key) => !readAnswer.repositoryKeys.includes(key)).slice(0, room);
+    const overLimit = outside.filter(
+      (key) => !readAnswer.repositoryKeys.includes(key) && !taken.includes(key),
+    );
+    if (overLimit.length > 0) {
+      logger.warn(
+        { runId: input.row.runId, clarificationId: input.row.id, overLimit },
+        "work_scope_answer_named_more_than_one_answer_records",
+      );
+    }
+    answerRead = { kind: "repositories", repositoryKeys: [...readAnswer.repositoryKeys, ...taken] };
+    alsoNamed = {
+      added: taken.filter((key) => catalog.enabledKeys.includes(key)),
+      notEnabled: taken.filter((key) => !catalog.enabledKeys.includes(key)),
+      unmatched,
+      overLimit,
+    };
+  }
 
   // A PLAIN NO ON A TICKET IS NOT EVIDENCE THAT ANYBODY ANSWERED US.
   //
@@ -465,6 +601,38 @@ export async function recordRepositoryAnswer(
   });
   if (refusalDecidesNothing) return { told: "unaddressed_refusal" };
 
+  // A DELEGATION IS A DECISION, SO NONE OF THE "RECORDED NOTHING" SENTENCES
+  // BELOW IS TRUE OF IT, not even when it took nothing: a question about a
+  // repository the run cannot use, handed back, is answered by continuing
+  // without it. What the person hears is what the workflow chose and what it
+  // left open, from the same rule that wrote the entries.
+  //
+  // A repository a person had already decided on is in neither list: the
+  // workflow did not choose it, and "nothing is recorded about it" would be
+  // false, because their own entry is.
+  if (answer.kind === "delegated") {
+    return {
+      delegated: {
+        taken: answer.repositoryKeys,
+        notTaken: [
+          ...new Set(
+            askedRepositories
+              .filter(
+                (repository) =>
+                  repository.named === true &&
+                  !answer.repositoryKeys.includes(repository.repositoryKey) &&
+                  !keptKeys.includes(repository.repositoryKey) &&
+                  !isDecidedByAPerson(scope?.entries ?? [], repository.repositoryKey),
+              )
+              .map((repository) => repository.repositoryKey),
+          ),
+        ],
+      },
+    };
+  }
+  const withAlsoNamed = (outcome: RepositoryAnswerOutcome): RepositoryAnswerOutcome =>
+    alsoNamed ? { ...outcome, alsoNamed } : outcome;
+
   // NOBODY IS ASKED SOMETHING THEY HAVE ALREADY ANSWERED WITHOUT BEING TOLD WHY.
   //
   // An answer can be read, be nobody's fault, and still leave the record exactly
@@ -528,7 +696,7 @@ export async function recordRepositoryAnswer(
   // decision, so it is never also a reason the record kept nothing, and putting
   // it after a branch that can return would make whether the person hears it
   // depend on which kind of question they answered.
-  if (declinedKeys.length > 0) return { declined: declinedKeys };
+  if (declinedKeys.length > 0) return withAlsoNamed({ declined: declinedKeys });
   // AND WHAT AN ANSWER THAT NAMED SOMETHING LEFT OUT, which binds exactly as a
   // decline does and said nothing to anybody. The question listed four, the
   // person named one, and the other three are out of this work with no later
@@ -551,8 +719,8 @@ export async function recordRepositoryAnswer(
           ),
         ]
       : [];
-  if (leftOutKeys.length > 0) return { leftOut: leftOutKeys };
-  if (!recordKeptNothing || settledByAnsweringAtAll) return {};
+  if (leftOutKeys.length > 0) return withAlsoNamed({ leftOut: leftOutKeys });
+  if (!recordKeptNothing || settledByAnsweringAtAll) return withAlsoNamed({});
   // An answer with no word in it is its own case, because the RUN does
   // something with it that nothing else here does: `isRefusalAnswer` takes the
   // wordless branch and ends the asking, so the run carries on without the
@@ -562,7 +730,7 @@ export async function recordRepositoryAnswer(
   // comment arrives here as "Jane: (thumbs up)", which HAS words, and the run
   // asks its follow-up instead; that one is told the ordinary sentence, which
   // is the truthful one for it.
-  if (hasNoWords(input.answer)) return { told: "no_words" };
+  if (hasNoWords(input.answer)) return withAlsoNamed({ told: "no_words" });
   // Two unreadable replies the ordinary sentence would describe falsely, since
   // "nothing in that answer named a repository this work should use" is not
   // true of "this one, but not that one". A reply about a repository the
@@ -571,10 +739,10 @@ export async function recordRepositoryAnswer(
   // it was not read as a choice.
   if (answer.kind === "unrecognised") {
     if (answerNamesKeptRepositories(theirAnswer, reading)) {
-      return { told: "names_kept_repository" };
+      return withAlsoNamed({ told: "names_kept_repository" });
     }
     if (answerSaysNoAndNamesARepository(theirAnswer, reading)) {
-      return { told: "refusal_beside_named" };
+      return withAlsoNamed({ told: "refusal_beside_named" });
     }
     // "both" under a question that listed three. The reply is not ambiguous and
     // it names nothing: it contradicts the list in front of it, so the reader
@@ -587,7 +755,7 @@ export async function recordRepositoryAnswer(
         askedCount: askedKeys.length,
       })
     ) {
-      return { told: "counting_word_and_list_disagree" };
+      return withAlsoNamed({ told: "counting_word_and_list_disagree" });
     }
   }
   // WHICH OF THE TWO WAYS AN ANSWER NAMES NOTHING. Both end here with an empty
@@ -596,7 +764,7 @@ export async function recordRepositoryAnswer(
   // next run resolves it; a person who already wrote `github:acme/thing` in
   // full, for a repository this deployment does not hold, would write the same
   // words for the next run to resolve to the same nothing.
-  return {
+  return withAlsoNamed({
     told: namedOnlyRepositoriesWeDoNotHold({
       answer: theirAnswer,
       askedQuestions: input.row.questions,
@@ -604,7 +772,7 @@ export async function recordRepositoryAnswer(
     })
       ? "no_such_repository"
       : "no_repository_named",
-  };
+  });
 }
 
 /**

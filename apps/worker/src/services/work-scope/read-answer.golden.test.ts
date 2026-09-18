@@ -8,17 +8,25 @@
  * failure paths through a fake, and by construction it cannot say anything
  * about whether "Yes, please" is understood. That is this file's whole job.
  *
- * IT HAS NEVER RUN. There is no provider credential on the machine this was
- * written on, so every row below is UNPROVEN: not one of them has been through a
- * real model. The production campaign is where they are proven, and until that
- * has happened nothing in this file is evidence of anything. A file that
- * describes itself as ready is how a PASS gets reported for something nobody
- * observed.
+ * RUN IT AFTER EVERY CHANGE TO THE PROMPT OR THE OUTCOME SET. Its first run
+ * against the real model, on 2026-09-18, found the reader on production calling
+ * "none", "neither" and "skip it" unclear while every unit test was green,
+ * because the unit tests read through a fake. A green run of the ordinary suite
+ * says nothing about the model.
  *
  * NOT IN THE ORDINARY SUITE. It costs one small-model call per row and needs a
- * credential, so it is opt in:
+ * credential, so it is opt in. The worker's environment validation runs before
+ * the provider is reached, so a bare key is not enough: without the other
+ * required variables the reader falls back to the deterministic one and every
+ * row fails with "the provider was not reached". Placeholders are enough for
+ * all of them except the key; nothing here contacts Jira, a database or a VCS.
  *
- *   ANSWER_READING_GOLDEN=1 ANTHROPIC_API_KEY=... \
+ *   ANSWER_READING_GOLDEN=1 ANTHROPIC_API_KEY=... GITLAB_TOKEN=x \
+ *     GITLAB_WEBHOOK_SECRET=x JIRA_BASE_URL=https://example.invalid \
+ *     JIRA_API_TOKEN=x JIRA_PROJECT_KEY=XX DATABASE_URL=postgres://x@127.0.0.1:1/x \
+ *     BETTER_AUTH_SECRET=<32 characters> BETTER_AUTH_URL=http://127.0.0.1:1 \
+ *     DASHBOARD_ORIGIN=http://127.0.0.1:1 DASHBOARD_AUTH_EMAIL=x@example.invalid \
+ *     DASHBOARD_AUTH_PASSWORD=x \
  *     pnpm exec vitest run src/services/work-scope/read-answer.golden.test.ts
  *
  * Every row is a shape somebody typed or would type. The first group is the
@@ -65,6 +73,7 @@ type Expected =
   | { kind: "repositories"; repositoryKeys: RepositoryKey[] }
   | { kind: "declined_all" }
   | { kind: "declined_one"; repositoryKey: RepositoryKey }
+  | { kind: "delegated" }
   | { kind: "unclear" };
 
 const ROWS: Array<{
@@ -186,17 +195,63 @@ const ROWS: Array<{
     why: "the word none quantifies a noun that shares a name with a repository",
   },
   { answer: "see the description", question: LIST4, expected: { kind: "unclear" } },
-  { answer: "whatever you think", question: LIST4, expected: { kind: "unclear" } },
+  { answer: "whatever", question: LIST4, expected: { kind: "unclear" }, why: "a shrug, not a request that we choose" },
   { answer: "ok", question: LIST4, expected: { kind: "unclear" } },
+  { answer: "nie wiem", question: LIST4, expected: { kind: "unclear" }, why: "not knowing is neither a choice nor a hand-over" },
+  { answer: "👍", question: LIST4, expected: { kind: "unclear" }, why: "an acknowledgement says nothing about which" },
   { answer: "", question: LIST4, expected: { kind: "unclear" } },
   { answer: "", question: ONE, expected: { kind: "unclear" } },
 
-  // --- a name we could not act on is TOLD, never recorded ---
+  // --- the person hands the decision back ---
+  //
+  // Production, AWP-236: "whatever you think is best" was read as unclear, the
+  // run kept waiting and the person was asked again. Handing the choice back is
+  // an answer. It carries no keys: which repositories are taken is our rule
+  // over the question's own list, never the reader's pick.
+  { answer: "whatever you think is best", question: LIST4, expected: { kind: "delegated" }, why: "AWP-236 on production" },
+  { answer: "whatever you think", question: LIST4, expected: { kind: "delegated" } },
+  { answer: "you decide", question: LIST4, expected: { kind: "delegated" } },
+  { answer: "up to you", question: LIST4, expected: { kind: "delegated" } },
+  { answer: "rób jak uważasz", question: LIST4, expected: { kind: "delegated" } },
+  { answer: "wybierz sam", question: LIST4, expected: { kind: "delegated" } },
+  { answer: "you decide", question: ONE, expected: { kind: "delegated" }, why: "a question about one repository can be handed back too" },
+
+  // --- ...but only when it says nothing about the repositories ---
+  //
+  // A delegation that carries a refusal is not a delegation: what is left once
+  // the refused one is taken away is our subtraction, and the negation reading
+  // keeps its precedence.
+  {
+    answer: "not the fixture one",
+    question: LIST4,
+    expected: { kind: "unclear" },
+    why: "AWP-234: says what to avoid, never what to use",
+  },
+  {
+    answer: "you decide, but not the api one",
+    question: LIST4,
+    expected: { kind: "unclear" },
+    why: "a refusal beside a hand-over still leaves the choice to our subtraction",
+  },
+  {
+    answer: "rób jak uważasz, byle nie web",
+    question: LIST4,
+    expected: { kind: "unclear" },
+    why: "the same refusal in Polish",
+  },
+  {
+    answer: "you decide, api is a must",
+    question: LIST4,
+    expected: { kind: "repositories", repositoryKeys: [API] },
+    why: "naming beats delegating",
+  },
+
+  // --- a name outside the list is a NAME, never a key ---
   //
   // These rows are about a field beside the outcome, so the expectation below
   // is only half of what they check: the row asserts the outcome, and the
-  // reading must also come back carrying the outside name, which is what the
-  // person is shown. Recording it is never an option.
+  // reading must also come back carrying the outside name. The reader never
+  // puts it in repositoryKeys; the record looks it up in the catalog (A19c).
   {
     answer: "api and billing",
     question: LIST4,
@@ -224,6 +279,22 @@ const ROWS: Array<{
     question: LIST4,
     expected: { kind: "unclear" },
     why: "not a key that was offered, so the whole reading is thrown away",
+  },
+
+  // --- held out: phrasings that appear neither in the prompt nor above ---
+  //
+  // The prompt carries examples, and a row that repeats one proves recall, not
+  // reading. These say the same things in words the prompt never shows.
+  { answer: "sounds good", question: ONE, expected: { kind: "repositories", repositoryKeys: [API] } },
+  { answer: "no need for it", question: ONE, expected: { kind: "declined_one", repositoryKey: API } },
+  { answer: "your choice", question: ONE, expected: { kind: "delegated" } },
+  { answer: "I'll leave that to you", question: LIST4, expected: { kind: "delegated" } },
+  { answer: "none of those, thanks", question: LIST4, expected: { kind: "declined_all" } },
+  {
+    answer: "dealer's choice, except web",
+    question: LIST4,
+    expected: { kind: "unclear" },
+    why: "a hand-over carrying a refusal, in words the prompt does not use",
   },
 ];
 

@@ -484,6 +484,13 @@
       "when": 1789712353618,
       "tag": "0068_clarification_answer_reading",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1789730757102,
+      "tag": "0069_work_scope_delegated_origin",
+      "breakpoints": true
     }
   ]
 }

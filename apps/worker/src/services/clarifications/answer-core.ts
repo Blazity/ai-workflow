@@ -60,7 +60,9 @@ import {
 } from "../tickets/index.js";
 import {
   formatAnswerNotRecordedComment,
+  formatAnswerAlsoNamedComment,
   formatAnswerDeclinedComment,
+  formatAnswerDelegatedComment,
   formatAnswerNotOfferedComment,
   formatAnswerLeftOutComment,
   formatClarificationAnswerComment,
@@ -776,6 +778,18 @@ async function answerClarificationAndResumeWithPersistence(
     recorded.leftOut && recorded.leftOut.length > 0
       ? formatAnswerLeftOutComment(recorded.leftOut)
       : undefined;
+  // AND WHAT THE WORKFLOW CHOSE WHEN IT WAS ASKED TO. Said in the same place a
+  // decline is and for the same reason: on the ticket the answer WAS a comment
+  // and there is no screen behind it, and on the other two channels the reply is
+  // where the person is looking. The record and the trail say it as well, so
+  // the dashboard and MCP can explain the choice later without this sentence.
+  const delegatedSentence = recorded.delegated
+    ? formatAnswerDelegatedComment({
+        taken: recorded.delegated.taken,
+        notTaken: recorded.delegated.notTaken,
+        commentPath: commentPathAfterAnUnrecordedAnswer({ questions: row.questions }),
+      })
+    : undefined;
   // AND WHAT THEY NAMED THAT THIS QUESTION NEVER OFFERED, which until now went
   // nowhere at all. The keys the question put in front of somebody are the only
   // ones that become a decision, so "api and web" to a question about api
@@ -786,15 +800,23 @@ async function answerClarificationAndResumeWithPersistence(
   // JOINED TO THE OTHER SENTENCES RATHER THAN RANKED AGAINST THEM. It is not an
   // alternative to "your answer recorded nothing": both can be true of one
   // reply, and this is the one nothing else on this path can say.
-  const notOfferedSentence =
-    answerReading?.unofferedNames && answerReading.unofferedNames.length > 0 && repositoryQuestion
+  //
+  // AND, WHERE THE ANSWER CHOSE REPOSITORIES, WHAT BECAME OF EACH NAME ONCE IT
+  // WAS LOOKED UP: taken, recorded but not enabled, or matched to nothing. Where
+  // the answer chose nothing (a refusal or a delegation beside a name, or an
+  // answer we declined to attribute) the name was not acted on at all, and the
+  // sentence that says so is the one this path has always used.
+  const notOfferedSentence = recorded.alsoNamed
+    ? formatAnswerAlsoNamedComment(recorded.alsoNamed)
+    : answerReading?.unofferedNames && answerReading.unofferedNames.length > 0 && repositoryQuestion
       ? formatAnswerNotOfferedComment({
           names: answerReading.unofferedNames,
           askedKeys: repositoryQuestion.askedKeys,
         })
       : undefined;
   const toTheTicket = [
-    notRecorded ?? (composedFromComments && !isResumeRetry ? declinedSentence : undefined),
+    notRecorded ??
+      (composedFromComments && !isResumeRetry ? (declinedSentence ?? delegatedSentence) : undefined),
     // On the ticket too, and on a comment answer especially: that channel has no
     // screen behind it, so a reply nobody reads is the same as saying nothing.
     isResumeRetry ? undefined : notOfferedSentence,
@@ -860,7 +882,10 @@ async function answerClarificationAndResumeWithPersistence(
   // words the ticket comment carries, or it declined the repositories the
   // question listed and this says which. Absent when the answer recorded what
   // it named, which is the case that needs no sentence.
-  const recordOutcome = [notRecorded ?? declinedSentence ?? leftOutSentence, notOfferedSentence]
+  const recordOutcome = [
+    notRecorded ?? declinedSentence ?? delegatedSentence ?? leftOutSentence,
+    notOfferedSentence,
+  ]
     .filter((sentence): sentence is string => sentence !== undefined)
     .join("\n\n");
   return { kind: "answered", row: answered, ...(recordOutcome ? { recordOutcome } : {}) };

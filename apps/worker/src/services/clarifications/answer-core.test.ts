@@ -792,7 +792,10 @@ describe("answerClarificationAndResume: where an unclear answer leaves the ticke
     { repositoryKey: "github:acme/ops", askedBecause: "selection", named: true },
   ];
   const QUESTION = "Which of these two should this work use?";
-  const UNCLEAR = "Ada: whatever you think is best";
+  // AWP-234 on production: it says what to avoid and never what to use, so it
+  // settles nothing. "whatever you think is best" used to stand here and no
+  // longer does: handing the decision back is an answer (A19e).
+  const UNCLEAR = "Ada: not the fixture one";
   const BACK_IN_BACKLOG = `This ticket is back in the "${settings.COLUMN_BACKLOG}" column while the question waits.`;
   const HAND_IT_BACK = `Reply in a comment here and move it to the "${settings.COLUMN_AI}" column again, or answer in the dashboard.`;
 
@@ -859,7 +862,7 @@ describe("answerClarificationAndResume: where an unclear answer leaves the ticke
     const row = await seedPending(TWO_ASKED, [QUESTION]);
     const tracker = makeTracker({ trackerStatus: settings.COLUMN_BACKLOG });
 
-    const outcome = await answer(tracker, row.id, "whatever you think is best");
+    const outcome = await answer(tracker, row.id, "not the fixture one");
 
     expect(outcome.kind).toBe("answer_unclear");
     expect(tracker.moveTicket).not.toHaveBeenCalled();
@@ -874,7 +877,7 @@ describe("answerClarificationAndResume: where an unclear answer leaves the ticke
     const row = await seedPending(TWO_ASKED, [QUESTION]);
     const tracker = makeTracker({ trackerStatus: ` ${settings.COLUMN_AI.toLowerCase()} ` });
 
-    const outcome = await answer(tracker, row.id, "whatever you think is best");
+    const outcome = await answer(tracker, row.id, "not the fixture one");
 
     expect(outcome.kind).toBe("answer_unclear");
     expect(movesToBacklog(tracker)).toHaveLength(1);

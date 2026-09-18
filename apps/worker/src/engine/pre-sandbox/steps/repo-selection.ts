@@ -1900,9 +1900,12 @@ export function selectRepositoriesFromMetadata(input: {
     // With a record the same gate counts only what a PERSON did not decide.
     // Asking someone to narrow down their own answer is both rude and useless:
     // their answer is exactly what closes this question on this subject.
+    // A delegation is that person's answer too: they were asked, and told us to
+    // choose. Counting its entries as undecided would list them as repositories
+    // "taken without asking", which is false about a question they answered.
     const personDecided = new Set(
       (input.workScope?.scope?.entries ?? [])
-        .filter((entry) => entry.origin === "person")
+        .filter((entry) => entry.origin === "person" || entry.origin === "delegated")
         .map((entry) => entry.repositoryKey),
     );
     const undecided = [...selected.keys()].filter((key) => !personDecided.has(key));

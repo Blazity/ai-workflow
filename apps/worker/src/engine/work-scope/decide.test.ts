@@ -5,8 +5,12 @@ import {
   type WorkScopeEntry,
 } from "@shared/contracts";
 import { describe, expect, it } from "vitest";
+import { TEXT_MATCH_AMBIGUITY_LIMIT } from "./context.js";
 import {
+  DELEGATION_REPOSITORIES_MAX,
   decideWorkScope,
+  isGuessEntry,
+  repositoriesADelegationTakes,
   type WorkScopeDecisionContext,
   type WorkScopeDecisionEvent,
 } from "./decide.js";
@@ -144,6 +148,25 @@ describe("decideWorkScope decision table", () => {
         editRejected: [],
         trailTruncated: 0,
       });
+    });
+
+    // `delegated` ties with `person` on rank, and the tie must not hand the last
+    // seat to whichever key sorts first: the choice somebody delegated waits
+    // behind the choices somebody made.
+    it("one seat left: a person's own entry takes it before a delegated choice", () => {
+      const decision = decide(
+        context({
+          attachedKeys: HELD.slice(0, 7),
+          scope: scopeOf(
+            entry({ repositoryKey: API, origin: "delegated", decidedBy: person }),
+            entry({ repositoryKey: WEB, origin: "person", decidedBy: person }),
+          ),
+        }),
+        { kind: "run_started" },
+      );
+
+      expect(decision.attach).toEqual([WEB]);
+      expect(decision.refused).toEqual([{ repositoryKey: API, reason: "workspace_cap" }]);
     });
 
     it("selected, reachable, candidate or exempt origin, no room: refused workspace_cap, entry kept", () => {
@@ -2916,5 +2939,240 @@ describe("decideWorkScope bounds", () => {
         answer: { kind: "repositories", repositoryKeys: nine },
       }),
     ).toThrow();
+  });
+});
+
+/**
+ * A PERSON WHO HANDS THE DECISION BACK IS ANSWERING, AND WHAT THE WORKFLOW THEN
+ * TAKES IS THE WORKFLOW'S OWN DECISION.
+ *
+ * Production, AWP-236: "whatever you think is best" recorded nothing and the
+ * person was asked the same question again. What must happen instead is a
+ * choice made by us, attributed to us, naming who asked for it, and binding
+ * nothing beyond what it took.
+ */
+describe("answered: the person asked the workflow to decide", () => {
+  const DELEGATED_BY_FILIP = "Chosen by the workflow because Filip asked it to decide.";
+
+  const asked = (keys: string[], askedBecause: "selection" | "not_enabled" | "outside_policy" = "selection") =>
+    keys.map((repositoryKey) => ({ repositoryKey, askedBecause, named: true as const }));
+
+  it("takes the repositories the question listed, in its order, up to the limit that made it ask", () => {
+    const four = [DOCS, API, WEB, TOOLS];
+    const decision = decide(context({ actor: person, policy: null }), {
+      kind: "answered",
+      clarificationId: "clar-d1",
+      asked: asked(four),
+      answer: { kind: "delegated", repositoryKeys: repositoriesADelegationTakes(asked(four), []) },
+    });
+
+    expect(decision.plan.upserts.map((upsert) => upsert.entry.repositoryKey)).toEqual([
+      DOCS,
+      API,
+      WEB,
+    ]);
+    for (const upsert of decision.plan.upserts) {
+      expect(upsert.entry).toMatchObject({
+        state: "selected",
+        origin: "delegated",
+        rationale: DELEGATED_BY_FILIP,
+        decidedBy: person,
+      });
+    }
+  });
+
+  // The whole point of the origin. An entry read as a guess is furnished to no
+  // later run and taken back by the next guess.
+  it("records the choice as the workflow's, never as a repository the person named", () => {
+    const decision = decide(context({ actor: person, policy: null }), {
+      kind: "answered",
+      clarificationId: "clar-d2",
+      asked: asked([API]),
+      answer: { kind: "delegated", repositoryKeys: [API] },
+    });
+
+    const [upsert] = decision.plan.upserts;
+    expect(upsert.entry.origin).toBe("delegated");
+    expect(upsert.entry.rationale).toContain("Filip");
+    expect(isGuessEntry(upsert.entry)).toBe(false);
+  });
+
+  // A delegation binds exactly what it took. The person judged none of the
+  // five; the workflow judged three, so the other two stay open for a later
+  // run to take or to ask about.
+  it("writes nothing at all for the repositories it did not take", () => {
+    const five = [API, WEB, DOCS, TOOLS, "github:acme/extra"];
+    const decision = decide(context({ actor: person, policy: null }), {
+      kind: "answered",
+      clarificationId: "clar-d3",
+      asked: asked(five),
+      answer: { kind: "delegated", repositoryKeys: repositoriesADelegationTakes(asked(five), []) },
+    });
+
+    const written = decision.plan.upserts.map((upsert) => upsert.entry.repositoryKey);
+    expect(written).toEqual([API, WEB, DOCS]);
+    expect(decision.plan.deletes).toEqual([]);
+  });
+
+  // A decline of one repository outside the policy writes `excluded` in that
+  // person's name. A delegation is not a decline: it continues without the
+  // repository and records nothing permanent about it.
+  it("continues without a repository the run cannot use and records nothing in their name", () => {
+    const outside = asked([LEGACY], "outside_policy");
+    const decision = decide(context({ actor: person, policy: null }), {
+      kind: "answered",
+      clarificationId: "clar-d4",
+      asked: outside,
+      answer: { kind: "delegated", repositoryKeys: repositoriesADelegationTakes(outside, []) },
+    });
+
+    expect(decision.plan.upserts).toEqual([]);
+    expect(decision.plan.trail).toEqual([
+      {
+        kind: "question_answered",
+        clarificationId: "clar-d4",
+        answer: { kind: "delegated", repositoryKeys: [] },
+        answeredBy: person,
+      },
+    ]);
+  });
+
+  // The store refuses this overwrite whatever the decision plans; planning it
+  // anyway would put an entry_written in the plan for a row that never changes,
+  // and a caller that passed the key unchecked would go on believing it took it.
+  it("plans nothing over a person's own entry, even when the caller passes its key", () => {
+    const selectedByFilip = entry({
+      repositoryKey: API,
+      origin: "person",
+      rationale: NAMED,
+      decidedBy: person,
+    });
+    const decision = decide(context({ actor: person, policy: null, scope: scopeOf(selectedByFilip) }), {
+      kind: "answered",
+      clarificationId: "clar-d6",
+      asked: asked([API, WEB]),
+      answer: { kind: "delegated", repositoryKeys: [API, WEB] },
+    });
+
+    expect(decision.plan.upserts.map((upsert) => upsert.entry.repositoryKey)).toEqual([WEB]);
+  });
+
+  // The record has to explain the choice afterwards, on the dashboard and over
+  // MCP, without anybody replaying the reply the caller happened to see.
+  it("puts what was taken in the trail beside who asked for it", () => {
+    const two = asked([API, WEB]);
+    const decision = decide(context({ actor: person, policy: null }), {
+      kind: "answered",
+      clarificationId: "clar-d5",
+      asked: two,
+      answer: { kind: "delegated", repositoryKeys: repositoriesADelegationTakes(two, []) },
+    });
+
+    expect(decision.plan.trail[0]).toEqual({
+      kind: "question_answered",
+      clarificationId: "clar-d5",
+      answer: { kind: "delegated", repositoryKeys: [API, WEB] },
+      answeredBy: person,
+    });
+  });
+});
+
+describe("repositoriesADelegationTakes", () => {
+  it("caps at the limit that made the question get asked at all", () => {
+    expect(DELEGATION_REPOSITORIES_MAX).toBe(TEXT_MATCH_AMBIGUITY_LIMIT);
+    const six = Array.from({ length: 6 }, (_, index) => `github:acme/many-${index}`).map((repositoryKey) => ({
+      repositoryKey,
+      askedBecause: "selection" as const,
+      named: true,
+    }));
+
+    expect(repositoriesADelegationTakes(six, [])).toHaveLength(TEXT_MATCH_AMBIGUITY_LIMIT);
+  });
+
+  it("takes only repositories the run could actually use", () => {
+    expect(
+      repositoriesADelegationTakes([
+        { repositoryKey: LEGACY, askedBecause: "not_enabled", named: true },
+        { repositoryKey: BROKEN, askedBecause: "unusable", named: true },
+        { repositoryKey: API, askedBecause: "selection", named: true },
+      ], []),
+    ).toEqual([API]);
+  });
+
+  // A key the question never spelled out is a key nobody was shown, so it is
+  // not part of what they handed over.
+  it("takes nothing the question did not put in front of the person", () => {
+    expect(
+      repositoriesADelegationTakes([{ repositoryKey: API, askedBecause: "selection" }], []),
+    ).toEqual([]);
+  });
+
+  // "You decide" hands over what is still open, not what somebody already
+  // decided: the question was asked before a person selected or excluded one
+  // of these (on the panel, or answering another run's question on the same
+  // ticket), and the workflow's choice may not take that decision's place.
+  it("leaves a repository a person already decided on, and takes the next one instead", () => {
+    const four = [API, WEB, DOCS, TOOLS].map((repositoryKey) => ({
+      repositoryKey,
+      askedBecause: "selection" as const,
+      named: true,
+    }));
+    const excludedByAda = entry({
+      repositoryKey: WEB,
+      state: "excluded",
+      origin: "person",
+      rationale: "Not this one.",
+      decidedBy: person,
+    });
+    const guessed = entry({ repositoryKey: API });
+
+    expect(repositoriesADelegationTakes(four, [excludedByAda, guessed])).toEqual([API, DOCS, TOOLS]);
+  });
+});
+
+/**
+ * WHAT THE RESUMED RUN DOES WITH A DELEGATION.
+ *
+ * The run that asked wakes up, the block that asked runs again from the top,
+ * and the ticket still names every repository it named. It must not put the
+ * same question to somebody who has just told it to decide.
+ */
+describe("text_ambiguous after a delegation", () => {
+  const delegatedEntry = (repositoryKey: string) =>
+    entry({
+      repositoryKey,
+      origin: "delegated",
+      rationale: "Chosen by the workflow because Filip asked it to decide.",
+      decidedBy: person,
+    });
+
+  it("does not ask again, because the subject now carries that person's answer", () => {
+    const decision = decide(
+      context({ scope: scopeOf(delegatedEntry(API), delegatedEntry(WEB), delegatedEntry(DOCS)) }),
+      { kind: "text_ambiguous", matchedKeys: [API, WEB, DOCS, TOOLS] },
+    );
+
+    expect(decision.ask).toEqual([]);
+  });
+
+  // A delegation binds only what it took. The repository it left is not a
+  // repository anybody refused, so an agent that asks for it later gets it.
+  it("lets a later request take a repository the delegation did not take", () => {
+    const decision = decide(
+      context({
+        scope: scopeOf(delegatedEntry(API), delegatedEntry(WEB), delegatedEntry(DOCS)),
+        answeredRepositoryKeys: [],
+      }),
+      { kind: "requested", repositoryKeys: [TOOLS] },
+    );
+
+    expect(decision.attach).toEqual([TOOLS]);
+    expect(decision.refused).toEqual([]);
+  });
+
+  it("furnishes the next run's workspace from it, where a guess would furnish nothing", () => {
+    const decision = decide(context({ scope: scopeOf(delegatedEntry(API)) }), { kind: "run_started" });
+
+    expect(decision.attach).toEqual([API]);
   });
 });

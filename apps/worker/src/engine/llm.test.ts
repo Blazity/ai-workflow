@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { generateStructured } from "./llm.js";
+import { generateProviderText } from "../infra/llm.js";
 
 const mockGenerateText = vi.fn();
 const mockJsonSchema = vi.fn((s: unknown) => ({ __schema: s }));
@@ -246,5 +247,23 @@ describe("generateStructured", () => {
 
     expect(mockAnthropic).toHaveBeenCalledWith("gpt-5");
     expect(mockCreateOpenAI).not.toHaveBeenCalled();
+  });
+
+  it("sends a temperature only to the caller that asked for one", async () => {
+    // A reader that records decisions asks for 0 so the same words read the
+    // same way twice; every other caller's request must stay byte-for-byte what
+    // it was, so an unset temperature sends no key at all.
+    mockGenerateText.mockResolvedValue({ text: "{}", output: {}, usage: {} });
+    const call = {
+      model: "claude-haiku-4-5",
+      provider: "claude" as const,
+      prompt: "p",
+      schema: { type: "object" },
+      credentials: { anthropicApiKey: "k" },
+    };
+    await generateProviderText({ ...call, temperature: 0 });
+    await generateProviderText(call);
+    expect(mockGenerateText.mock.calls[0][0].temperature).toBe(0);
+    expect("temperature" in mockGenerateText.mock.calls[1][0]).toBe(false);
   });
 });

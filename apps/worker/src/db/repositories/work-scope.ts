@@ -539,14 +539,27 @@ function expiredKeysPredicate(plan: WorkScopeWritePlan, column: SQL) {
  * over an unavailable row of either reason. Whether it has expired is the
  * decision module's call; the store only refuses to let such a write replace
  * an exclusion or a selection.
+ *
+ * ONE TIE IS NOT SYMMETRIC. `delegated` ranks 0 beside `person`
+ * (`WORK_SCOPE_ORIGIN_RANKS`), so the rank alone would let the workflow's
+ * choice, made because somebody said "you decide", replace a person's own
+ * entry. That overwrite is refused here, whatever the person's row says and
+ * expired or not. The decision module skips such keys too
+ * (`repositoriesADelegationTakes`), but only this statement sees the row as it
+ * stands when the write lands, so this is the guarantee. The reverse stays
+ * allowed, because a person replacing a delegated entry is their way back, and
+ * a delegated entry still replaces an earlier delegated one.
  */
 function overwriteAllowed(plan: WorkScopeWritePlan, proposed: SQL, stored: SQL) {
   return sql`(
-    ${proposed}.origin_rank <= ${stored}.origin_rank
-    OR (
-      ${expiredKeysPredicate(plan, sql`${proposed}.repository_key`)}
-      AND ${stored}.state = 'unavailable'
+    (
+      ${proposed}.origin_rank <= ${stored}.origin_rank
+      OR (
+        ${expiredKeysPredicate(plan, sql`${proposed}.repository_key`)}
+        AND ${stored}.state = 'unavailable'
+      )
     )
+    AND NOT (${proposed}.origin = 'delegated' AND ${stored}.origin = 'person')
   )`;
 }
 

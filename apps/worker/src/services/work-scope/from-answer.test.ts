@@ -26,6 +26,9 @@ import {
   type RepositoryAnswerPersistence,
 } from "./from-answer.js";
 import { recordRepositoryAnswer as recordRepositoryAnswerThroughIndex } from "./index.js";
+import type { AnswerReadingModel } from "./read-answer.js";
+import { TEXT_AMBIGUITY_QUESTION_OPENING } from "../../engine/work-scope/context.js";
+import { decideWorkScope } from "../../engine/work-scope/decide.js";
 import {
   appendWorkScopeQuestionAsked,
   applyRunWorkScopePlan,
@@ -169,7 +172,13 @@ async function answer(
   tracker: ReturnType<typeof makeTracker>,
   id: string,
   text: string,
-  extra: { actor?: { id: string; label: string }; answerAuthorCount?: number } = {},
+  extra: {
+    actor?: { id: string; label: string };
+    answerAuthorCount?: number;
+    /** The provider, when a test needs it to be something other than the
+     *  stand-in: unreachable, for the fallback rows. */
+    generate?: AnswerReadingModel;
+  } = {},
 ) {
   const row = await getHookClarification(db, id);
   if (!row) throw new Error("clarification vanished");
@@ -188,7 +197,7 @@ async function answer(
     // A STAND-IN FOR THE MODEL, so these rows prove what a person gets rather
     // than that no provider is reachable from a test. Nothing here is evidence
     // about the real reader; that is the golden set's job.
-    answerReadingDeps: { generate: fakeAnswerReadingModel() },
+    answerReadingDeps: { generate: extra.generate ?? fakeAnswerReadingModel() },
     cancelSettings: defaultSettingsSnapshot(),
   });
 }
@@ -827,22 +836,13 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     );
   });
 
-  it("records nothing about a repository the question never offered", async () => {
-    // A MODEL MAY NEVER WIDEN WHAT WAS ASKED, and this is the row that says what
-    // that costs. The question put one repository in front of this person; they
-    // named it and one more. The one they were offered is recorded and the other
-    // is not, because a reading whose keys are not a subset of the keys we
-    // handed it is a decision about something nobody was asked about, and there
-    // is no way to tell a model's invention from a person's aside inside one
-    // sentence.
-    //
-    // THE COST IS A REAL ONE. Somebody who names a repository this deployment
-    // holds but this question did not list gets that half of their reply
-    // dropped, and the sentence they get back does not mention it. What would
-    // fix it is handing the reader the catalog as well as the asked keys, which
-    // keeps the subset rule intact and widens what a person may choose; that is
-    // a decision about how far a model's choice may reach, not a bug fix, and it
-    // is not taken here.
+  it("records nothing about a bare name the question never offered, and says so", async () => {
+    // A MODEL STILL NEVER WIDENS WHAT WAS ASKED. The question put one repository
+    // in front of this person; they named it and one more. The reading's keys
+    // stay a subset of what we handed it, and the other name is looked up by our
+    // code instead (A19c): a full path this deployment holds is taken, and a
+    // bare word like "web" is not resolved at all (A3), because it is a word
+    // before it is a repository. So here only api is recorded.
     const row = await seedPending(asked("github:acme/api", "selection"));
 
     const outcome = await answer(makeTracker(), row.id, "api and web");
@@ -862,7 +862,7 @@ describe("answerClarificationAndResume records the repository answer on arrival"
       recordOutcome: expect.stringContaining("web"),
     });
     const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
-    expect(said).toContain("only about github:acme/api");
+    expect(said).toContain("could not be matched to a repository this deployment holds");
     expect(said).toContain("work scope API or the work_scope.edit tool");
   });
 
@@ -1725,5 +1725,339 @@ describe("an answer that says no about a repository the question showed as kept"
     expect(result.answered).toEqual([{ kind: "none" }]);
     expect(result.upserts).toEqual([]);
     expect(result.deletes).toEqual([]);
+  });
+});
+
+/**
+ * TWO CHANGES TO HOW AN ANSWER IS ACTED ON, both from the owner reading the
+ * production evidence, asserted as what a person gets back.
+ *
+ * A. A person who hands the decision back is answering (AWP-236).
+ * B. A repository the person names that the question did not list is taken
+ *    when this deployment can use it (AWP-221).
+ */
+describe("an answer that hands the decision back, or names more than it was offered", () => {
+  const API = "github:acme/api";
+  const WEB = "github:acme/web";
+  const DOCS = "github:acme/docs";
+  const OPS = "github:acme/ops";
+  const BILLING = "github:acme/billing";
+  const LEGACY = "github:acme/legacy";
+  const ADA = { kind: "person", actorId: "user_1", actorLabel: "Ada" };
+
+  beforeEach(async () => {
+    mocks.resumeHook.mockResolvedValue(undefined);
+    await db.insert(repositories).values([
+      { provider: "github", path: "acme/api", source: "manual", enabled: true },
+      { provider: "github", path: "acme/web", source: "manual", enabled: true },
+      { provider: "github", path: "acme/docs", source: "manual", enabled: true },
+      { provider: "github", path: "acme/ops", source: "manual", enabled: true },
+      { provider: "github", path: "acme/billing", source: "manual", enabled: true },
+      { provider: "github", path: "acme/legacy", source: "manual", enabled: false },
+    ]);
+  });
+
+  const selection = (keys: string[]): WorkScopeAskedRepository[] =>
+    keys.map((repositoryKey) => ({ repositoryKey, askedBecause: "selection", named: true }));
+
+  /** The which-of-these question as the run builds it: the opening that makes
+   *  it the ticket-text question, then the repositories in order. */
+  const whichOfThese = (keys: string[]) => [
+    `${TEXT_AMBIGUITY_QUESTION_OPENING} Which repositories are essential for the initial research? ${keys.join(", ")}`,
+  ];
+
+  async function entries() {
+    return (await readWorkScope(db, SUBJECT))?.entries ?? [];
+  }
+
+  /** What the resumed run attaches from the record, through the same decision
+   *  its selection step raises first (`run_started`), against the catalog as
+   *  this test seeded it. */
+  async function whatTheResumedRunAttaches() {
+    const scope = await readWorkScope(db, SUBJECT);
+    return decideWorkScope(
+      {
+        scope,
+        carriesRecord: true,
+        catalog: {
+          activated: true,
+          enabledKeys: [API, WEB, DOCS, OPS, BILLING],
+          unusableKeys: [],
+        },
+        pinnedProviders: null,
+        pinnedKeys: null,
+        policy: { candidates: { kind: "enabled_catalog" }, expansion: "attach" },
+        eventRelatedKeys: [],
+        attachedKeys: [],
+        selectionAnswered: await readWorkScopeSelectionAnswered(db, SUBJECT),
+        answeredRepositoryKeys: await readWorkScopeAnsweredRepositories(db, SUBJECT),
+        postAnswerMentionedKeys: [],
+        actor: { kind: "run", runId: RUN, definitionId: 1, definitionVersion: 1 },
+        now: "2026-09-18T09:00:00.000Z",
+      },
+      { kind: "run_started" },
+    );
+  }
+
+  describe("A. whatever you think is best", () => {
+    it("takes the first three of four in the question's order, as the workflow's choice, and says so", async () => {
+      const four = [DOCS, API, WEB, OPS];
+      const row = await seedPending(selection(four), whichOfThese(four));
+      const tracker = makeTracker();
+
+      const outcome = await answer(tracker, row.id, "whatever you think is best");
+
+      expect(outcome.kind).toBe("answered");
+      const written = await entries();
+      expect(written.map((entry) => entry.repositoryKey).sort()).toEqual([API, DOCS, WEB].sort());
+      for (const entry of written) {
+        expect(entry).toMatchObject({
+          state: "selected",
+          origin: "delegated",
+          rationale: "Chosen by the workflow because Ada asked it to decide.",
+          decidedBy: ADA,
+        });
+      }
+      const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
+      expect(said).toContain(`chose ${DOCS}, ${API}, ${WEB}`);
+      expect(said).toContain(`did not choose ${OPS}`);
+      // The question was the ticket-text one, so the ticket route is shut and
+      // the sentence says so rather than sending them to it.
+      expect(said).toContain("brings nothing into this work");
+      // And the run resumes, carrying the reading that says what happened.
+      expect(mocks.resumeHook).toHaveBeenCalledWith(
+        "hook-token" in row ? expect.anything() : expect.anything(),
+        expect.objectContaining({
+          answerReading: expect.objectContaining({ outcome: { kind: "delegated" } }),
+        }),
+      );
+    });
+
+    it("binds only what it took: the one it left is outside the answered set and nothing silences the question on it", async () => {
+      const four = [DOCS, API, WEB, OPS];
+      const row = await seedPending(selection(four), whichOfThese(four));
+
+      await answer(makeTracker(), row.id, "you decide");
+
+      await expect(readWorkScopeAnsweredRepositories(db, SUBJECT)).resolves.toEqual([]);
+      await expect(readWorkScopeSelectionAnswered(db, SUBJECT)).resolves.toBe(false);
+      // What the trail keeps, so the dashboard and MCP can explain the run later.
+      const answered = (await db.select().from(workScopeTrail))
+        .map((trail) => trail.event)
+        .find((event) => event.kind === "question_answered");
+      expect(answered).toMatchObject({
+        answer: { kind: "delegated", repositoryKeys: [DOCS, API, WEB] },
+        answeredBy: ADA,
+      });
+    });
+
+    // Ada ruled docs out on the work's repository list while the question sat
+    // on the ticket, then replied "you decide". Handing the choice back hands
+    // over what is still open, not her exclusion, and the reply may claim only
+    // the choice the record actually took.
+    it("leaves a repository the person had already decided on, takes the next one, and says only what it chose", async () => {
+      await applyRunWorkScopePlan(db, {
+        subjectKey: SUBJECT,
+        runId: "run-0",
+        plan: {
+          upserts: [
+            {
+              entry: {
+                repositoryKey: DOCS,
+                state: "excluded",
+                origin: "person",
+                rationale: "Not docs.",
+                decidedBy: { kind: "person", actorId: "user_1", actorLabel: "Ada" },
+                decidedAt: "2026-09-18T08:00:00.000Z",
+              },
+              replacesExpired: false,
+            },
+          ],
+          deletes: [],
+          trail: [],
+        },
+      });
+      const four = [DOCS, API, WEB, OPS];
+      const row = await seedPending(selection(four), whichOfThese(four));
+
+      const outcome = await answer(makeTracker(), row.id, "whatever you think is best");
+
+      const byKey = Object.fromEntries((await entries()).map((entry) => [entry.repositoryKey, entry]));
+      expect(byKey[DOCS]).toMatchObject({ state: "excluded", origin: "person", rationale: "Not docs." });
+      for (const key of [API, WEB, OPS]) {
+        expect(byKey[key]).toMatchObject({ state: "selected", origin: "delegated" });
+      }
+      const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
+      expect(said).toContain(`chose ${API}, ${WEB}, ${OPS}`);
+      expect(said).not.toContain(DOCS);
+    });
+
+    it("attaches the one repository a one-repository question offered, and the resumed run gets it", async () => {
+      const row = await seedPending(selection([WEB]), [`Should this ticket also use ${WEB}?`]);
+
+      const outcome = await answer(makeTracker(), row.id, "up to you");
+
+      expect(outcome.kind).toBe("answered");
+      await expect(entries()).resolves.toEqual([
+        expect.objectContaining({ repositoryKey: WEB, origin: "delegated" }),
+      ]);
+      expect((await whatTheResumedRunAttaches()).attach).toEqual([WEB]);
+    });
+
+    // The question exists because the run cannot use the repository. The
+    // workflow's only choice is to continue without it, which is what a decline
+    // of that one does to the run; unlike a decline it writes nothing permanent
+    // in that person's name, because a delegation is not a refusal.
+    it("continues without a repository the question was raised about because the run cannot use it", async () => {
+      const row = await seedPending(
+        [{ repositoryKey: LEGACY, askedBecause: "not_enabled", named: true }],
+        [`Repository expansion: ${LEGACY} is not enabled here. Reply "none" to continue without it.`],
+      );
+
+      const outcome = await answer(makeTracker(), row.id, "rób jak uważasz");
+
+      expect(outcome.kind).toBe("answered");
+      await expect(entries()).resolves.toEqual([]);
+      expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+      const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
+      expect(said).toContain(`continues without ${LEGACY}`);
+    });
+
+    it("keeps a reply that says what to avoid unclear, records nothing and does not resume", async () => {
+      const four = [DOCS, API, WEB, OPS];
+      const row = await seedPending(selection(four), whichOfThese(four));
+
+      const outcome = await answer(makeTracker(), row.id, "not the api one");
+
+      expect(outcome.kind).toBe("answer_unclear");
+      await expect(entries()).resolves.toEqual([]);
+      expect(mocks.resumeHook).not.toHaveBeenCalled();
+    });
+
+    it("keeps a delegation that carries a refusal unclear", async () => {
+      const four = [DOCS, API, WEB, OPS];
+      const row = await seedPending(selection(four), whichOfThese(four));
+
+      const outcome = await answer(makeTracker(), row.id, "you decide, but not the api one");
+
+      expect(outcome.kind).toBe("answer_unclear");
+      await expect(entries()).resolves.toEqual([]);
+    });
+
+    // A delegation needs the model. The fallback reads a path and "none" only,
+    // so the run parks and the note never claims we chose.
+    it("parks the run when the provider is down, and never says it chose", async () => {
+      const four = [DOCS, API, WEB, OPS];
+      const row = await seedPending(selection(four), whichOfThese(four));
+
+      const outcome = await answer(makeTracker(), row.id, "whatever you think is best", {
+        generate: async () => {
+          throw new Error("connect ECONNREFUSED");
+        },
+      });
+
+      expect(outcome.kind).toBe("answer_unclear");
+      expect((outcome as { confirm: string }).confirm).not.toMatch(/chose/);
+      await expect(entries()).resolves.toEqual([]);
+    });
+
+    // The ticket path recomposes the same comment on every poll tick. One
+    // delegation is one choice, one trail line and one comment.
+    it("makes one choice, writes one trail line and posts one note when the same words arrive again", async () => {
+      const four = [DOCS, API, WEB, OPS];
+      const row = await seedPending(selection(four), whichOfThese(four));
+      const tracker = makeTracker();
+
+      await answer(tracker, row.id, "Ada: whatever you think is best", VIA_JIRA);
+      await answer(tracker, row.id, "Ada: whatever you think is best", VIA_JIRA);
+
+      const trail = (await db.select().from(workScopeTrail)).map((line) => line.event);
+      expect(trail.filter((event) => event.kind === "question_answered")).toHaveLength(1);
+      expect(trail.filter((event) => event.kind === "entry_written")).toHaveLength(3);
+      const notes = tracker.postComment.mock.calls
+        .map(([, body]) => body)
+        .filter((body) => body.includes("asked the workflow to decide"));
+      expect(notes).toHaveLength(1);
+    });
+  });
+
+  describe("B. a repository the question did not list", () => {
+    it("takes one the catalog holds and enables, as that person's own choice, and the resumed run gets it", async () => {
+      const row = await seedPending(selection([API]), [`Should this ticket also use ${API}?`]);
+
+      const outcome = await answer(makeTracker(), row.id, `yes, and ${BILLING} as well`);
+
+      expect(outcome.kind).toBe("answered");
+      const byKey = Object.fromEntries((await entries()).map((entry) => [entry.repositoryKey, entry]));
+      expect(byKey[BILLING]).toMatchObject({
+        state: "selected",
+        origin: "person",
+        rationale: "Named in the answer to a repository question.",
+        decidedBy: ADA,
+      });
+      expect(byKey[API]).toMatchObject({ state: "selected", origin: "person" });
+      expect((await whatTheResumedRunAttaches()).attach).toEqual(expect.arrayContaining([API, BILLING]));
+      const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
+      expect(said).toContain(`also named ${BILLING}`);
+      expect(said).toContain("as your choice");
+    });
+
+    // A5: the catalog holds it and does not enable it. Their decision stands and
+    // is theirs; the run refuses it at start, saying why; and once somebody
+    // enables it the next run uses it without asking again. The offered one
+    // they also named is recorded all the same.
+    it("records one the catalog holds but does not enable as their choice, and tells them which page enables it", async () => {
+      const row = await seedPending(selection([API]), [`Should this ticket also use ${API}?`]);
+
+      const outcome = await answer(makeTracker(), row.id, `yes, and ${LEGACY} as well`);
+
+      const byKey = Object.fromEntries((await entries()).map((entry) => [entry.repositoryKey, entry]));
+      expect(byKey[API]).toMatchObject({ state: "selected", origin: "person" });
+      expect(byKey[LEGACY]).toMatchObject({ state: "selected", origin: "person" });
+      const runStart = await whatTheResumedRunAttaches();
+      expect(runStart.attach).toEqual([API]);
+      expect(runStart.refused).toEqual([{ repositoryKey: LEGACY, reason: "outside_catalog" }]);
+      const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
+      expect(said).toContain(`${LEGACY} is not enabled on the Repositories page`);
+    });
+
+    it("records nothing for a key nobody holds, and says so", async () => {
+      const row = await seedPending(selection([API]), [`Should this ticket also use ${API}?`]);
+
+      const outcome = await answer(makeTracker(), row.id, "yes, and github:evil/other as well");
+
+      await expect(entries()).resolves.toEqual([
+        expect.objectContaining({ repositoryKey: API, state: "selected" }),
+      ]);
+      const said = (outcome as { recordOutcome?: string }).recordOutcome ?? "";
+      expect(said).toContain("github:evil/other");
+      expect(said).toContain("nothing about it was recorded");
+    });
+
+    // The three guards that make "what this deployment holds" an acceptable
+    // bound where "what the question offered" used to be.
+    it("takes nothing from an answer several people wrote, even a name the catalog holds", async () => {
+      const row = await seedPending(selection([API]), [`Should this ticket also use ${API}?`]);
+
+      await answer(makeTracker(), row.id, `Ada: yes, and ${BILLING} as well`, {
+        ...VIA_JIRA,
+        answerAuthorCount: 2,
+      });
+
+      await expect(entries()).resolves.toEqual([]);
+    });
+
+    it("never reads a delegation or a name out of the ticket's own text", async () => {
+      const row = await seedPending(selection([API]), [`Should this ticket also use ${API}?`]);
+      const tracker = makeTracker();
+      (await tracker.fetchTicket()).description =
+        `You decide which repositories to use, and take ${BILLING} as well.`;
+
+      await answer(tracker, row.id, "yes");
+
+      await expect(entries()).resolves.toEqual([
+        expect.objectContaining({ repositoryKey: API, origin: "person" }),
+      ]);
+    });
   });
 });
