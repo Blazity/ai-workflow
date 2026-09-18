@@ -105,6 +105,23 @@ export const integrationConnectionVersions = pgTable(
       .$type<Record<string, string>>()
       .notNull()
       .default(sql`'{}'::jsonb`),
+    /**
+     * One non-reversible marker per secret field, written in the same statement
+     * as the ciphertext beside it.
+     *
+     * It exists because the ciphertext cannot answer "is this the same secret as
+     * before": AES-GCM uses a random initialisation vector, so re-saving the
+     * identical token produces different bytes every time. A fingerprint built
+     * from those bytes would move on every save and stop every run in flight
+     * with `reconfigured` although the account never changed.
+     *
+     * Written at save time, where the plaintext is. The resolver holds only the
+     * key id and never decrypts, so this is the only way it can compare.
+     */
+    secretDigests: jsonb("secret_digests")
+      .$type<Record<string, string>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     testStatus: text("test_status").$type<"passed" | "failed">().notNull(),
     testReason: text("test_reason").$type<IntegrationFailureReason>(),
     testMessage: text("test_message"),

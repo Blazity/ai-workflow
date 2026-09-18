@@ -21,6 +21,9 @@ export interface StoredIntegrationVersion {
   readonly config: Readonly<Record<string, string>>;
   /** Secret field ciphertexts, by field key. */
   readonly secrets: Readonly<Record<string, string>>;
+  /** One marker per secret field, written beside the ciphertext. The resolver
+   *  compares these because it cannot decrypt; see the schema for why. */
+  readonly secretDigests: Readonly<Record<string, string>>;
   readonly testStatus: "passed" | "failed";
   readonly testReason: IntegrationFailureReason | null;
   readonly testMessage: string | null;
@@ -68,6 +71,7 @@ interface VersionRow {
   version: number;
   config: Record<string, string> | null;
   secrets: Record<string, string> | null;
+  secret_digests: Record<string, string> | null;
   test_status: "passed" | "failed";
   test_reason: IntegrationFailureReason | null;
   test_message: string | null;
@@ -89,6 +93,7 @@ function toVersion(row: VersionRow): StoredIntegrationVersion {
     version: Number(row.version),
     config: row.config ?? {},
     secrets: row.secrets ?? {},
+    secretDigests: row.secret_digests ?? {},
     testStatus: row.test_status,
     testReason: row.test_reason,
     testMessage: row.test_message,
@@ -120,8 +125,8 @@ export async function readIntegrationConnections(
 
   const versions = rowsOf<VersionRow>(
     await db.execute(sql`
-      SELECT v.integration_id, v.version, v.config, v.secrets, v.test_status,
-             v.test_reason, v.test_message, v.tested_at, v.created_at
+      SELECT v.integration_id, v.version, v.config, v.secrets, v.secret_digests,
+             v.test_status, v.test_reason, v.test_message, v.tested_at, v.created_at
       FROM ${integrationConnectionVersions} AS v
       JOIN ${integrationConnections} AS c ON c.integration_id = v.integration_id
       WHERE v.version IN (c.active_version, c.latest_version)
@@ -171,6 +176,18 @@ export interface SaveIntegrationVersionInput {
   readonly expectedVersion: number;
   readonly config: Readonly<Record<string, string>>;
   readonly secrets: Readonly<Record<string, string>>;
+  /** One per stored secret, computed from the plaintext at save time. */
+  readonly secretDigests: Readonly<Record<string, string>>;
+  /**
+   * Whether activating this version also makes stored values the live source.
+   *
+   * Set when the environment is not a usable source for this integration, so a
+   * first connection is one action rather than a save followed by a switch. It
+   * is part of THIS statement and not a second one, because an invocation killed
+   * between the two would leave stored values active, the source on
+   * `environment`, and a card reading "Not connected" after a green test.
+   */
+  readonly takeOverSource: boolean;
   readonly test: {
     readonly status: "passed" | "failed";
     readonly reason: IntegrationFailureReason | null;
@@ -209,6 +226,7 @@ export type SaveIntegrationVersionResult =
  */
 export function saveIntegrationVersionStatement(input: SaveIntegrationVersionInput) {
   const activates = input.test.status === "passed";
+  const takesOver = activates && input.takeOverSource;
   return sql`
     WITH existing AS (
       SELECT integration_id, latest_version, active_version, source, enabled
@@ -229,7 +247,7 @@ export function saveIntegrationVersionStatement(input: SaveIntegrationVersionInp
       )
       SELECT
         ${input.integrationId}, 1, ${activates ? sql`1` : sql`NULL::integer`},
-        'environment',
+        ${takesOver ? sql`'stored'` : sql`'environment'`},
         ${activates ? sql`${input.test.status}` : sql`NULL::text`},
         ${activates && input.test.reason ? sql`${input.test.reason}` : sql`NULL::text`},
         ${activates && input.test.message ? sql`${input.test.message}` : sql`NULL::text`},
@@ -252,6 +270,7 @@ export function saveIntegrationVersionStatement(input: SaveIntegrationVersionInp
             ? sql`${integrationConnections}.latest_version + 1`
             : sql`${integrationConnections}.active_version`
         },
+        source = ${takesOver ? sql`'stored'` : sql`${integrationConnections}.source`},
         last_test_status = ${activates ? sql`${input.test.status}` : sql`${integrationConnections}.last_test_status`},
         last_test_reason = ${activates && input.test.reason ? sql`${input.test.reason}` : sql`${integrationConnections}.last_test_reason`},
         last_test_message = ${activates && input.test.message ? sql`${input.test.message}` : sql`${integrationConnections}.last_test_message`},
@@ -270,12 +289,13 @@ export function saveIntegrationVersionStatement(input: SaveIntegrationVersionInp
       SELECT integration_id, latest_version FROM updated
     ), minted AS (
       INSERT INTO ${integrationConnectionVersions} (
-        integration_id, version, config, secrets, test_status, test_reason,
-        test_message, tested_at, actor_id
+        integration_id, version, config, secrets, secret_digests, test_status,
+        test_reason, test_message, tested_at, actor_id
       )
       SELECT
         target.integration_id, target.latest_version,
         ${JSON.stringify(input.config)}::jsonb, ${JSON.stringify(input.secrets)}::jsonb,
+        ${JSON.stringify(input.secretDigests)}::jsonb,
         ${input.test.status}, ${input.test.reason}, ${input.test.message}, now(),
         ${input.actorId}
       FROM target
@@ -411,6 +431,7 @@ export async function disconnectIntegration(
       UPDATE ${integrationConnectionVersions} SET
         config = '{}'::jsonb,
         secrets = '{}'::jsonb,
+        secret_digests = '{}'::jsonb,
         redacted_at = now()
       WHERE integration_id = ${input.integrationId}
         AND redacted_at IS NULL

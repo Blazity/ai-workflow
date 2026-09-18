@@ -40,7 +40,9 @@ import {
   type StoredIntegrationConnection,
   type StoredIntegrationVersion,
   environmentReaderFrom,
+  integrationSecretDigest,
   integrationVerificationFingerprint,
+  normalizeConnectionValue,
   resolveIntegrationState,
 } from "./resolve.js";
 
@@ -71,22 +73,6 @@ export class IntegrationVersionConflictError extends Error {
     this.name = "IntegrationVersionConflictError";
     this.currentVersion = currentVersion;
   }
-}
-
-/**
- * A submitted value as it will be stored.
- *
- * Whitespace around a pasted token or URL is what a clipboard adds, never what
- * an admin means, so it goes. A `multiline` value is left exactly as typed: a
- * PEM key's newlines and its trailing line are part of the value, and trimming
- * one has broken a deployment before.
- */
-function normalizeFieldValue(
-  value: string | undefined,
-  field: { readonly format?: "text" | "multiline" | "url" | "integer" },
-): string | undefined {
-  if (value === undefined) return undefined;
-  return field.format === "multiline" ? value : value.trim();
 }
 
 /** Timeout for a connection test. Well under the invocation ceiling, because an
@@ -326,7 +312,6 @@ export async function saveIntegrationConnection(
     input.integrationId,
   );
   const stored = (await readConnectedIntegrationConnections()).get(input.integrationId) ?? null;
-  const stateBefore = stateOf(manifest, stored, material);
   // What the admin last SAVED, not what is in use. A save the provider refused
   // still holds the values they typed, and the next save builds on those: an
   // admin who pasted a new token with a wrong URL, then fixed the URL and left
@@ -336,15 +321,22 @@ export async function saveIntegrationConnection(
 
   const config: Record<string, string> = {};
   const secrets: Record<string, string> = {};
+  // Beside each ciphertext, the marker the resolver compares. It has to be made
+  // here, because here is the only place the plaintext exists.
+  const secretDigests: Record<string, string> = {};
   for (const field of manifest.connection.fields) {
     if (!field.secret) {
-      const supplied = normalizeFieldValue(input.values[field.key], field);
+      const supplied = input.values[field.key] === undefined
+        ? undefined
+        : normalizeConnectionValue(input.values[field.key] ?? "", field);
       const value = supplied ?? previous?.config[field.key] ?? "";
       if (value.length > 0) config[field.key] = value;
       continue;
     }
     if (input.clearSecrets.includes(field.key)) continue;
-    const supplied = normalizeFieldValue(input.values[field.key], field);
+    const supplied = input.values[field.key] === undefined
+        ? undefined
+        : normalizeConnectionValue(input.values[field.key] ?? "", field);
     if (supplied !== undefined && supplied.length > 0) {
       if (!material.present) {
         throw new DashboardAuthError(
@@ -356,18 +348,27 @@ export async function saveIntegrationConnection(
         integrationId: manifest.id,
         fieldKey: field.key,
       });
+      secretDigests[field.key] = integrationSecretDigest(manifest.id, field.key, supplied);
       continue;
     }
-    // Untouched: the ciphertext moves forward as bytes. Re-encrypting would need
-    // the old value, and a save that only changes a URL must not need the key.
+    // Untouched: the ciphertext moves forward as bytes, and its marker with it.
+    // Re-encrypting would need the old value, and a save that only changes a URL
+    // must not need the key. The marker is what makes that safe: the bytes
+    // differ from the previous version's only by their initialisation vector,
+    // and nothing compares the bytes.
     const carried = previous?.secrets[field.key];
-    if (carried) secrets[field.key] = carried;
+    if (carried) {
+      secrets[field.key] = carried;
+      const carriedDigest = previous?.secretDigests[field.key];
+      if (carriedDigest) secretDigests[field.key] = carriedDigest;
+    }
   }
 
   const candidate: StoredIntegrationVersion = {
     version: (stored?.latestVersion ?? 0) + 1,
     config,
     secrets,
+    secretDigests,
     testStatus: "failed",
     testReason: null,
     testMessage: null,
@@ -385,11 +386,25 @@ export async function saveIntegrationConnection(
     ? await runConnectionTest(manifest, resolved.values)
     : { ok: false, failure: resolved.failure };
 
+  // "Is the environment a usable source for this integration", not "did anyone
+  // set a variable". A manifest whose fields are all optional, or one with no
+  // fields at all, has a complete environment and must not be taken over; an
+  // environment that is half set, or whose variable names an upgrade renamed,
+  // cannot serve and there is nothing to protect.
+  const environmentState = resolveIntegrationState({
+    manifest,
+    environment: environmentReaderFrom(),
+    stored: { ...(stored ?? emptyStored()), source: "environment" },
+    secretsKey: keyState(material),
+  });
+
   const result = await saveConnectedIntegrationVersion({
     integrationId: manifest.id,
     expectedVersion: input.expectedVersion,
     config,
     secrets,
+    secretDigests,
+    takeOverSource: environmentState.connection !== "connected",
     test: {
       status: test.ok ? "passed" : "failed",
       reason: test.ok ? null : test.failure.reason,
@@ -404,21 +419,6 @@ export async function saveIntegrationConnection(
     actorId: input.actor.id,
   });
   if (result.conflict) throw new IntegrationVersionConflictError(result.currentVersion);
-
-  // The first connection on a deployment that configures nothing through its
-  // environment is one action, not two: there is no environment connection to
-  // protect, so leaving the source on `environment` would answer a successful
-  // save with "Not connected" and make the admin press a second button to
-  // finish what they already did. Where the environment DOES set some of the
-  // variables, the switch stays explicit, because that is the prepare-and-switch
-  // journey the plan asks for.
-  if (test.ok && stateBefore.environment.setVariables.length === 0 && stateBefore.source === "environment") {
-    await setConnectedIntegrationSource({
-      integrationId: manifest.id,
-      source: "stored",
-      actorId: input.actor.id,
-    });
-  }
 
   return respond(manifest, material, test);
 }

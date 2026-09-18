@@ -40,6 +40,8 @@ function save(overrides: Partial<Parameters<typeof saveIntegrationVersion>[1]> =
     expectedVersion: 0,
     config: { baseUrl: "https://fixture.example/site" },
     secrets: { apiToken: "v1:aaaaaaaa:fixture.apiToken:iv:tag:body" },
+    secretDigests: { apiToken: "digest-one" },
+    takeOverSource: false,
     test: PASSED,
     actorId: "user-1",
     ...overrides,
@@ -64,6 +66,29 @@ describe("saving stored values", () => {
   it("leaves the source alone, so preparing values does not switch anything (INT-053)", async () => {
     await save();
     expect((await readIntegrationConnections(db)).get("fixture")?.source).toBe("environment");
+  });
+
+  it("makes stored the source in the same statement when the caller says to", async () => {
+    // One statement, not two. An invocation killed between a save and a
+    // follow-up switch would leave stored values active, the source on
+    // environment, and a card reading Not connected after a green test.
+    await save({ takeOverSource: true });
+    const stored = (await readIntegrationConnections(db)).get("fixture");
+    expect(stored?.source).toBe("stored");
+    expect(stored?.activeVersion).toBe(1);
+  });
+
+  it("does not take the source over when the version did not activate", async () => {
+    await save({ takeOverSource: true, test: FAILED });
+    const stored = (await readIntegrationConnections(db)).get("fixture");
+    expect(stored?.source).toBe("environment");
+    expect(stored?.activeVersion).toBeNull();
+  });
+
+  it("keeps the markers the resolver compares, beside the ciphertexts", async () => {
+    await save();
+    const stored = (await readIntegrationConnections(db)).get("fixture");
+    expect(stored?.active?.secretDigests).toEqual({ apiToken: "digest-one" });
   });
 
   it("remembers a save whose test failed without putting it in use (INT-051, INT-018)", async () => {
@@ -205,6 +230,13 @@ describe("disconnecting (INT-070)", () => {
     expect(stored?.activeVersion).toBeNull();
     expect(stored?.lastTest).toBeNull();
 
+    const raw0 = await db.execute(
+      "select secret_digests::text as digests from integration_connection_versions",
+    );
+    for (const row of (raw0 as { rows?: { digests: string }[] }).rows ?? []) {
+      expect(row.digests).toBe("{}");
+    }
+
     const versions = await readIntegrationAudit(db, "fixture");
     expect(versions).toHaveLength(2);
     for (const version of versions) {
@@ -248,6 +280,8 @@ describe("the statement a save is", () => {
         expectedVersion: 4,
         config: {},
         secrets: {},
+        secretDigests: {},
+        takeOverSource: false,
         test: PASSED,
         actorId: null,
       }),

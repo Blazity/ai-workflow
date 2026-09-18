@@ -17,7 +17,9 @@ const manifest = defineIntegration({
   connection: {
     fields: [
       { key: "baseUrl", label: "Site URL", env: "DEMO_BASE_URL", secret: false, format: "url" },
-      { key: "apiToken", label: "API token", env: "DEMO_API_TOKEN", secret: true },
+      // Marked as naming the account, the way a Slack bot token does: this is
+      // the flag whose digest reaches what a run pins.
+      { key: "apiToken", label: "API token", env: "DEMO_API_TOKEN", secret: true, identity: true },
       {
         key: "privateKey",
         label: "Private key",
@@ -37,6 +39,8 @@ const manifest = defineIntegration({
 /** The token the provider below accepts. Anything else is refused the way a real
  *  one refuses: with a body that echoes what was sent. */
 const GOOD_TOKEN = "demo-token-good-0123456789";
+/** A second account's token, which the provider also accepts. */
+const OTHER_TOKEN = "demo-token-other-0123456789";
 const BAD_TOKEN = "demo-token-bad-0123456789";
 
 const testConnection = vi.fn(async (ctx: { connection: Record<string, unknown> }) => {
@@ -47,7 +51,9 @@ const testConnection = vi.fn(async (ctx: { connection: Record<string, unknown> }
   if (!baseUrl.startsWith("https://demo.example")) {
     throw new Error(`fetch failed: ${baseUrl}`);
   }
-  if (ctx.connection.apiToken === GOOD_TOKEN) return { ok: true as const, message: "Demo reachable" };
+  if (ctx.connection.apiToken === GOOD_TOKEN || ctx.connection.apiToken === OTHER_TOKEN) {
+    return { ok: true as const, message: "Demo reachable" };
+  }
   return {
     ok: false as const,
     // Providers really do echo the credential back in an error body.
@@ -160,13 +166,31 @@ describe("an admin connecting an integration for the first time", () => {
     expect(switched.integration.state.status).toBe("connected");
   });
 
-  it("does not switch a half-configured environment out from under the admin", async () => {
-    // One variable set is a typo, not a decision. It is still the source, so a
-    // stored save must not silently take over and make the typo invisible.
+  it("also finishes in one action when the environment is half set, since it cannot serve", async () => {
+    // One variable set is a typo, and a typo is not a source. Leaving the
+    // connection on it would answer a green test with Failing and ask the admin
+    // for a second click to fix what they already fixed. The incomplete
+    // environment is still on the card, so the typo stays visible.
     process.env.DEMO_BASE_URL = "https://demo.example/site";
     const saved = await save(GOOD);
+    expect(saved.test?.ok).toBe(true);
+    expect(saved.integration.state.source).toBe("stored");
+    expect(saved.integration.state.status).toBe("connected");
+    expect(saved.integration.state.environment.missingVariables).toEqual(["DEMO_API_TOKEN"]);
+  });
+
+  it("never takes over an environment that works, whatever the manifest looks like", async () => {
+    // The protection that matters, and the reason the decision is "can the
+    // environment serve" rather than "did anyone set a variable": a manifest
+    // whose fields are all optional, or one with no fields at all, has a
+    // complete environment that nobody set, and taking it over would move a
+    // working deployment onto stored values it never asked for.
+    process.env.DEMO_BASE_URL = "https://demo.example/site";
+    process.env.DEMO_API_TOKEN = GOOD_TOKEN;
+    const saved = await save(GOOD);
+    expect(saved.test?.ok).toBe(true);
     expect(saved.integration.state.source).toBe("environment");
-    expect(saved.integration.state.status).toBe("failing");
+    expect(saved.integration.state.stored.activeVersion).toBe(1);
   });
 });
 
@@ -181,6 +205,60 @@ describe("a provider that does not answer at all (INT-012)", () => {
 
     const refused = await save({ ...GOOD, apiToken: BAD_TOKEN }, 1);
     expect(refused.test?.ok === false && refused.test.failure.reason).toBe("credential_rejected");
+  });
+});
+
+describe("what a run pins across saves", () => {
+  const pin = (r: { integration: { state: { pin: { configFingerprint: string } } } }) =>
+    r.integration.state.pin.configFingerprint;
+
+  it("does not move when the same token is stored again", async () => {
+    // Saving the identical token encrypts it to different bytes. Nothing a run
+    // pins may notice that, or an admin correcting a URL would stop every run in
+    // flight for an account that never changed.
+    const first = await save(GOOD);
+    const second = await save(GOOD, first.integration.state.stored.latestVersion);
+    expect(second.test?.ok).toBe(true);
+    expect(pin(second)).toBe(pin(first));
+  });
+
+  it("does not move when a save changes nothing at all", async () => {
+    // Every value carried forward, including the secret, whose ciphertext moves
+    // across unchanged and whose marker has to move with it. Without the marker
+    // the account would stop being named and the pin would shift on a save that
+    // touched nothing.
+    const first = await save(GOOD);
+    const second = await save({}, first.integration.state.stored.latestVersion);
+    expect(second.test?.ok).toBe(true);
+    expect(pin(second)).toBe(pin(first));
+  });
+
+  it("moves when the token names a different account", async () => {
+    const first = await save(GOOD);
+    const second = await save(
+      { ...GOOD, apiToken: OTHER_TOKEN },
+      first.integration.state.stored.latestVersion,
+    );
+    expect(second.test?.ok).toBe(true);
+    expect(pin(second)).not.toBe(pin(first));
+  });
+
+  it("does not move when the same connection is read from the environment instead", async () => {
+    // Switching source with the same values is not a reconfiguration, and that
+    // has to hold for a secret whose digest is the only thing naming the
+    // account. This goes through the save, which writes the marker, and the
+    // resolver, which reads it, with nothing shared between them but the stored
+    // row.
+    const stored = await save(GOOD);
+    process.env.DEMO_BASE_URL = GOOD.baseUrl;
+    process.env.DEMO_API_TOKEN = GOOD_TOKEN;
+    const switched = await setIntegrationConnectionSource({
+      actor: ADMIN,
+      integrationId: "demo",
+      source: "environment",
+    });
+    expect(switched.integration.state.source).toBe("environment");
+    expect(pin(switched)).toBe(pin(stored));
   });
 });
 

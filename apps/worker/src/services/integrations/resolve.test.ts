@@ -7,6 +7,7 @@ import {
   type StoredIntegrationVersion,
   checkIntegrationPin,
   environmentReaderFrom,
+  integrationSecretDigest,
   integrationVerificationFingerprint,
   resolveIntegrationState,
 } from "./resolve.js";
@@ -75,6 +76,7 @@ function version(overrides: Partial<StoredIntegrationVersion> = {}): StoredInteg
       integrationId: "fixture",
       fieldKey: "apiToken",
     }) },
+    secretDigests: { apiToken: integrationSecretDigest("fixture", "apiToken", "stored-token") },
     testStatus: "passed",
     testReason: null,
     testMessage: null,
@@ -297,6 +299,66 @@ describe("the secrets key", () => {
   });
 });
 
+describe("a provider that could not be reached", () => {
+  const unreachable = (fingerprint: string) =>
+    resolve({
+      env: COMPLETE_ENV,
+      stored: storedRow({
+        source: "environment",
+        active: null,
+        activeVersion: null,
+        latestVersion: 0,
+        lastTest: {
+          status: "failed",
+          reason: "provider_unreachable",
+          message: "fetch failed",
+          at: "2026-09-18T12:00:00.000Z",
+          fingerprint,
+        },
+      }),
+    });
+
+  it("leaves the connection exactly as it was, because it says nothing about the values", () => {
+    // Without this, thirty seconds of provider downtime while an admin happens
+    // to press Test would stop every run until a human pressed Test again, and
+    // there is no "save it anyway" to climb back out with.
+    const state = unreachable(verificationFingerprintOf(COMPLETE_ENV));
+    expect(state.status).toBe("connected");
+    expect(state.usable).toBe(true);
+    expect(state.failure).toBeNull();
+  });
+
+  it("still says what happened and when, so nobody thinks the check ran", () => {
+    const state = unreachable(verificationFingerprintOf(COMPLETE_ENV));
+    expect(state.verification).toEqual({
+      state: "failed",
+      at: "2026-09-18T12:00:00.000Z",
+      failure: { reason: "provider_unreachable", message: "fetch failed" },
+    });
+  });
+
+  it("is not how a refused credential behaves", () => {
+    const refused = resolve({
+      env: COMPLETE_ENV,
+      stored: storedRow({
+        source: "environment",
+        active: null,
+        activeVersion: null,
+        latestVersion: 0,
+        lastTest: {
+          status: "failed",
+          reason: "credential_rejected",
+          message: "401 Unauthorized",
+          at: "2026-09-18T12:00:00.000Z",
+          fingerprint: verificationFingerprintOf(COMPLETE_ENV),
+        },
+      }),
+    });
+    expect(refused.status).toBe("failing");
+    expect(refused.usable).toBe(false);
+  });
+});
+
 describe("a test verdict and the values it was about", () => {
   it("demotes an otherwise complete environment when the last test failed against these values", () => {
     const state = resolve({
@@ -466,6 +528,100 @@ describe("an integration whose only identifying value is a secret", () => {
 
   it("still follows a rotation of a secret that only authenticates", () => {
     expect(pinFor({ ...original, ONLYSECRET_SIGNING: "signing-two" })).toBe(pinFor(original));
+  });
+
+  it("does not move the pin when the same token is stored again", () => {
+    // The journey this exists for: an admin re-pastes the same bot token, or
+    // saves it again while fixing a URL. AES-GCM gives a new initialisation
+    // vector every time, so the stored bytes differ although the account did
+    // not. A pin built from those bytes would stop every run in flight.
+    const pinForStored = (plaintext: string) =>
+      resolveIntegrationState({
+        manifest: workspaceToken,
+        environment: environmentReaderFrom({}),
+        stored: {
+          enabled: true,
+          source: "stored",
+          latestVersion: 1,
+          activeVersion: 1,
+          active: {
+            version: 1,
+            config: {},
+            secrets: {
+              botToken: encryptIntegrationSecret(plaintext, KEY, {
+                integrationId: "onlysecret",
+                fieldKey: "botToken",
+              }),
+              signingSecret: encryptIntegrationSecret("signing-one", KEY, {
+                integrationId: "onlysecret",
+                fieldKey: "signingSecret",
+              }),
+            },
+            secretDigests: {
+              botToken: integrationSecretDigest("onlysecret", "botToken", plaintext),
+              signingSecret: integrationSecretDigest("onlysecret", "signingSecret", "signing-one"),
+            },
+            testStatus: "passed",
+            testReason: null,
+            testMessage: null,
+            testedAt: "2026-09-18T10:00:00.000Z",
+            createdAt: "2026-09-18T10:00:00.000Z",
+          },
+          latest: null,
+          lastTest: null,
+        },
+        secretsKey: PRESENT,
+      }).pin.configFingerprint;
+
+    // Two encryptions of the same value, which differ byte for byte.
+    expect(pinForStored("xoxb-one")).toBe(pinForStored("xoxb-one"));
+    // And a genuinely different account still moves it.
+    expect(pinForStored("xoxb-two")).not.toBe(pinForStored("xoxb-one"));
+  });
+
+  it("gives the same pin whether the token arrives from the environment or from storage", () => {
+    // Switching source with the same values is not a reconfiguration, and that
+    // has to hold for a secret the manifest marks as naming the account too.
+    const fromEnvironment = resolveIntegrationState({
+      manifest: workspaceToken,
+      environment: environmentReaderFrom(original),
+      stored: null,
+      secretsKey: PRESENT,
+    }).pin.configFingerprint;
+
+    const fromStorage = resolveIntegrationState({
+      manifest: workspaceToken,
+      environment: environmentReaderFrom({}),
+      stored: {
+        enabled: true,
+        source: "stored",
+        latestVersion: 1,
+        activeVersion: 1,
+        active: {
+          version: 1,
+          config: {},
+          secrets: { botToken: "irrelevant", signingSecret: "irrelevant" },
+          secretDigests: {
+            botToken: integrationSecretDigest("onlysecret", "botToken", original.ONLYSECRET_BOT_TOKEN),
+            signingSecret: integrationSecretDigest(
+              "onlysecret",
+              "signingSecret",
+              original.ONLYSECRET_SIGNING,
+            ),
+          },
+          testStatus: "passed",
+          testReason: null,
+          testMessage: null,
+          testedAt: "2026-09-18T10:00:00.000Z",
+          createdAt: "2026-09-18T10:00:00.000Z",
+        },
+        latest: null,
+        lastTest: null,
+      },
+      secretsKey: PRESENT,
+    }).pin.configFingerprint;
+
+    expect(fromStorage).toBe(fromEnvironment);
   });
 
   it("puts no secret value into what it pins", () => {

@@ -1,5 +1,5 @@
 {
-  "id": "493c146b-e013-4329-8613-7b8a1af91339",
+  "id": "58fd72ef-9ce9-4148-9cb8-f0ac229c9b0d",
   "prevId": "77251730-769e-4226-b1c5-38e706aac4a2",
   "version": "7",
   "dialect": "postgresql",
@@ -1821,6 +1821,13 @@
         },
         "secrets": {
           "name": "secrets",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "secret_digests": {
+          "name": "secret_digests",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true,

@@ -610,7 +610,7 @@ Its output carries no secret and no ciphertext. That is a property of the type:
 | `verification` | `never_tested`, `stale`, `passed`, `failed` | What the last connection test proved, and whether it still applies. |
 | `failure.reason` | nine values, see `packages/contracts/api.ts` | Split as finely as the admin's ACTION differs. |
 
-Two rules decide `connected`:
+Three rules decide `connected`:
 
 - **Complete is not verified.** Stored values become the active version only when
   their test passed, so a stored connection that is `connected` always has a
@@ -621,6 +621,25 @@ Two rules decide `connected`:
   false, and inventing a verification time would be worse, so `verification` is
   `never_tested` and carries no time at all. S5 and S6 render that; they do not
   build a sentence about it at the edge.
+
+- **A provider that could not be REACHED does not demote anything.** A refusal is
+  about the credential; a timeout, an aborted request or a transport failure is
+  about the network, and with no "save it anyway" to climb back out with, a
+  thirty second outage while an admin happens to press Test would otherwise
+  record a failure that stops every run until a human pressed Test again.
+  `credential_rejected` demotes to `failing`; `provider_unreachable` leaves the
+  connection as it was, and `verification` still carries what happened and when,
+  so nobody reads it as a check that passed.
+
+  The boundary: core reads a thrown error from `testConnection` as unreachable
+  and a returned `{ ok: false }` as a refusal, because a returned refusal means
+  the provider answered about the credential. `ctx.http` returns a non-2xx rather
+  than throwing, so **an integration that gets a 5xx decides**: it should throw
+  (or rethrow) so core reads it as unreachable, and return `{ ok: false }` only
+  when the provider has actually said something about the credential. This is
+  written here rather than in the SDK because S2 may not change the S0 contract;
+  a later stage that finds the distinction worth typing should add it to
+  `ConnectionTestResult` and record it in the change log.
 
 A partial environment is `failing` with the missing variable NAMES, never a
 silent fall back to stored values: that would make a typo and a deliberate switch
@@ -647,12 +666,20 @@ escape hatch for a provider outage would take a working deployment down. If a
 real deployment is ever blocked by a broken probe, the override to add is one
 that stays usable, and its shape is decided then rather than guessed now.
 
-**The first connection is one action.** On a deployment whose environment sets
-none of an integration's declared variables there is no environment connection
-to protect, so a save whose test passed also becomes the source. Where the
-environment sets some of them, the switch stays explicit: that is the
-prepare-and-switch journey, and taking it over automatically would hide a
-half-configured environment behind stored values.
+**The first connection is one action.** A save whose test passed also becomes
+the source when the environment is not a usable source for that integration, and
+it does so **inside the same statement**: a second write would leave an
+invocation killed between the two with stored values active, the source on
+`environment`, and a card reading "Not connected" after a green test.
+
+The condition is "can the environment serve this integration", not "did anyone
+set a variable". A manifest whose fields are all optional, and one with no fields
+at all, has a complete environment nobody set, and taking that over would move a
+working deployment onto stored values it never asked for. An environment that is
+half set, or whose variable names an upgrade renamed, cannot serve, and leaving
+the connection on it would answer a green test with Failing and ask for a second
+click to fix what was already fixed. The incomplete environment stays on the
+card either way, so a typo is still visible.
 
 ### The pin: a fingerprint, not a number
 
@@ -676,11 +703,27 @@ values. Consequences, each deliberate:
 
 **A change to a manifest's connection fields is a drain event**, the same way a
 moved `"use step"` file is (decision 5). Renaming a field key, changing its
-`env`, or changing a default moves the fingerprint for every deployment that
-sets it, and every run in flight through that integration stops with
-`reconfigured`. Adding or removing a field nobody has set does not. A stage that
-changes a connection field drains production and demo before it merges and says
-so in its DoD.
+`env`, changing a default or turning `identity` on or off moves the fingerprint
+for every deployment that sets that field, and every run in flight through the
+integration stops with `reconfigured`. Adding or removing a field nobody has set
+does not.
+
+**The check is a committed artefact**, because otherwise the rule is a paragraph
+nobody reads at the moment it applies: renaming a field key is a one-line edit
+inside an integration package, and nothing in a diff says a run will die of it.
+`apps/worker/src/services/integrations/connection-shape.snapshot.json` holds
+every shipped integration's connection shape (key, env, secret, identity,
+optional, default, format), and
+`connection-shape.test.ts` fails when it moves. So the edit and its consequence
+arrive in one review.
+
+**Who demands the drain line:** the stages that change a manifest, which from
+here is S8 to S12 and S15. A moved snapshot in the diff is what obliges that
+stage to add the drain to its definition of done, naming the integrations whose
+shape moved, exactly as the `"use step"` guard tests do for a moved step. It is
+a review obligation rather than a gate, because a gate cannot tell a first
+manifest, where every field is new and no deployment has values, from a rename
+on a live one.
 
 `checkIntegrationPin` answers in this order: a pin for another integration
 (a caller bug, answered rather than silently resolved against the wrong
@@ -703,6 +746,20 @@ post into the wrong company's channels.
 marks a secret that names the account. Its value enters the configuration
 fingerprint as a digest, never in the clear, so the swap stops the run with
 `reconfigured`.
+
+**The digest is of the plaintext, and it is stored.** It cannot be derived from
+the ciphertext: AES-GCM uses a random initialisation vector, so the identical
+token encrypts to different bytes on every save, and a fingerprint built from
+those bytes would move whenever an admin re-pasted the same token or saved it
+again while fixing a URL, stopping every run in flight for an account that never
+changed. The save path is the only place the plaintext exists, so it writes one
+marker per secret field into `integration_connection_versions.secret_digests`,
+in the same statement as the ciphertext beside it. The resolver holds only the
+key id, never decrypts, and compares markers. The environment source has the
+plaintext in hand and computes the same marker through the same function, so
+switching source with the same token moves no pin. A disconnect erases the
+markers with the values: a digest of a credential must not outlive the
+credential.
 
 Chosen over storing the account identity a connection test reported, because a
 manifest flag also works for the environment source, which may never have been

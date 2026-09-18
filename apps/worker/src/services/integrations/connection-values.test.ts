@@ -15,6 +15,14 @@ const manifest = defineIntegration({
       { key: "apiToken", label: "API token", env: "FIXTURE_API_TOKEN", secret: true },
       { key: "appId", label: "App id", env: "FIXTURE_APP_ID", secret: false, format: "integer" },
       {
+        key: "privateKey",
+        label: "Private key",
+        env: "FIXTURE_PRIVATE_KEY",
+        secret: false,
+        optional: true,
+        format: "multiline",
+      },
+      {
         key: "host",
         label: "Host",
         env: "FIXTURE_HOST",
@@ -58,6 +66,26 @@ describe("the values an integration actually receives", () => {
     });
   });
 
+  it("hands a multiline value to the provider with its shape intact", () => {
+    // A PEM key's newlines and its trailing line are part of the key. Trimming
+    // them produces a value the provider rejects for a reason that has nothing
+    // to do with the credential being wrong.
+    const pem = "-----BEGIN KEY-----\n  indented\nline\n-----END KEY-----\n";
+    const result = readConnectionValues({
+      manifest,
+      source: "environment",
+      environment: environmentReaderFrom({
+        FIXTURE_BASE_URL: "https://fixture.example/site",
+        FIXTURE_API_TOKEN: "token-abcdef",
+        FIXTURE_APP_ID: "42",
+        FIXTURE_PRIVATE_KEY: pem,
+      }),
+      active: null,
+      secretsKey: SECRETS_KEY,
+    });
+    expect(result.ok && result.values.privateKey).toBe(pem);
+  });
+
   it("takes the whitespace off a pasted value rather than handing it to the provider", () => {
     const result = readConnectionValues({
       manifest,
@@ -88,6 +116,7 @@ describe("the values an integration actually receives", () => {
             fieldKey: "apiToken",
           }),
         },
+        secretDigests: {},
         testStatus: "passed",
         testReason: null,
         testMessage: null,
@@ -114,6 +143,7 @@ describe("the values an integration actually receives", () => {
             fieldKey: "apiToken",
           }),
         },
+        secretDigests: {},
         testStatus: "passed",
         testReason: null,
         testMessage: null,
@@ -135,6 +165,7 @@ describe("the values an integration actually receives", () => {
         version: 1,
         config: { baseUrl: "https://fixture.example/stored", appId: "7" },
         secrets: { apiToken: "v1:deadbeef:fixture.apiToken:a:b:c" },
+        secretDigests: {},
         testStatus: "passed",
         testReason: null,
         testMessage: null,

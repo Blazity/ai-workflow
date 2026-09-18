@@ -95,7 +95,13 @@ export function resolveIntegrationState(input: ResolveIntegrationInput): Integra
     secretsKey,
   );
 
-  const values = connectionValueShape({ fields, source, environment, active });
+  const values = connectionValueShape({
+    integrationId: manifest.id,
+    fields,
+    source,
+    environment,
+    active,
+  });
   const pin: IntegrationConnectionPin = {
     integrationId: manifest.id,
     configFingerprint: fingerprint(manifest.id, values.config),
@@ -114,11 +120,21 @@ export function resolveIntegrationState(input: ResolveIntegrationInput): Integra
     currentFingerprint: verificationOf,
   });
 
-  // A complete configuration the provider has already refused is not Connected,
+  // A complete configuration the provider has already REFUSED is not Connected,
   // whichever source it came from. A configuration nobody ever tested is, and
   // says so through `verification`: that is every deployment on the day this
   // lands, and telling them they are disconnected would be false.
-  const testFailure = verification.state === "failed" ? verification.failure : null;
+  //
+  // A provider that could not be REACHED is different, and with no "save it
+  // anyway" it matters: a thirty second outage while an admin happens to press
+  // Test would otherwise record a failure that stops every run and that only a
+  // human pressing Test again can clear. An unreachable provider says nothing
+  // about the configuration, so the connection stays as it was and
+  // `verification` carries what happened and when.
+  const testFailure =
+    verification.state === "failed" && verification.failure.reason !== "provider_unreachable"
+      ? verification.failure
+      : null;
   const failure = readiness.failure ?? testFailure;
   const connection: IntegrationConnectionStatus = failure
     ? "failing"
@@ -160,6 +176,7 @@ export function integrationVerificationFingerprint(input: {
   readonly active: StoredIntegrationVersion | null;
 }): string {
   const values = connectionValueShape({
+    integrationId: input.manifest.id,
     fields: input.manifest.connection.fields,
     source: input.source,
     environment: input.environment,
@@ -176,12 +193,50 @@ export function integrationConfigFingerprint(input: {
   readonly active: StoredIntegrationVersion | null;
 }): string {
   const values = connectionValueShape({
+    integrationId: input.manifest.id,
     fields: input.manifest.connection.fields,
     source: input.source,
     environment: input.environment,
     active: input.active,
   });
   return fingerprint(input.manifest.id, values.config);
+}
+
+/**
+ * The marker stored beside a secret, and the same value the resolver compares.
+ *
+ * A truncated SHA-256 over the integration, the field and the value: not a
+ * keyed or salted digest, so treat it as what it is, an equality marker for
+ * "the same secret as last time". It lives in the worker's own database and in
+ * no response, log or MCP payload.
+ *
+ * The save path calls this with the plaintext; the resolver calls it for the
+ * environment source and reads the stored one otherwise. One function, so the
+ * two sides agree and switching source with the same token moves no pin.
+ */
+export function integrationSecretDigest(
+  integrationId: string,
+  fieldKey: string,
+  value: string,
+): string {
+  return digest(`${integrationId}:${fieldKey}:${value}`);
+}
+
+/**
+ * A connection value as it is compared and stored.
+ *
+ * Whitespace around a pasted token or URL is what a clipboard adds, never what
+ * an admin means. A `multiline` value keeps every character: a PEM key's
+ * newlines and its trailing line are part of the value, and trimming one has
+ * broken a deployment before. Every path that reads a value uses this, so the
+ * value stored, the value the provider is called with and the value the
+ * fingerprint covers are the same string.
+ */
+export function normalizeConnectionValue(
+  value: string,
+  field: { readonly format?: "text" | "multiline" | "url" | "integer" },
+): string {
+  return field.format === "multiline" ? value : value.trim();
 }
 
 export type IntegrationPinCheck =
@@ -464,6 +519,7 @@ interface ValueShape {
 }
 
 function connectionValueShape(input: {
+  readonly integrationId: string;
   readonly fields: readonly ConnectionField[];
   readonly source: IntegrationSource;
   readonly environment: IntegrationEnvironmentReader;
@@ -472,24 +528,20 @@ function connectionValueShape(input: {
   const config: (readonly [string, string])[] = [];
   const verification: (readonly [string, string])[] = [];
   for (const field of [...input.fields].sort((a, b) => a.key.localeCompare(b.key))) {
-    const raw =
-      input.source === "environment"
-        ? input.environment.value(field.env)
-        : field.secret
-          ? input.active?.secrets[field.key]
-          : input.active?.config[field.key];
-    const value = isSet(raw) ? raw.trim() : (field.default ?? "");
-    // A field carrying nothing contributes nothing. Otherwise every manifest
-    // that grows a field would move every fingerprint on this deployment, and
-    // S8 to S12 each rewrite a manifest: every run in flight would stop with
-    // `reconfigured` for a connection nobody touched. A field whose VALUE
-    // changes, including one gaining or losing a value, still moves it.
-    if (value.length === 0) continue;
     if (field.secret) {
-      // Never the value: the ciphertext is what is stored and its IV is random,
-      // so a plain copy would move the fingerprint on every re-encryption. The
-      // digest is of the plaintext, which is stable across re-encryption.
-      const hashed = digest(`${field.key}:${value}`);
+      // Never the ciphertext. AES-GCM uses a random initialisation vector, so
+      // the identical token encrypts to different bytes every time it is saved:
+      // a fingerprint built from them would move on every save and stop every
+      // run in flight with `reconfigured` although nothing changed. Under the
+      // stored source the marker is the one the save wrote from the plaintext;
+      // under the environment source the plaintext is right here. The two are
+      // computed by the same function, so switching source with the same token
+      // moves nothing either.
+      const hashed =
+        input.source === "environment"
+          ? environmentSecretDigest(input, field)
+          : input.active?.secretDigests[field.key];
+      if (hashed === undefined || hashed.length === 0) continue;
       verification.push([field.key, hashed]);
       // A secret the manifest marks as naming the account belongs in the pin
       // too, or swapping a Slack bot token for another workspace's would read as
@@ -497,10 +549,30 @@ function connectionValueShape(input: {
       if (field.identity === true) config.push([field.key, hashed]);
       continue;
     }
+    const raw =
+      input.source === "environment"
+        ? input.environment.value(field.env)
+        : input.active?.config[field.key];
+    const value = isSet(raw) ? normalizeConnectionValue(raw, field) : (field.default ?? "");
+    // A field carrying nothing contributes nothing. Otherwise every manifest
+    // that grows a field would move every fingerprint on this deployment, and
+    // S8 to S12 each rewrite a manifest: every run in flight would stop with
+    // `reconfigured` for a connection nobody touched. A field whose VALUE
+    // changes, including one gaining or losing a value, still moves it.
+    if (value.length === 0) continue;
     config.push([field.key, value]);
     verification.push([field.key, value]);
   }
   return { config, verification };
+}
+
+function environmentSecretDigest(
+  input: { readonly integrationId: string; readonly environment: IntegrationEnvironmentReader },
+  field: ConnectionField,
+): string | undefined {
+  const raw = input.environment.value(field.env);
+  if (!isSet(raw)) return undefined;
+  return integrationSecretDigest(input.integrationId, field.key, normalizeConnectionValue(raw, field));
 }
 
 function fingerprint(integrationId: string, entries: readonly (readonly [string, string])[]): string {

@@ -4,6 +4,7 @@ CREATE TABLE "integration_connection_versions" (
 	"version" integer NOT NULL,
 	"config" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"secrets" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"secret_digests" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"test_status" text NOT NULL,
 	"test_reason" text,
 	"test_message" text,

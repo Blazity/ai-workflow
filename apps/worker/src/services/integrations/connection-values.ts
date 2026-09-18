@@ -7,9 +7,10 @@ import {
   IntegrationSecretKeyMismatchError,
   decryptIntegrationSecret,
 } from "../../infra/secrets-crypto.js";
-import type {
-  IntegrationEnvironmentReader,
-  StoredIntegrationVersion,
+import {
+  type IntegrationEnvironmentReader,
+  type StoredIntegrationVersion,
+  normalizeConnectionValue,
 } from "./resolve.js";
 
 /**
@@ -49,7 +50,14 @@ export function readConnectionValues(input: {
           ? readStoredSecret(input, field)
           : input.active?.config[field.key];
     if (raw !== null && typeof raw === "object") return raw;
-    const text = typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : undefined;
+    // The same normalization the save and the fingerprint use, so the provider
+    // is called with exactly the string that was stored and pinned. A multiline
+    // value keeps its shape: a PEM key handed over without its newlines is not
+    // the key that was saved.
+    const text =
+      typeof raw === "string" && raw.trim().length > 0
+        ? normalizeConnectionValue(raw, field)
+        : undefined;
     const resolved = text ?? field.default;
     if (resolved === undefined) {
       values[field.key] = undefined;
