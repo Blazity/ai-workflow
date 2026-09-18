@@ -32,6 +32,13 @@ const SENTENCE_START = /[.!?]["')]*\s+(?=[\p{L}\p{N}"'(`])/gu;
 export function clampBothEnds(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   const budget = maxLength - ELISION.length;
+  // A limit at or below the marker's own length leaves no budget for real
+  // text once the marker is paid for: `budget` would be zero or negative, and
+  // the head/tail arithmetic below assumes there is text on at least one side
+  // of it. Cut bluntly instead. A marker with nothing beside it says nothing
+  // a plain cut does not, and this keeps the one promise that matters at any
+  // size: the result never exceeds maxLength.
+  if (budget <= 0) return text.slice(0, Math.max(0, maxLength));
   // The tail first, so what its boundary gives back goes to the head. Neither
   // end keeps a marker an earlier clamp left at its edge, or the two would sit
   // side by side and say nothing twice.
