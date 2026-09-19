@@ -203,4 +203,5 @@ Runtime payload
     message: "The prompt contains an unresolved placeholder.",
   }],
   profileContext: null,
+  unrenderedRuntimeParts: [],
 } as const;

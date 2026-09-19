@@ -70,7 +70,7 @@ type PromptPiece =
 
 /** A zero-byte part: it records text the agent did not get, a withheld rule
  *  or a part cut whole, and never carries separator text. */
-function recordsUnsentText(part: EffectivePromptPart): boolean {
+export function recordsUnsentText(part: EffectivePromptPart): boolean {
   return part.withheld !== undefined || part.cutBeforeSend === "whole";
 }
 

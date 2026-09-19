@@ -252,7 +252,11 @@ async function compileBoth(input: Input) {
 
 /** Everything the base compiler returned, from the current compilation. */
 function asBaseReturned(compilation: EffectivePromptCompilation) {
-  const { profileContext: _profileContext, ...rest } = compilation;
+  const {
+    profileContext: _profileContext,
+    unrenderedRuntimeParts: _unrendered,
+    ...rest
+  } = compilation;
   return {
     ...rest,
     sections: compilation.sections.map(({ parts: _parts, ...section }) => section),
@@ -441,6 +445,35 @@ describe("what the profile left out, and who wrote the block prompt", () => {
     });
     assert.equal(unnamed.profileContext, null);
     assert.equal(unnamed.sections.some((entry) => entry.kind === "runtime"), true);
+  });
+
+  it("keeps a withheld rule and a part cut whole on record when none of the runtime data is sent", async () => {
+    const cutWhole: EffectivePromptPart = {
+      ...part("clarification:1", ""),
+      cutBeforeSend: "whole",
+      cutCause: "clarification_budget",
+      originalLengthUtf16: 40,
+    };
+    const input = { nodeId: "node", blockPrompt: "Do the task.", runtimeData: [withheld, cutWhole] };
+    const { current, base } = await compileBoth(input);
+    // The model gets what it always got: no runtime section at all.
+    assert.equal(current.prompt, base.prompt);
+    assert.equal(current.sections.some((entry) => entry.kind === "runtime"), false);
+    // A reader still learns what was held back and what was cut.
+    assert.deepEqual(current.unrenderedRuntimeParts, [withheld, cutWhole]);
+
+    const rendered = await compileEffectivePrompt({
+      ...input,
+      runtimeData: [part("ticket", "# Ticket\n"), withheld],
+      ...HOST,
+    });
+    assert.deepEqual(rendered.unrenderedRuntimeParts, []);
+    const leftOut = await compileEffectivePrompt({
+      ...input,
+      profileContext: { includeWorkflowData: false, includeRepositoryInstructions: true },
+      ...HOST,
+    });
+    assert.deepEqual(leftOut.unrenderedRuntimeParts, []);
   });
 
   it("names the code's default role prompt as ours, not the block author's", async () => {

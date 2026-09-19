@@ -12,6 +12,7 @@ import { DEFAULT_AGENT_PROMPTS, DEFAULT_FIX_PROMPT } from "./default-prompts";
 import {
   concatPromptParts,
   joinPromptParts,
+  recordsUnsentText,
   type EffectivePromptPart,
   type EffectivePromptPartOrigin,
 } from "./prompt-parts";
@@ -171,6 +172,15 @@ export interface EffectivePromptCompilation {
    *  runtime section the profile left out from one that had nothing in it.
    *  Null when the caller named no profile (the authoring preview). */
   profileContext: EffectivePromptProfileContext | null;
+  /**
+   * The zero-byte runtime parts (a withheld rule, a part cut whole) when the
+   * runtime section is not rendered because none of its text would be sent.
+   * The prompt gets no empty section for them, and a reader still learns what
+   * was held back. Empty whenever the section is rendered, which carries them
+   * itself, and when the profile left workflow data out, which
+   * `profileContext` says.
+   */
+  unrenderedRuntimeParts: EffectivePromptPart[];
 }
 
 const MAX_SECTION_LENGTH = 200_000;
@@ -425,10 +435,12 @@ export async function compileEffectivePrompt(
     promptProvenance,
   ));
   const runtimeData = joinPromptParts(input.runtimeData);
-  if (
-    input.profileContext?.includeWorkflowData !== false &&
-    runtimeData.trim().length > 0
-  ) {
+  const includeWorkflowData = input.profileContext?.includeWorkflowData !== false;
+  const renderRuntime = includeWorkflowData && runtimeData.trim().length > 0;
+  const unrenderedRuntimeParts = includeWorkflowData && !renderRuntime
+    ? input.runtimeData.filter(recordsUnsentText)
+    : [];
+  if (renderRuntime) {
     const runtimeHash = await hashText(runtimeData);
     sections.push(await section(
       "runtime",
@@ -454,6 +466,7 @@ export async function compileEffectivePrompt(
     unresolvedSources: dedupeUnresolved(unresolvedSources),
     issues: dedupeIssues(issues),
     profileContext: input.profileContext ?? null,
+    unrenderedRuntimeParts,
   };
 }
 

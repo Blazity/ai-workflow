@@ -27,6 +27,7 @@ describe("resolveAgentInput", () => {
       unresolvedSources: [],
       issues: [],
       profileContext: null,
+      unrenderedRuntimeParts: [],
     } satisfies EffectivePromptCompilation;
     const compileInvocationPrompt = vi.fn().mockResolvedValue({ ok: true, compilation });
     await expect(
