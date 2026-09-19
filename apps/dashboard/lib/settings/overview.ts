@@ -52,6 +52,7 @@ const MODE_LABELS: Record<SystemHealthMode, string> = {
   "not-configured": "Not configured",
   misconfigured: "Needs configuration",
   mock: "Mock mode",
+  disabled: "Disabled",
 };
 
 const MODE_TONES: Record<SystemHealthMode, SetupOverviewTone> = {
@@ -62,6 +63,9 @@ const MODE_TONES: Record<SystemHealthMode, SetupOverviewTone> = {
   "not-configured": "off",
   misconfigured: "warn",
   mock: "warn",
+  // Turned off deliberately: the same tone as something nobody set up, because
+  // neither is a problem to chase.
+  disabled: "off",
 };
 
 /** Which of two providers to report on: the one that is actually set up. */
@@ -73,6 +77,9 @@ const MODE_RANK: Record<SystemHealthMode, number> = {
   down: 2,
   mock: 1,
   "not-configured": 0,
+  // Nothing about a provider somebody switched off says this deployment is set
+  // up to use it, so it never wins the row over one that is.
+  disabled: 0,
 };
 
 const MEMORY_KEY = "ENABLE_REPO_MEMORY";

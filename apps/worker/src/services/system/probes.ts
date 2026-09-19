@@ -23,6 +23,8 @@ import {
   type SystemHealthProbeResult,
   type SystemHealthProbes,
 } from "./collect.js";
+import { integrationHealthContributions } from "./integration-health.js";
+import { integrationHealthEntries } from "./integration-probes.js";
 import {
   getLatestSystemHealthObservations,
   sweepSystemHealthObservations,
@@ -56,9 +58,12 @@ export async function collectDeploymentSystemHealth(
 ): Promise<SystemHealthResponse> {
   const config = configFromEnvironment(settings);
   await sweepSystemHealthObservations().catch(() => {});
+  // Whatever this build ships, asked of the registry rather than listed here.
+  const contributions = integrationHealthContributions(await integrationHealthEntries());
   return collectSystemHealth({
     config,
-    probes: probesForEnvironment(config),
+    probes: { ...probesForEnvironment(config), ...contributions.probes },
+    contributed: contributions.definitions,
   });
 }
 

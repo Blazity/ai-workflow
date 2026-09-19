@@ -1015,6 +1015,11 @@ export interface MemoryDocumentResponse {
  * entries; `mock` means the system deliberately runs a no-op adapter (Slack
  * without a token). Every probed check resolves to a probe result: there is no
  * "unverified" state, a check that cannot be verified is not listed.
+ *
+ * `disabled` is an integration an admin turned off. It is neither an outage nor
+ * a gap in the configuration: nothing was probed because nobody asked for it to
+ * run, and a screen that showed it as either would send somebody to fix a
+ * decision that was deliberate.
  */
 export type SystemHealthMode =
   | "live"
@@ -1023,9 +1028,12 @@ export type SystemHealthMode =
   | "configured"
   | "not-configured"
   | "misconfigured"
-  | "mock";
+  | "mock"
+  | "disabled";
 
-export type SystemHealthGroup = "core" | "auth-email" | "platform";
+/** `integrations` is every integration the build ships, each a section of its
+ *  own; the other three are core's own services. */
+export type SystemHealthGroup = "core" | "auth-email" | "platform" | "integrations";
 
 export interface SystemHealthPing {
   ok: boolean;
@@ -1061,6 +1069,9 @@ export interface SystemHealthIntegration {
   id: string;
   label: string;
   group: SystemHealthGroup;
+  /** One line about what this is, for a section core cannot describe itself:
+   *  an integration brings its manifest's description with it. */
+  description?: string;
   /** Variable NAMES only — values never leave the worker. */
   envVars: string[];
   /** A failure blocks the workflow itself (issue tracker, VCS, agent, DB). */

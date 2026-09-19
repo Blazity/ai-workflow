@@ -68,29 +68,47 @@ export type SystemHealthProbes = Partial<Record<string, SystemHealthProbe>>;
 
 const PROBE_TIMEOUT_MS = 4_000;
 
-type CheckBase = Omit<
+export type CheckBase = Omit<
   SystemHealthCheck,
   "checkedAt" | "observedAt" | "latencyMs" | "coverage"
 >;
 
-type IntegrationDefinition = {
+/**
+ * One section of the report before any probe has run: what is listed, and which
+ * of its checks a probe may still settle. Core writes the sections below;
+ * integrations contribute theirs through `collectSystemHealth`, so the pipeline
+ * (one timeout, one latency, one summary) is the same for both.
+ */
+export type SystemHealthDefinition = {
   id: string;
   label: string;
   group: SystemHealthGroup;
   critical: boolean;
   checks: CheckBase[];
+  /** One line about the integration, when the section brings its own. */
+  description?: string;
+  /**
+   * Prefix for this section's probe keys. Core's own sections have none and
+   * keep the keys they have always had; a contributed section carries one, so
+   * a section whose id happens to equal a core one can never take over a core
+   * probe.
+   */
+  probeNamespace?: string;
 };
 
 export async function collectSystemHealth(input: {
   config: SystemHealthConfig;
   probes: SystemHealthProbes;
+  /** Sections this build's integrations contribute, after core's own and
+   *  probed by the same pipeline. Core writes none of them. */
+  contributed?: readonly SystemHealthDefinition[];
   now?: () => Date;
   monotonicNow?: () => number;
 }): Promise<SystemHealthResponse> {
   const now = input.now ?? (() => new Date());
   const monotonicNow = input.monotonicNow ?? (() => performance.now());
   const generatedAt = now().toISOString();
-  const definitions = healthDefinitions(input.config);
+  const definitions = [...healthDefinitions(input.config), ...(input.contributed ?? [])];
 
   const integrations = await Promise.all(
     definitions.map(async (definition): Promise<SystemHealthIntegration> => {
@@ -98,7 +116,9 @@ export async function collectSystemHealth(input: {
         definition.checks.map((check) =>
           probedCheck(
             check,
-            input.probes[`${definition.id}.${check.id}`],
+            input.probes[
+              `${definition.probeNamespace ?? ""}${definition.id}.${check.id}`
+            ],
             monotonicNow,
             generatedAt,
           ),
@@ -110,7 +130,7 @@ export async function collectSystemHealth(input: {
           check.latencyMs !== undefined &&
           (check.mode === "live" || check.mode === "down"),
       );
-      return {
+      const section: SystemHealthIntegration = {
         id: definition.id,
         label: definition.label,
         group: definition.group,
@@ -133,6 +153,10 @@ export async function collectSystemHealth(input: {
           : null,
         checks,
       };
+      // Only a section that brought a description carries one, so a core
+      // section is the same object it has always been.
+      if (definition.description) section.description = definition.description;
+      return section;
     }),
   );
 
@@ -160,7 +184,7 @@ export async function collectSystemHealth(input: {
   };
 }
 
-function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] {
+function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[] {
   const githubCredentialsMode = groupedMode([
     config.githubAppId,
     config.githubAppPrivateKey,
@@ -291,7 +315,7 @@ function integration(
   group: SystemHealthGroup,
   critical: boolean,
   checks: CheckBase[],
-): IntegrationDefinition {
+): SystemHealthDefinition {
   return { id, label, group, critical, checks };
 }
 
@@ -428,6 +452,18 @@ function integrationMode(checks: SystemHealthCheck[]): SystemHealthMode {
   if (checks.some((check) => check.mode === "live")) return "live";
   if (checks.every((check) => check.mode === "not-configured")) return "not-configured";
   if (checks.every((check) => check.mode === "mock")) return "mock";
+  // Nothing was probed because nobody asked for it to be. A decision somebody
+  // made explains more than a value nobody set, so it outranks `not-configured`
+  // here exactly as `disabled` outranks the connection status in the resolver,
+  // and it never outranks a failure: those are decided above.
+  if (
+    checks.some((check) => check.mode === "disabled") &&
+    checks.every(
+      (check) => check.mode === "disabled" || check.mode === "not-configured",
+    )
+  ) {
+    return "disabled";
+  }
   if (checks.some((check) => check.mode === "configured")) return "configured";
   return checks[0]?.mode ?? "not-configured";
 }

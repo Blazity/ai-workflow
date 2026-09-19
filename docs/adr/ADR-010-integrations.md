@@ -1106,6 +1106,101 @@ may work on the next, while this one never succeeds until an admin changes a
 connection. It maps to HTTP 422 and, over MCP, to `VALIDATION_FAILED`,
 not retryable, nothing applied.
 
+## Health, decided in S5
+
+### One section per integration, contributed not listed
+
+A scan has two halves. Core writes its own sections (database, Jira, GitHub,
+GitLab, the agent, authentication, email, Slack, Arthur, MCP, custom webhooks)
+exactly as before, and adds nothing to them. The integrations of this build
+contribute theirs: `integrationHealthContributions` in
+`apps/worker/src/services/system/integration-health.ts` is handed one entry per
+manifest the registry ships, and returns the sections and the probes; core's
+collector appends them and runs both halves through the same pipeline, the same
+4 s per-probe timeout and the same summary. Nothing in
+`apps/worker/src/services/system` names an integration, so adding one adds a
+section and adding an outside developer's adds one too.
+
+They land in a group of their own, `integrations`, rather than in core's three.
+Core groups say what a service does for the product; an integration is
+connected per deployment, and core cannot say which of its own groups a
+provider it has never heard of belongs to.
+
+An integration section is never `critical`. Criticality in this report means
+"the product cannot work without it", which is what `criticalDown` counts. A
+provider one workflow uses and another does not is not that, and a demo
+integration that has never been connected must not read as the platform being
+down. Criticality inside the integration is the manifest's per-check `critical`,
+which decides whether a failing check takes the whole integration down.
+
+### What a section says, and where each word comes from
+
+Every section begins with one check core adds, `connection`, and continues with
+the checks the manifest declares, in its order. The connection check is where
+the resolver's answer becomes a row; nothing about connectedness is derived a
+second time here, because the health page and the Integrations page must never
+disagree about the same deployment.
+
+| `IntegrationState` | Health mode | What the row says |
+|---|---|---|
+| `enabled: false` | `disabled` | Turned off on the Integrations page. No probe runs. |
+| `connection: not_connected` | `not-configured` | Not connected. No probe runs. |
+| `failing`, `environment_incomplete` or `stored_incomplete` or any secret-key reason | `misconfigured` | The resolver's own sentence, and the variables to set as the check's `envVars`: the missing ones only. |
+| `failing`, `credential_rejected` or `provider_unreachable` | `down` | The provider answered and refused, or could not be reached. |
+| `usable` | `configured`, then whatever the probes return | Where the values come from, and what the last connection test proved. |
+
+`SystemHealthMode` gained `disabled` for the first row of that table. A
+deliberate decision is neither an outage nor an unfinished configuration, and
+reporting it as either sends somebody to fix what somebody else chose. The
+union is exhaustive in three maps on the dashboard, so the compiler asked every
+reader of a mode what it now means.
+
+The declared checks of an integration that is not usable report the same mode
+as its connection rather than a probe result: there is no connection to run them
+against, and a scan never states a result nobody measured. Variable names appear
+only when the environment is the source; stored values come from the database,
+and naming a variable for them would send an admin to set something that changes
+nothing.
+
+### What a probe may do to a scan
+
+A probe is called only for a usable integration, so a deployment that connected
+nothing makes no provider request at all, and a disabled integration is left
+alone. Each call is bounded by the collector's existing timeout and they run in
+parallel, because the dashboard aborts the whole scan after 15 s and ten
+providers hanging one after another would never finish.
+
+A probe that throws is one failing check with the provider's own reason, never a
+failed scan: the reason includes what the error hides in its `cause` (`fetch`
+throws a flat "fetch failed" and keeps "connect ECONNREFUSED" underneath), and
+it is redacted against this connection's secret values and bounded to 300
+characters before it reaches the response or a log. A provider that echoes a
+token in an error body is normal, and that body is what an admin reads on a
+screen. Redaction covers each secret as written, percent-encoded, base64,
+JSON-escaped, and line by line for a multiline value such as a PEM key, because
+a provider quoting one line back would otherwise hand it over.
+
+### An integration is code core did not write
+
+Everything a probe returns is treated as input from outside this repository, not
+as a value core can trust:
+
+- **Only `live`, `degraded` and `down` are results.** A probe that returns
+  nothing, an empty object, a status of another type, or a word this report has
+  no meaning for is a check that is `down`, with a message saying the probe
+  returned no usable result. The alternative is the one mistake a health screen
+  must never make: painting Live over something nobody measured. Core's own
+  probes keep their contract, where returning nothing means the call succeeded.
+- **Contributed probe keys are namespaced** (`integration:<id>.<check>`).
+  Probes are one map keyed by section and check, and an integration's id is its
+  own to choose: an integration called `github` declaring a check called
+  `repositories` would otherwise replace core's probe, and the page would show
+  two GitHub rows that could disagree. Conformance refuses such an id as well,
+  and the namespace is what holds for an integration conformance never saw.
+- **The screen never breaks on an unknown word.** A mode or a group this build
+  has no entry for renders as Unknown, in its own section, rather than throwing
+  while somebody reads the page during an incident.
+
 ## Change log
 
 Additive changes to `@integrations/sdk` after S0, newest first. Each entry
@@ -1113,6 +1208,7 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-18 | S5 | `CORE_HEALTH_SECTION_IDS` and `RESERVED_HEALTH_CHECK_ID`, both refused by conformance | Additive: no manifest field changes and nothing already written stops compiling; conformance refuses two more names. An id core's health page still holds (`github`, `jira`, `database`) would draw a second section for the same word, and a health check called `connection` would collide with the one core adds to every integration's section. `CORE_HEALTH_SECTION_IDS` shrinks: the stage that moves a provider out of core deletes its row in the same change as core's section, which is how the provider's own integration comes to be allowed to take the name. |
 | 2026-09-18 | S4 | `secretsKeyMaterial` exported from `services/integrations` | The generic integration step resolves a connection through the same key material every other caller uses; a second reader of `INTEGRATION_SECRETS_KEY` in the engine would be a second derivation of the thing S2 exists to derive once. Additive: nothing that existed changed. |
 | 2026-09-18 | S2 | `ConnectionField.identity` | An integration whose fields are all secret has a constant configuration fingerprint, so replacing a Slack bot token with another workspace's would read as a rotation and a run in flight would post into the wrong company's channels. The flag marks a secret that names the account; its value enters the pin as a digest, never in the clear. Optional and absent by default, so every manifest written against S0 is unchanged. |
 | 2026-09-18 | S1 | `ErasedIntegrationRuntime` and `ErasedIntegrationCall` | The generated registry has to hold runtimes whose types come from manifests core does not know statically. `IntegrationRuntime<IntegrationManifest>` is not that type: a block executor typed against a literal block type is not assignable to one typed against `IntegrationBlockManifest`, because its parameters are contravariant, and the compiler says so. The erased interface keeps the keys and the results and erases only the parameters, so core can list an integration's blocks, health checks and capabilities and use what each call returns, and S4 narrows the call once where it builds the context. |
