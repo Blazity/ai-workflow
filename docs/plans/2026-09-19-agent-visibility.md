@@ -446,3 +446,46 @@ storage stage 3a builds. Stage 4 follows 3a in the same cluster. Stage 6 starts
 after pull request B is on production, so its effect is visible in real
 briefings; stage 7 follows 6 and stage 8 follows 7, because all three touch
 `engine/agent-workflow.ts`.
+
+## Decisions taken during delivery
+
+Each of these came from a scenario pass or a gate, changed what was built, and
+would otherwise live only in a chat transcript.
+
+- **A related repository gets its own derived origin.** A ticket trigger never
+  uses `event_repository_and_related` (that policy is legal only on pull
+  request triggers), so nothing derived the neighbour at all. Recording it as
+  `trigger_policy` would send a person reading the Decision Trail to a trigger
+  that says nothing about relationships, so the work scope contract gains one
+  new origin with its own rank, and the CHECK constraint on `work_scope_entries`
+  gets its migration. `eventRelatedKeys` is filled as well, which fixes the
+  pull request path.
+- **A neighbour nobody chose attaches read only.** Workspace access defaults to
+  write, so taking a related repository automatically would widen what a run may
+  modify. Write comes only from the plan's `writeRepositories` or from a person.
+- **The briefings list carries a run-level state** (`available`, `expired`,
+  `replay_gone`, `predates_capture`) beside its items, because after retention a
+  run has no attempts and no briefings, and an empty list would read to a person
+  as "the system lost it".
+- **Briefings are read with the replay's audience, not the run detail's.** The
+  two run surfaces scope differently today and `agent_briefings` carries no
+  tenant column, so the read model resolves the organization from the run and
+  refuses with a named reason when it cannot, rather than answering 404 (which
+  reads as "no briefings") or reading openly. Giving briefings their own tenant
+  column is the durable fix and is not in this plan.
+- **The MCP page budget is measured on the result, not on the page.** The
+  envelope goes out twice (a text block and `structuredContent`) and the cap
+  measures `{data, meta}`, so the package's maximum page was unservable and a
+  48 KB page crossed the wire at about 98 KB. The tool derives its own default
+  and maximum from a measured allowance and refuses above it.
+- **Lists page on an append-only key.** A positional cursor over a live run
+  serves one item twice and skips another, with nothing red anywhere.
+- **Rounds are an opt-in on `work_scope.get`**, so a client that has called it
+  for months keeps today's answer inline.
+- **`map_shown` gets its writer.** A briefing lives thirty days and the work
+  scope record outlives it, so after retention the trail line is the only
+  account of what the map said.
+- **The repository map lives in its own directory**, imported by the engine and
+  by the sandbox composer, because the obvious home created an
+  `engine <-> sandbox` cycle and a type-only import would have hidden it rather
+  than removed it.
