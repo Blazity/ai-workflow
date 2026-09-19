@@ -188,10 +188,13 @@ one attempt (`agent-workflow.ts:2629`, restarts at `:2705`, `:2942`, `:3005`,
 second pass. A briefing is keyed by run, node, attempt, activation scope and a
 sequence number, and carries the pass label `researchPhaseIdentity` already
 produces (`engine/blocks/support/types.ts:496-537`). The sequence is ONE counter
-per Block Attempt shared by every kind, in send order: discovery runs inside
-the planning attempt (`agent-workflow.ts:2719` calls `ensureCodeWorkspace`,
-which discovers at `:2460`), so separate counters would collide and one insert
-would silently do nothing. The insert checks what it wrote and logs a conflict.
+per Block Attempt shared by every kind, in the order the sends really happen,
+so separate counters cannot collide and make one insert silently do nothing.
+Discovery belongs to whichever Block Attempt sent it: with a `prepare_workspace`
+node, which is the production shape, that is that node's own attempt
+(`agent-workflow.ts:2607-2611`); on the lazy path it is the planning attempt
+(`:2719` calls `ensureCodeWorkspace`, which discovers at `:2460`). Both shapes
+record. The insert checks what it wrote and logs a conflict.
 
 **Capture path (from the spike, re-verified on `main`).** One optional trailing
 argument on the existing send steps (`writeAndStartPhase`,
@@ -206,8 +209,13 @@ no briefing and says so.
 
 **Capture never fails a run.** A failed write logs `logger.warn` with run and
 attempt and the agent starts exactly as today (`phase.ts:559` keeps
-`maxRetries = 0`). A setting switches capture off without a deploy; it is on by
-default, so data accumulates from the first deploy.
+`maxRetries = 0`). A setting switches capture off; because the workflow body
+reads settings frozen at run start, it is honestly `appliesToRunsInFlight:
+"next run"` and stops the next run, not one in flight. It is on by default, so
+data accumulates from the first deploy. The row is written after the prompt
+file exists in the sandbox and before the detached command starts
+(`phase.ts:507-540`): writing it after the launch would leave a window in which
+a person is told "never sent" about an agent that is already working.
 
 **Section text is what was sent.** A section's text is the exact bytes between
 its sentinels as sent. The compiler rewrites sentinel characters and NUL and
@@ -287,8 +295,11 @@ after a retry shows as asked again, not as a new round.
 addressed by run, not through the replay attempt route, which returns nothing
 once a replay expires (`run-replay-read.ts:140-143`):
 `GET /api/v1/runs/{runId}/briefings` (the overview of every briefing of the
-run, filterable by node, attempt and activation scope, with the missing-briefing
-reason for an attempt that has none); under
+run, filterable by node, attempt and activation scope; per Block Attempt its
+briefings, a missing-briefing reason computed even beside existing briefings (a
+planning attempt that captured discovery but whose pass never went out), and
+whether the block sends prompts at all, decided by the worker from the block
+type, so a script block never reads as "not recorded"); under
 `/api/v1/runs/{runId}/briefings/{briefingId}`: `sections` (section headers),
 `sections/{index}` (a page of one section's text by offset and limit),
 `sections/{index}/parts` and `sections/{index}/spans`, and `repository-context`
@@ -400,7 +411,7 @@ audience as its logs. Retention as Block Attempts.
   to bypass it, recorded in Jira as ADR-004 requires (on 2026-09-18 that was a
   comment on the credit incident issue), every time. Pull request B ships
   capture before C ships a reader; capture is on by default so data
-  accumulates, and its setting switches it off without a deploy.
+  accumulates, and its setting switches it off for the next run.
 - `CONTEXT.md` edits are coordinated with the parallel integrations session,
   which also edits it.
 
@@ -415,8 +426,8 @@ describe; stage 10 closes.
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | A person's view of a send has a stable, validated shape | Visibility package | `packages/agent-visibility/**`; `scripts/gates/tiers.json`; root `package.json` test filters; `scripts/ci/verify-changed.test.ts` if it lists packages; `packages/AGENTS.md`; ADR-001 dated addendum; `pnpm-lock.yaml` | opus | tight | yes | yes | no | `pnpm run test:packages` and `pnpm run test:packages:zod4` include the package and pass; the dependency-cruiser gate fences it; `pnpm run typecheck` green |
 | 2 | Every byte of a prompt belongs to a named part with an origin, and the model gets the same bytes | Prompt compiler | worktree `lanes/wt-prompt-parts`: `packages/prompts/**`; `apps/worker/src/sandbox/context.ts`; `engine/helpers/effective-prompt.ts`, `engine/helpers/resolve-agent-input.ts`; the composition regions of `engine/agent-workflow.ts` (research additions, implementation and review inputs, `compileInvocationPrompt`, discovery assembly); `engine/repository-discovery/runner.ts` prompt assembly; the addition shape in `pre-sandbox/steps/repo-selection.ts`; the composition regions of `engine/blocks/{generic-agent,fix-agent}/execute.ts`; `engine/blocks/support/types.ts` (the per-invocation context); `packages/prompts/prompt-authoring.ts` and the dashboard authoring preview where the `runtimeData` type forces it | opus | tight | yes | yes | no | an oracle (the assemblers and discovery composer as they are at the base commit, copied into test code) and the new code render identical bytes over a generated matrix of inputs (every optional input present, absent and empty; Polish text and emoji; a ticket containing the sentinel characters; a ticket over 200,000 characters), with branch coverage of the old functions as evidence, except the declared label fix; every byte of every section in exactly one part; `step-registration-coverage` and `workflow-import-boundary` green; the effective-prompt parity test green; typecheck green |
-| 3a | Briefings and answer deliveries have somewhere to live, and redaction stops shredding numbers | Sanitizer; Storage and deliveries | `apps/worker/src/db/schema/` (new file plus its export); `apps/worker/drizzle/0070_*`; a new repository file under `apps/worker/src/db/repositories/`; `apps/worker/src/services/agent-visibility/` write half; `run-observability/sanitizer.ts`, `run-observability/configured-secrets.ts`; `services/clarifications/answer-core.ts` and the answer-surface wording for MCP answers; the replay observation cleanup so briefings expire with it | opus | tight | yes | yes | no | migration applies in pglite; every write is one statement; sanitizer tests on the real false positives (costs, model date suffixes, dates, timestamps, IP addresses, epoch milliseconds); two unclear answers and a clear one read back as three deliveries; 200 identical poll ticks read back as one delivery with a count of 200; briefings of an expired replay are gone; typecheck |
-| 3b | Every send records its briefing | Capture | `engine/steps/phase.ts`; the send steps in `engine/blocks/{generic-agent,fix-agent,call-llm,investigate}/execute.ts`; the send call sites in `engine/agent-workflow.ts`; `engine/blocks/support/types.ts`; `engine/agent-visibility/` capture adapter; the capture setting | opus | tight | yes | yes | no | a planning attempt that discovers and then plans three passes writes four briefings in send order (discovery first); `call_llm` writes one; a ticket over 200,000 characters produces a briefing whose parts say what was cut before sending; failed insert logs and the agent starts; capture switched off writes nothing and says so; step guards green; deployment pinning checked once |
+| 3a | Briefings and answer deliveries have somewhere to live, and redaction stops shredding numbers | Sanitizer; Storage and deliveries | `apps/worker/src/db/schema/` (new file plus its export); `apps/worker/drizzle/0070_*`; a new repository file under `apps/worker/src/db/repositories/`; `apps/worker/src/services/agent-visibility/` write half; `run-observability/sanitizer.ts`, `run-observability/configured-secrets.ts`; `services/clarifications/answer-core.ts`; the answer-surface wording in `engine/support/clarification-comment-format.ts` and the surface plumbing from `services/clarifications/answer-request.ts` and the MCP answer tool; the replay observation cleanup so briefings expire with it | opus | tight | yes | yes | no | migration applies in pglite; every write is one statement; sanitizer tests on the real false positives (costs, model date suffixes, dates, timestamps, IP addresses, epoch milliseconds); two unclear answers and a clear one read back as three deliveries; 200 identical poll ticks read back as one delivery with a count of 200; briefings of an expired replay are gone; typecheck |
+| 3b | Every send records its briefing | Capture | `engine/steps/phase.ts`; the send steps in `engine/blocks/{generic-agent,fix-agent,call-llm,investigate}/execute.ts`; the send call sites in `engine/agent-workflow.ts`; `engine/blocks/support/types.ts`; `engine/agent-visibility/` capture adapter; the capture setting | opus | tight | yes | yes | no | every send kind, built from the real stage 2 compilation, records (outcome `recorded`, never a refusal marker); a planning attempt that plans three passes writes them in send order with its discovery recorded under the attempt that sent it, in both the `prepare_workspace` and the lazy shape; `call_llm` writes one; a ticket over 200,000 characters produces a briefing whose parts say what was cut before sending; the new step argument stays far under 64 KB for a 300 KB prompt; failed insert logs and the agent starts; capture switched off writes a marker per send and says so; step guards green; deployment pinning checked once against an observed deployment id |
 | 4 | The dashboard and MCP can read briefings and rounds, byte for byte the same | HTTP and MCP | `apps/worker/src/services/agent-visibility/` read half; `routes/api/v1/runs/[runId]/briefings*`; `routes/api/v1/work-scope.get.ts`; `mcp/tools/` runs and work-scope tools, tool catalog, MCP contract | opus | tight | yes | yes | no | route and tool parity on a briefing over the MCP cap, every page under the default and under the cap; `work_scope.get` with rounds stays under the cap on a round with hundreds of poll ticks; each missing reason; `mcp:contract:check` green |
 | 5 | A person sees every pass, section, origin, map and round, on desktop and phone | Dashboard | `apps/dashboard/**` replay Briefing tab, ticket Repositories panel, API client and proxy routes | opus | open | yes | no | yes (fixtures) | component tests; browser at 1440 px and 375 px, each empty state seen |
 | 5b | Someone with only Jira can correct the record from the ticket page | Dashboard | the ticket Repositories panel in `apps/dashboard/` | opus | open | yes | no | no | select, exclude and undo through the existing edit endpoint, seen in the browser; the same edit through `work_scope.edit` |
