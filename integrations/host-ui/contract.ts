@@ -1,0 +1,86 @@
+import type { ComponentType } from "react";
+import type { IntegrationManifest } from "@integrations/sdk";
+
+/**
+ * What a contributed page is handed: the id it was asked for, and nothing else.
+ *
+ * This is a contract, not a sandbox, and the difference matters. A page is a
+ * Server Component compiled into the cockpit and run in its process, so it can
+ * reach further than its props: `process.env`, global `fetch`, its own
+ * dependencies. An integration is trusted code, reviewed like ours, and the
+ * rules around this seam exist so a page does not couple itself to our runtime
+ * by accident, not because they would stop one that meant to.
+ *
+ * So the props stay narrow on purpose. A page shows what its own package
+ * knows; there is no session, no database handle and no worker client to be
+ * had here, and the boundaries gate refuses the imports that would fetch them
+ * (`next/*`, `node:*`, `server-only`, the dashboard's `@/` alias) plus
+ * `process.env`. Widening this is a contract decision, not a convenience, and
+ * ADR-010 records where that decision belongs.
+ */
+export interface IntegrationPageProps {
+  /** The integration whose area this page is being rendered in. */
+  readonly integrationId: string;
+}
+
+export type IntegrationPageComponent = ComponentType<IntegrationPageProps>;
+
+/**
+ * One component per page the manifest declares, keyed by the page id.
+ *
+ * The keys are the manifest's literal page ids, so a page declared without a
+ * component and a component for a page nobody declared are both refused where
+ * the mistake is rather than at the tab that renders nothing.
+ */
+export type IntegrationDashboardPages<M extends IntegrationManifest> = {
+  readonly [PageId in M["pages"][number]["id"]]: IntegrationPageComponent;
+};
+
+export interface IntegrationDashboard<M extends IntegrationManifest = IntegrationManifest> {
+  readonly pages: IntegrationDashboardPages<M>;
+}
+
+/**
+ * One integration's pages with their types erased: the page ids of a manifest
+ * core does not know statically, with the props kept. The same shape as the
+ * SDK's `ErasedIntegrationRuntime` and for the same reason.
+ */
+export interface ErasedIntegrationDashboard {
+  readonly pages: Readonly<Record<string, IntegrationPageComponent>>;
+}
+
+/**
+ * How the generated registry holds one integration's pages: the ids as data,
+ * and the module behind a loader.
+ *
+ * The split is the point. A static import of every integration's dashboard
+ * entry would run the top level of every shipped integration on the first load
+ * of any integration route, whether or not that integration is connected, which
+ * is not what "an unusable integration's page does not run" means. The ids are
+ * what the route needs to decide, and deciding costs no module.
+ */
+export interface ErasedIntegrationDashboardEntry {
+  /** The page ids this integration's entry serves, read without loading it. */
+  readonly pages: readonly string[];
+  readonly load: () => Promise<{ readonly dashboard: ErasedIntegrationDashboard }>;
+}
+
+/**
+ * Declares an integration's dashboard pages.
+ *
+ * Written with the manifest's type rather than its value, so the import that
+ * types it erases at build: a dashboard entry that imported `manifest.ts` would
+ * pull that manifest's zod schemas into the browser for nothing.
+ *
+ * ```ts
+ * import type { manifest } from "./manifest";
+ * export const dashboard = defineIntegrationDashboard<typeof manifest>({
+ *   pages: { overview: OverviewPage },
+ * });
+ * ```
+ */
+export function defineIntegrationDashboard<M extends IntegrationManifest>(
+  dashboard: IntegrationDashboard<M>,
+): IntegrationDashboard<M> {
+  return dashboard;
+}

@@ -16,6 +16,8 @@ export function outputPaths(
       options.outputPaths?.manifests ?? join(options.root, DEFAULT_OUTPUT_PATHS.manifests),
     runtimes:
       options.outputPaths?.runtimes ?? join(options.root, DEFAULT_OUTPUT_PATHS.runtimes),
+    dashboards:
+      options.outputPaths?.dashboards ?? join(options.root, DEFAULT_OUTPUT_PATHS.dashboards),
   };
 }
 
@@ -114,11 +116,64 @@ function renderRuntimes(
   ].join("\n");
 }
 
+/**
+ * The React half, keyed by id rather than listed: the dashboard's route holds
+ * the id from the URL, so a lookup is the shape it asks in, and an integration
+ * without pages is simply absent rather than an entry with an empty object.
+ *
+ * Each entry carries its page ids as data and its module behind a loader. A
+ * static import would run the top level of every shipped integration on the
+ * first load of any integration route, connected or not; the ids are all the
+ * route needs to decide what to show, and deciding must cost no module.
+ */
+function renderDashboards(
+  records: IntegrationRecord[],
+  outputPath: string,
+  root: string,
+): string {
+  const withPages = records.filter((record) => record.dashboardPath !== null);
+  const entries =
+    withPages.length === 0
+      ? ["export const generatedIntegrationDashboards: Dashboards = {};"]
+      : [
+          "export const generatedIntegrationDashboards: Dashboards = {",
+          ...withPages.flatMap((record) => [
+            `  ${JSON.stringify(record.id)}: {`,
+            `    pages: [${record.pageIds.map((page) => JSON.stringify(page)).join(", ")}],`,
+            `    load: () => import("${importPath(outputPath, join(root, record.dashboardPath!))}"),`,
+            "  },",
+          ]),
+          "};",
+        ];
+  return [
+    GENERATED_HEADER.trimEnd(),
+    "",
+    "/**",
+    " * The pages every integration in this build contributes to the dashboard.",
+    " *",
+    " * React components, so this file belongs to the dashboard's bundle and to",
+    " * nothing else: the worker never imports it, and neither does the registry's",
+    " * root entry, which the Workflow DevKit reads inside a flow bundle that has",
+    " * no React in it.",
+    " *",
+    " * An integration appears here only when its manifest declares a page, and",
+    " * its module is loaded only when one of its pages is actually rendered.",
+    " */",
+    'import type { ErasedIntegrationDashboardEntry } from "@integrations/host-ui";',
+    "",
+    "type Dashboards = Readonly<Record<string, ErasedIntegrationDashboardEntry>>;",
+    "",
+    ...entries,
+    "",
+  ].join("\n");
+}
+
 export function renderGeneratedFiles(options: GeneratorOptions): GeneratedFiles {
   const records = readIntegrations(options);
   const paths = outputPaths(options);
   return {
     manifests: renderManifests(records, paths.manifests, options.root),
     runtimes: renderRuntimes(records, paths.runtimes, options.root),
+    dashboards: renderDashboards(records, paths.dashboards, options.root),
   };
 }

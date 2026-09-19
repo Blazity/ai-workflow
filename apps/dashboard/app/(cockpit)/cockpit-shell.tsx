@@ -16,11 +16,14 @@ import {
   type RunRefreshCadence,
   type Tweaks,
 } from "@/components/cockpit/context";
+import { CkSidebar } from "@/components/cockpit/chrome";
 import {
-  CkSidebar,
-  cockpitNavItems,
+  cockpitScreen,
+  hrefForNavId,
   isMobileMoreNavItem,
-} from "@/components/cockpit/chrome";
+  type CockpitIntegration,
+} from "@/lib/cockpit/navigation";
+import { useIntegrationChangeRefresh } from "@/lib/integrations/change-signal";
 import { LivePollControl } from "@/components/cockpit/controls";
 import { LogoutButton } from "@/components/cockpit/logout-button";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
@@ -33,13 +36,6 @@ import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
 import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
 import { MoreSheet } from "@/components/cockpit/mobile/more-sheet";
 
-/** Overview lives at `/`; every other screen is `/<id>` (matches the nav ids). */
-const pathForScreen = (id: string) => (id === "overview" ? "/" : `/${id}`);
-const screenForPath = (path: string) => {
-  const seg = path.replace(/^\/+/, "").split("/")[0];
-  return seg === "" ? "overview" : seg;
-};
-
 /** Drop one key, returning the same object when there is nothing to drop. */
 function withoutKey(
   current: Readonly<Record<string, RunRefreshCadence>>,
@@ -51,25 +47,6 @@ function withoutKey(
   return next;
 }
 
-const TITLE_FOR_SCREEN: Record<string, string> = {
-  overview: "Overview",
-  runs: "Workflow runs",
-  approvals: "Approvals",
-  prompts: "Prompts",
-  memory: "Agent memory",
-  evals: "Arthur evals",
-  cost: "Cost & usage",
-  editor: "Workflow editor",
-  profiles: "Harness profiles",
-  repositories: "Repositories",
-  integrations: "Integrations",
-  health: "System health",
-  users: "Users",
-  settings: "Settings",
-  trace: "Run trace",
-  ticket: "Ticket runs",
-};
-
 /**
  * Persistent cockpit chrome (sidebar, topbar, activity drawer) plus the shared
  * context. Lives in the route-group layout so the sidebar, drawer and the
@@ -79,13 +56,20 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
 export function CockpitShell({
   children,
   session,
+  integrations = [],
 }: {
   children: React.ReactNode;
   session: DashboardSession;
+  /**
+   * Every integration this build ships, read once in the layout. The sidebar
+   * carries the usable ones; the rest are here so the topbar can still name an
+   * integration whose area was opened from the Integrations list.
+   */
+  integrations?: readonly CockpitIntegration[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const screen = screenForPath(pathname);
+  const screen = cockpitScreen(pathname, integrations);
   const canManageUsers = session.canManageUsers;
 
   const [t, setTweak] = useTweaks<Tweaks>(TWEAK_DEFAULTS);
@@ -99,9 +83,6 @@ export function CockpitShell({
   const [runRefreshKeys, setRunRefreshKeys] = useState<
     Readonly<Record<string, RunRefreshCadence>>
   >({});
-  const moreScreens = cockpitNavItems({ canManageUsers })
-    .filter((item) => isMobileMoreNavItem(item.id))
-    .map((item) => item.id);
 
   useEffect(() => {
     setActivityOpen(!!t.activityDrawerOpen);
@@ -153,6 +134,37 @@ export function CockpitShell({
     navigate(runHref(r));
   };
 
+  // The sidebar's entries are a fact about the deployment, and this shell is
+  // the only listener that is mounted on every screen, so this is where an
+  // integration connected in another tab becomes an entry here. The refresh
+  // re-runs every server component on screen, which empties a form somebody is
+  // half way through, so it is refused exactly while the cockpit is holding
+  // unsaved work. `enabled` is a getter because the answer that matters is the
+  // one at the moment the signal arrives, not the one at the last render.
+  //
+  // A refused refresh leaves a sidebar that is quietly wrong, which is worse
+  // than one that flickers, so the topbar says so. The connection screen tells
+  // its own user the same thing about its own form; this is the sentence for
+  // everybody else, and it clears itself when a navigation renders the layout
+  // from the server again.
+  const [integrationsChangedElsewhere, setIntegrationsChangedElsewhere] = useState(false);
+  useIntegrationChangeRefresh({
+    get enabled() {
+      return !hasUnsavedSettings();
+    },
+    onSuppressed: () => setIntegrationsChangedElsewhere(true),
+  });
+  useEffect(() => setIntegrationsChangedElsewhere(false), [pathname]);
+  const staleNavNotice = integrationsChangedElsewhere ? (
+    <span
+      role="status"
+      data-stale-nav-notice=""
+      className="font-mono text-[10px] uppercase tracking-[0.06em] text-[#A23E18]"
+    >
+      Integrations changed elsewhere. Reload once your edits are saved.
+    </span>
+  ) : null;
+
   // Mounted run surfaces declare their own cadence here; the loop below is the
   // only thing that calls router.refresh(), once for the whole cockpit. Plain
   // state (no ref mirror) so `enabled` can never disagree with the registry.
@@ -182,8 +194,11 @@ export function CockpitShell({
   // active runs are present", and it is what lets a new run appear in the list.
   // Health probes hit every configured provider. They are intentionally
   // user-triggered so a persisted global Live preference cannot turn one open
-  // health tab into a continuous fan-out of production requests.
-  const globalPollingAllowed = screen !== "health";
+  // health tab into a continuous fan-out of production requests. The screen
+  // says so itself rather than the shell matching a path: System health moved
+  // under Settings, and a check written as `screen !== "health"` would have
+  // stopped matching without a word.
+  const globalPollingAllowed = screen.allowsLivePolling;
   const liveDisabledReason = globalPollingAllowed
     ? undefined
     : "Live updates are unavailable because health checks contact every configured provider.";
@@ -223,6 +238,8 @@ export function CockpitShell({
         range,
         env,
         openRun,
+        navigate,
+        canManageUsers,
         livePolling: !!t.livePolling,
         toggleLive: () => setTweak("livePolling", !t.livePolling),
         nextRefreshAt,
@@ -236,29 +253,37 @@ export function CockpitShell({
         {/* Desktop sidebar, lg and up only */}
         <div className="hidden lg:flex">
           <CkSidebar
-            active={screen}
-            onNav={(id) => navigate(pathForScreen(id))}
+            active={screen.navId}
+            onNav={(id) => navigate(hrefForNavId(id))}
             collapsed={!!t.sidebarCollapsed}
             onToggleCollapse={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)}
-            canManageUsers={canManageUsers}
+            integrations={integrations}
+            collapsedGroups={t.collapsedNavGroups}
+            onToggleGroup={(id) =>
+              setTweak(
+                "collapsedNavGroups",
+                t.collapsedNavGroups.includes(id)
+                  ? t.collapsedNavGroups.filter((group) => group !== id)
+                  : [...t.collapsedNavGroups, id],
+              )
+            }
           />
         </div>
 
         <main data-cockpit-main="" className="flex-1 flex flex-col min-w-0 min-h-0">
           {/* Mobile header */}
           <div className="lg:hidden">
-            <MobileHeader
-              title={TITLE_FOR_SCREEN[screen] ?? "AI Workflow"}
-              liveDisabledReason={liveDisabledReason}
-            />
+            <MobileHeader title={screen.title} liveDisabledReason={liveDisabledReason} />
+            {staleNavNotice && <div className="px-4 pb-2">{staleNavNotice}</div>}
           </div>
 
           {/* Desktop top bar. Health keeps the shared control visible but disabled. */}
           <div className="hidden lg:flex items-center justify-between flex-[0_0_44px] h-11 border-b border-neutral-200 bg-panel px-6">
             <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
-              {TITLE_FOR_SCREEN[screen] ?? "AI Workflow"}
+              {screen.title}
             </span>
             <div className="flex items-center gap-4">
+              {staleNavNotice}
               <LivePollControl disabledReason={liveDisabledReason} />
               <LogoutButton />
             </div>
@@ -269,9 +294,9 @@ export function CockpitShell({
           {/* Mobile bottom tab bar */}
           <div className="lg:hidden">
             <BottomTabBar
-              active={screen}
-              moreActive={moreScreens.includes(screen)}
-              onNav={(id) => navigate(pathForScreen(id))}
+              active={screen.navId}
+              moreActive={isMobileMoreNavItem(screen.navId)}
+              onNav={(id) => navigate(hrefForNavId(id))}
               onOpenMore={() => setMoreOpen(true)}
             />
           </div>
@@ -287,9 +312,9 @@ export function CockpitShell({
           <MoreSheet
             open={moreOpen}
             onClose={() => setMoreOpen(false)}
-            active={screen}
-            onNav={(id) => navigate(pathForScreen(id))}
-            canManageUsers={canManageUsers}
+            active={screen.navId}
+            onNav={(id) => navigate(hrefForNavId(id))}
+            integrations={integrations}
           />
         </div>
 

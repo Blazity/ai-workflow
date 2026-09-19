@@ -12,9 +12,18 @@ catalogs:
     '@types/node':
       specifier: ^22.0.0
       version: 22.19.15
+    '@types/react':
+      specifier: ^19.0.0
+      version: 19.2.15
     happy-dom:
       specifier: 20.14.5
       version: 20.14.5
+    react:
+      specifier: ^19.0.0
+      version: 19.2.4
+    react-test-renderer:
+      specifier: 19.2.4
+      version: 19.2.4
     tsx:
       specifier: ^4.23.13
       version: 4.23.13
@@ -68,6 +77,9 @@ importers:
 
   apps/dashboard:
     dependencies:
+      '@integrations/registry':
+        specifier: workspace:*
+        version: link:../../integrations/registry
       '@phosphor-icons/react':
         specifier: 2.1.10
         version: 2.1.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -105,7 +117,7 @@ importers:
         specifier: ^15.5.25
         version: 15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       react:
-        specifier: ^19.0.0
+        specifier: 'catalog:'
         version: 19.2.4
       react-dom:
         specifier: ^19.0.0
@@ -121,7 +133,7 @@ importers:
         specifier: 'catalog:'
         version: 22.19.15
       '@types/react':
-        specifier: ^19.0.0
+        specifier: 'catalog:'
         version: 19.2.15
       '@types/react-dom':
         specifier: ^19.0.0
@@ -136,7 +148,7 @@ importers:
         specifier: ^8.5.23
         version: 8.5.28
       react-test-renderer:
-        specifier: 19.2.4
+        specifier: 'catalog:'
         version: 19.2.4(react@19.2.4)
       tailwindcss:
         specifier: ^4.0.0
@@ -295,6 +307,9 @@ importers:
 
   integrations/_fixtures/demo:
     dependencies:
+      '@integrations/host-ui':
+        specifier: workspace:*
+        version: link:../../host-ui
       '@integrations/sdk':
         specifier: workspace:*
         version: link:../../sdk
@@ -302,12 +317,21 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.15
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.2.15
+      react:
+        specifier: 'catalog:'
+        version: 19.2.4
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
 
   integrations/_template:
     dependencies:
+      '@integrations/host-ui':
+        specifier: workspace:*
+        version: link:../host-ui
       '@integrations/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -315,11 +339,17 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.15
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.2.15
+      react:
+        specifier: 'catalog:'
+        version: 19.2.4
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
 
-  integrations/registry:
+  integrations/host-ui:
     dependencies:
       '@integrations/sdk':
         specifier: workspace:*
@@ -328,6 +358,37 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.15
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.2.15
+      react:
+        specifier: 'catalog:'
+        version: 19.2.4
+      react-test-renderer:
+        specifier: 'catalog:'
+        version: 19.2.4(react@19.2.4)
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+
+  integrations/registry:
+    dependencies:
+      '@integrations/host-ui':
+        specifier: workspace:*
+        version: link:../host-ui
+      '@integrations/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.2.15
       tsx:
         specifier: 'catalog:'
         version: 4.23.13

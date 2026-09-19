@@ -33,6 +33,43 @@ test("/scripts is permanently redirected to the Repositories page", async () => 
   assert.equal(scripts.permanent, true);
 });
 
+test("the old System health and Users URLs still work", async () => {
+  // Both are in bookmarks and in runbooks, and both moved into the Settings
+  // area in the same change that gave the sidebar its Integrations section.
+  const redirects = await nextConfig.redirects?.();
+  assert.ok(redirects, "the dashboard must declare its retired routes");
+  const bySource = new Map(redirects.map((entry) => [entry.source, entry]));
+
+  const health = bySource.get("/health");
+  assert.equal(health?.destination, "/settings/health");
+  assert.equal(health?.permanent, true, "System health is not coming back to /health");
+
+  const users = bySource.get("/users");
+  assert.equal(users?.destination, "/settings/users");
+  assert.equal(users?.permanent, true, "Users is not coming back to /users");
+
+  // A destination carrying a query of its own replaces the one the person
+  // arrived with, and `/health?provider=jira` is a shape people have.
+  for (const entry of redirects) {
+    assert.ok(
+      !entry.destination.includes("?"),
+      `${entry.source} must not overwrite the query string`,
+    );
+  }
+});
+
+test("no redirect points at a path that redirects again", async () => {
+  // A chain costs a round trip per hop and breaks the moment one hop changes.
+  const redirects = (await nextConfig.redirects?.()) ?? [];
+  const sources = new Set(redirects.map((entry) => entry.source));
+  for (const entry of redirects) {
+    assert.ok(
+      !sources.has(entry.destination),
+      `${entry.source} redirects to ${entry.destination}, which redirects again`,
+    );
+  }
+});
+
 test("/checks forwards to the Repositories page rather than rendering anything", async () => {
   // The oldest link of the three, and the one that forwards in the route rather
   // than in the config, because it is a page inside the cockpit group.

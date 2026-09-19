@@ -3,13 +3,25 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   /**
-   * The Repository scripts screen became a tab inside a repository entry, so
-   * `/scripts` is gone. A permanent redirect rather than a deleted route: the
-   * path is in bookmarks, in Slack messages the worker posted and in the
-   * workflow editor's older block panels, and a 404 there teaches nothing.
+   * Screens that moved, kept working.
+   *
+   * `/scripts` became a tab inside a repository entry. `/health` and `/users`
+   * became tabs of the Settings area, so the sidebar could say what belongs to
+   * the product and what belongs to an integration without growing to fifteen
+   * flat entries.
+   *
+   * Permanent redirects rather than deleted routes: all three are in bookmarks,
+   * in Slack messages the worker posted, in runbooks and in the workflow
+   * editor's older block panels, and a 404 there teaches nothing. Next carries
+   * the query string across, and a fragment never reaches the server, so
+   * `/health?provider=jira` and `/users?tab=invites#row-7` arrive whole.
    */
   async redirects() {
-    return [{ source: "/scripts", destination: "/repositories", permanent: true }];
+    return [
+      { source: "/scripts", destination: "/repositories", permanent: true },
+      { source: "/health", destination: "/settings/health", permanent: true },
+      { source: "/users", destination: "/settings/users", permanent: true },
+    ];
   },
 };
 

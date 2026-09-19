@@ -65,6 +65,10 @@ type IntegrationFiles = {
   worker?: string | null;
   readme?: string | null;
   packageName?: string | null;
+  /** The pages the manifest declares, which is what a dashboard entry serves. */
+  pages?: Array<{ id: string; label: string }>;
+  /** `null` writes no dashboard.tsx, whatever the pages say. */
+  dashboard?: string | null;
 };
 
 async function writeIntegration(
@@ -99,11 +103,24 @@ export const manifest = defineIntegration({
   connection: { fields: [] },
   capabilities: [],
   blocks: [${blocks.map((_, index) => `block${index}`).join(", ")}],
-  pages: [],
+  pages: [${(files.pages ?? []).map((page) => `{ id: "${page.id}", label: "${page.label}" }`).join(", ")}],
   health: [{ id: "auth", label: "Auth", description: "d", critical: true }],
 });
 `,
   );
+  if (files.dashboard !== null && (files.dashboard !== undefined || (files.pages ?? []).length > 0)) {
+    await writeFile(
+      join(absolute, "dashboard.tsx"),
+      files.dashboard ??
+        `import { defineIntegrationDashboard } from "@integrations/host-ui";
+import type { manifest } from "./manifest";
+
+export const dashboard = defineIntegrationDashboard<typeof manifest>({
+  pages: { ${(files.pages ?? []).map((page) => `${page.id}: () => null`).join(", ")} },
+});
+`,
+    );
+  }
   if (files.worker !== null) {
     await writeFile(
       join(absolute, "worker.ts"),
@@ -393,6 +410,104 @@ test("a directory under integrations with no manifest is refused rather than ski
   await writeFile(join(root, "integrations/halfway/worker.ts"), "export const runtime = 1;\n");
 
   assert.throws(() => readIntegrations({ root }), /halfway[\s\S]*manifest\.ts/);
+});
+
+test("an integration's pages become a dashboard registry keyed by id", async (t) => {
+  const root = await fixtureRoot("gen-integrations-dashboard");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeIntegration(root, "alpha", {
+    id: "alpha",
+    pages: [{ id: "overview", label: "Overview" }],
+  });
+  // An integration with no pages contributes no screen and is simply absent,
+  // rather than present with an empty object for the route to look through.
+  await writeIntegration(root, "beta", { id: "beta" });
+
+  const generated = renderGeneratedFiles({ root });
+  assert.match(generated.dashboards, /"alpha": \{/u);
+  assert.match(generated.dashboards, /pages: \["overview"\]/u);
+  assert.doesNotMatch(generated.dashboards, /beta/);
+  // The module is behind a loader and nothing imports it at the top level: a
+  // static import would run the top level of every shipped integration on the
+  // first load of any integration route, connected or not.
+  assert.match(generated.dashboards, /load: \(\) => import\("\.\.\/alpha\/dashboard"\)/u);
+  assert.doesNotMatch(
+    generated.dashboards,
+    /^import \{ dashboard/mu,
+    "an integration's dashboard entry must not be imported at the top of the registry",
+  );
+  // And the React half stays out of the two registries that are read where
+  // there is no React: the worker's, and the flow bundle's.
+  assert.doesNotMatch(generated.manifests, /from "[^"]*dashboard"/u);
+  assert.doesNotMatch(generated.runtimes, /from "[^"]*dashboard"/u);
+});
+
+test("a declared page with no component is refused, naming the page", async (t) => {
+  // Otherwise the tab is in the sidebar and renders nothing, which is the one
+  // failure a reader would blame on the cockpit rather than the integration.
+  const root = await fixtureRoot("gen-integrations-page-nocomponent");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeIntegration(root, "alpha", {
+    id: "alpha",
+    pages: [{ id: "overview", label: "Overview" }],
+    dashboard: null,
+  });
+  assert.throws(() => readIntegrations({ root }), /declares the page "overview".*dashboard\.tsx/su);
+});
+
+test("a dashboard entry for an integration with no pages is refused", async (t) => {
+  // Nothing in the cockpit can reach it: the tabs are built from the manifest.
+  const root = await fixtureRoot("gen-integrations-page-undeclared");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeIntegration(root, "alpha", {
+    id: "alpha",
+    dashboard: "export const dashboard = { pages: {} };\n",
+  });
+  assert.throws(() => readIntegrations({ root }), /declares no pages/u);
+});
+
+test("a dashboard entry that reads the deployment's environment is refused", async (t) => {
+  // Not an import, so no specifier rule can see it, and the one reach that
+  // needs no dependency at all: a Server Component in our process would get
+  // WORKER_BASE_URL and every other variable this deployment runs with.
+  const root = await fixtureRoot("gen-integrations-dashboard-env");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeIntegration(root, "alpha", {
+    id: "alpha",
+    pages: [{ id: "overview", label: "Overview" }],
+    dashboard: 'export const dashboard = { pages: { overview: () => process.env.WORKER_BASE_URL } };\n',
+  });
+  assert.throws(() => readIntegrations({ root }), /may not read process\.env/u);
+});
+
+test("a helper one file away cannot read it either", async (t) => {
+  const root = await fixtureRoot("gen-integrations-dashboard-env-helper");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeIntegration(root, "alpha", {
+    id: "alpha",
+    pages: [{ id: "overview", label: "Overview" }],
+    dashboard: 'import { where } from "./where";\nexport const dashboard = { pages: { overview: where } };\n',
+  });
+  await writeFile(
+    join(root, "integrations/alpha/where.ts"),
+    "export const where = () => process.env.WORKER_BASE_URL;\n",
+  );
+  assert.throws(() => readIntegrations({ root }), /where\.ts: a dashboard entry may not read process\.env/u);
+});
+
+test("the host UI package is not read as an integration", async (t) => {
+  // It sits under integrations/ because it is a contract with integrations,
+  // not because it is one. A directory with no manifest is refused rather than
+  // skipped, so forgetting to name it here is a generator that cannot run.
+  const root = await fixtureRoot("gen-integrations-host-ui");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "integrations/host-ui"), { recursive: true });
+  await writeFile(join(root, "integrations/host-ui/index.ts"), "export const Page = 1;\n");
+  await writeIntegration(root, "alpha", { id: "alpha" });
+  assert.deepEqual(
+    readIntegrations({ root }).map((entry) => entry.id),
+    ["alpha"],
+  );
 });
 
 test("the generated files carry the header that says not to edit them", async (t) => {

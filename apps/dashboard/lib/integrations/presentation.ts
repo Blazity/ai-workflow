@@ -613,6 +613,118 @@ export const NO_INTEGRATIONS_LINE =
 export const CORE_CAPABILITIES_LINE =
   "The ticket-to-PR flow needs an issue tracker, version control and a coding agent. Blocks that need a capability nobody provides stay unavailable in the editor and say which one is missing.";
 
+/**
+ * Why a page an integration contributes is not being shown, or null when it is.
+ *
+ * An integration's own pages read the provider through the connection, so an
+ * integration nobody has connected has nothing for them to show. Rather than
+ * run its code and let it produce whatever a package makes of a connection it
+ * does not have, the area says what is missing in the cockpit's words and
+ * leaves the Connection tab, which is the action, one click away.
+ *
+ * `usable` is the resolver's own answer, so this reads it rather than working
+ * the same thing out again from `enabled` and `connection`.
+ */
+function contributedPageBlockedLine(integration: IntegrationDto): string | null {
+  const state = integration.state;
+  if (state.usable) return null;
+  if (!state.enabled) {
+    return `${integration.name} is switched off, so its pages are not being shown. The Connection tab is where it goes back on.`;
+  }
+  if (state.connection === "failing") {
+    return `${integration.name}'s connection is failing, so its pages have nothing to read. The Connection tab says what went wrong.`;
+  }
+  return `${integration.name} is not connected, so its pages have nothing to read yet. The Connection tab is where that starts.`;
+}
+
+/** Enough of a manifest to decide what an area shows: name and declared pages. */
+export interface ContributedPageManifest {
+  readonly name: string;
+  readonly pages: readonly { readonly id: string; readonly label: string }[];
+}
+
+export type ContributedPageOutcome =
+  /** Hand the integration's own component the page. */
+  | { readonly kind: "render"; readonly label: string }
+  /** Say something in our own words, and offer the one thing that helps. */
+  | {
+      readonly kind: "notice";
+      readonly title: string;
+      readonly body: string;
+      readonly action: "integration" | "connection";
+    };
+
+/**
+ * What the area shows behind a tab, before any integration code runs.
+ *
+ * Four different nothings, and the difference matters to whoever arrived here
+ * from a bookmark, a link or a tab they left open: a page this integration does
+ * not have, a page it declares that this build did not compile, an integration
+ * that is not in use, and the page itself. A bare 404 collapses the four into
+ * one and sends people looking in the wrong place.
+ *
+ * A worker that did not answer is a fourth kind of nothing, not a licence to
+ * carry on. The rule this page follows is that an integration's own code runs
+ * only once the deployment has said the integration is in use, and "we could
+ * not ask" is not that sentence: an integration somebody disabled an hour ago
+ * would otherwise start running again the moment the worker went quiet. The
+ * notice names our outage rather than the integration, because that is whose
+ * fault it is.
+ */
+export function contributedPageOutcome({
+  manifest,
+  pageId,
+  hasComponent,
+  integration,
+  workerAnswered = true,
+}: {
+  manifest: ContributedPageManifest;
+  pageId: string;
+  hasComponent: boolean;
+  integration?: IntegrationDto;
+  /** False when the worker did not answer, which is not the same as absent. */
+  workerAnswered?: boolean;
+}): ContributedPageOutcome {
+  const declared = manifest.pages.find((page) => page.id === pageId);
+  if (!declared) {
+    const has =
+      manifest.pages.length === 0
+        ? "no pages"
+        : andList(manifest.pages.map((page) => page.label));
+    return {
+      kind: "notice",
+      title: "No page under that name",
+      body: `${manifest.name} contributes ${has}, and nothing called "${pageId}". The tabs above are everything this integration has.`,
+      action: "integration",
+    };
+  }
+  if (!hasComponent) {
+    // The generator refuses a declared page with no component, so this means
+    // the manifest and the dashboard entry were built from different commits.
+    return {
+      kind: "notice",
+      title: "This page did not ship",
+      body: `${manifest.name} declares ${declared.label}, and this build carries no screen for it. The build is inconsistent with the integration; re-running the registry generator is what fixes it.`,
+      action: "integration",
+    };
+  }
+  if (!integration) {
+    return {
+      kind: "notice",
+      title: declared.label,
+      body: workerAnswered
+        ? `This deployment does not ship ${manifest.name} any more, so there is nothing behind this page.`
+        : `Whether ${manifest.name} is connected could not be read just now, and its pages are only shown once this deployment says it is in use. Reload in a moment.`,
+      action: "connection",
+    };
+  }
+  const blocked = contributedPageBlockedLine(integration);
+  if (blocked) {
+    return { kind: "notice", title: declared.label, body: blocked, action: "connection" };
+  }
+  return { kind: "render", label: declared.label };
+}
+
 /** Said to a role that may read this page and not change it. */
 export const MEMBER_READ_ONLY_LINE =
   "Read-only: every integration and its status are shown here, and connecting or changing one needs the owner or admin role.";

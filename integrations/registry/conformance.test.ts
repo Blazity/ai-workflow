@@ -25,8 +25,12 @@ import {
 const integrationsRoot = resolve(import.meta.dirname, "..");
 const repositoryRoot = resolve(integrationsRoot, "..");
 
-/** Not integrations: `sdk` is the contract and `registry` is this package. */
-const NOT_INTEGRATIONS = new Set(["sdk", "registry"]);
+/**
+ * Not integrations: `sdk` is the contract an integration's worker half is
+ * written against, `host-ui` the one its dashboard half is written against, and
+ * `registry` is this package.
+ */
+const NOT_INTEGRATIONS = new Set(["sdk", "host-ui", "registry"]);
 
 function packageDirectories(): string[] {
   const found: string[] = [];
@@ -82,11 +86,15 @@ for (const directory of directories) {
     const workspace = Object.keys(declared.dependencies ?? {}).filter((dependency) =>
       dependency.startsWith("@shared/") || dependency.startsWith("@integrations/"),
     );
+    const allowed = new Set(["@integrations/host-ui", "@integrations/sdk"]);
+    assert.ok(
+      workspace.includes("@integrations/sdk"),
+      `${name} must depend on @integrations/sdk, which re-exports what an integration needs, including z, so a package never picks its own zod.`,
+    );
     assert.deepEqual(
-      workspace,
-      ["@integrations/sdk"],
-      `${name} may depend on @integrations/sdk and on its provider's own packages, and on nothing else in this repository. ` +
-        "The SDK re-exports what an integration needs, including z, so a package never picks its own zod.",
+      workspace.filter((dependency) => !allowed.has(dependency)),
+      [],
+      `${name} may depend on @integrations/sdk, on @integrations/host-ui when it contributes a dashboard page, and on its provider's own packages. Nothing else in this repository is reachable from an integration.`,
     );
   });
 }

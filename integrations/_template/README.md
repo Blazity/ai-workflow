@@ -13,6 +13,10 @@ integration under `integrations/<id>`.
   per declared capability, one executor per declared block, one probe per
   declared health check. Server only; it may import `@integrations/sdk` and
   `./manifest`.
+- `dashboard.tsx`: the screens this integration contributes to the cockpit,
+  one component per page the manifest declares, built from
+  `@integrations/host-ui`. Delete it and empty `manifest.pages` if your
+  integration brings no screens of its own.
 - `README.md`: this file. Replace it with your own integration's README. The
   generator refuses a package without one.
 
@@ -24,8 +28,9 @@ integration under `integrations/<id>`.
 4. Rename the block types from `example_*` to `<id>_*`.
 5. Rename the connection fields' environment variables from `EXAMPLE_*` to
    `<ID>_*`.
-6. Run `pnpm install`.
-7. Run `pnpm gen:integrations`.
+6. Keep `manifest.pages` and `dashboard.tsx` in step, or delete both.
+7. Run `pnpm install`.
+8. Run `pnpm gen:integrations`.
 
 ## What will get your package refused
 
@@ -39,6 +44,11 @@ integration under `integrations/<id>`.
 - A block type another integration or a core block already owns is refused; a
   block type must start with `<id>_`.
 - The package name must be `@integrations/<id>`, matching the manifest id.
+- Every page in `manifest.pages` needs a component of the same id in
+  `dashboard.tsx`, and a `dashboard.tsx` with no declared pages is refused.
+- `dashboard.tsx` may import `@integrations/host-ui` and your own files. Not
+  `@/...`, not `next/*`, not `node:*`, not `server-only`, and it may not read
+  `process.env`.
 - Keep the `IntegrationRuntimeDefinition<...>` annotation in `worker.ts`.
   Written inline as the second argument of `defineIntegrationRuntime`,
   TypeScript stops typing the health probes' arguments from the manifest and

@@ -11,6 +11,7 @@
     "test": "node --experimental-test-module-mocks --import tsx --test \"**/*.test.ts\" \"**/*.test.tsx\""
   },
   "dependencies": {
+    "@integrations/registry": "workspace:*",
     "@phosphor-icons/react": "2.1.10",
     "@shared/conditions": "workspace:*",
     "@shared/contracts": "workspace:*",
@@ -23,19 +24,19 @@
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
     "next": "^15.5.25",
-    "react": "^19.0.0",
+    "react": "catalog:",
     "react-dom": "^19.0.0",
     "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "catalog:",
-    "@types/react": "^19.0.0",
+    "@types/react": "catalog:",
     "@types/react-dom": "^19.0.0",
     "@types/react-test-renderer": "^19.1.0",
     "happy-dom": "catalog:",
     "postcss": "^8.5.23",
-    "react-test-renderer": "19.2.4",
+    "react-test-renderer": "catalog:",
     "tailwindcss": "^4.0.0",
     "tsx": "catalog:",
     "typescript": "catalog:"

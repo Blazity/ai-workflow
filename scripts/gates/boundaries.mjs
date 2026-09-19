@@ -210,6 +210,31 @@ export function forbiddenImport(fromPath, toPath) {
   return forbiddenImports.find((rule) => rule.from.test(fromPath) && rule.to.test(toPath)) ?? null;
 }
 
+const forbiddenSpecifiers = (tierMap.forbiddenSpecifiers ?? []).map((rule) => ({
+  from: new RegExp(rule.from),
+  specifier: new RegExp(rule.specifier),
+  reason: rule.reason,
+}));
+
+/**
+ * Rules about what a file may WRITE, not about what it reaches.
+ *
+ * A tier rule needs a resolved path, and the import this exists to refuse has
+ * none: `@/components/ui` is the dashboard's own tsconfig alias, so from a file
+ * outside `apps/` it resolves to nothing and every rule keyed on the target
+ * skips it. An edge the gate cannot resolve is an edge it cannot refuse, which
+ * is exactly the hole an integration reaching into the dashboard would sit in.
+ * Matched against the specifier as written. Returns the rule, or null.
+ */
+export function forbiddenSpecifier(fromPath, specifier) {
+  if (typeof specifier !== "string") return null;
+  return (
+    forbiddenSpecifiers.find(
+      (rule) => rule.from.test(fromPath) && rule.specifier.test(specifier),
+    ) ?? null
+  );
+}
+
 function increment(counts, key) {
   counts.set(key, (counts.get(key) ?? 0) + 1);
 }
@@ -390,6 +415,7 @@ function dependencyCounts(root, config) {
   const counts = new Map();
   const forbiddenEdges = [];
   const bundleViolations = [];
+  const specifierViolations = [];
   const unknown = new Set();
   const deepImports = new Set();
   const packageDirectories = workspacePackageDirectories(root);
@@ -400,6 +426,16 @@ function dependencyCounts(root, config) {
     const fromTier = classify(root, fromPath);
     if (!fromTier) unknown.add(fromPath);
     for (const dependency of module.dependencies ?? []) {
+      // Before resolution, because the specifiers this refuses are the ones
+      // that resolve to nothing from where they were written.
+      const specifierRule = forbiddenSpecifier(fromPath, dependency.module);
+      if (specifierRule) {
+        specifierViolations.push({
+          from: fromPath,
+          specifier: dependency.module,
+          reason: specifierRule.reason,
+        });
+      }
       const toPath = resolvedDependencyPath(
         root,
         module.source,
@@ -431,6 +467,9 @@ function dependencyCounts(root, config) {
     unknown: [...unknown].sort(),
     bundleViolations: bundleViolations.toSorted((left, right) =>
       `${left.from}\0${left.to}`.localeCompare(`${right.from}\0${right.to}`),
+    ),
+    specifierViolations: specifierViolations.toSorted((left, right) =>
+      `${left.from}\0${left.specifier}`.localeCompare(`${right.from}\0${right.specifier}`),
     ),
     deepImports: [...deepImports].toSorted().map((entry) => JSON.parse(entry)),
     forbiddenEdges: forbiddenEdges.toSorted((left, right) =>
@@ -521,6 +560,7 @@ function main() {
     report,
     unknown,
     bundleViolations,
+    specifierViolations,
     deepImports,
     forbiddenEdges,
   } = dependencyCounts(root, config);
@@ -561,8 +601,13 @@ function main() {
   for (const { from, to, reason } of bundleViolations) {
     console.log(`${from} must not import ${to}: ${reason}`);
   }
+  console.log(`Refused import specifiers  ${specifierViolations.length}`);
+  for (const { from, specifier, reason } of specifierViolations) {
+    console.log(`${from} must not import "${specifier}": ${reason}`);
+  }
   const failed = unknown.length > 0 || Object.values(tierPairs).some((count) => count > 0) ||
     hasFileCycles(fileCycles) || bundleViolations.length > 0 ||
+    specifierViolations.length > 0 ||
     deepImportDrift.added.length > 0 || deepImportDrift.stale.length > 0;
   if (failed || printEdges) {
     console.log("Forbidden edges");

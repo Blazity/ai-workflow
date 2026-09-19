@@ -9,7 +9,10 @@ import {
 } from "../generate-block-catalog/manifest-ast.js";
 import { readManifests } from "../generate-block-catalog/read-manifests.js";
 import { compareCodePoints } from "../generate-block-catalog/types.js";
-import { assertManifestIsPureData } from "./manifest-imports.js";
+import {
+  assertDashboardReadsNoEnvironment,
+  assertManifestIsPureData,
+} from "./manifest-imports.js";
 import {
   FIXTURES_DIRECTORY,
   INTEGRATION_ID,
@@ -159,6 +162,25 @@ function blockTypes(
   });
 }
 
+/** `pages[].id`, in declaration order, so the registry and the tab strip agree. */
+function pageIds(
+  manifest: ts.ObjectLiteralExpression,
+  printed: string,
+): string[] {
+  const pages = objectProperty(manifest, "pages");
+  const value = pages && unwrap(pages);
+  if (!value || !ts.isArrayLiteralExpression(value)) {
+    throw new Error(`${printed}: manifest.pages must be an array literal.`);
+  }
+  return value.elements.map((element, index) => {
+    const object = unwrap(element);
+    if (!ts.isObjectLiteralExpression(object)) {
+      throw new Error(`${printed}: pages[${index}] must be an object literal.`);
+    }
+    return stringValue(objectProperty(object, "id"), printed, `pages[${index}].id`);
+  });
+}
+
 function readManifest(
   root: string,
   directory: string,
@@ -217,6 +239,29 @@ function readManifest(
     );
   }
 
+  // The dashboard entry is required exactly when the manifest declares a page
+  // and refused otherwise. A declared page with no component is a tab that
+  // renders nothing, and a component nobody declared is code that never runs;
+  // both are cheaper to meet here than in the cockpit.
+  const pages = pageIds(object, `${printed}/manifest.ts`);
+  const dashboardPath = join(directory, "dashboard.tsx");
+  const hasDashboard = existsSync(dashboardPath);
+  if (pages.length > 0 && !hasDashboard) {
+    throw new Error(
+      `${printed}: the manifest declares the page${pages.length === 1 ? "" : "s"} ${pages
+        .map((page) => JSON.stringify(page))
+        .join(", ")}, so the package needs dashboard.tsx exporting a const named dashboard, ` +
+        "declared with defineIntegrationDashboard from @integrations/host-ui. Without it the tab is in the sidebar and renders nothing.",
+    );
+  }
+  if (pages.length === 0 && hasDashboard) {
+    throw new Error(
+      `${printed}/dashboard.tsx: the manifest declares no pages, so nothing in the cockpit can reach this file. ` +
+        "Declare the pages in manifest.pages, or delete the entry.",
+    );
+  }
+  if (hasDashboard) assertDashboardReadsNoEnvironment(directory, dashboardPath, root);
+
   return {
     directory: localPath(root, directory),
     id,
@@ -225,6 +270,8 @@ function readManifest(
     fixture,
     manifestPath: localPath(root, manifestPath),
     workerPath: localPath(root, workerPath),
+    pageIds: pages,
+    dashboardPath: hasDashboard ? localPath(root, dashboardPath) : null,
   };
 }
 

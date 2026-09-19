@@ -1,8 +1,9 @@
 import { canManageIntegrations } from "@shared/contracts";
-import type { IntegrationsListResponse, WorkflowDefinitionsResponse } from "@shared/contracts";
+import type { WorkflowDefinitionsResponse } from "@shared/contracts";
 
 import { authAwareFallback, getJSON } from "@/lib/api/server";
 import { requireSession } from "@/lib/auth/session";
+import { readIntegrationsList } from "@/lib/integrations/list";
 import { blockAvailabilityOf } from "@/lib/integrations/presentation";
 
 import { IntegrationsScreen } from "./integrations-screen";
@@ -26,9 +27,7 @@ export async function IntegrationsData() {
   const session = await requireSession();
 
   const [list, editor] = await Promise.all([
-    getJSON<IntegrationsListResponse>("/api/v1/integrations").catch((error) =>
-      authAwareFallback(error, (): IntegrationsListResponse | null => null),
-    ),
+    readIntegrationsList(),
     getJSON<WorkflowDefinitionsResponse>("/api/v1/workflow-definitions").catch((error) =>
       authAwareFallback(error, (): WorkflowDefinitionsResponse | null => null),
     ),

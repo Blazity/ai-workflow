@@ -11,6 +11,7 @@ import {
   crossClusterDeepImport,
   deepImportRegression,
   forbiddenImport,
+  forbiddenSpecifier,
   hasFileCycles,
   normalizeFileCycles,
 } from "../gates/boundaries.mjs";
@@ -1421,6 +1422,13 @@ test("core reaches an integration through the registry and never directly", () =
 
 test("an integration imports the SDK and nothing else in this repository", () => {
   assert.equal(allowed("integrations/jira", "integrations/sdk", "integrations/sdk/index.ts"), true);
+  // The host UI is the second half of the same contract: the SDK types what an
+  // integration's worker code is handed, the host UI what its dashboard pages
+  // are built from.
+  assert.equal(
+    allowed("integrations/jira", "integrations/host-ui", "integrations/host-ui/index.ts"),
+    true,
+  );
   assert.equal(
     allowed("integrations/jira", "packages/contracts", "packages/contracts/api.ts"),
     false,
@@ -1440,6 +1448,119 @@ test("an integration imports the SDK and nothing else in this repository", () =>
   assert.equal(
     allowed("integrations/sdk", "integrations/jira", "integrations/jira/manifest.ts"),
     false,
+  );
+});
+
+test("the host UI reads the manifest types and nothing of the dashboard's", () => {
+  // It types the pages a manifest declares, so it reads the SDK. It may not
+  // read an integration, another integration's pages are not its business, and
+  // it may not read the app whose look it carries: a package importing an app
+  // would invert the dependency and put a screen's internals into a contract
+  // with third-party code.
+  assert.equal(
+    allowed("integrations/host-ui", "integrations/sdk", "integrations/sdk/index.ts"),
+    true,
+  );
+  assert.equal(
+    allowed("integrations/host-ui", "integrations/jira", "integrations/jira/manifest.ts"),
+    false,
+  );
+  assert.equal(
+    allowed("integrations/host-ui", "app", "apps/dashboard/components/ui/button.tsx"),
+    false,
+  );
+  // And core does not reach for it: the dashboard has its own primitives, and
+  // a worker importing a React package is a Vercel build failure.
+  for (const core of ["engine", "services", "adapters", "app"]) {
+    assert.equal(
+      allowed(core, "integrations/host-ui", "integrations/host-ui/index.ts"),
+      false,
+      core,
+    );
+  }
+});
+
+test("an integration cannot reach the dashboard through its own alias", () => {
+  // The rule that needs a specifier rather than a path. `@/components/ui` is
+  // the dashboard's tsconfig alias, so from a file outside apps/ it resolves to
+  // nothing at all, and every rule keyed on the target skips it: an edge the
+  // gate cannot resolve is an edge it cannot refuse.
+  assert.notEqual(
+    forbiddenSpecifier("integrations/jira/dashboard.tsx", "@/components/ui"),
+    null,
+  );
+  assert.notEqual(
+    forbiddenSpecifier("integrations/_fixtures/demo/dashboard.tsx", "@/lib/api/client"),
+    null,
+  );
+  // The one import it is meant to send them to is untouched, and so is the
+  // registry, which is core's own file and lives under the same root.
+  assert.equal(
+    forbiddenSpecifier("integrations/jira/dashboard.tsx", "@integrations/host-ui"),
+    null,
+  );
+  assert.equal(forbiddenSpecifier("integrations/registry/dashboard.ts", "@/lib/anything"), null);
+  assert.equal(
+    forbiddenSpecifier("apps/dashboard/components/cockpit/chrome.tsx", "@/components/ui"),
+    null,
+  );
+});
+
+test("a dashboard entry cannot reach our runtime through an import", () => {
+  // These are the doors that turn a contributed page from a page into part of
+  // the cockpit: next/headers reaches our cookies, next/navigation moves the
+  // person, node: reaches the filesystem, server-only says the module is ours.
+  // Integration code is trusted code we review; this rule is against coupling,
+  // not against a hostile page, which ADR-010 says in those words.
+  for (const specifier of [
+    "next/headers",
+    "next/navigation",
+    "node:fs",
+    "node:child_process",
+    "server-only",
+  ]) {
+    assert.notEqual(
+      forbiddenSpecifier("integrations/jira/dashboard.tsx", specifier),
+      null,
+      specifier,
+    );
+  }
+  // What a page is meant to import, and what the worker half still may.
+  assert.equal(forbiddenSpecifier("integrations/jira/dashboard.tsx", "react"), null);
+  assert.equal(forbiddenSpecifier("integrations/jira/dashboard.tsx", "@integrations/host-ui"), null);
+  assert.equal(forbiddenSpecifier("integrations/jira/worker.ts", "node:crypto"), null);
+  assert.equal(forbiddenSpecifier("apps/dashboard/app/(cockpit)/layout.tsx", "next/headers"), null);
+});
+
+test("the dashboard registry stays out of every bundle that has no React", () => {
+  // React components in the Nitro bundle or in the Workflow DevKit's flow
+  // bundle is a Vercel build failure and nothing local.
+  assert.notEqual(
+    forbiddenImport(
+      "apps/worker/src/services/integrations/resolve.ts",
+      "integrations/registry/dashboard.ts",
+    ),
+    null,
+  );
+  assert.notEqual(
+    forbiddenImport("integrations/registry/index.ts", "integrations/registry/dashboard.ts"),
+    null,
+  );
+  assert.notEqual(
+    forbiddenImport("integrations/registry/worker.ts", "integrations/registry/dashboard.generated.ts"),
+    null,
+  );
+  assert.equal(
+    forbiddenImport(
+      "apps/dashboard/app/(cockpit)/integrations/contributed-page.tsx",
+      "integrations/registry/dashboard.ts",
+    ),
+    null,
+  );
+  // And an integration's two halves stay in their own bundles.
+  assert.notEqual(
+    forbiddenImport("integrations/jira/dashboard.tsx", "integrations/jira/worker.ts"),
+    null,
   );
 });
 

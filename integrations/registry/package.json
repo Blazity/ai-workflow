@@ -14,18 +14,24 @@
     "./worker": {
       "types": "./worker.ts",
       "default": "./worker.ts"
+    },
+    "./dashboard": {
+      "types": "./dashboard.ts",
+      "default": "./dashboard.ts"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test \"*.test.ts\"",
-    "test:zod4": "node --import tsx --import ../../packages/zod4-alias.mjs --test \"*.test.ts\""
+    "test": "node --experimental-test-module-mocks --import tsx --test \"*.test.ts\"",
+    "test:zod4": "node --experimental-test-module-mocks --import tsx --import ../../packages/zod4-alias.mjs --test \"*.test.ts\""
   },
   "dependencies": {
+    "@integrations/host-ui": "workspace:*",
     "@integrations/sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/react": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "zod4": "catalog:"

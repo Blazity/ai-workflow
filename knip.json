@@ -45,13 +45,16 @@
         "index.ts",
         "manifest.ts",
         "worker.ts",
-        "*.test.ts"
+        "dashboard.tsx",
+        "*.test.ts",
+        "*.test.tsx"
       ]
     },
     "integrations/_fixtures/*": {
       "entry": [
         "manifest.ts",
-        "worker.ts"
+        "worker.ts",
+        "dashboard.tsx"
       ]
     }
   },

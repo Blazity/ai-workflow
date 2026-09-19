@@ -1,8 +1,7 @@
 import { canManageIntegrations } from "@shared/contracts";
-import type { IntegrationsListResponse } from "@shared/contracts";
 
-import { authAwareFallback, getJSON } from "@/lib/api/server";
 import { requireSession } from "@/lib/auth/session";
+import { readIntegrationsList } from "@/lib/integrations/list";
 import { workerUnreachableLine } from "@/lib/integrations/presentation";
 
 import { ConnectionScreen, UnknownIntegrationScreen } from "./connection-screen";
@@ -18,9 +17,7 @@ export async function ConnectionData({ id }: { id: string }) {
   const session = await requireSession();
   const canManage = canManageIntegrations(session.role);
 
-  const list = await getJSON<IntegrationsListResponse>("/api/v1/integrations").catch(
-    (error) => authAwareFallback(error, (): IntegrationsListResponse | null => null),
-  );
+  const list = await readIntegrationsList();
 
   if (list === null) {
     return (

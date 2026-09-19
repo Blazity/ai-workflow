@@ -42,7 +42,9 @@ export const manifest = defineIntegration({
   // adapter factory under `capabilities` in worker.ts.
   capabilities: [],
   blocks: [pingBlock],
-  // A page's React side arrives with the dashboard entry, designed in a later stage.
-  pages: [],
+  // Every page declared here needs a component of the same id in dashboard.tsx,
+  // and every component there needs a page declared here. Declare no pages and
+  // delete dashboard.tsx if this integration brings no screens of its own.
+  pages: [{ id: "overview", label: "Overview" }],
   health: [{ id: "auth", label: "Token accepted", description: "The provider accepts the API token.", critical: true }],
 });

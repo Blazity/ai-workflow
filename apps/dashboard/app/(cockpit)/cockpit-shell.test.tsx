@@ -440,8 +440,12 @@ test("returning to the tab restores the refresh cycle, not a single refresh", (t
 // ── The LIVE badge ──────────────────────────────────────────────────────────
 
 test("health never polls and explains why the shared live control is disabled", (t) => {
+  // System health is a tab of the Settings area now. The shell used to read
+  // the first path segment and compare it to "health", which stopped matching
+  // the moment the screen moved, and started polling a screen whose every
+  // refresh contacts every configured provider. The path below is the real one.
   beginTest(t, { livePolling: true });
-  const { refreshes, root } = mountShell(t, "/health", <div>Health</div>);
+  const { refreshes, root } = mountShell(t, "/settings/health", <div>Health</div>);
 
   advance(60_000);
 
@@ -715,4 +719,50 @@ test("a settings form with nothing typed in it never interrupts a navigation", (
   navigateTo(root, "runs");
   assert.deepEqual(pushes, ["/runs"]);
   assert.deepEqual(confirmPrompts, []);
+});
+
+// ── The sidebar's own freshness ─────────────────────────────────────────────
+
+test("a sidebar refresh refused over unsaved work says so instead of going quiet", (t) => {
+  // The sidebar carries one entry per connected integration, so a colleague
+  // connecting one has to reach this tab. The refresh that would deliver it
+  // re-runs every server component on screen and empties a form somebody is
+  // half way through, so it is refused while the cockpit holds unsaved work.
+  // A refused refresh with nothing said leaves a sidebar that is quietly
+  // wrong, which is worse than one that flickers.
+  beginTest(t);
+  const { refreshes, root } = mountShell(t, "/settings", <div>Settings</div>);
+  t.after(resetUnsavedSettings);
+  act(() => {
+    trackUnsavedSettings("settings:agent", true);
+  });
+
+  // Coming back to a tab twice in a few seconds is one arrival, so the signal
+  // is only due once the gap has passed.
+  advance(20_000);
+  const before = refreshes.length;
+  act(() => {
+    for (const listener of Array.from(focusListeners)) listener();
+  });
+  assert.equal(refreshes.length, before, "a dirty form must not be refreshed away");
+  assert.equal(
+    root.findAll((node) => node.props["data-stale-nav-notice"] !== undefined).length,
+    2,
+    "the desktop topbar and the mobile header both say the sidebar is behind",
+  );
+
+  // With nothing to lose, the refresh happens and there is nothing to say.
+  act(() => {
+    trackUnsavedSettings("settings:agent", false);
+  });
+  const { refreshes: clean, root: cleanRoot } = mountShell(t, "/runs", <div>Runs</div>);
+  advance(20_000);
+  act(() => {
+    for (const listener of Array.from(focusListeners)) listener();
+  });
+  assert.ok(clean.length > 0, "a cockpit with nothing typed takes the refresh");
+  assert.equal(
+    cleanRoot.findAll((node) => node.props["data-stale-nav-notice"] !== undefined).length,
+    0,
+  );
 });

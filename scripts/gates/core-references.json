@@ -48,15 +48,14 @@
       "stage": "S8",
       "reason": "dashboard screens and helpers that still name the provider; S8 removes them",
       "paths": [
-        "apps/dashboard/app/(cockpit)/cockpit-shell.tsx",
         "apps/dashboard/app/layout.tsx",
         "apps/dashboard/components/cockpit/activity-drawer.tsx",
-        "apps/dashboard/components/cockpit/chrome.tsx",
         "apps/dashboard/components/cockpit/flow-editor/block-palette.ts",
         "apps/dashboard/components/cockpit/flow-editor/blocks/arthur_injection_check.tsx",
         "apps/dashboard/components/cockpit/flow-editor/blocks/index.ts",
         "apps/dashboard/components/cockpit/screens/evals.tsx",
-        "apps/dashboard/components/cockpit/screens/health.tsx"
+        "apps/dashboard/components/cockpit/screens/health.tsx",
+        "apps/dashboard/lib/cockpit/navigation.ts"
       ]
     },
     {

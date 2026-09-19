@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import { sourceFile } from "../generate-block-catalog/manifest-ast.js";
@@ -87,4 +87,47 @@ export function assertManifestIsPureData(
   };
   visit(manifestPath);
   return [...seen];
+}
+
+/**
+ * A dashboard entry may not read the deployment's environment.
+ *
+ * The specifier rules in `tiers.json` shut the doors that are imports:
+ * `next/headers`, `node:*`, `server-only`. `process.env` is not an import, so
+ * nothing there can see it, and it is the one reach that needs no dependency at
+ * all: a Server Component in our process would get `WORKER_BASE_URL` and every
+ * other variable this deployment runs with. An integration's own credentials
+ * reach it through the context the SDK describes, on the worker side, where
+ * they are resolved once.
+ *
+ * Source text, not the type graph: this is about what a file can do at run
+ * time, and the whole reachable graph inside the package is checked, because a
+ * helper one file away would read the same environment.
+ */
+export function assertDashboardReadsNoEnvironment(
+  packageDirectory: string,
+  dashboardPath: string,
+  repositoryRoot: string,
+): void {
+  const seen = new Set<string>();
+  const visit = (filePath: string): void => {
+    if (seen.has(filePath)) return;
+    seen.add(filePath);
+    const local = relative(repositoryRoot, filePath).replaceAll("\\", "/");
+    if (/\bprocess\s*\.\s*env\b/u.test(readFileSync(filePath, "utf8"))) {
+      throw new Error(
+        `${local}: a dashboard entry may not read process.env. It renders inside the cockpit's own process, so the environment it would read is this deployment's, not the integration's. ` +
+          "What an integration needs reaches it through the context the SDK describes, on the worker side.",
+      );
+    }
+    const file = sourceFile(filePath);
+    for (const specifier of specifiers(file)) {
+      if (!specifier.startsWith(".")) continue;
+      const target = resolveLocal(filePath, specifier);
+      if (!target) continue;
+      if (relative(packageDirectory, target).startsWith("..")) continue;
+      visit(target);
+    }
+  };
+  visit(dashboardPath);
 }

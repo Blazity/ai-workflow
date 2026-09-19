@@ -1,6 +1,7 @@
 export type GeneratedFiles = {
   manifests: string;
   runtimes: string;
+  dashboards: string;
 };
 
 export type GeneratorOptions = {
@@ -27,6 +28,10 @@ export type IntegrationRecord = {
   fixture: boolean;
   manifestPath: string;
   workerPath: string;
+  /** The page ids the manifest declares, in declaration order. */
+  pageIds: string[];
+  /** `dashboard.tsx`, present exactly when the manifest declares a page. */
+  dashboardPath: string | null;
 };
 
 /**
@@ -43,17 +48,20 @@ export const FIXTURES_DIRECTORY = "_fixtures";
 
 /**
  * Directories under `integrations/` that are not integrations. `sdk` is the
- * contract and `registry` is what this generator writes; every other
- * directory without a manifest is a mistake rather than something to skip,
- * which is what keeps a half-written integration from disappearing quietly.
- * A directory whose name starts with `_` is never registered: that is how the
- * template stays out of every build and how the fixtures wait for their flag.
+ * contract an integration's worker half is written against, `host-ui` the one
+ * its dashboard half is written against, and `registry` is what this generator
+ * writes; every other directory without a manifest is a mistake rather than
+ * something to skip, which is what keeps a half-written integration from
+ * disappearing quietly. A directory whose name starts with `_` is never
+ * registered: that is how the template stays out of every build and how the
+ * fixtures wait for their flag.
  */
-export const NON_INTEGRATION_DIRECTORIES = ["sdk", "registry"] as const;
+export const NON_INTEGRATION_DIRECTORIES = ["sdk", "host-ui", "registry"] as const;
 
 export const DEFAULT_OUTPUT_PATHS = {
   manifests: "integrations/registry/manifests.generated.ts",
   runtimes: "integrations/registry/runtimes.generated.ts",
+  dashboards: "integrations/registry/dashboard.generated.ts",
 } as const;
 
 export const GENERATED_HEADER =

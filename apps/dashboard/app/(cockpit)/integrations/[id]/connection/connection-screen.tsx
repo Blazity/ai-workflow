@@ -14,6 +14,7 @@ import type {
 
 import { Button, CkChip, Field, Input, Switch, Textarea, Modal } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
+import { trackUnsavedSettings } from "@/lib/settings/unsaved";
 import {
   publishIntegrationChange,
   useIntegrationChangeRefresh,
@@ -231,6 +232,15 @@ export function ConnectionScreen({
     enabled: !dirty,
     onSuppressed: () => setChangedElsewhere(true),
   });
+  // The cockpit's own guard: leaving this screen with a half-typed token, by a
+  // sidebar entry, a tab of this area or a spotlight jump, asks first. The form
+  // did not register when this screen stood alone, because nothing but a
+  // sidebar entry could take somebody off it; S7 put a tab strip directly above
+  // it, which is one click away from the field.
+  useEffect(
+    () => trackUnsavedSettings(`integration:${integration.id}`, dirty),
+    [integration.id, dirty],
+  );
 
   function typeInto(key: string, value: string) {
     touched.current.add(key);

@@ -1527,6 +1527,227 @@ The stage that ships the first real integration block owns that form.
 | Whether the text a provider returns is bounded where it is stored, not only where it is read | S2 |
 | Inputs are 12 px on every cockpit form, which makes iOS zoom on focus | DESIGN.md and the shared `Input` primitive, not one screen |
 
+## Where an integration lives in the cockpit, decided in S7
+
+The sidebar was a flat list of thirteen, and "Arthur evals" sat sixth in it
+whether Arthur existed or not. It now says which side of the product each entry
+belongs to: three core groups, a separator, then Integrations. Above the line is
+what we build. Below it is what this deployment was connected to.
+
+### The sidebar
+
+| Choice | Why |
+|---|---|
+| Three core groups, each with a heading that folds, and the fold persisted per person | The number of entries below the separator is not ours to decide. A person with five providers connected folds Observability and gets the room back; without a fold the only lever would have been ours, and we would have had to pick a cap. |
+| A separator, not a fourth ordinary group | The line is the statement. An integration's screens are not a category of our product, they are somebody else's screens hosted in ours, and a person debugging one has to know which of us to blame. |
+| The Integrations page is always an entry, and is the first one under the separator | "Nothing is connected" is an answer somebody has to be able to go and read. A section that disappeared with the last integration would hide the question along with it. |
+| One entry per integration, and only for `state.usable` | `usable` is the resolver's own word for connected and enabled (S2). Reading `status` here, or recomputing it from `enabled` and `connection`, would be a second derivation of the one thing S2 exists to derive once. An integration somebody switched off leaves the sidebar, which is the answer to "why is nothing running". |
+| The nav region scrolls, and says when it is scrollable; nothing is capped or hidden behind a "more" | A cap means an integration somebody connected is not in the list and nothing says so. Measured on the running cockpit with five connected: the column needs 859 px, so 1920x1080 has about 140 px to spare and a 1280x800 laptop is about 140 px short. It scrolls there, and macOS hides an overlay scrollbar nobody has touched, so the region carries `.ck-scroll-cue`: pure-CSS scrolling shadows, painted only while there is content past the edge, no measuring and so nothing that can disagree with the real scroll state. Folding a group is the other lever, and it is the person's. |
+| A two-character monogram from the name's own capitals in the rail | Nothing in a manifest gives us a symbol, and the five providers coming next are camel-cased brands, so their capitals separate them: GitHub is GH and GitLab is GL, where a first letter would have drawn both as G. Every entry carries the full name as `title` and `aria-label`. If two ever collide, the answer is a `glyph` in the manifest, which is additive; S7 did not need it. |
+| System health and Users became tabs of Settings, and `/health` and `/users` redirect permanently | They are things an administrator does to the deployment rather than places the product's work happens, and thirteen flat entries left no room for the section below the separator. Both paths are in bookmarks and in runbooks, so neither route was deleted. Next carries the query string across and a fragment never reaches the server, so `/health?provider=jira` arrives whole. |
+| The phone's More sheet is the same list, grouped the same way, Integrations last | Somebody who learned where a screen lives on a laptop finds it in the same place on a phone. The bottom bar carries three screens, so anything the More sheet drops cannot be reached from a phone at all. |
+
+**The shell no longer reads the first path segment.** It used to, and
+`globalPollingAllowed` was `screen !== "health"`. Moving System health under
+Settings would have made that comparison stop matching in silence, and the
+cockpit would have started refreshing on a timer the one screen whose every
+refresh contacts every configured provider. `cockpitScreen(pathname,
+integrations)` in `apps/dashboard/lib/cockpit/navigation.ts` answers the three
+questions instead: which entry is lit, what the topbar says, and whether the
+timer may touch this screen. The topbar names the integration and the page
+("Demo / Activity"), because four open tabs all saying "Integrations" is four
+tabs nobody can tell apart.
+
+**The sidebar's list is read once per request** in the cockpit layout, through
+`readIntegrationsList` (`apps/dashboard/lib/integrations/list.ts`), which is
+`cache`d so the sidebar, an integration's area and the Integrations screens get
+one round trip and, more to the point, one answer. It is one call on the
+critical path of every cockpit page load, which was not there before. Measured
+from a laptop against the dev worker and the shared Neon branch, the round trip
+to `/api/v1/integrations` takes 85 ms (five samples, 84 to 136 ms), almost all
+of it the database round trip the session check makes to another region. That
+number is the local shape, not the deployed one: on Vercel the worker and the
+database are in the same region and the call is one more hop the layout already
+makes for the session. Without the `cache` the same page would have made up to
+three of these. A worker that does not
+answer leaves the core groups standing and the Integrations page reachable: a
+cockpit that refused to render because a list of plugins could not be read
+would be the worse failure by a distance. The shell subscribes to S6's change
+signal, so an integration connected in another tab becomes an entry here;
+that refresh is refused while the cockpit holds unsaved work, and the
+Connection form now registers there, because S7 put a tab strip one click from
+its token field. A refused refresh is not silent: the topbar and the mobile
+header say the sidebar is behind, because a nav that is quietly wrong is worse
+than one that flickers.
+
+### The integration area
+
+`/integrations/<id>` is an area with horizontal tabs: the pages the manifest
+declares, in its own order, then Connection.
+
+- **Connection last.** Somebody who opened an integration from the sidebar came
+  to read what it is doing. Connection is the setup: needed on the first
+  afternoon and rarely again, and first would make every visit open on a form.
+  The screen itself is S6's, unchanged, at the same URL.
+- **`/integrations/<id>` redirects to the first tab**, which is the first
+  declared page, or Connection when a manifest declares none. An integration
+  with one tab gets no strip at all: a strip offering no choice is furniture
+  that says an integration has more than it has.
+- **The tabs come from the manifest registry, not from the worker**, which is
+  what keeps the area layout synchronous. An async layout would put a Suspense
+  boundary over the Connection screen, and a boundary that suspends again on a
+  refresh takes the client tree with it, which is the failure S6 spent a round
+  on.
+- **Tabs navigate through the cockpit's `navigate`**, not through a link or
+  `router.push`. `router.push` never fires `beforeunload`, and the only thing
+  between a half-typed token and an empty form is that guard.
+- **Four different nothings, each said in our words**
+  (`contributedPageOutcome`, in `presentation.ts` with every other sentence):
+  an integration this build does not ship, a page id the manifest does not
+  declare, a declared page this build did not compile, and an integration that
+  is not in use. A bare 404 collapses the four and sends people looking in the
+  wrong place.
+- **A page is not run at all while the integration is unusable.** Its own pages
+  read the provider through the connection, so rather than let a package make
+  what it will of a connection it does not have, the area says which of the
+  three states applies and leaves Connection one click away. A worker that did
+  not answer is not turned into a refusal: the page is handed no data of ours,
+  so one that renders while we cannot confirm the connection shows its own
+  static content and nothing worse.
+- **A page that throws hits an `error.tsx` of its own, and one that is slow
+  hits a `loading.tsx`.** A crash is expected here in a way it is nowhere else
+  in the cockpit: without the boundary the route segment is replaced by the
+  app's generic error screen and the chrome goes with it, and an admin would
+  see the product break with no reason to suspect the plugin. The waiting state
+  is the same argument about the other failure: a page fetches from its
+  provider, the segment had no Suspense boundary of its own, so a slow provider
+  left the previous screen on display and the tab click read as not having
+  landed. The tab strip stays through both, because the layout is not what
+  suspended.
+
+### The host UI package
+
+`@integrations/host-ui` (`integrations/host-ui`) is what an integration's
+dashboard pages are built from, and the boundaries gate holds them to it.
+
+| Choice | Why |
+|---|---|
+| Under `integrations/`, beside the SDK, not in `packages/` | It is the second half of one contract: the SDK types what an integration's worker code is handed, the host UI what its dashboard pages are built from. A package under `packages/` is reachable by every core tier, and a React package the Nitro worker can import is a Vercel build failure waiting for somebody to write the import. |
+| Extracted primitives, not a re-export of `@/components/ui` | A package cannot import an app without inverting the dependency. More to the point, `@/components/ui` is internal and changes whenever a cockpit screen needs it to; a contract with third-party code has to be a thing that only grows. The cost is two definitions of a card, and the guard against drift is that both are drawn with the same `@theme` tokens, so a palette change reaches an integration's pages the same day it reaches ours. |
+| Nine presentational primitives: `Page`, `Section`, `Card`, `KeyValue`, `Chip`, `Notice`, `EmptyState`, `ExternalLink`, `Table` | Enough to build a page that looks like ours out of what a provider returns, and nothing that decides anything. |
+| No dialog, overlay, drawer or portal | A page renders inside the content area. Anything that escapes it is an integration taking the screen from the product. |
+| No router, internal link or redirect | Where somebody is in the product is the product's to decide. `ExternalLink` leaves to the provider, in a new tab, with `noreferrer noopener`. |
+| No inputs, selects or submitting buttons | A page has no write seam in this build, and a control that does nothing when clicked is worse than no control. The stage that gives pages a write seam brings the controls with it. |
+| No `className` on any primitive | The look of a primitive is the product's. A page composes primitives with its own elements and writes Tailwind classes, arbitrary values included, on those. |
+| A page is handed `{ integrationId }` and nothing else | Its props are the contract, and a narrow one is what keeps the next five stages from each inventing a different way in. What that is NOT is a sandbox: see below. |
+
+### What a contributed page can actually reach
+
+Say this plainly, because S14 hands it to an author outside this team.
+
+A contributed page is a Server Component compiled into the dashboard and run in
+its process. Its props carry the integration id and nothing else, and there is
+no session, no database handle and no worker client in them. It could still
+reach `process.env`, call global `fetch`, or use any dependency it declares:
+nothing here is a sandbox, and building one would mean a separate process or an
+iframe, which is the design this stage exists to avoid.
+
+**An integration is trusted build-time code we review, like the rest of this
+repository.** The rules below are against coupling, not against a hostile page.
+They exist so an author does not reach for our runtime by accident, and so that
+what "a page shows what its own package knows" means is checkable rather than
+aspirational:
+
+| Refused | By | Because |
+|---|---|---|
+| `@/...` | `forbiddenSpecifiers` in the boundaries gate | the dashboard's own alias; an integration pinned to it breaks on an afternoon nobody told them about |
+| `next/*` | the same rule, on `dashboard.tsx` | `next/headers` reaches our cookies and `next/navigation` moves the person |
+| `node:*` | the same rule | a page has no business in the filesystem, and it is the first step of anything that does |
+| `server-only` | the same rule | it is how a module declares itself part of our server, which an integration's is not |
+| `process.env` | the registry generator, on the entry and every file it imports inside the package | not an import, so no specifier rule can see it, and it is the one reach that needs no dependency at all: it would hand a page this deployment's `WORKER_BASE_URL` and everything beside it |
+
+What remains possible, and is not claimed otherwise: a page may `fetch` the
+open internet, and it may ship any dependency it declares. **A page bounds its
+own fetches**, because the cockpit is what waits on it. The route has a
+`loading.tsx`, so a slow page shows a waiting state instead of leaving the
+previous screen up, but a page that never answers is a tab that never finishes,
+and nothing on our side cancels it.
+
+**A page runs only once the deployment says its integration is in use.** That is
+true of the module, not only of the render: `dashboard.generated.ts` holds each
+integration's page ids as data and its module behind a `load()` thunk, and
+`ContributedPage` decides from the ids and the connection state before it
+awaits that thunk. A static import would have run the top level of every
+shipped integration on the first load of any integration route. "The worker did
+not answer" is not "in use" either, so it blocks too, in words that name our
+outage rather than the integration.
+
+**Declaring pages is typed against the manifest.**
+`defineIntegrationDashboard<typeof manifest>({ pages: { ... } })` keys the
+components by the manifest's literal page ids, so a page declared without a
+component and a component for a page nobody declared are both compile errors
+where the mistake is. The manifest is imported with `import type`, so the
+import erases and a manifest's zod schemas never reach the browser. The
+generator refuses the same two mistakes for a build assembled from mismatched
+commits.
+
+**S7 needed nothing from `@integrations/sdk`.** The dashboard contract lives in
+the host UI rather than the SDK because the SDK is browser-safe plain data with
+no React in it and is imported by the worker; putting `ComponentType` there
+would put React in the worker's type graph for a contract the worker never
+reads. So the change log below has no S7 row.
+
+### Three registries, three bundles
+
+`pnpm run gen:integrations` now writes a third file,
+`integrations/registry/dashboard.generated.ts`, behind
+`@integrations/registry/dashboard`. It holds React components, keyed by id
+because the route holds the id from the URL, and an integration with no pages is
+absent rather than present with an empty object.
+
+The boundaries gate states which bundle each registry belongs to, because every
+one of these failures appears only in a Vercel build: the worker may not import
+the dashboard registry, the root entry and the worker entry may not import it
+either (the Workflow DevKit traces the flow bundle and there is no React in it),
+and an integration's `dashboard.tsx` may not import its own `worker.ts`.
+
+**The gate gained a rule keyed on the specifier, not the target.**
+`@/components/ui` is the dashboard's own tsconfig alias, so from a file outside
+`apps/` it resolves to nothing at all and every rule keyed on the resolved path
+skips it: an edge the gate cannot resolve is an edge it cannot refuse, which is
+exactly the hole an integration reaching into the dashboard would have sat in.
+`forbiddenSpecifiers` in `scripts/gates/tiers.json` matches the specifier as
+written.
+
+### Tailwind compiles what an integration writes
+
+`apps/dashboard/app/globals.css` gains an `@source` per dashboard entry.
+Tailwind scans the project it is compiled in and nothing else, so without them a
+contributed page renders with its markup intact and none of its classes defined.
+
+The dashboard entries only, never a whole package: a worker entry holds provider
+payloads and secrets-shaped strings and a README holds prose, and scanning
+either would let a string in server code decide what CSS this app ships. So the
+convention an integration follows, and the one its README states, is that page
+code is `dashboard.tsx` or lives under a `dashboard/` directory beside it.
+
+The failure is deceptive and worth naming for the five stages that follow. A
+class a cockpit screen also uses is generated anyway, so a contributed page
+looks fine until it writes something only it uses. Arbitrary values are the
+honest detector, which is why the fixture page draws a bar with
+`w-[137px] h-[9px] rounded-[11px] bg-[#FD6027]`: with the `@source` line
+commented out that bar measures 855x0 with no radius and no background, while
+the card beside it keeps its border.
+
+### What S7 left open
+
+| Question | Owner |
+|---|---|
+| A contributed page can read nothing. Every real provider will want its own data, and the seam that gives it any is a contract decision: the recommendation is a read-only call the host resolves through the integration's own worker runtime, never our database and never our session | the first stage whose provider contributes a page with data in it |
+| Two integrations whose names yield the same monogram would draw the same mark in the collapsed rail | the stage that lands the second colliding name; an optional `glyph` on the manifest is the additive fix |
+| The `ui-primitives` gate scans `apps/dashboard` only. Extending it to `integrations/host-ui` would read a primitive package as a call site, so `primitives.test.ts` and `primitives.render.test.tsx` carry that weight instead | open by choice; the lever we hold over an integration's own markup is what the host UI lends |
+| The cockpit layout reads the integrations list on every page load, one round trip on top of the session check | acceptable today; a worker read light enough to be free would be a worker change |
+
 ## Change log
 
 Additive changes to `@integrations/sdk` after S0, newest first. Each entry
