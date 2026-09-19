@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   sleep: vi.fn().mockResolvedValue(undefined),
   checkPhaseDone: vi.fn(),
   collectPhase: vi.fn(),
-  assembleFixContext: vi.fn(),
+  fixContextParts: vi.fn(),
   setCommitGuard: vi.fn(),
   artifactPaths: vi.fn(),
   buildPhaseScript: vi.fn(),
@@ -37,8 +37,12 @@ vi.mock("../../steps/sandbox-poll-agent.js", () => ({
   collectPhaseReplayDiagnostics: mocks.collectPhase,
 }));
 vi.mock("../../../sandbox/context.js", () => ({
-  assembleFixContext: mocks.assembleFixContext,
+  fixContextParts: mocks.fixContextParts,
 }));
+
+const FIX_INPUT_PARTS = [
+  { id: "ticket", title: "Ticket", content: "FIX INPUT", origin: { kind: "ticket" } },
+];
 vi.mock("../../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
@@ -150,7 +154,7 @@ describe("fix_agent execute", () => {
       runId: "published-run",
       current: { provider: "github", repoPath: "acme/api", id: 42, url: "https://github/pr/42" },
     });
-    mocks.assembleFixContext.mockReturnValue("FIX INPUT");
+    mocks.fixContextParts.mockReturnValue(FIX_INPUT_PARTS);
     mocks.artifactPaths.mockImplementation((phase: string) => pathsFor(phase));
     mocks.buildPhaseScript.mockReturnValue("#!/bin/bash");
     mocks.checkPhaseDone.mockResolvedValue(true);
@@ -208,9 +212,16 @@ describe("fix_agent execute", () => {
       result: "implemented",
       summary: "patched",
     });
-    const compileEffectivePrompt = vi.fn().mockResolvedValue({
+    const compileInvocationPrompt = vi.fn().mockResolvedValue({
       ok: true,
-      prompt: "COMPILED FIX PROMPT",
+      compilation: {
+        prompt: "COMPILED FIX PROMPT",
+        hash: "h",
+        sections: [],
+        provenance: [],
+        unresolvedSources: [],
+        issues: [],
+      },
     });
 
     const block = makeNode("fix_agent", {
@@ -226,15 +237,15 @@ describe("fix_agent execute", () => {
       {},
       ctx,
       {},
-      makeInvocation(ctx, { compileEffectivePrompt }),
+      makeInvocation(ctx, { compileInvocationPrompt }),
     );
 
-    expect(mocks.assembleFixContext).toHaveBeenCalledWith(
+    expect(mocks.fixContextParts).toHaveBeenCalledWith(
       expect.not.objectContaining({ instructions: expect.anything() }),
     );
-    expect(compileEffectivePrompt).toHaveBeenCalledWith({
+    expect(compileInvocationPrompt).toHaveBeenCalledWith({
       blockPrompt: "Focus on the failing test",
-      runtimeData: "FIX INPUT",
+      runtimeData: FIX_INPUT_PARTS,
       sandboxId: "sbx-1",
     });
     expect(mocks.writeFiles).toHaveBeenCalledWith(
@@ -334,7 +345,7 @@ describe("fix_agent execute", () => {
       },
     );
 
-    expect(mocks.assembleFixContext.mock.calls[0][0].reviewResults).toEqual([
+    expect(mocks.fixContextParts.mock.calls[0][0].reviewResults).toEqual([
       {
         decision: "request_changes",
         findings: [

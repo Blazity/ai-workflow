@@ -148,9 +148,16 @@ describe("generic_agent execute", () => {
       }),
       exitCode: 0,
     });
-    const compileEffectivePrompt = vi.fn().mockResolvedValue({
+    const compileInvocationPrompt = vi.fn().mockResolvedValue({
       ok: true,
-      prompt: "COMPILED EFFECTIVE PROMPT",
+      compilation: {
+        prompt: "COMPILED EFFECTIVE PROMPT",
+        hash: "h",
+        sections: [],
+        provenance: [],
+        unresolvedSources: [],
+        issues: [],
+      },
     });
 
     const block = makeNode("generic_agent", {
@@ -174,14 +181,26 @@ describe("generic_agent execute", () => {
       { plan: "Bound plan", count: 2 },
       makeInvocation(ctx, {
         clarificationAnswer: "Use Redis",
-        compileEffectivePrompt,
+        compileInvocationPrompt,
       }),
     );
 
-    expect(compileEffectivePrompt).toHaveBeenCalledWith({
+    expect(compileInvocationPrompt).toHaveBeenCalledWith({
       blockPrompt: "Authored prompt",
-      runtimeData:
-        'Resolved inputs:\n{\n  "plan": "Bound plan",\n  "count": 2\n}\n\nHuman clarification answer:\nUse Redis',
+      runtimeData: [
+        {
+          id: "bound-inputs",
+          title: "Bound inputs",
+          origin: { kind: "bound_data" },
+          content: 'Resolved inputs:\n{\n  "plan": "Bound plan",\n  "count": 2\n}\n\n',
+        },
+        {
+          id: "clarification-answer",
+          title: "Human clarification answer",
+          origin: { kind: "clarification" },
+          content: "Human clarification answer:\nUse Redis",
+        },
+      ],
       sandboxId: "scratch-1",
     });
     expect(mocks.writeFiles).toHaveBeenCalledWith(

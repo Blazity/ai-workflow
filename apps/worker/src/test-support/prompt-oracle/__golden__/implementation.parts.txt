@@ -1,0 +1,29 @@
+[profile: Harness Profile: Claude]
+  profile                          91  profile ref=builtin-claude  "Harness Profile instructions"
+
+[repository: acme/api/AGENTS.md]
+  repository-file                  61  repository_file ref=acme/api/AGENTS.md  "Repository file AGENTS.md"
+
+[repository: Repository rules for acme/api]
+  repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
+
+[block: Block role and task]
+  authored:1                     6225  block_prompt  "Block prompt text"
+
+[runtime: Runtime data]
+  ticket                           96  ticket ref=AIW-512  "Ticket"
+  acceptance-criteria             104  ticket ref=AIW-512  "Acceptance criteria"
+  clarifications                   26  clarification  "Clarification answers"
+  clarification:1                 184  clarification ref=1 label=Anna Nowak  "Clarification round 1"
+  research-plan                   201  research_plan  "Research and plan"
+  remediation-framing             391  platform  "Existing pull request: review feedback is the task"
+  pr-comments:1                   116  pull_request ref=github:acme/api  "Pull request comments on github:acme/api"
+  merge-conflicts:1               137  pull_request ref=github:acme/api  "Merge conflicts on github:acme/api"
+  merge-conflicts-rule:1          114  platform  "How to finish the merge"
+  selected-repositories            27  workspace  "Selected repositories"
+  selected-repositories-rule      114  platform  "Which of them may be changed"
+  selected-repository:1           121  workspace ref=github:acme/api  "Selected repository github:acme/api"
+  selected-repository:2           102  workspace ref=github:acme/web  "Selected repository github:acme/web"
+  pre-sandbox:1                   203  pre_sandbox  "Pre-sandbox: Selected Repositories"
+  pre-sandbox:2                   179  pre_sandbox  "Pre-sandbox: Repositories left out"
+  repository-discovery:1          118  repository_discovery  "Repositories left out"

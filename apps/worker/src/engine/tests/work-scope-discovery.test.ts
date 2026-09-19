@@ -35,9 +35,15 @@ import { formatExecutionErrorForUser } from "../helpers/execution-error.js";
 import { makeCtx } from "../blocks/support/test-support.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import {
+  discoveryLeftOutAddition,
   repositoryDiscoveryQuestion,
   validateRepositoryDiscoveryResult,
 } from "../repository-discovery/protocol.js";
+import {
+  implementationContextParts,
+  researchPlanContextParts,
+  reviewContextParts,
+} from "../../sandbox/context.js";
 import {
   offerableRepositoryCatalog,
   validateHumanRepositoryExpansion,
@@ -630,6 +636,68 @@ describe("a discovery question about repositories the model was unsure of", () =
       ],
     });
     expect(consumeWorkScopeAsk(ctx)).toBeUndefined();
+  });
+
+  it("tells every agent what it left out as discovery's note, never as a pre-sandbox addition", () => {
+    // Discovery runs in a sandbox, so the label the pre-sandbox additions carry
+    // ("produced before sandbox creation") would be false of this note.
+    const { decision } = decide({
+      scope: scopeOf(),
+      answeredRepositoryKeys: ["github:acme/web"],
+      mandatory: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "the pull request this run was triggered by",
+        },
+      ],
+      raw: unsureProposal(["acme/web", "the ticket names the dashboard"]),
+    });
+    if (decision.kind !== "selected") throw new Error("expected a selection");
+    const leftOut = discoveryLeftOutAddition(decision.leftOut);
+    const ticket = {
+      identifier: "AWT-1",
+      title: "t",
+      description: "d",
+      acceptanceCriteria: "a",
+      comments: [],
+    };
+    const sends = {
+      research: researchPlanContextParts({ ticket, prompt: "", branchName: "b", preSandboxAdditions: [leftOut] }),
+      implementation: implementationContextParts({
+        ticket,
+        prompt: "",
+        researchPlanMarkdown: "",
+        preSandboxAdditions: [leftOut],
+      }),
+      review: reviewContextParts({ ticket, prompt: "", researchPlanMarkdown: "", preSandboxAdditions: [leftOut] }),
+    };
+
+    expect(leftOut.target).toEqual(["research", "implementation", "review"]);
+    for (const [kind, parts] of Object.entries(sends)) {
+      const note = parts.find((part) => part.id === "repository-discovery:1");
+      expect(note?.origin, kind).toEqual({ kind: "repository_discovery" });
+      expect(note?.content, kind).toContain(
+        "## Repositories left out\n\n- github:acme/web was listed in a repository question already answered on this work",
+      );
+      expect(parts.map((part) => part.content).join(""), kind).not.toContain("Pre-Sandbox");
+    }
+  });
+
+  it("puts discovery's note into every agent's additions from the one place that marks it", () => {
+    // A source tripwire, as the ones below: the push is inside the workflow
+    // body, which no test can invoke. Building the note inline again would
+    // drop the marker the test above holds the helper to.
+    const workflow = readFileSync(
+      fileURLToPath(new URL("../agent-workflow.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(
+      workflow.includes("const leftOut = discoveryLeftOutAddition(decision.leftOut);") &&
+        workflow.includes("for (const target of leftOut.target) ctx.preSandboxAdditions[target].push(leftOut);"),
+      "discovery's left-out note no longer reaches the agents through discoveryLeftOutAddition",
+    ).toBe(true);
   });
 
   it("is asked once per repository, and afterwards stops rather than asking again", () => {
