@@ -249,6 +249,15 @@ function discoveredTests(path: string, repo: Repo): string[] {
     .filter(repo.exists);
 }
 
+/**
+ * `node --test` reads every positional as a glob, so a Next dynamic segment
+ * such as `[userId]` arrives as a character class and matches nothing: the run
+ * collects zero files, reports zero tests and exits green. Node's glob has no
+ * backslash escape, so each magic character is wrapped in a class of its own,
+ * which is the form it does understand.
+ */
+const globLiteral = (path: string): string => path.replace(/[?*()[\]{}]/g, "[$&]");
+
 export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   if (paths.length === 0) {
     return { status: "NOOP", scopes: ["none"], commands: [], errors: [] };
@@ -377,7 +386,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
       "--import",
       "tsx",
       "--test",
-      ...[...dashboardTests].map((path) => `./${path}`),
+      ...[...dashboardTests].map((path) => globLiteral(`./${path}`)),
     ]);
   }
   // Nothing else runs a package's own tests: the worker vitest run and the
