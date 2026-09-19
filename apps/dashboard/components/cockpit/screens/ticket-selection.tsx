@@ -10,8 +10,11 @@ import {
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { TraceDetailSkeleton } from "@/app/ticket-skeleton";
+import { RepositoriesPanel } from "@/components/cockpit/agent-visibility/repositories-panel";
 
 interface TicketSelection {
+  /** The ticket whose runs the rail lists. */
+  ticketKey: string;
   /** Run the user just clicked, shown active immediately, before the URL commits. */
   pendingRun: string | null;
   /** The committed `?run=` from the URL. */
@@ -59,7 +62,7 @@ export function TicketSelectionProvider({
   };
 
   return (
-    <Ctx.Provider value={{ pendingRun, urlRun, isPending, select }}>
+    <Ctx.Provider value={{ ticketKey, pendingRun, urlRun, isPending, select }}>
       {children}
     </Ctx.Provider>
   );
@@ -81,10 +84,18 @@ export function useTicketSelection(): TicketSelection {
  * boundary streams its own skeleton normally.
  */
 export function DetailArea({ children }: { children: ReactNode }) {
-  const { isPending } = useTicketSelection();
+  const { isPending, ticketKey, urlRun } = useTicketSelection();
   return (
     <div style={{ gridArea: "detail" }} className="relative min-h-0 min-w-0">
-      <div className="h-full overflow-y-auto p-4 lg:p-6">{children}</div>
+      <div className="flex h-full flex-col gap-4 overflow-y-auto p-4 lg:p-6">
+        {/* The repository record belongs to the ticket, not to the run the
+            rail has selected, so it sits above the trace and stays put when
+            the selection moves. It only opens itself when the URL names no
+            run: a link to a run is a person asking for that run, not for the
+            record above it. */}
+        <RepositoriesPanel ticketKey={ticketKey} autoOpen={urlRun === null} />
+        {children}
+      </div>
       {isPending && (
         <div className="absolute inset-0 overflow-hidden bg-app-bg p-4 lg:p-6">
           <TraceDetailSkeleton />

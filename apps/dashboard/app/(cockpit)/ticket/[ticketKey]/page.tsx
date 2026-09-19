@@ -11,6 +11,7 @@ import {
   TraceDetailSkeleton,
   TicketMobileSkeleton,
 } from "@/app/ticket-skeleton";
+import { RepositoriesPanel } from "@/components/cockpit/agent-visibility/repositories-panel";
 import { MobileBackToRuns } from "@/components/cockpit/mobile/screens/ticket-mobile";
 import {
   TicketSelectionProvider,
@@ -64,6 +65,11 @@ export default async function TicketPage({
         {run ? (
           <div className="flex flex-col gap-3 px-4 pt-4 pb-6">
             <MobileBackToRuns ticketKey={ticketKey} />
+            {/* Reachable from the run view as well: a phone never shows the
+                runs list and a run at the same time. Closed until asked: this
+                page was opened for one run, and the record can be two screens
+                tall. */}
+            <RepositoriesPanel ticketKey={ticketKey} />
             {detail}
           </div>
         ) : (

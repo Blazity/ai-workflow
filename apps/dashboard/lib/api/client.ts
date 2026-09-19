@@ -251,6 +251,27 @@ function jsonInit(
   };
 }
 
+/** A path with the given query parameters, leaving out the ones not set. */
+function withParams(path: string, params: Record<string, string | number | null | undefined>): string {
+  const query = new URLSearchParams();
+  for (const [name, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined) query.set(name, String(value));
+  }
+  const text = query.toString();
+  return text ? `${path}?${text}` : path;
+}
+
+function briefingPath(runId: string, briefingId: string, suffix: string): string {
+  return `/api/runs/${encodeURIComponent(runId)}/briefings/${encodeURIComponent(briefingId)}/${suffix}`;
+}
+
+/** A page of a cursor-paged list: where it starts and, optionally, how many
+ *  bytes it may hold. */
+interface ListPageRequest {
+  cursor?: string | null;
+  limit?: number;
+}
+
 function definitionTriggerPath(
   definitionId: number,
   nodeId: string,
@@ -638,6 +659,53 @@ export const apiClient = {
       ),
   },
 
+  /**
+   * What an agent was sent, one send at a time (agent briefings). Every body is
+   * returned unparsed: `lib/agent-visibility/contract.ts` reads it, so a newer
+   * worker's record degrades to a sentence instead of a crash.
+   */
+  briefings: {
+    /** The sends of one Block Attempt, with why any are missing. */
+    attempt: (
+      runId: string,
+      filter: { nodeId: string; attempt: number; activationScopeId: string },
+      page: ListPageRequest = {},
+      options?: BrowserRequestOptions,
+    ) =>
+      requestJson<unknown>(
+        withParams(`/api/runs/${encodeURIComponent(runId)}/briefings`, { ...filter, ...page }),
+        options,
+      ),
+    sections: (runId: string, briefingId: string, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(withParams(briefingPath(runId, briefingId, "sections"), { ...page }), options),
+    /** One page of a section's stored text, from a UTF-8 byte offset. */
+    sectionText: (
+      runId: string,
+      briefingId: string,
+      sectionIndex: number,
+      offset: number,
+      options?: BrowserRequestOptions,
+    ) =>
+      requestJson<unknown>(
+        withParams(briefingPath(runId, briefingId, `sections/${sectionIndex}`), { offset }),
+        options,
+      ),
+    parts: (runId: string, briefingId: string, sectionIndex: number, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(
+        withParams(briefingPath(runId, briefingId, `sections/${sectionIndex}/parts`), { ...page }),
+        options,
+      ),
+    spans: (runId: string, briefingId: string, sectionIndex: number, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(
+        withParams(briefingPath(runId, briefingId, `sections/${sectionIndex}/spans`), { ...page }),
+        options,
+      ),
+    repositoryContext: (runId: string, briefingId: string, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(withParams(briefingPath(runId, briefingId, "repository-context"), { ...page }), options),
+    unresolvedSources: (runId: string, briefingId: string, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(withParams(briefingPath(runId, briefingId, "unresolved-sources"), { ...page }), options),
+  },
+
   settings: {
     /** One key's recorded changes. The listing already carries the newest one,
      *  so this is only fetched when a history drawer is opened. */
@@ -665,6 +733,30 @@ export const apiClient = {
       requestVoid(
         `/api/users/${encodeURIComponent(userId)}/role`,
         jsonInit("PATCH", { role }),
+      ),
+  },
+
+  /** The repository record of a subject and its repository questions, as
+   *  rounds. Bodies are returned unparsed for `lib/agent-visibility/contract.ts`. */
+  workScope: {
+    /** Rounds are opt-in on the worker, so a caller from before they existed
+     *  keeps its inline answer. This dashboard always wants them. */
+    get: (subjectKey: string, roundsCursor: string | null = null, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(withParams("/api/work-scope", { subjectKey, rounds: "true", roundsCursor }), options),
+    deliveries: (
+      subjectKey: string,
+      roundId: string,
+      page: ListPageRequest = {},
+      options?: BrowserRequestOptions,
+    ) =>
+      requestJson<unknown>(
+        withParams(`/api/work-scope/rounds/${encodeURIComponent(roundId)}/deliveries`, { subjectKey, ...page }),
+        options,
+      ),
+    effects: (subjectKey: string, roundId: string, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(
+        withParams(`/api/work-scope/rounds/${encodeURIComponent(roundId)}/effects`, { subjectKey, ...page }),
+        options,
       ),
   },
 

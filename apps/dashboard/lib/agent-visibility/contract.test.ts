@@ -1,0 +1,180 @@
+// apps/dashboard/lib/agent-visibility/contract.test.ts
+//
+// The worker and the dashboard deploy separately, so what these guard is the
+// day they disagree: one record written by a newer worker, or one broken row,
+// must cost that record and never the screen around it.
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { AGENT_VISIBILITY_SCHEMA_VERSION } from "@shared/agent-visibility";
+
+import {
+  readAttemptBriefingsPage,
+  readSectionPage,
+  readWorkScopeWithRounds,
+} from "./contract";
+import {
+  EXPIRED_RUN,
+  FIXTURE_SUBJECT,
+  PLANNING_RUN,
+  STATES_RUN,
+  buildFixtureStore,
+  serveFixture,
+  type FixtureStore,
+} from "./test-support/fixtures";
+
+let store: FixtureStore;
+test.before(async () => {
+  store = await buildFixtureStore();
+});
+
+function get(path: string): unknown {
+  const served = serveFixture(store, "GET", new URL(path, "http://worker.test"));
+  assert.ok(served, `the fixtures do not serve ${path}`);
+  assert.equal(served.status, 200, `${path} answered ${served.status}`);
+  return served.body;
+}
+
+function attempt(runId: string, nodeId: string) {
+  const page = readAttemptBriefingsPage(
+    get(`/api/v1/runs/${runId}/briefings?nodeId=${nodeId}&attempt=1&activationScopeId=root`),
+  );
+  assert.ok(page.ok, page.ok ? "" : page.message);
+  const found = page.value.items.find((item) => item.nodeId === nodeId);
+  assert.ok(found, `no attempt ${nodeId}`);
+  return found;
+}
+
+test("a send written by a newer worker names its version and leaves its siblings readable", () => {
+  // `research` holds two sends: one rewritten to schema version 2, one ours.
+  const found = attempt(STATES_RUN, "research");
+  assert.equal(found.briefings.length, 2);
+  const [newer, ours] = found.briefings;
+  assert.equal(newer!.overview.ok, false);
+  assert.equal(newer!.overview.ok === false ? newer!.overview.reason : null, "newer_version");
+  assert.match(
+    newer!.overview.ok === false ? newer!.overview.message : "",
+    new RegExp(`schema version ${AGENT_VISIBILITY_SCHEMA_VERSION + 1}`),
+  );
+  assert.equal(ours!.overview.ok, true);
+});
+
+test("one broken item costs that item, by position, and not the page", () => {
+  const body = get(`/api/v1/runs/${PLANNING_RUN}/briefings`) as { items: unknown[] };
+  const broken = { ...body, items: [body.items[0], { nodeId: "planning" }, body.items[2]] };
+  const page = readAttemptBriefingsPage(broken);
+  assert.ok(page.ok, page.ok ? "" : page.message);
+  assert.equal(page.value.items.length, 2);
+  assert.deepEqual(
+    page.value.unreadable.map((entry) => entry.position),
+    [1],
+  );
+});
+
+test("a newer envelope is refused as a whole, with the version in the message", () => {
+  const body = get(`/api/v1/runs/${PLANNING_RUN}/briefings`) as object;
+  const page = readAttemptBriefingsPage({ ...body, schemaVersion: AGENT_VISIBILITY_SCHEMA_VERSION + 3 });
+  assert.equal(page.ok, false);
+  assert.equal(page.ok === false ? page.reason : null, "newer_version");
+  assert.match(page.ok === false ? page.message : "", /schema version 4/);
+});
+
+test("an attempt carries its own missing reason even when it has a send", () => {
+  // Discovery went out, then the run stopped for a clarification: the pass
+  // never went out, and that is a fact about the attempt, not about the send.
+  const found = attempt(STATES_RUN, "planning");
+  assert.equal(found.briefings.length, 1);
+  assert.ok(found.missing?.ok);
+  assert.equal(found.missing.ok ? found.missing.value.kind : null, "not_sent_yet");
+});
+
+test("a block that sends no prompt says so instead of carrying a reason", () => {
+  const found = attempt(PLANNING_RUN, "trigger");
+  assert.equal(found.sendsPrompts, false);
+  assert.equal(found.missing, null);
+  assert.deepEqual(found.briefings, []);
+});
+
+test("a section page reads as the bytes the worker stored", () => {
+  const page = readSectionPage(get(`/api/v1/runs/${PLANNING_RUN}/briefings/brf_plan_2/sections/4?offset=0`));
+  assert.ok(page.ok, page.ok ? "" : page.message);
+  assert.equal(page.value.offset, 0);
+  assert.ok(page.value.text.length > 0);
+  // The section is longer than one page, so this page ends where the next
+  // starts and the whole section is bigger than it.
+  assert.equal(page.value.nextOffset, new TextEncoder().encode(page.value.text).length);
+  assert.ok(page.value.totalBytes > page.value.nextOffset!);
+});
+
+test("a worker that does not serve rounds yet leaves the record readable", () => {
+  const body = get(
+    `/api/v1/work-scope?subjectKey=${encodeURIComponent(FIXTURE_SUBJECT)}&rounds=true`,
+  ) as Record<string, unknown>;
+  const { rounds: _rounds, ...withoutRounds } = body;
+  const read = readWorkScopeWithRounds(withoutRounds);
+  assert.ok(read.ok, read.ok ? "" : read.message);
+  assert.equal(read.value.entries.length, 4);
+  assert.equal(read.value.rounds.ok, false);
+  assert.equal(read.value.rounds.ok === false ? read.value.rounds.reason : null, "absent");
+});
+
+test("an entry the dashboard cannot read is counted, not dropped silently", () => {
+  const body = get(`/api/v1/work-scope?subjectKey=${encodeURIComponent(FIXTURE_SUBJECT)}&rounds=true`) as {
+    entries: unknown[];
+  };
+  const read = readWorkScopeWithRounds({ ...body, entries: [...body.entries, { repositoryKey: 7 }] });
+  assert.ok(read.ok, read.ok ? "" : read.message);
+  assert.equal(read.value.entries.length, 4);
+  assert.equal(read.value.unreadableEntries, 1);
+  assert.ok(read.value.rounds.ok);
+  assert.equal(read.value.rounds.ok ? read.value.rounds.value.items.length : 0, 4);
+});
+
+test("a record asked for without rounds reads as a record with no rounds served", () => {
+  // Rounds are opt-in on the worker. A caller that does not ask gets the
+  // record it always got, and this reader must not call that a failure.
+  const body = get(`/api/v1/work-scope?subjectKey=${encodeURIComponent(FIXTURE_SUBJECT)}`);
+  assert.equal(Object.hasOwn(body as object, "rounds"), false, "the fixture served rounds nobody asked for");
+  const read = readWorkScopeWithRounds(body);
+  assert.ok(read.ok, read.ok ? "" : read.message);
+  assert.equal(read.value.entries.length, 4);
+  assert.equal(read.value.rounds.ok, false);
+});
+
+test("a run says what state it is in, beside its attempts", () => {
+  const live = readAttemptBriefingsPage(get(`/api/v1/runs/${PLANNING_RUN}/briefings`));
+  assert.ok(live.ok, live.ok ? "" : live.message);
+  assert.equal(live.value.runState, "available");
+
+  // After retention a run has no attempts at all: the state is the only thing
+  // left that can tell "we kept it and removed it" from "we lost it".
+  const gone = readAttemptBriefingsPage(get(`/api/v1/runs/${EXPIRED_RUN}/briefings`));
+  assert.ok(gone.ok, gone.ok ? "" : gone.message);
+  assert.deepEqual(gone.value.items, []);
+  assert.equal(gone.value.runState, "expired");
+});
+
+test("a state this build does not know is carried as itself, and silence is not a state", () => {
+  const body = get(`/api/v1/runs/${PLANNING_RUN}/briefings`) as object;
+  const invented = readAttemptBriefingsPage({ ...body, state: "quarantined" });
+  assert.ok(invented.ok, invented.ok ? "" : invented.message);
+  assert.equal(invented.value.runState, "quarantined");
+
+  const { state: _state, ...silent } = body as Record<string, unknown>;
+  const older = readAttemptBriefingsPage(silent);
+  assert.ok(older.ok, older.ok ? "" : older.message);
+  assert.equal(older.value.runState, null);
+});
+
+test("an attempt carries when it started, its loop turn, and an honest unknown", () => {
+  const fix = attempt(STATES_RUN, "fix");
+  assert.equal(fix.startedAt, "2026-09-19T08:33:00.000Z");
+  assert.equal(fix.iterationLabel, "iteration 3 of 50");
+  assert.equal(fix.sendsPrompts, true);
+
+  // Past the replay's life the definition snapshot is gone, so the worker
+  // says it cannot tell rather than guessing from today's definition.
+  const investigate = attempt(STATES_RUN, "investigate");
+  assert.equal(investigate.sendsPrompts, null);
+  assert.equal(investigate.iterationLabel, null);
+});
