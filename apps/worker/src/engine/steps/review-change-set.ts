@@ -61,20 +61,26 @@ export function pullRequestChangeSetTarget(
  * provider failure degrades the addition to a stated "diff unavailable" instead
  * of failing the run: a review without the diff is still worth more than no
  * review, as long as the agent is told what it is missing.
+ *
+ * Marked as the run's own here, in workflow scope and outside the step, so the
+ * prompt stops calling it a pre-sandbox addition on every run from this deploy
+ * on, whatever an older journal returned.
  */
 export async function assembleReviewChangeSetAddition(
   target: PullRequestChangeSetTarget,
 ): Promise<PreSandboxPromptAddition> {
+  let fetched: PreSandboxPromptAddition;
   try {
-    return await fetchPullRequestChangeSetStep(target);
+    fetched = await fetchPullRequestChangeSetStep(target);
   } catch (error) {
     const { isRunControlError } = await import("../helpers/run-control-error.js");
     if (isRunControlError(error)) throw error;
-    return renderPullRequestChangeSet(target, {
+    fetched = renderPullRequestChangeSet(target, {
       ok: false,
       reason: error instanceof Error ? error.message : String(error),
     });
   }
+  return { ...fetched, producedBy: "review_change_set" };
 }
 
 /**

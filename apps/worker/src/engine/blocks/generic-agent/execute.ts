@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
+import { concatPromptParts, type EffectivePromptPart } from "@shared/prompts";
 import type { AgentKind } from "../../../sandbox/agents/index.js";
 import type {
   AgentProtocolResult,
@@ -260,6 +261,40 @@ async function blockGenericAgentSchemaFailureStep(
 }
 
 /**
+ * The run's contribution to a generic_agent prompt: every bound input except
+ * the prompt itself, then the human's answer when the block resumes from a
+ * question.
+ */
+export function genericAgentRuntimeData(
+  resolvedInputs: Record<string, unknown>,
+  clarificationAnswer: string | undefined,
+): EffectivePromptPart[] {
+  const runtimeInputs = Object.fromEntries(
+    Object.entries(resolvedInputs).filter(([name]) => name !== "prompt"),
+  );
+  const parts: EffectivePromptPart[] = [];
+  if (Object.keys(runtimeInputs).length > 0) {
+    parts.push({
+      id: "bound-inputs",
+      title: "Bound inputs",
+      origin: { kind: "bound_data" },
+      content: `Resolved inputs:\n${JSON.stringify(runtimeInputs, null, 2)}`,
+    });
+  }
+  if (clarificationAnswer) {
+    parts.push({
+      id: "clarification-answer",
+      title: "Human clarification answer",
+      origin: { kind: "clarification" },
+      content: `Human clarification answer:\n${clarificationAnswer}`,
+    });
+  }
+  return concatPromptParts(
+    parts.flatMap((entry, index) => (index === 0 ? [entry] : ["\n\n", entry])),
+  );
+}
+
+/**
  * generic_agent: run a free-form agent phase on the attached workspace. The
  * prompt param is written verbatim as the phase input file. Without an
  * outputSchema param the phase uses GENERIC_SCHEMA and its status maps to
@@ -353,24 +388,13 @@ export const execute: BlockExecuteFn = async (
       : typeof block.params.prompt === "string"
         ? block.params.prompt
         : "";
-  const runtimeInputs = Object.fromEntries(
-    Object.entries(resolvedInputs).filter(([name]) => name !== "prompt"),
-  );
-  const runtimeParts: string[] = [];
-  if (Object.keys(runtimeInputs).length > 0) {
-    runtimeParts.push(
-      `Resolved inputs:\n${JSON.stringify(runtimeInputs, null, 2)}`,
-    );
-  }
-  if (execution?.clarificationAnswer) {
-    runtimeParts.push(
-      `Human clarification answer:\n${execution.clarificationAnswer}`,
-    );
-  }
   const resolvedPrompt = await resolveAgentInput({
-    compileEffectivePrompt: execution?.compileEffectivePrompt,
+    compileInvocationPrompt: execution?.compileInvocationPrompt,
     blockPrompt: basePrompt,
-    runtimeData: runtimeParts.join("\n\n"),
+    runtimeData: genericAgentRuntimeData(
+      resolvedInputs,
+      execution?.clarificationAnswer,
+    ),
     sandboxId,
     fallbackInput: execution?.clarificationAnswer
       ? `${basePrompt}\n\nHuman clarification answer:\n${execution.clarificationAnswer}`

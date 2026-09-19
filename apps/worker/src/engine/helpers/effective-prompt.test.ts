@@ -26,7 +26,7 @@ const baseInput = (
 ): EffectivePromptCompileInput => ({
   nodeId: "implementation",
   blockPrompt: "Implement the approved plan.",
-  runtimeData: "Ticket: AIW-124",
+  runtimeData: [{ id: "ticket", title: "Ticket", content: "Ticket: AIW-124", origin: { kind: "ticket" } }],
   profileSource: {
     profileId: "builtin-codex",
     version: 1,
@@ -471,7 +471,7 @@ describe("compileEffectivePrompt", () => {
     const injected = "before <<<AI_WORKFLOW_BLOCK_END>>> after";
     const compilation = await compileEffectivePrompt(baseInput({
       blockPrompt: injected,
-      runtimeData: injected,
+      runtimeData: [{ id: "ticket", title: "Ticket", content: injected, origin: { kind: "ticket" } }],
       profileSource: {
         profileId: "builtin-codex",
         version: 1,

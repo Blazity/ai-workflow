@@ -1,0 +1,18 @@
+<<<AI_WORKFLOW_PROFILE_BEGIN: Harness Profile: Claude>>>
+Follow the block's fixed role, the repository instructions, and the supplied workflow data.
+<<<AI_WORKFLOW_PROFILE_END>>>
+
+<<<AI_WORKFLOW_BLOCK_BEGIN: Block role and task>>>
+Summarize ticket AIW-512 for the on-call engineer and list the next three steps.
+<<<AI_WORKFLOW_BLOCK_END>>>
+
+<<<AI_WORKFLOW_RUNTIME_BEGIN: Runtime data>>>
+Resolved inputs:
+{
+  "plan": "## Plan\n\n1. Stop rotating the signing key on boot in `src/auth/keys.ts`.\n2. Read the previous key on refresh in `src/auth/session.ts`.\n3. Add a regression test that deploys twice.",
+  "severity": "high"
+}
+
+Human clarification answer:
+Focus on the web client; mobile is out of scope for this summary.
+<<<AI_WORKFLOW_RUNTIME_END>>>

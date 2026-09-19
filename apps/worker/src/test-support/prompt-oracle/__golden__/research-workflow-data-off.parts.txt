@@ -1,0 +1,13 @@
+[profile: Harness Profile: Claude]
+  profile                          91  profile ref=builtin-claude  "Harness Profile instructions"
+
+[repository: acme/api/AGENTS.md]
+  repository-file                  61  repository_file ref=acme/api/AGENTS.md  "Repository file AGENTS.md"
+
+[repository: Repository rules for acme/api]
+  repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
+
+[block: Block role and task]
+  authored:1                     6973  block_prompt  "Block prompt text"
+
+[profile left out: includeWorkflowData]

@@ -1,6 +1,7 @@
 import type {
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
+import type { EffectivePromptPart } from "@shared/prompts";
 import {
   createWorkflowValueAnalyzer,
   dedupeWorkflowDefinitionIssues,
@@ -193,20 +194,32 @@ export async function previewConnectedWorkflowPromptCandidate(
   return { ok: true, preview: { blockId: input.blockId, prompt: resolved.compilation.prompt, hash: resolved.compilation.hash, sections: resolved.compilation.sections, provenance: resolved.compilation.provenance, unresolvedSources: resolved.compilation.unresolvedSources, issues: dedupeWorkflowDefinitionIssues([...validationIssues, ...resolved.issues]) } };
 }
 
+/** The preview's stand-in for the run's contribution: an example of every value
+ *  the block is guaranteed, or a note that there is none. */
 function renderPreviewRuntimeData(
   values: Parameters<typeof resolveNodePromptAuthoring>[0]["availableValues"],
-): string {
+): EffectivePromptPart[] {
   if (values.length === 0) {
-    return "No runtime values are guaranteed for this block.";
+    return [{
+      id: "no-guaranteed-values",
+      title: "No guaranteed runtime values",
+      content: "No runtime values are guaranteed for this block.",
+      origin: { kind: "platform" },
+    }];
   }
-  return JSON.stringify(
-    Object.fromEntries(
-      values.map((value) => [
-        value.reference,
-        exampleValueForJsonSchema(value.schema),
-      ]),
+  return [{
+    id: "example-values",
+    title: "Example runtime values",
+    content: JSON.stringify(
+      Object.fromEntries(
+        values.map((value) => [
+          value.reference,
+          exampleValueForJsonSchema(value.schema),
+        ]),
+      ),
+      null,
+      2,
     ),
-    null,
-    2,
-  );
+    origin: { kind: "preview_example" },
+  }];
 }

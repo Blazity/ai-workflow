@@ -10,6 +10,10 @@ import type {
 } from "@shared/contracts";
 import type { CostProviderKind } from "@shared/costs";
 import type {
+  EffectivePromptCompilation,
+  EffectivePromptPart,
+} from "@shared/prompts";
+import type {
   BlockExecutionContext,
   BlockExecutionResult,
   StepsRecord,
@@ -402,8 +406,27 @@ export type { BlockExecutionResult, StepsRecord } from "@shared/workflow-graph";
 export { executionError };
 
 /**
+ * Compiles the effective prompt of one agent invocation from the block's
+ * prompt and the run's contribution as named parts, and hands back the whole
+ * compilation: the prompt to send and the sections, provenance and parts it
+ * was made of, so the send site holds exactly what the model receives.
+ */
+export type InvocationPromptCompiler = (input: {
+  blockPrompt: string;
+  runtimeData: readonly EffectivePromptPart[];
+  sandboxId: string | null;
+}) => Promise<
+  | { ok: true; compilation: EffectivePromptCompilation }
+  | {
+      ok: false;
+      result: Extract<BlockExecutionResult, { kind: "execution_error" }>;
+    }
+>;
+
+/**
  * One block invocation as this worker sees it: everything the scheduler hands
- * an executor, plus the run budget the invocation is charged against.
+ * an executor, plus the run budget the invocation is charged against, plus the
+ * prompt compiler.
  *
  * The budget is not optional. `@shared/workflow-graph` carried these two
  * functions as optional fields until stage 12-6b, and every reader had to fall
@@ -411,9 +434,16 @@ export { executionError };
  * invocation has no profile budget" and "the caller forgot" looked the same.
  * The one construction site (`agent-workflow.ts`) now decides which of the two
  * it means, once.
+ *
+ * The compiler is the worker's own for the same kind of reason: the shared
+ * `compileEffectivePrompt` seam can carry only a prompt string, because that
+ * package may not name the compilation type, so it is left out here and the
+ * worker's typed compiler takes its place.
  */
-export interface BlockInvocationContext extends BlockExecutionContext {
+export interface BlockInvocationContext
+  extends Omit<BlockExecutionContext, "compileEffectivePrompt"> {
   budget: RunBudgetHooks;
+  compileInvocationPrompt?: InvocationPromptCompiler;
 }
 
 /**

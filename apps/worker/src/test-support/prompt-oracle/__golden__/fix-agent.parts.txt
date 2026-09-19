@@ -1,0 +1,31 @@
+[profile: Harness Profile: Claude]
+  profile                          91  profile ref=builtin-claude  "Harness Profile instructions"
+
+[repository: acme/api/AGENTS.md]
+  repository-file                  61  repository_file ref=acme/api/AGENTS.md  "Repository file AGENTS.md"
+
+[repository: Repository rules for acme/api]
+  repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
+
+[block: Block role and task]
+  authored:1                       65  block_prompt  "Block prompt text"
+
+[runtime: Runtime data]
+  ticket                          100  ticket ref=AIW-512  "Ticket"
+  acceptance-criteria             104  ticket ref=AIW-512  "Acceptance criteria"
+  clarifications                   26  clarification  "Clarification answers"
+  clarification:1                 184  clarification ref=1 label=Anna Nowak  "Clarification round 1"
+  review-threads                   20  pull_request  "Review threads"
+  review-threads-rule             159  platform  "Answer every listed alias"
+  review-threads-open             137  pull_request  "Review threads to answer"
+  review-context-rule             178  platform  "Context-only threads are not answered"
+  review-context-threads          108  pull_request  "Review threads for context only"
+  review-answer-rules             717  platform  "How to answer review threads"
+  pr-comments                      80  pull_request  "Pull request comments"
+  ci-checks                        95  pull_request  "CI/CD check results"
+  internal-review-results         289  review_result  "Internal review results"
+  merge-conflicts                  79  pull_request  "Merge conflicts"
+  merge-conflicts-rule             90  platform  "How to finish the merge"
+  selected-repositories            27  workspace  "Selected repositories"
+  selected-repositories-rule      114  platform  "Which of them may be changed"
+  selected-repository:1           121  workspace ref=github:acme/api  "Selected repository github:acme/api"

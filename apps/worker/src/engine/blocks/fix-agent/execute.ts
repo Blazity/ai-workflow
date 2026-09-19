@@ -2,6 +2,7 @@ import type {
   RunRepositoryAccess,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
+import { joinPromptParts, type EffectivePromptPart } from "@shared/prompts";
 import type { AgentKind } from "../../../sandbox/agents/index.js";
 import type {
   AgentOutput,
@@ -540,8 +541,8 @@ async function buildFixInput(
   reviewFeedback: ReviewFeedback | undefined,
   reviewResults: Extract<ReviewResultsResolution, { ok: true }>["value"],
   includeInstructions = true,
-): Promise<string> {
-  const { assembleFixContext } = await import("../../../sandbox/context.js");
+): Promise<EffectivePromptPart[]> {
+  const { fixContextParts } = await import("../../../sandbox/context.js");
 
   let prComments: PRComment[] = ctx.repositoryContexts.flatMap(
     (context) => context.prComments,
@@ -573,16 +574,12 @@ async function buildFixInput(
       ? block.params.instructions.trim()
       : undefined;
 
-  return assembleFixContext({
+  return fixContextParts({
     ticket: { ...ctx.ticket, ...(ctx.clarifications ? { clarifications: ctx.clarifications } : {}) },
     prComments,
     failedChecks,
     ...(reviewResults ? { reviewResults } : {}),
-    ...(conflictRepos.length > 0
-      ? {
-          conflictNotes: `These repositories have merge conflicts: ${conflictRepos.join(", ")}. Resolve the conflict markers, stage the files, and continue the merge in each repository.`,
-        }
-      : {}),
+    ...(conflictRepos.length > 0 ? { conflictRepositories: conflictRepos } : {}),
     ...(instructions ? { instructions } : {}),
     repositories: ctx.selectedRepositories,
     ...(ctx.workspaceManifest ? { workspaceManifest: ctx.workspaceManifest } : {}),
@@ -723,21 +720,23 @@ export const execute: BlockExecuteFn = async (
       ctx.workspaceManifest?.version === 2 ? ctx.workspaceManifest : null,
     );
     const before = await inspectFixWorkspace(sandboxId);
-    const fallbackInput = await buildFixInput(
+    // With a compiler the instructions are the block prompt, so they stay out
+    // of the runtime parts; without one the joined parts are the whole prompt.
+    const fixInput = await buildFixInput(
       block,
       ctx,
       reviewFeedback.value,
       fixReviewResults,
-      execution?.compileEffectivePrompt === undefined,
+      execution?.compileInvocationPrompt === undefined,
     );
     const resolvedInput = await resolveAgentInput({
-      compileEffectivePrompt: execution?.compileEffectivePrompt,
+      compileInvocationPrompt: execution?.compileInvocationPrompt,
       blockPrompt:
         typeof block.params.instructions === "string"
           ? block.params.instructions
           : "",
-      runtimeData: fallbackInput,
-      fallbackInput,
+      runtimeData: fixInput,
+      fallbackInput: joinPromptParts(fixInput),
       sandboxId,
     });
     if (!resolvedInput.ok) return resolvedInput.result;
