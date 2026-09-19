@@ -8,7 +8,7 @@
     "build": "tsx ../../scripts/gates/generate-block-catalog.ts --check && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-test-module-mocks --import tsx --test \"**/*.test.ts\" \"**/*.test.tsx\""
+    "test": "node --experimental-test-module-mocks --import tsx --test \"!(node_modules)/**/*.test.{ts,tsx}\" \"*.test.ts\""
   },
   "dependencies": {
     "@phosphor-icons/react": "2.1.10",

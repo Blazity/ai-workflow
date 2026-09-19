@@ -28,10 +28,8 @@ import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import type { Db } from "../src/db/client.js";
 import * as schema from "../src/db/schema.js";
-import { getCurrentSystemHarnessProfileReference } from "../src/db/repositories/harness-profiles.js";
 import { assertNoRetiredEnvironmentVariables } from "../src/services/settings/retired-environment.js";
-import { seedWorkflowDefinitionTemplates } from "../src/services/workflow-definitions/template-seed.js";
-import { defaultBuiltinHarnessProfile } from "@shared/harness";
+import { seedDeploymentDefaults } from "../src/services/workflow-definitions/deployment-seed.js";
 import { decideMarkerAction } from "../src/db/migrate-marker.js";
 
 assertNoRetiredEnvironmentVariables(process.env);
@@ -92,15 +90,6 @@ if (decision.action === "reclaim") {
 
 if (process.exitCode !== 1) {
   const db = drizzle({ client: sql, schema }) as unknown as Db;
-  const provider = defaultBuiltinHarnessProfile().harness.provider;
-  const profileReference =
-    await getCurrentSystemHarnessProfileReference(db, provider);
-  console.log("[db-migrate] System harness profiles are ready.");
-  await seedWorkflowDefinitionTemplates(db, {
-    includeReview: false,
-    includeLeakReview: false,
-    provider,
-    profileReference,
-  });
-  console.log("[db-migrate] Workflow templates are ready.");
+  await seedDeploymentDefaults(db);
+  console.log("[db-migrate] System harness profiles and workflow templates are ready.");
 }

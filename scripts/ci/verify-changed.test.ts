@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { glob, readFile, readdir, stat } from "node:fs/promises";
 import test from "node:test";
 import {
   candidateDiff,
@@ -306,6 +306,47 @@ test("directory discovery includes test variants, direct tests, safety prefixes,
     commands(["apps/dashboard/-danger.test.ts"], repo).at(-2),
     "pnpm --dir apps/dashboard exec node --experimental-test-module-mocks --import tsx --test ./-danger.test.ts",
   );
+});
+
+const DASHBOARD = "apps/dashboard";
+
+async function dashboardTestFiles(directory = DASHBOARD): Promise<string[]> {
+  const found: string[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    // A dot directory and the dependency tree hold no suite of ours, and
+    // pnpm links the second one, so descending it would leave the package.
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const path = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) found.push(...(await dashboardTestFiles(path)));
+    else if (/\.test\.tsx?$/.test(entry.name)) found.push(path.slice(DASHBOARD.length + 1));
+  }
+  return found.sort();
+}
+
+/**
+ * The dashboard runs on `node --test`, which reads its positionals as globs:
+ * a path is not a path. `app/api/users/[userId]/role/route.test.ts` arrived as
+ * a character class, matched nothing, and the run reported zero tests and
+ * exited green, so that file never ran and nobody could tell.
+ *
+ * Counting what the planned commands reach against what is on disk is what
+ * makes the next path shape nobody predicted fail instead of disappear.
+ */
+test("the plan reaches every dashboard test file that is on disk", async () => {
+  const onDisk = await dashboardTestFiles();
+  assert.ok(onDisk.length >= 100, `walked ${onDisk.length} test files, expected the suite`);
+
+  const reached = new Set<string>();
+  for (const relative of onDisk) {
+    const command = plan([`${DASHBOARD}/${relative}`]).commands.find((cmd) =>
+      cmd.includes("--test"),
+    );
+    assert.ok(command, `no dashboard run planned for ${relative}`);
+    for (const pattern of command.slice(command.indexOf("--test") + 1)) {
+      for await (const file of glob(pattern, { cwd: DASHBOARD })) reached.add(file);
+    }
+  }
+  assert.deepEqual([...reached].sort(), onDisk);
 });
 
 test("fixed tests and overlapping changed tests deduplicate into one process", () => {
