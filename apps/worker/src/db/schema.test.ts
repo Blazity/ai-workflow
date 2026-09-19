@@ -5,8 +5,10 @@ import { describe, expect, it } from "vitest";
 import * as schema from "./schema.js";
 
 const SQL_TABLES = [
-  "account", "active_run_sandboxes", "active_runs", "agent_memory_documents",
-  "approval_requests", "carry_schema_resync_audit", "clarification_requests",
+  "account", "active_run_sandboxes", "active_runs", "agent_briefing_runs",
+  "agent_briefing_texts", "agent_briefings", "agent_memory_documents",
+  "approval_requests", "carry_schema_resync_audit", "clarification_answer_deliveries",
+  "clarification_requests",
   "dispatch_capacity_queue", "env_marker", "failed_tickets", "gate_current",
   "gate_dedupe", "gate_locks", "harness_capability_catalogs",
   "harness_profile_version_skills", "harness_profile_versions", "harness_profiles",
@@ -32,12 +34,12 @@ const SQL_TABLES = [
 ] as const;
 
 describe("schema barrel", () => {
-  it("exports the literal 71-table schema exactly once", () => {
+  it("exports the literal 75-table schema exactly once", () => {
     const names = Object.values(schema)
       .filter((value) => is(value, PgTable))
       .map((table) => getTableName(table as PgTable))
       .sort();
     expect(names).toEqual([...SQL_TABLES].sort());
-    expect(new Set(names).size).toBe(71);
+    expect(new Set(names).size).toBe(75);
   });
 });

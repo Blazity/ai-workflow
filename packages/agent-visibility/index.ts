@@ -7,7 +7,11 @@ export {
 export {
   AgentVisibilityInputError,
   DEFAULT_REDACTION_REPLACEMENT,
+  applyRemovals,
+  mergeRedactions,
+  type AppliedSpan,
   type VisibilityRedaction,
+  type VisibilityRemoval,
   type VisibilitySanitizer,
 } from "./redact";
 export {

@@ -180,6 +180,9 @@ importers:
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
+      '@shared/agent-visibility':
+        specifier: workspace:*
+        version: link:../../packages/agent-visibility
       '@shared/conditions':
         specifier: workspace:*
         version: link:../../packages/conditions

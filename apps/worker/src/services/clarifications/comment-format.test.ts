@@ -7,6 +7,7 @@ import {
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,
   formatAnswerAlsoNamedComment,
+  formatClarificationAnswerComment,
   formatAnswerDelegatedComment,
   formatAnswerNotRecordedComment,
   formatAnswerUnreadableComment,
@@ -297,6 +298,35 @@ describe("formatClarificationNudgeComment", () => {
     expect(body).toContain(CLARIFICATION_NUDGE_MARKER);
     expect(body).toContain(DASHBOARD);
     expect(body).toContain('move the ticket back to the "AI" column.');
+  });
+});
+
+describe("formatClarificationAnswerComment", () => {
+  // Red when: an answer's trace on the ticket says it came from somewhere it
+  // did not. Every answer used to read as "in the dashboard", signed with an
+  // MCP client's OAuth id.
+  it("says where the answer came from", () => {
+    expect(
+      formatClarificationAnswerComment({
+        answeredByLabel: "Jane Doe",
+        answer: "github:acme/api",
+        surface: { kind: "dashboard" },
+      }),
+    ).toBe("Jane Doe answered the clarification in the dashboard; the run is resuming.\n\nAnswer:\ngithub:acme/api");
+    expect(
+      formatClarificationAnswerComment({
+        answeredByLabel: "MCP fBEUsk",
+        answer: "github:acme/api",
+        surface: { kind: "mcp", clientId: "fBEUsk", person: "Jane Doe" },
+      }),
+    ).toContain("Jane Doe answered the clarification through the MCP client fBEUsk; the run is resuming.");
+    expect(
+      formatClarificationAnswerComment({
+        answeredByLabel: "MCP fBEUsk",
+        answer: "github:acme/api",
+        surface: { kind: "mcp", clientId: "fBEUsk", person: null },
+      }),
+    ).toContain("The MCP client fBEUsk answered the clarification; the run is resuming.");
   });
 });
 

@@ -70,6 +70,7 @@ export async function answerClarificationRequest(input: {
     row,
     rawAnswer: input.rawAnswer,
     actor: { id: input.actor.userId, label },
+    surface: { kind: "dashboard" },
     issueTracker: createAdapters().issueTracker,
     aiColumn: settings.COLUMN_AI,
     cancelSettings: settings,

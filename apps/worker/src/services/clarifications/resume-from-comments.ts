@@ -147,6 +147,10 @@ export async function resumeClarificationFromComments(input: {
           id: row.answeredById ?? "system",
           label: row.answeredByLabel ?? "system",
         },
+        // The channel this redelivery came through. It records no delivery of
+        // its own (the core writes one per arrival, and this is our retry of
+        // words already recorded) and posts no answer comment.
+        surface: { kind: "jira" },
         issueTracker,
         skipTicketFetch: false,
         ...(input.answerReadingDeps ? { answerReadingDeps: input.answerReadingDeps } : {}),
@@ -380,6 +384,7 @@ export async function resumeClarificationFromComments(input: {
     row,
     rawAnswer: composed,
     actor: { id: answeredById, label: answeredByLabel },
+    surface: { kind: "jira" },
     issueTracker,
     skipTicketFetch: true,
     // How many people these words came from, told to the record as a number
