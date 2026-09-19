@@ -50,7 +50,6 @@ export const CORE_NAV_GROUPS: readonly NavGroup[] = [
       { id: "approvals", label: "Approvals", glyph: "⚖", href: "/approvals" },
       { id: "prompts", label: "Prompts", glyph: "❡", href: "/prompts" },
       { id: "memory", label: "Memory", glyph: "❖", href: "/memory", title: "Agent memory" },
-      { id: "evals", label: "Arthur evals", glyph: "✓", href: "/evals" },
       { id: "cost", label: "Cost & usage", glyph: "$", href: "/cost" },
     ],
   },

@@ -10,6 +10,10 @@
     ".": {
       "types": "./index.ts",
       "default": "./index.ts"
+    },
+    "./fixtures": {
+      "types": "./fixtures.ts",
+      "default": "./fixtures.ts"
     }
   },
   "scripts": {

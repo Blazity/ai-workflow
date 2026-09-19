@@ -14,7 +14,6 @@ import { blockTypesMissingExecutor, implementationChangeSummary, resolveOpenPrBo
 describe("block executor exhaustiveness", () => {
   it("keeps map, inline, and graph execution sets exact", () => {
     const mapTypes = [
-      "arthur_injection_check",
       "call_llm",
       "complete_pr_check",
       "create_pr_check",

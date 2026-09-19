@@ -32,7 +32,6 @@ const RUNTIME_ENV = resolve(import.meta.dirname, "../../apps/worker/src/infra/ru
 const NAME = "apps/worker/src/infra/runtime-env.ts";
 
 const PROVIDER_PREFIXES: ReadonlyArray<readonly [string, string]> = [
-  ["GENAI_ENGINE_", "S8, Arthur"],
   ["CHAT_SDK_", "S9, Slack"],
   ["SLACK_", "S9, Slack"],
   ["GITLAB_", "S10, GitLab"],

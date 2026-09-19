@@ -77,7 +77,6 @@ vi.mock("../../engine/definition/block-contract-environment.js", () => ({
     vcsProviders: ["github"],
     vcsBotIdentities: ["github"],
     slackConfigured: true,
-    arthurConfigured: true,
     webhookTriggerConfigured: true,
     integrations: integrations ?? {
       byId: new Map(),

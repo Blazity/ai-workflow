@@ -46,7 +46,6 @@ export interface WorkflowBlockRegistryContext {
   vcsProviders: VcsProviderKind[];
   vcsBotIdentities: VcsProviderKind[];
   slackConfigured: boolean;
-  arthurConfigured: boolean;
   webhookTriggerConfigured: boolean;
   /**
    * What this deployment's integrations let a workflow do.
@@ -121,9 +120,6 @@ function availabilityFor(
         "Slack messaging is not configured; turn off the Slack provider for a Jira-only investigation.",
       );
     }
-  }
-  if (type === "arthur_injection_check" && !context.arthurConfigured) {
-    return unavailable("Arthur Engine is not configured.");
   }
   if (type === "trigger_webhook" && !context.webhookTriggerConfigured) {
     return unavailable("Webhook trigger encryption is not configured.");

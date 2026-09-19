@@ -1,10 +1,13 @@
 import type { z } from "zod";
 import type {
   BlockOutput,
+  JsonValue,
   SystemHealthMode,
   WorkflowBlockInputContract,
 } from "@shared/contracts";
+import type { AgentTracingAdapter } from "./agent-tracing";
 import type { VcsRepositoryTarget } from "./capabilities";
+import type { IntegrationRunStart, IntegrationRunState } from "./run-state";
 import type { IntegrationBlockContext, IntegrationContext } from "./context";
 import type { IssueTrackerAdapter } from "./issue-tracker";
 import type { IntegrationBlockManifest, IntegrationManifest } from "./manifest";
@@ -29,7 +32,36 @@ import type { VCSAdapter } from "./vcs";
  * `ctx.http`. Throw `FatalError` when retrying cannot help at all: core stops
  * there and never retries the call, wherever it was made from.
  */
-export interface IntegrationRuntimeDefinition<M extends IntegrationManifest> {
+export type IntegrationRuntimeDefinition<M extends IntegrationManifest> =
+  IntegrationRuntimeBase<M> & RunStateSlot<M>;
+
+/**
+ * `beginRun`, required exactly when the manifest declares `runState` and
+ * refused otherwise, so the declaration and the code that serves it cannot
+ * drift apart. A manifest that declared run state with nothing to create it
+ * would hand every block `null` and, for a block that needs the handle, turn
+ * the whole integration into a refusal nobody could explain.
+ */
+type RunStateSlot<M extends IntegrationManifest> = M extends { readonly runState: true }
+  ? {
+      /**
+       * Creates this integration's per-run state, once per run. Core calls it
+       * inside a step at the run's first use of the integration and records
+       * the result with the run, so a suspended run comes back holding the
+       * same value. It must therefore return JSON and nothing else.
+       *
+       * Returning `null`, or throwing, leaves the run without the handle: core
+       * records that and carries on, and each use decides what to do without
+       * one.
+       */
+      readonly beginRun: (
+        start: IntegrationRunStart,
+        ctx: IntegrationContext<M>,
+      ) => Promise<IntegrationRunState | null>;
+    }
+  : { readonly beginRun?: never };
+
+interface IntegrationRuntimeBase<M extends IntegrationManifest> {
   /**
    * Proves that `ctx.connection` works, cheaply. Core runs it before stored
    * values become active and when an admin presses Test. A refusal reports
@@ -57,16 +89,27 @@ export interface IntegrationRuntimeDefinition<M extends IntegrationManifest> {
    */
   readonly webhook?: never;
   /**
-   * Reserved for S8, which designs the worker handlers an integration's own
-   * pages read their data from.
+   * What each of this integration's pages reads, keyed by the page id its
+   * manifest declares. A page is a component in the dashboard's process with
+   * no session, no database and no client of ours in its props, so this is the
+   * only way it sees anything: core resolves the connection, calls the reader
+   * on the server, and hands the page what it returned.
+   *
+   * Read-only and optional per page. A reader receives the ordinary context
+   * and returns JSON, which is what reaches the browser, so nothing it returns
+   * may carry a secret. A reader that throws is reported to the page as the
+   * provider being unavailable, with the provider's own reason, redacted.
    */
-  readonly api?: never;
+  readonly api?: {
+    readonly [PageId in M["pages"][number]["id"]]?: (
+      ctx: IntegrationContext<M>,
+    ) => Promise<JsonValue>;
+  };
 }
 
-export interface IntegrationRuntime<M extends IntegrationManifest>
-  extends IntegrationRuntimeDefinition<M> {
+export type IntegrationRuntime<M extends IntegrationManifest> = IntegrationRuntimeDefinition<M> & {
   readonly manifest: M;
-}
+};
 
 /**
  * One runtime as the generated registry holds it. Every signature here is
@@ -89,6 +132,10 @@ export interface ErasedIntegrationRuntime {
     Record<string, ErasedIntegrationCall<IntegrationBlockOutcome<IntegrationBlockManifest>>>
   >;
   readonly health: Readonly<Record<string, ErasedIntegrationCall<IntegrationHealthResult>>>;
+  /** Present exactly when the manifest declares `runState`. */
+  readonly beginRun?: ErasedIntegrationCall<IntegrationRunState | null>;
+  /** One reader per page that has data behind it, keyed by page id. */
+  readonly api?: Readonly<Record<string, ErasedIntegrationCall<JsonValue>>>;
 }
 
 /** A call whose arguments core builds from the manifest rather than the type. */
@@ -99,6 +146,7 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
   issue_tracker: (ctx: IntegrationContext<M>) => IssueTrackerAdapter;
   vcs: (ctx: IntegrationContext<M>, repository: VcsRepositoryTarget) => VCSAdapter;
   messaging: (ctx: IntegrationContext<M>) => MessagingAdapter;
+  agent_tracing: (ctx: IntegrationContext<M>) => AgentTracingAdapter;
 }
 
 export type ConnectionTestResult =

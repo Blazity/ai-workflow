@@ -58,6 +58,16 @@ test("the old System health and Users URLs still work", async () => {
   }
 });
 
+test("the old Evals URL lands on the Evals page its integration now serves", async () => {
+  // Evals moved from a core screen into the Arthur Engine's own area. The
+  // old link is in bookmarks and in messages, and a 404 there reads as "the
+  // feature is gone" when it only moved.
+  const redirects = await nextConfig.redirects?.();
+  const evals = redirects?.find((entry) => entry.source === "/evals");
+  assert.equal(evals?.destination, "/integrations/arthur/evals");
+  assert.equal(evals?.permanent, true, "Evals is not coming back to /evals");
+});
+
 test("no redirect points at a path that redirects again", async () => {
   // A chain costs a round trip per hop and breaks the moment one hop changes.
   const redirects = (await nextConfig.redirects?.()) ?? [];

@@ -34,7 +34,6 @@ import {
   postTicketCommentParams,
   postPrCommentParams,
   humanQuestionParams,
-  arthurInjectionCheckParams,
   leakReviewParams,
   sendPlanApprovalParams,
 } from "./params.generated.js";
@@ -349,7 +348,6 @@ export const BLOCK_PARAMS_SCHEMAS = {
   send_slack_message: v2SendSlackMessageConfiguration,
   send_plan_approval: sendPlanApprovalParams,
   human_question: humanQuestionParams,
-  arthur_injection_check: arthurInjectionCheckParams,
   leak_review: leakReviewParams,
   loop: v2LoopConfiguration,
   terminate: v2TerminateConfiguration,

@@ -8,8 +8,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { checkIntegrationConformance, z, type ConformanceCode } from "./index";
-import { fixtureManifest } from "./fixture-manifest";
-import { fixtureRuntime } from "./fixture-runtime";
+import { fixtureManifest, otelFixtureManifest } from "./fixture-manifest";
+import { fixtureRuntime, otelFixtureRuntime } from "./fixture-runtime";
 
 // Hand-built integrations are deliberately untyped: conformance exists for
 // packages the compiler did not hold to the contract.
@@ -88,6 +88,15 @@ test("a conforming integration yields no issues", () => {
 
 test("the fixture integration of this package conforms", () => {
   assert.deepEqual(issues(fixtureManifest, fixtureRuntime), []);
+});
+
+/**
+ * The foil. It traces with no per-run handle, no package, no file and no hook,
+ * which is what keeps `agent_tracing` implementable by something that is not
+ * the provider it was designed from.
+ */
+test("a tracing provider that needs nothing but an endpoint conforms too", () => {
+  assert.deepEqual(issues(otelFixtureManifest, otelFixtureRuntime), []);
 });
 
 test("a manifest that is not an object, or misses a required field, does not parse", () => {
@@ -352,11 +361,62 @@ test("a page id is a lowercase slug and never the core connection tab", () => {
 });
 
 test("a reserved runtime slot cannot be filled before its stage designs it", () => {
-  for (const slot of ["webhook", "api"]) {
+  for (const slot of ["webhook"]) {
     const { manifest, runtime } = validIntegration();
     runtime[slot] = async () => ({});
     hasIssue(manifest, runtime, "reserved_slot_used", `runtime.${slot}`);
   }
+});
+
+test("a page reader belongs to a page the manifest declares", () => {
+  const { manifest, runtime } = validIntegration();
+  runtime.api = { nowhere: async () => ({}) };
+  hasIssue(manifest, runtime, "page_reader_undeclared", "runtime.api.nowhere");
+});
+
+test("run state is declared and served together", () => {
+  const declaredOnly = validIntegration();
+  declaredOnly.manifest.runState = true;
+  hasIssue(declaredOnly.manifest, declaredOnly.runtime, "run_state_missing", "runtime.beginRun");
+
+  const servedOnly = validIntegration();
+  servedOnly.runtime.beginRun = async () => ({ taskId: "t1" });
+  hasIssue(servedOnly.manifest, servedOnly.runtime, "run_state_undeclared", "runtime.beginRun");
+});
+
+test("a field a graph must read is one the block's output declares", () => {
+  const fine = validIntegration();
+  fine.manifest.blocks[0].output.mustRead = ["status", "count"];
+  assert.deepEqual(issues(fine.manifest, fine.runtime), []);
+
+  const unknown = validIntegration();
+  unknown.manifest.blocks[0].output.mustRead = ["verdict"];
+  hasIssue(unknown.manifest, unknown.runtime, "block_must_read_undeclared", "blocks[0].output.mustRead[0]");
+});
+
+test("an input default names ticket fields, and only a text input has one", () => {
+  const fine = validIntegration();
+  fine.manifest.blocks[0].inputs = {
+    content: { required: true, schema: { type: "string" }, defaultFromSubject: ["description", "comments"] },
+  };
+  assert.deepEqual(issues(fine.manifest, fine.runtime), []);
+
+  const unknownField = validIntegration();
+  unknownField.manifest.blocks[0].inputs = {
+    content: { required: true, schema: { type: "string" }, defaultFromSubject: ["assignee"] },
+  };
+  hasIssue(
+    unknownField.manifest,
+    unknownField.runtime,
+    "block_input_default_invalid",
+    "blocks[0].inputs.content.defaultFromSubject",
+  );
+
+  const notText = validIntegration();
+  notText.manifest.blocks[0].inputs = {
+    limit: { required: true, schema: { type: "number" }, defaultFromSubject: ["description"] },
+  };
+  hasIssue(notText.manifest, notText.runtime, "block_input_default_invalid", "blocks[0].inputs.limit.defaultFromSubject");
 });
 
 test("every issue says in words what is wrong", () => {

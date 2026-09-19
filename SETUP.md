@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-18
+Last-verified: 2026-09-19
 
 # ai-workflow — Setup & Deployment Guide
 
@@ -846,16 +846,20 @@ A copyable example lives in [`docs/example-skill/SKILL.md`](./docs/example-skill
 
 **Build behaviour.** `pnpm build` in `apps/worker` validates the directory before anything else runs and fails the build when any entry cannot ship, listing each path and reason. A deployment with no `skills/` directory is fine and says so in one line.
 
-### Arthur AI Engine (tracing + prompt-injection check)
+### Arthur AI Engine (tracing, evals and the prompt-injection check)
 
-Set both:
+Arthur is an integration, configured once and read everywhere it appears: the tracer in every agent sandbox, the Evals page in its own sidebar section, its check on System health, and the `arthur_injection_check` block in the editor. Set both variables and the Integrations page shows it Connected, sourced from the environment:
 
 ```bash
 GENAI_ENGINE_API_KEY=...
 GENAI_ENGINE_TRACE_ENDPOINT=https://your-arthur-host/api/v1/traces
 ```
 
-This enables per-run tracing and the optional `arthur_injection_check` block. The tracer is built into every sandbox via `pnpm build:arthur-tracer` during deploy.
+`GENAI_ENGINE_TRACE_ENDPOINT` is the full traces URL and ends in `/api/v1/traces`: the in-sandbox tracer posts to it, and the task API is read from the same host. An admin can instead enter both values in the dashboard (Integrations → Arthur Engine → Connection), which switches the source from the environment to the stored connection; until they do, the environment is the source.
+
+Leaving both unset leaves Arthur disconnected, and that is now a visible state rather than a quiet one: its block is not offered in the palette, a workflow that uses it cannot be published, and a run that would reach it stops at the start naming Arthur. The prompt-injection check reports a verdict or stops the run; it never reports that it did not look.
+
+The tracer travels with the integration as `integrations/arthur/tracer.generated.ts` and is installed into each sandbox at run time, so no deploy-time build step is involved. Regenerate it from a newer upstream tracer with `pnpm --filter @integrations/arthur run build:tracer`.
 
 ### GitLab alongside (or instead of) GitHub
 

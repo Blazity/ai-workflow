@@ -35,7 +35,6 @@ const registryContext: WorkflowBlockRegistryContext = {
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
   integrations: NO_INTEGRATIONS,
 };
@@ -202,7 +201,7 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     defaults: { claude: "claude-model", codex: "codex-model" },
     prompts: { research: "r", implement: "i", review: "v" },
     moveTargets: { backlog: "Backlog", aiReview: "AI Review" },
-    arthur: { taskId: null },
+    integrationRunStates: null,
     checksCeilingMs: null,
     prePrChecksFailureMessage: vi.fn().mockImplementation((error: unknown) =>
       Promise.resolve(error instanceof Error ? error.message : String(error)),

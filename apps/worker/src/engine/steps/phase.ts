@@ -605,7 +605,7 @@ async function setCommitGuardStep(
 }
 
 // Step wrappers around the AgentAdapter class methods. The adapter classes
-// transitively reach the pino logger (via installArthurTracer); the workflow
+// transitively reach the pino logger (through the tracing installer); the workflow
 // bundler can't tolerate that, so all adapter method calls happen inside
 // step bundles rather than the workflow body.
 async function planPhaseStep(

@@ -35,6 +35,7 @@ import type { RunStartWorkScope } from "../../steps/run-start-settings.js";
 import type { RunTriggerRepositoryPolicySource } from "../../work-scope/policy.js";
 import type { TicketTextReading } from "../../work-scope/context.js";
 import type { LoadedPrompts } from "../../steps/prompts-step.js";
+import type { IntegrationRunStateOutcome } from "../../steps/integration-run-state-step.js";
 import type { AgentWorkflowInput } from "../../agent-input.js";
 import type {
   RunBudgetAttribution,
@@ -63,7 +64,7 @@ import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
  * Mutation contract (executors write back through the shared object):
  * - prepare_workspace sets `sandboxId` (and appends to `sandboxIds`),
  *   `workspaceManifest`, `selectedRepositories`, `repositoryContexts`,
- *   `preSandboxAdditions`, `repositoryScopeNarrowing`, and `arthur.taskId`.
+ *   `preSandboxAdditions` and `repositoryScopeNarrowing`.
  * - fetch_pr_context refreshes `repositoryContexts`.
  * - prepare_workspace sets `setupFailures` when a setup command fails.
  * - finalize_workspace sets `publication`.
@@ -367,10 +368,14 @@ export interface EngineCtx {
   prompts: LoadedPrompts;
   moveTargets: { backlog: IssueTrackerMoveTarget; aiReview: IssueTrackerMoveTarget };
   /**
-   * Arthur observability wiring. prepare_workspace ensures the run's Arthur
-   * task (named after the ticket) and writes back the resolved `taskId`.
+   * Per-run integration state, by integration id: created at the run's first
+   * use of each integration that declares it and shared by every later use (a
+   * provider's per-run bucket, session or task). An answer of "settings could
+   * not be read" is never stored, so the next use asks again. Null until
+   * something asks; `engine/support/integration-run-state.ts` is the only
+   * writer.
    */
-  arthur: { taskId: string | null };
+  integrationRunStates: Readonly<Record<string, IntegrationRunStateOutcome>> | null;
   /**
    * The run's checks ceiling in milliseconds, resolved once and cached.
    *

@@ -99,16 +99,6 @@ export function CkChip({
   );
 }
 
-/* ── CkDot ───────────────────────────────────────────────────────────────── */
-export function CkDot({ color = "#3C43E7", size = 6 }: { color?: string; size?: number }) {
-  return (
-    <span
-      className="inline-block rounded-full flex-none"
-      style={{ width: size, height: size, background: color }}
-    />
-  );
-}
-
 /* ── CkCard ──────────────────────────────────────────────────────────────── */
 export function CkCard({
   title,

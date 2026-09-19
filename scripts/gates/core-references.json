@@ -17,10 +17,6 @@
   ],
   "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support, workflow-graph-suites, mcp-dogfood and fixtures trees are test material by another name.",
   "plannedIntegrations": {
-    "arthur": {
-      "stage": "S8",
-      "reason": "the Arthur engine becomes integrations/arthur, and agent_tracing becomes a capability"
-    },
     "slack": {
       "stage": "S9",
       "reason": "Slack becomes integrations/slack, and messaging becomes a capability core reaches through a port"
@@ -45,93 +41,10 @@
       "ids": [
         "arthur"
       ],
-      "stage": "S8",
-      "reason": "dashboard screens and helpers that still name the provider; S8 removes them",
+      "stage": "kept",
+      "reason": "the analysis comment marker (`Arthur report: <run>:<stage>`) and the two headings of the comments it marks (`Arthur research complete`, `Arthur pull requests ready`), all written into tickets and all naming the Arthur tenant rather than the Arthur provider. The marker is a stored identifier in comments already posted, so rewriting it would make the product post a second copy of every report; the headings are what that tenant's people read at the top of those comments, and changing them is a product decision rather than a refactor",
       "paths": [
-        "apps/dashboard/app/layout.tsx",
-        "apps/dashboard/components/cockpit/activity-drawer.tsx",
-        "apps/dashboard/components/cockpit/flow-editor/block-palette.ts",
-        "apps/dashboard/components/cockpit/flow-editor/blocks/arthur_injection_check.tsx",
-        "apps/dashboard/components/cockpit/flow-editor/blocks/index.ts",
-        "apps/dashboard/components/cockpit/screens/evals.tsx",
-        "apps/dashboard/components/cockpit/screens/health.tsx",
-        "apps/dashboard/lib/cockpit/navigation.ts"
-      ]
-    },
-    {
-      "ids": [
-        "arthur"
-      ],
-      "stage": "S8",
-      "reason": "engine call sites that still name the provider; S8 removes them",
-      "paths": [
-        "apps/worker/src/engine/agent-workflow.ts",
-        "apps/worker/src/engine/blocks/agent-sandbox.ts",
-        "apps/worker/src/engine/blocks/arthur-injection-check/execute.ts",
-        "apps/worker/src/engine/blocks/arthur-injection-check/manifest.ts",
-        "apps/worker/src/engine/blocks/fix-agent/execute.ts",
-        "apps/worker/src/engine/blocks/generic-agent/execute.ts",
-        "apps/worker/src/engine/blocks/pre-pr-checks.ts",
-        "apps/worker/src/engine/blocks/prepare-workspace/execute.ts",
-        "apps/worker/src/engine/blocks/support/test-support.ts",
-        "apps/worker/src/engine/blocks/support/types.ts",
-        "apps/worker/src/engine/definition/block-contract-environment.ts",
-        "apps/worker/src/engine/definition/block-contract-resolver.ts",
-        "apps/worker/src/engine/definition/block-params-schemas.ts",
-        "apps/worker/src/engine/definition/block-registry.ts",
-        "apps/worker/src/engine/definition/legacy-block-metadata.fixture.ts",
-        "apps/worker/src/engine/steps/clarification-snapshot-steps.ts",
-        "apps/worker/src/engine/steps/disposable-review-workspace.ts",
         "apps/worker/src/engine/support/run-analysis-report.ts"
-      ]
-    },
-    {
-      "ids": [
-        "arthur"
-      ],
-      "stage": "S8",
-      "reason": "the provider webhook and API routes, which keep their URLs; the code moves, and the URL a provider already calls survives it: rows here going away is not the measure of the stage being done",
-      "paths": [
-        "apps/worker/src/routes/api/v1/evals.get.ts"
-      ]
-    },
-    {
-      "ids": [
-        "arthur"
-      ],
-      "stage": "S8",
-      "reason": "what a sandbox agent is handed about the provider; S8 removes them",
-      "paths": [
-        "apps/worker/src/sandbox/agents/claude.ts",
-        "apps/worker/src/sandbox/agents/codex.ts",
-        "apps/worker/src/sandbox/agents/types.ts",
-        "apps/worker/src/sandbox/arthur-client.ts",
-        "apps/worker/src/sandbox/arthur-tracer.ts"
-      ]
-    },
-    {
-      "ids": [
-        "arthur"
-      ],
-      "stage": "S8",
-      "reason": "service call sites that still name the provider; S8 removes them",
-      "paths": [
-        "apps/worker/src/services/overview/collect-eval-summary.ts",
-        "apps/worker/src/services/overview/collect-evals.ts",
-        "apps/worker/src/services/system/collect.ts",
-        "apps/worker/src/services/system/probes.ts"
-      ]
-    },
-    {
-      "ids": [
-        "arthur"
-      ],
-      "stage": "S8",
-      "reason": "shared contracts, prompts and skills that still name the provider; S8 removes them",
-      "paths": [
-        "packages/contracts/block-catalog-types.ts",
-        "packages/contracts/workflow-graph.ts",
-        "packages/workflow-graph/graph-issues.ts"
       ]
     },
     {

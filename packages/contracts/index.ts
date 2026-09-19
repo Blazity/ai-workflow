@@ -13,6 +13,7 @@ export * from "./block-catalog.generated";
 export * from "./block-contract-resolver";
 export * from "./api";
 export * from "./workflow-graph";
+export * from "./subject-default";
 export * from "./workflow-layout";
 export * from "./prompt-references";
 export * from "./prompt-slots";

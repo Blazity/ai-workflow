@@ -1,7 +1,6 @@
 // THIS FILE IS GENERATED. DO NOT EDIT.
 // Run pnpm run gen:blocks to update.
 
-import { manifest as arthurInjectionCheckManifest } from "../blocks/arthur-injection-check/manifest.js";
 import { manifest as branchManifest } from "../blocks/branch/manifest.js";
 import { manifest as callLlmManifest } from "../blocks/call-llm/manifest.js";
 import { manifest as completePrCheckManifest } from "../blocks/complete-pr-check/manifest.js";
@@ -42,7 +41,6 @@ import { manifest as triggerWebhookManifest } from "../blocks/trigger-webhook/ma
 import { manifest as updateTicketStatusManifest } from "../blocks/update-ticket-status/manifest.js";
 
 export const BLOCK_PARAM_SCHEMAS = {
-  arthur_injection_check: arthurInjectionCheckManifest.paramsSchema,
   branch: branchManifest.paramsSchema,
   call_llm: callLlmManifest.paramsSchema,
   complete_pr_check: completePrCheckManifest.paramsSchema,
@@ -85,7 +83,6 @@ export const BLOCK_PARAM_SCHEMAS = {
 
 export const paramsSchemas = BLOCK_PARAM_SCHEMAS;
 
-export const arthurInjectionCheckParams = BLOCK_PARAM_SCHEMAS.arthur_injection_check;
 export const branchParams = BLOCK_PARAM_SCHEMAS.branch;
 export const callLlmParams = BLOCK_PARAM_SCHEMAS.call_llm;
 export const completePrCheckParams = BLOCK_PARAM_SCHEMAS.complete_pr_check;

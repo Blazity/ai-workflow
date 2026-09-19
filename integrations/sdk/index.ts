@@ -21,8 +21,8 @@
  * step directive anywhere in integration code.
  *
  * What it implements for a capability is a port: `IssueTrackerAdapter`,
- * `VCSAdapter`, `MessagingAdapter`. The ports of `memory`, `agent_tracing` and
- * `agent_tools` are reserved (see `INTEGRATION_CAPABILITIES`).
+ * `VCSAdapter`, `MessagingAdapter`, `AgentTracingAdapter`. The ports of
+ * `memory` and `agent_tools` are reserved (see `INTEGRATION_CAPABILITIES`).
  *
  * `checkIntegrationConformance` is what CI runs over every integration.
  * ADR-010 records why the contract has this shape and every later change.
@@ -30,6 +30,20 @@
  * This entry reaches no Node module; a test bundles it for the browser.
  */
 export { z } from "zod";
+
+export {
+  AGENT_TRACING_DIR_TOKEN,
+  AGENT_TRACING_EVENTS,
+  type AgentTracingAdapter,
+  type AgentTracingEvent,
+  type AgentTracingFile,
+  type AgentTracingHook,
+  type AgentTracingInvocation,
+  type AgentTracingPackage,
+  type AgentTracingSetup,
+} from "./agent-tracing";
+
+export type { IntegrationRunStart, IntegrationRunState } from "./run-state";
 
 export {
   INTEGRATION_CAPABILITIES,

@@ -1,3 +1,4 @@
+import type { AgentTracingRun } from "../support/integration-tracing.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 
@@ -156,8 +157,10 @@ trap 'rm -f -- "$credential_pattern_file"' EXIT HUP INT TERM
 find /tmp -maxdepth 1 -type f -name '.aiw-clarification-credential-patterns-*' ! -path "$credential_pattern_file" -delete
 find /tmp -maxdepth 1 -type f -name 'agent-env*.sh' -delete
 rm -rf "$snapshot_home/.codex" "$snapshot_home/.claude" "$snapshot_home/.config/claude" "$snapshot_home/.config/claude-code"
-rm -f "$snapshot_home/.claude.json" /tmp/config.toml /tmp/arthur_config.json /tmp/arthur-tracer.py
-find /tmp -maxdepth 1 -type f \\( -iname '*arthur*credential*' -o -iname '*tracer*credential*' \\) -delete
+rm -f "$snapshot_home/.claude.json" /tmp/config.toml
+rm -rf "$snapshot_home/.aiw-tracing"
+find /tmp -maxdepth 1 -type f -name 'aiw-tracing-*' -delete
+find /tmp -maxdepth 1 -type f \\( -iname '*tracer*credential*' -o -iname '*engine*credential*' \\) -delete
 ${profileRuntimeCredentialScrubScript(input.profileRuntimeRoot)}
 chmod 600 "$credential_pattern_file"
 node --input-type=module - "$credential_pattern_file" ${scanRootArguments} "$snapshot_home" <<'AIW_CREDENTIAL_SCAN'
@@ -339,11 +342,17 @@ export async function snapshotClarificationSandboxStep(
     );
     const { randomUUID } = await import("node:crypto");
     const { env } = await import("../../infra/vcs-config.js");
+    const { integrationSecretValues } = await import(
+      "../../services/integrations/runtime.js"
+    );
     const credentialValues = [
       env.ANTHROPIC_API_KEY,
       env.CODEX_API_KEY,
       env.CODEX_CHATGPT_OAUTH_TOKEN,
-      env.GENAI_ENGINE_API_KEY,
+      // Every connected integration's, because a tracing provider's key is
+      // inside this sandbox by design and a snapshot must not carry it out.
+      // Asked for rather than listed: core no longer knows their names.
+      ...(await integrationSecretValues()),
     ].filter(
       (value): value is string =>
         typeof value === "string" && value.length > 0,
@@ -497,7 +506,8 @@ export interface RestoreClarificationSandboxInput {
     model: string;
     runtime?: ResolvedHarnessRuntime;
   }>;
-  arthurTaskId: string | null;
+  /** The run as its tracing providers see it, with their states. */
+  tracingRun: AgentTracingRun;
 }
 
 /** Restore from a serializable id, register exact ownership, then inject current credentials. */
@@ -525,14 +535,7 @@ export async function restoreClarificationSandboxStep(
   const { runRegistry } = createAdapters();
   try {
     await runRegistry.registerSandbox(input.subjectKey, input.ownerToken, sandbox.sandboxId);
-    const arthur =
-      env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && input.arthurTaskId
-        ? {
-            apiKey: env.GENAI_ENGINE_API_KEY,
-            taskId: input.arthurTaskId,
-            endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-          }
-        : undefined;
+    const { agentTracingPlans } = await import("../support/integration-tracing.js");
     for (const selected of input.agents) {
       const adapter = createAgentAdapter(
         selected.kind,
@@ -549,7 +552,7 @@ export async function restoreClarificationSandboxStep(
           anthropicApiKey: env.ANTHROPIC_API_KEY,
           codexApiKey: env.CODEX_API_KEY,
           codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-          arthur,
+          tracing: await agentTracingPlans({ harness: selected.kind, run: input.tracingRun }),
         });
       }
     }

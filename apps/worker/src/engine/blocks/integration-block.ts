@@ -8,7 +8,13 @@
  * function for every integration block there will ever be.
  */
 import { integrationBlock } from "@integrations/registry";
-import { BLOCK_TYPE_SPECS, integrationUnavailableFailureCode } from "@shared/contracts";
+import type { IntegrationBlockManifest } from "@integrations/sdk";
+import {
+  BLOCK_TYPE_SPECS,
+  describeSubjectDefault,
+  integrationUnavailableFailureCode,
+  subjectDefaultText,
+} from "@shared/contracts";
 import type { BlockOutput, IntegrationConnectionPin } from "@shared/contracts";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./support/types.js";
 import { isRunControlError } from "../helpers/run-control-error.js";
@@ -46,6 +52,13 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
   }
 
   const { runIntegrationBlockStep } = await import("../steps/integration-block-step.js");
+  const { integrationRunState, runSubjectKey, stateOf } = await import(
+    "../support/integration-run-state.js"
+  );
+  const inputs = withSubjectDefaults(entry.block, resolvedInputs, ctx.ticket);
+  if (!inputs.ok) {
+    return executionError(inputs.message, { category: "configuration", message: inputs.message });
+  }
   const pin = pinFor(ctx.integrationPins, entry.integrationId);
   const llm = ctx.integrationLlmDefaults;
   if (!llm) {
@@ -57,17 +70,28 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
       { category: "engine" },
     );
   }
+  // Created at the run's first use of this integration, whether that use is
+  // this block or a sandbox it traces, and never for any other integration.
+  const runState = await integrationRunState(ctx, entry.integrationId);
+  if (runState.status === "unreadable") {
+    // Nothing was asked of the integration, so it is not the one to blame, and
+    // nothing was remembered, so a retry of the run asks again.
+    const message = `${entry.block.ui.label} could not start: this run could not read the deployment's integration settings (${runState.reason}). Nothing was asked of the integration; retry the run.`;
+    return executionError(message, { category: "engine", message });
+  }
   try {
     const result = await runIntegrationBlockStep({
       integrationId: entry.integrationId,
       blockType: block.type,
       pin,
       configuration: block.params,
-      inputs: resolvedInputs,
+      inputs: inputs.values,
       run: {
         runId: ctx.runId,
         nodeId: block.id,
         attempt: execution?.attempt ?? 1,
+        subjectKey: runSubjectKey(ctx),
+        state: stateOf(runState),
       },
       llm,
     });
@@ -103,6 +127,38 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
     });
   }
 };
+
+/**
+ * The block's inputs with every unbound one that names a default filled from
+ * the run's ticket, or the reason it cannot be.
+ *
+ * Bound means present in `resolvedInputs`, even when the binding resolved to
+ * nothing: an author who bound a value chose that value, and a default quietly
+ * standing in for it would screen, or send, something they did not pick. An
+ * unbound input whose ticket fields are all empty is refused here rather than
+ * handed on as an empty string the block would have to guess about.
+ */
+function withSubjectDefaults(
+  block: IntegrationBlockManifest,
+  resolvedInputs: Readonly<Record<string, unknown>>,
+  ticket: Parameters<typeof subjectDefaultText>[1] | null | undefined,
+): { ok: true; values: Record<string, unknown> } | { ok: false; message: string } {
+  const values: Record<string, unknown> = { ...resolvedInputs };
+  for (const [name, input] of Object.entries(block.inputs ?? {})) {
+    const fields = input.defaultFromSubject;
+    if (!fields || fields.length === 0) continue;
+    if (Object.prototype.hasOwnProperty.call(resolvedInputs, name)) continue;
+    const text = ticket ? subjectDefaultText(fields, ticket) : "";
+    if (text.length === 0) {
+      return {
+        ok: false,
+        message: `${block.ui.label} reads "${name}" from ${describeSubjectDefault(fields)} when nothing is bound, and this run's ticket has none of them. Bind "${name}" to the text it should use.`,
+      };
+    }
+    values[name] = text;
+  }
+  return { ok: true, values };
+}
 
 function pinFor(
   pins: readonly IntegrationConnectionPin[] | undefined,

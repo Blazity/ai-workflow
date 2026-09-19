@@ -37,36 +37,10 @@ export interface KpisResponse {
   cost24h: { value: number; deltaPct: number } | null;
 }
 
-export type EvalHealthResponse =
-  | {
-      available: true;
-      score: number;
-      pass: number;
-      warn: number;
-      fail: number;
-      spansGraded: number;
-      windowHours: number;
-    }
-  | { available: false; reason: string };
-
-export type EvalsResponse =
-  | {
-      available: true;
-      generatedAt: string;
-      windowHours: number;
-      /** continuous_eval_success_rate × 100, fleet-wide. */
-      score: number;
-      /** Σ eval_count across tasks — "spans graded" in the window. */
-      spansGraded: number;
-      /** Σ trace_count across tasks. */
-      traceCount: number;
-    }
-  | { available: false; generatedAt: string; reason: string };
-
 export interface CostByWorkflowEntry {
-  /** Arthur task_id (per ticket-run, e.g. "AWT-42" / "AWT-42.1"). */
+  /** The workflow definition the runs belong to. */
   taskId: string;
-  /** Arthur task name (= the ticket-run identifier). */
+  /** That definition's name, or its id when the name is gone. */
   name: string;
   /** trace_count for the task. */
   runs: number;
@@ -81,8 +55,8 @@ export interface CostByWorkflowEntry {
 export interface CostResponse {
   generatedAt: string;
   /**
-   * false when Arthur is unconfigured/unreachable or returns nothing. The
-   * screen renders its empty/N-A state.
+   * false when the window holds no runs, or when the figures could not be
+   * read. The screen renders its empty/N-A state.
    */
   available: boolean;
   /** Window the figures cover (month-to-date). ISO. */

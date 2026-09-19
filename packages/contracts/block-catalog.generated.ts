@@ -43,7 +43,6 @@ export interface BlockManifest extends Omit<BlockCatalogEntry, "additionalInputs
 }
 
 export type WorkflowBlockType =
-  | "arthur_injection_check"
   | "branch"
   | "call_llm"
   | "complete_pr_check"
@@ -84,21 +83,6 @@ export type WorkflowBlockType =
   | "update_ticket_status";
 
 export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
-  arthur_injection_check: {
-    contract: {"category":"action","ports":["out"],"allowsFailurePort":true},
-    ui: {"group":"arthur","label":"Prompt injection check","description":"Scans untrusted content with the optional Arthur Engine integration.","glyph":"◬","color":"#8b6f8f","softColor":"#F3F0F4"},
-    defaults: {},
-    inputs: {
-      "content": {
-        "required": false,
-        "schema": {
-          "type": "string"
-        }
-      }
-    },
-    additionalInputs: [],
-    execution: "map",
-  },
   branch: {
     contract: {"category":"control","ports":["true","false"],"allowsFailurePort":false},
     ui: {"group":"control","label":"Branch","description":"Chooses one of two paths using the restricted condition language.","glyph":"⋔","color":"#35823f","softColor":"#E9F3EA"},
@@ -1129,7 +1113,6 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
 };
 
 export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
-  arthur_injection_check: BLOCK_CATALOG.arthur_injection_check.contract,
   branch: BLOCK_CATALOG.branch.contract,
   call_llm: BLOCK_CATALOG.call_llm.contract,
   complete_pr_check: BLOCK_CATALOG.complete_pr_check.contract,

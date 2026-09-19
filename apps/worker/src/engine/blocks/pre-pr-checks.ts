@@ -128,8 +128,6 @@ export interface PrePrChecksOptions {
   budget?: PrePrFixBudgetContext;
   /** @deprecated As budget. */
   runtime?: ResolvedHarnessRuntime;
-  /** @deprecated As budget. */
-  arthurTaskId?: string | null;
 }
 
 /**

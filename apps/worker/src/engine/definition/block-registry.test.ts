@@ -29,7 +29,6 @@ const context: WorkflowBlockRegistryContext = {
   vcsProviders: ["github"],
   vcsBotIdentities: [],
   slackConfigured: false,
-  arthurConfigured: false,
   webhookTriggerConfigured: false,
   integrations: NO_INTEGRATIONS,
 };
@@ -547,10 +546,6 @@ describe("workflow block registry", () => {
     expect(registry.send_slack_message.availability).toEqual({
       available: false,
       unavailableReason: "Slack messaging is not configured.",
-    });
-    expect(registry.arthur_injection_check.availability).toEqual({
-      available: false,
-      unavailableReason: "Arthur Engine is not configured.",
     });
 
     for (const contract of Object.values(registry)) {

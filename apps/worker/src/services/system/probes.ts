@@ -118,8 +118,6 @@ export function configFromEnvironment(settings: SettingsSnapshot): SystemHealthC
     slackChannelId: env.CHAT_SDK_CHANNEL_ID,
     slackSigningSecret: env.SLACK_SIGNING_SECRET,
     slackAllowedUserIds: env.SLACK_ALLOWED_USER_IDS,
-    arthurApiKey: env.GENAI_ENGINE_API_KEY,
-    arthurTraceEndpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
     mcpEnabled: mcpSettings(settings).enabled,
     webhookTriggerEncryptionKey: env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
   };
@@ -260,23 +258,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
     probes["slack.channel"] = (signal) => slackChannelDeliveryResult(config, signal);
   }
 
-  if (config.arthurApiKey && config.arthurTraceEndpoint) {
-    probes["arthur.api"] = async (signal) => {
-      const baseUrl = config.arthurTraceEndpoint!
-        .replace(/\/api\/v1\/traces\/?$/, "")
-        .replace(/\/+$/, "");
-      const response = await fetch(`${baseUrl}/api/v2/tasks?page_size=1`, {
-        headers: {
-          Authorization: `Bearer ${config.arthurApiKey}`,
-          "ngrok-skip-browser-warning": "true",
-        },
-        signal,
-      }).catch(() => null);
-      if (!response?.ok) {
-        throw new PublicHealthProbeError("Arthur task API authentication failed.");
-      }
-    };
-  }
 
   if (config.mcpEnabled) {
     probes["mcp.contract"] = async () => {

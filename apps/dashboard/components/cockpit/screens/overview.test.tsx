@@ -118,7 +118,6 @@ function overviewData(liveRows: Run[], recentRows: Run[]): OverviewScreenData {
       errors24h: null,
       cost24h: null,
     },
-    evalHealth: { available: false, reason: "Unavailable" },
     liveRuns: { generatedAt: "2026-08-10T00:00:00.000Z", rows: liveRows },
     capacity: capacity(),
     recentRuns: {

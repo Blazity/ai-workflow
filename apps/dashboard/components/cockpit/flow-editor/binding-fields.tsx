@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  describeSubjectDefault,
   isSafeWorkflowInputName,
   type JsonSchema202012,
   type JsonValue,
@@ -175,6 +176,7 @@ function V2BindingEditor({
   availableValues,
   valuesRefreshing,
   required,
+  unboundLabel,
   canEdit,
   onChange,
 }: {
@@ -184,6 +186,8 @@ function V2BindingEditor({
   availableValues: WorkflowDataCatalogEntry[];
   valuesRefreshing: boolean;
   required: boolean;
+  /** What the empty choice says; an input with a default names where it comes from. */
+  unboundLabel?: string;
   canEdit: boolean;
   onChange: (binding: WorkflowInputBindingV2 | undefined) => void;
 }) {
@@ -238,7 +242,7 @@ function V2BindingEditor({
         className="min-w-0 w-full"
         triggerClassName="h-[28px] min-w-0 w-full px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-[11px] text-coal outline-none disabled:opacity-60"
         options={[
-          { value: "", label: required ? "Choose a value…" : "Not bound" },
+          { value: "", label: unboundLabel ?? (required ? "Choose a value…" : "Not bound") },
           { value: "reference", label: "Workflow value" },
           ...((acceptsReferenceList || binding?.kind === "reference_list")
             ? [{ value: "reference_list", label: "Workflow value list" }]
@@ -452,18 +456,30 @@ export function V2BindingFields({
           Choose a guaranteed workflow value or enter a literal.
         </p>
       </div>
-      {fixedInputs.map(([name, input]) => (
+      {fixedInputs.map(([name, input]) => {
+        const defaultFrom =
+          input.defaultFromSubject && input.defaultFromSubject.length > 0
+            ? describeSubjectDefault(input.defaultFromSubject)
+            : null;
+        return (
         <div key={name} className="border-b border-neutral-200 px-[14px] py-2.5">
           <div className="mb-1 flex items-center gap-1.5">
             <span className="font-mono text-[9px] tracking-[0.04em] text-neutral-700">
               {name}
             </span>
-            {input.required && (
+            {input.required && !defaultFrom && (
               <span className="font-mono text-[8px] uppercase tracking-[0.05em] text-red-700">
                 Required
               </span>
             )}
           </div>
+          {defaultFrom && !node.inputs[name] && (
+            // Said before the author picks anything, because an unbound input
+            // that still receives text is the case nobody would guess.
+            <p className="m-0 mb-1 font-body text-[11px] leading-[1.4] text-neutral-600">
+              Not bound, so it uses {defaultFrom}. Bind a value to use something else.
+            </p>
+          )}
           <V2BindingEditor
             inputName={name}
             binding={node.inputs[name]}
@@ -471,6 +487,7 @@ export function V2BindingFields({
             availableValues={availableValues}
             valuesRefreshing={valuesRefreshing}
             required={input.required}
+            {...(defaultFrom ? { unboundLabel: `From ${defaultFrom}` } : {})}
             canEdit={canEdit}
             onChange={(binding) => {
               const inputs = { ...node.inputs };
@@ -480,7 +497,8 @@ export function V2BindingFields({
             }}
           />
         </div>
-      ))}
+        );
+      })}
       {node.additionalInputs.map((input, index) => (
         <div key={`${input.name}-${index}`} className="border-b border-neutral-200 px-[14px] py-2.5">
           <div className="mb-1 flex items-center justify-between gap-2">

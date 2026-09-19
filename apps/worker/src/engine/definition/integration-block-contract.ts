@@ -106,6 +106,7 @@ function contractFor(
       // fields the block declared required.
       bindingSchema: objectSchema(properties, ["status", ...(block.output.required ?? [])]),
       statusVariants: [...block.output.statusVariants],
+      ...(block.output.mustRead?.length ? { mustRead: [...block.output.mustRead] } : {}),
     },
     availability,
   };

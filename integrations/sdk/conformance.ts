@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WORKFLOW_SUBJECT_FIELDS } from "@shared/contracts";
 import { INTEGRATION_CAPABILITIES } from "./capabilities";
 
 /**
@@ -30,10 +31,15 @@ export type ConformanceCode =
   | "block_params_schema_missing"
   | "block_params_schema_one_argument_record"
   | "block_executor_missing"
+  | "block_must_read_undeclared"
+  | "block_input_default_invalid"
   | "connection_test_missing"
   | "health_checks_missing"
   | "health_probe_missing"
   | "page_id_invalid"
+  | "page_reader_undeclared"
+  | "run_state_missing"
+  | "run_state_undeclared"
   | "implementation_undeclared"
   | "reserved_slot_used";
 
@@ -60,7 +66,6 @@ export const RESERVED_HEALTH_CHECK_ID = "connection";
  * integration comes to be allowed to take the name.
  */
 export const CORE_HEALTH_SECTION_IDS: readonly string[] = [
-  "arthur",
   "custom-webhooks",
   "dashboard-auth",
   "database",
@@ -207,7 +212,6 @@ const SNAKE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 const RESERVED_PAGE_IDS = new Set(["connection"]);
 const RESERVED_RUNTIME_SLOTS: Record<string, string> = {
   webhook: "S9, which designs webhook translation",
-  api: "S8, which designs the handlers an integration's pages read",
 };
 const CREDENTIAL_WORDS = new Set([
   "TOKEN",
@@ -265,6 +269,7 @@ const manifestSchema = z.object({
         properties: z.record(z.string(), z.unknown()),
         required: z.array(z.string()).optional(),
         statusVariants: z.array(text).min(1),
+        mustRead: z.array(z.string()).optional(),
       }),
       requires: z
         .object({ capabilities: z.array(z.string()).optional(), llm: z.boolean().optional() })
@@ -273,6 +278,7 @@ const manifestSchema = z.object({
   ),
   pages: z.array(z.object({ id: z.string(), label: text })),
   health: z.array(z.object({ id: text, label: text, description: text, critical: z.boolean() })),
+  runState: z.boolean().optional(),
 });
 
 type ParsedManifest = z.infer<typeof manifestSchema>;
@@ -311,7 +317,8 @@ export function checkIntegrationConformance(
   checkCapabilities(declared, implemented, report);
   checkBlocks(declared, implemented, report);
   checkHealth(declared, implemented, report);
-  checkPages(declared, report);
+  checkPages(declared, implemented, report);
+  checkRunState(declared, implemented, report);
   checkRuntimeSlots(implemented, report);
   return issues;
 }
@@ -450,7 +457,7 @@ function checkBlocks(manifest: ParsedManifest, runtime: Runtime, report: Report)
         `${path}.contract.ports`,
         `Block "${block.type}" declares ${JSON.stringify(block.contract.ports)}; an integration block has exactly one port named "out". ` +
           "The workflow graph reads ports from core's generated catalog, which holds no integration block, so it resolves every one of them to a single port named \"out\": a second port is offered in the editor, refused at publish as an unknown port, and propagates to nothing at run time. " +
-          "Stage S8 lifts this by teaching the graph a manifest's ports (ADR-010). Until then, branch downstream on the block's status output.",
+          "Until the graph learns a manifest's ports (ADR-010), branch downstream on the block's status output.",
       );
     }
     if (isZodSchema(block.paramsSchema)) {
@@ -467,6 +474,32 @@ function checkBlocks(manifest: ParsedManifest, runtime: Runtime, report: Report)
         `${path}.paramsSchema`,
         `Block "${block.type}" needs a params schema written with the z exported by @integrations/sdk.`,
       );
+    }
+    for (const [position, field] of (block.output.mustRead ?? []).entries()) {
+      if (field === "status" || Object.hasOwn(block.output.properties, field)) continue;
+      report(
+        "block_must_read_undeclared",
+        `${path}.output.mustRead[${position}]`,
+        `Block "${block.type}" says a graph must read "${field}", which its output does not declare. Name "status" or one of its output properties.`,
+      );
+    }
+    for (const [name, input] of Object.entries(block.inputs ?? {})) {
+      if (!isRecord(input) || input.defaultFromSubject === undefined) continue;
+      const fields = input.defaultFromSubject;
+      const schema = isRecord(input.schema) ? input.schema : {};
+      const known = new Set<unknown>(WORKFLOW_SUBJECT_FIELDS);
+      if (
+        !Array.isArray(fields) ||
+        fields.length === 0 ||
+        !fields.every((field) => known.has(field)) ||
+        schema.type !== "string"
+      ) {
+        report(
+          "block_input_default_invalid",
+          `${path}.inputs.${name}.defaultFromSubject`,
+          `Block "${block.type}" input "${name}" defaults to ${JSON.stringify(fields)}. A default names one or more of ${WORKFLOW_SUBJECT_FIELDS.join(", ")}, and only a text input can have one.`,
+        );
+      }
     }
     block.requires?.capabilities?.forEach((capability, position) => {
       checkCapabilityId(capability, `${path}.requires.capabilities[${position}]`, report);
@@ -534,7 +567,7 @@ function checkHealth(manifest: ParsedManifest, runtime: Runtime, report: Report)
   }
 }
 
-function checkPages(manifest: ParsedManifest, report: Report) {
+function checkPages(manifest: ParsedManifest, runtime: Runtime, report: Report) {
   const ids = new Set<string>();
   manifest.pages.forEach((page, index) => {
     const path = `pages[${index}].id`;
@@ -549,6 +582,42 @@ function checkPages(manifest: ParsedManifest, report: Report) {
     }
     ids.add(page.id);
   });
+  // A reader for a page nobody declared is code the cockpit can never reach,
+  // and the mistake is almost always a renamed page.
+  const readers = isRecord(runtime.api) ? runtime.api : {};
+  for (const key of Object.keys(readers)) {
+    if (ids.has(key)) continue;
+    report(
+      "page_reader_undeclared",
+      `runtime.api.${key}`,
+      `The runtime reads data for a page "${key}", which the manifest does not declare. A page with no tab is never rendered, so nothing would ever call it.`,
+    );
+  }
+}
+
+/**
+ * Run state is declared and served together. A manifest that declares it with
+ * no `beginRun` hands every use `null`, and a `beginRun` nobody declared is
+ * never called, so both halves fail here rather than at the first run that
+ * needed the handle.
+ */
+function checkRunState(manifest: ParsedManifest, runtime: Runtime, report: Report) {
+  const declared = manifest.runState === true;
+  const implemented = typeof runtime.beginRun === "function";
+  if (declared && !implemented) {
+    report(
+      "run_state_missing",
+      "runtime.beginRun",
+      "The manifest declares runState, so the runtime needs beginRun to create it. Without one every use of this integration in a run is handed null.",
+    );
+  }
+  if (!declared && implemented) {
+    report(
+      "run_state_undeclared",
+      "runtime.beginRun",
+      "The runtime has beginRun, which core calls only for a manifest that declares runState: true. Declare it, or delete the function.",
+    );
+  }
 }
 
 function checkRuntimeSlots(runtime: Runtime, report: Report) {

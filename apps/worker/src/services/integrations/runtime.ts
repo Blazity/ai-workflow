@@ -24,3 +24,7 @@ export {
 export { readIntegrationStates, secretsKeyMaterial } from "./authoring.js";
 
 export { environmentReaderFrom } from "./resolve.js";
+
+export { resolveUsableIntegrations, usableIntegrations } from "./usable.js";
+
+export { integrationSecretValues } from "./secret-values.js";

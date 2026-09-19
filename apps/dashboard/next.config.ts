@@ -10,7 +10,10 @@ const nextConfig: NextConfig = {
    * the product and what belongs to an integration without growing to fifteen
    * flat entries.
    *
-   * Permanent redirects rather than deleted routes: all three are in bookmarks,
+   * `/evals` moved into the area of the integration that serves it, because
+   * the screen reads what that integration reports and is its to show.
+   *
+   * Permanent redirects rather than deleted routes: all four are in bookmarks,
    * in Slack messages the worker posted, in runbooks and in the workflow
    * editor's older block panels, and a 404 there teaches nothing. Next carries
    * the query string across, and a fragment never reaches the server, so
@@ -21,6 +24,8 @@ const nextConfig: NextConfig = {
       { source: "/scripts", destination: "/repositories", permanent: true },
       { source: "/health", destination: "/settings/health", permanent: true },
       { source: "/users", destination: "/settings/users", permanent: true },
+      // Evals moved into the area of the integration that grades the runs.
+      { source: "/evals", destination: "/integrations/arthur/evals", permanent: true },
     ];
   },
 };

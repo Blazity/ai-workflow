@@ -44,6 +44,7 @@ import {
   validateWorkflowV2WorkspaceAccessIssues,
   workflowDefinitionIssue,
   workflowScheduleGraphIssues,
+  workflowUnreadOutputIssues,
   workflowValueReferenceIssues,
   type WorkflowBlockParamsSchemas,
   type WorkflowDeploymentIssueSource,
@@ -195,6 +196,19 @@ function workerDeploymentIssues(
     ),
     ...analysis.issues,
     ...workflowValueReferenceIssues(def, catalogAnalysis.catalogByNode),
+    // Publish only. A graph deployed before a block declared a field it must
+    // read keeps running; refusing it at run load would stop runs over a rule
+    // its author never saw, and the next publish is where they meet it.
+    ...(checkEnvironmentAvailability === false
+      ? []
+      : workflowUnreadOutputIssues(
+          def,
+          (node) =>
+            resolveContract(
+              node.type,
+              v2ConfigurationParams(node, blockParamsSchemas, resolvedHarnessProfiles),
+            ).output.mustRead ?? [],
+        )),
     ...validateWorkflowV2WorkspaceAccessIssues(def),
     ...repositoryScopePinIssues(def, configuredVcsProviders, { checkEnvironmentAvailability }),
   ];

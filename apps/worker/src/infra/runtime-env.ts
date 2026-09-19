@@ -77,12 +77,6 @@ export const env = createEnv({
       .default("https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"),
     CODEX_PRICING_TTL_MS: z.coerce.number().int().positive().default(3_600_000),
 
-    // Arthur AI Engine (optional: both required together). Enables the
-    // in-sandbox tracer and the prompt-injection check. One task per run is
-    // auto-created, so there is no static GENAI_ENGINE_TASK_ID.
-    GENAI_ENGINE_API_KEY: z.string().min(1).optional(),
-    GENAI_ENGINE_TRACE_ENDPOINT: z.string().url().optional(),
-
     // Remote MCP server
     MCP_SERVER_VERSION: z
       .string()

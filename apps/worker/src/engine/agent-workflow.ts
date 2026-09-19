@@ -68,6 +68,7 @@ import { resolveReviewFeedbackInput } from "./helpers/review-feedback.js";
 import { workspaceRepositoryAccess, type WorkspaceManifest, type WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
 import { ensureWorkspace, maybePromoteGenericAgentWorkspace, maybePromoteTicketWorkspaceWrites, promoteWorkspaceWrites, requiredAgentsForDefinition, researchDeclaredNoWritesGuard } from "./blocks/prepare-workspace/execute.js";
 import { prepareHarnessAgentInvocationStep } from "./blocks/agent-sandbox.js";
+import { agentTracingRun } from "./support/integration-run-state.js";
 import { recoverScriptDriftFromSteps } from "./blocks/finalize-workspace/execute.js";
 import { resolveCallLlmTarget } from "./blocks/call-llm/execute.js";
 import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
@@ -1303,9 +1304,7 @@ async function agentWorkflowBody(
         backlog: backlogMoveTarget(),
         aiReview: aiReviewMoveTarget(),
       },
-      arthur: {
-        taskId: null,
-      },
+      integrationRunStates: null,
       checksCeilingMs: null,
       prePrChecksFailureMessage,
       observeBudget: (requireRemainingDuration = true, attribution, observedAtMs?: number) =>
@@ -1586,8 +1585,9 @@ async function agentWorkflowBody(
             const { restoreClarificationSandboxStep } = await import(
               "./steps/clarification-snapshot-steps.js"
             );
-            const { ensureArthurTask, ensureChecksCeiling, sandboxLifetimeMs } =
-              await import("./blocks/prepare-workspace/execute.js");
+            const { ensureChecksCeiling, sandboxLifetimeMs } = await import(
+              "./blocks/prepare-workspace/execute.js"
+            );
             const requiredAgents = requiredAgentsForDefinition({
               nodes: plan.nodes,
               defaultKind: runDefaultKind,
@@ -1621,7 +1621,8 @@ async function agentWorkflowBody(
                 restoredCeilingMs,
               ),
               agents: requiredAgents,
-              arthurTaskId: await ensureArthurTask(ctx),
+              // No invocation: a restored sandbox is the run's, not one node's.
+              tracingRun: await agentTracingRun(ctx),
             });
             ctx.sandboxId = restored.sandboxId;
             invalidateWorkspaceGate(ctx);
@@ -2001,8 +2002,10 @@ async function agentWorkflowBody(
           sandboxId,
           ctx.runDefaultKind,
           defaultModel,
-          ctx.arthur.taskId,
-          { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG },
+          await agentTracingRun(ctx),
+          {
+            organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG,
+          },
         );
         if (!prepared.ok) return agentProtocolBlockError(prepared);
         const guard = await setCommitGuardStep(
@@ -2759,8 +2762,11 @@ async function agentWorkflowBody(
               sandboxId,
               kind,
               model,
-              ctx.arthur.taskId,
-              { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
+              await agentTracingRun(ctx, { nodeId: node.id, attempt: invocationAttempt }),
+              {
+                organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG,
+               runtime,
+              },
             );
             if (!researchRuntime.ok) {
               return agentProtocolBlockError(researchRuntime);
@@ -3300,8 +3306,11 @@ async function agentWorkflowBody(
                 sandboxId,
                 kind,
                 model,
-                ctx.arthur.taskId,
-                { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
+                await agentTracingRun(ctx, { nodeId: node.id, attempt: invocationAttempt }),
+                {
+                  organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG,
+                 runtime,
+                },
               );
             if (!implementationRuntime.ok) {
               return agentProtocolBlockError(implementationRuntime);
@@ -3512,7 +3521,7 @@ async function agentWorkflowBody(
               ownerToken: ctx.entry.ownerToken,
               agentKind: kind,
               model,
-              arthurTaskId: ctx.arthur.taskId,
+              tracingRun: await agentTracingRun(ctx, { nodeId: node.id, attempt: invocationAttempt }),
               jobTimeoutMs: ctx.settings.JOB_TIMEOUT_MS,
               runtime,
               // The session memory document lives outside the repository now, so
@@ -3562,8 +3571,11 @@ async function agentWorkflowBody(
                 sandboxId,
                 kind,
                 model,
-                ctx.arthur.taskId,
-                { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
+                await agentTracingRun(ctx, { nodeId: node.id, attempt: invocationAttempt }),
+                {
+                  organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG,
+                 runtime,
+                },
               );
               if (!reviewRuntime.ok) {
                 return agentProtocolBlockError(reviewRuntime);
@@ -3758,7 +3770,6 @@ async function agentWorkflowBody(
                   price: priceLookup?.(repairModel) ?? null,
                 },
                 runtime: repairRuntime,
-                arthurTaskId: ctx.arthur.taskId,
               });
             } catch (err) {
               if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;

@@ -84,7 +84,7 @@ to show that the code does what the code does, proves nothing.
 | INT-020 | Agent | Looks for a tool to connect, test, disable, disconnect or configure an integration | None exists; a guard test fails if one is added to the MCP catalog | S3 | |
 | INT-021 | ~~Agent acting for a member, any write~~ | | Withdrawn 2026-09-18: integration management is dashboard only and MCP covers what workflows can do (plan decision 15) | | |
 | INT-022 | Agent | Reads any MCP response after an integration was connected | No connection field, source detail or secret appears in any response | S3 | |
-| INT-023 | Anyone | Reads worker logs and run traces after any of the above | No secret value in any line | S2, S8 | apps/worker/src/services/integrations/authoring.test.ts "carry neither the token nor the envelope", "carry no token even when the provider echoed it back", apps/worker/src/services/integrations/resolve.test.ts "carries no secret value and no ciphertext" |
+| INT-023 | Anyone | Reads worker logs and run traces after any of the above | No secret value in any line | S2, S8 | apps/worker/src/services/integrations/authoring.test.ts "carry neither the token nor the envelope", "carry no token even when the provider echoed it back", apps/worker/src/services/integrations/resolve.test.ts "carries no secret value and no ciphertext"; S8 half (a key that reaches a sandbox): apps/worker/src/sandbox/agents/tracing.test.ts "puts no connection secret on a command line", integrations/arthur/worker.test.ts "the tracer's key is for its hooks, and never in the agent's own environment", apps/worker/src/sandbox/agents/tracing-adapters.test.ts "records no command that carries the key", "writes the key to the provider's hook file, mode 600, and nowhere the agent reads", apps/worker/src/engine/steps/clarification-snapshot-steps.test.ts "scrubs credentials, snapshots for seven days, and polls until the source stopped" |
 
 ## J3. Using an integration in workflows
 
@@ -110,7 +110,7 @@ to show that the code does what the code does, proves nothing.
 | INT-045 | Waiting person, the disabled integration is the issue tracker itself | Their run fails | The failure is visible in the run view and through MCP, and reaches them through messaging if that is connected, since the ticket comment cannot be posted | S4, S12 | |
 | INT-046 | Admin | Re-enables | Everything returns with the kept configuration; runs that failed stay failed and can be started again | S2, S6 | apps/worker/src/db/repositories/integrations.test.ts "keeps the stored values so re-enabling finds them", apps/worker/src/services/integrations/resolve.test.ts "shows Disabled over stored values";S6 half: prod: re-enabling returned the block to the palette with its stored values untouched |
 | INT-047 | ~~Agent, `integrations.set_enabled`~~ | | Withdrawn 2026-09-18: integration management is dashboard only and MCP covers what workflows can do (plan decision 15); the impact preview lives on the screen (INT-040) | | |
-| INT-048 | Admin | Disables Arthur while an agent session is being traced | The session already running keeps its tracer until the sandbox ends; the next agent start has no tracer and the run records that tracing was off | S8 | |
+| INT-048 | Admin | Disables Arthur while an agent session is being traced | The session already running keeps its tracer until the sandbox ends; the next agent start has no tracer and the run records that tracing was off | S8 | integrations/arthur/worker.test.ts "no task means no tracing, rather than tracing into nothing"; apps/worker/src/sandbox/agents/tracing.test.ts "leaves a provider whose install failed out"; a sandbox already running keeps the tracer it was configured with, which no test can observe: prod evidence in the S8 report |
 
 ## J5. Changing a connection (rotation, source, reconfiguration)
 
@@ -150,11 +150,11 @@ to show that the code does what the code does, proves nothing.
 
 | ID | Who, in what state | Does | Must see or must happen | Stage | Held by |
 |---|---|---|---|---|---|
-| INT-080 | Admin, Arthur connected | Opens the sidebar | Core groups, a separator, the Integrations page, then Arthur, whose area has Evals and Connection as tabs; never Arthur among core items, never Integrations inside Settings | S7, S8 | |
-| INT-081 | Member, Arthur connected | Opens Arthur, Evals | Reads the page; no settings controls | S7, S8 | |
+| INT-080 | Admin, Arthur connected | Opens the sidebar | Core groups, a separator, the Integrations page, then Arthur, whose area has Evals and Connection as tabs; never Arthur among core items, never Integrations inside Settings | S7, S8 | prod: the S8 report's production steps (the sidebar is S7's, the section and its tabs arrive from Arthur's manifest) |
+| INT-081 | Member, Arthur connected | Opens Arthur, Evals | Reads the page; no settings controls | S7, S8 | prod: the S8 report's production steps |
 | INT-082 | Anyone with a bookmark to Arthur's page, Arthur disabled | Opens it | A page saying Arthur is disabled with a link to its card, not a 404 and not an empty chart | S7 | |
 | INT-083 | ~~Agent, `arthur.evals_summary`~~ | | Withdrawn 2026-09-18: integration management is dashboard only and MCP covers what workflows can do (plan decision 15); whether read-only integration data may come back is an open question to Jakub | | |
-| INT-084 | Admin on a phone | Opens Arthur, Evals | Styled like the rest of the product and usable at phone width | S7, S8 | |
+| INT-084 | Admin on a phone | Opens Arthur, Evals | Styled like the rest of the product and usable at phone width | S7, S8 | prod: the S8 report's production steps |
 
 ## J9. Health
 
@@ -172,8 +172,8 @@ to show that the code does what the code does, proves nothing.
 | INT-100 | Waiting person | A run starts for a workflow whose integration is disconnected | The run fails at start with `integration_unavailable`, reason `disconnected`, the integration named in the run view and the ticket comment | S4 | |
 | INT-101 | Waiting person | Token rotated during their run | The run continues | S2, S4 | S2 half: apps/worker/src/services/integrations/resolve.test.ts "follows a rotated secret: the fingerprint does not move"; the run half is S4 |
 | INT-102 | Waiting person | Provider outage during their run | A typed provider failure naming the integration, distinct from `integration_unavailable` | S4 | |
-| INT-103 | Waiting person, workflow with Arthur's injection check | A flagged prompt | The run stops at the check with a typed verdict; never `skipped` | S8 | |
-| INT-104 | Waiting person, parked run (waiting for a clarification) across a deploy that moved a step | Answers the clarification | Either the run resumes, or it was cancelled before the deploy with a comment telling them to start again; never silence | S8 to S12, R1 | |
+| INT-103 | Waiting person, workflow with Arthur's injection check | A flagged prompt | The run stops at the check with a typed verdict; never `skipped` | S8 | integrations/arthur/worker.test.ts "a clean prompt with a rule evaluated is ok, and a failed rule is flagged", "a validation that evaluated no rule is flagged, never ok", "no task on the engine refuses rather than reporting content clean", "nothing bound to screen is a refusal, not a clean verdict"; the verdict has no `skipped` variant left to report (integrations/arthur/manifest.ts statusVariants); unbound content screens the ticket's description and comments: apps/worker/src/engine/blocks/integration-block.test.ts "fills an unbound input from the ticket exactly as the block declared", "refuses, naming the input and the fields, when the ticket holds none of them"; a verdict nothing reads cannot be published: apps/worker/src/engine/definition/integration-screen-publish.test.ts "refuses to publish a graph where nothing reads it, naming the node and the way out" |
+| INT-104 | Waiting person, parked run (waiting for a clarification) across a deploy that moved a step | Answers the clarification | Either the run resumes, or it was cancelled before the deploy with a comment telling them to start again; never silence | S8 to S12, R1 | S8 half: the drain is total (ADR-010, "The drain for this stage is total"): every running, awaiting or parked run on production and demo is finished or cancelled with a Jira comment before the merge, because the removed ensure-task step sits in every run that reached a sandbox; the guard tests apps/worker/src/engine/workflow-import-boundary.test.ts and step-registration-coverage.test.ts hold the rest |
 
 ## J11. Events from providers
 

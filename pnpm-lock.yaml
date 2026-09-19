@@ -349,6 +349,37 @@ importers:
         specifier: 'catalog:'
         version: 5.9.3
 
+  integrations/arthur:
+    dependencies:
+      '@integrations/host-ui':
+        specifier: workspace:*
+        version: link:../host-ui
+      '@integrations/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.2.15
+      react:
+        specifier: 'catalog:'
+        version: 19.2.4
+      react-test-renderer:
+        specifier: 'catalog:'
+        version: 19.2.4(react@19.2.4)
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      zod4:
+        specifier: 'catalog:'
+        version: zod@4.3.6
+
   integrations/host-ui:
     dependencies:
       '@integrations/sdk':

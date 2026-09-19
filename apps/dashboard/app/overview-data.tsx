@@ -8,7 +8,6 @@ import {
 import { OverviewMobileScreen } from "@/components/cockpit/mobile/screens/overview-mobile";
 import type {
   KpisResponse,
-  EvalHealthResponse,
   LiveRunsResponse,
   DispatchCapacityResponse,
   RunsResponse,
@@ -16,7 +15,6 @@ import type {
 } from "@shared/contracts";
 import {
   kpisFallback,
-  evalHealthFallback,
   recentRunsFallback,
   liveRunsFallback,
   dispatchCapacityFallback,
@@ -44,14 +42,11 @@ export async function OverviewData({ window }: { window: TimeWindow }) {
   const now = new Date().toISOString();
 
   // Window scopes the historical aggregates (KPIs, recent runs, workflows).
-  // Eval-health (Arthur) and live runs (registry) are not windowed here.
-  const [kpis, evalHealth, recentRuns, liveRuns, capacity, workflows] =
+  // Live runs (registry) are not windowed here.
+  const [kpis, recentRuns, liveRuns, capacity, workflows] =
     await Promise.all([
       getJSON<KpisResponse>(withQuery("/api/v1/overview/kpis", { window })).catch(
         (e) => authAwareFallback(e, () => kpisFallback(now)),
-      ),
-      getJSON<EvalHealthResponse>("/api/v1/overview/eval-health").catch(
-        (e) => authAwareFallback(e, () => evalHealthFallback()),
       ),
       getJSON<RunsResponse>(withQuery("/api/v1/runs", { window })).catch((e) =>
         authAwareFallback(e, () => recentRunsFallback(now)),
@@ -86,7 +81,6 @@ export async function OverviewData({ window }: { window: TimeWindow }) {
 
   const data: OverviewScreenData = {
     kpis: mergedKpis,
-    evalHealth,
     liveRuns: reconcileOverviewLiveRuns(recentRuns, liveRuns),
     capacity,
     recentRuns,

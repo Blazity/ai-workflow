@@ -258,7 +258,6 @@ const GROUP_ORDER = [
   "vcs",
   "human",
   "utility",
-  "arthur",
 ] as const;
 
 const GROUP_LABELS: Record<string, string> = {
@@ -270,7 +269,6 @@ const GROUP_LABELS: Record<string, string> = {
   vcs: "Version control",
   human: "Human",
   utility: "Utility",
-  arthur: "Arthur",
 };
 
 function paletteDefaults(

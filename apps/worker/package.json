@@ -27,7 +27,6 @@
     "check:prompt-drift": "tsx src/services/workflow-definitions/builtin-prompt-drift-gate.ts",
     "check:carry-schema-drift": "tsx src/services/workflow-definitions/carry-schema-drift-gate.ts",
     "check:retired-env": "tsx scripts/check-retired-env.ts",
-    "build:arthur-tracer": "node scripts/build-arthur-tracer.mjs",
     "test:e2e": "pnpm test:e2e:agent && pnpm test:e2e:orchestration && pnpm test:e2e:capacity",
     "test:e2e:agent": "vitest run --config e2e/vitest.e2e.config.ts --project agent",
     "test:e2e:orchestration": "vitest run --config e2e/vitest.e2e.config.ts --project orchestration",

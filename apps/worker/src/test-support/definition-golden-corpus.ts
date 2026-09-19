@@ -50,7 +50,6 @@ const fullContext: WorkflowBlockRegistryContext = {
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
   integrations: NO_INTEGRATIONS,
 };
@@ -64,7 +63,6 @@ const bareContext: WorkflowBlockRegistryContext = {
   vcsProviders: [],
   vcsBotIdentities: [],
   slackConfigured: false,
-  arthurConfigured: false,
   webhookTriggerConfigured: false,
   integrations: NO_INTEGRATIONS,
 };

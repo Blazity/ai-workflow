@@ -41,8 +41,6 @@ export type SystemHealthConfig = {
   slackChannelId?: string;
   slackSigningSecret?: string;
   slackAllowedUserIds?: string;
-  arthurApiKey?: string;
-  arthurTraceEndpoint?: string;
   mcpEnabled: boolean;
   webhookTriggerEncryptionKey?: string;
 };
@@ -249,7 +247,6 @@ function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[]
       : slackHasAnyConfig
         ? "misconfigured"
         : "mock";
-  const arthurMode = groupedMode([config.arthurApiKey, config.arthurTraceEndpoint]);
   const agentMode: SystemHealthMode =
     config.agentKind === "claude"
       ? requiredMode([config.anthropicApiKey, config.anthropicModel])
@@ -296,9 +293,6 @@ function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[]
       checked("bot-auth", "Bot authentication", ["CHAT_SDK_SLACK_TOKEN"], slackBotMode, true),
       checked("channel", "Configured channel delivery", ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"], slackChannelMode, true),
       checked("webhook-delivery", "Slash command signature", ["SLACK_SIGNING_SECRET", "SLACK_ALLOWED_USER_IDS"], optionalValueMode(config.slackSigningSecret), false, "local-observation"),
-    ]),
-    integration("arthur", "Arthur AI Engine", "platform", false, [
-      checked("api", "Task API", ["GENAI_ENGINE_API_KEY", "GENAI_ENGINE_TRACE_ENDPOINT"], arthurMode, true),
     ]),
     integration("mcp", "Remote MCP", "platform", false, [
       checked("contract", "Published tool contract", ["MCP_ENABLED"], config.mcpEnabled ? "configured" : "not-configured", true),

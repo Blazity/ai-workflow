@@ -16,8 +16,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
     GITLAB_TOKEN: "gitlab-token",
     CHAT_SDK_SLACK_TOKEN: "slack-token",
     CHAT_SDK_CHANNEL_ID: "channel",
-    GENAI_ENGINE_API_KEY: "arthur-key",
-    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
   },
 }));
 

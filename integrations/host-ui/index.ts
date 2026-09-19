@@ -28,10 +28,12 @@
  *   own elements, and writes its own Tailwind classes, arbitrary values
  *   included, on those. Redressing a primitive is how two screens come to
  *   disagree about what a card looks like.
- * - **No session, no data access, no client in the props.** A page is a Server
- *   Component in the cockpit's own process, so this is a contract rather than
- *   a sandbox: see `IntegrationPageProps` for what that means and for the
- *   imports the boundaries gate refuses.
+ * - **No session and no client in the props.** A page reads its provider
+ *   through its own package's reader, which the host resolves on the server
+ *   and hands over as `data`; it gets no database handle, no session and no
+ *   client of ours. This is a contract rather than a sandbox: see
+ *   `IntegrationPageProps` for what that means and for the imports the
+ *   boundaries gate refuses.
  */
 export {
   defineIntegrationDashboard,
@@ -40,6 +42,7 @@ export {
   type IntegrationDashboard,
   type IntegrationDashboardPages,
   type IntegrationPageComponent,
+  type IntegrationPageData,
   type IntegrationPageProps,
 } from "./contract";
 

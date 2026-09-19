@@ -21,6 +21,7 @@ import type {
   IntegrationBlockManifest,
   IntegrationManifest,
 } from "@integrations/sdk";
+import type { IntegrationRunState } from "@integrations/sdk";
 import type { IntegrationConnectionPin, IntegrationUnavailableReason } from "@shared/contracts";
 
 /** Comfortably under the 300 s a plain function is killed at. */
@@ -34,7 +35,21 @@ export interface IntegrationBlockStepInput {
   readonly pin: IntegrationConnectionPin | null;
   readonly configuration: Record<string, unknown>;
   readonly inputs: Record<string, unknown>;
-  readonly run: { readonly runId: string; readonly nodeId: string; readonly attempt: number };
+  readonly run: {
+    readonly runId: string;
+    readonly nodeId: string;
+    readonly attempt: number;
+    /** What the run is about, from `runSubjectKey` and nowhere else. */
+    readonly subjectKey: string;
+    /**
+     * This integration's per-run state, created at the run's first use of it
+     * (see `integration-run-state-step.ts`). Null when the integration
+     * declares none, and when creating it failed: a block that cannot work
+     * without the handle refuses rather than reporting a result nothing
+     * produced, which is what makes the injection check fail closed.
+     */
+    readonly state: IntegrationRunState | null;
+  };
   /** The run's default model, for a block that declared `requires.llm`. */
   readonly llm: { readonly provider: "claude" | "codex"; readonly model: string };
 }

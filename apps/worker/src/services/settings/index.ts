@@ -13,7 +13,6 @@ export {
   dashboardOrganizationSettings,
   dashboardOrigin,
   deploymentSettings,
-  evaluationTraceSettings,
   maxConcurrentAgents,
   mcpSettings,
   ssoSettings,

@@ -32,8 +32,6 @@ const environment = vi.hoisted(() => ({
   CHAT_SDK_CHANNEL_ID: "C123",
   SLACK_SIGNING_SECRET: "slack-signing",
   SLACK_ALLOWED_USER_IDS: "U1,U2",
-  GENAI_ENGINE_API_KEY: "arthur-key",
-  GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/api/v1/traces",
   MCP_ENABLED: true,
   WEBHOOK_TRIGGER_ENCRYPTION_KEY: "a".repeat(64),
 }));
@@ -144,8 +142,6 @@ describe("deployment system-health probes", () => {
       slackChannelId: environment.CHAT_SDK_CHANNEL_ID,
       slackSigningSecret: environment.SLACK_SIGNING_SECRET,
       slackAllowedUserIds: environment.SLACK_ALLOWED_USER_IDS,
-      arthurApiKey: environment.GENAI_ENGINE_API_KEY,
-      arthurTraceEndpoint: environment.GENAI_ENGINE_TRACE_ENDPOINT,
       mcpEnabled: environment.MCP_ENABLED,
       webhookTriggerEncryptionKey: environment.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
     });
@@ -182,7 +178,6 @@ describe("deployment system-health probes", () => {
       "email.sender",
       "slack.bot-auth",
       "slack.channel",
-      "arthur.api",
       "mcp.contract",
       "agent.model",
     ]) {

@@ -9,12 +9,14 @@
  * directive is unused and the typecheck fails.
  */
 import {
+  AGENT_TRACING_DIR_TOKEN,
   defineIntegration,
   defineIntegrationBlock,
   defineIntegrationRuntime,
   FatalError,
   IssueTrackerNotFoundError,
   z,
+  type AgentTracingAdapter,
   type ConnectionValues,
   type IntegrationBlockContext,
   type IntegrationBlockManifest,
@@ -30,7 +32,8 @@ import {
   type VCSAdapter,
   type VcsRepositoryTarget,
 } from "./index";
-import { fixtureManifest, pingBlock, researchBlock } from "./fixture-manifest";
+import type { JsonValue } from "@shared/contracts";
+import { fixtureManifest, otelFixtureManifest, pingBlock, researchBlock } from "./fixture-manifest";
 
 type FixtureManifest = typeof fixtureManifest;
 type FixtureContext = IntegrationContext<FixtureManifest>;
@@ -206,6 +209,36 @@ async function probe(ctx: IntegrationContext<FixtureManifest>, path: string) {
     : { status: "down" as const, message: `The provider answered ${response.status}.` };
 }
 
+/**
+ * What the sandbox needs so this provider sees the agent: its own tracer
+ * script, the packages the script imports, the bucket it reports into, and a
+ * hook on each moment the harness offers. Nothing here knows how a harness
+ * registers a hook; core does that.
+ */
+function fixtureTracing(ctx: FixtureContext): AgentTracingAdapter {
+  return {
+    setup: (invocation) => {
+      const bucketId = invocation.state?.bucketId;
+      if (typeof bucketId !== "string") return null;
+      return {
+        packages: [{ ecosystem: "python", name: "opentelemetry-sdk", minVersion: "1.20.0" }],
+        files: [
+          { path: "tracer.py", contentBase64: "cHJpbnQoIjopIikK", executable: true },
+        ],
+        // The token is for the hooks, so the agent never has it.
+        hookEnvironment: {
+          SDKFIXTURE_BUCKET: bucketId,
+          SDKFIXTURE_TOKEN: ctx.connection.apiToken,
+        },
+        hooks: [
+          { event: "prompt_submitted", command: `python3 "${AGENT_TRACING_DIR_TOKEN}/tracer.py" prompt` },
+          { event: "session_ended", command: `python3 "${AGENT_TRACING_DIR_TOKEN}/tracer.py" stop` },
+        ],
+      };
+    },
+  };
+}
+
 const definition: IntegrationRuntimeDefinition<FixtureManifest> = {
   testConnection: async (ctx) => {
     const response = await ctx.http.fetch(new URL("/me", ctx.connection.baseUrl), {
@@ -217,6 +250,7 @@ const definition: IntegrationRuntimeDefinition<FixtureManifest> = {
     return { ok: false, reason: await response.text() };
   },
   capabilities: {
+    agent_tracing: fixtureTracing,
     issue_tracker: (ctx) => new FixtureTracker(ctx),
     vcs: (ctx, repository) => new FixtureRepository(ctx, repository),
     messaging: fixtureMessaging,
@@ -270,9 +304,65 @@ const definition: IntegrationRuntimeDefinition<FixtureManifest> = {
     auth: (ctx) => probe(ctx, "/me"),
     webhook: (ctx) => probe(ctx, "/webhooks/last"),
   },
+  // Created once for the run, because this provider numbers a second bucket
+  // for the same name rather than returning the first.
+  beginRun: async (start, ctx) => {
+    const created = (await readJson(ctx, "/buckets", {
+      method: "POST",
+      body: JSON.stringify({ name: start.subjectKey }),
+    })) as { id: string };
+    return { bucketId: created.id };
+  },
+  api: {
+    overview: async (ctx) => {
+      const body = (await readJson(ctx, "/overview")) as { score: number };
+      return { score: body.score };
+    },
+  },
 };
 
 export const fixtureRuntime = defineIntegrationRuntime(fixtureManifest, definition);
+
+/**
+ * The foil's runtime: tracing with no run handle, no package, no file and no
+ * hook. If `agent_tracing` ever requires one of those, this stops compiling,
+ * which is the point of keeping it here rather than in a report nobody reruns.
+ */
+const otelDefinition: IntegrationRuntimeDefinition<typeof otelFixtureManifest> = {
+  testConnection: async (ctx) => {
+    const response = await ctx.http.fetch(new URL("/v1/traces", ctx.connection.endpoint), {
+      method: "HEAD",
+      headers: { authorization: `Bearer ${ctx.connection.apiKey}` },
+      signal: ctx.signal,
+    });
+    return response.ok ? { ok: true } : { ok: false, reason: `The collector answered ${response.status}.` };
+  },
+  capabilities: {
+    agent_tracing: (ctx) => ({
+      // The harness is the exporter here, so what it reads has to be in its
+      // own environment; the port's `hookEnvironment` is for a provider whose
+      // hooks do the exporting.
+      setup: (invocation) => ({
+        environment: {
+          OTEL_EXPORTER_OTLP_ENDPOINT: ctx.connection.endpoint,
+          OTEL_EXPORTER_OTLP_HEADERS: `authorization=Bearer ${ctx.connection.apiKey}`,
+          OTEL_RESOURCE_ATTRIBUTES: `aiw.run_id=${invocation.run.runId}`,
+        },
+      }),
+    }),
+  },
+  blocks: {},
+  health: {
+    collector: async (ctx) => {
+      const response = await ctx.http.fetch(new URL("/health", ctx.connection.endpoint), {
+        signal: ctx.signal,
+      });
+      return response.ok ? { status: "live" } : { status: "down", message: "The collector did not answer." };
+    },
+  },
+};
+
+export const otelFixtureRuntime = defineIntegrationRuntime(otelFixtureManifest, otelDefinition);
 
 // ---------------------------------------------------------------------------
 // What the types promise. Each alias fails to compile if the promise breaks.
@@ -297,6 +387,10 @@ type _FixturePromises = [
   Expect<Equal<ResearchContext["capabilities"]["issue_tracker"], IssueTrackerAdapter>>,
   // Params are the parsed zod output, defaults applied.
   Expect<Equal<Parameters<typeof definition.blocks.sdkfixture_research>[0]["params"]["lookbackDays"], number>>,
+  // A block is told what the run is about and what this integration's per-run
+  // state is, and the state is nullable: creating it can fail.
+  Expect<Equal<ResearchContext["run"]["subjectKey"], string>>,
+  Expect<Equal<ResearchContext["run"]["state"], Readonly<Record<string, JsonValue>> | null>>,
 ];
 
 // ---------------------------------------------------------------------------
@@ -313,6 +407,9 @@ type _ConnectionTestHasNoRun = IntegrationContext<FixtureManifest>["run"];
 
 // @ts-expect-error `llm` is block-only as well
 type _ConnectionTestHasNoLlm = IntegrationContext<FixtureManifest>["llm"];
+
+// @ts-expect-error `agent_tracing` is applied by core to a sandbox, so a block holds no adapter for it
+type _ResearchHasNoTracing = ResearchContext["capabilities"]["agent_tracing"];
 
 const _refusedManifests = {
   reservedCapability: () =>
@@ -331,7 +428,7 @@ const _refusedManifests = {
     defineIntegrationBlock({
       ...pingBlock,
       // @ts-expect-error a block may require only a capability that has a port
-      requires: { capabilities: ["agent_tracing"] },
+      requires: { capabilities: ["memory"] },
     }),
 };
 
@@ -368,6 +465,17 @@ const _refusedRuntimes = {
       ...definition.blocks,
       // @ts-expect-error the research block declared `summary` as always present in its output
       sdkfixture_research: async () => ({ kind: "next", output: { status: "found", matches: 0 } }),
+    },
+  }),
+  runStateWithoutBeginRun: (): IntegrationRuntimeDefinition<FixtureManifest> =>
+    // @ts-expect-error the manifest declares runState, so beginRun is required
+    ({ ...definition, beginRun: undefined }),
+  readerForUndeclaredPage: (): IntegrationRuntimeDefinition<FixtureManifest> => ({
+    ...definition,
+    api: {
+      ...definition.api,
+      // @ts-expect-error the manifest declares no page called "activity"
+      activity: async () => ({}),
     },
   }),
   undeclaredPort: (): IntegrationRuntimeDefinition<FixtureManifest> => ({

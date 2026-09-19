@@ -5,6 +5,7 @@ import type {
   IntegrationBlockManifest,
   IntegrationManifest,
 } from "./manifest";
+import type { IntegrationRunState } from "./run-state";
 
 /**
  * What an integration receives from core. It is the only thing it receives:
@@ -61,6 +62,20 @@ export interface IntegrationRunIdentity {
   readonly nodeId: string;
   /** 1 on the first attempt; higher when core retries the block. */
   readonly attempt: number;
+  /**
+   * What the run is about, the same value `beginRun` was given: the ticket
+   * key for a ticket run, and the identifier core gives a run with no ticket
+   * (see `IntegrationRunStart.subjectKey`).
+   */
+  readonly subjectKey: string;
+  /**
+   * This integration's per-run state (see `run-state.ts`), created at the first
+   * use of the integration in this run and the same value at every later one.
+   * `null` when the manifest declares no run state, and also when creating it
+   * failed: a block for which that makes the work impossible says so rather
+   * than reporting a result nothing produced.
+   */
+  readonly state: IntegrationRunState | null;
 }
 
 /** `ctx.connection`, typed from the manifest's fields. */
@@ -84,8 +99,16 @@ type RequiredCapabilityId<B extends IntegrationBlockManifest> = B extends {
   ? C & ProvidedCapabilityId
   : never;
 
+/**
+ * Only the capabilities a block can actually reach from inside itself. A block
+ * may require one it cannot hold (`agent_tracing` is applied by core to a
+ * sandbox, not called by a block), and then the requirement still decides
+ * whether the block is offered at all; it simply has no key here, so nothing
+ * can be called on it.
+ */
 type RequiredCapabilities<B extends IntegrationBlockManifest> = {
-  readonly [C in RequiredCapabilityId<B>]: IntegrationCapabilityAccess[C];
+  readonly [C in RequiredCapabilityId<B> &
+    keyof IntegrationCapabilityAccess]: IntegrationCapabilityAccess[C];
 };
 
 type LlmAccess<B extends IntegrationBlockManifest> = B extends {

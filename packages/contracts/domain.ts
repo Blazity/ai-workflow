@@ -478,6 +478,12 @@ export interface WorkflowBlockContract {
     /** Fields guaranteed when execution continues through a normal output port. */
     bindingSchema: WorkflowValueSchema;
     statusVariants: string[];
+    /**
+     * Output fields a published graph must read somewhere, because the block
+     * reports something the run has to act on (a screen's verdict) and a graph
+     * that never looks at it would carry on regardless. Absent means none.
+     */
+    mustRead?: string[];
   };
   availability: WorkflowBlockAvailability;
   /**

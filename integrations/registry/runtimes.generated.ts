@@ -8,5 +8,8 @@
  * re-exports it.
  */
 import type { ErasedIntegrationRuntime } from "@integrations/sdk";
+import { runtime as arthur } from "../arthur/worker";
 
-export const generatedIntegrationRuntimes: readonly ErasedIntegrationRuntime[] = [];
+export const generatedIntegrationRuntimes: readonly ErasedIntegrationRuntime[] = [
+  arthur,
+];

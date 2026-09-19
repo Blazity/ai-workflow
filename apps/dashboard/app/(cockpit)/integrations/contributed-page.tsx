@@ -3,6 +3,7 @@ import { integrationDashboardPages, loadIntegrationPage } from "@integrations/re
 
 import { CONNECTION_PAGE, integrationHref } from "@/lib/cockpit/navigation";
 import { readIntegrationsList } from "@/lib/integrations/list";
+import { readContributedPageData } from "@/lib/integrations/page-data";
 import { contributedPageOutcome } from "@/lib/integrations/presentation";
 
 /**
@@ -14,10 +15,10 @@ import { contributedPageOutcome } from "@/lib/integrations/presentation";
  * are plain data. The integration's own code is loaded after the decision, so
  * an integration nobody has connected contributes nothing that runs.
  *
- * The component is then handed the integration id and nothing else, which is
- * all its props carry; ADR-010 is honest about what a Server Component in our
- * process can still reach, and about the gate that keeps the obvious routes
- * shut.
+ * The component is then handed the integration id and what its own reader
+ * returned, which is all its props carry; ADR-010 is honest about what a Server
+ * Component in our process can still reach, and about the gate that keeps the
+ * obvious routes shut.
  */
 function AreaNotice({
   title,
@@ -86,5 +87,9 @@ export async function ContributedPage({ id, pageId }: { id: string; pageId: stri
       />
     );
   }
-  return <Contributed integrationId={id} />;
+  // Resolved before the page renders, through the integration's own reader.
+  // A page has no client of ours and no session, so this is the whole of what
+  // it can see beyond what its package ships.
+  const data = await readContributedPageData(id, pageId);
+  return <Contributed integrationId={id} data={data} />;
 }

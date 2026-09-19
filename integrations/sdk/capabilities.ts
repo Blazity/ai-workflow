@@ -1,3 +1,4 @@
+import type { AgentTracingAdapter } from "./agent-tracing";
 import type { IssueTrackerAdapter } from "./issue-tracker";
 import type { MessagingAdapter } from "./messaging";
 import type { VCSAdapter } from "./vcs";
@@ -21,8 +22,8 @@ export const INTEGRATION_CAPABILITIES = {
   messaging: { cardinality: "one", reservedFor: null },
   /** Designed in S13 against the built-in store and two external engines. */
   memory: { cardinality: "one", reservedFor: "S13" },
-  /** Designed in S8 from what Arthur's tracer hands to a sandbox today. */
-  agent_tracing: { cardinality: "many", reservedFor: "S8" },
+  /** Every connected provider watches every agent sandbox; see `agent-tracing.ts`. */
+  agent_tracing: { cardinality: "many", reservedFor: null },
   /** MCP servers handed to sandbox agents; waits for AIW-392, a later plan. */
   agent_tools: { cardinality: "many", reservedFor: "a later plan, after AIW-392" },
 } as const satisfies Record<
@@ -37,6 +38,7 @@ export interface IntegrationCapabilityPorts {
   issue_tracker: IssueTrackerAdapter;
   vcs: VCSAdapter;
   messaging: MessagingAdapter;
+  agent_tracing: AgentTracingAdapter;
 }
 
 /** A capability an integration may declare and implement today. */

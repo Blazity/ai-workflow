@@ -7,6 +7,18 @@ import type {
   AgentProtocolDiagnostic,
   AgentProtocolProvider,
 } from "@shared/contracts";
+import type { AgentTracingSetup } from "@integrations/sdk";
+
+/**
+ * One tracing provider's answer for one sandbox, resolved before the step that
+ * configures it ran. It holds whatever that provider asked for, a connection
+ * secret included: it reaches a sandbox through a written file, never a
+ * command line (ADR-010, decision 7).
+ */
+export interface AgentTracingPlan {
+  readonly integrationId: string;
+  readonly setup: AgentTracingSetup;
+}
 
 // Open union: "research" | "impl" | "review" remain the built-in phases, but
 // new block executors label phases freely (e.g. "fix", "agent-<blockId>").
@@ -447,18 +459,17 @@ export interface PhaseUsage {
 
 // --- Adapter contract ---
 
-interface ArthurConfig {
-  apiKey: string;
-  taskId: string;
-  endpoint: string;
-}
-
 export interface ConfigureOpts {
   anthropicApiKey?: string;
   codexApiKey?: string;
   codexChatGptOauthToken?: string;
   model: string;
-  arthur?: ArthurConfig;
+  /**
+   * What the connected tracing integrations asked this sandbox for, already
+   * resolved: core applies each plan and maps the moments a provider named to
+   * the hooks this harness has. Empty or absent when nothing is connected.
+   */
+  tracing?: readonly AgentTracingPlan[];
   /**
    * PR5 v2 profiles use an immutable, manifest-hash-addressed runtime. V1
    * omits this and retains its historical shared-home compatibility behavior.

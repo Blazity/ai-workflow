@@ -59,7 +59,6 @@ test("the product's groups come first, then a separator, then Integrations", (t)
     "Approvals",
     "Prompts",
     "Memory",
-    "Arthur evals",
     "Cost & usage",
     "Workflow editor",
     "Harness profiles",

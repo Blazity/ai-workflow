@@ -251,7 +251,6 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   send_slack_message: ["message", "sendOn"],
   send_plan_approval: ["mirrorComment"],
   human_question: ["questions", "suggestedAnswers"],
-  arthur_injection_check: [],
   leak_review: ["model", "llmScan", "maxDiffBytes"],
   branch: ["condition"],
   loop: ["maxAttempts", "onExhaust"],

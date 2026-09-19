@@ -79,7 +79,6 @@ function context(overrides: Partial<WorkflowBlockRegistryContext> = {}): Workflo
     vcsProviders: ["github"],
     vcsBotIdentities: ["github"],
     slackConfigured: true,
-    arthurConfigured: true,
     webhookTriggerConfigured: true,
     integrations: NO_INTEGRATIONS,
     ...overrides,

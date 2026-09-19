@@ -1,1 +1,25 @@
-[]
+[
+  {
+    "integration": "arthur",
+    "fields": [
+      {
+        "key": "apiKey",
+        "env": "GENAI_ENGINE_API_KEY",
+        "secret": true,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "traceEndpoint",
+        "env": "GENAI_ENGINE_TRACE_ENDPOINT",
+        "secret": false,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "url"
+      }
+    ]
+  }
+]

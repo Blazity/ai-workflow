@@ -166,7 +166,7 @@ export const scheduleOccurrences = pgTable(
  * text is append-only in prompt_library_versions, the same split
  * workflow_definitions uses. A prompt is archived (soft-deleted) via
  * archived_at; the partial unique index frees its name for reuse once archived.
- * Distinct from the read-only Arthur prompt registry served by /api/v1/prompts:
+ * Distinct from the read-only prompt registry served by /api/v1/prompts:
  * those are runtime agent prompts discovered from the codebase, these are
  * user-authored text blocks copied into workflow-definition block params.
  */

@@ -34,7 +34,6 @@ const registryContext: WorkflowBlockRegistryContext = {
   vcsProviders: ["github"],
   vcsBotIdentities: ["github"],
   slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
   integrations: NO_INTEGRATIONS,
 };

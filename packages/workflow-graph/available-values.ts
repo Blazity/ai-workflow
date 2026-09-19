@@ -1135,7 +1135,9 @@ function inputTargets(
   const targets: InputTarget[] = Object.entries(contract.inputs).map(([name, input]) => ({
     name,
     schema: input.schema,
-    required: input.required,
+    // A default from the run's ticket satisfies the input without a binding;
+    // the executor side fills it (and refuses when the ticket holds nothing).
+    required: input.required && (input.defaultFromSubject?.length ?? 0) === 0,
     binding: node.inputs[name],
     path: `/nodes/${nodeIndex}/inputs/${pointerSegment(name)}`,
   }));

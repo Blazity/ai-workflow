@@ -109,7 +109,6 @@ function deploymentIssues(
     vcsProviders: ["github"],
     vcsBotIdentities: ["github"],
     slackConfigured: true,
-    arthurConfigured: true,
     webhookTriggerConfigured: true,
     integrations,
   });
@@ -190,7 +189,6 @@ describe("a block type nobody can run", () => {
       vcsProviders: ["github"],
       vcsBotIdentities: ["github"],
       slackConfigured: true,
-      arthurConfigured: true,
       webhookTriggerConfigured: true,
       integrations: NO_INTEGRATIONS,
     });

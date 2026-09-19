@@ -25,16 +25,26 @@ import {
   AGENT_ENV_SHIM,
   installSkillsToAgentsDir,
 } from "./shared.js";
-import { ARTHUR_TRACER_PY_BASE64 } from "../arthur-tracer.js";
 import { buildCommitGuardCheckScript } from "./commit-guard.js";
 import { WORKSPACE_MANIFEST_PATH } from "../repo-workspace.js";
+import {
+  installTracingPlans,
+  tracingEnvironmentLines,
+  tracingHookCommands,
+  type HarnessHookEvents,
+} from "./tracing.js";
 
-const ARTHUR_HOOK_EVENTS: ReadonlyArray<readonly [string, string]> = [
-  ["UserPromptSubmit", "user_prompt_submit"],
-  ["PreToolUse", "pre_tool"],
-  ["PostToolUse", "post_tool"],
-  ["Stop", "stop"],
-];
+/**
+ * What this harness calls each moment a tracing provider can ask for. It has
+ * no hook for a failed tool call, so a provider that asked for one is given
+ * the other four rather than an error about a harness it never heard of.
+ */
+const CODEX_HOOK_EVENTS: HarnessHookEvents = {
+  prompt_submitted: "UserPromptSubmit",
+  tool_started: "PreToolUse",
+  tool_finished: "PostToolUse",
+  session_ended: "Stop",
+};
 
 const CODEX_PROTOCOL_EVENTS = new Set([
   "thread.started",
@@ -92,15 +102,10 @@ export class CodexAgentAdapter implements AgentAdapter {
         `export CODEX_ACCESS_TOKEN=${shellQuote(opts.codexChatGptOauthToken)}`,
       );
     }
-    // Arthur tracer runs as a hook subprocess; expose its env so it picks up
-    // config without depending on the discovery file paths.
-    if (opts.arthur) {
-      envLines.push(
-        `export GENAI_ENGINE_API_KEY=${shellQuote(opts.arthur.apiKey)}`,
-        `export GENAI_ENGINE_TASK_ID=${shellQuote(opts.arthur.taskId)}`,
-        `export GENAI_ENGINE_TRACE_ENDPOINT=${shellQuote(opts.arthur.endpoint)}`,
-      );
-    }
+    // What a tracing provider asked the agent itself to have. A provider's
+    // hook variables, its key among them, are in its own file instead, which
+    // only its hook commands source.
+    envLines.push(...tracingEnvironmentLines(opts.tracing ?? []));
     const envPath = opts.runtime?.envPath ?? AGENT_ENV_CODEX_PATH;
     await sandbox.writeFiles([
       { path: envPath, content: Buffer.from(envLines.join("\n") + "\n") },
@@ -181,10 +186,11 @@ export class CodexAgentAdapter implements AgentAdapter {
     ]);
     await requireProviderSetup(exclude, this.cliSpec, "Codex workspace exclusion setup");
 
-    // 7) Arthur tracer. Re-uses the Claude Code tracer; Codex traces will be
-    // labeled as "claude-code" in Arthur until a dedicated Codex tracer ships.
-    if (opts.arthur) {
-      await this.installArthurTracer(sandbox, opts.arthur, opts.runtime);
+    // 7) Whatever the connected tracing integrations asked for.
+    if (opts.tracing && opts.tracing.length > 0) {
+      const ready = await installTracingPlans(sandbox, opts.tracing, this.kind, opts.runtime);
+      const hooks = tracingHookCommands(ready, CODEX_HOOK_EVENTS);
+      if (hooks.length > 0) await this.mergeHooks(sandbox, { hooks }, opts.runtime);
     }
   }
 
@@ -543,17 +549,19 @@ touch ${paths.sentinel}
 
   private async mergeHooks(
     sandbox: RunnableSandbox,
-    opts: { commitGuard?: "enable" | "disable"; arthur?: "install" },
+    opts: {
+      commitGuard?: "enable" | "disable";
+      /** `[harness event, command]`, already resolved for this sandbox. */
+      hooks?: ReadonlyArray<readonly [string, string]>;
+    },
     runtime?: AgentRuntimePaths,
   ): Promise<void> {
     // Codex hooks.json shape (matches Claude's settings.json):
     //   { "hooks": { "Event": [ { "matcher": "...", "hooks": [{type,command}] } ] } }
-    const arthurEvents = JSON.stringify(ARTHUR_HOOK_EVENTS);
     const script = `
       import fs from 'node:fs';
       import path from 'node:path';
       const opts = ${JSON.stringify(opts)};
-      const arthurEvents = ${arthurEvents};
       const home = process.env.HOME;
       const cfgPath = path.join(home, '.codex', 'hooks.json');
       fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
@@ -577,10 +585,8 @@ touch ${paths.sentinel}
       if (opts.commitGuard === 'enable') upsert('Stop', '', 'bash $HOME/.codex/hooks/commit-guard.sh');
       else if (opts.commitGuard === 'disable') remove('Stop', c => c.includes('commit-guard.sh'));
 
-      if (opts.arthur === 'install') {
-        for (const [event, arg] of arthurEvents) {
-          upsert(event, '', 'python3 "$HOME/.codex/hooks/claude_code_tracer.py" ' + arg);
-        }
+      for (const [event, command] of opts.hooks || []) {
+        upsert(event, '', command);
       }
       fs.writeFileSync(cfgPath, JSON.stringify(s, null, 2));
     `;
@@ -596,53 +602,6 @@ touch ${paths.sentinel}
     await requireProviderSetup(merge, this.cliSpec, "Codex hooks setup");
   }
 
-  private async installArthurTracer(
-    sandbox: RunnableSandbox,
-    arthur: NonNullable<ConfigureOpts["arthur"]>,
-    runtime?: AgentRuntimePaths,
-  ): Promise<void> {
-    const { logger } = await import("../../infra/logger.js");
-    logger.info({ endpoint: arthur.endpoint, taskId: arthur.taskId, agent: this.kind }, "agent_install_arthur_started");
-
-    const pip = await sandbox.runCommand("bash", [
-      "-c",
-      withRuntimeHome(
-        runtime,
-        "python3 -m ensurepip --user && python3 -m pip install --user --quiet 'opentelemetry-sdk>=1.20.0' 'opentelemetry-exporter-otlp-proto-http>=1.20.0'",
-      ),
-    ]);
-    if (pip.exitCode !== 0) { logger.warn({}, "arthur_pip_install_failed"); return; }
-
-    const tracerBytes = Buffer.from(ARTHUR_TRACER_PY_BASE64, "base64");
-    await sandbox.writeFiles([{ path: "/tmp/arthur-tracer.py", content: tracerBytes }]);
-    const mvTracer = await sandbox.runCommand("bash", [
-      "-c",
-      withRuntimeHome(
-        runtime,
-        "mkdir -p $HOME/.codex/hooks && mv /tmp/arthur-tracer.py $HOME/.codex/hooks/claude_code_tracer.py && chmod +x $HOME/.codex/hooks/claude_code_tracer.py",
-      ),
-    ]);
-    if (mvTracer.exitCode !== 0) { logger.warn({}, "arthur_tracer_install_failed"); return; }
-
-    // The bundled tracer's discover_config() reads GENAI_ENGINE_* env vars
-    // first (wired via /tmp/agent-env.sh), then ~/.claude/arthur_config.json.
-    // Mirror the file at both ~/.claude and ~/.codex so file-discovery works
-    // regardless of how the hook subprocess is launched.
-    const configJson = JSON.stringify(
-      { api_key: arthur.apiKey, task_id: arthur.taskId, endpoint: arthur.endpoint }, null, 2,
-    );
-    await sandbox.writeFiles([{ path: "/tmp/arthur_config.json", content: Buffer.from(configJson) }]);
-    await sandbox.runCommand("bash", [
-      "-c",
-      withRuntimeHome(
-        runtime,
-        "mkdir -p $HOME/.claude $HOME/.codex && cp /tmp/arthur_config.json $HOME/.claude/arthur_config.json && mv /tmp/arthur_config.json $HOME/.codex/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json $HOME/.codex/arthur_config.json",
-      ),
-    ]);
-
-    await this.mergeHooks(sandbox, { arthur: "install" }, runtime);
-    logger.info({ agent: this.kind }, "agent_install_arthur_complete");
-  }
 }
 
 // --- module-private helpers ---

@@ -13,8 +13,6 @@ const state = vi.hoisted(() => ({
     GITLAB_TOKEN: undefined as string | undefined,
     CHAT_SDK_SLACK_TOKEN: undefined as string | undefined,
     CHAT_SDK_CHANNEL_ID: undefined as string | undefined,
-    GENAI_ENGINE_API_KEY: undefined as string | undefined,
-    GENAI_ENGINE_TRACE_ENDPOINT: undefined as string | undefined,
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",
   },
@@ -34,8 +32,6 @@ beforeEach(() => {
   state.env.GITLAB_TOKEN = undefined;
   state.env.CHAT_SDK_SLACK_TOKEN = undefined;
   state.env.CHAT_SDK_CHANNEL_ID = undefined;
-  state.env.GENAI_ENGINE_API_KEY = undefined;
-  state.env.GENAI_ENGINE_TRACE_ENDPOINT = undefined;
 });
 
 describe("fetchAvailableModels", () => {
@@ -223,11 +219,7 @@ describe("buildWorkflowEditorOptions", () => {
       available: false,
       unavailableReason: "Slack messaging is not configured.",
     });
-    expect(options.blockRegistry.arthur_injection_check.availability).toEqual({
-      available: false,
-      unavailableReason: "Arthur Engine is not configured.",
-    });
-    expect(Object.keys(options.blockRegistry)).toHaveLength(39);
+    expect(Object.keys(options.blockRegistry)).toHaveLength(38);
     expect(options.runBindingSchema).toMatchObject({
       type: "object",
       properties: {

@@ -21,7 +21,43 @@ import type { IntegrationManifest } from "@integrations/sdk";
 export interface IntegrationPageProps {
   /** The integration whose area this page is being rendered in. */
   readonly integrationId: string;
+  /**
+   * What this page's own reader returned, resolved on the server before the
+   * page rendered.
+   *
+   * This is the one thing a page is given besides its id, and it comes from
+   * the integration's own `worker` entry (`runtime.api[pageId]`), through the
+   * connection the deployment has: never our database, never our session. The
+   * host waits for it, so a page renders once rather than fetching on its own
+   * and leaving the cockpit with a spinner it cannot cancel.
+   *
+   * It is `unknown` because the registry erases a page's types, and the reader
+   * that produced it lives in a half of the package the dashboard entry may
+   * not import. The page wrote both ends, so it is the one that can read the
+   * value back; do it defensively, because a deployment can be a build behind.
+   */
+  readonly data: IntegrationPageData;
 }
+
+/**
+ * Three answers, kept apart because a person acts differently on each: the
+ * provider answered, the integration declared no reader for this page (a
+ * static page, and nothing is wrong), or we could not ask it. Collapsing the
+ * last two is how "nothing to show" comes to mean "your provider is down".
+ *
+ * "Could not ask" has three causes a reader acts on differently, so it says
+ * which: our own worker did not answer (ours to fix, nothing is known about
+ * the provider), the integration is not connected here (an admin connects
+ * it), or the provider was asked and failed (its reason, redacted).
+ */
+export type IntegrationPageData =
+  | { readonly status: "ok"; readonly value: unknown }
+  | { readonly status: "none" }
+  | {
+      readonly status: "unavailable";
+      readonly cause: "worker" | "not_connected" | "provider";
+      readonly reason: string;
+    };
 
 export type IntegrationPageComponent = ComponentType<IntegrationPageProps>;
 

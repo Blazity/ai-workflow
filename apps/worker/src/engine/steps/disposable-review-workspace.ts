@@ -1,3 +1,4 @@
+import type { AgentTracingRun } from "../support/integration-tracing.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { AgentProtocolResult } from "../../sandbox/agents/types.js";
 import type {
@@ -54,7 +55,8 @@ export interface ProvisionDisposableReviewWorkspaceInput {
   ownerToken: string;
   agentKind: AgentKind;
   model: string;
-  arthurTaskId: string | null;
+  /** The run as its tracing providers see it, with their states. */
+  tracingRun: AgentTracingRun;
   /** The run's job timeout, from the settings it started with. */
   jobTimeoutMs: number;
   runtime?: ResolvedHarnessRuntime;
@@ -343,14 +345,7 @@ export async function provisionDisposableReviewWorkspaceStep(
       }
     }
 
-    const arthur =
-      env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && input.arthurTaskId
-        ? {
-            apiKey: env.GENAI_ENGINE_API_KEY,
-            taskId: input.arthurTaskId,
-            endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-          }
-        : undefined;
+    const { agentTracingPlans } = await import("../support/integration-tracing.js");
     const adapter = createAgentAdapter(
       input.agentKind,
       input.runtime?.cliSpec,
@@ -365,7 +360,7 @@ export async function provisionDisposableReviewWorkspaceStep(
       await adapter.configure(sandbox, {
         ...runtimeCredentials,
         model: input.model,
-        arthur,
+        tracing: await agentTracingPlans({ harness: input.agentKind, run: input.tracingRun }),
       });
       // A review must never be prompted to commit. The filesystem policy below
       // is the enforcement boundary, while the detached bundle checkouts have

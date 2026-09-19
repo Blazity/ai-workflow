@@ -19,7 +19,7 @@ export default defineEventHandler(async (event): Promise<CostResponse> => {
   const generatedAt = new Date().toISOString();
   try {
     const data = await collectCostAggregate(getQuery(event).window, new Date());
-    // Empty window: documented empty state (matches the prior Arthur behaviour).
+    // Empty window: the documented empty state, so the screen says "no runs" rather than $0.
     return { generatedAt, available: data.totals.traceCount > 0, ...data };
   } catch (err) {
     // DB unreachable, degrade like the other collectors.

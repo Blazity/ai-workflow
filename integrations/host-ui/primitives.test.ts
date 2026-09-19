@@ -35,6 +35,7 @@ test("the package exports exactly the contract and the primitives", () => {
     "IntegrationDashboard",
     "IntegrationDashboardPages",
     "IntegrationPageComponent",
+    "IntegrationPageData",
     "IntegrationPageProps",
     "KeyValue",
     "KeyValueItem",

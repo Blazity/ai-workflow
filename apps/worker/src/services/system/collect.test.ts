@@ -167,8 +167,6 @@ describe("collectSystemHealth", () => {
         ssoClientId: "client",
         ssoClientSecret: "secret",
         ssoAllowedDomain: "example.com",
-        arthurApiKey: "arthur",
-        arthurTraceEndpoint: "https://arthur.example/api/v1/traces",
         mcpEnabled: true,
         webhookTriggerEncryptionKey: "k".repeat(64),
       },

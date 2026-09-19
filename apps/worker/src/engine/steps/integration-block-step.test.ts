@@ -126,7 +126,13 @@ function call(overrides: Partial<Parameters<typeof runIntegrationBlockStep>[0]> 
     pin: { integrationId: "acmenotify", configFingerprint: "site-one" },
     configuration: { channel: "releases" },
     inputs: {},
-    run: { runId: "run-1", nodeId: "announce", attempt: 1 },
+    run: {
+      runId: "run-1",
+      nodeId: "announce",
+      attempt: 1,
+      subjectKey: "AWT-42",
+      state: { taskId: "task-7" },
+    },
     llm: { provider: "claude", model: "claude-test" },
     ...overrides,
   });
@@ -160,7 +166,17 @@ describe("running an integration block", () => {
     ];
     expect(invocation.params).toEqual({ channel: "releases" });
     expect(invocation.inputs).toEqual({ message: "hi" });
-    expect(ctx.run).toEqual({ runId: "run-1", nodeId: "announce", attempt: 1 });
+    // What the run is about and this integration's per-run handle travel with
+    // the identity: a block that cannot work without the handle (a screen with
+    // nothing to screen against) can only refuse if it is handed one or told
+    // there is none.
+    expect(ctx.run).toEqual({
+      runId: "run-1",
+      nodeId: "announce",
+      attempt: 1,
+      subjectKey: "AWT-42",
+      state: { taskId: "task-7" },
+    });
     // Bounded, so a block that hangs reports a failure rather than letting the
     // invocation be killed with the run half done.
     expect(ctx.signal).toBeInstanceOf(AbortSignal);

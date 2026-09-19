@@ -14,6 +14,7 @@ import {
   configuredSecretValues,
   mcpSettings,
 } from "../services/settings/runtime-settings.js";
+import { integrationSecretValues } from "../services/integrations/secret-values.js";
 import { authorizeTool, policyFor } from "./policy.js";
 import {
   MCP_CONTRACT_HASH,
@@ -83,6 +84,15 @@ type ExecutionContext = {
   startedAt: Date;
   inputHash: string;
   idempotencyKeyHash: string | null;
+  /**
+   * What must never leave in a result: core's own credentials plus every
+   * connected integration's, resolved once per call. The integrations are
+   * read rather than listed, because their variable names belong to them and
+   * a stored connection has no variable at all. A provider's key can reach a
+   * result the long way round: it lives inside an agent sandbox, an agent can
+   * echo its own environment, and what it wrote is what a tool hands back.
+   */
+  secrets: string[];
 };
 
 // Node reports a transport failure as `TypeError: fetch failed` and puts the
@@ -221,6 +231,9 @@ async function rejectRateLimited(
 }
 
 async function prepare(context: ExecutionContext): Promise<void> {
+  // Resolved here rather than at every sanitize, so one call reads one set,
+  // and before anything runs, so a failure cannot leave a result unredacted.
+  context.secrets.push(...(await integrationSecretValues()));
   const policy = policyFor(context.toolName);
   // Cheapest guard first, and ahead of the attempted row on purpose: a caller
   // over its budget writes at most one row per window, so a flood of refused
@@ -253,7 +266,7 @@ function sanitize<T>(context: ExecutionContext, data: T): McpEnvelope<T> {
     traceId: context.deps.traceId,
     trust: "external_untrusted",
     maxBytes: mcpSettings(context.deps.settings).maxResultBytes,
-    secrets: configuredSecretValues(),
+    secrets: context.secrets,
   });
 }
 
@@ -280,6 +293,7 @@ export async function executeMcpRead<T>(input: {
       toolName: input.toolName,
     }),
     idempotencyKeyHash: null,
+    secrets: configuredSecretValues(),
   };
   await prepare(context);
 
@@ -330,6 +344,7 @@ export async function executeMcpMutation<T>(input: {
     startedAt,
     inputHash: input.payloadHash,
     idempotencyKeyHash: hashCanonicalJson(input.idempotencyKey),
+    secrets: configuredSecretValues(),
   };
   // Guarded rather than trusted, because "must be pure and must not throw" is a
   // docstring and not a mechanism. This runs in argument position on the audit

@@ -10,8 +10,11 @@
  * module of this package.
  */
 import type { IntegrationManifest } from "@integrations/sdk";
+import { manifest as arthur } from "../arthur/manifest";
 
-export const generatedIntegrationManifests: readonly IntegrationManifest[] = [];
+export const generatedIntegrationManifests: readonly IntegrationManifest[] = [
+  arthur,
+];
 
 /**
  * Which of the above are fixtures, generated in behind INTEGRATION_FIXTURES.

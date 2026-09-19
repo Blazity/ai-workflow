@@ -959,14 +959,6 @@ export const blockContractDefinitions: Record<WorkflowBlockType, ContractDefinit
     normalOutputRequired: ["answer"],
     statusVariants: ["needs_human_input", "answered"],
   },
-  arthur_injection_check: {
-    output: statusOutput({
-      findings: arrayType(unknownType()),
-      reason: stringType(),
-      backend: stringType(),
-    }),
-    statusVariants: ["ok", "flagged", "skipped"],
-  },
   leak_review: {
     output: statusOutput({
       findings: arrayType(unknownType()),

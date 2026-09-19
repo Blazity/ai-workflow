@@ -32,6 +32,8 @@ import { hydrateWorkspaceMemoryStep } from "../../steps/memory-steps.js";
 import { captureDefaultBranchFilesStep } from "../../steps/repo-memory-steps.js";
 import { seedRepoMemoryStep } from "../../steps/repo-seed-steps.js";
 import { invalidateWorkspaceGate } from "../../steps/workspace-gate.js";
+import { agentTracingRun } from "../../support/integration-run-state.js";
+import type { AgentTracingRun } from "../../support/integration-tracing.js";
 import { emitRepositoryWorkflowObservation } from "../../../run-observability/agent-observations.js";
 import {
   blockFetchPrContextsStep,
@@ -296,48 +298,13 @@ async function blockApprovedRepositoryScopeStep(
 }
 blockApprovedRepositoryScopeStep.maxRetries = 0;
 
-async function blockPrepareWorkspaceEnsureArthurTaskStep(
-  taskName: string,
-): Promise<string | null> {
-  "use step";
-  const { env } = await import("../../../infra/vcs-config.js");
-  if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) return null;
-
-  const { logger } = await import("../../../infra/logger.js");
-  const { ArthurClient } = await import("../../../sandbox/arthur-client.js");
-  const client = ArthurClient.fromTraceEndpoint(
-    env.GENAI_ENGINE_TRACE_ENDPOINT,
-    env.GENAI_ENGINE_API_KEY,
-  );
-  try {
-    const task = await client.ensureTaskForTicket(taskName);
-    logger.info({ taskId: task.id, taskName: task.name }, "arthur_task_created");
-    return task.id;
-  } catch (err) {
-    if (isRunControlError(err)) throw err;
-    logger.warn({ err: (err as Error).message, taskName }, "arthur_task_create_failed");
-    return null;
-  }
-}
-blockPrepareWorkspaceEnsureArthurTaskStep.maxRetries = 0;
-
-/** Ensure all sandboxes created by the run share its Arthur task when tracing
- * is configured, including repository-free Planning/Generic sandboxes. */
-export async function ensureArthurTask(
-  ctx: Parameters<BlockExecuteFn>[2],
-): Promise<string | null> {
-  if (ctx.arthur.taskId) return ctx.arthur.taskId;
-  const taskId = await blockPrepareWorkspaceEnsureArthurTaskStep(ctx.ticket.identifier);
-  ctx.arthur.taskId = taskId;
-  return taskId;
-}
-
 async function blockPrepareWorkspaceProvisionStep(
   subjectKey: string,
   ownerToken: string,
   branchName: string,
   selectedRepositories: WorkspaceRepositoryInput[],
-  arthurTaskId: string | null,
+  /** The run as its tracing providers see it, with their states. */
+  tracingRun: AgentTracingRun,
   requiredAgents: WorkspaceAgentRuntime[],
   access: "read" | "write",
   /** The run's job timeout, from the settings snapshot it started with. */
@@ -352,15 +319,7 @@ async function blockPrepareWorkspaceProvisionStep(
   const { SandboxManager } = await import("../../../sandbox/manager.js");
   const { createAgentAdapter } = await import("../../../sandbox/agents/index.js");
   const { buildSandboxProviderConfigs } = await import("../../support/vcs-runtime.js");
-
-  const arthur =
-    env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
-      ? {
-          apiKey: env.GENAI_ENGINE_API_KEY,
-          taskId: arthurTaskId,
-          endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-        }
-      : undefined;
+  const { agentTracingPlans } = await import("../../support/integration-tracing.js");
 
   for (const { kind, runtime } of requiredAgents) {
     const spec = createAgentAdapter(kind, runtime?.cliSpec).cliSpec;
@@ -403,6 +362,7 @@ async function blockPrepareWorkspaceProvisionStep(
   }
 
   const configureOptsFor = async ({
+    kind,
     model,
     runtime,
   }: WorkspaceAgentRuntime) => {
@@ -412,7 +372,7 @@ async function blockPrepareWorkspaceProvisionStep(
         codexApiKey: env.CODEX_API_KEY,
         codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
         model,
-        arthur,
+        tracing: await agentTracingPlans({ harness: kind, run: tracingRun }),
       };
     }
     return {
@@ -501,7 +461,8 @@ blockPrepareWorkspaceProvisionStep.maxRetries = 0;
 async function blockInstallPromotedWorkspaceAgentsStep(
   sandboxId: string,
   requiredAgents: WorkspaceAgentRuntime[],
-  arthurTaskId: string | null,
+  /** The run as its tracing providers see it, with their states. */
+  tracingRun: AgentTracingRun,
 ): Promise<
   | { ok: true }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -517,15 +478,7 @@ async function blockInstallPromotedWorkspaceAgentsStep(
   const { isAgentRuntimeError } = await import(
     "../../../sandbox/agents/runtime-error.js"
   );
-
-  const arthur =
-    env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
-      ? {
-          apiKey: env.GENAI_ENGINE_API_KEY,
-          taskId: arthurTaskId,
-          endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-        }
-      : undefined;
+  const { agentTracingPlans } = await import("../../support/integration-tracing.js");
 
   try {
     const sandbox = await Sandbox.get({
@@ -559,7 +512,7 @@ async function blockInstallPromotedWorkspaceAgentsStep(
         codexApiKey: env.CODEX_API_KEY,
         codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
         model,
-        arthur,
+        tracing: await agentTracingPlans({ harness: kind, run: tracingRun }),
       });
     }
     return { ok: true };
@@ -629,11 +582,11 @@ export function requiredAgentsForDefinition(input: {
 /**
  * prepare_workspace: select repositories (pre-sandbox phase for ticket entries,
  * the PR's repository for pr_trigger entries), provision read-only checkouts,
- * fetch PR contexts, ensure the run's Arthur task, provision one sandbox with
+ * fetch PR contexts, provision one sandbox with
  * every agent CLI the definition can need, and register it for cleanup.
  * Mutates ctx.sandboxId, ctx.workspaceManifest, ctx.selectedRepositories,
- * ctx.repositoryContexts, ctx.preSandboxAdditions, and ctx.arthur.taskId (see
- * the EngineCtx mutation contract).
+ * ctx.repositoryContexts and ctx.preSandboxAdditions (see the EngineCtx
+ * mutation contract).
  */
 /**
  * How long a sandbox that may host a check batch is allowed to live.
@@ -1318,7 +1271,8 @@ export async function ensureWorkspace(
       },
     );
 
-    const arthurTaskId = await ensureArthurTask(ctx);
+    // No invocation: the workspace belongs to the run, not to one node.
+    const tracingRun = await agentTracingRun(ctx);
 
     const requiredAgents = requiredAgentsForDefinition({
       nodes: ctx.definitionNodes,
@@ -1341,7 +1295,7 @@ export async function ensureWorkspace(
       const installedAgents = await blockInstallPromotedWorkspaceAgentsStep(
         discoverySandboxId,
         requiredAgents,
-        arthurTaskId,
+        tracingRun,
       );
       if (!installedAgents.ok) {
         return agentProtocolExecutionError(installedAgents.failure);
@@ -1360,7 +1314,7 @@ export async function ensureWorkspace(
         ctx.entry.ownerToken,
         ctx.branchName,
         workspaceRepositories,
-        arthurTaskId,
+        tracingRun,
         requiredAgents,
         "read",
         ctx.settings.JOB_TIMEOUT_MS,

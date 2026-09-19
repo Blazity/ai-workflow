@@ -16,4 +16,9 @@ import type { ErasedIntegrationDashboardEntry } from "@integrations/host-ui";
 
 type Dashboards = Readonly<Record<string, ErasedIntegrationDashboardEntry>>;
 
-export const generatedIntegrationDashboards: Dashboards = {};
+export const generatedIntegrationDashboards: Dashboards = {
+  "arthur": {
+    pages: ["evals"],
+    load: () => import("../arthur/dashboard"),
+  },
+};

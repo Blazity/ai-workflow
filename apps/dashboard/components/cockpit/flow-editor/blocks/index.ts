@@ -1,7 +1,6 @@
 import { createElement } from "react";
 import type { WorkflowBlockType } from "@shared/contracts";
 import type { BlockRenderer, BlockRendererProps } from "./types";
-import { ArthurInjectionCheckFields } from "./arthur_injection_check";
 import { BranchFields } from "./branch";
 import { CallLlmFields } from "./call_llm";
 import { CompletePrCheckFields } from "./complete_pr_check";
@@ -42,7 +41,6 @@ import { TriggerWebhookFields } from "./trigger_webhook";
 import { UpdateTicketStatusFields } from "./update_ticket_status";
 
 const BLOCK_RENDERERS = {
-  arthur_injection_check: ArthurInjectionCheckFields,
   branch: BranchFields,
   call_llm: CallLlmFields,
   complete_pr_check: CompletePrCheckFields,

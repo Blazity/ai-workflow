@@ -11,8 +11,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
     GITHUB_INSTALLATION_ID: 2,
     CHAT_SDK_SLACK_TOKEN: "slack-token",
     CHAT_SDK_CHANNEL_ID: "channel",
-    GENAI_ENGINE_API_KEY: "arthur-key",
-    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
   },
 }));
 // This deployment's integrations, stated. The plan load reads them inside the
@@ -85,8 +83,6 @@ async function resetEnv() {
     GITHUB_INSTALLATION_ID: 2,
     CHAT_SDK_SLACK_TOKEN: "slack-token",
     CHAT_SDK_CHANNEL_ID: "channel",
-    GENAI_ENGINE_API_KEY: "arthur-key",
-    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
   });
 }
 

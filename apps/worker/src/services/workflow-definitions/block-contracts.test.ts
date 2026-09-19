@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
     vcsProviders: ["github" as const],
     vcsBotIdentities: ["github" as const],
     slackConfigured: true,
-    arthurConfigured: true,
     webhookTriggerConfigured: true,
     integrations: integrations ?? NO_INTEGRATIONS,
   })),

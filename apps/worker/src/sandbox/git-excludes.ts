@@ -17,8 +17,9 @@ export interface RepositoryExcludesSandbox<
  * Stable by contract, not by accident: a clarification snapshot preserves each
  * checkout's .git/config, so a restored sandbox still points core.excludesFile at
  * this exact path, and the path must keep matching none of the credential scrub
- * globs in clarification-snapshot-steps.ts (agent-env*.sh, *arthur*credential*,
- * *tracer*credential*, .aiw-clarification-credential-patterns-*).
+ * globs in clarification-snapshot-steps.ts (agent-env*.sh, aiw-tracing-*,
+ * *tracer*credential*, *engine*credential*,
+ * .aiw-clarification-credential-patterns-*).
  */
 const REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-primary-git-excludes";
 

@@ -554,13 +554,6 @@ test("drops retired bespoke reference params while retaining supported arrays", 
       y: 0,
       params: { planFromStep: "plan" },
     },
-    {
-      id: "arthur",
-      type: "arthur_injection_check",
-      x: 0,
-      y: 0,
-      params: { contentFromStep: "plan" },
-    },
     { id: "rc", type: "run_checks", x: 0, y: 0, params: { commands: [] } },
   ]);
 
@@ -574,7 +567,6 @@ test("drops retired bespoke reference params while retaining supported arrays", 
       params: {},
     },
     { id: "approval", type: "send_plan_approval", x: 0, y: 0, params: {} },
-    { id: "arthur", type: "arthur_injection_check", x: 0, y: 0, params: {} },
     { id: "rc", type: "run_checks", x: 0, y: 0, params: {} },
   ]);
 });

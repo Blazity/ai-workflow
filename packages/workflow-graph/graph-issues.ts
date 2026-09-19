@@ -554,6 +554,71 @@ export function workflowValueReferenceIssues(
   ];
 }
 
+/**
+ * A block whose output carries something the run has to act on, in a graph
+ * that never looks at it.
+ *
+ * A screen reports a verdict and continues, so "screen, then agent" with no
+ * Branch hands the agent exactly the text the screen flagged. The block's
+ * contract names the fields a published graph must read (`output.mustRead`);
+ * this finds a field no other node mentions, whether in a Branch condition, a
+ * Transform, a data token or an input binding. Reading the whole output counts,
+ * because the reader receives the field with it.
+ *
+ * Deliberately textual: every place a node can read a value is a string
+ * holding a `steps.<id>.output...` reference, and walking them all is what
+ * keeps a new kind of reader from being missed by a list of known ones.
+ */
+export function workflowUnreadOutputIssues(
+  def: WorkflowDefinitionV2,
+  mustReadOf: (node: WorkflowDefinitionV2Node) => readonly string[],
+): WorkflowDefinitionValidationIssue[] {
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  for (const [nodeIndex, node] of def.nodes.entries()) {
+    const fields = mustReadOf(node);
+    if (fields.length === 0) continue;
+    const texts = def.nodes
+      .filter((other) => other.id !== node.id)
+      .flatMap((other) =>
+        stringsIn([other.configuration, other.inputs, other.additionalInputs]),
+      );
+    for (const field of fields) {
+      const reads = outputFieldPattern(node.id, field);
+      if (texts.some((text) => reads.test(text))) continue;
+      const reference = `steps.${node.id}.output.${field}`;
+      issues.push({
+        code: "output.unread",
+        severity: "error",
+        nodeId: node.id,
+        path: `/nodes/${nodeIndex}`,
+        message: `Block "${node.id}" reports ${reference} and nothing in this workflow reads it, so the run would continue whatever it says. Add a Branch on ${reference} to decide what happens next.`,
+      });
+    }
+  }
+  return issues;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** `steps.<id>.output.<field>` and anything under it, or `steps.<id>.output` whole. */
+function outputFieldPattern(nodeId: string, field: string): RegExp {
+  const base = `steps\\.${escapeRegExp(nodeId)}\\.output`;
+  return new RegExp(
+    `(?<![A-Za-z0-9_.-])${base}(?:\\.${escapeRegExp(field)}(?![A-Za-z0-9_-])|(?![A-Za-z0-9_.-]))`,
+  );
+}
+
+function stringsIn(value: unknown, into: string[] = []): string[] {
+  if (typeof value === "string") into.push(value);
+  else if (Array.isArray(value)) for (const item of value) stringsIn(item, into);
+  else if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) stringsIn(item, into);
+  }
+  return into;
+}
+
 function branchConditionIssues(
   def: WorkflowDefinitionV2,
   catalogByNode: Record<string, WorkflowDataCatalogEntry[]>,
@@ -1078,9 +1143,6 @@ const ANY_SCOPE_BLOCK_POLICY = {
   send_slack_message: "deny",
   send_plan_approval: "deny",
   human_question: "deny",
-  // Guardrail classification is explicit: it inspects content and returns a
-  // verdict, but owns no ticket/workspace/branch mutation.
-  arthur_injection_check: "safe",
   // Nothing to guard on an any-scope path: Finalize, Open PR/MR, and the check
   // blocks it protects are all denied there, so the block would only add
   // repository-owned command surface inside the credential-bearing sandbox.

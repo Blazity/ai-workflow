@@ -122,7 +122,6 @@ export function configuredSecretValues(): string[] {
     env.ANTHROPIC_API_KEY,
     env.CODEX_API_KEY,
     env.CODEX_CHATGPT_OAUTH_TOKEN,
-    env.GENAI_ENGINE_API_KEY,
     env.VERCEL_TOKEN,
     env.CRON_SECRET,
     env.JIRA_WEBHOOK_SECRET,
@@ -134,20 +133,6 @@ export function configuredSecretValues(): string[] {
     env.RESEND_API_KEY,
     env.RESEND_WEBHOOK_SECRET,
   ].filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
-}
-
-/**
- * The evaluation trace backend. Both halves are optional and a caller that has
- * only one of them cannot call anything, so they travel together.
- */
-export function evaluationTraceSettings(): {
-  endpoint?: string;
-  apiKey?: string;
-} {
-  return {
-    endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-    apiKey: env.GENAI_ENGINE_API_KEY,
-  };
 }
 
 /** The secret the OAuth flow cookie is signed with. */

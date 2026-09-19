@@ -446,7 +446,10 @@ does not declare; and a reserved runtime slot that is filled.
 ### Debt the moved ports carry
 
 The ports moved without signature changes, so provider-specific leftovers
-moved with them. Each is removed by the stage that moves its provider.
+moved with them. Each is removed by the stage that moves its provider. The last
+two rows are of another kind: changes S8 made to the contract that are not
+additive for everyone who compiles against it, recorded here so the change log
+does not have to call them additive.
 
 | Leftover | Where | Owner |
 |---|---|---|
@@ -459,6 +462,8 @@ moved with them. Each is removed by the stage that moves its provider.
 | `TicketEvent.pr_ready` carries `RunPullRequest`, whose `provider` is `github | gitlab` in `@shared/contracts`, so a third VCS cannot be reported yet | `messaging.ts` | S10 (decision 19) |
 | `GateStatusRef` names GitHub and GitLab, which is why the gate status extensions have not moved | worker `vcs/types.ts` | S10, S11 |
 | `GITHUB_APP_PRIVATE_KEY` is base64 in the environment (`adapters/vcs/github-auth.ts:20-21`) while `multiline` invites a raw PEM in the dashboard, and the integration cannot tell the two apart. Proposal: a `pem` format core normalises, so both forms reach the integration the same way | `manifest.ts` | S11 |
+| `IntegrationRunIdentity` gained two required fields in S8 (`subjectKey`, `state`). Additive for an integration, which only reads it; anything that builds one (core, a test double, a host other than ours) stops compiling until it supplies both. Proposal: the next field on it is optional, or this record says why not | `context.ts` | recorded in S8 |
+| `IntegrationRuntimeDefinition` and `IntegrationRuntime` went from interfaces to type aliases over a conditional type in S8, so that `beginRun` is required exactly when `runState` is declared. An interface can no longer `extends` either for a generic manifest, and a class cannot `implements` one; nothing in this repository did, a provider package outside it that did would stop compiling. Proposal: keep the aliases (the drift they prevent is the costlier mistake) and revisit if a provider needs to extend one | `runtime.ts` | recorded in S8 |
 
 ## Options considered
 
@@ -1748,6 +1753,328 @@ the card beside it keeps its border.
 | The `ui-primitives` gate scans `apps/dashboard` only. Extending it to `integrations/host-ui` would read a primitive package as a call site, so `primitives.test.ts` and `primitives.render.test.tsx` carry that weight instead | open by choice; the lever we hold over an integration's own markup is what the host UI lends |
 | The cockpit layout reads the integrations list on every page load, one round trip on top of the session check | acceptable today; a worker read light enough to be free would be a worker change |
 
+## The first real provider, decided in S8
+
+Arthur is `integrations/arthur`, and core no longer holds the word. Its blocks,
+its health checks, its Evals page and the tracer every agent sandbox runs all
+arrive through the contract. What follows is what that took, and it is the
+template the four provider stages after it copy.
+
+### What moved, and what core deleted
+
+| Was | Is |
+|---|---|
+| `sandbox/arthur-client.ts` | `integrations/arthur/client.ts`, every request through `ctx.http` |
+| `sandbox/arthur-tracer.ts` and `scripts/build-arthur-tracer.mjs` | `integrations/arthur/tracer.generated.ts` and its build script, handed to core as a file to write |
+| `installArthurTracer` in `sandbox/agents/claude.ts` and `codex.ts`, and `ConfigureOpts.arthur` | the `agent_tracing` port, applied by `sandbox/agents/tracing.ts` |
+| `blockPrepareWorkspaceEnsureArthurTaskStep` and `ensureArthurTask` | `createIntegrationRunStateStep` and `engine/support/integration-run-state.ts`, for any integration |
+| `engine/blocks/arthur-injection-check/**` | the `arthur_injection_check` block of the package, run by S4's generic step |
+| `engine/blocks/support/injection-markers.ts` | `integrations/arthur/injection-markers.ts` (its only caller moved) |
+| `services/overview/collect-evals.ts`, `collect-eval-summary.ts`, `routes/api/v1/evals.get.ts`, the `/evals` screen | the `evals` page of the package, read through the `api` slot; `/evals` redirects there permanently, so a bookmark still lands |
+| `routes/api/v1/overview/eval-health.get.ts`, `EvalHealthResponse` and the overview's eval tile | nothing: the tile promised grading that was never wired up, and the Evals page is where grading is read |
+| `arthurConfigured` in `block-contract-resolver.ts`, the `arthur` health section, `GENAI_ENGINE_*` in `runtime-env.ts` | the registry answers all three |
+
+The `arthur` rows in `scripts/gates/core-references.json` went from fifty to
+one, and `plannedIntegrations.arthur` is gone, which is what makes the gate
+fail if core writes the name again. The row that stays is
+`engine/support/run-analysis-report.ts`: the marker `Arthur report: <run>:<stage>`
+is written into tickets and read back to find the comment to update, and the
+two headings of those comments (`Arthur research complete`, `Arthur pull
+requests ready`) are what the tenant's people read. All three name the tenant
+this product is delivered to rather than the provider. Rewriting the marker
+would post a second copy of every report already out there, and renaming the
+headings is a product decision, not a refactor.
+
+### `agent_tracing`: a description, not a client
+
+A coding agent is a CLI inside a sandbox core provisions, so a tracing provider
+cannot hold a client in our process: what it needs has to be in that sandbox
+before the agent starts. The port is therefore a description of what a harness
+needs (`packages`, `files`, `hookEnvironment`, `environment`, `hooks`) and core
+applies it. The provider learns nothing about how a harness registers a hook,
+and core learns nothing about the provider's protocol. A provider is told the
+run (`runId`, `subjectKey`), its own run state, the harness, and, for a sandbox
+that serves one node, `invocation` (`nodeId`, `attempt`), so traces from the
+several sandboxes of one run can be told apart.
+
+Four decisions inside that, each of which could have gone the other way:
+
+- **The moments are named for what happened**, not for what a harness calls it:
+  `prompt_submitted`, `tool_started`, `tool_finished`, `tool_failed`,
+  `session_ended`. Core maps them per harness and silently drops one a harness
+  does not have, which is how Codex, with no failure hook, takes the same setup
+  that Claude does. A provider naming `PostToolUseFailure` itself would have
+  been the Claude harness written into the contract.
+- **Files land in the provider's own directory** (`$HOME/.aiw-tracing/<id>`),
+  and a hook command writes `${TRACING_DIR}` where the path goes. Two providers
+  shipping a `tracer.py` do not overwrite each other, and neither writes inside
+  a harness's own configuration.
+- **Nothing in tracing fails a run.** A package that will not install or a file
+  that will not land leaves the run untraced and says so in the log, and a
+  provider whose install failed contributes no hooks either, because a hook
+  calling a script that never arrived fails on every tool call an agent makes.
+  An untraced sandbox is still said out loud: `agent_tracing_off` is logged per
+  sandbox with the harness and the reason (`no_tracing_integration` and
+  `every_provider_declined` also carry the run and the node; `install_failed`
+  carries the providers whose install failed).
+- **A secret goes to the hooks, not to the agent.** `hookEnvironment` is
+  written to `hook.env` in the provider's directory (mode 600, directory 700),
+  and every hook command core registers for that provider sources it first.
+  `environment` is exported into the agent's own env file, which everything the
+  agent starts inherits: the test runner, the code under test, a script that
+  prints its environment into a log. Arthur's key used to be there; it is now
+  only in `hook.env`, and the agent env holds the run id and nothing secret.
+  The sandbox has one user, so this keeps the key out of every inherited or
+  printed environment, not away from an agent that reads the file on purpose.
+
+The declared secret exception (decision 7) is held at one place: both files are
+written through `writeFiles` and never put on a command line, because a command
+is recorded with the sandbox and read back on a screen.
+`sandbox/agents/tracing.test.ts` and `tracing-adapters.test.ts` hold it, the
+second through the real Claude and Codex adapters with a sentinel value that
+must appear in no command and in no agent env file.
+
+**The foil is committed, not remembered.** `integrations/sdk/fixture-runtime.ts`
+carries a second tracing provider that needs no run handle, no package, no file
+and no hook: two variables and an endpoint, which is what an OpenTelemetry
+collector asks for. It compiles and passes conformance in CI, so the day the
+port grows a requirement only Arthur can meet, that file stops building, and
+`engine/support/integration-tracing.test.ts` runs it through core's real plan
+and install path, so the day core assumes a hook, a file or a task, the run id
+it labels telemetry with stops reaching the agent. Writing it is what removed
+the run handle from the port and put it on the runtime instead.
+
+### Per-run integration state
+
+Some providers cannot be asked twice for the same thing: this task API answers
+a second request for `AWT-42` with `AWT-42.1`, so a run that asked once per use
+would scatter itself over a new bucket every time. The contract therefore has
+`manifest.runState` and `runtime.beginRun`, declared and served together, and
+`ctx.run.state` wherever a block reads it.
+
+Where it is created is the whole design:
+
+- **At the run's first use of that integration, and of no other**, through
+  `engine/support/integration-run-state.ts`, which every use goes through: the
+  blocks it contributes and the tracing applied to each sandbox. Running one
+  integration's block never creates another's state, a workflow that never
+  touches an integration never asks its provider for anything, and a graph
+  holding only the injection check still gets a task, which the old wiring got
+  only because `prepare_workspace` happened to run first. The workflow keeps
+  the answer per integration id, so a second use in the same invocation calls
+  nothing.
+- **Inside a step**, `createIntegrationRunStateStep`, with no retries. The
+  Workflow DevKit records the result, so a run that suspends for a person and
+  resumes days later replays the recorded value instead of creating a second
+  bucket. A plain function would have created one per replay.
+- **One generic step, told which integration by its argument**, and called
+  once per integration: a step's identity is its module path plus its function
+  name, so a step per integration would take its identity from an
+  integration's id and moving that integration would strand every run
+  suspended past it. One call per integration means a provider that throws is
+  recorded against itself alone and each provider gets its own 60 second bound
+  rather than a share of one.
+- **Four answers, not a nullable value.** `ready` carries the state; `none`
+  means the integration declares none or is not usable now; `failed` means the
+  provider was asked and produced nothing, recorded for the run because asking
+  again could create a second bucket; `unreadable` means this deployment's own
+  integration settings could not be read, so no provider was asked. The last
+  is not remembered, so the next use asks again, and a block that needed the
+  state says the settings could not be read and the run can be retried, rather
+  than blaming a provider nobody asked. An integration's own code still sees
+  `ctx.run.state` as the value or `null`.
+- **One name for the run.** `runSubjectKey` is the only place integration code
+  is told what the run is about, so a block and a tracer in the same run cannot
+  name it differently. It is the identifier of the run's ticket snapshot: the
+  ticket key (`AWT-42`) for a ticket run, which is the name the old task was
+  created under, and for a run with no ticket the identifier core gave its
+  snapshot (a pull request run's subject key, a hash of a webhook delivery).
+- **Only blocks and tracing see it.** Capability ports other than
+  `agent_tracing` (an issue tracker, a VCS, messaging) do not receive run state:
+  they are called by core on core's behalf, and nothing they do today needs a
+  per-run handle. Persistent state an integration keeps across runs is a
+  different thing and is not part of this contract.
+
+### The injection check fails closed, and one verdict disappeared
+
+`skipped` is gone from the block's `statusVariants`. The old block returned it
+when Arthur was unconfigured, which is a security screen reporting that it did
+not look, in a shape a graph could branch past. After this stage:
+
+| Situation | Before | Now |
+|---|---|---|
+| Arthur disconnected or disabled | `skipped`, run continues | the run fails at dispatch with `integration_unavailable`, naming Arthur |
+| The connection moved mid-run | `skipped` | the run fails at the block, reason `reconfigured` |
+| No task on the engine | `skipped` | the block fails: nothing screened the content |
+| The engine could not be reached | `skipped` when that stopped the task being created, a provider failure when it stopped the validation | the block fails with the network error either way, never read as a verdict |
+| The worker could not read its own integration settings | could not happen: the settings were environment variables | the block fails, says the settings could not be read, and the run can be retried |
+| Nothing bound to `content` | screened the ticket's description and comments | unchanged, and the editor says so on the field |
+| Nothing bound and a run subject with no description and no comments | screened an empty string | the block fails at configuration and says to bind `content` |
+| The engine evaluated no rule | `flagged`, `arthur_no_rules_evaluated` | unchanged |
+| A flagged prompt | `flagged` | unchanged |
+| A graph where nothing reads `status` | published, and the run continued whatever the verdict | refused at publish, naming the node |
+
+The stored block type (`arthur_injection_check`), its `status` output and the
+value `flagged` are unchanged, so a deployed graph that branches on them keeps
+working with its bindings intact.
+
+#### What the check reads when nothing is bound (`defaultFromSubject`)
+
+The old block screened the ticket's description and comments when `content`
+was not bound, and definition 28 on production binds nothing, so refusing an
+unbound check would have stopped the one deployed graph that uses it. The SDK
+therefore gained a closed, additive facility: a block input may declare
+`defaultFromSubject`, a list drawn from the run subject's fields (`title`,
+`description`, `comments`), and core fills an unbound input from those fields
+before the block runs, in the declared order, comments as `author: body`,
+joined by blank lines, which is what the old block did.
+`packages/contracts/subject-default.ts` is the one place that text is built
+and the one place the phrase describing it ("the ticket's description and
+comments") comes from.
+
+- The input stays `required`. The graph validator counts a defaulted input as
+  satisfied, so a graph that binds nothing publishes, and a graph that binds
+  something screens exactly what it bound.
+- The editor shows where the value comes from: an unbound field reads "Not
+  bound, so it uses the ticket's description and comments. Bind a value to use
+  something else.", its empty option reads "From the ticket's description and
+  comments", and the Required badge is hidden because nothing is missing.
+- A run whose subject has none of those fields, and nothing bound, refuses at
+  the block with a configuration error that names the input, the fields it
+  would have read, and says to bind it. It never screens an empty string and
+  calls that a pass.
+- The set is closed on purpose. An input that wants anything else binds it; a
+  default that could name an arbitrary path would be a second binding language.
+
+#### A verdict nobody reads cannot be published (`mustRead`)
+
+A screen whose verdict nothing branches on is a screen the run walks past: it
+runs, flags, and the next node starts anyway. The manifest can now declare, per
+block, output fields a graph must read (`output.mustRead`), and the injection
+check declares `status`. Graph validation refuses to publish a graph in which
+no other node reads a declared field, with the issue `output.unread` on that
+node:
+
+> Block "injection" reports steps.injection.output.status and nothing in this
+> workflow reads it, so the run would continue whatever it says. Add a Branch
+> on steps.injection.output.status to decide what happens next.
+
+The editor shows it live on the node, because the candidate validator runs the
+deploy policy; the draft still saves, and only publishing is refused. Reading
+means any other node's configuration or inputs naming
+`steps.<id>.output.<field>`, which is a textual check: it proves the field is
+read, not that the branch sends a flagged run anywhere sensible. Runtime loads
+of already published graphs skip it, so a deployed graph that never read the
+verdict keeps running until somebody edits and republishes it.
+
+The deterministic prefilter moved with the block rather than staying in core.
+It ran before the engine and still does, so a blatant override payload flags
+identically on every run whatever a probabilistic classifier makes of it, and
+it flags without a task and without a network call.
+
+### What a contributed page can read
+
+S7 left the seam open and named the recommendation: a read-only call the host
+resolves through the integration's own worker runtime, never our database and
+never our session. That is what `runtime.api` is, keyed by page id, and it is
+the whole of what a page sees beyond what its own package ships.
+
+- **The host waits for it** and hands the page the result as `data`. A page
+  that fetched for itself would be a tab the cockpit could not cancel.
+- **Three answers, kept apart**: the provider answered, this page has no reader,
+  or we could not ask. Collapsing the last two is how "nothing to show" comes
+  to read as "your provider is down", which on an evals page is the difference
+  between nothing graded and nothing working.
+- **A reader's error is redacted** against that connection's secrets and
+  bounded, because a provider that echoes a key in an error body is normal and
+  that body is what a person reads.
+- The route is `/api/v1/integrations/<id>/pages/<page>`, readable by any
+  signed-in role: it carries what the provider reports, never a connection
+  value, and there is no write surface behind it.
+
+### What core kept, and why it is not a leak
+
+Three core reads now ask the registry instead of naming a provider:
+
+- `integrationSecretValues()` feeds the redaction pass over MCP results and the
+  credential scan a clarification snapshot runs. Core used to list
+  `GENAI_ENGINE_API_KEY` by hand; an integration's variable names are its own,
+  and a stored connection has no variable at all, so the set is resolved rather
+  than listed. A tracing provider's key is inside a sandbox by design and an
+  agent can echo its own environment, so dropping that coverage with the
+  variable would have been a real regression.
+- Integration settings that cannot be read mean "nothing usable" where the
+  caller is doing something alongside the work (tracing a sandbox, drawing a
+  page, where the page says the worker did not answer rather than that the
+  provider is down). Creating run state is the exception: it records
+  `unreadable` apart from `none`, because a block that needs the state must
+  say the settings could not be read rather than that no provider is
+  connected. `resolveUsableIntegrations` returns the two apart, and
+  `usableIntegrations` is the "nothing usable" reading of it.
+- `builtinCapabilitiesOfDeployment()` lost nothing: Arthur served no core
+  capability, which is why it was the right provider to move first.
+
+### What the next provider stage copies
+
+1. Write the manifest against the variables the deployment already sets, and
+   keep their meaning exactly (this one holds a full traces path, not a base
+   URL; changing that would have pointed every deployment at the wrong paths
+   while its card still read Connected).
+2. Put the provider's client behind `ctx.http`, and let a connection test tell
+   a refused credential (`{ ok: false }`) from a provider that could not be
+   reached (throw).
+3. Move the core block's directory into the package unchanged in type, output
+   fields and status variants, so a deployed graph keeps its bindings.
+4. Delete core's condition in `block-contract-resolver.ts`, its health section,
+   its row in `CORE_HEALTH_SECTION_IDS`, its variables in `runtime-env.ts` and
+   its prefix in the registry's `reserved-env.test.ts`, in one change.
+5. Run `pnpm run gate:core-references -- --prune`, delete the
+   `plannedIntegrations` entry, and write a reason for every row that stays.
+6. Update `connection-shape.snapshot.json` and say in the stage report which
+   step identities and which connection shapes moved, and assume the drain is
+   total until a replay argument proves otherwise (below).
+
+### The drain for this stage is total
+
+Two step identities are gone (`blockArthurValidatePromptStep` and
+`blockPrepareWorkspaceEnsureArthurTaskStep`) and one is new
+(`createIntegrationRunStateStep`). The old ensure-task step was recorded on
+every run that reached a sandbox, configured or not, because it returned
+`null` from inside the step. Any run suspended after that point replays
+into a step call that no longer matches its event log, so every parked or
+awaiting run on the deployment is affected, not a subset. Seven step
+functions also changed their inputs (`blockPrepareWorkspaceProvisionStep`,
+`blockInstallPromotedWorkspaceAgentsStep`, `blockProvisionAgentSandboxStep`,
+`prepareHarnessAgentInvocationStep`, `restoreClarificationSandboxStep`,
+`provisionDisposableReviewWorkspaceStep`, `runIntegrationBlockStep`); where it
+was cheap the new value took the removed one's position rather than shifting
+the rest, but a step queued with old arguments and executed by new code is
+still wrong, which a total drain rules out.
+
+Before this stage merges, run the protocol of
+[the restructure plan](../plans/2026-09-09-architecture-restructure.md)
+("Drain protocol before a step-moving deploy") in full, on production and on
+demo:
+
+1. Announce the dispatch pause and its expected length to the team.
+2. Disable every enabled definition through the product MCP
+   (`workflows_list`, then `workflows_set_enabled false` for each), and record
+   the list to re-enable.
+3. Wait for zero running, awaiting or parked runs (`runs_stats` or the
+   dashboard runs view). Cancel each awaiting or parked run with `runs_cancel`
+   and a reason naming the redeploy, and before cancelling post a Jira comment
+   with `tickets_comment` telling the person to move the ticket back into the
+   AI column after the deploy: `runs_cancel` posts no comment of its own.
+4. Merge (main deploys both projects) and wait for `/health` to report the new
+   commit.
+5. Re-enable the recorded definitions and run the smoke: health, the dashboard
+   login page, a `workflows_get_graph` sweep that returns every definition.
+6. Record the window and every cancelled run in the pull request.
+
+Demo reports the production database today, so steps 2 and 3 on one cover
+both; check it rather than assume it, because the day demo gets its own
+database it has its own parked runs.
+
 ## Change log
 
 Additive changes to `@integrations/sdk` after S0, newest first. Each entry
@@ -1755,6 +2082,15 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-19 | S8 | `@integrations/sdk/fixtures`, a second entry point exporting the OpenTelemetry-shaped tracing foil (`otelFixtureManifest`, `otelFixtureRuntime`) | Core's own test runs the foil through the real plan and install path, and a test in `apps/worker` may not reach into the package's source files. Test support only; nothing in production imports it. |
+| 2026-09-19 | S8 | `IntegrationPageData` (in `@integrations/host-ui`): the unavailable answer carries `cause` (`worker`, `not_connected`, `provider`) | A page has to tell "the worker did not answer" from "this provider could not be read", and a message string is not something a page may branch on. Additive for a page that ignores it; required on the host, which is core alone. |
+| 2026-09-19 | S8 | `IntegrationBlockOutput.mustRead` and, in `@shared/contracts`, `WorkflowBlockContract.output.mustRead`; conformance code `block_must_read_undeclared` | A security screen whose verdict no node reads is a screen the run walks past. The manifest names the fields; graph validation refuses to publish a graph where no other node reads one (`output.unread`). Optional and absent by default. |
+| 2026-09-19 | S8 | `defaultFromSubject` on a block input (`WorkflowBlockInputContract`), the closed set `WORKFLOW_SUBJECT_FIELDS` (`title`, `description`, `comments`) and `subjectDefaultText` in `@shared/contracts`; conformance code `block_input_default_invalid` | The injection check screened the ticket's description and comments when nothing was bound, and the one production graph that uses it binds nothing. A required input may now name where its value comes from when unbound; core fills it before the block runs and the validator counts it as satisfied. Optional and absent by default. |
+| 2026-09-19 | S8 | `AgentTracingSetup.hookEnvironment` and `AgentTracingInvocation.invocation` (`nodeId`, `attempt`) | A tracing key does not belong in the environment everything the agent starts inherits; `hookEnvironment` reaches only the hook commands. `invocation` tells the several sandboxes of one run apart. Both optional. |
+| 2026-09-19 | S8 | `agent_tracing` designed and unreserved: `AgentTracingAdapter`, `AgentTracingSetup`, `AGENT_TRACING_EVENTS`, `AGENT_TRACING_DIR_TOKEN` | The capability's port, reserved in S0 for this stage. Additive: a reserved id becoming providable makes nothing that compiled stop compiling. A block may now list `agent_tracing` in `requires.capabilities`, the type accepts it, and the requirement decides whether the block is offered at all; the block holds no adapter for it (core applies it to a sandbox), which `RequiredCapabilities` says by intersecting with the capabilities a block can reach, so `ctx.capabilities.agent_tracing` does not exist. |
+| 2026-09-19 | S8 | `manifest.runState`, `runtime.beginRun`, `IntegrationRunState`, `IntegrationRunStart`, and `state` plus `subjectKey` on `ctx.run` | A provider whose per-run handle cannot be re-derived needs it created once and carried; this one numbers a second task for a name that already exists. Optional and absent by default, and required in the runtime exactly when the manifest declares it, so every manifest written against S0 is unchanged. Two parts of it are not additive for everyone and are recorded as debt in "Debt the moved ports carry": the two new required fields of `IntegrationRunIdentity`, and `IntegrationRuntimeDefinition` and `IntegrationRuntime` becoming type aliases over a conditional type. |
+| 2026-09-19 | S8 | `runtime.api`, the reserved slot released: one read-only reader per declared page, and `IntegrationPageData` on a page's props in `@integrations/host-ui` | S7 left the question of what a contributed page can read to the first provider with data in a page. A reader keyed by page id means a page's data comes from its own package through its own connection, never our database or session. Additive: the slot was `never` and no manifest field changed. |
+| 2026-09-19 | S8 | `CORE_HEALTH_SECTION_IDS` lost `arthur` | Core's own Arthur health section is gone, so the id is the integration's to take. This is the shrink that entry describes. |
 | 2026-09-18 | S5 | `CORE_HEALTH_SECTION_IDS` and `RESERVED_HEALTH_CHECK_ID`, both refused by conformance | Additive: no manifest field changes and nothing already written stops compiling; conformance refuses two more names. An id core's health page still holds (`github`, `jira`, `database`) would draw a second section for the same word, and a health check called `connection` would collide with the one core adds to every integration's section. `CORE_HEALTH_SECTION_IDS` shrinks: the stage that moves a provider out of core deletes its row in the same change as core's section, which is how the provider's own integration comes to be allowed to take the name. |
 | 2026-09-18 | S4 | `secretsKeyMaterial` exported from `services/integrations` | The generic integration step resolves a connection through the same key material every other caller uses; a second reader of `INTEGRATION_SECRETS_KEY` in the engine would be a second derivation of the thing S2 exists to derive once. Additive: nothing that existed changed. |
 | 2026-09-18 | S2 | `ConnectionField.identity` | An integration whose fields are all secret has a constant configuration fingerprint, so replacing a Slack bot token with another workspace's would read as a rotation and a run in flight would post into the wrong company's channels. The flag marks a secret that names the account; its value enters the pin as a digest, never in the clear. Optional and absent by default, so every manifest written against S0 is unchanged. |

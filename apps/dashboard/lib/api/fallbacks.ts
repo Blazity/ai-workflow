@@ -1,7 +1,5 @@
 import type {
   KpisResponse,
-  EvalHealthResponse,
-  EvalsResponse,
   CostResponse,
   RunsResponse,
   RunDetailResponse,
@@ -20,10 +18,6 @@ export function kpisFallback(now: string): KpisResponse {
     errors24h: null,
     cost24h: null,
   };
-}
-
-export function evalHealthFallback(): EvalHealthResponse {
-  return { available: false, reason: "Worker unavailable." };
 }
 
 export function recentRunsFallback(now: string): RunsResponse {
@@ -60,10 +54,6 @@ export function dispatchCapacityFallback(now: string): DispatchCapacityResponse 
 
 export function workflowsFallback(now: string): WorkflowsResponse {
   return { generatedAt: now, rows: [], total: 0 };
-}
-
-export function evalsFallback(now: string): EvalsResponse {
-  return { available: false, generatedAt: now, reason: "Worker unavailable." };
 }
 
 export function costFallback(now: string): CostResponse {

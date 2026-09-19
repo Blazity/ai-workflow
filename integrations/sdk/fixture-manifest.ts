@@ -83,11 +83,54 @@ export const fixtureManifest = defineIntegration({
       },
     ],
   },
-  capabilities: ["issue_tracker", "vcs", "messaging"],
+  capabilities: ["issue_tracker", "vcs", "messaging", "agent_tracing"],
   blocks: [researchBlock, pingBlock],
   pages: [{ id: "overview", label: "Overview" }],
+  // This provider cannot be asked twice for the same bucket, so it takes a
+  // handle created once for the run. The second fixture below is the foil: a
+  // tracing provider that needs none.
+  runState: true,
   health: [
     { id: "auth", label: "Token accepted", description: "The provider accepts the API token.", critical: true },
     { id: "webhook", label: "Webhook delivered", description: "The last delivery arrived.", critical: false },
+  ],
+});
+
+/**
+ * The foil: a tracing provider shaped nothing like the first one. It needs no
+ * per-run handle, installs nothing, writes no file and registers no hook. A
+ * few variables for a harness that exports OpenTelemetry itself are the whole
+ * of it, one of them carrying the run id so a trace can be found from a run.
+ *
+ * It exists so that `agent_tracing` cannot quietly acquire a requirement only
+ * the first provider can meet: the day the port demands a run handle, a file
+ * or a hook, this stops compiling.
+ */
+export const otelFixtureManifest = defineIntegration({
+  id: "sdkfixtureotel",
+  name: "SDK fixture collector",
+  description: "A tracing provider that needs nothing but an endpoint and a key.",
+  connection: {
+    fields: [
+      {
+        key: "endpoint",
+        label: "OTLP endpoint",
+        env: "SDKFIXTUREOTEL_ENDPOINT",
+        secret: false,
+        format: "url",
+      },
+      { key: "apiKey", label: "API key", env: "SDKFIXTUREOTEL_API_KEY", secret: true },
+    ],
+  },
+  capabilities: ["agent_tracing"],
+  blocks: [],
+  pages: [],
+  health: [
+    {
+      id: "collector",
+      label: "Collector reachable",
+      description: "The collector answers at the endpoint.",
+      critical: true,
+    },
   ],
 });

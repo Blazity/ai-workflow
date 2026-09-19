@@ -36,6 +36,14 @@ export interface IntegrationManifest {
   readonly pages: readonly IntegrationPage[];
   /** At least one. Each needs a probe in the runtime. */
   readonly health: readonly IntegrationHealthCheck[];
+  /**
+   * Whether this integration needs a handle created once per run and shared by
+   * every use of it in that run (see `run-state.ts`). Declaring it requires
+   * `beginRun` in the runtime, and it is what tells core to create the state
+   * at the run's first use of this integration: an integration that does not
+   * declare it is never asked for one.
+   */
+  readonly runState?: boolean;
 }
 
 export interface IntegrationConnection {
@@ -160,6 +168,14 @@ export interface IntegrationBlockOutput {
   readonly required?: readonly string[];
   /** Every value `status` can take; a branch downstream can test for each. */
   readonly statusVariants: readonly [string, ...string[]];
+  /**
+   * Fields a published graph must read, for a block whose output is something
+   * the run has to act on rather than information it may use: a screen's
+   * verdict, say. Publishing refuses a graph in which no node reads one,
+   * naming the block, because a verdict nobody looks at lets the run carry on
+   * whatever it says. `status` or a key of `properties`.
+   */
+  readonly mustRead?: readonly string[];
 }
 
 /**

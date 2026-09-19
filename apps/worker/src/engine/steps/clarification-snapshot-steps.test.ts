@@ -38,9 +38,16 @@ vi.mock("../../infra/vcs-config.js", () => ({
     ANTHROPIC_API_KEY: "anthropic-fresh",
     CODEX_API_KEY: "codex-fresh",
     CODEX_CHATGPT_OAUTH_TOKEN: undefined,
-    GENAI_ENGINE_API_KEY: "arthur-fresh",
-    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/api/v1/traces",
   },
+}));
+// A tracing integration's key is inside the sandbox by design, so the scan has
+// to cover it too, and core no longer knows its variable name: it asks the
+// connected integrations. That is the seam this stands in for.
+vi.mock("../../services/integrations/runtime.js", () => ({
+  integrationSecretValues: async () => ["integration-fresh"],
+  // Nothing is connected in this test, so a restored sandbox is configured
+  // with no tracing at all.
+  usableIntegrations: async () => [],
 }));
 vi.mock("../../db/repositories/clarification-hooks.js", () => ({
   recordConnectedHookClarificationSnapshot: (...args: unknown[]) =>
@@ -114,13 +121,13 @@ describe("clarification sandbox snapshot Workflow steps", () => {
     );
     expect(sanitizationScript).toContain("agent-env*.sh");
     expect(sanitizationScript).toContain("snapshot_home");
-    expect(sanitizationScript).toContain("arthur");
+    expect(sanitizationScript).toContain("aiw-tracing");
     expect(sanitizationScript).toContain("/tmp/aiw-harness");
     expect(sanitizationScript).toContain("credentials.sh");
     expect(sanitizationScript).toContain("CREDENTIAL_FOUND");
     expect(sanitizationScript).not.toContain("anthropic-fresh");
     expect(sanitizationScript).not.toContain("codex-fresh");
-    expect(sanitizationScript).not.toContain("arthur-fresh");
+    expect(sanitizationScript).not.toContain("integration-fresh");
     expect(events).toEqual(["patterns", "sanitize", "snapshot"]);
     expect(mocks.get).toHaveBeenCalledTimes(3);
     expect(mocks.unregisterSandbox).toHaveBeenCalledWith(
@@ -164,7 +171,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
         Buffer.from("anthropic-fresh").toString("base64"),
         Buffer.from("anthropic-fresh").toString("hex"),
         "codex-fresh",
-        "arthur-fresh",
+        "integration-fresh",
       ]),
     );
     expect(mocks.recordSnapshot).toHaveBeenCalledWith(
@@ -361,7 +368,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
         { kind: "codex", model: "gpt-5-codex" },
         { kind: "claude", model: "claude-opus" },
       ],
-      arthurTaskId: "arthur-task",
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
     });
 
     expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -401,7 +408,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       ownerToken: "owner-successor",
       timeoutMs: 900_000,
       agents: [{ kind: "codex", model: "gpt-5-codex" }],
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
     })).rejects.toThrow("credential setup failed");
     expect(stop).toHaveBeenCalledWith({ blocking: true });
     expect(mocks.unregisterSandbox).toHaveBeenCalledWith(
@@ -424,7 +431,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       ownerToken: "owner-successor",
       timeoutMs: 900_000,
       agents: [{ kind: "codex", model: "gpt-5-codex" }],
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
     })).rejects.toThrow(/cleanup unconfirmed.*stopping/i);
 
     expect(stop).toHaveBeenCalledWith({ blocking: true });

@@ -55,7 +55,6 @@ function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAg
       ),
     ),
     slackConfigured: Boolean(env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID),
-    arthurConfigured: Boolean(env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT),
     webhookTriggerConfigured: Boolean(env.WEBHOOK_TRIGGER_ENCRYPTION_KEY),
     // Filled by the async reader below, which is the only caller that can ask
     // the database what is connected. A caller that cannot wait gets an empty
