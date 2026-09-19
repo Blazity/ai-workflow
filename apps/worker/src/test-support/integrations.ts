@@ -31,4 +31,3 @@ export function testDeploymentIntegrations(
     builtinCapabilities: new Set(builtinCapabilities),
   });
 }
-
