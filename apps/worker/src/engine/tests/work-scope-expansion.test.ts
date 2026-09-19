@@ -46,6 +46,7 @@ import {
 } from "../support/run-analysis-report.js";
 import type { EngineCtx } from "../blocks/support/types.js";
 import { makeCtx } from "../blocks/support/test-support.js";
+import { researchPlanContextParts } from "../../sandbox/context.js";
 
 const SUBJECT = "ticket:jira:AWT-1";
 const NOW = "2026-09-15T12:00:00.000Z";
@@ -1581,5 +1582,87 @@ describe("every repository question goes through the one door that names its rep
     door.raise(["Repository expansion: a question about nothing in particular"], null);
 
     expect(ctx.workScopeAsk).toBeUndefined();
+  });
+});
+
+describe("the next research pass is told every request this run refused", () => {
+  // acme/jobs is recorded as unavailable and still is: nobody enabled it.
+  const catalog = [catalogEntry("github", "acme/web"), catalogEntry("github", "acme/api")];
+  const attached = [{ provider: "github" as const, repoPath: "acme/web" }];
+
+  it("sends each refusal as a part of its own, as the run's note and not as a pre-sandbox one", () => {
+    const scope = scopeOf(
+      entry("github:acme/api", "excluded"),
+      entry("github:acme/jobs", "unavailable", { unavailableReason: "not_enabled" }),
+    );
+    // Two rounds of the loop, each refused: the list it collects spans both.
+    const refusedIn = (repoPath: string) => {
+      const verdict = validateAgainstRecord({
+        requests: [requestFor("github", repoPath)],
+        catalog,
+        attached,
+        record: recorderFor({ scope, catalog, attached }),
+      });
+      if (verdict.kind !== "refused") throw new Error("expected a refusal");
+      return verdict.refusals;
+    };
+    // What the loop in agent-workflow.ts collects for each refusal, handed to
+    // the research assembler the way the next pass is composed.
+    const refusals = [...refusedIn("acme/api"), ...refusedIn("acme/jobs")].map((refusal) => ({
+      repositoryKey: refusal.repositoryKey,
+      sentence: repositoryExpansionRefusalSentence(refusal),
+    }));
+    const parts = researchPlanContextParts({
+      ticket: {
+        identifier: "AWT-1",
+        title: "t",
+        description: "d",
+        acceptanceCriteria: "a",
+        comments: [],
+      },
+      prompt: "",
+      branchName: "b",
+      researchNotes: {
+        priorRequests: [],
+        refusals,
+        expansionClosed: false,
+        ledgerCorrectionNote: null,
+        noChangeRetry: false,
+      },
+    });
+
+    expect(
+      parts
+        .filter((part) => part.id.startsWith("refusal:"))
+        .map((part) => ({ id: part.id, origin: part.origin, content: part.content.trim() })),
+    ).toEqual(
+      refusals.map((refusal, index) => ({
+        id: `refusal:${index + 1}`,
+        origin: { kind: "research_note", ref: refusal.repositoryKey },
+        content: refusal.sentence,
+      })),
+    );
+    expect(refusals.map((refusal) => refusal.repositoryKey)).toEqual([
+      "github:acme/api",
+      "github:acme/jobs",
+    ]);
+    expect(parts.map((part) => part.content).join("")).not.toContain("Pre-Sandbox");
+  });
+
+  it("hands the research pass the refusals the loop collected, not an empty list", () => {
+    // A source tripwire, like the ones above: the loop and the research call
+    // are closures inside agentWorkflowBody, which no test can invoke. Handing
+    // the pass an empty list, or no longer collecting into it, would send a
+    // model that asked for a refused repository no word of the refusal, and it
+    // would ask again.
+    const workflow = workflowLines.join("\n");
+    expect(
+      workflow.includes("expansionRefusals.push({ repositoryKey: refusal.repositoryKey, sentence });"),
+      "the expansion loop no longer collects each refusal for the next pass",
+    ).toBe(true);
+    expect(
+      /researchNotes: \{[\s\S]{0,200}?refusals: expansionRefusals,/u.test(workflow),
+      "the research pass is no longer handed the refusals the loop collected",
+    ).toBe(true);
   });
 });

@@ -203,7 +203,7 @@ describe("repository instruction sources", () => {
     const compiled = await compileEffectivePrompt({
       nodeId: "planning",
       blockPrompt: "Plan the work.",
-      runtimeData: "Ticket: AIW-124",
+      runtimeData: [{ id: "ticket", title: "Ticket", content: "Ticket: AIW-124", origin: { kind: "ticket" } }],
       profileSource: {
         profileId: "builtin-codex",
         version: 1,

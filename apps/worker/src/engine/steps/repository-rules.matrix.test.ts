@@ -128,7 +128,7 @@ async function compiledPrompt(): Promise<string> {
   const compiled = await compileEffectivePrompt({
     nodeId: "implementation",
     blockPrompt: "Do the work.",
-    runtimeData: "",
+    runtimeData: [],
     repositorySources: sources,
   });
   return compiled.prompt;
