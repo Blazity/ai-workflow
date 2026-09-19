@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-17
+Last-verified: 2026-09-19
 
 # packages/AGENTS.md
 
@@ -7,8 +7,10 @@ Workspace packages shared by the worker and the dashboard. `contracts` holds
 cross-application shapes and constants; `conditions` evaluates predicates;
 `costs` prices provider usage; `harness` owns model policy and built-in
 compatibility profiles; `prompts` owns prompt composition; `skills`
-owns browser-safe product skill contracts and validation; and
-`workflow-graph` owns the pure rules of a workflow definition. These pure
+owns browser-safe product skill contracts and validation;
+`workflow-graph` owns the pure rules of a workflow definition; and
+`agent-visibility` owns the record of what one send gave a model and the
+clarification rounds, and never composes a prompt. These pure
 packages may import another shared package only through its public entry point
 and never application infrastructure. ADR-001 owns the tiers.
 
@@ -31,10 +33,11 @@ and never application infrastructure. ADR-001 owns the tiers.
   out of `pnpm -r typecheck`, so each keeps a `typecheck` script and a strict
   `tsconfig.json`.
 - **The test scripts name the packages they run.** `pnpm run test:packages`
-  runs `test` in `contracts`, `costs`, `harness`, `prompts`, `skills` and
-  `workflow-graph`. `pnpm run test:packages:zod4` runs `test:zod4` in
-  `contracts` and `workflow-graph`, the two packages that carry a runtime zod
-  dependency; the other five have no such script and no zod 4 evidence. Both
+  runs `test` in `agent-visibility`, `contracts`, `costs`, `harness`,
+  `prompts`, `skills` and `workflow-graph`. `pnpm run test:packages:zod4`
+  runs `test:zod4` in `agent-visibility`, `contracts` and `workflow-graph`,
+  the three packages that carry a runtime zod dependency; the other five have
+  no such script and no zod 4 evidence. Both
   scripts name those packages with `--filter` rather than selecting
   `./packages/*` with `--if-present`, which reported a package that owns no
   such script as a package that passed, so a run over seven packages proved

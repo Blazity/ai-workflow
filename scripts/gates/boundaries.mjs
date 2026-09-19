@@ -276,6 +276,10 @@ function sourceInputs(root) {
     "apps/dashboard/app",
     "apps/dashboard/components",
     "apps/dashboard/lib",
+    // Scanned directly, not only as reached from an app: a package edge that no
+    // app import happens to follow (a new package, a test-only path) is still a
+    // package edge.
+    ...tierMap.packageRoots,
   ];
   const dashboard = join(root, "apps/dashboard");
   if (existsSync(dashboard)) {

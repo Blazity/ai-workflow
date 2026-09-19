@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-12
+Last-verified: 2026-09-19
 
 # ADR-001: Layering and packages
 
@@ -125,6 +125,24 @@ it `engine/steps/repository-instructions.ts`, a `"use step"` module that
 `apps/worker/src/routes/import-graph-guard.test.ts` forbids the app tier to
 reach. The pure re-export `schema.ts` was deleted, not moved: its six symbols
 come from `@shared/workflow-graph` directly.
+
+2026-09-19: `packages/agent-visibility` exists, created by stage 1 of
+[docs/plans/2026-09-19-agent-visibility.md](../plans/2026-09-19-agent-visibility.md).
+It owns the Agent Briefing contract (what one send gave a model: sections with
+the origin of every part, the repository context, the harness extras), the
+Clarification Round, the reason a briefing is missing, and the pure functions
+over them: build a stored record with the sanitizer and the storage budget
+passed in, page a section or a list under a byte cap, explain a missing
+briefing from recorded facts, and assemble rounds from rows. It has the two
+consumers this section asks for: the worker writes and serves the records and
+the dashboard parses and renders them, so the page and the MCP tool read one
+shape. It imports `@shared/contracts` and zod only (the default package edge).
+It may not compose a prompt, and it does not import `@shared/prompts`: the
+worker's capture adapter maps a compilation to this package's input, so neither
+package knows the other. It may not read the environment or configured secrets
+(the sanitizer stays in `run-observability` and is passed in), reach the
+database, or own capture, storage, retention or the routes; those stay in the
+worker, as the definition half of `workflow-graph` does.
 
 The engine, the adapters, the services and the DB layer have one consumer (the
 worker) and stay directories inside `apps/worker/src`, fenced by dependency

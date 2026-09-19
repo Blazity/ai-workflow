@@ -287,6 +287,19 @@ importers:
         specifier: 'catalog:'
         version: zod@4.3.6
 
+  packages/agent-visibility:
+    dependencies:
+      '@shared/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
+    devDependencies:
+      zod4:
+        specifier: 'catalog:'
+        version: zod@4.3.6
+
   packages/conditions:
     dependencies:
       '@shared/contracts':
