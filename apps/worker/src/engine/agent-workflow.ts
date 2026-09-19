@@ -44,7 +44,7 @@ import { safeReplayAgentProtocolMetadata, safeWorkflowExecutionLogEvent } from "
 import { executeTransform, type V2BindingResolutionContext } from "@shared/workflow-graph";
 import { JSON_SCHEMA_SUPPORT } from "./definition/json-schema-support.js";
 import { SCHEDULER_DEPENDENCIES } from "./definition/scheduler-dependencies.js";
-import type { BlockExecutionContext, BlockExecutionResult, BlockExecutor } from "@shared/workflow-graph";
+import type { BlockExecutionResult, BlockExecutor } from "@shared/workflow-graph";
 import {
   resolveBlockAgent,
   resolveRunHarnessDefaults,
@@ -52,9 +52,9 @@ import {
 import { resolveTicketMoveTarget } from "./helpers/ticket-move-target.js";
 import { runKindForAgentWorkflowInput, type AgentWorkflowInput } from "./agent-input.js";
 import { moveTicketStep } from "./steps/ticket-transition-step.js";
-import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockError, blockBudgetObserver, buildV2AgentArtifactKeys, recordBlockPhaseUsage, researchPhaseIdentity, type BlockInvocationContext, type EngineCtx } from "./blocks/support/types.js";
+import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockError, blockBudgetObserver, buildV2AgentArtifactKeys, recordBlockPhaseUsage, researchPhaseIdentity, type BlockInvocationContext, type EngineCtx, type InvocationPromptCompiler } from "./blocks/support/types.js";
 import { VARIABLE_PARAM_KEYS } from "@shared/prompts";
-import { compatibilityPromptSourceForV2Node, compileEffectivePrompt, effectivePromptProfileSource } from "./helpers/effective-prompt.js";
+import { compatibilityPromptForV2Node, compileEffectivePrompt, effectivePromptProfileSource } from "./helpers/effective-prompt.js";
 import { loadInvocationRepositoryInstructionSources, shouldLoadRepositoryInstructionSources } from "./steps/repository-instructions.js";
 import { transformRegexEvaluator } from "./helpers/transform-regex-evaluator.js";
 import { publicationPrsForTelemetry } from "./helpers/publication-prs-for-telemetry.js";
@@ -549,8 +549,14 @@ async function agentWorkflowBody(
   const budgetStartedAtMs = await readRunBudgetClockStep();
 
   const { env } = await import("./harness-profiles/model-env.js");
-  const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
-    await import("../sandbox/context.js");
+  const {
+    assembleResearchPlanContext,
+    assembleImplementationContext,
+    assembleReviewContext,
+    researchPlanContextParts,
+    implementationContextParts,
+    reviewContextParts,
+  } = await import("../sandbox/context.js");
   const {
     collectPhase,
     collectPhaseReplayDiagnostics,
@@ -1950,7 +1956,7 @@ async function agentWorkflowBody(
       };
       /** What the run refused the model, in the model's next research prompt.
        *  A model told only "no" asks again, and the run pays another pass. */
-      const expansionRefusals: string[] = [];
+      const expansionRefusals: Array<{ repositoryKey: string; sentence: string }> = [];
       /** Every question this run puts about repositories goes through here, so
        *  none of them can reach a person without naming what it asks about. */
       const repositoryQuestions = createRepositoryQuestions(ctx);
@@ -1989,7 +1995,7 @@ async function agentWorkflowBody(
 
         const {
           REPOSITORY_DISCOVERY_SCHEMA,
-          assembleRepositoryDiscoveryPrompt,
+          composeRepositoryDiscoveryPrompt,
         } = await import("./repository-discovery/runner.js");
         const { paths, script } = await planPhaseStep(
           ctx.runDefaultKind,
@@ -2015,7 +2021,9 @@ async function agentWorkflowBody(
               .filter((repository) => repository.usable)
               .map(workScopeRepositoryKey),
           ) ?? [];
-        const prompt = assembleRepositoryDiscoveryPrompt({
+        // The prompt and the named parts it is made of, side by side at the
+        // send: discovery has no compiled sections.
+        const discoveryPrompt = composeRepositoryDiscoveryPrompt({
           ticket: ctx.ticket,
           discovery: { ...discovery, catalog: offered },
         });
@@ -2024,7 +2032,7 @@ async function agentWorkflowBody(
           ctx.runDefaultKind,
           phase,
           paths.input,
-          prompt,
+          discoveryPrompt.prompt,
           paths.wrapper,
           script,
         );
@@ -2059,9 +2067,11 @@ async function agentWorkflowBody(
         );
         if (!parsed.result.ok) return agentProtocolBlockError(parsed.result);
 
-        const { repositoryDiscoveryQuestion, validateRepositoryDiscoveryResult } = await import(
-          "./repository-discovery/protocol.js"
-        );
+        const {
+          discoveryLeftOutAddition,
+          repositoryDiscoveryQuestion,
+          validateRepositoryDiscoveryResult,
+        } = await import("./repository-discovery/protocol.js");
         const decision = validateRepositoryDiscoveryResult(
           parsed.result.value,
           offered,
@@ -2094,13 +2104,8 @@ async function agentWorkflowBody(
           // reads a ticket that names a repository and a run that never opened
           // it, and concludes we simply missed it.
           if (decision.leftOut.length > 0) {
-            const targets = ["research", "implementation", "review"] as const;
-            const leftOut = {
-              target: [...targets],
-              title: "Repositories left out",
-              content: decision.leftOut.map((left) => `- ${left.reason}`).join("\n"),
-            };
-            for (const target of targets) ctx.preSandboxAdditions[target].push(leftOut);
+            const leftOut = discoveryLeftOutAddition(decision.leftOut);
+            for (const target of leftOut.target) ctx.preSandboxAdditions[target].push(leftOut);
             // And to the person, in the one comment a finished run posts. The
             // prompt above reaches the agent and nobody else, so without this
             // the person who excluded the repository in March reads an ordinary
@@ -2308,7 +2313,9 @@ async function agentWorkflowBody(
                   ? { decidedBy: decided.decidedBy, decidedAt: decided.decidedAt }
                   : undefined,
               );
-              if (!expansionRefusals.includes(sentence)) expansionRefusals.push(sentence);
+              if (!expansionRefusals.some((seen) => seen.sentence === sentence)) {
+                expansionRefusals.push({ repositoryKey: refusal.repositoryKey, sentence });
+              }
               // The same refusal, on its way to a person. The addition above
               // reaches the model and the model alone, and until this line the
               // sentence stopped there: a run that refused half of what it was
@@ -2767,78 +2774,29 @@ async function agentWorkflowBody(
                 RESEARCH_SCHEMA,
                 runtime,
               );
-            const researchAdditions = [...ctx.preSandboxAdditions.research];
-            if (ctx.repositoryExpansion.priorRequests.length > 0) {
-              researchAdditions.push({
-                target: ["research" as const],
-                title: "Repository expansion history",
-                content: [
-                  "The following repositories were requested and are now attached.",
-                  "Continue the same research; do not restart from assumptions.",
-                  JSON.stringify(ctx.repositoryExpansion.priorRequests),
-                ].join("\n"),
-              });
-            }
-            if (expansionRefusals.length > 0) {
-              // The refusals of this run, said to the model rather than to a
-              // person: no answer to them could be recorded against a
-              // repository, so a question would come back on the next run that
-              // behaved the same way.
-              researchAdditions.push({
-                target: ["research" as const],
-                title: "Repository requests this run refused",
-                content: [
-                  ...expansionRefusals,
-                  "Requesting these again changes nothing. Plan with the repositories already attached, and if one of them is genuinely required, say so in the result, naming it and what it is needed for, instead of requesting it.",
-                ].join("\n"),
-              });
-            }
-            if (ctx.repositoryExpansion.expansionClosed) {
-              // Expansion is closed, so the model needs to know that asking
-              // again changes nothing. It is told what it can do instead, and
-              // not told what to conclude: a repository that really is missing
-              // has to stay reportable (AIW-377).
-              researchAdditions.push({
-                target: ["research" as const],
-                title: "Repository expansion closed",
-                content: [
-                  "No further repository will be attached to this workspace: requesting one again changes nothing, and repeating the request ends the run.",
-                  "A repository checked out read-only is checked out again with write access when implementation starts, so needing to write to one is never a reason to request it.",
-                  "Plan with the repositories already attached. If a repository is genuinely required and is not attached, say so in the result, naming it and what it is needed for, instead of requesting it.",
-                ].join("\n"),
-              });
-            }
-            if (ledgerCorrectionNote) {
-              // The ledger rejected specific aliases, so the generic "do not
-              // declare this resolved" note would be misleading: the model is
-              // told which claims failed and why instead.
-              researchAdditions.push({
-                target: ["research" as const],
-                title: "Fix the rejected review thread dispositions",
-                content: ledgerCorrectionNote,
-              });
-            } else if (noChangeRetryUsed) {
-              researchAdditions.push({
-                target: ["research" as const],
-                title: "Do not declare this ticket already resolved",
-                content: [
-                  "A human requested changes in the PR review feedback above, and the previous research pass wrongly concluded no change was needed.",
-                  "Treat addressing every point of that review feedback as the task: produce an implementation plan for it, declare the writeRepositories it touches, and do not set noChangeNeeded.",
-                ].join("\n"),
-              });
-            }
+            // What the passes before this one leave for it: the refusals, the
+            // closed expansion, the ledger's correction. This says what
+            // happened; sandbox/context.ts says how each note reads.
             const researchContext = {
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               branchName,
               attachments: downloadedAttachments,
-              preSandboxAdditions: researchAdditions,
+              preSandboxAdditions: ctx.preSandboxAdditions.research,
+              researchNotes: {
+                priorRequests: ctx.repositoryExpansion.priorRequests,
+                refusals: expansionRefusals,
+                // Closed by the bound or by a human; either reads the same here.
+                expansionClosed: Boolean(ctx.repositoryExpansion.expansionClosed),
+                ledgerCorrectionNote,
+                noChangeRetry: noChangeRetryUsed,
+              },
               repositoryContexts: ctx.repositoryContexts,
               workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
             const resolvedResearchInput = await resolveAgentInput({
-              compileEffectivePrompt: execution?.compileEffectivePrompt,
+              compileInvocationPrompt: execution?.compileInvocationPrompt,
               blockPrompt: promptOverride(node) ?? "",
-              runtimeData: assembleResearchPlanContext({
+              runtimeData: researchPlanContextParts({
                 ...researchContext,
                 prompt: "",
               }),
@@ -3304,9 +3262,9 @@ async function agentWorkflowBody(
               workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
             const resolvedImplementationInput = await resolveAgentInput({
-              compileEffectivePrompt: execution?.compileEffectivePrompt,
+              compileInvocationPrompt: execution?.compileInvocationPrompt,
               blockPrompt: promptOverride(node) ?? "",
-              runtimeData: assembleImplementationContext({
+              runtimeData: implementationContextParts({
                 ...implementationContext,
                 prompt: "",
               }),
@@ -3566,9 +3524,9 @@ async function agentWorkflowBody(
                 workspaceManifest: ctx.workspaceManifest ?? undefined,
               };
               const resolvedReviewInput = await resolveAgentInput({
-                compileEffectivePrompt: execution?.compileEffectivePrompt,
+                compileInvocationPrompt: execution?.compileInvocationPrompt,
                 blockPrompt: promptOverride(node) ?? "",
-                runtimeData: assembleReviewContext({
+                runtimeData: reviewContextParts({
                   ...reviewContext,
                   prompt: "",
                 }),
@@ -4070,9 +4028,11 @@ async function agentWorkflowBody(
           });
         }
         const configuration = promptConfiguration.configuration;
-        const compileInvocationPrompt: NonNullable<
-          BlockExecutionContext["compileEffectivePrompt"]
-        > = async ({ blockPrompt, runtimeData, sandboxId }) => {
+        const compileInvocationPrompt: InvocationPromptCompiler = async ({
+          blockPrompt,
+          runtimeData,
+          sandboxId,
+        }) => {
           const runtime = harnessRuntime;
           if (!runtime) {
             return {
@@ -4158,15 +4118,23 @@ async function agentWorkflowBody(
               memorySources = [];
             }
           }
+          // A block with no profile and no prompt of its own runs on the code's
+          // role prompt, and the compilation says so rather than crediting the
+          // block's author with it.
+          const compatibility =
+            blockPrompt.trim().length > 0 ? null : compatibilityPromptForV2Node(node);
           const compilation = await compileEffectivePrompt({
             nodeId: node.id,
-            blockPrompt:
-              blockPrompt.trim().length > 0
-                ? blockPrompt
-                : compatibilityPromptSourceForV2Node(node) ?? blockPrompt,
-            runtimeData: runtime.manifest.context.includeWorkflowData
-              ? runtimeData
-              : "",
+            blockPrompt: compatibility?.source ?? blockPrompt,
+            ...(compatibility ? { blockPromptOrigin: compatibility.origin } : {}),
+            // The compiler applies the profile's switches and records them, so
+            // a send without workflow data says it was left out on purpose.
+            runtimeData,
+            profileContext: {
+              includeWorkflowData: runtime.manifest.context.includeWorkflowData,
+              includeRepositoryInstructions:
+                runtime.manifest.context.includeRepositoryInstructions,
+            },
             slots: resolvedPrompts.slotsByNode[node.id] ?? [],
             slotBindings: node.configuration.promptSlotBindings,
             promptManifest:
@@ -4192,7 +4160,9 @@ async function agentWorkflowBody(
               ),
             };
           }
-          return { ok: true, prompt: compilation.prompt };
+          // The whole compilation, not only its prompt: the sections, their
+          // provenance and parts are what the send was made of.
+          return { ok: true, compilation };
         };
         if (node.type === "transform") {
           try {
@@ -4291,7 +4261,7 @@ async function agentWorkflowBody(
             agentArtifactKey: v2AgentArtifactKeys.get(node.id)!,
             cancellation: invocation.cancellation,
             observations: invocation.observations,
-            compileEffectivePrompt: compileInvocationPrompt,
+            compileInvocationPrompt,
             budget: invocationBudget
               ? {
                   observeBudget: invocationBudget.observeBudget,

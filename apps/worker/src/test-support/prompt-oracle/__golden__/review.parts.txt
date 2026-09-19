@@ -1,0 +1,27 @@
+[profile: Harness Profile: Claude]
+  profile                          91  profile ref=builtin-claude  "Harness Profile instructions"
+
+[repository: acme/api/AGENTS.md]
+  repository-file                  61  repository_file ref=acme/api/AGENTS.md  "Repository file AGENTS.md"
+
+[repository: Repository rules for acme/api]
+  repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
+
+[block: Block role and task]
+  authored:1                     3294  block_prompt  "Block prompt text"
+
+[runtime: Runtime data]
+  ticket                           96  ticket ref=AIW-512  "Ticket"
+  acceptance-criteria             104  ticket ref=AIW-512  "Acceptance criteria"
+  clarifications                   26  clarification  "Clarification answers"
+  clarification:1                 184  clarification ref=1 label=Anna Nowak  "Clarification round 1"
+  research-plan                   201  research_plan  "Research and plan"
+  review-feedback                  94  pull_request label=Piotr  "Pull request review feedback"
+  selected-repositories            27  workspace  "Selected repositories"
+  selected-repositories-rule      114  platform  "Which of them may be changed"
+  selected-repository:1           121  workspace ref=github:acme/api  "Selected repository github:acme/api"
+  selected-repository:2           116  workspace ref=github:acme/sdk  "Selected repository github:acme/sdk"
+  review-siblings                  33  workspace  "Review sibling repositories"
+  review-siblings-rule            207  platform  "Inspect sibling repositories, do not modify them"
+  review-sibling:1                137  workspace ref=github:acme/sdk  "Review sibling github:acme/sdk"
+  review-change-set:1             503  pull_request label=change set  "Pull request change set"

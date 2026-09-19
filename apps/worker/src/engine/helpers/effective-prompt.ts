@@ -32,7 +32,7 @@ export type {
   EffectivePromptProfileSource,
   EffectivePromptRepositorySource,
 } from "@shared/prompts";
-export { compatibilityPromptSourceForV2Node } from "@shared/prompts";
+export { compatibilityPromptForV2Node } from "@shared/prompts";
 
 interface ResolveProfileInstructionsInput {
   node: WorkflowDefinitionV2Node;
