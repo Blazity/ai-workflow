@@ -822,8 +822,289 @@ interactive transaction, while the pglite driver used by tests can, so a
 
 The impact preview before a disable or a reconfigure (decision 9) needs to count
 published workflows and runs in flight, which is the engine's knowledge: S4 and
-S6. The active provider selection for a single-provider capability is S4's, since
-it is the same question as "which integration serves this block".
+S6. The active provider selection for a single-provider capability was assigned
+here to S4 and moved to S6 during it: choosing between two providers is a
+control on the Integrations page, and a stored selection with nothing to write
+it is a refusal that sends an admin to a screen that does not exist. S4 refuses
+the ambiguity by name and tells the admin to disable the provider they do not
+want until the page can select one.
+
+## What the engine decides, decided in S4
+
+The one description S3, S5 and S6 read instead of the code. Delivered in stage
+S4 (AIW-408) as `apps/worker/src/engine/definition/integration-availability.ts`,
+`integration-block-contract.ts`, `integration-run.ts` and the generic step
+`apps/worker/src/engine/steps/integration-block-step.ts`.
+
+### Availability is one pure function over declared data
+
+`deploymentIntegrations({ manifests, states, selected, builtinCapabilities })`
+turns the registry and S2's states into the one value the engine reasons over,
+and `integrationBlockAvailability(type, integrations)` is the only place a block
+of an integration is judged. Both are pure: every input is an argument, so a
+test declares a deployment instead of arranging a database, an environment and a
+generated registry file, and there is no cache to go stale when an admin reaches
+for the kill switch.
+
+The read happens in the services tier (`connectedDeploymentIntegrations` in
+`services/workflow-definitions/block-contracts.ts`) once per request, and inside
+a step for a run. The resolver itself reads nothing, exactly as
+`block-contract-environment.ts` already kept the environment out of it.
+
+**It never reads `verification`.** A connection whose values are complete and
+that nobody ever tested is usable, which is the state of every deployment alive
+on the day this lands; reading the test verdict here would empty their palettes.
+`usable` is `enabled && connection === "connected"`, and that is the whole
+question.
+
+Decision order for one block:
+
+| Check | Answer |
+|---|---|
+| Its integration is disabled | `<Name> is disabled. Enable it on the Integrations page ...` |
+| Its integration is failing | `<Name> is failing: <the resolver's own sentence>.` |
+| Its integration is not connected | `<Name> is not connected. Connect it ...` |
+| A required capability nobody provides | `No connected integration provides the <capability> capability, which this block needs.` |
+| A required capability two usable integrations provide, with no selection | `<A> and <B> both provide the <capability> capability. Choose the active one ...` |
+| Nothing in the build provides the block type | `No integration in this build provides the block "<type>". ...` |
+
+A capability nobody serves is a named refusal and never a silent pick of the
+first provider: a block that posted into one of two connected workspaces because
+it happened to be first in the registry is the failure an admin cannot explain
+afterwards. A provider an admin disabled does not count as a provider at all, so
+disabling one of two trackers resolves the choice rather than raising it.
+
+**`builtinCapabilities` is the bridge, and it shrinks to nothing.** Core still
+serves `issue_tracker`, `vcs` and `messaging` from its own variables, which is
+decision 10: an implementation that needs core configuration stays in core and
+is the built-in provider of the capability. `builtinCapabilitiesOfDeployment()`
+in `block-contract-environment.ts` is the only place that is stated, each entry
+gated on the credentials core needs to serve it, and stages S8 to S13 remove a
+line each as they move a provider out.
+
+Until then, a capability that only an integration declares is **refused**, by
+name. Execution hands a block whichever adapter core builds from its own
+configuration (`engine/support/integration-capabilities.ts`), so offering the
+block because an integration declared the capability would promise one provider
+in the palette and use another in the run. Availability and execution have to
+agree about which provider serves a block, and today that answer is core's.
+
+### One sentence, four audiences
+
+The palette, the publish refusal, the dispatch blocker and the run failure all
+carry the same sentence, because they answer the same question for the same
+person: what is missing and what do I do about it. The surfaces frame it, they
+do not rewrite it. `Block "<id>" (<type>) is unavailable: <sentence>` at publish,
+the blocker `message` at dispatch, and the ticket comment at failure.
+
+### A stored definition may carry a block type core does not own
+
+`isStorableWorkflowBlockType` (`packages/contracts/workflow-graph.ts`) accepts a
+core type or one shaped like `<integration id>_<name>`. The graph package may not
+import the registry (the boundaries gate fences it to `packages/contracts` and
+`packages/conditions`), and it does not need to: whether the block can run is the
+engine's question, answered by name through the contract.
+
+Refusing an unknown type at the schema would make a definition published while an
+integration existed unreadable the day the build stopped shipping it, and the
+node would vanish from a canvas instead of saying what is missing. Writing a NEW
+candidate carrying one is a different matter and is still refused, in
+`validateWorkflowDefinitionCandidate`, with the sentence a misspelled block type
+always produced.
+
+`buildProvidesBlockType(contract)` is how a caller holding a contract asks
+whether the build could describe the block at all. The signal is an explicit
+`unprovided: true` on `WorkflowBlockContract` (`packages/contracts/domain.ts`),
+set in exactly one place, `unknownBlockContract`. It is a field rather than a
+shape read off some other value: an earlier draft inferred it from an empty
+port list and then from an empty set of status variants, and both readings are
+true of a block somebody may legitimately declare one day. A test in
+`block-contract-integrations.test.ts` holds that no contract the registry
+resolves carries it and that an unknown type's does.
+
+### One port, named `out`, until S8
+
+`blockTypeSpecOf` answers one action port named `out` for a type core does not
+own, because the graph package may not read an integration manifest (the
+boundaries gate fences it to `packages/contracts` and `packages/conditions`).
+The editor, meanwhile, draws an integration block's ports from the contract the
+engine resolves, which carries the manifest's own.
+
+A block with two ports therefore reads one way in the palette and another
+everywhere else: the second port is offered, refused at publish as an unknown
+port, and at run time propagates to nothing, leaving a dead branch inside a
+green run. Our own demo fixture shipped exactly that shape.
+
+So an integration block declares exactly one port, named `out`, and branches on
+its `status` output instead. It is enforced twice, because neither place sees
+the other's integrations: `pnpm run gen:integrations` refuses the manifest, and
+the SDK's conformance check refuses it as `block_ports_unsupported`. Both
+messages name the stage that lifts the rule.
+
+| Debt | Owner | What lifting it takes |
+|---|---|---|
+| An integration block has one port | S8, the first stage that ships an integration block | The graph has to learn a manifest's ports. Either a generated port table inside `packages/contracts` written by `gen:integrations`, or the contract threaded into the graph's port lookups. Then the generator rule, the conformance rule and this row all go. |
+
+### What a run carries, and what stops it
+
+A run pins `{ integrationId, configFingerprint }` for each integration its graph
+uses. The pin is a value in the run's own workflow state, not a column:
+`loadWorkflowDefinitionFor` (already a `"use step"`) computes it and returns it
+on `LoadedWorkflowPlan`, so the Workflow DevKit restores it from that step's
+recorded result on replay without reading the database again. A run suspended
+across a deploy comes back holding the connection it started with and learns at
+its next use that the connection moved. A column would have said the same and
+cost a migration; S2 left the choice here for that reason.
+
+The comparison only means anything because the pin is recorded: recomputing it
+from live state on both sides would always agree and `reconfigured` could never
+fire. `checkRunIntegrationUse` answers in S2's order, disabled, then
+disconnected, then reconfigured, and `disabled` is re-read live at every use
+because it is the kill switch.
+
+A plan replayed from before this shipped carries no pins, compares nothing, and
+behaves exactly as it did.
+
+The same read feeds the validation that step runs before it builds the plan. The
+run-load walk resolves contracts through `workflowBlockRegistryContext(undefined,
+integrations)` and parameters through `blockParamsSchemasFor(integrations)`. Give
+it core's registry instead and every integration block resolves to the contract
+for a block nothing provides: a workflow whose integration is connected and
+healthy dies as an invalid definition, which is a log line, no failure reason and
+no ticket comment. Give it core's parameter map and an integration block's
+parameters are never looked at, so a value its own schema rejects starts the run
+and stops it at the block, after everything before it already ran. Both are one
+call away from each other and neither shows up in a type, so both are held by
+`definition-step-integrations.test.ts`.
+
+Two moments stop a run:
+
+- **Before any work.** `runIntegrationBlocker` over the plan's nodes; the run
+  fails through the existing `failBeforeWork` exit, which records the reason,
+  comments it on the ticket and moves the ticket back. One sentence instead of a
+  workspace and an agent invocation nobody needed.
+- **At the block.** The generic step re-reads the state, checks the pin and
+  returns `unavailable` with one of the three reasons. The executor turns it into
+  an execution error of category `configuration`, because no retry and no
+  provider can change it and the person who can is an admin editing a
+  connection.
+
+Nothing is skipped and nothing degrades. The one exception the plan allows is
+memory (decision 12), which S13 delivers.
+
+### One generic step
+
+`runIntegrationBlockStep` runs every integration block there will ever be, with
+`maxRetries = 0`. Integration packages therefore carry no `"use step"`, so moving
+or renaming an integration never strands a suspended run. Core never re-runs a
+block executor that started: a block that posted a comment and then threw must
+not post it twice, and retrying a transient failure is the integration's own
+business through `ctx.http`.
+
+The generated `BLOCK_EXECUTORS` table is written from core's own block
+directories and keyed by block type, so it can hold neither a per-integration
+entry nor a name core may not write. `executeBlock` asks that table first and the
+one generic executor second.
+
+Everything the step reads about the deployment it reads INSIDE the step, so the
+DevKit records the answer and a replay reproduces it rather than asking a
+database that has moved on.
+
+### The core conditions that survive, and when each one goes
+
+`availabilityFor` keeps a condition per provider that has not moved out yet.
+Each reads an environment variable core owns, so the day an integration ships
+under the same id, the condition keeps the old core block in the palette on
+core's own credentials while the integration sits disabled: two answers about
+one provider, and the one an admin acted on loses. Integration ids are free
+strings and none of these five are reserved, so nothing in the type system
+notices.
+
+`apps/worker/src/engine/definition/core-provider-conditions.test.ts` fails when
+a shipped integration id still has a condition in the resolver, and when the
+resolver names a provider this table does not list.
+
+| Provider named in `block-contract-resolver.ts` | Removed by |
+|---|---|
+| Arthur | S8 |
+| Slack | S9 |
+| GitLab | S10 |
+| GitHub | S11 |
+| Jira | S12 |
+
+Rules that depend on a block's own parameters (which VCS providers a trigger
+selected, whether an investigation asked for Slack) stay with the block that
+owns them, which is decision 11; they leave with the same stage.
+
+### The prose is what a human reads; the code is what a machine reads
+
+A failed run records both. `status_reason` is the sentence, and it is copy: we
+rewrite it whenever the wording can be clearer, so anything built on matching it
+breaks silently the first time we improve it, in the direction of "this run
+failed for no reason I recognise". `status_reason_code` is the machine's answer,
+a member of a closed set (`RUN_FAILURE_CODES`, `packages/contracts/run-registry.ts`).
+The code does not replace the sentence and is not derived from it: they answer
+different readers. Decision 12 and the S3 definition of done both require the
+machine-readable reason, so the cost belongs here rather than in a stage that
+would have to reach back into the engine for it.
+
+The set starts as the three this stage can produce, spelled `family.case`:
+`integration_unavailable.disconnected`, `.disabled` and `.reconfigured`.
+Membership is a type, so a code nobody agreed to fails the typecheck rather than
+reaching the column, and `integrationUnavailableFailureCode` is the only way to
+mint one: its template literal means a fourth `IntegrationUnavailableReason`
+stops compiling until someone adds the row.
+
+The pairing is a type, not a convention. `RunStatusReason` is either a bare
+sentence or a sentence carrying a code, so there is no way to spell a code
+without the prose it explains, and both writers
+(`recordRunUsage`, `recordRunStatusReason`) split it into two columns of one
+statement. Production runs on neon-http and cannot open a transaction, so a
+second write would have been exactly the window in which a row holds one half.
+Where the two disagree the code follows the prose through the identical branch:
+a kept watchdog sentence keeps the watchdog's code.
+
+Nothing is backfilled. Every run that failed before the column existed keeps
+null, and null means "this failure carries no code", never "unknown failure".
+Readers are unchanged for null, which is every failure the product produces
+today: the dashboard query names its columns and does not name this one, the run
+detail payload is built field by field, and
+`apps/worker/src/db/repositories/runs/run-detail-read.test.ts` holds that a
+failed run reads exactly as it did and that the field does not appear in what a
+client receives. S3 is the first consumer, and it reads the column directly.
+
+No user-facing sentence changed in this stage. `runRetiredWorkflowFailureExit`
+splits the pair at its own boundary: the ticket comment, the log line and the
+notification get the sentence, and only the durable record sees the code.
+
+The manual-dispatch path already carried the typed code: `integration_unavailable`
+is a `ManualDispatchBlockerCode`, and MCP maps it to `VALIDATION_FAILED`, not
+retryable, nothing applied. The column is the run-side half of the same answer.
+
+Migration `0071_run_status_reason_code`, one nullable `text` column on
+`workflow_runs`.
+
+### Where the engine reaches the integration service
+
+`tiers.json` gains one edge exception: `engine -> apps/worker/src/services/integrations/runtime.ts`.
+The engine has to resolve a connection to run a block, and the connection state,
+the connection values and the context an integration receives are resolved in
+exactly one place. A second resolution in the engine is how a palette and a run
+come to disagree about the same deployment.
+
+The exception names `runtime.ts` rather than `index.ts` deliberately.
+`runtime.ts` re-exports reads only; the write surface (save, disconnect, set
+enabled, set source, test) is not in it, so a run may use a connection and can
+never change one, and the exception cannot widen by accident into the rest of
+`services`.
+
+### Vocabulary this stage adds
+
+`ManualDispatchBlockerCode` gains `integration_unavailable`, distinct from
+`provider_unavailable`: that one is a provider unreachable for THIS request and
+may work on the next, while this one never succeeds until an admin changes a
+connection. It maps to HTTP 422 and, over MCP, to `VALIDATION_FAILED`,
+not retryable, nothing applied.
 
 ## Change log
 
@@ -832,6 +1113,7 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-18 | S4 | `secretsKeyMaterial` exported from `services/integrations` | The generic integration step resolves a connection through the same key material every other caller uses; a second reader of `INTEGRATION_SECRETS_KEY` in the engine would be a second derivation of the thing S2 exists to derive once. Additive: nothing that existed changed. |
 | 2026-09-18 | S2 | `ConnectionField.identity` | An integration whose fields are all secret has a constant configuration fingerprint, so replacing a Slack bot token with another workspace's would read as a rotation and a run in flight would post into the wrong company's channels. The flag marks a secret that names the account; its value enters the pin as a digest, never in the clear. Optional and absent by default, so every manifest written against S0 is unchanged. |
 | 2026-09-18 | S1 | `ErasedIntegrationRuntime` and `ErasedIntegrationCall` | The generated registry has to hold runtimes whose types come from manifests core does not know statically. `IntegrationRuntime<IntegrationManifest>` is not that type: a block executor typed against a literal block type is not assignable to one typed against `IntegrationBlockManifest`, because its parameters are contravariant, and the compiler says so. The erased interface keeps the keys and the results and erases only the parameters, so core can list an integration's blocks, health checks and capabilities and use what each call returns, and S4 narrows the call once where it builds the context. |
 | 2026-09-18 | S0 | Contract created | This record |

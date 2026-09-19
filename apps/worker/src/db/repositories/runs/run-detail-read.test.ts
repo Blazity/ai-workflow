@@ -437,3 +437,69 @@ describe("fetchRunRefs", () => {
     expect(refs?.ticketUrl).toBe("https://blazity.atlassian.net/browse/AWT-5");
   });
 });
+
+/**
+ * The new code column changes nothing for a failure that has no code, which is
+ * every failure the product produces today and every run that failed before the
+ * column existed.
+ *
+ * `readRunDetailRow` selects the whole table, so a new column arrives in the row
+ * whether anyone asked for it or not. What must not happen is that arrival
+ * reaching a caller: the API payload is built field by field, and the day it is
+ * not, this is what says so.
+ */
+describe("a failed run that carries no failure code", () => {
+  const failure = {
+    runId: "r-nocode",
+    status: "failed",
+    statusReason: "Implementation phase timed out",
+    startedAt: new Date("2026-09-19T10:00:00Z"),
+  };
+
+  it("reads exactly as it did before the column existed", async () => {
+    await db.insert(workflowRuns).values(failure);
+
+    const result = await fetchRunDetailFromDb({ db, runId: "r-nocode", ...base });
+
+    expect(result?.run.statusReason).toBe("Implementation phase timed out");
+    expect(result?.run.error).toEqual({ message: "Implementation phase timed out" });
+    // Not "is null": absent. A field nobody added cannot be one a client has to
+    // learn to ignore.
+    expect(Object.keys(result?.run ?? {})).not.toContain("statusReasonCode");
+    expect(Object.keys(result?.run ?? {})).not.toContain("failureCode");
+  });
+
+  it("keeps the refs read to the fields it always returned", async () => {
+    await db.insert(workflowRuns).values(failure);
+
+    const refs = await fetchRunRefs(db, "r-nocode", JIRA);
+
+    expect(Object.keys(refs ?? {}).sort()).toEqual([
+      "prNumber",
+      "prUrl",
+      "prs",
+      "statusReason",
+      "ticketKey",
+      "ticketTitle",
+      "ticketUrl",
+    ]);
+  });
+
+  it("does not let a run that HAS a code grow a field on the way out either", async () => {
+    // The code is for a machine reading the durable row, and S3 is the first
+    // thing that will read it. It is not part of this payload until someone
+    // decides it is, deliberately, with a contract change.
+    await db.insert(workflowRuns).values({
+      ...failure,
+      runId: "r-code",
+      statusReason: "Acme Notify is disabled.",
+      statusReasonCode: "integration_unavailable.disabled",
+    });
+
+    const result = await fetchRunDetailFromDb({ db, runId: "r-code", ...base });
+
+    expect(result?.run.statusReason).toBe("Acme Notify is disabled.");
+    expect(result?.run.error).toEqual({ message: "Acme Notify is disabled." });
+    expect(Object.keys(result?.run ?? {})).not.toContain("statusReasonCode");
+  });
+});

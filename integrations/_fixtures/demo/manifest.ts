@@ -34,7 +34,7 @@ const lookupBlock = defineIntegrationBlock({
     query: z.string().min(1),
     limit: z.number().int().positive().default(10),
   }),
-  contract: { ports: ["out", "empty"], allowsFailurePort: true },
+  contract: { ports: ["out"], allowsFailurePort: true },
   ui: {
     label: "Demo lookup",
     description: "Looks a query up against the demo provider's fixed data.",

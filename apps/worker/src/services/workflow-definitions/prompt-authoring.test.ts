@@ -13,6 +13,7 @@ import {
   resolveNodePromptAuthoring,
   validateWorkflowPromptAuthoringIssuesWithLoader,
 } from "./prompt-authoring.js";
+import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -23,6 +24,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const resolveContract = testBlockContractResolver(registryContext);

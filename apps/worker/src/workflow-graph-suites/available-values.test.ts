@@ -16,6 +16,7 @@ import {
 import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
 import { testBlockContractResolver } from "../test-support/block-contracts.js";
+import { NO_INTEGRATIONS } from "../engine/definition/integration-availability.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -26,6 +27,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const resolveContract = testBlockContractResolver(registryContext);

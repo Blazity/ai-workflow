@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 
+import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
+
 const mocks = vi.hoisted(() => ({
-  contextFromEnv: vi.fn(() => ({
+  contextFromEnv: vi.fn((_profile?: unknown, integrations?: unknown) => ({
     agentProviders: { claude: true, codex: true },
     llmProviders: { claude: true, codex: true },
     defaultAgent: { provider: "claude" as const, model: "claude-test" },
@@ -11,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     slackConfigured: true,
     arthurConfigured: true,
     webhookTriggerConfigured: true,
+    integrations: integrations ?? NO_INTEGRATIONS,
   })),
 }));
 

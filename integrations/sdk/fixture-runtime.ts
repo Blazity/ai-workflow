@@ -230,7 +230,11 @@ const definition: IntegrationRuntimeDefinition<FixtureManifest> = {
       )) as string[];
       ctx.log.info({ runId: ctx.run.runId, nodeId: ctx.run.nodeId, hits: hits.length }, "fixture_research_searched");
       if (hits.length === 0) {
-        return { kind: "next", port: "empty", output: { status: "nothing_found", summary: "", matches: 0 } };
+        // One port, and the outcome in `status`: the graph reads an integration
+        // block's ports from core's catalog, which holds none of them, so a
+        // second port would be offered in the editor and propagate to nothing.
+        // A branch downstream tests `status` instead.
+        return { kind: "next", output: { status: "nothing_found", summary: "", matches: 0 } };
       }
       if (inputs.repository !== undefined) {
         const repository = ctx.capabilities.vcs({

@@ -7,6 +7,7 @@ import type { WorkflowBlockRegistryContext } from "./block-contract-resolver.js"
 import { testBlockData } from "../../test-support/block-contracts.js";
 import { workflowDefinitionTemplate } from "./templates.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
+import { NO_INTEGRATIONS } from "./integration-availability.js";
 
 const migrationsDir = fileURLToPath(new URL("../../../drizzle/", import.meta.url));
 const migrationFiles = readdirSync(migrationsDir)
@@ -22,6 +23,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const blockData = testBlockData(registryContext);

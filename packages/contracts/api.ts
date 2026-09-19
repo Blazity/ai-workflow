@@ -295,7 +295,15 @@ export type ManualDispatchBlockerCode =
   | "deployment_changed"
   | "invalid_input"
   | "not_eligible"
-  | "provider_unavailable";
+  | "provider_unavailable"
+  /**
+   * An integration this workflow uses is disconnected, disabled, failing, or no
+   * longer part of this build. Distinct from `provider_unavailable`, which is a
+   * provider that could not be reached for THIS request and may work on the
+   * next: this one never succeeds until an admin changes a connection, and the
+   * message names which integration and what to do about it.
+   */
+  | "integration_unavailable";
 
 export interface ManualDispatchPreflightStep {
   title: string;

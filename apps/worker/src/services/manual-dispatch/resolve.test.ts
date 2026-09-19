@@ -240,6 +240,7 @@ describe("manual dispatch against a definition repository pin", () => {
   function deployed(
     scope: "any" | "workflow_owned",
     repositoryScope: Record<string, unknown>,
+    extraNodes: Array<{ id: string; type: string }> = [],
   ) {
     return {
       definitionId: 5,
@@ -257,6 +258,15 @@ describe("manual dispatch against a definition repository pin", () => {
             inputs: {},
             additionalInputs: [],
           },
+          ...extraNodes.map((node, index) => ({
+            id: node.id,
+            type: node.type,
+            x: 0,
+            y: index + 1,
+            configuration: {},
+            inputs: {},
+            additionalInputs: [],
+          })),
         ],
         edges: [],
       },
@@ -339,6 +349,30 @@ describe("manual dispatch against a definition repository pin", () => {
       }),
     ).resolves.toMatchObject({
       inputPayload: { scope: "any", pr: expect.objectContaining({ repoPath: "acme/api" }) },
+    });
+  });
+
+  it("reports every block type the deployed graph carries, so the preflight can ask about its integrations", async () => {
+    // The preflight decides whether an integration this workflow uses is in a
+    // state to run, and this list is the only thing it has to ask about.
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+      deployed("any", { repositories: [{ provider: "github", repoPath: "Acme/API" }] }, [
+        { id: "announce", type: "acmenotify_announce" },
+        { id: "comment", type: "post_pr_comment" },
+      ]),
+    );
+
+    await expect(
+      resolveManualDispatch({
+        db: definitionDb,
+        issueTracker,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog,
+      }),
+    ).resolves.toMatchObject({
+      blockTypes: ["trigger_pr_created", "acmenotify_announce", "post_pr_comment"],
     });
   });
 

@@ -59,7 +59,7 @@ const definition: IntegrationRuntimeDefinition<DemoManifest> = {
     demo_lookup: async ({ params }, ctx) => {
       const matches = Math.min(params.limit, params.query.length);
       if (matches === 0) {
-        return { kind: "next", port: "empty", output: { status: "nothing_found", summary: "No matches.", matches: 0 } };
+        return { kind: "next", output: { status: "nothing_found", summary: "No matches.", matches: 0 } };
       }
       const summary = `Found ${matches} match${matches === 1 ? "" : "es"} for "${params.query}".`;
       await ctx.capabilities.messaging.notifyForTicket(params.query, { kind: "note", text: summary });

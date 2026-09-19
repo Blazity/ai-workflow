@@ -96,10 +96,36 @@ function blockObject(
   );
 }
 
+/** The whole stored block type, not only its prefix. The rule is the one
+ *  `isStorableWorkflowBlockType` enforces when a definition carrying the type
+ *  is parsed, so a manifest that generates cleanly and is then unstorable is
+ *  refused here, where the mistake is. */
+const BLOCK_TYPE = /^[a-z][a-z0-9]{2,31}_[a-z0-9]+(?:_[a-z0-9]+)*$/u;
+
+function blockPorts(
+  block: ts.ObjectLiteralExpression,
+  printed: string,
+): string[] {
+  const contract = objectProperty(block, "contract");
+  const value = contract && unwrap(contract);
+  if (!value || !ts.isObjectLiteralExpression(value)) {
+    throw new Error(`${printed}: every block needs a contract object literal.`);
+  }
+  const ports = objectProperty(value, "ports");
+  const list = ports && unwrap(ports);
+  if (!list || !ts.isArrayLiteralExpression(list)) {
+    throw new Error(`${printed}: blocks[].contract.ports must be an array literal.`);
+  }
+  return list.elements.map((element, index) =>
+    stringValue(element, printed, `blocks[].contract.ports[${index}]`),
+  );
+}
+
 function blockTypes(
   manifest: ts.ObjectLiteralExpression,
   manifestPath: string,
   printed: string,
+  id: string,
 ): string[] {
   const blocks = objectProperty(manifest, "blocks");
   const value = blocks && unwrap(blocks);
@@ -108,7 +134,28 @@ function blockTypes(
   }
   return value.elements.map((element) => {
     const object = blockObject(element, manifestPath, printed);
-    return stringValue(objectProperty(object, "type"), printed, "blocks[].type");
+    const type = stringValue(objectProperty(object, "type"), printed, "blocks[].type");
+    if (!type.startsWith(`${id}_`)) {
+      throw new Error(
+        `${printed}: the block type "${type}" must start with "${id}_", so a stored definition says which integration a block belongs to.`,
+      );
+    }
+    if (!BLOCK_TYPE.test(type)) {
+      throw new Error(
+        `${printed}: the block type "${type}" must be lowercase words joined by underscores. ` +
+          "A definition carrying any other shape cannot be parsed, so it would generate here and fail at the editor.",
+      );
+    }
+    const ports = blockPorts(object, printed);
+    if (ports.length !== 1 || ports[0] !== "out") {
+      throw new Error(
+        `${printed}: the block "${type}" declares ports ${JSON.stringify(ports)}; an integration block has exactly one port named "out". ` +
+          "The workflow graph reads a block's ports from the generated core catalog, which holds no integration block, so it resolves every one of them to a single port named \"out\": " +
+          "a second port would be offered in the editor, refused at publish as an unknown port, and would silently propagate to nothing at run time. " +
+          "Stage S8 lifts this by teaching the graph a manifest's ports (ADR-010, \"What the engine decides\"). Until then, branch on the block's status output instead.",
+      );
+    }
+    return type;
   });
 }
 
@@ -174,7 +221,7 @@ function readManifest(
     directory: localPath(root, directory),
     id,
     packageName,
-    blockTypes: blockTypes(object, manifestPath, `${printed}/manifest.ts`),
+    blockTypes: blockTypes(object, manifestPath, `${printed}/manifest.ts`, id),
     fixture,
     manifestPath: localPath(root, manifestPath),
     workerPath: localPath(root, workerPath),

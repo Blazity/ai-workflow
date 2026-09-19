@@ -51,6 +51,7 @@ import {
   type WorkflowValueAnalysis,
 } from "@shared/workflow-graph";
 import { JSON_SCHEMA_SUPPORT } from "./json-schema-support.js";
+import { buildProvidesBlockType } from "./integration-block-contract.js";
 import {
   MINIMUM_PERIOD_MS,
   parseSchedule,
@@ -209,7 +210,10 @@ function v2ConfigurationParams(
   const parsedConfiguration =
     node.type === "branch" || node.type === "transform"
       ? null
-      : blockParamsSchemas[node.type].safeParse(node.configuration);
+      : // Undefined for a block whose integration this build no longer ships;
+        // the node's own availability says so, so the raw configuration is kept
+        // and nothing here pretends to understand it.
+        (blockParamsSchemas[node.type]?.safeParse(node.configuration) ?? null);
   const configuration =
     parsedConfiguration?.success === true
       ? (parsedConfiguration.data as Record<string, unknown>)
@@ -418,15 +422,28 @@ function validateWorkflowV2BlockDeploymentIssues(
           message: `Block "${node.id}" (${node.type}) is unavailable: ${issue.message}`,
         })),
       );
-    } else if (
-      options.checkEnvironmentAvailability !== false &&
-      !profileUnavailable
-    ) {
-      const availability = resolveContract(node.type, params).availability;
-      if (!availability.available) {
+    } else {
+      const contract = resolveContract(node.type, params);
+      // A block type nothing in this build provides is refused whatever the
+      // deployment looks like, because no connection an admin could make would
+      // bring it back: it is a fact about the build, not about a provider. It
+      // is therefore reported even where environment availability is skipped.
+      if (!buildProvidesBlockType(contract)) {
         issues.push(
           workflowDefinitionIssue(
-            `Block "${node.id}" (${node.type}) is unavailable: ${availability.unavailableReason}`,
+            `Block "${node.id}" (${node.type}) is unavailable: ${contract.availability.unavailableReason}`,
+            node.id,
+            `/nodes/${nodeIndex}/type`,
+          ),
+        );
+      } else if (
+        options.checkEnvironmentAvailability !== false &&
+        !profileUnavailable &&
+        !contract.availability.available
+      ) {
+        issues.push(
+          workflowDefinitionIssue(
+            `Block "${node.id}" (${node.type}) is unavailable: ${contract.availability.unavailableReason}`,
             node.id,
             `/nodes/${nodeIndex}/configuration`,
           ),

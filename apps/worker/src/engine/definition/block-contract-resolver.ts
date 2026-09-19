@@ -30,6 +30,14 @@ import {
   resolvedOutput,
   workflowBlockDefinitionIssue,
 } from "./block-registry.js";
+import {
+  integrationBlockAvailability,
+  type DeploymentIntegrations,
+} from "./integration-availability.js";
+import {
+  integrationBlockContract,
+  integrationBlockContracts,
+} from "./integration-block-contract.js";
 
 export interface WorkflowBlockRegistryContext {
   agentProviders: { claude: boolean; codex: boolean };
@@ -40,6 +48,15 @@ export interface WorkflowBlockRegistryContext {
   slackConfigured: boolean;
   arthurConfigured: boolean;
   webhookTriggerConfigured: boolean;
+  /**
+   * What this deployment's integrations let a workflow do.
+   *
+   * The rules below that name a provider are the ones for providers the plan
+   * has not moved out yet (ADR-010, stages S8 to S12); each of those stages
+   * deletes its own. Everything an integration contributes is decided from
+   * this field and the registry, so adding an integration edits no core file.
+   */
+  integrations: DeploymentIntegrations;
 }
 
 const vcsBlocks = new Set<WorkflowBlockType>([
@@ -80,6 +97,13 @@ function availabilityFor(
   params: Record<string, WorkflowParamValue>,
   context: WorkflowBlockRegistryContext,
 ): WorkflowBlockAvailability {
+  // An integration's block first, and from data alone: its integration's state
+  // and the capabilities it declared. Core writes no rule for one and learns
+  // nothing about the provider behind it.
+  const fromIntegration = integrationBlockAvailability(type, context.integrations, {
+    coreOwnsType: coreOwnsBlockType(type),
+  });
+  if (fromIntegration) return fromIntegration;
   const definitionIssue = workflowBlockDefinitionIssue(type, params);
   if (definitionIssue) return unavailable(definitionIssue);
   if (type === "send_slack_message" && !context.slackConfigured) {
@@ -194,11 +218,30 @@ function availabilityFor(
   return available;
 }
 
+/**
+ * Whether core's own catalog owns this block type.
+ *
+ * A stored definition may name a type this build does not ship, because an
+ * integration was removed since it was published. Asking the catalog rather
+ * than trusting the type is what lets that node be answered instead of
+ * crashing a lookup that assumes every type is core's.
+ */
+function coreOwnsBlockType(type: WorkflowBlockType): boolean {
+  return Object.prototype.hasOwnProperty.call(blockContractDefinitions, type);
+}
+
 export function resolveWorkflowBlockContract(
   type: WorkflowBlockType,
   params: Record<string, WorkflowParamValue>,
   context: WorkflowBlockRegistryContext,
 ): WorkflowBlockContract {
+  if (!coreOwnsBlockType(type)) {
+    return integrationBlockContract(
+      type,
+      context.integrations,
+      availabilityFor(type, params, context),
+    );
+  }
   const definition = blockContractDefinitions[type];
   const catalog = BLOCK_CATALOG[type];
   const defaults = defaultsForContext(type, catalog.defaults, context);
@@ -226,11 +269,20 @@ export function resolveWorkflowBlockContract(
   };
 }
 
+/**
+ * Every block this deployment offers: core's catalog plus the blocks the
+ * integrations in this build contribute.
+ *
+ * An integration's block is listed whether or not it is usable, carrying its
+ * availability, because the palette is where an author learns that the block
+ * exists and what is missing. A build that ships no such integration lists
+ * none, so an author is never offered a block nothing here could run.
+ */
 export function buildWorkflowBlockRegistry(
   context: WorkflowBlockRegistryContext,
 ): Record<WorkflowBlockType, WorkflowBlockContract> {
-  return Object.fromEntries(
-    (Object.keys(blockContractDefinitions) as WorkflowBlockType[]).map((type) => [
+  return Object.fromEntries([
+    ...(Object.keys(blockContractDefinitions) as WorkflowBlockType[]).map((type) => [
       type,
       resolveWorkflowBlockContract(
         type,
@@ -238,7 +290,10 @@ export function buildWorkflowBlockRegistry(
         context,
       ),
     ]),
-  ) as Record<WorkflowBlockType, WorkflowBlockContract>;
+    ...integrationBlockContracts(context.integrations, (type, params) =>
+      availabilityFor(type, params, context),
+    ),
+  ]) as Record<WorkflowBlockType, WorkflowBlockContract>;
 }
 
 function defaultsForContext(

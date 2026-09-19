@@ -40,6 +40,7 @@ import type { WorkflowBlockRegistryContext } from "../engine/definition/block-co
 import { workflowDefinitionV2Schema } from "@shared/workflow-graph";
 import { workflowDefinitionTemplates } from "../engine/definition/templates.js";
 import { testBlockData, testDeploymentIssues } from "./block-contracts.js";
+import { NO_INTEGRATIONS } from "../engine/definition/integration-availability.js";
 
 /** Everything configured, so a fixture reports only what its graph earns. */
 const fullContext: WorkflowBlockRegistryContext = {
@@ -51,6 +52,7 @@ const fullContext: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 /** Nothing configured, which is the only way to observe the availability rule
@@ -64,6 +66,7 @@ const bareContext: WorkflowBlockRegistryContext = {
   slackConfigured: false,
   arthurConfigured: false,
   webhookTriggerConfigured: false,
+  integrations: NO_INTEGRATIONS,
 };
 
 const contexts = { full: fullContext, bare: bareContext } as const;

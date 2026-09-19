@@ -26,6 +26,7 @@ import {
 } from "../../../sandbox/harness-runtime.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import type { BlockInvocationContext, EngineCtx } from "./types.js";
+import { NO_INTEGRATIONS } from "../../definition/integration-availability.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -36,6 +37,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 /** Keep an executor assertion coupled to the editor-visible registry contract. */

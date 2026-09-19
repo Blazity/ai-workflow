@@ -10,6 +10,7 @@ import {
 import { workflowDefinitionV2Schema } from "@shared/workflow-graph";
 import { executorRunsOf, expectStartsAfterFinishOf } from "./assertions.js";
 import { createScenario, type Scenario } from "./harness.js";
+import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
 
 /**
  * The committed `schedule-open-pr-v1` snapshot as an executable specification.
@@ -53,6 +54,7 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);

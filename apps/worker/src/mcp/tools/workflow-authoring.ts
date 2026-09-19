@@ -18,7 +18,7 @@ import {
   validateWorkflowDefinitionCandidate,
 } from "../../services/mcp/app-dependencies.js";
 import { pinnedRepositoriesNotEnabled } from "../../services/repository-catalog/index.js";
-import { blockContractsFor } from "../../services/workflow-definitions/block-contracts.js";
+import { connectedBlockContracts } from "../../services/workflow-definitions/block-contracts.js";
 import {
   runnableDefinitionOf,
   WorkflowDefinitionStoreError,
@@ -490,7 +490,9 @@ export function registerWorkflowAuthoringTools(
           // authority on a legal graph is applied, and the store then parses the
           // same schema again before it stores anything.
           //
-          const contracts = blockContractsFor();
+          // Connected, so a graph the dashboard accepts is not refused here for
+          // carrying a block of an integration this deployment has connected.
+          const contracts = await connectedBlockContracts();
           const candidate = validateWorkflowDefinitionCandidate(
             input.definition,
             contracts.resolveContract,

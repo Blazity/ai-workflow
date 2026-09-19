@@ -14,7 +14,7 @@ import type {
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
 import {
-  BLOCK_TYPE_SPECS,
+  isStorableWorkflowBlockType,
   isHarnessProfileReference,
   isSafeWorkflowInputName,
   isV2AgentBlockType,
@@ -288,12 +288,13 @@ export const v2BranchConfigurationSchema = z
 const workflowDefinitionV2NodeSchema = z
   .object({
     id: nodeId,
-    type: z.custom<WorkflowBlockType>(
-      (type) =>
-        typeof type === "string" &&
-        Object.prototype.hasOwnProperty.call(BLOCK_TYPE_SPECS, type),
-      { message: "Unknown workflow block type." },
-    ),
+    // A core block type, or one an integration contributes. Whether this
+    // build can actually run it is the engine's question, answered by name in
+    // the block's contract; refusing it here would make a definition published
+    // while the integration existed unreadable rather than unrunnable.
+    type: z.custom<WorkflowBlockType>((type) => isStorableWorkflowBlockType(type), {
+      message: "Unknown workflow block type.",
+    }),
     name: z.string().optional(),
     x: coordinate,
     y: coordinate,

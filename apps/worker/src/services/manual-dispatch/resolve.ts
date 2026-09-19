@@ -81,6 +81,9 @@ export type ResolvedManualDispatch =
       currentStatus: string;
       aiColumn: string;
       steps: ManualDispatchPreflightStep[];
+      /** Every block type the deployed graph carries, so the preflight can ask
+       *  whether an integration it uses is in a state to run. */
+      blockTypes: string[];
     }
   | {
       definitionId: number;
@@ -101,6 +104,9 @@ export type ResolvedManualDispatch =
       subjectUrl: string;
       aiColumn: string;
       steps: ManualDispatchPreflightStep[];
+      /** Every block type the deployed graph carries, so the preflight can ask
+       *  whether an integration it uses is in a state to run. */
+      blockTypes: string[];
     };
 
 type ManualDispatchPersistence = {
@@ -128,6 +134,14 @@ const connectedPersistence: ManualDispatchPersistence = {
   hasBlockingApproval: hasConnectedDispatchBlockingApprovalForTicket,
   findWorkflowOwnedPullRequest: findConnectedWorkflowOwnedPullRequest,
 };
+
+/** The block types a deployed graph carries. Empty for a version this build
+ *  cannot run, whose own refusal arrives before the preflight reads this. */
+function deployedBlockTypes(
+  row: Parameters<typeof runnableDefinitionOf>[0],
+): string[] {
+  return (runnableDefinitionOf(row)?.nodes ?? []).map((node) => node.type);
+}
 
 export async function resolveManualDispatch(input: {
   db: Db;
@@ -292,6 +306,7 @@ async function resolveTicketDispatch(
     subjectTitle: ticket.title,
     currentStatus: ticket.trackerStatus,
     aiColumn: input.settings.COLUMN_AI,
+    blockTypes: deployedBlockTypes(deployed.definition),
     steps: [
       {
         title: "Reserve ticket",
@@ -483,6 +498,7 @@ async function resolvePullRequestDispatch(
     subjectTitle: snapshot.title || `${parsed.repoPath}#${parsed.prNumber}`,
     subjectUrl: snapshot.prUrl,
     aiColumn: input.settings.COLUMN_AI,
+    blockTypes: deployedBlockTypes(deployed.definition),
     steps: [
       {
         title: "Reserve pull request",

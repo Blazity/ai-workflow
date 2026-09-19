@@ -12,7 +12,7 @@ import type {
   WorkflowDefinitionV2,
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { blockContractsFor } from "./block-contracts.js";
+import { connectedBlockContracts } from "./block-contracts.js";
 import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from "./policy-operations.js";
 import {
   analyzeWorkflowV2Catalog,
@@ -56,9 +56,14 @@ export async function validateWorkflowDefinitionDraftCandidate(candidate: unknow
 /** Which values every block in this candidate may read, and where each comes
  *  from. The API retains its snapshot-shaped input, while block contracts use
  *  the code-owned built-in Harness Profile when no node profile is in force. */
-export function analyzeWorkflowDefinitionCatalog(
+export async function analyzeWorkflowDefinitionCatalog(
   _settings: SettingsSnapshot,
   definition: WorkflowDefinitionV2,
-): WorkflowDefinitionCatalogResponse {
-  return analyzeWorkflowV2Catalog(blockContractsFor().analyzeValues(definition));
+): Promise<WorkflowDefinitionCatalogResponse> {
+  // Connected, so the fields an integration block promises downstream appear in
+  // the catalog the editor binds from. With the core-only map every integration
+  // node resolves to the contract for a block nothing provides, and its output
+  // offers nothing to bind.
+  const contracts = await connectedBlockContracts();
+  return analyzeWorkflowV2Catalog(contracts.analyzeValues(definition));
 }

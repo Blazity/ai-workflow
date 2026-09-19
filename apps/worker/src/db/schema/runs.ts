@@ -23,6 +23,7 @@ import type {
   ReplayCaptureStatus,
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
+  RunFailureCode,
   RunPullRequest,
   RunAnalysisReport,
   RunRepositoryAccess,
@@ -51,6 +52,16 @@ export const workflowRuns = pgTable("workflow_runs", {
    * failed. Written by cancelRun / recordRunUsage; the world has no such field
    * (a cancelled run's error is always undefined). */
   statusReason: text("status_reason"),
+  /**
+   * The machine-readable companion to statusReason, written in the same
+   * statement so a row can never carry a code without the sentence it explains.
+   *
+   * Nothing is backfilled: every run that failed before this column existed
+   * keeps null, and null means "this failure carries no code", never "unknown
+   * failure". Readers that do not know about it are unaffected, which is the
+   * whole reason it is a column beside the prose instead of a new shape for it.
+   */
+  statusReasonCode: text("status_reason_code").$type<RunFailureCode>(),
   subjectKey: text("subject_key"),
   ticketKey: text("ticket_key"),
   ticketTitle: text("ticket_title"),

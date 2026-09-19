@@ -1,6 +1,7 @@
 import {
   BLOCK_TYPE_SPECS,
   GENERATED_TRIGGER_BLOCK_TYPES,
+  type BlockTypeSpec,
   type WorkflowBlockType,
 } from "./block-catalog.generated";
 
@@ -9,6 +10,44 @@ export type { BlockCategory, BlockTypeSpec, WorkflowBlockType } from "./block-ca
 
 export const DEFAULT_OUT_PORT = "out";
 export const FAILURE_PORT = "failed";
+
+/**
+ * A block type an integration contributes: its integration's id, then the
+ * block's own name. The id rule is the manifest's (`INTEGRATION_ID` in the
+ * generator), written here because this package may not import the SDK.
+ */
+const INTEGRATION_BLOCK_TYPE = /^[a-z][a-z0-9]{2,31}_[a-z0-9]+(?:_[a-z0-9]+)*$/;
+
+/**
+ * Whether a stored definition may carry this block type.
+ *
+ * Core's catalog is generated from core's own blocks, so it holds neither a
+ * block an integration contributes nor one whose integration this build has
+ * stopped shipping. Refusing either here would make a definition published
+ * yesterday unreadable today, and the node would vanish instead of saying what
+ * is missing. Whether the block can actually RUN is a different question, and
+ * the engine's block contract answers it by name.
+ */
+export function isStorableWorkflowBlockType(type: unknown): type is WorkflowBlockType {
+  if (typeof type !== "string") return false;
+  if (Object.prototype.hasOwnProperty.call(BLOCK_TYPE_SPECS, type)) return true;
+  return INTEGRATION_BLOCK_TYPE.test(type);
+}
+
+/**
+ * The ports and category of a block type, for a caller holding only the type.
+ *
+ * A type core does not own answers with one action port. The graph uses this
+ * where an edge names no port of its own, which an editor only ever writes for
+ * a block that has exactly one; an integration block therefore names its first
+ * port `out` (ADR-010), and the editor draws its real ports from the contract
+ * the engine resolves, not from here.
+ */
+export function blockTypeSpecOf(type: WorkflowBlockType): BlockTypeSpec {
+  return Object.prototype.hasOwnProperty.call(BLOCK_TYPE_SPECS, type)
+    ? BLOCK_TYPE_SPECS[type]
+    : { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false };
+}
 
 const RESERVED_WORKFLOW_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
@@ -40,7 +79,7 @@ export function isSafeWorkflowInputName(name: string): boolean {
 
 /** Ports an editor may wire from: the spec ports plus the failure port when allowed. */
 export function wirablePorts(type: WorkflowBlockType): string[] {
-  const spec = BLOCK_TYPE_SPECS[type];
+  const spec = blockTypeSpecOf(type);
   return spec.allowsFailurePort ? [...spec.ports, FAILURE_PORT] : [...spec.ports];
 }
 
@@ -120,7 +159,7 @@ export function isV2AgentBlockType(
 
 /** True when a block type can start a run (its category is "trigger"). */
 export function isTriggerBlockType(type: WorkflowBlockType): boolean {
-  return BLOCK_TYPE_SPECS[type].category === "trigger";
+  return blockTypeSpecOf(type).category === "trigger";
 }
 
 export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {

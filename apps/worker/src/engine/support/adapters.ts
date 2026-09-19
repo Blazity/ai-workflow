@@ -66,6 +66,23 @@ const vcsWithoutRepository: VCSAdapter = {
   postRunFailureNote: refuseWithoutRepository,
 };
 
+/**
+ * Whether this deployment can build an issue tracker at all.
+ *
+ * Asked by the palette, which offers a block on the issue tracker capability
+ * only where core can serve it. It lives here because this is the module that
+ * builds the tracker: a caller that decided for itself would name the provider,
+ * and the same question answered in two places is how a palette comes to offer
+ * a block whose call then fails.
+ *
+ * True on every deployment that boots today, because the variables it reads are
+ * required by the environment schema. It is written as a question anyway, so
+ * the day the tracker becomes an integration (S12) there is one place to change.
+ */
+export function coreServesIssueTracker(): boolean {
+  return Boolean(env.JIRA_BASE_URL && env.JIRA_API_TOKEN && env.JIRA_PROJECT_KEY);
+}
+
 export function createAdapters(vcsTarget?: VcsAdapterTarget): Adapters {
   const runRegistry = createConnectedPostgresRunRegistry();
   let vcs: VCSAdapter | undefined;

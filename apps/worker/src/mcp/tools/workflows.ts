@@ -72,6 +72,15 @@ const BLOCKER_ERRORS: Record<ManualDispatchBlockerCode, PublicBlockerError> = {
     retryable: true,
     effectNotApplied: false,
   },
+  // An integration this workflow uses is disconnected, disabled or failing.
+  // Not retryable and nothing was applied: no repetition of this dispatch
+  // succeeds until an admin changes a connection in the dashboard, which is
+  // what the message tells the agent to ask for.
+  integration_unavailable: {
+    code: "VALIDATION_FAILED",
+    retryable: false,
+    effectNotApplied: true,
+  },
 };
 
 /** Domain blockers carry messages the dashboard already shows to people, so

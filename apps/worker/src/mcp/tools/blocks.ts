@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { WorkflowBlockContract } from "@shared/contracts";
 
-import { blockContractsFor } from "../../services/workflow-definitions/block-contracts.js";
+import { connectedBlockContracts } from "../../services/workflow-definitions/block-contracts.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { registerCatalogTool } from "../tool-catalog.js";
@@ -18,8 +18,14 @@ type BlocksListData = {
 // configured Slack channel) is then visible on the very next call instead of
 // waiting for a restart. The agent default comes from the built-in Harness
 // Profile because this catalog call has no run-specific profile.
-function buildRegistry(_deps: McpToolDependencies): Record<string, WorkflowBlockContract> {
-  return blockContractsFor().blockRegistry();
+async function buildRegistry(
+  _deps: McpToolDependencies,
+): Promise<Record<string, WorkflowBlockContract>> {
+  // Through the connected variant, so the catalog an agent reads holds the
+  // blocks of the integrations this deployment has connected and says which of
+  // them are usable. Reading the core-only map here would let an agent build a
+  // graph the dashboard accepts and this tool's own save then refuses.
+  return (await connectedBlockContracts()).blockRegistry();
 }
 
 export function registerBlockTools(server: McpServer, deps: McpToolDependencies): void {
@@ -32,7 +38,7 @@ export function registerBlockTools(server: McpServer, deps: McpToolDependencies)
         toolName: "blocks.list",
         targetRefs: [],
         operation: async (): Promise<BlocksListData> => {
-          const registry = buildRegistry(deps);
+          const registry = await buildRegistry(deps);
           return {
             blocks: Object.values(registry).sort((a, b) => a.type.localeCompare(b.type)),
           };
@@ -57,7 +63,7 @@ export function registerBlockTools(server: McpServer, deps: McpToolDependencies)
         toolName: "blocks.get",
         targetRefs: [input.type],
         operation: async (): Promise<WorkflowBlockContract> => {
-          const registry = buildRegistry(deps);
+          const registry = await buildRegistry(deps);
           const contract = registry[input.type];
           if (!contract) throw new McpPublicError("NOT_FOUND", "Unknown block type", false);
           return contract;

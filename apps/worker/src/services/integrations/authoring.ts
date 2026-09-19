@@ -79,7 +79,9 @@ export class IntegrationVersionConflictError extends Error {
  *  admin pressing Test is waiting at the screen. */
 const TEST_TIMEOUT_MS = 20_000;
 
-function secretsKeyMaterial(): IntegrationSecretsKeyMaterial {
+/** The key this deployment holds. Exported so the engine's integration step
+ *  reads a connection through the same material every other caller does. */
+export function secretsKeyMaterial(): IntegrationSecretsKeyMaterial {
   const key = process.env.INTEGRATION_SECRETS_KEY;
   if (!key || !isValidIntegrationSecretsKey(key)) return { present: false };
   return { present: true, keyId: integrationSecretsKeyId(key), key };
@@ -111,6 +113,10 @@ function fieldDtos(
   // one of them can be corrected. Whether those values are the ones running is a
   // different question, and the state answers it.
   const active = stored?.latest ?? stored?.active ?? null;
+  // Through the resolver's own reader rather than `process.env` directly, so
+  // this deployment's environment is read in exactly one place and the settings
+  // consumer guard keeps its list of computed reads short.
+  const environment = environmentReaderFrom();
   return manifest.connection.fields.map((field) => ({
     key: field.key,
     label: field.label,
@@ -119,7 +125,7 @@ function fieldDtos(
     secret: field.secret,
     optional: field.optional === true,
     format: field.format ?? "text",
-    envSet: (process.env[field.env] ?? "").trim().length > 0,
+    envSet: (environment.value(field.env) ?? "").trim().length > 0,
     // A secret's value is never here, under any source. The screen needs to know
     // one exists so it can say "leave blank to keep", and that is all it needs.
     ...(field.secret || active?.config[field.key] === undefined

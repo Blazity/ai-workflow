@@ -13,6 +13,7 @@ vi.mock("../../prompt-library/prompt-reference-loader.js", () => ({
 }));
 
 import { previewWorkflowPromptCandidate } from "./prompt-preview.js";
+import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -23,6 +24,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const candidate: WorkflowDefinitionV2 = {

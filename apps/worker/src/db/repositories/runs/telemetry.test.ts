@@ -193,6 +193,60 @@ describe("recordRunUsage", () => {
     expect((await row("wrun_1")).statusReason).toBe("Implementation phase timed out");
   });
 
+  it("leaves the code null for a failure that has none, which is every failure today", async () => {
+    // Null is "this failure carries no code", never "unknown failure". Every
+    // run that failed before the column existed reads exactly like this one,
+    // and so does every failure nobody has given a code yet.
+    await recordRunUsage(
+      db,
+      usage({ status: "failed", statusReason: "Implementation phase timed out" }),
+    );
+
+    const r = await row("wrun_1");
+    expect(r.statusReason).toBe("Implementation phase timed out");
+    expect(r.statusReasonCode).toBeNull();
+  });
+
+  it("persists the code beside the sentence when the failure has one", async () => {
+    // What S3 reads. The sentence stays the thing a human reads: it is copy and
+    // we keep rewriting it, which is exactly why a machine may not match on it.
+    await recordRunUsage(
+      db,
+      usage({
+        status: "failed",
+        statusReason: {
+          text: "Acme Notify is disabled. Enable it on the Integrations page to use this block.",
+          code: "integration_unavailable.disabled",
+        },
+      }),
+    );
+
+    const r = await row("wrun_1");
+    expect(r.statusReason).toContain("Acme Notify is disabled");
+    expect(r.statusReasonCode).toBe("integration_unavailable.disabled");
+  });
+
+  it("keeps the watchdog's code with the watchdog's sentence when a late finally lands", async () => {
+    // The watchdog outcome and its explanation are one durable decision. A
+    // kept sentence sitting beside a replaced code would be a row that lies
+    // about itself, and the code is the half a machine believes.
+    await markRunFailedByWatchdog(db, "wrun_1", `${"Run engine stalled:"} step "x" for 32 minutes`);
+    await recordRunUsage(
+      db,
+      usage({
+        status: "failed",
+        statusReason: {
+          text: "Acme Notify is disabled.",
+          code: "integration_unavailable.disabled",
+        },
+      }),
+    );
+
+    const r = await row("wrun_1");
+    expect(r.statusReason).toContain("Run engine stalled:");
+    expect(r.statusReasonCode).toBeNull();
+  });
+
   it("persists structured terminal budget telemetry", async () => {
     const budgetFailure = {
       status: "budget_exceeded" as const,

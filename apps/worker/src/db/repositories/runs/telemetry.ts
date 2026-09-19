@@ -16,12 +16,14 @@ import {
   clarificationRequests,
   workflowRuns,
 } from "../../schema.js";
+import { runStatusReasonParts } from "@shared/contracts";
 import type {
   BlockRunState,
   HarnessRunManifestRecord,
   ResolvedPromptReference,
   RunRepositoryAccess,
   RunPullRequest,
+  RunStatusReason,
   RunStep,
   WorkflowRunBudgetFailure,
 } from "@shared/contracts";
@@ -83,8 +85,10 @@ export interface RunUsage {
    */
   status: "success" | "failed" | "awaiting";
   /** Durable failure reason (execution error / budget stop) recorded with a
-   * "failed" status so the dashboard can show why; null on other outcomes. */
-  statusReason?: string | null;
+   * "failed" status so the dashboard can show why; null on other outcomes.
+   * A bare sentence, or that sentence carrying the code a machine reads: one
+   * value, so the code cannot be written without the prose beside it. */
+  statusReason?: RunStatusReason | null;
   ticketKey: string | null;
   ticketTitle: string | null;
   ticketUrl: string | null;
@@ -225,6 +229,11 @@ export function upsertConnectedRunSnapshots(
  * COALESCE so it never erases a gate PR a cron snapshot may have recorded.
  */
 export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
+  // Split once, written once: the prose and its code are two columns of the
+  // same INSERT, so there is no window in which a row carries one without the
+  // other. Production runs on neon-http and cannot open a transaction, so a
+  // second statement would have been exactly that window.
+  const reason = usage.statusReason ? runStatusReasonParts(usage.statusReason) : null;
   await db
     .insert(workflowRuns)
     .values({
@@ -233,7 +242,8 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
       workflowId: usage.workflowId,
       workflowName: usage.workflowName,
       status: usage.status,
-      statusReason: usage.statusReason ?? null,
+      statusReason: reason?.text ?? null,
+      statusReasonCode: reason?.code ?? null,
       completedAt: sql`now()`,
       ticketKey: usage.ticketKey,
       ticketTitle: usage.ticketTitle,
@@ -272,6 +282,16 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
             and ${workflowRuns.statusReason} like ${`${WATCHDOG_FAILURE_REASON_PREFIX}%`}
           then ${workflowRuns.statusReason}
           else coalesce(excluded.status_reason, ${workflowRuns.statusReason})
+        end`,
+        // The code follows the prose through the identical branch. Any other
+        // rule lets a kept watchdog sentence sit beside a replaced code, which
+        // is the one thing this column must never say.
+        statusReasonCode: sql`case
+          when ${workflowRuns.status} = 'failed'
+            and ${workflowRuns.statusReason} like ${`${WATCHDOG_FAILURE_REASON_PREFIX}%`}
+          then ${workflowRuns.statusReasonCode}
+          when excluded.status_reason is not null then excluded.status_reason_code
+          else ${workflowRuns.statusReasonCode}
         end`,
         workflowId: sql`excluded.workflow_id`,
         workflowName: sql`excluded.workflow_name`,
@@ -433,12 +453,15 @@ function defaultRunStatusReasonOptions(): { kind: RunStatusReasonKind } {
 export async function recordRunStatusReason(
   db: Db,
   runId: string,
-  reason: string,
+  reason: RunStatusReason,
   options: { kind: RunStatusReasonKind } = defaultRunStatusReasonOptions(),
 ): Promise<void> {
+  // One value in, two columns out, in one statement: a caller cannot hand this
+  // a code without the sentence, and the row cannot briefly hold one alone.
+  const parts = runStatusReasonParts(reason);
   await db
     .insert(workflowRuns)
-    .values({ runId, statusReason: reason })
+    .values({ runId, statusReason: parts.text, statusReasonCode: parts.code })
     .onConflictDoUpdate({
       target: workflowRuns.runId,
       set: {
@@ -449,6 +472,15 @@ export async function recordRunStatusReason(
                 when ${workflowRuns.status} = 'success' then ${workflowRuns.statusReason}
                 else coalesce(${workflowRuns.statusReason}, excluded.status_reason)
               end`,
+        // Whichever sentence the branch above keeps, its code goes with it.
+        statusReasonCode:
+          options.kind === "failure"
+            ? sql`excluded.status_reason_code`
+            : sql`case
+                when ${workflowRuns.status} = 'success' then ${workflowRuns.statusReasonCode}
+                when ${workflowRuns.statusReason} is null then excluded.status_reason_code
+                else ${workflowRuns.statusReasonCode}
+              end`,
         updatedAt: sql`now()`,
       },
     });
@@ -456,7 +488,7 @@ export async function recordRunStatusReason(
 
 export function recordConnectedRunStatusReason(
   runId: string,
-  reason: string,
+  reason: RunStatusReason,
   input: Parameters<typeof recordRunStatusReason>[3],
 ): Promise<void> {
   return recordRunStatusReason(getDb(), runId, reason, input);

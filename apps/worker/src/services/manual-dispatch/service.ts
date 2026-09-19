@@ -108,6 +108,19 @@ export async function preflightManualDispatch(input: {
   const active = await input.adapters.runRegistry.get(resolved.subjectKey);
   const atCapacity =
     !active && (await capacityCount(input.adapters)) >= input.maxConcurrentAgents;
+  // An integration the graph uses that is disconnected, disabled or failing.
+  // Reported here rather than discovered at the block, because the person is
+  // looking at a modal and can act on the sentence.
+  const { connectedDeploymentIntegrations } = await import(
+    "../workflow-definitions/block-contracts.js"
+  );
+  const { runIntegrationBlocker } = await import(
+    "../../engine/definition/integration-run.js"
+  );
+  const integrationBlocker = runIntegrationBlocker(
+    resolved.blockTypes.map((type) => ({ type })),
+    await connectedDeploymentIntegrations(),
+  );
   return {
     definitionId: resolved.definitionId,
     definitionName: resolved.definitionName,
@@ -127,7 +140,7 @@ export async function preflightManualDispatch(input: {
         : { url: resolved.subjectUrl }),
     },
     steps: resolved.steps,
-    runnable: !active && !atCapacity,
+    runnable: !active && !atCapacity && !integrationBlocker,
     ...(active
       ? {
           blocker: {
@@ -142,7 +155,14 @@ export async function preflightManualDispatch(input: {
               message: "All workflow execution slots are currently in use.",
             },
           }
-        : {}),
+        : integrationBlocker
+          ? {
+              blocker: {
+                code: "integration_unavailable" as const,
+                message: integrationBlocker.message,
+              },
+            }
+          : {}),
   };
 }
 
@@ -658,6 +678,11 @@ function storedFailure(row: ManualDispatchRow): ManualDispatchError {
   const statusCode =
     row.errorCode === "provider_unavailable"
       ? 502
+      : // Never succeeds until an admin changes a connection, so it is the
+        // caller's request that is wrong for this deployment, not a transient
+        // upstream failure.
+        row.errorCode === "integration_unavailable"
+        ? 422
       : row.errorCode === "invalid_input" || row.errorCode === "not_eligible"
         ? 422
         : 409;

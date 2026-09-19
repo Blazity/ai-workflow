@@ -52,7 +52,7 @@ export default defineEventHandler(
           statusMessage: "Invalid v2 definition",
         });
       }
-      return analyzeWorkflowDefinitionCatalog(
+      return await analyzeWorkflowDefinitionCatalog(
         await getRequestSettingsSnapshot(event),
         candidate.definition,
       );

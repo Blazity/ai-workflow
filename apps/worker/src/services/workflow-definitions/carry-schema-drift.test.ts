@@ -22,6 +22,7 @@ import {
 } from "./carry-schema-drift-gate.js";
 import { workflowDefinitionTemplate, workflowDefinitionTemplates } from "../../engine/definition/templates.js";
 import { validateWorkflowDefinitionCandidate } from "../../engine/definition/validation.js";
+import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
 
 const migrationsDir = fileURLToPath(new URL("../../../drizzle/", import.meta.url));
 const migrationFiles = readdirSync(migrationsDir)
@@ -37,6 +38,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const blockData = testBlockData(registryContext);

@@ -10,7 +10,7 @@ import type { ActiveRunOwner, TicketTransitionOwner } from "../internal/ports.js
 import { analysisCommentMarker, buildApprovedPlanAnalysisReport, buildResearchAnalysisReport, formatPublishedAnalysisComment, formatResearchAnalysisComment, hasAnalysisComment } from "../support/run-analysis-report.js";
 import { isRunControlError } from "../helpers/run-control-error.js";
 import { errorMessage } from "../helpers/repository-failure.js";
-import type { RunAnalysisReport } from "@shared/contracts";
+import type { RunAnalysisReport, RunStatusReason } from "@shared/contracts";
 
 export async function postPrLinksComment(
   ticketId: string,
@@ -329,18 +329,26 @@ markRunFailedOnSelfMoveStep.maxRetries = 0;
  */
 async function recordRunFailureReasonStep(
   runId: string,
-  reason: string,
+  reason: RunStatusReason,
 ): Promise<void> {
   "use step";
   const { loadRunTelemetryPort } = await import("../internal/ports.js");
-  const [{ recordConnectedRunStatusReason }, { logger }] = await Promise.all([
-    loadRunTelemetryPort(),
-    import("../../infra/logger.js"),
-  ]);
+  const [{ recordConnectedRunStatusReason }, { runStatusReasonParts }, { logger }] =
+    await Promise.all([
+      loadRunTelemetryPort(),
+      import("@shared/contracts"),
+      import("../../infra/logger.js"),
+    ]);
+  const parts = runStatusReasonParts(reason);
   try {
-    await recordConnectedRunStatusReason(runId, reason.slice(0, 2_000), {
-      kind: "failure",
-    });
+    await recordConnectedRunStatusReason(
+      runId,
+      // The clamp is the sentence's, not the code's: a closed-set member is
+      // already short, and slicing one would mint a member that is not in the
+      // set.
+      parts.code ? { text: parts.text.slice(0, 2_000), code: parts.code } : parts.text.slice(0, 2_000),
+      { kind: "failure" },
+    );
   } catch (error) {
     logger.warn(
       { runId, err: error instanceof Error ? error.message : String(error) },

@@ -10,7 +10,7 @@
  * in the worker.
  */
 import {
-  BLOCK_TYPE_SPECS,
+  blockTypeSpecOf,
   isSafeWorkflowInputName,
   isTriggerBlockType,
   isWorkflowAddressablePathSegment,
@@ -635,7 +635,7 @@ function resolvedPort(
   edge: WorkflowDefinitionV2ControlEdge,
   source: WorkflowDefinitionV2Node,
 ): string | null {
-  return edge.fromPort ?? BLOCK_TYPE_SPECS[source.type].ports[0] ?? null;
+  return edge.fromPort ?? blockTypeSpecOf(source.type).ports[0] ?? null;
 }
 
 function stronglyConnectedComponents(
@@ -769,7 +769,7 @@ function authoringLoopRegions(
       const source = nodeById.get(edge.from);
       if (
         source &&
-        BLOCK_TYPE_SPECS[source.type].ports.length === 1
+        blockTypeSpecOf(source.type).ports.length === 1
       ) {
         phaseGuaranteedAdjacency.get(edge.from)?.push(edge.to);
       }
@@ -932,7 +932,7 @@ function activationFormulas(
         const sourceFormula = formulas.get(source.id) ?? emptyFormula();
         const port = resolvedPort(edge, source);
         const propagated =
-          port !== null && BLOCK_TYPE_SPECS[source.type].ports.length > 1
+          port !== null && blockTypeSpecOf(source.type).ports.length > 1
             ? guardedFormula(sourceFormula, `$port:${source.id}`, port)
             : sourceFormula;
         mergeFormula(formula, propagated);

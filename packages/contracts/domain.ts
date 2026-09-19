@@ -480,6 +480,17 @@ export interface WorkflowBlockContract {
     statusVariants: string[];
   };
   availability: WorkflowBlockAvailability;
+  /**
+   * Present, and true, only when this build ships nothing that could run the
+   * block: neither core's catalog nor an integration compiled into it.
+   *
+   * A fact about the build rather than about the deployment, so it is a field
+   * of its own rather than something a reader infers from a payload. No
+   * connection an admin could make brings the block back, which is why a
+   * definition carrying one is refused where it is written and not only where
+   * it is published.
+   */
+  unprovided?: true;
 }
 
 export interface WorkflowDefinitionNode {

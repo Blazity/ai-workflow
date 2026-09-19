@@ -45,6 +45,7 @@ import {
   v2LoopConfiguration,
   vcsProviderSelection,
 } from "@shared/workflow-graph";
+import type { DeploymentIntegrations } from "./integration-availability.js";
 
 const emptyParams = z.object({}).strict();
 const agentParams = z
@@ -357,3 +358,23 @@ export const BLOCK_PARAMS_SCHEMAS = {
 } satisfies Record<WorkflowBlockType, z.ZodTypeAny>;
 
 export type BlockParamsSchemas = typeof BLOCK_PARAMS_SCHEMAS;
+
+/**
+ * The parameter schemas one request validates against: core's, plus the schema
+ * each integration block declared in its own manifest.
+ *
+ * Built per request rather than at module load, because which integration
+ * blocks exist is a property of the build and which are usable is a property
+ * of the deployment, and the same request has to answer both from one read.
+ */
+export function blockParamsSchemasFor(
+  integrations: DeploymentIntegrations,
+): BlockParamsSchemas {
+  if (integrations.blocks.size === 0) return BLOCK_PARAMS_SCHEMAS;
+  return {
+    ...BLOCK_PARAMS_SCHEMAS,
+    ...Object.fromEntries(
+      [...integrations.blocks].map(([type, entry]) => [type, entry.block.paramsSchema]),
+    ),
+  } as BlockParamsSchemas;
+}

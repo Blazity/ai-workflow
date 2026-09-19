@@ -41,6 +41,7 @@ import {
   type Scenario,
   type ScenarioOutcome,
 } from "./harness.js";
+import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
 
 /**
  * Arthur's private post-PR review workflow (AIW-221) as an executable
@@ -442,6 +443,7 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);

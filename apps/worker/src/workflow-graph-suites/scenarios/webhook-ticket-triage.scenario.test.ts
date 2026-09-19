@@ -14,6 +14,7 @@ import {
   portsOf,
 } from "./assertions.js";
 import { createScenario, type Scenario } from "./harness.js";
+import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
 
 /**
  * The shipped webhook ticket triage template as an executable specification.
@@ -52,6 +53,7 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);

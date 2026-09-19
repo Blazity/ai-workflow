@@ -9,7 +9,7 @@ import { summarizeRunBlockStatuses } from "../run-block-status-summary.js";
 import { type RunBudgetFailure } from "../helpers/run-budget.js";
 import { redactDiagnosticText } from "../../sandbox/agents/redact.js";
 import { errorMessage } from "../helpers/repository-failure.js";
-import type { BlockRunState, ReplayAttemptOutcome, ReplayObservationKind, ReplaySanitizedEnvelope, ResolvedPromptReference, RunPullRequest, RunRepositoryAccess, WorkflowReplayGraphSnapshot, WorkflowReplaySelectedTransition, HarnessRunManifestRecord } from "@shared/contracts";
+import type { BlockRunState, ReplayAttemptOutcome, ReplayObservationKind, ReplaySanitizedEnvelope, ResolvedPromptReference, RunFailureCode, RunPullRequest, RunRepositoryAccess, RunStatusReason, WorkflowReplayGraphSnapshot, WorkflowReplaySelectedTransition, HarnessRunManifestRecord } from "@shared/contracts";
 import type {
   PreparedReplayAttemptPersistence,
   ReplayAttemptPersistenceState,
@@ -29,6 +29,29 @@ async function persistPreparedReplayAttempt(input: {
     if (await input.replace(input.prepare(current))) return true;
   }
   throw new Error(input.errorMessage);
+}
+
+/**
+ * The durable "why" a failed run records: the sentence, plus the code when the
+ * failure carries one.
+ *
+ * Returned as one value rather than two, because the two are written into one
+ * INSERT and a code without its sentence is a row that explains nothing to the
+ * person who actually opens it.
+ */
+function failureReasonOf(payload: {
+  status: "success" | "failed" | "awaiting";
+  executionError: { message: string; failureCode?: RunFailureCode | null } | null;
+  budgetFailure: RunBudgetFailure | null;
+}): RunStatusReason | null {
+  if (payload.status !== "failed") return null;
+  const error = payload.executionError;
+  if (error) {
+    return error.failureCode ? { text: error.message, code: error.failureCode } : error.message;
+  }
+  return payload.budgetFailure
+    ? `Run stopped on budget: ${payload.budgetFailure.reason}`
+    : null;
 }
 
 /**
@@ -53,7 +76,13 @@ export async function recordRunTelemetryStep(payload: {
   budgetFailure: RunBudgetFailure | null;
   pr: { url: string; number: number } | null;
   prs: RunPullRequest[] | null;
-  executionError: { message: string; code: string } | null;
+  /** `code` is the diagnostic id an operator correlates a log by. `failureCode`
+   *  is the closed-set code a machine reads; null for a failure that has none. */
+  executionError: {
+    message: string;
+    code: string;
+    failureCode?: RunFailureCode | null;
+  } | null;
   harnessManifests?: HarnessRunManifestRecord[];
 }) {
   "use step";
@@ -90,13 +119,9 @@ export async function recordRunTelemetryStep(payload: {
       status: payload.status,
       // Durable "why" for a failed run: the user-facing execution error when one
       // was captured, else a short derivation from the structured budget stop.
-      statusReason:
-        payload.status === "failed"
-          ? payload.executionError?.message ??
-            (payload.budgetFailure
-              ? `Run stopped on budget: ${payload.budgetFailure.reason}`
-              : null)
-          : null,
+      // The machine-readable code rides in the same value, so the row can never
+      // hold one without the other.
+      statusReason: failureReasonOf(payload),
       ticketKey: payload.ticketKey,
       ticketTitle: payload.ticketTitle,
       ticketUrl: payload.ticketUrl,

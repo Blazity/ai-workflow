@@ -127,6 +127,20 @@ test("a block type is the integration id, an underscore and a snake_case name", 
   }
 });
 
+test("a block with a second output port is refused, naming the stage that lifts it", () => {
+  // The workflow graph reads a block's ports from core's generated catalog,
+  // which holds no integration block, so it resolves every one of them to a
+  // single port named "out". A second port would be offered in the editor,
+  // refused at publish as an unknown port, and would propagate to nothing at
+  // run time: a dead branch inside a green run.
+  // An empty list is already refused by the manifest schema, which requires one.
+  for (const ports of [["out", "empty"], ["result"]]) {
+    const { manifest, runtime } = validIntegration();
+    manifest.blocks[0].contract.ports = ports;
+    hasIssue(manifest, runtime, "block_ports_unsupported", "blocks[0].contract.ports");
+  }
+});
+
 test("two blocks with one type are refused", () => {
   const { manifest, runtime } = validIntegration();
   manifest.blocks.push({ ...manifest.blocks[0] });

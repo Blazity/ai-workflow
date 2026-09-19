@@ -77,9 +77,13 @@ import { isRepositoryScriptsRefusal, repositoryScriptFailureEntry, repositoryScr
 import { RunBudgetError, addElapsed, checksCeilingErrorDetail, createRunBudgetState, isChecksCeilingExceededError, isDurationAbortError, isV2InvocationCancelledError, observeRunBudget, propagateInvocationInterruption, recordBudgetUsage, runBudgetFailureFromError, type RunBudgetAttribution, type RunBudgetHooks, type RunBudgetLimits, type RunBudgetFailure, type RunBudgetObservation, type RunBudgetState } from "./helpers/run-budget.js";
 import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
-import { createWorkflowExecutionErrorState, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
+import {
+  executeIntegrationBlock,
+  isIntegrationBlockType,
+} from "./blocks/integration-block.js";
+import { createWorkflowExecutionErrorState, integrationUnavailableFailureCode, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE, runStatusReasonParts } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
-import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
+import type { BlockOutput, BlockRunState, RunPullRequest, RunStatusReason, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
 import type { RunWorkScopeWrite } from "./work-scope/apply-plans.js";
 import type { RepositoryCatalogEntry } from "./repository-discovery/catalog.js";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
@@ -344,7 +348,8 @@ export interface RetiredWorkflowFailureDeps {
   ticketKey: string | undefined;
   cleanupClarifications(): Promise<void>;
   markRunFailed(): Promise<void>;
-  recordFailureReason(reason: string): Promise<void>;
+  /** The durable record, which is the one place the machine-readable code goes. */
+  recordFailureReason(reason: RunStatusReason): Promise<void>;
   logFailure(reason: string): Promise<void>;
   commentFailure(reason: string): Promise<void>;
   moveTicket(): Promise<void>;
@@ -355,21 +360,24 @@ export interface RetiredWorkflowFailureDeps {
  * work: a retired plan, and a ticket run whose catalog enables no repository at
  * all. It records the run state and reason before provider side effects,
  * preserves the Jira comment path (AIW-254), and returns the durable workflow
- * outcome. The reason is a plain string because there is more than one of them
- * now; each caller owns its own sentence. */
+ * outcome. Each caller owns its own sentence; a caller whose failure also has a
+ * machine-readable cause hands the pair, and only the durable record sees the
+ * code. Everything a person reads - the log line, the ticket comment, the
+ * notification - gets the sentence and nothing else. */
 export async function runRetiredWorkflowFailureExit(
-  reason: string,
+  reason: RunStatusReason,
   deps: RetiredWorkflowFailureDeps,
 ): Promise<"failed"> {
+  const sentence = runStatusReasonParts(reason).text;
   await deps.cleanupClarifications();
   await deps.markRunFailed();
   await deps.recordFailureReason(reason);
   const { handleWorkflowFailureExit } = await import("./runtime/workflow-failure-exit.js");
   await handleWorkflowFailureExit(deps.ticketKey, {
-    logFailure: () => deps.logFailure(reason),
-    commentFailure: () => deps.commentFailure(reason),
+    logFailure: () => deps.logFailure(sentence),
+    commentFailure: () => deps.commentFailure(sentence),
     moveTicket: deps.moveTicket,
-    notifyTicket: () => deps.notifyTicket(reason),
+    notifyTicket: () => deps.notifyTicket(sentence),
   });
   return "failed";
 }
@@ -608,7 +616,7 @@ async function agentWorkflowBody(
    * telemetry that one records for a definition problem: this is a
    * configuration refusal with one sentence to give and nothing to diagnose.
    */
-  const failBeforeWork = async (reason: string): Promise<"failed"> =>
+  const failBeforeWork = async (reason: RunStatusReason): Promise<"failed"> =>
     await runRetiredWorkflowFailureExit(reason, {
       ticketKey: entry.ticketKey ?? undefined,
       cleanupClarifications,
@@ -784,6 +792,18 @@ async function agentWorkflowBody(
     workflowNeedsRepositoryAccess(plan.definition.nodes)
   ) {
     return await failBeforeWork(NO_ENABLED_REPOSITORY_MESSAGE);
+  }
+
+  // An integration this graph uses is disconnected, disabled or failing. The
+  // run stops here with one sentence on the ticket rather than at the block,
+  // after a workspace and an agent invocation nobody needed. The check is the
+  // run-start read frozen into the plan, so a run that replays takes the same
+  // branch it took the first time.
+  if (plan.integrationBlocker) {
+    return await failBeforeWork({
+      text: plan.integrationBlocker.message,
+      code: integrationUnavailableFailureCode(plan.integrationBlocker.reason),
+    });
   }
 
   const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
@@ -1236,6 +1256,11 @@ async function agentWorkflowBody(
       definitionId: plan.definitionId,
       definitionVersion: plan.version,
       definitionNodes: plan.nodes,
+      // Frozen with the definition, by the same step. Absent on a plan replayed
+      // from before this shipped, which then compares nothing, exactly as it
+      // did before.
+      ...(plan.integrationPins ? { integrationPins: plan.integrationPins } : {}),
+      integrationLlmDefaults: { provider: runDefaultKind, model: defaultModel },
       entry,
       ticket,
       ticketUrl: entry.ticketKey
@@ -2584,7 +2609,13 @@ async function agentWorkflowBody(
           execution,
         );
         if (genericPromotion) return genericPromotion;
-        const blockExecute = BLOCK_EXECUTORS[node.type];
+        // Core's generated table first, then the one generic executor every
+        // integration block runs through. The table is generated from core's
+        // own block directories and is keyed by block type, so it can hold
+        // neither a per-integration entry nor a name core may not write.
+        const blockExecute =
+          BLOCK_EXECUTORS[node.type] ??
+          (isIntegrationBlockType(node.type) ? executeIntegrationBlock : undefined);
         if (blockExecute) {
           const result = await blockExecute(
             node,
@@ -4782,6 +4813,7 @@ async function agentWorkflowBody(
           ? {
               message: formatExecutionErrorForUser(terminalExecutionError),
               code: terminalExecutionError.diagnosticId,
+              failureCode: terminalExecutionError.failureCode ?? null,
             }
           : null,
         harnessManifests,

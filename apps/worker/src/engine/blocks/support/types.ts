@@ -1,3 +1,4 @@
+import type { IntegrationConnectionPin } from "@shared/contracts";
 import type {
   RunRepositoryAccess,
   SettingsSnapshot,
@@ -71,6 +72,18 @@ import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
 export interface EngineCtx {
   /** Durable workflow run id (getWorkflowMetadata().workflowRunId). */
   runId: string;
+  /**
+   * The connection each integration this graph uses had when the run started,
+   * frozen by the same step that loaded the definition.
+   *
+   * Compared at every use, so a rotated token is followed and a different site
+   * stops the run. Absent for a run that started before integrations existed
+   * and replayed its recorded plan: it then runs with no pin to compare, which
+   * is exactly the behaviour it had before this shipped.
+   */
+  integrationPins?: readonly IntegrationConnectionPin[];
+  /** The provider and model an integration block reaches through `ctx.llm`. */
+  integrationLlmDefaults?: { provider: "claude" | "codex"; model: string };
   /**
    * The deployment settings this run started under, loaded once by
    * `loadRunStartSettingsStep` before any other step.

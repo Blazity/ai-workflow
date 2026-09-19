@@ -12,6 +12,7 @@ export {
   listIntegrations,
   readIntegrationStates,
   saveIntegrationConnection,
+  secretsKeyMaterial,
   setIntegrationConnectionSource,
   setIntegrationEnabledState,
   testIntegrationConnection,

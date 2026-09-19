@@ -8,6 +8,7 @@ import {
 import type { AgentWorkflowInput, PrTriggerPayload } from "../agent-input.js";
 import { assertScheduledRunMayNotPark, SCHEDULED_RUN_CANNOT_PARK_REASON } from "../agent-workflow.js";
 import { selectEntryTriggerNode, triggerOutputFor, triggerOutputWithTicketContext, triggerTypeFor } from "../helpers/trigger-input.js";
+import { NO_INTEGRATIONS } from "../definition/integration-availability.js";
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -18,6 +19,7 @@ const context: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const basePr: PrTriggerPayload = {

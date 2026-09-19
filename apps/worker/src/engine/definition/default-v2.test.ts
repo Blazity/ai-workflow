@@ -18,6 +18,7 @@ import {
 import { workflowDefinitionV2Schema } from "@shared/workflow-graph";
 import { validateHarnessProfileReferencesWithLoader } from "./harness-profile-runtime.js";
 import { hashHarnessProfileManifest } from "../../harness-profiles/manifest.js";
+import { NO_INTEGRATIONS } from "./integration-availability.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -28,6 +29,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const blockData = testBlockData(registryContext);

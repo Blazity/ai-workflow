@@ -23,6 +23,7 @@ import {
 } from "./deployment-validation.js";
 import { parseStoredWorkflowDefinition } from "./stored-definition.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
+import { NO_INTEGRATIONS } from "./integration-availability.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -33,6 +34,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const blockData = testBlockData(registryContext);
@@ -1555,6 +1557,7 @@ describe("webhook trigger configuration", () => {
         ...deploymentBlockData({
           ...registryContext,
           webhookTriggerConfigured: false,
+          integrations: NO_INTEGRATIONS,
         }),
       ),
     ).toContain(

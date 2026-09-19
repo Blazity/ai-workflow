@@ -42,6 +42,7 @@ import {
   type V2StepsRecord,
 } from "@shared/workflow-graph";
 import { SCHEDULER_DEPENDENCIES } from "../../engine/definition/scheduler-dependencies.js";
+import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
 
 /**
  * Turns a workflow definition into an executable specification. The scenario
@@ -151,6 +152,7 @@ const SNAPSHOT_REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   slackConfigured: true,
   arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: NO_INTEGRATIONS,
 };
 
 const SNAPSHOT_CONTRACT_RESOLVER = createWorkflowBlockContractResolver(

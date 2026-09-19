@@ -20,6 +20,7 @@ import {
   type WorkflowBlockRegistryContext,
 } from "./block-contract-resolver.js";
 import { LEGACY_BLOCK_METADATA } from "./legacy-block-metadata.fixture.js";
+import { NO_INTEGRATIONS } from "./integration-availability.js";
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: false },
@@ -30,6 +31,7 @@ const context: WorkflowBlockRegistryContext = {
   slackConfigured: false,
   arthurConfigured: false,
   webhookTriggerConfigured: false,
+  integrations: NO_INTEGRATIONS,
 };
 
 describe("workflow block registry", () => {

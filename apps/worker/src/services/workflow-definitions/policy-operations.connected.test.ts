@@ -64,7 +64,8 @@ vi.mock("../settings/snapshot.js", () => ({
 }));
 
 vi.mock("../../engine/definition/block-contract-environment.js", () => ({
-  workflowBlockRegistryContext: () => ({
+  builtinCapabilitiesOfDeployment: () => ["issue_tracker", "vcs", "messaging"],
+  workflowBlockRegistryContext: (_profile?: unknown, integrations?: unknown) => ({
     agentProviders: { claude: true, codex: true },
     llmProviders: { claude: true, codex: true },
     defaultAgent: { provider: "codex", model: "codex-test" },
@@ -73,6 +74,13 @@ vi.mock("../../engine/definition/block-contract-environment.js", () => ({
     slackConfigured: true,
     arthurConfigured: true,
     webhookTriggerConfigured: true,
+    integrations: integrations ?? {
+      byId: new Map(),
+      blocks: new Map(),
+      providers: new Map(),
+      selected: new Map(),
+      builtinCapabilities: new Set(),
+    },
   }),
 }));
 

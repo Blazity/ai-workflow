@@ -26,6 +26,7 @@ export type ConformanceCode =
   | "capability_reserved"
   | "capability_adapter_missing"
   | "block_type_invalid"
+  | "block_ports_unsupported"
   | "block_params_schema_missing"
   | "block_params_schema_one_argument_record"
   | "block_executor_missing"
@@ -415,6 +416,15 @@ function checkBlocks(manifest: ParsedManifest, runtime: Runtime, report: Report)
       report("duplicate", `${path}.type`, `Block type "${block.type}" is declared twice.`);
     }
     types.add(block.type);
+    if (block.contract.ports.length !== 1 || block.contract.ports[0] !== "out") {
+      report(
+        "block_ports_unsupported",
+        `${path}.contract.ports`,
+        `Block "${block.type}" declares ${JSON.stringify(block.contract.ports)}; an integration block has exactly one port named "out". ` +
+          "The workflow graph reads ports from core's generated catalog, which holds no integration block, so it resolves every one of them to a single port named \"out\": a second port is offered in the editor, refused at publish as an unknown port, and propagates to nothing at run time. " +
+          "Stage S8 lifts this by teaching the graph a manifest's ports (ADR-010). Until then, branch downstream on the block's status output.",
+      );
+    }
     if (isZodSchema(block.paramsSchema)) {
       for (const at of oneArgumentRecords(block.paramsSchema, `${path}.paramsSchema`, new Set())) {
         report(

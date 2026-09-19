@@ -17,7 +17,7 @@ export const researchBlock = defineIntegrationBlock({
     lookbackDays: z.number().int().positive().default(30),
     headers: z.record(z.string(), z.string()).optional(),
   }),
-  contract: { ports: ["out", "empty"], allowsFailurePort: true },
+  contract: { ports: ["out"], allowsFailurePort: true },
   ui: {
     label: "Fixture research",
     description: "Searches the fixture provider and summarises what it finds.",

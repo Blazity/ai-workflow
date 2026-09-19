@@ -30,7 +30,7 @@ import {
   readConnectedWorkflowDefinitionVersionRows,
 } from "../../engine/stored-definition-reads.js";
 import { readConnectedWorkflowDefinitionDraft } from "../../engine/definition-draft-read.js";
-import { blockContractsFor } from "./block-contracts.js";
+import { connectedBlockContracts } from "./block-contracts.js";
 
 export interface WorkflowDefinitionsOverview {
   definitions: WorkflowDefinitionRow[];
@@ -58,10 +58,14 @@ export async function readWorkflowDefinitionsOverview(
 ): Promise<WorkflowDefinitionsOverview> {
   const agentKind = defaultBuiltinHarnessProfile().harness.provider;
   const storedDefinitions = await listConnectedWorkflowDefinitions();
-  const [models, ticketStatuses, profileReference, deployments] = await Promise.all([
+  const [models, ticketStatuses, profileReference, blockContracts, deployments] =
+    await Promise.all([
     fetchAvailableModels(),
     fetchTicketStatuses(),
     currentSystemHarnessProfileReference(),
+    // The palette carries every integration's blocks and says which are usable,
+    // so the editor needs the connection state the same request read.
+    connectedBlockContracts(),
     Promise.all(storedDefinitions.map((row) =>
       row.deployedVersion === null
         ? null
@@ -89,7 +93,7 @@ export async function readWorkflowDefinitionsOverview(
       settings,
       models,
       ticketStatuses,
-      blockContractsFor().blockRegistry(),
+      blockContracts.blockRegistry(),
     ),
   };
 }

@@ -32,7 +32,7 @@ import type {
 } from "@shared/contracts";
 import {
   BLOCK_PARAM_KEYS,
-  BLOCK_TYPE_SPECS,
+  blockTypeSpecOf,
   FAILURE_PORT,
   evaluateWorkflowValueCompatibility,
   isHarnessProfileReference,
@@ -269,8 +269,13 @@ function workflowConfigurationV2Issues(
     // separate avoids accidentally accepting executor params as operations.
     if (node.type === "transform") continue;
 
+    // A block core does not own declares its parameters in its integration's
+    // manifest, so the key list here has nothing to say about it and its own
+    // schema below is what refuses an unsupported one. `null` rather than an
+    // empty list: an empty list would refuse every parameter the block has.
+    const coreParamKeys = BLOCK_PARAM_KEYS[node.type] ?? null;
     const allowedKeys = new Set([
-      ...BLOCK_PARAM_KEYS[node.type],
+      ...(coreParamKeys ?? Object.keys(node.configuration)),
       ...(node.type === "branch" ? ["combinator", "conditions"] : []),
       ...(node.type === "loop" ? ["carry"] : []),
       ...(isV2AgentBlockType(node.type)
@@ -292,7 +297,12 @@ function workflowConfigurationV2Issues(
       );
     }
 
-    const parsed = blockParamsSchemas[node.type].safeParse(node.configuration);
+    // A block type this build has no schema for is one an integration
+    // contributed and this build no longer ships. Its availability already
+    // refuses the node by name; parsing parameters nobody can describe would
+    // bury that under a schema error.
+    const schema = blockParamsSchemas[node.type];
+    const parsed = schema ? schema.safeParse(node.configuration) : { success: true as const, data: node.configuration };
     const profileReference = node.configuration.harnessProfile;
     if (
       parsed.success &&
@@ -896,7 +906,7 @@ function workflowGraphV2Issues(
     }
     if (!fromNode || !toNode || edge.from === edge.to) continue;
 
-    const ports = BLOCK_TYPE_SPECS[fromNode.type].ports;
+    const ports = blockTypeSpecOf(fromNode.type).ports;
     const resolvedPort = edge.fromPort ?? ports[0];
     if (edge.fromPort === FAILURE_PORT) {
       addIssue(
