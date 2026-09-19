@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { WorkflowBlockContract } from "@shared/contracts";
 
-import { connectedBlockContracts } from "../../services/workflow-definitions/block-contracts.js";
+import { agentFacingBlockContracts } from "../integration-facts.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { registerCatalogTool } from "../tool-catalog.js";
@@ -25,7 +25,11 @@ async function buildRegistry(
   // blocks of the integrations this deployment has connected and says which of
   // them are usable. Reading the core-only map here would let an agent build a
   // graph the dashboard accepts and this tool's own save then refuses.
-  return (await connectedBlockContracts()).blockRegistry();
+  //
+  // Agent-facing: the verdict is the editor's own, and the sentence beside it
+  // is the one a model may read. The admin's version names the variable that is
+  // missing, which is the one thing ADR-010 decision 15 keeps off this surface.
+  return (await agentFacingBlockContracts()).blockRegistry();
 }
 
 export function registerBlockTools(server: McpServer, deps: McpToolDependencies): void {

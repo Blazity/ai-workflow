@@ -1,5 +1,5 @@
 {
-  "contractHash": "48e66de186204b0a402fd038fe4fce8e3f55be56555e2dde8688629b5afee18c",
+  "contractHash": "cbb84c4b35ebda2e86d7b92c2118dfc0d932d38667b2cca4e657461a95482837",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -16,7 +16,7 @@
   "tools": [
     {
       "name": "system.capabilities",
-      "description": "Describe this authenticated MCP deployment.",
+      "description": "Describe this authenticated MCP deployment: protocol versions, server version, contract hash, enabled domains, read scopes, whether authoring announcements reach anybody, and `integrations` - every integration this build ships with its status and the blocks it makes available, or null when that state could not be read. Integrations are read-only here; connecting, testing, enabling and configuring one is a dashboard action.",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -501,7 +501,7 @@
     },
     {
       "name": "workflows.save_draft",
-      "description": "Save a graph as the definition's next draft version. `definition` is a whole workflow graph (`schemaVersion` 2, `nodes`, `edges`), validated by exactly the schema the dashboard editor saves through: anything it rejects comes back as VALIDATION_FAILED with the issues named, and nothing is written. A graph declaring any other schema version is refused the same way: schema v1 is retired, so a v1 graph cannot be saved and has to be recreated as schema v2. `expectedDraftRevision` must be the current draft revision (0 for a definition that has never been saved), and the save is refused with CONFLICT if the draft has moved on since, so an agent and a person editing the same workflow cannot overwrite each other. A draft is inert: it changes nothing about what runs until workflows.publish deploys it. `pinnedRepositoriesNotEnabled` lists the repositories this graph pins that the repository catalog does not enable. A pin is a selection inside the catalog and extends nothing, so events from a repository listed here are refused until an operator enables it on the Repositories page, and a run that starts some other way cannot reach it either. Saving such a graph is allowed and is reported rather than refused. The reply never echoes the graph; `graphHash` is sha256 over the canonical JSON of the version that was STORED, which the store canonicalizes on the way in, so it may differ from a digest of the request and is directly comparable with the `graphHash` workflows.publish reports for the same version.",
+      "description": "Save a graph as the definition's next draft version. `definition` is a whole workflow graph (`schemaVersion` 2, `nodes`, `edges`), validated by exactly the schema the dashboard editor saves through: anything it rejects comes back as VALIDATION_FAILED with the issues named, and nothing is written. A graph declaring any other schema version is refused the same way: schema v1 is retired, so a v1 graph cannot be saved and has to be recreated as schema v2. `expectedDraftRevision` must be the current draft revision (0 for a definition that has never been saved), and the save is refused with CONFLICT if the draft has moved on since, so an agent and a person editing the same workflow cannot overwrite each other. A draft is inert: it changes nothing about what runs until workflows.publish deploys it. `pinnedRepositoriesNotEnabled` lists the repositories this graph pins that the repository catalog does not enable. A pin is a selection inside the catalog and extends nothing, so events from a repository listed here are refused until an operator enables it on the Repositories page, and a run that starts some other way cannot reach it either. Saving such a graph is allowed and is reported rather than refused. The reply never echoes the graph; `graphHash` is sha256 over the canonical JSON of the version that was STORED, which the store canonicalizes on the way in, so it may differ from a digest of the request and is directly comparable with the `graphHash` workflows.publish reports for the same version. `deployable` and `deploymentIssues` report what the dashboard editor reports about the SAME graph: a draft that uses a block whose integration is not connected is stored anyway and named here, so it can be built up before a person connects anything. They are not a promise about workflows.publish, which additionally resolves each pinned Harness Profile version against this deployment and can refuse a graph this call called deployable. `deploymentIssueCount` is the total; `deploymentIssues` lists at most the first 50.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -103,3 +103,38 @@ test("the reserved environment variables hold no name an integration owns", () =
     "an integration declares an environment variable core reads for itself; conformance should have refused it",
   );
 });
+
+/**
+ * The floor the MCP surface redacts variable names above.
+ *
+ * `apps/worker/src/mcp/integration-redaction.ts` hides every declared name from
+ * an agent, because a model that knows which variable to ask a person for is
+ * one sentence away from a token in a chat log. It cannot hide a name short
+ * enough to appear inside ordinary words without shredding every answer that
+ * happens to contain those letters, and the `env` pattern above only requires
+ * `^[A-Z][A-Z0-9_]*$`, so a one-letter name is legal.
+ *
+ * That exemption is safe only while no such name exists, which is a rule rather
+ * than a hope. The number is restated and not imported, because this package
+ * may not see the worker: it is `MIN_REDACTED_NAME_LENGTH`, and the two move
+ * together.
+ */
+const MIN_REDACTED_NAME_LENGTH = 4;
+
+for (const directory of directories) {
+  const name = relative(repositoryRoot, directory).replaceAll("\\", "/");
+
+  test(`${name} declares variable names long enough for MCP to redact`, async () => {
+    const { manifest } = (await import(
+      pathToFileURL(join(directory, "manifest.ts")).href
+    )) as { manifest: { connection: { fields: readonly { env: string }[] } } };
+    const short = manifest.connection.fields
+      .map((field) => field.env)
+      .filter((variable) => variable.length < MIN_REDACTED_NAME_LENGTH);
+    assert.deepEqual(
+      short,
+      [],
+      `${name} declares a variable shorter than ${MIN_REDACTED_NAME_LENGTH} characters. The MCP surface leaves such a name visible to an agent rather than redacting it inside every unrelated word; give the field a longer variable name.`,
+    );
+  });
+}

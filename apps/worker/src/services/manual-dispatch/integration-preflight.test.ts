@@ -22,12 +22,15 @@ vi.mock("../../infra/vcs-config.js", () => ({
 }));
 vi.mock("./resolve.js", () => ({
   resolveManualDispatch: (...args: unknown[]) => mockResolve(...args),
+  resolveConnectedManualDispatch: (...args: unknown[]) => mockResolve(...args),
 }));
 vi.mock("../workflow-definitions/block-contracts.js", () => ({
   connectedDeploymentIntegrations: () => mockIntegrations(),
 }));
 
-const { preflightManualDispatch } = await import("./service.js");
+const { preflightManualDispatch, preflightConnectedManualDispatch } = await import(
+  "./service.js"
+);
 
 const notify: IntegrationManifest = {
   id: "acmenotify",
@@ -123,6 +126,28 @@ function preflight() {
   });
 }
 
+/** The variant production runs. It reaches the same reads without a handle. */
+function connectedPreflight(integrations?: ReturnType<typeof deploymentIntegrations>) {
+  return preflightConnectedManualDispatch({
+    adapters,
+    definitionId: 9,
+    triggerNodeId: "trigger",
+    dispatchInput: { kind: "ticket", ticketKey: "AIW-1" },
+    maxConcurrentAgents: 4,
+    repositoryCatalog: unactivatedRepositoryCatalog(),
+    ...(integrations ? { integrations } : {}),
+  });
+}
+
+function disabled() {
+  return deploymentIntegrations({
+    manifests: [notify],
+    states: new Map([
+      ["acmenotify", state({ enabled: false, status: "disabled", usable: false })],
+    ]),
+  });
+}
+
 describe("running a workflow by hand when its integration is gone", () => {
   it("is runnable while the integration is connected and enabled", async () => {
     mockIntegrations.mockResolvedValue(
@@ -151,5 +176,40 @@ describe("running a workflow by hand when its integration is gone", () => {
     expect(response.runnable).toBe(false);
     expect(response.blocker?.code).toBe("integration_unavailable");
     expect(response.blocker?.message).toContain("Acme Notify is disabled");
+  });
+});
+
+describe("the preflight production actually runs", () => {
+  it("refuses the same dispatch the database-bound variant refuses", async () => {
+    // This variant reported no integration blocker at all until S3: every test
+    // that proved the refusal ran the other half, so a workflow whose
+    // integration was disconnected preflighted as runnable on production and
+    // failed the run at its first block.
+    mockIntegrations.mockResolvedValue(disabled());
+
+    const response = await connectedPreflight();
+
+    expect(response.runnable).toBe(false);
+    expect(response.blocker?.code).toBe("integration_unavailable");
+    expect(response.blocker?.message).toContain("Acme Notify is disabled");
+  });
+
+  it("answers from the deployment its caller passed, not from its own read", async () => {
+    // How MCP gets a sentence a model may read: the verdict is this deployment's
+    // own, and only the wording differs (ADR-010, decision 15).
+    mockIntegrations.mockResolvedValue(
+      deploymentIntegrations({
+        manifests: [notify],
+        states: new Map([["acmenotify", state()]]),
+      }),
+    );
+
+    mockIntegrations.mockClear();
+
+    const response = await connectedPreflight(disabled());
+
+    expect(mockIntegrations).not.toHaveBeenCalled();
+    expect(response.runnable).toBe(false);
+    expect(response.blocker?.code).toBe("integration_unavailable");
   });
 });

@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-18
+Last-verified: 2026-09-19
 
 # ADR-010: Integrations
 
@@ -1200,6 +1200,177 @@ as a value core can trust:
 - **The screen never breaks on an unknown word.** A mode or a group this build
   has no entry for renders as Unknown, in its own section, rather than throwing
   while somebody reads the page during an incident.
+
+## What MCP says about integrations, decided in S3
+
+The one description a later stage reads instead of the code. Delivered in stage
+S3 (AIW-410) as `apps/worker/src/mcp/integration-facts.ts`,
+`apps/worker/src/mcp/integration-redaction.ts` and the guard
+`apps/worker/src/mcp/integration-management-guard.test.ts`.
+
+### The caller is a model, and that is the whole design
+
+An agent building a workflow over MCP needs one thing from integrations: which
+blocks it may put in a graph right now, and, when it may not, what to tell the
+person who can change that. It needs nothing else, and Jakub's boundary of
+2026-09-18 (plan decision 15) is that it gets nothing else: connecting, testing,
+enabling, disabling, switching the source and choosing a provider stay in the
+dashboard, because a token that travelled through one of these tools would land
+in a model's context and in a model provider's logs.
+
+### What is exposed
+
+`system.capabilities` gains one field, `integrations`, and no new tool. The plan
+decided the surface; what S3 decided is its shape, one entry per integration
+this build ships:
+
+| Field | Means |
+|---|---|
+| `id`, `name` | The manifest's own, which is what an agent names to a person |
+| `status` | `connected`, `not_connected`, `failing` or `disabled` |
+| `usable` | Enabled and connected: whether its blocks can run at all |
+| `capabilities` | The capability ids it declares. Not which one is active |
+| `blocks[]` | `type`, `available`, and the resolver's own `unavailableReason` |
+
+An empty list for a build that ships no integration, never an absent field: an
+agent has to be able to tell "this deployment has none" from "I asked wrong".
+That case also reaches no database, because there is nothing to read.
+
+There is no sentence of MCP's own beside them. `status` and `usable` are the
+machine-readable answer and the per-block sentence is the resolver's; a third
+wording for the same state is how two surfaces start drifting. For the same
+reason the verdict is read off the contracts the editor's palette is built from
+rather than recomputed: `system.capabilities` and `blocks.list` answer from one
+registry built from one read of the state, inside one call.
+
+Nothing is cached. Disabling an integration is the kill switch an admin reaches
+for, and on Vercel the next call lands on a warm invocation where a module-level
+cache would answer with the catalog that admin just revoked.
+
+### What is not exposed, and what that cost
+
+**No management tool, under any name.** The guard is two rules, because neither
+catches the other's case: a reviewed list of every published tool, so a tool
+added under ANY name fails and the failure names it, and a shape rule over the
+names and the scopes, so the likely spellings fail even in the edit that updated
+the list. Both were seen failing against a planted `integrations.connect` and a
+planted `vendors.rotate`.
+
+**No variable name, anywhere.** This is the finding that changed the stage. S2
+composes the sentence an admin needs, "Set `DEMO_API_TOKEN` on this deployment",
+and S4's `integrationUnusableReason` embeds it, so every MCP surface that
+relayed that sentence handed a model the exact name to ask a person to paste a
+value for. That is the boundary itself, not a detail of it.
+
+The split lives in the state, not in the prose:
+
+- `agentFacingIntegrations` returns the same deployment with each presence's
+  `failure` replaced by a code-owned, agent-safe one. `usable` and `status` are
+  untouched, so the verdict stays exactly one verdict, and
+  `missingVariables`/`missingFields` do not survive, since they are the same
+  answer in structured form. Every sentence the resolver composes downstream,
+  in the palette, in a draft issue and in a publish refusal, then comes out
+  agent-safe without anybody rewriting a finished sentence.
+- A redaction floor in the envelope sanitizer, and in the two places an error
+  message leaves without passing through it (`issueText` and the dispatch
+  refusal), replaces the declared names with `[a deployment variable]`. It is
+  the floor and not the mechanism: a failed run's durable reason is written by
+  code that answers an admin and never heard of this surface. The names come
+  from the manifests, so an integration that adds a variable is covered the day
+  it lands, and the match folds case, because provider tooling and log lines
+  spell a variable whichever way they like. Names shorter than four characters
+  are left alone, because the `env` pattern allows a one-letter name and
+  redacting one would shred every answer that happened to contain those
+  letters; that exemption is safe because `integrations/registry` holds every
+  shipped manifest to the same four characters, so such a name cannot ship.
+
+The dispatch preflight is the one surface that composes its own sentence from
+the presence rather than from a block contract, so MCP passes it the
+agent-facing deployment instead of relying on the floor. Doing that found the
+defect below.
+
+What survives is what a person can act on: which integration, what state it is
+in, and that the Integrations page is where it is fixed.
+
+**No failure reason enum either.** Nine reasons split as finely as an admin's
+afternoon differs; an agent's action is the same for all of them. `status` is
+what it branches on.
+
+### A draft is stored and told why it cannot ship
+
+`workflows.save_draft` keeps the draft and answers with `deployable`, the
+editor's own `deploymentIssues` and `deploymentIssueCount`. It does not refuse.
+Refusing would leave an agent unable to build a graph in steps toward an
+integration a person has yet to connect, and would make MCP disagree with the
+editor about the same graph, which is the failure the plan names. Publish is the
+gate, and it already refuses naming the integration. What must be impossible is
+reading a success without the reason it cannot ship, so `deployable` sits beside
+the revision an agent came for rather than behind a second call. The count is
+reported even when nothing was dropped, because an agent that fixed a capped
+list of fifty and met fifty more would read the second page as damage it had
+just caused.
+
+**`deployable` is not a promise about publish, and that is recorded rather than
+fixed.** `validateWorkflowDefinitionCandidate` resolves no pinned Harness
+Profile versions; the deploy gate does. So a graph pinning a version this
+deployment cannot resolve reads deployable here and is refused there, and a
+parameter issue that depends on a resolved profile can appear here and not
+there. Making this call database-bound would close that gap and open a worse
+one: it would answer differently from the editor's own draft save, which runs
+exactly this function (`validate.post.ts`), and "MCP and the editor never
+disagree about one graph" is the rule this stage is built on. The two are
+reconciled by teaching that one function about profiles, which is the engine's
+call. Until then the tool description says what the field covers.
+
+### The typed failure code is read, not inferred
+
+S4 wrote `status_reason_code` and left the first consumer to S3. A failed run
+now carries `failureCode` on `runs.result` and `runs.logs`, beside the prose
+each of them already carried, and `runs.diagnose` gains an
+`integration_unavailable` category decided from the code.
+
+That category is ahead of every prose rule and is the only high-confidence rule
+in the classifier that looks at a failure at all, which is the point: every
+other rule matches a sentence, and a run stopped by an integration whose reason
+happens to open like another category's was being diagnosed as that category. A
+test holds exactly that case. The three reasons carry three different actions,
+because a person answers them differently: enable it, reconnect it, or nothing
+at all and run again.
+
+`failureCode` travels beside the run rather than inside `RunDetail`, so the
+dashboard's run detail payload is unchanged, exactly as S4 decided.
+
+**The code travels wherever the prose does, and nowhere else.** `runs.get` is a
+summary and carries neither, so an agent polling it sees a failed status and has
+to call `runs.result` for the why. That is the rule rather than a gap: a code
+without the sentence it explains is half an answer, and `runs.get` was never the
+tool that gives one.
+
+### One thing this stage fixed outside itself
+
+`preflightConnectedManualDispatch`, which is the variant production runs,
+computed no integration blocker at all: S4 added it to the database-bound
+variant, and every test that proved the blocker ran that half. A workflow whose
+integration was disconnected therefore preflighted as runnable over MCP and
+failed the run at its first step. Both variants now report it from one helper,
+which takes the deployment as an argument so each caller answers the audience it
+serves.
+
+`system.capabilities` also stopped letting that read fail the whole call.
+Integrations are its one database-backed field and it is the first call every
+client makes, so the field is `null` when the state could not be read, distinct
+from `[]`, which means this build ships none.
+
+### What this stage deliberately left
+
+- Read-only integration data of an integration's own (an evals summary, say) is
+  still an open question to Jakub. The plan says no, and nothing here prepares a
+  slot for one.
+- The response shapes are pinned by tests rather than by the contract hash,
+  which covers tool names, descriptions, input schemas and annotations only. A
+  field added to or removed from a response moves no hash, so the assertions on
+  `system.capabilities`, `workflows.save_draft` and the `runs.result` outcome
+  are what a client's expectations rest on.
 
 ## Change log
 

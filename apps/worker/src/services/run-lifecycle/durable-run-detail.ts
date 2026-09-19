@@ -1,4 +1,11 @@
-import type { RunAnalysisReport, RunDetail, RunPullRequest, RunStep } from "@shared/contracts";
+import type {
+  RunAnalysisReport,
+  RunDetail,
+  RunFailureCode,
+  RunPullRequest,
+  RunStep,
+} from "@shared/contracts";
+import { isRunFailureCode } from "@shared/contracts";
 import type { Db } from "../../db/types.js";
 import {
   readConnectedRunDetailRow,
@@ -64,10 +71,23 @@ export interface FetchRunDetailFromDbOptions {
   jiraBaseUrl: string;
 }
 
+/**
+ * `failureCode` travels BESIDE the run rather than inside it, which is what
+ * ADR-010 decided in S4: the durable column is the machine's answer, the
+ * dashboard payload is built field by field and does not carry it, and MCP is
+ * its first consumer. A field on RunDetail would have put it into every client
+ * of the run detail route on the way to one reader.
+ */
 function mapRunDetailRow(
   row: NonNullable<Awaited<ReturnType<typeof readRunDetailRow>>>,
   jiraBaseUrl: string,
-): { run: RunDetail; steps: RunStep[]; hasRealSteps: boolean; analysisReport: RunAnalysisReport | null } {
+): {
+  run: RunDetail;
+  steps: RunStep[];
+  hasRealSteps: boolean;
+  analysisReport: RunAnalysisReport | null;
+  failureCode: RunFailureCode | null;
+} {
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
   const base = row.startedAt ?? row.createdAt ?? row.firstSeenAt;
   const status = coerceStatus(row.status);
@@ -100,14 +120,23 @@ function mapRunDetailRow(
   };
   const persisted = Array.isArray(row.steps) ? (row.steps as RunStep[]) : null;
   const analysisReport = parseStoredRunAnalysisReport(row.analysisReport);
+  // Null for every run that failed before the column existed, and null means
+  // "this failure carries no code", never "unknown failure".
+  const failureCode = isRunFailureCode(row.statusReasonCode) ? row.statusReasonCode : null;
   if (persisted && persisted.length > 0) {
     const safePersisted = sanitizeRunSteps(persisted) ?? [];
     const steps = TERMINAL.has(run.status)
       ? normalizeFinishedSteps(safePersisted, run.completedAt)
       : safePersisted;
-    return { run, steps, hasRealSteps: true, analysisReport };
+    return { run, steps, hasRealSteps: true, analysisReport, failureCode };
   }
-  return { run, steps: phasesToSteps(row.phases, base), hasRealSteps: false, analysisReport };
+  return {
+    run,
+    steps: phasesToSteps(row.phases, base),
+    hasRealSteps: false,
+    analysisReport,
+    failureCode,
+  };
 }
 
 export async function fetchRunDetailFromDb(opts: FetchRunDetailFromDbOptions) {

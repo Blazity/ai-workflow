@@ -13,6 +13,7 @@ import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { aiColumnMoveTarget, moveTicketForRun } from "../tickets/index.js";
 import type { Db } from "../../db/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
+import type { DeploymentIntegrations } from "../../engine/definition/integration-availability.js";
 import { agentWorkflow } from "../../engine/index.js";
 import {
   readConnectedDeployedWorkflowDefinitionVersion,
@@ -88,6 +89,32 @@ const connectedExecutionStore: ManualExecutionStore = {
   },
 };
 
+/**
+ * The integration blocker both preflights report, from one rule.
+ *
+ * `integrations` is passed in rather than read here so a caller can answer for
+ * the audience it serves: the dashboard shows an admin the sentence naming the
+ * variable that is missing, and MCP passes the agent-facing view of the same
+ * state, because a model that learns a variable name is one sentence away from
+ * asking a person to paste a token into a chat (ADR-010, decision 15). The
+ * verdict is the same either way; only the wording differs.
+ */
+async function preflightIntegrationBlocker(
+  blockTypes: readonly string[],
+  integrations?: DeploymentIntegrations,
+) {
+  const { connectedDeploymentIntegrations } = await import(
+    "../workflow-definitions/block-contracts.js"
+  );
+  const { runIntegrationBlocker } = await import(
+    "../../engine/definition/integration-run.js"
+  );
+  return runIntegrationBlocker(
+    blockTypes.map((type) => ({ type })),
+    integrations ?? (await connectedDeploymentIntegrations()),
+  );
+}
+
 export async function preflightManualDispatch(input: {
   db: Db;
   adapters: Adapters;
@@ -96,6 +123,8 @@ export async function preflightManualDispatch(input: {
   dispatchInput: ManualDispatchInput;
   maxConcurrentAgents: number;
   repositoryCatalog: RepositoryCatalogSnapshot;
+  /** The deployment this answer is for. See preflightIntegrationBlocker. */
+  integrations?: DeploymentIntegrations;
 }): Promise<ManualDispatchPreflightResponse> {
   const resolved = await resolveManualDispatch({
     db: input.db,
@@ -111,15 +140,9 @@ export async function preflightManualDispatch(input: {
   // An integration the graph uses that is disconnected, disabled or failing.
   // Reported here rather than discovered at the block, because the person is
   // looking at a modal and can act on the sentence.
-  const { connectedDeploymentIntegrations } = await import(
-    "../workflow-definitions/block-contracts.js"
-  );
-  const { runIntegrationBlocker } = await import(
-    "../../engine/definition/integration-run.js"
-  );
-  const integrationBlocker = runIntegrationBlocker(
-    resolved.blockTypes.map((type) => ({ type })),
-    await connectedDeploymentIntegrations(),
+  const integrationBlocker = await preflightIntegrationBlocker(
+    resolved.blockTypes,
+    input.integrations,
   );
   return {
     definitionId: resolved.definitionId,
@@ -179,6 +202,14 @@ export async function preflightConnectedManualDispatch(
   });
   const active = await input.adapters.runRegistry.get(resolved.subjectKey);
   const atCapacity = !active && (await capacityCount(input.adapters)) >= input.maxConcurrentAgents;
+  // The same blocker the database-bound variant reports. It used to be absent
+  // here, which is the variant production runs: a workflow whose integration is
+  // disconnected preflighted as runnable, and the dispatch then failed the run
+  // at its first step. Every test that proved the blocker ran the other half.
+  const integrationBlocker = await preflightIntegrationBlocker(
+    resolved.blockTypes,
+    input.integrations,
+  );
   return {
     definitionId: resolved.definitionId,
     definitionName: resolved.definitionName,
@@ -193,8 +224,14 @@ export async function preflightConnectedManualDispatch(
       ...(resolved.inputKind === "ticket" ? { currentStatus: resolved.currentStatus } : { url: resolved.subjectUrl }),
     },
     steps: resolved.steps,
-    runnable: !active && !atCapacity,
-    ...(active ? { blocker: { code: "active_run" as const, message: "This ticket or pull request already has an active workflow run." } } : atCapacity ? { blocker: { code: "at_capacity" as const, message: "All workflow execution slots are currently in use." } } : {}),
+    runnable: !active && !atCapacity && !integrationBlocker,
+    ...(active
+      ? { blocker: { code: "active_run" as const, message: "This ticket or pull request already has an active workflow run." } }
+      : atCapacity
+        ? { blocker: { code: "at_capacity" as const, message: "All workflow execution slots are currently in use." } }
+        : integrationBlocker
+          ? { blocker: { code: "integration_unavailable" as const, message: integrationBlocker.message } }
+          : {}),
   };
 }
 

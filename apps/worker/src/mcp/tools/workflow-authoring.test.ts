@@ -488,12 +488,22 @@ describe("workflows.save_draft", () => {
     const result = await saveDraft(client);
 
     expect(result.isError).not.toBe(true);
+    // The whole response shape, pinned: the contract hash covers tool names,
+    // descriptions, input schemas and annotations, so nothing else would notice
+    // a field appearing or disappearing here.
     expect(dataOf(result)).toEqual({
       definitionId,
       draftRevision: 1,
       graphHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       // This graph pins nothing, and the catalog is not activated either.
       pinnedRepositoriesNotEnabled: [],
+      // Nothing about this deployment stops this graph from going live, and the
+      // flag says so rather than being absent when there is nothing to report.
+      deployable: true,
+      deploymentIssues: [],
+      // Always present, so an agent that fixed a capped list of issues can tell
+      // "there were more" from "these are all of them".
+      deploymentIssueCount: 0,
     });
     // A draft is inert, so nobody is told about one: the channel hears about the
     // publish that makes a graph the platform's instruction, not about the writing.

@@ -3,6 +3,10 @@ import { Buffer } from "node:buffer";
 import { canonicalJson, hashCanonicalJson } from "./canonical-json.js";
 import { MCP_CONTRACT_HASH } from "./contract-artifact.js";
 import { McpPublicError, type McpEnvelope, type SanitizeOptions } from "./contracts.js";
+import {
+  INTEGRATION_VARIABLE_PATTERNS,
+  INTEGRATION_VARIABLE_PLACEHOLDER,
+} from "./integration-redaction.js";
 
 // Re-exported, not redefined. The hash is computed in contract-artifact.ts over the
 // real published surface (every tool's name, description, input schema and
@@ -59,6 +63,13 @@ function sanitizeString(
   value = replaceCounted(value, GITHUB_CREDENTIAL, "[REDACTED]", redactions);
   for (const secret of secrets) {
     value = replaceCounted(value, secret, "[REDACTED]", redactions);
+  }
+  // Names, not values, and a different placeholder for that reason. A model
+  // that knows which variable to ask a person for is the hole ADR-010 decision
+  // 15 closes; see integration-redaction.ts for why the floor is here and not
+  // only at the places this surface composes its own sentences.
+  for (const pattern of INTEGRATION_VARIABLE_PATTERNS) {
+    value = replaceCounted(value, pattern, INTEGRATION_VARIABLE_PLACEHOLDER, redactions);
   }
   value = replaceCounted(value, ANSI_SEQUENCE, "", redactions);
   value = replaceCounted(value, CONTROL_BYTES, "", redactions);

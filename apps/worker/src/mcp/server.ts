@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { mcpSettings } from "../services/settings/runtime-settings.js";
 import type { McpToolDependencies } from "./contracts.js";
 import { executeMcpRead } from "./execute-tool.js";
+import { deploymentIntegrationFacts } from "./integration-facts.js";
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";
 import { MCP_ENABLED_DOMAINS, registerCatalogTool } from "./tool-catalog.js";
 import { authoringAnnouncementDelivery } from "./tools/authoring-support.js";
@@ -55,6 +56,13 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
         // a client is entitled to know it is unobserved, and an operator running the
         // smoke client is entitled to find that out before an incident does.
         authoringAnnouncements: authoringAnnouncementDelivery(deps.adapters?.messaging),
+        // Which integrations this build ships, what state each is in, and which
+        // blocks that lets an agent use. Read-only, and read afresh on every
+        // call: ADR-010 decision 15 keeps connecting, testing, enabling and
+        // configuring an integration in the dashboard, so a token never travels
+        // through a model's context, and this is the half an agent needs to
+        // build a workflow that can actually run here.
+        integrations: await deploymentIntegrationFacts(),
       }),
     });
     envelope.meta.trust = "system";

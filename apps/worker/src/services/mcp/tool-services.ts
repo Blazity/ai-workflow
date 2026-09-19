@@ -1,4 +1,4 @@
-import type { RunDetail, RunStep, SettingsSnapshot } from "@shared/contracts";
+import type { RunDetail, RunFailureCode, RunStep, SettingsSnapshot } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { Db } from "../../db/types.js";
@@ -135,10 +135,17 @@ export interface McpToolServices extends McpGateServices {
   ): ReturnType<typeof savePromptVersionWithPolicy>;
 
   // --- run reads ---------------------------------------------------------
+  /** `failureCode` is the machine-readable half of a failed run's reason, read
+   *  straight off the durable column (ADR-010, S4): the prose is copy and a
+   *  reader that matched on it would break the first time we improved it. */
   fetchRunDetail(
     runId: string,
     jiraBaseUrl: string,
-  ): Promise<{ run: RunDetail; steps: RunStep[] } | null>;
+  ): Promise<{
+    run: RunDetail;
+    steps: RunStep[];
+    failureCode: RunFailureCode | null;
+  } | null>;
   getRunReplay(input: {
     runId: string;
     organizationId: string;
