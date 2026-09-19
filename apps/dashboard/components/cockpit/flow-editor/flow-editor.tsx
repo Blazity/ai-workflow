@@ -47,6 +47,7 @@ import {
   buildPaletteItems,
   CONNECTED_CARD_TEXT_CLASS,
   nodeSummary,
+  unavailableBlockNotices,
 } from "./block-palette";
 import type { PaletteItem } from "./block-palette";
 import { NODE_W, NODE_H, inPortPos, outPortPos, bezier } from "./ports";
@@ -278,6 +279,13 @@ const FlowNode = React.memo(function FlowNode({
   const portCount = outPorts.length;
   const running = runStatus === "running";
   const invalid = validationIssues.length > 0;
+  // The block exists and is configured; this deployment just cannot run it,
+  // because whatever provides it is not connected, is failing, or was switched
+  // off. Amber rather than the red of an invalid node: nothing here is wrong
+  // with the workflow, and the fix is on another screen.
+  const availability = options.blockRegistry[node.type]?.availability;
+  const unavailable = availability !== undefined && !availability.available;
+  const unavailableReason = unavailable ? availability.unavailableReason : null;
 
   return (
     <div
@@ -290,6 +298,8 @@ const FlowNode = React.memo(function FlowNode({
       } ${
         invalid
           ? "border-2 border-red-500 shadow-[0_0_0_4px_rgba(209,67,67,0.12),0_4px_12px_rgba(24,27,32,0.08)] z-[5]"
+          : unavailable
+          ? "border-2 border-amber-400 shadow-[0_0_0_4px_rgba(255,200,0,0.14),0_4px_12px_rgba(24,27,32,0.08)] z-[5]"
           : running
           ? "border-2 border-mariner z-[4] animate-ck-glow"
           : selected
@@ -366,6 +376,15 @@ const FlowNode = React.memo(function FlowNode({
       {invalid && (
         <span id={validationDescriptionId(node.id)} className="sr-only">
           Validation errors: {validationIssues.map((issue) => issue.message).join("; ")}
+        </span>
+      )}
+      {unavailableReason && (
+        <span
+          title={unavailableReason}
+          className="pointer-events-none absolute -top-5 right-0 z-[2] truncate rounded-[3px] border border-amber-300 bg-amber-50 px-1.5 py-0.5 font-mono text-[8px] font-semibold uppercase tracking-[0.05em] text-amber-900"
+        >
+          Unavailable here
+          <span className="sr-only">: {unavailableReason}</span>
         </span>
       )}
       {dataSourceHighlighted && (
@@ -590,6 +609,10 @@ function FlowCanvas({
     [edges],
   );
   const nodeIds = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
+  const canvasNotices = useMemo(
+    () => unavailableBlockNotices(options, nodes.map((node) => node.type)),
+    [nodes, options],
+  );
   useEffect(() => {
     setSelection((current) =>
       reconcileCanvasSelection(current, nodeIds, edgeKeys),
@@ -1294,6 +1317,36 @@ function FlowCanvas({
           />
         ))}
       </div>
+
+      {/* What this deployment cannot run, and where it is fixed. Sits over the
+          canvas rather than inside a node: the sentence is a paragraph and the
+          link has to be clickable, neither of which fits a draggable box. */}
+      {canvasNotices.length > 0 && (
+        <div
+          role="status"
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute left-4 top-4 z-10 max-w-[420px] rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-2 shadow-[0_2px_6px_rgba(24,27,32,0.08)]"
+        >
+          <div className="font-mono text-[9px] font-semibold uppercase tracking-[0.05em] text-amber-900">
+            {canvasNotices.length === 1
+              ? "One step cannot run here"
+              : `${canvasNotices.length} steps cannot run here`}
+          </div>
+          <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0">
+            {canvasNotices.map((notice) => (
+              <li key={notice.type} className="font-body text-[11px] leading-[1.45] text-amber-900">
+                <span className="font-semibold">{notice.label}:</span> {notice.reason}
+              </li>
+            ))}
+          </ul>
+          <a
+            href="/integrations"
+            className="mt-1 inline-block font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-amber-900 underline"
+          >
+            Open Integrations
+          </a>
+        </div>
+      )}
 
       {/* Canvas overlays: zoom controls, mini status */}
       <div
@@ -2333,7 +2386,19 @@ function NodeConfig({
   embedded?: boolean;
 }) {
   const cat = blockPresentation(options, node.type);
-  const contract = nodeContracts[node.id] ?? options.blockRegistry[node.type];
+  const nodeContract = nodeContracts[node.id] ?? options.blockRegistry[node.type];
+  // Ports and outputs are per node, shaped by this node's own configuration, so
+  // they come from the contract validation resolved for it. Availability is not:
+  // it is a fact about the deployment and the block type (ADR-010 S4), and the
+  // per-node contract is only refetched when the canvas changes. An admin who
+  // disabled an integration in another tab would otherwise keep reading "this
+  // block can run" in the panel while the palette and the node badge, both fed
+  // by the registry the server just re-rendered, said it cannot.
+  const registryContract = options.blockRegistry[node.type];
+  const contract = {
+    ...nodeContract,
+    availability: registryContract?.availability ?? nodeContract.availability,
+  };
   const inner = (
     <>
       <div className="pt-[14px] px-[18px] pb-[14px] border-b border-neutral-200 flex flex-col gap-1.5">
@@ -2472,7 +2537,10 @@ function NodeConfig({
             <span className="block font-mono text-[9px] font-semibold tracking-[0.05em] uppercase mb-1">
               Unavailable
             </span>
-            {contract.availability.unavailableReason}
+            {contract.availability.unavailableReason}{" "}
+            <a href="/integrations" className="font-semibold underline">
+              Open Integrations
+            </a>
           </div>
         )}
       </div>

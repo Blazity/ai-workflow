@@ -786,3 +786,25 @@ test("changing a v2 pin changes the semantic definition", () => {
 
   assert.notDeepEqual(after, before);
 });
+
+test("an integration's block keeps its own params instead of taking the editor down", () => {
+  // The param-key allowlist is keyed by the block types core owns, and an
+  // integration's type is storable without being in it. Reading the table
+  // directly threw "BLOCK_PARAM_KEYS[node.type] is not iterable" on the first
+  // render after such a block reached the canvas, which replaced the whole
+  // editor with the client-error screen.
+  const nodes = flowNodes([
+    {
+      id: "echo",
+      type: "demo_echo" as FlowNodeDef["type"],
+      name: "Demo echo",
+      x: 10,
+      y: 20,
+      params: { message: "hello", limit: 3, blank: "   " },
+    },
+  ]);
+
+  const definition = serializeWorkflowDefinition(nodes, []) as WorkflowDefinitionV2;
+
+  assert.deepEqual(definition.nodes[0]?.configuration, { message: "hello", limit: 3 });
+});

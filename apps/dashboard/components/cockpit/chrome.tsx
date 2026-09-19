@@ -14,6 +14,11 @@ const NAV = [
   { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
   { id: "profiles", label: "Harness profiles", glyph: "⌘", group: "flow" },
   { id: "repositories", label: "Repositories", glyph: "☑", group: "flow" },
+  // Never role gated: reading what this deployment is connected to is open to
+  // every role, and only the controls on a connection screen are owner and
+  // admin only. S7 moves it below an Integrations separator with one entry per
+  // connected integration under it.
+  { id: "integrations", label: "Integrations", glyph: "⇄", group: "team" },
   { id: "health", label: "System health", glyph: "＋", group: "team" },
   { id: "users", label: "Users", glyph: "U", group: "team" },
   // Last, and never role gated: reading what the deployment is configured to do
@@ -35,6 +40,7 @@ const MOBILE_MORE_NAV_IDS = [
   "cost",
   "profiles",
   "repositories",
+  "integrations",
   "health",
   "users",
   "settings",

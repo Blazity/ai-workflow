@@ -22,6 +22,43 @@ export function blockPresentation(
   return options.blockRegistry[type].presentation;
 }
 
+/** A block on the canvas this deployment cannot run, and the reason the engine
+ *  gave for it. One entry per block type, because a workflow with four blocks
+ *  of one disconnected integration has one thing wrong with it, not four. */
+export interface UnavailableBlockNotice {
+  readonly type: string;
+  readonly label: string;
+  readonly reason: string;
+}
+
+/**
+ * What the canvas has to warn about, from the same `availability` the palette
+ * greys a block out with.
+ *
+ * The sentence is the engine's: the palette, this warning, the publish refusal
+ * and the failed run all say the same thing, because they answer the same
+ * question for the same person. A block type the registry does not describe at
+ * all is skipped here and is already the editor's unknown-block case.
+ */
+export function unavailableBlockNotices(
+  options: WorkflowEditorOptions,
+  types: readonly string[],
+): UnavailableBlockNotice[] {
+  // Keyed by block type, which is what collapses a workflow's four nodes of one
+  // disconnected integration into the one thing that is wrong with it.
+  const notices = new Map<string, UnavailableBlockNotice>();
+  for (const type of types) {
+    const contract = options.blockRegistry[type as WorkflowBlockType];
+    if (!contract || contract.availability.available) continue;
+    notices.set(type, {
+      type,
+      label: contract.presentation.label,
+      reason: contract.availability.unavailableReason,
+    });
+  }
+  return [...notices.values()];
+}
+
 function truncate(text: string, max = 48): string {
   const clean = text.trim().replace(/\s+/g, " ");
   return clean.length > max ? clean.slice(0, max - 1) + "…" : clean;
@@ -250,6 +287,18 @@ function paletteDefaults(
   return defaults;
 }
 
+/** Title Case from a group id, for a group this list was written before. */
+function groupLabel(group: string): string {
+  return (
+    GROUP_LABELS[group] ??
+    group
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ")
+  );
+}
+
 export function buildPaletteItems(
   options: WorkflowEditorOptions,
 ): PaletteGroup[] {
@@ -262,12 +311,25 @@ export function buildPaletteItems(
       // "add a new one" affordance is gone.
       contract.type !== "run_checks",
   );
-  const groups: PaletteGroup[] = GROUP_ORDER.flatMap((group) => {
+  // The order is core's, then every group the order was written before, in
+  // registry order. An integration that groups its blocks under its own name is
+  // a group this list cannot have known about, and iterating only the known
+  // order would have dropped its blocks out of the palette with no sign that
+  // anything was missing.
+  const knownGroups = new Set<string>(GROUP_ORDER);
+  const contributedGroups = [
+    ...new Set(
+      contracts
+        .map((contract) => contract.presentation.group)
+        .filter((group) => !knownGroups.has(group)),
+    ),
+  ];
+  const groups: PaletteGroup[] = [...GROUP_ORDER, ...contributedGroups].flatMap((group) => {
     const groupContracts = contracts.filter((contract) => contract.presentation.group === group);
     if (groupContracts.length === 0) return [];
     return [{
       group,
-      label: GROUP_LABELS[group],
+      label: groupLabel(group),
       color: groupContracts[0]!.presentation.color,
       items: groupContracts.map((contract) => ({
         id: `block:${contract.type}`,

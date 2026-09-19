@@ -16,6 +16,11 @@ import type {
   HarnessSkillImportRequest,
   HarnessSkillImportResponse,
   HarnessSkillRefreshResponse,
+  IntegrationConnectionSaveRequest,
+  IntegrationMutationResponse,
+  IntegrationSource,
+  IntegrationVersionConflict,
+  IntegrationsListResponse,
   JsonSchemaAuthoringInspectionResponse,
   ManualDispatchInput,
   ManualDispatchPreflightResponse,
@@ -412,6 +417,50 @@ export const apiClient = {
       requestJson<HarnessSkillImportResponse>(
         "/api/harness-skills/local",
         jsonInit("POST", body),
+      ),
+  },
+
+  integrations: {
+    list: (options?: BrowserRequestOptions) =>
+      requestJson<IntegrationsListResponse>("/api/integrations", {
+        cache: "no-store",
+        ...options,
+      }),
+    /** The 409 naming the version the integration actually sits at is the
+     *  answer to `expectedVersion`, not a failure: a second tab is told that
+     *  somebody else saved and keeps what was typed, so the body is read as
+     *  data rather than as an error message. */
+    save: (id: string, body: IntegrationConnectionSaveRequest) =>
+      requestJson<
+        IntegrationMutationResponse | IntegrationVersionConflict,
+        IntegrationVersionConflict
+      >(
+        `/api/integrations/${encodeURIComponent(id)}/connection`,
+        jsonInit("PUT", body),
+        (status) => status === 200 || status === 409,
+      ),
+    /** Tests what is live, whichever source it comes from, and carries no body:
+     *  a test of values the request supplied would prove nothing about the
+     *  connection a run will use. */
+    test: (id: string) =>
+      requestJson<IntegrationMutationResponse>(
+        `/api/integrations/${encodeURIComponent(id)}/test`,
+        { method: "POST" },
+      ),
+    setEnabled: (id: string, enabled: boolean) =>
+      requestJson<IntegrationMutationResponse>(
+        `/api/integrations/${encodeURIComponent(id)}/enabled`,
+        jsonInit("PATCH", { enabled }),
+      ),
+    setSource: (id: string, source: IntegrationSource) =>
+      requestJson<IntegrationMutationResponse>(
+        `/api/integrations/${encodeURIComponent(id)}/source`,
+        jsonInit("PATCH", { source }),
+      ),
+    disconnect: (id: string) =>
+      requestJson<IntegrationMutationResponse>(
+        `/api/integrations/${encodeURIComponent(id)}/connection`,
+        { method: "DELETE" },
       ),
   },
 

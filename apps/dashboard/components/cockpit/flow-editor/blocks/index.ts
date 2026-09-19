@@ -83,6 +83,22 @@ const BLOCK_RENDERERS = {
   update_ticket_status: UpdateTicketStatusFields,
 } satisfies Record<WorkflowBlockType, BlockRenderer>;
 
+/**
+ * The settings panel for one block.
+ *
+ * Every type core owns has a renderer written for it. An integration's block
+ * type does not and cannot: its parameters are declared by the integration's
+ * own schema, which this package never sees. Handing `createElement` the
+ * `undefined` that lookup returns took the whole editor down with "Element type
+ * is invalid" the moment such a block was selected, so a type with no renderer
+ * contributes no fields instead. The rest of the panel still works: the block
+ * keeps its name, its inputs and their bindings, and the Unavailable banner
+ * when this deployment cannot run it.
+ *
+ * A generic form built from an integration's parameter schema is the stage that
+ * ships the first real integration block, not this one.
+ */
 export function ConfigFields(props: BlockRendererProps) {
-  return createElement(BLOCK_RENDERERS[props.node.type], props);
+  const renderer = BLOCK_RENDERERS[props.node.type] as BlockRenderer | undefined;
+  return renderer ? createElement(renderer, props) : null;
 }
