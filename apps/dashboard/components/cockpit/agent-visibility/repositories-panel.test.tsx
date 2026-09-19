@@ -13,12 +13,15 @@ import { act, create, type ReactTestInstance } from "react-test-renderer";
 import {
   ANNA,
   FILIP,
+  FIXTURE_SUBJECT,
   FIXTURE_TICKET,
   LEGACY,
   OLD_ADMIN,
   SHOP_API,
+  SHOP_MOBILE,
   SHOP_WEB,
   buildFixtureStore,
+  resetFixtureScope,
   serveFixture,
   type FixtureStore,
 } from "@/lib/agent-visibility/test-support/fixtures";
@@ -48,21 +51,32 @@ function render(
     withoutRounds?: boolean;
     /** As the ticket's own view mounts it: a waiting question may open it. */
     autoOpen?: boolean;
+    /** The worker refusing every edit, as it refuses one. */
+    refuseEdits?: { status: number; body: unknown };
   } = {},
-): { root: ReactTestInstance; requests: string[] } {
+): { root: ReactTestInstance; requests: string[]; edits: { body: unknown }[] } {
   const requests: string[] = [];
+  const edits: { body: unknown }[] = [];
+  resetFixtureScope(store);
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input: string) => {
+  globalThis.fetch = ((input: string, init?: RequestInit) => {
     const path = String(input);
+    const method = init?.method ?? "GET";
     requests.push(path);
+    const sent = init?.body === undefined ? undefined : (JSON.parse(String(init.body)) as unknown);
+    if (method !== "GET") edits.push({ body: sent });
+    if (options.refuseEdits && method !== "GET") {
+      return Promise.resolve(Response.json(options.refuseEdits.body, { status: options.refuseEdits.status }));
+    }
     if (options.fail?.pattern.test(path)) {
       return Promise.resolve(Response.json({ error: "on purpose" }, { status: options.fail.status }));
     }
     const asked = new URL(path, "http://dashboard.test");
     const served = serveFixture(
       store,
-      "GET",
+      method,
       new URL(`/api/v1${asked.pathname.slice("/api".length)}${asked.search}`, "http://worker.test"),
+      sent,
     );
     if (!served) return Promise.resolve(Response.json({ error: "not served" }, { status: 404 }));
     let body = served.body;
@@ -87,7 +101,7 @@ function render(
     uninstallBrowser();
     globalThis.fetch = originalFetch;
   });
-  return { root: renderer.root, requests };
+  return { root: renderer.root, requests, edits };
 }
 
 async function settle(times = 8) {
@@ -342,4 +356,273 @@ test("an answered round with no kept words says that in its header", async (t) =
   assert.match(summary, /Answered/);
   assert.match(summary, /answered before we kept the words/);
   assert.doesNotMatch(summary, /no answer recorded/);
+});
+
+/* ── Correcting the record ─────────────────────────────────────────────── */
+
+function labelled(root: ReactTestInstance, label: string): ReactTestInstance {
+  const found = root.findAll((node) => node.type === "button" && node.props["aria-label"] === label);
+  assert.equal(found.length, 1, `expected one control labelled "${label}", found ${found.length}`);
+  return found[0]!;
+}
+
+async function click(node: ReactTestInstance) {
+  act(() => node.props.onClick());
+  await settle();
+}
+
+async function clickText(root: ReactTestInstance, label: string) {
+  const found = buttons(root, label);
+  assert.equal(found.length, 1, `expected one button saying "${label}", found ${found.length}`);
+  await click(found[0]!);
+}
+
+test("an action is not a change: nothing is sent until the confirmation is tapped", async (t) => {
+  const harness = render(t);
+  await settle();
+
+  await click(labelled(harness.root, `Exclude: ${SHOP_WEB}`));
+  assert.deepEqual(harness.edits, [], "tapping an action wrote to the record");
+  const asked = text(harness.root);
+  assert.match(asked, new RegExp(`${SHOP_WEB} becomes a repository this ticket's work will not touch`));
+  assert.match(asked, /It is recorded as your decision, with your name and the time/);
+  assert.match(asked, /It changes the record only\. Nothing running is stopped or restarted by it/);
+  // A question is waiting on this ticket, and this is not an answer to it.
+  assert.match(asked, /This does not answer it, and the run stays parked/);
+
+  await clickText(harness.root, "Cancel");
+  assert.deepEqual(harness.edits, [], "cancelling wrote to the record");
+  assert.doesNotMatch(text(harness.root), /becomes a repository this ticket's work will not touch/);
+});
+
+test("a confirmed change sends one change against the version that was read, and shows the worker's answer", async (t) => {
+  const harness = render(t);
+  await settle();
+
+  await click(labelled(harness.root, `Exclude: ${SHOP_WEB}`));
+  await clickText(harness.root, "Yes, exclude it");
+
+  assert.deepEqual(harness.edits, [
+    {
+      body: {
+        subjectKey: FIXTURE_SUBJECT,
+        expectedVersion: 4,
+        changes: [{ repositoryKey: SHOP_WEB, action: "exclude", rationale: "Corrected on the dashboard." }],
+      },
+    },
+  ]);
+  const body = text(harness.root);
+  // The record on the screen is the one the worker sent back, version and all.
+  assert.match(body, new RegExp(`${SHOP_WEB} Excluded`));
+  assert.match(body, /record version 5/);
+  assert.match(body, /Recorded\./);
+  assert.match(body, new RegExp(`${SHOP_WEB} is now: excluded, ${FILIP}`));
+  assert.match(body, /Corrected on the dashboard/);
+});
+
+test("a person's own words are what the record keeps, when they write any", async (t) => {
+  const harness = render(t);
+  await settle();
+
+  await click(labelled(harness.root, `Exclude: ${SHOP_WEB}`));
+  await clickText(harness.root, "Add a reason");
+  const field = harness.root.findAll(
+    (node) => node.type === "input" && node.props["aria-label"] === "Why you are making this change",
+  );
+  assert.equal(field.length, 1);
+  act(() => field[0]!.props.onChange({ target: { value: "I meant the API only." } }));
+  await settle();
+  await clickText(harness.root, "Yes, exclude it");
+
+  assert.deepEqual((harness.edits[0]!.body as { changes: unknown[] }).changes, [
+    { repositoryKey: SHOP_WEB, action: "exclude", rationale: "I meant the API only." },
+  ]);
+  assert.match(text(harness.root), /I meant the API only/);
+});
+
+test("undo puts the record back, and says so as one correction rather than a second decision", async (t) => {
+  const harness = render(t);
+  await settle();
+
+  await click(labelled(harness.root, `Exclude: ${SHOP_WEB}`));
+  await clickText(harness.root, "Yes, exclude it");
+  assert.match(text(harness.root), new RegExp(`${SHOP_WEB} Excluded`));
+
+  await clickText(harness.root, "Undo this change");
+  // It says what putting it back means, including whose name ends up on it.
+  const asked = text(harness.root);
+  assert.match(asked, new RegExp(`${SHOP_WEB} goes back to selected, where it was before your change`));
+  assert.match(asked, /Your name goes on it/);
+  await clickText(harness.root, "Yes, select it");
+
+  const body = text(harness.root);
+  assert.match(body, new RegExp(`${SHOP_WEB} Selected`));
+  assert.match(body, /Put back\./);
+  assert.match(body, /record version 6/);
+  // One correction: there is nothing to undo about an undo.
+  assert.equal(buttons(harness.root, "Undo this change").length, 0);
+  assert.equal(harness.edits.length, 2);
+  assert.deepEqual(harness.edits[1]!.body, {
+    subjectKey: FIXTURE_SUBJECT,
+    expectedVersion: 5,
+    changes: [{ repositoryKey: SHOP_WEB, action: "select", rationale: "Corrected on the dashboard." }],
+  });
+});
+
+test("a repository a question offered and nobody decided about can be put in the record", async (t) => {
+  const harness = render(t);
+  await settle();
+
+  const body = text(harness.root);
+  assert.match(body, /Offered in a question, not in the record/);
+  assert.match(body, new RegExp(`${SHOP_MOBILE} Nobody decided about this one`));
+  await click(labelled(harness.root, `Select: ${SHOP_MOBILE}`));
+  await clickText(harness.root, "Yes, select it");
+
+  const after = text(harness.root);
+  assert.match(after, new RegExp(`${SHOP_MOBILE} Selected`));
+  assert.match(after, /5 repositories decided/);
+  // It is in the record now, so it is no longer offered as one nobody decided.
+  assert.doesNotMatch(after, new RegExp(`${SHOP_MOBILE} Nobody decided about this one`));
+  // And it can be taken straight back out, where the undo lives.
+  assert.equal(buttons(harness.root, "Undo this change").length, 1);
+});
+
+test("a repository the catalog does not enable is refused in the worker's own words", async (t) => {
+  const harness = render(t);
+  await settle();
+
+  await click(labelled(harness.root, `Select: ${OLD_ADMIN}`));
+  await clickText(harness.root, "Yes, select it");
+
+  const body = text(harness.root);
+  assert.match(body, /The change was refused/);
+  assert.match(body, new RegExp(`The repository catalog does not enable ${OLD_ADMIN}`));
+  assert.match(body, /Ask an owner or an admin to enable it on the Repositories page/);
+  assert.match(body, /Nothing was changed/);
+  // And the record is where it was.
+  assert.match(body, new RegExp(`${OLD_ADMIN} Unavailable: not enabled`));
+  assert.match(body, /record version 4/);
+});
+
+test("a person the worker does not accept is told in a sentence, not in a status code", async (t) => {
+  const harness = render(t, {
+    // Exactly what `requireDashboardActor` answers a non-member with.
+    refuseEdits: { status: 403, body: { statusCode: 403, statusMessage: "Forbidden" } },
+  });
+  await settle();
+
+  await click(labelled(harness.root, `Exclude: ${SHOP_WEB}`));
+  await clickText(harness.root, "Yes, exclude it");
+
+  const body = text(harness.root);
+  assert.match(body, /The worker did not accept you as a member here/);
+  assert.match(body, /every member of the workspace/);
+  assert.match(body, /an owner or an admin adding you/);
+  assert.doesNotMatch(body, /Forbidden/);
+  assert.doesNotMatch(body, /403/);
+  assert.match(body, new RegExp(`${SHOP_WEB} Selected`), "the record was not changed on the screen either");
+});
+
+test("an edit against a record that moved on is refused and says which versions", async (t) => {
+  const harness = render(t, {
+    refuseEdits: { status: 409, body: { error: "version_conflict", latestVersion: 9 } },
+  });
+  await settle();
+
+  await click(labelled(harness.root, `Exclude: ${SHOP_WEB}`));
+  await clickText(harness.root, "Yes, exclude it");
+
+  const body = text(harness.root);
+  assert.match(body, /The record moved while this page was open/);
+  assert.match(body, /Nothing was changed/);
+  assert.match(body, /version 4/);
+  assert.match(body, /version 9/);
+  assert.doesNotMatch(body, /version_conflict/);
+  assert.match(body, new RegExp(`${SHOP_WEB} Selected`));
+  assert.equal(buttons(harness.root, "Read the record again").length, 1);
+});
+
+test("a record that moves under an open confirmation stops the change before it is sent", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const harness = render(t);
+  await settle();
+
+  await click(labelled(harness.root, `Exclude: ${SHOP_WEB}`));
+  // Another person writes while this one is deciding. The waiting question
+  // makes this panel poll, so the new version arrives on its own.
+  store.scope = { version: 9, entries: store.scope.entries };
+  await act(async () => {
+    t.mock.timers.tick(IDLE_POLL_MS + 100);
+    await Promise.resolve();
+  });
+  await settle();
+
+  const body = text(harness.root);
+  assert.match(body, /The record changed while you were deciding/);
+  assert.match(body, /Nothing was sent/);
+  assert.match(body, /version 9/);
+  assert.deepEqual(harness.edits, [], "a change was sent against a version nobody was looking at");
+  assert.equal(buttons(harness.root, "Yes, exclude it").length, 0, "the confirmation stayed tappable");
+});
+
+test("removing an entry takes it out of the record, and the undo puts it back where it was", async (t) => {
+  const harness = render(t);
+  await settle();
+
+  await click(labelled(harness.root, `Remove from the record: ${LEGACY}`));
+  const asked = text(harness.root);
+  assert.match(asked, new RegExp(`${LEGACY} leaves the record: neither chosen nor refused`));
+  assert.match(asked, /A later run may ask about it again/);
+  await clickText(harness.root, "Yes, remove it");
+
+  const gone = text(harness.root);
+  assert.match(gone, new RegExp(`${LEGACY} is not in the record`));
+  assert.match(gone, /3 repositories decided/);
+  assert.match(gone, /record version 5/);
+  // The entry is gone from the list, and the notice that offers the undo is
+  // not: it sits above the list for exactly this case.
+  assert.doesNotMatch(gone, new RegExp(`${LEGACY} Excluded`));
+  assert.deepEqual(harness.edits[0]!.body, {
+    subjectKey: FIXTURE_SUBJECT,
+    expectedVersion: 4,
+    changes: [{ repositoryKey: LEGACY, action: "remove", rationale: "Corrected on the dashboard." }],
+  });
+
+  await clickText(harness.root, "Undo this change");
+  assert.match(text(harness.root), new RegExp(`${LEGACY} goes back to excluded, where it was before your change`));
+  await clickText(harness.root, "Yes, exclude it");
+
+  const back = text(harness.root);
+  assert.match(back, new RegExp(`${LEGACY} Excluded`));
+  assert.match(back, /Put back\./);
+  assert.match(back, /4 repositories decided/);
+});
+
+test("a repository a question offered can also be ruled out, not only chosen", async (t) => {
+  const harness = render(t);
+  await settle();
+
+  assert.match(text(harness.root), /excluding it keeps a later question from offering it again/);
+  await click(labelled(harness.root, `Exclude: ${SHOP_MOBILE}`));
+  await clickText(harness.root, "Yes, exclude it");
+
+  const body = text(harness.root);
+  assert.match(body, new RegExp(`${SHOP_MOBILE} Excluded`));
+  assert.deepEqual(harness.edits[0]!.body, {
+    subjectKey: FIXTURE_SUBJECT,
+    expectedVersion: 4,
+    changes: [{ repositoryKey: SHOP_MOBILE, action: "exclude", rationale: "Corrected on the dashboard." }],
+  });
+});
+
+test("a question the worker itself could not read is named, not silently missing", async (t) => {
+  const harness = render(t);
+  await settle();
+
+  const body = text(harness.root);
+  assert.match(body, /1 round could not be read and is not listed/);
+  // The worker leaves such a row out of `total` as well, so the count of
+  // questions stays the count of questions a person can actually open.
+  assert.match(body, /4 repositories decided, 4 questions/);
 });

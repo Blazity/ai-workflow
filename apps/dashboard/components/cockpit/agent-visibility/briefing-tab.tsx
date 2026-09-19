@@ -15,7 +15,7 @@ import { apiClient } from "@/lib/api/client";
 import { readAttemptBriefingsPage, type AttemptBriefings } from "@/lib/agent-visibility/contract";
 import { formatMoment } from "@/lib/agent-visibility/format";
 import { loadVisibility, type LoadFailure } from "@/lib/agent-visibility/load";
-import { runStateSentence, sendTitle } from "@/lib/agent-visibility/wording";
+import { iterationLine, runStateSentence, sendTitle } from "@/lib/agent-visibility/wording";
 import { LIVE_POLL_MS, useLivePoll } from "@/lib/use-live-poll";
 
 import { LoadFailureNotice, Loading, MissingReason, Notice } from "./notices";
@@ -185,9 +185,9 @@ export function BriefingTab({
       {runNotice}
       {/* Which turn of a loop this is, and when it began: fifty rows of one
           loop body are otherwise told apart only by an opaque scope id. */}
-      {state.data.iterationLabel || state.data.startedAt ? (
+      {state.data.iteration || state.data.startedAt ? (
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-[10px] text-neutral-600">
-          {state.data.iterationLabel ? <span className="text-coal">{state.data.iterationLabel}</span> : null}
+          {state.data.iteration ? <span className="text-coal">{iterationLine(state.data.iteration)}</span> : null}
           {state.data.startedAt ? <span>started {formatMoment(state.data.startedAt)}</span> : null}
         </div>
       ) : null}

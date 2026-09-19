@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { handleWorkScopeGet } from "./handler";
+import { handleWorkScopeEdit, handleWorkScopeGet } from "./handler";
 
 const context = (path?: string[]) => ({ params: Promise.resolve({ path }) });
 const SUBJECT = "ticket:jira:AWP-235";
@@ -126,4 +126,70 @@ test("a worker that does not answer in time is a 504, not a crash", async () => 
   );
   assert.equal(response.status, 504);
   assert.deepEqual(await response.json(), { error: "Worker request timed out" });
+});
+
+/* ── Editing ───────────────────────────────────────────────────────────── */
+
+async function edited(url: string, body: unknown, path?: string[]) {
+  const calls: { path: string; method?: string; body?: string; contentType?: string }[] = [];
+  const response = await handleWorkScopeEdit(
+    new Request(url, { method: "PATCH", body: JSON.stringify(body) }),
+    context(path),
+    async (workerPath, init) => {
+      calls.push({
+        path: workerPath,
+        ...(init?.method === undefined ? {} : { method: init.method }),
+        ...(init?.body === undefined ? {} : { body: String(init.body) }),
+        ...(new Headers(init?.headers).get("content-type") === null
+          ? {}
+          : { contentType: new Headers(init?.headers).get("content-type")! }),
+      });
+      return Response.json({ scope: { subjectKey: SUBJECT, version: 5, entries: [] } });
+    },
+  );
+  return { calls, response };
+}
+
+test("a change reaches the worker whole, as a PATCH of the record itself", async () => {
+  const change = {
+    subjectKey: SUBJECT,
+    expectedVersion: 4,
+    changes: [{ repositoryKey: "github:acme/shop-web", action: "exclude", rationale: "I meant the API only." }],
+  };
+  const { calls, response } = await edited("https://dashboard.test/api/work-scope", change);
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    {
+      path: "/api/v1/work-scope",
+      method: "PATCH",
+      // Byte for byte: what a change may say is the worker's to decide, and a
+      // second copy of those rules here is a second place to get them wrong.
+      body: JSON.stringify(change),
+      contentType: "application/json",
+    },
+  ]);
+});
+
+test("the worker's refusal reaches the person who asked, status and body untouched", async () => {
+  const response = await handleWorkScopeEdit(
+    new Request("https://dashboard.test/api/work-scope", { method: "PATCH", body: "{}" }),
+    context(),
+    async () => Response.json({ error: "version_conflict", latestVersion: 9 }, { status: 409 }),
+  );
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: "version_conflict", latestVersion: 9 });
+});
+
+test("the record is edited at the record's own route, never under a round", async () => {
+  let called = false;
+  const response = await handleWorkScopeEdit(
+    new Request("https://dashboard.test/api/work-scope/rounds/clr_2/effects", { method: "PATCH", body: "{}" }),
+    context(["rounds", "clr_2", "effects"]),
+    async () => {
+      called = true;
+      return Response.json({});
+    },
+  );
+  assert.equal(response.status, 404);
+  assert.equal(called, false);
 });

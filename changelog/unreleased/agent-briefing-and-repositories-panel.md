@@ -1,0 +1,2 @@
+- A run's Block Attempt has a Briefing tab: read the exact prompt each agent was sent, section by section, with where every part came from, what was held back before sending, and the repositories it was given.
+- A ticket page has a Repositories panel: see the repository record and every repository question as a round with each answer as it arrived, and select, exclude or undo an entry yourself.

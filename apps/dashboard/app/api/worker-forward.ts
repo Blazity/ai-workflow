@@ -27,14 +27,19 @@ function isWorkerTimeoutError(error: unknown): boolean {
 }
 
 /** Forwards one request to the worker and hands its JSON body and status back
- *  verbatim; a worker that does not answer in time is a 504. */
+ *  verbatim; a worker that does not answer in time is a 504. A `body` is sent
+ *  as the JSON it came in as: the worker owns what a body may say. */
 export async function forward(
   workerProxy: WorkerProxy,
   path: string,
-  method: "GET" | "POST" = "GET",
+  method: "GET" | "POST" | "PATCH" = "GET",
+  body?: string,
 ) {
   try {
-    const response = await workerProxy(path, { method });
+    const response = await workerProxy(
+      path,
+      body === undefined ? { method } : { method, headers: { "content-type": "application/json" }, body },
+    );
     return NextResponse.json(await response.json().catch(() => ({})), {
       status: response.status,
       headers: { "cache-control": "private, no-store" },

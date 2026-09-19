@@ -12,10 +12,10 @@ import React from "react";
 
 import { Button, CkChip } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
-import { readWorkScopeWithRounds, type WorkScopeRead } from "@/lib/agent-visibility/contract";
-import { formatClock, formatMoment, plural } from "@/lib/agent-visibility/format";
+import { readWorkScopeWithRounds, type WorkScopeEditRead, type WorkScopeRead } from "@/lib/agent-visibility/contract";
+import { offeredNotInRecord } from "@/lib/agent-visibility/edit";
+import { formatClock, plural } from "@/lib/agent-visibility/format";
 import { loadVisibility, type LoadFailure } from "@/lib/agent-visibility/load";
-import { actorLabel, entryOriginLabel, entryStateLabel, entryStateTone } from "@/lib/agent-visibility/wording";
 import type { ClarificationRoundHeader } from "@shared/agent-visibility";
 
 import { IDLE_POLL_MS, useLivePoll } from "@/lib/use-live-poll";
@@ -23,6 +23,7 @@ import { IDLE_POLL_MS, useLivePoll } from "@/lib/use-live-poll";
 import { LoadFailureNotice, Loading, Notice } from "./notices";
 import { useOnScreen } from "./on-screen";
 import { PagedCacheProvider } from "./paged";
+import { RecordEditor } from "./record-editor";
 import { RoundView } from "./round-view";
 
 /** The subject a ticket's record is kept under, as the worker spells it
@@ -31,11 +32,23 @@ export function ticketSubjectKey(ticketKey: string): string {
   return `ticket:jira:${ticketKey.trim().toUpperCase()}`;
 }
 
-function Entries({ record }: { record: WorkScopeRead }) {
+function Entries({
+  record,
+  questionWaiting,
+  onRecord,
+  onReload,
+}: {
+  record: WorkScopeRead;
+  questionWaiting: boolean;
+  onRecord: (scope: WorkScopeEditRead) => void;
+  onReload: () => void;
+}) {
   if (!record.carriesRecord) {
     return <Notice>This kind of work keeps no repository record, so nothing is decided here.</Notice>;
   }
-  if (record.entries.length === 0) {
+  const rounds = record.rounds.ok ? record.rounds.value.items : [];
+  const offered = offeredNotInRecord(rounds, record.entries);
+  if (record.entries.length === 0 && offered.length === 0) {
     return (
       <Notice>
         No repository is decided for this ticket yet. A run that needs one asks, and the answer lands here.
@@ -43,23 +56,21 @@ function Entries({ record }: { record: WorkScopeRead }) {
     );
   }
   return (
-    <ul className="m-0 flex list-none flex-col p-0">
-      {record.entries.map((entry) => (
-        <li
-          key={entry.repositoryKey}
-          className="flex flex-col gap-1 border-t border-neutral-200 py-2 first:border-t-0"
-        >
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="break-all font-mono text-[12px] font-medium text-coal">{entry.repositoryKey}</span>
-            <CkChip tone={entryStateTone(entry.state)}>{entryStateLabel(entry)}</CkChip>
-          </div>
-          <span className="font-body text-[12px] leading-[1.5] text-neutral-700">
-            {actorLabel(entry.decidedBy)} on {formatMoment(entry.decidedAt)} ({entryOriginLabel(entry.origin)})
-            {entry.rationale ? `: ${entry.rationale}` : ""}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <>
+      {record.entries.length === 0 ? (
+        <Notice>
+          No repository is decided for this ticket yet. A run that needs one asks, and the answer lands here. You can
+          also put one in yourself.
+        </Notice>
+      ) : null}
+      <RecordEditor
+        record={record}
+        offered={offered}
+        questionWaiting={questionWaiting}
+        onRecord={onRecord}
+        onReload={onReload}
+      />
+    </>
   );
 }
 
@@ -214,7 +225,23 @@ export function RepositoriesPanel({
                     <h4 className="m-0 font-display text-[14px] font-semibold text-coal">What is decided</h4>
                     <span className="font-mono text-[10px] text-neutral-600">record version {record.version}</span>
                   </div>
-                  <Entries record={record} />
+                  <Entries
+                    record={record}
+                    questionWaiting={pending > 0}
+                    onRecord={(scope) =>
+                      setRecord((current) =>
+                        current === null
+                          ? current
+                          : {
+                              ...current,
+                              version: scope.version,
+                              entries: scope.entries,
+                              unreadableEntries: scope.unreadableEntries,
+                            },
+                      )
+                    }
+                    onReload={() => void load()}
+                  />
                   {record.unreadableEntries > 0 ? (
                     <Notice>
                       {plural(record.unreadableEntries, "entry", "entries")} of the record could not be read and is not

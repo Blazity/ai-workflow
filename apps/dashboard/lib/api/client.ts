@@ -758,6 +758,14 @@ export const apiClient = {
         withParams(`/api/work-scope/rounds/${encodeURIComponent(roundId)}/effects`, { subjectKey, ...page }),
         options,
       ),
+    /** A person's change to the record. `expectedVersion` is the version they
+     *  read: the worker refuses a stale one rather than overwriting, and there
+     *  is no force flag to offer. */
+    edit: (body: {
+      subjectKey: string;
+      expectedVersion: number;
+      changes: { repositoryKey: string; action: "select" | "exclude" | "remove"; rationale?: string }[];
+    }) => requestJson<unknown>("/api/work-scope", jsonInit("PATCH", body)),
   },
 
   workflowDefinitions: {

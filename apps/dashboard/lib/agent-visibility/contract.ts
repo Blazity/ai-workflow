@@ -19,13 +19,19 @@
  *   and no briefings at all: without it an empty list is the only thing the
  *   shape can say, and "nothing here" reads as "we lost it".
  *   Each item is one Block Attempt: `{ nodeId, attempt, activationScopeId,
- *   startedAt, iterationLabel, sendsPrompts, briefings: [{ briefingId,
- *   overview }], missing }`, briefings in sequence order, `missing` a
- *   missing-briefing reason or null (present even when the attempt has
- *   briefings: a pass that never went out after discovery). `sendsPrompts` is
- *   null past the replay's life, where the definition snapshot that would
- *   answer it is gone; `startedAt` orders the attempts and `iterationLabel`
- *   tells one turn of a loop body from the next.
+ *   startedAt, iteration, sendsPrompts, briefings: [{ briefingId, overview }],
+ *   missing }`, briefings in sequence order, `missing` a missing-briefing
+ *   reason or null (present even when the attempt has briefings: a pass that
+ *   never went out after discovery). `startedAt` orders the attempts and
+ *   `iteration` (`{ loopNodeId, index }` or null) tells one turn of a loop
+ *   body from the next. `sendsPrompts` is read as nullable here although the
+ *   worker types it as a boolean, so a worker that cannot tell (the definition
+ *   snapshot went with the replay) is rendered rather than refused.
+ * - Every list page is `{ schemaVersion, cursor, items, shortened, nextCursor,
+ *   total, unreadable }`, `limit` everywhere is a BYTE cap (default 49,152,
+ *   maximum 524,288, and out of bounds is a 400, never a trim), and
+ *   `unreadable` holds the rows the worker refused: they are in neither
+ *   `items` nor `total`.
  * - `.../briefings/{briefingId}/sections`, `.../sections/{index}/parts`,
  *   `.../sections/{index}/spans`, `.../unresolved-sources`: list pages.
  * - `.../sections/{index}?offset&limit`: one section text page.
@@ -35,6 +41,10 @@
  *   today plus `rounds`, a list page of round headers. Rounds are opt-in, so a
  *   caller from before they existed keeps its inline answer unchanged;
  *   `.../rounds/{roundId}/deliveries` and `.../effects`: list pages.
+ * - `PATCH /api/v1/work-scope` answers a person's change with `{ scope }`, the
+ *   whole record as it stands after it, or with 409
+ *   `{ error: "version_conflict", latestVersion }` when the version the person
+ *   read is no longer the one in force.
  */
 import {
   AGENT_VISIBILITY_SCHEMA_VERSION,
@@ -69,10 +79,20 @@ import {
 /** A record that could not be read: written by a newer version, or broken. */
 export type VisibilityProblem = Extract<VisibilityRead<unknown>, { ok: false }>;
 
-/** An entry of a list that could not be read, by its position on the page. */
+/**
+ * An entry that is not in `items` because it could not be read, named rather
+ * than dropped. Two things end up here, and both mean the same to a person:
+ * a stored row the WORKER refused (it sends them in `unreadable`, and its
+ * `total` does not count them), and an item this DASHBOARD could not read,
+ * which is what a record written by a newer worker looks like from here.
+ */
 interface UnreadableEntry {
+  /** The collection the worker names it by ("briefings"), or null when this
+   *  build is the one that could not read it. */
+  rows: string | null;
   position: number;
-  message: string;
+  id: string | null;
+  problem: string;
 }
 
 export interface ListPageRead<T> {
@@ -120,6 +140,25 @@ function invalid(message: string): VisibilityProblem {
   return { ok: false, reason: "invalid", message };
 }
 
+/**
+ * The rows the worker itself could not read, as it lists them
+ * (`{ rows, position, id, problem }`, always present and empty when every row
+ * read). An entry this build cannot make sense of is kept as far as it can be
+ * read rather than dropped, because the count is what a person is told.
+ */
+function readWorkerUnreadable(value: unknown): UnreadableEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry, position) => {
+    const row = isRecord(entry) ? entry : {};
+    return {
+      rows: typeof row.rows === "string" ? row.rows : null,
+      position: isCount(row.position) ? row.position : position,
+      id: typeof row.id === "string" ? row.id : null,
+      problem: typeof row.problem === "string" ? row.problem : "The worker did not say what was wrong with it.",
+    };
+  });
+}
+
 /** Reads a list page's envelope, then each item on its own with `readItem`. */
 function readList<T>(
   value: unknown,
@@ -142,12 +181,15 @@ function readList<T>(
           isRecord(entry) && isCount(entry.index) && isCount(entry.fullBytes),
       )
     : [];
+  // The worker's own refusals first: rows it could not read never reached
+  // `items` and are not in `total` either, so a screen that counts these says
+  // "one entry is not here" instead of quietly showing one fewer.
+  const unreadable: UnreadableEntry[] = readWorkerUnreadable(value.unreadable);
   const items: T[] = [];
-  const unreadable: UnreadableEntry[] = [];
   value.items.forEach((item, position) => {
     const read = readItem(item);
     if (read.ok) items.push(read.value);
-    else unreadable.push({ position, message: read.message });
+    else unreadable.push({ rows: null, position, id: null, problem: read.message });
   });
   return {
     ok: true,
@@ -182,9 +224,11 @@ export interface AttemptBriefings {
   /** When this attempt began: what puts the attempts of a run in the order
    *  they happened rather than in node-id order. Null when not recorded. */
   startedAt: string | null;
-  /** Which turn of a loop body this attempt is, in the run graph's own words.
-   *  Null outside a loop, or where the graph no longer says. */
-  iterationLabel: string | null;
+  /** Which turn of which loop this attempt ran in, as the worker reads it off
+   *  the activation scope (`root/loop:<node>:<index>`). Null outside a loop,
+   *  and null for a scope spelling this worker does not know: fifty turns that
+   *  differ only by an opaque id are unreadable, so it says nothing instead. */
+  iteration: { loopNodeId: string; index: number } | null;
   /** Decided by the worker from the block type; false means this block never
    *  sends a prompt, and no missing reason applies. Null means the worker can
    *  no longer tell: the definition snapshot went with the replay. */
@@ -228,7 +272,13 @@ function readAttemptBriefings(value: unknown): VisibilityRead<AttemptBriefings> 
       attempt: value.attempt,
       activationScopeId: value.activationScopeId,
       startedAt: typeof value.startedAt === "string" ? value.startedAt : null,
-      iterationLabel: typeof value.iterationLabel === "string" && value.iterationLabel !== "" ? value.iterationLabel : null,
+      iteration:
+        isRecord(value.iteration) &&
+        typeof value.iteration.loopNodeId === "string" &&
+        value.iteration.loopNodeId !== "" &&
+        isCount(value.iteration.index)
+          ? { loopNodeId: value.iteration.loopNodeId, index: value.iteration.index }
+          : null,
       sendsPrompts: typeof value.sendsPrompts === "boolean" ? value.sendsPrompts : null,
       briefings,
       missing:
@@ -312,22 +362,57 @@ export function readWorkScopeWithRounds(value: unknown): VisibilityRead<WorkScop
   if (typeof value.carriesRecord !== "boolean") return invalid("carriesRecord: expected true or false");
   if (!isCount(value.version)) return invalid("version: expected a whole number");
   if (!Array.isArray(value.entries)) return invalid("entries: expected a list");
-  const entries: AgentBriefingWorkScopeEntry[] = [];
-  let unreadableEntries = 0;
-  for (const entry of value.entries) {
-    const read = readVisibilityRecord(agentBriefingWorkScopeEntrySchema, entry);
-    if (read.ok) entries.push(read.value);
-    else unreadableEntries += 1;
-  }
   return {
     ok: true,
     value: {
       subjectKey: value.subjectKey,
       carriesRecord: value.carriesRecord,
       version: value.version,
-      entries,
-      unreadableEntries,
-      rounds: value.rounds === undefined ? { ok: false, reason: "absent" } : readRoundHeadersPage(value.rounds),
+      ...readEntries(value.entries),
+      // The worker leaves the key out entirely when rounds were not asked for
+      // (`work-scope.get.ts`); a null is read the same way, because neither is
+      // a page of questions and "this worker does not serve them" is the only
+      // honest thing either can mean.
+      rounds:
+        value.rounds === undefined || value.rounds === null
+          ? { ok: false, reason: "absent" }
+          : readRoundHeadersPage(value.rounds),
     },
+  };
+}
+
+/** An entry that does not parse is counted, never allowed to blank the rest. */
+function readEntries(list: readonly unknown[]): {
+  entries: AgentBriefingWorkScopeEntry[];
+  unreadableEntries: number;
+} {
+  const entries: AgentBriefingWorkScopeEntry[] = [];
+  let unreadableEntries = 0;
+  for (const entry of list) {
+    const read = readVisibilityRecord(agentBriefingWorkScopeEntrySchema, entry);
+    if (read.ok) entries.push(read.value);
+    else unreadableEntries += 1;
+  }
+  return { entries, unreadableEntries };
+}
+
+/** The whole record after an edit, which is all the edit endpoint answers
+ *  with: `{ scope }`, carrying the version now in force. */
+export interface WorkScopeEditRead {
+  subjectKey: string;
+  version: number;
+  entries: AgentBriefingWorkScopeEntry[];
+  unreadableEntries: number;
+}
+
+export function readWorkScopeEdit(value: unknown): VisibilityRead<WorkScopeEditRead> {
+  if (!isRecord(value) || !isRecord(value.scope)) return invalid("scope: expected the record after the change");
+  const scope = value.scope;
+  if (typeof scope.subjectKey !== "string") return invalid("scope.subjectKey: expected a string");
+  if (!isCount(scope.version)) return invalid("scope.version: expected a whole number");
+  if (!Array.isArray(scope.entries)) return invalid("scope.entries: expected a list");
+  return {
+    ok: true,
+    value: { subjectKey: scope.subjectKey, version: scope.version, ...readEntries(scope.entries) },
   };
 }

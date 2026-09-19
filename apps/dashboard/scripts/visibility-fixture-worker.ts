@@ -11,6 +11,8 @@
  *
  * `FIXTURE_FAIL=<pattern>` makes every path matching that regular expression
  * answer 503, which is how the "could not be loaded" states are looked at.
+ * `FIXTURE_FORBID=1` refuses every edit with 403 and the bare word the worker
+ * refuses a non-member with, which is how the refusal state is looked at.
  */
 import { createServer } from "node:http";
 
@@ -18,26 +20,52 @@ import { buildFixtureStore, serveFixture } from "../lib/agent-visibility/test-su
 
 const port = Number(process.env.PORT ?? 4010);
 const failing = process.env.FIXTURE_FAIL ? new RegExp(process.env.FIXTURE_FAIL) : null;
+const forbidEdits = process.env.FIXTURE_FORBID === "1";
+
+function readBody(request: { on: (event: string, listener: (chunk?: unknown) => void) => void }): Promise<unknown> {
+  return new Promise((resolve) => {
+    let text = "";
+    request.on("data", (chunk) => {
+      text += String(chunk);
+    });
+    request.on("end", () => {
+      try {
+        resolve(text === "" ? null : JSON.parse(text));
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
 
 async function main() {
   const store = await buildFixtureStore();
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
+    const method = request.method ?? "GET";
     const send = (status: number, body: unknown) => {
       response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
       response.end(JSON.stringify(body));
-      console.log(`${status} ${request.method} ${url.pathname}${url.search}`);
+      console.log(`${status} ${method} ${url.pathname}${url.search}`);
     };
     if (failing?.test(url.pathname)) {
       send(503, { error: "The fixture worker is failing this path on purpose." });
       return;
     }
-    const served = serveFixture(store, request.method ?? "GET", url);
-    if (!served) {
-      send(404, { error: "The fixture worker does not serve this path." });
+    if (forbidEdits && method !== "GET") {
+      // Exactly what `requireDashboardActor` refuses a non-member with.
+      send(403, { statusCode: 403, statusMessage: "Forbidden" });
       return;
     }
-    send(served.status, served.body);
+    void (async () => {
+      const body = method === "GET" ? undefined : await readBody(request);
+      const served = serveFixture(store, method, url, body);
+      if (!served) {
+        send(404, { error: "The fixture worker does not serve this path." });
+        return;
+      }
+      send(served.status, served.body);
+    })();
   });
   server.listen(port, "127.0.0.1", () => {
     console.log(`Fixture worker on http://127.0.0.1:${port} (ticket AWP-235, runs wrun_fx_planning and wrun_fx_states)`);

@@ -169,12 +169,50 @@ test("a state this build does not know is carried as itself, and silence is not 
 test("an attempt carries when it started, its loop turn, and an honest unknown", () => {
   const fix = attempt(STATES_RUN, "fix");
   assert.equal(fix.startedAt, "2026-09-19T08:33:00.000Z");
-  assert.equal(fix.iterationLabel, "iteration 3 of 50");
+  // The worker reads the turn off the activation scope and serves the two
+  // values it found, never a label: `{ loopNodeId, index }`.
+  assert.deepEqual(fix.iteration, { loopNodeId: "fix-loop", index: 3 });
   assert.equal(fix.sendsPrompts, true);
 
   // Past the replay's life the definition snapshot is gone, so the worker
   // says it cannot tell rather than guessing from today's definition.
   const investigate = attempt(STATES_RUN, "investigate");
   assert.equal(investigate.sendsPrompts, null);
-  assert.equal(investigate.iterationLabel, null);
+  assert.equal(investigate.iteration, null);
+});
+
+test("a turn of a loop with an id this build cannot read says nothing rather than half of it", () => {
+  const body = get(`/api/v1/runs/${STATES_RUN}/briefings`) as { items: Record<string, unknown>[] };
+  const items: Record<string, unknown>[] = [];
+  for (const item of body.items) items.push(Object.assign({}, item, { iteration: { loopNodeId: "fix-loop" } }));
+  const half = readAttemptBriefingsPage({ ...body, items });
+  assert.ok(half.ok, half.ok ? "" : half.message);
+  assert.ok(half.value.items.every((item) => item.iteration === null));
+});
+
+test("rows the worker could not read are counted on the page, not dropped in silence", () => {
+  const page = readWorkScopeWithRounds(get(`/api/v1/work-scope?subjectKey=${encodeURIComponent(FIXTURE_SUBJECT)}&rounds=true`));
+  assert.ok(page.ok, page.ok ? "" : page.message);
+  assert.ok(page.value.rounds.ok);
+  const rounds = page.value.rounds.ok ? page.value.rounds.value : null;
+  assert.deepEqual(rounds?.unreadable, [
+    {
+      rows: "clarifications",
+      position: 2,
+      id: "clr_unreadable",
+      problem: "question.askedAt: must be an ISO 8601 time",
+    },
+  ]);
+  // The worker leaves them out of `total` too, so a count of questions never
+  // includes one nobody can open.
+  assert.equal(rounds?.total, rounds?.items.length);
+});
+
+test("an item this build cannot read joins the worker's own refusals on the page", () => {
+  const body = get(`/api/v1/runs/${PLANNING_RUN}/briefings`) as { items: unknown[] };
+  const read = readAttemptBriefingsPage({ ...body, items: [...body.items, { nodeId: 42 }] });
+  assert.ok(read.ok, read.ok ? "" : read.message);
+  const mine = read.value.unreadable.filter((entry) => entry.rows === null);
+  assert.equal(mine.length, 1);
+  assert.match(mine[0]!.problem, /expected the attempt's node/);
 });

@@ -145,6 +145,23 @@ export function sendTitle(identity: { kind: string; passLabel?: string | undefin
   return identity.passLabel ? `${kind}: ${identity.passLabel}` : kind;
 }
 
+/**
+ * Which turn of which loop an attempt ran in.
+ *
+ * Both values are shown as the worker recorded them: it reads them off the
+ * activation scope (`root/loop:<node>:<index>`). The index counts from 1
+ * (`spawnLoopIteration` starts at 1 and each continuation passes
+ * `iteration + 1`, `packages/workflow-graph/scheduler.ts`), so iteration 3 is
+ * the third turn and needs no arithmetic here.
+ *
+ * It never becomes "turn 3 of 50": nothing on this page knows how many turns
+ * the loop ran, and a confident wrong number is the thing this whole screen
+ * exists to stop.
+ */
+export function iterationLine(iteration: { loopNodeId: string; index: number }): string {
+  return `loop ${iteration.loopNodeId}, iteration ${iteration.index}`;
+}
+
 /* ── Origins ───────────────────────────────────────────────────────────── */
 
 const ORIGIN_LABELS: Record<string, string> = {

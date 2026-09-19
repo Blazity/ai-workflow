@@ -61,6 +61,9 @@ export const SHOP_WEB = "github:acme/shop-web";
 export const SHOP_API = "github:acme/shop-api";
 export const LEGACY = "github:acme/legacy-checkout";
 export const OLD_ADMIN = "github:acme/old-admin";
+/** Offered in the first question, named in its words, and never decided about:
+ *  the repository somebody may have meant and nobody recorded. */
+export const SHOP_MOBILE = "github:acme/shop-mobile";
 
 export const SECRET = "sk-live-4f9Qm2Lx8Rt7Zp";
 export const FILIP = "Filip Maszota";
@@ -455,8 +458,9 @@ interface FixtureAttempt {
   /** Null past the replay's life: the definition snapshot that would answer
    *  it is gone, and the worker says so rather than guessing from today. */
   sendsPrompts: boolean | null;
-  /** Which turn of a loop body this attempt is, where the graph knows. */
-  iterationLabel?: string;
+  /** Which turn of which loop this attempt ran in, as the worker reads it off
+   *  the activation scope (`root/loop:<node>:<index>`). */
+  iteration?: { loopNodeId: string; index: number };
   briefingIds: string[];
   missing: MissingBriefingReason | null;
 }
@@ -547,13 +551,14 @@ function roundRows(): ClarificationRoundRows {
         runId: PLANNING_RUN,
         nodeId: "planning",
         questions: [
-          `Which repository should ${FIXTURE_TICKET} change? The checkout lives in ${SHOP_WEB}, but the button may call ${SHOP_API}.`,
+          `Which repository should ${FIXTURE_TICKET} change? The checkout lives in ${SHOP_WEB}, but the button may call ${SHOP_API}, and the same screen exists in ${SHOP_MOBILE}.`,
         ],
         askedAt: "2026-09-18T09:00:00.000Z",
         status: "cancelled",
         offered: [
           { key: SHOP_WEB, askedBecause: "selection", named: true },
           { key: SHOP_API, askedBecause: "selection", named: true },
+          { key: SHOP_MOBILE, askedBecause: "selection", named: true },
         ],
       },
       {
@@ -561,13 +566,14 @@ function roundRows(): ClarificationRoundRows {
         runId: PLANNING_RUN,
         nodeId: "planning",
         questions: [
-          `Which repository should ${FIXTURE_TICKET} change? The checkout lives in ${SHOP_WEB}, but the button may call ${SHOP_API}.`,
+          `Which repository should ${FIXTURE_TICKET} change? The checkout lives in ${SHOP_WEB}, but the button may call ${SHOP_API}, and the same screen exists in ${SHOP_MOBILE}.`,
         ],
         askedAt: "2026-09-18T09:01:30.000Z",
         status: "answered",
         offered: [
           { key: SHOP_WEB, askedBecause: "selection", named: true },
           { key: SHOP_API, askedBecause: "selection", named: true },
+          { key: SHOP_MOBILE, askedBecause: "selection", named: true },
         ],
       },
       {
@@ -693,6 +699,24 @@ export interface FixtureStore {
   overviews: Map<string, unknown>;
   texts: Map<string, string>;
   rounds: ClarificationRound[];
+  /** The one record an edit writes to, so a change made on the screen is
+   *  there when the screen reads the record again. */
+  scope: { version: number; entries: WorkScopeEntry[] };
+}
+
+/** The catalog the fixture edit tests a `select` against, as the worker tests
+ *  it. `OLD_ADMIN` is deliberately outside it: it is the record's
+ *  "Unavailable: not enabled" entry, and selecting it is refused. */
+const FIXTURE_ENABLED_KEYS = new Set([SHOP_WEB, SHOP_API, LEGACY, SHOP_MOBILE]);
+
+/** The record as `buildFixtureStore` leaves it. Tests that edit call this
+ *  first, because the store is built once for a whole file. */
+function initialScope(): FixtureStore["scope"] {
+  return { version: 4, entries: structuredClone(WORK_SCOPE_ENTRIES) };
+}
+
+export function resetFixtureScope(store: FixtureStore): void {
+  store.scope = initialScope();
 }
 
 async function record(store: FixtureStore, briefingId: string, input: AgentBriefingBuildInput, budgetBytes?: number) {
@@ -714,6 +738,7 @@ export async function buildFixtureStore(): Promise<FixtureStore> {
     overviews: new Map(),
     texts: new Map(),
     rounds: [],
+    scope: initialScope(),
   };
 
   // The planning run. The storage budget is below what a pass sent, so the
@@ -796,7 +821,7 @@ export async function buildFixtureStore(): Promise<FixtureStore> {
       {
         summary: summary("fix", "completed", "2026-09-19T08:33:00.000Z", 51_000),
         sendsPrompts: true,
-        iterationLabel: "iteration 3 of 50",
+        iteration: { loopNodeId: "fix-loop", index: 3 },
         briefingIds: [],
         missing: explainMissingBriefing({ ...live, captureDisabled: true, promptSent: true }),
       },
@@ -875,6 +900,29 @@ export interface FixtureResponse {
 }
 
 const ok = (body: unknown): FixtureResponse => ({ status: 200, body });
+
+/** A row the worker itself could not read: named on the page rather than
+ *  dropped, and counted by neither `items` nor `total`. */
+interface FixtureUnreadable {
+  rows: string;
+  position: number;
+  id: string | null;
+  problem: string;
+}
+
+/**
+ * A page as the WORKER serves it: the frozen package's page plus the rows it
+ * refused. The package pager knows no such key; the worker adds it
+ * (`apps/worker/src/services/agent-visibility/pages.ts`), always present and
+ * empty when every row read.
+ */
+function servedPage<T>(
+  items: readonly T[],
+  options: { cursor: string | null; maxBytes?: number },
+  unreadable: FixtureUnreadable[] = [],
+) {
+  return { ...pageList(items, options), unreadable };
+}
 const notFound = (what: string): FixtureResponse => ({ status: 404, body: { error: `${what} not found` } });
 
 function optionalNumber(value: string | null): number | undefined {
@@ -904,12 +952,12 @@ function briefingRoute(store: FixtureStore, runId: string, rest: string[], query
         attempt: entry.summary.attempt,
         activationScopeId: entry.summary.activationScopeId,
         startedAt: entry.summary.startedAt,
-        iterationLabel: entry.iterationLabel ?? null,
+        iteration: entry.iteration ?? null,
         sendsPrompts: entry.sendsPrompts,
         briefings: entry.briefingIds.map((briefingId) => ({ briefingId, overview: store.overviews.get(briefingId) })),
         missing: entry.missing,
       }));
-    return ok({ ...pageList(items, listOptions(query)), state: run.briefingsState });
+    return ok({ ...servedPage(items, listOptions(query)), state: run.briefingsState });
   }
   const [briefingId, collection, indexText, child] = rest;
   const index = store.briefings.get(briefingId!);
@@ -925,14 +973,14 @@ function briefingRoute(store: FixtureStore, runId: string, rest: string[], query
       schemaVersion: AGENT_VISIBILITY_SCHEMA_VERSION,
       unlistedCount: document.unlistedCount,
       workScope: document.workScope,
-      repositories: pageList(document.repositories, listOptions(query)),
+      repositories: servedPage(document.repositories, listOptions(query)),
     });
   }
   if (collection === "unresolved-sources" && rest.length === 2) {
-    return ok(pageList(index.unresolvedSources, listOptions(query)));
+    return ok(servedPage(index.unresolvedSources, listOptions(query)));
   }
   if (collection !== "sections") return notFound("route");
-  if (rest.length === 2) return ok(pageList(index.sections.map(agentBriefingSectionHeader), listOptions(query)));
+  if (rest.length === 2) return ok(servedPage(index.sections.map(agentBriefingSectionHeader), listOptions(query)));
   const section = index.sections[Number(indexText)];
   if (!section) return notFound("section");
   if (child === undefined) {
@@ -947,8 +995,8 @@ function briefingRoute(store: FixtureStore, runId: string, rest: string[], query
       }),
     );
   }
-  if (child === "parts") return ok(pageList(section.parts, listOptions(query)));
-  if (child === "spans") return ok(pageList(section.redactions, listOptions(query)));
+  if (child === "parts") return ok(servedPage(section.parts, listOptions(query)));
+  if (child === "spans") return ok(servedPage(section.redactions, listOptions(query)));
   return notFound("route");
 }
 
@@ -963,26 +1011,39 @@ function workScopeRoute(store: FixtureStore, rest: string[], query: URLSearchPar
       trail: [],
       nextTrailBeforeId: null,
     };
-    return ok(query.get("rounds") === "true" ? { ...empty, rounds: pageList([]) } : empty);
+    return ok(query.get("rounds") === "true" ? { ...empty, rounds: servedPage([], { cursor: null }) } : empty);
   }
   if (rest.length === 0) {
     const record: WorkScopeRecordResponse = {
       subjectKey,
       carriesRecord: true,
-      version: 4,
-      entries: WORK_SCOPE_ENTRIES,
+      version: store.scope.version,
+      entries: store.scope.entries,
       trail: [],
       nextTrailBeforeId: null,
     };
     // Rounds only when asked for: an older caller keeps its inline answer.
     if (query.get("rounds") !== "true") return ok(record);
-    return ok({ ...record, rounds: pageList(store.rounds.map(clarificationRoundHeader), listOptions(query, "roundsCursor")) });
+    return ok({
+      ...record,
+      // One clarification row the worker could not read: it is in neither
+      // `items` nor `total`, and the panel says so rather than showing one
+      // question fewer without a word.
+      rounds: servedPage(store.rounds.map(clarificationRoundHeader), listOptions(query, "roundsCursor"), [
+        {
+          rows: "clarifications",
+          position: 2,
+          id: "clr_unreadable",
+          problem: "question.askedAt: must be an ISO 8601 time",
+        },
+      ]),
+    });
   }
   const [rounds, roundId, collection] = rest;
   const round = store.rounds.find((entry) => entry.id === roundId);
   if (rounds !== "rounds" || !round) return notFound("round");
-  if (collection === "deliveries") return ok(pageList(round.deliveries, listOptions(query)));
-  if (collection === "effects") return ok(pageList(round.effects, listOptions(query)));
+  if (collection === "deliveries") return ok(servedPage(round.deliveries, listOptions(query)));
+  if (collection === "effects") return ok(servedPage(round.effects, listOptions(query)));
   return notFound("route");
 }
 
@@ -1129,12 +1190,71 @@ function uiRoute(store: FixtureStore, path: string[], query: URLSearchParams): F
 }
 
 /**
+ * A person's edit, answered the way `routes/api/v1/work-scope.patch.ts`
+ * answers it: the version first, then a `select` outside the enabled catalog
+ * refusing the whole change set, then the changes folded to the last one per
+ * repository (`engine/work-scope/decide.ts`). A `remove` of a repository the
+ * record does not hold is applied and changes nothing, as it does there.
+ */
+function editWorkScope(store: FixtureStore, body: unknown): FixtureResponse {
+  const request = body as {
+    subjectKey?: unknown;
+    expectedVersion?: unknown;
+    changes?: { repositoryKey?: unknown; action?: unknown; rationale?: unknown }[];
+  } | null;
+  const changes = Array.isArray(request?.changes) ? request.changes : [];
+  if (request?.subjectKey !== FIXTURE_SUBJECT) {
+    return { status: 400, body: { statusMessage: `${String(request?.subjectKey)} carries no work scope record, so there is nothing to edit.` } };
+  }
+  if (changes.length === 0) return { status: 400, body: { statusMessage: "changes: must hold at least 1 element" } };
+  if (request.expectedVersion !== store.scope.version) {
+    return { status: 409, body: { error: "version_conflict", latestVersion: store.scope.version } };
+  }
+  const refused = changes
+    .filter((change) => change.action === "select" && !FIXTURE_ENABLED_KEYS.has(String(change.repositoryKey)))
+    .map((change) => String(change.repositoryKey));
+  if (refused.length > 0) {
+    return {
+      status: 400,
+      body: {
+        statusMessage: `The repository catalog does not enable ${refused.join(", ")}, so the whole edit was refused. Ask an owner or an admin to enable it on the Repositories page, or send the edit again without it.`,
+      },
+    };
+  }
+  const folded = new Map<string, (typeof changes)[number]>();
+  for (const change of changes) folded.set(String(change.repositoryKey), change);
+  const written = (repositoryKey: string, change: (typeof changes)[number]): WorkScopeEntry =>
+    ({
+      repositoryKey,
+      state: change.action === "select" ? "selected" : "excluded",
+      origin: "person",
+      rationale: typeof change.rationale === "string" ? change.rationale : "",
+      decidedBy: decidedByFilip,
+      decidedAt: NOW,
+    }) as WorkScopeEntry;
+  // In place, so a row a person just changed does not jump down the list.
+  const entries: WorkScopeEntry[] = [];
+  for (const entry of store.scope.entries) {
+    const change = folded.get(entry.repositoryKey);
+    if (change === undefined) entries.push(entry);
+    else if (change.action !== "remove") entries.push(written(entry.repositoryKey, change));
+  }
+  for (const [repositoryKey, change] of folded) {
+    const known = store.scope.entries.some((entry) => entry.repositoryKey === repositoryKey);
+    if (!known && change.action !== "remove") entries.push(written(repositoryKey, change));
+  }
+  store.scope = { version: store.scope.version + 1, entries };
+  return ok({ scope: { subjectKey: FIXTURE_SUBJECT, version: store.scope.version, entries } });
+}
+
+/**
  * Answers a worker request (`/api/v1/...`) from the fixtures, or null for a
  * path the fixtures do not serve. A page request that cannot be served (an
  * offset inside a character, a cursor never handed out) is a 400, as the
  * worker answers it.
  */
-export function serveFixture(store: FixtureStore, method: string, url: URL): FixtureResponse | null {
+export function serveFixture(store: FixtureStore, method: string, url: URL, body?: unknown): FixtureResponse | null {
+  if (method === "PATCH" && url.pathname === "/api/v1/work-scope") return editWorkScope(store, body);
   if (method !== "GET" || !url.pathname.startsWith("/api/v1/")) return null;
   const path = url.pathname.slice("/api/v1/".length).split("/").filter(Boolean).map(decodeURIComponent);
   try {

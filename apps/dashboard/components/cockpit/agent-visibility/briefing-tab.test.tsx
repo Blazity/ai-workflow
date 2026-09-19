@@ -598,7 +598,10 @@ test("an attempt says which turn of its loop it is and when it began", async (t)
   await settle();
 
   const body = text(harness.root);
-  assert.match(body, /iteration 3 of 50/);
+  // Both values as the worker read them off the activation scope, and no
+  // invented total: nothing here knows how many turns the loop ran.
+  assert.match(body, /loop fix-loop, iteration 3/);
+  assert.doesNotMatch(body, /of 50/);
   assert.match(body, /started 19 Sept 2026, \d{2}:33:00/);
 });
 

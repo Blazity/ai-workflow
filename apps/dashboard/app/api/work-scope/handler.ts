@@ -10,7 +10,9 @@ const WHOLE_NUMBER = /^(?:0|[1-9][0-9]{0,9})$/;
 
 function valid(name: string, value: string): boolean {
   if (name === "subjectKey") return SUBJECT_KEY.test(value);
-  if (name === "limit" || name === "trailLimit" || name === "trailBefore") return WHOLE_NUMBER.test(value);
+  if (name === "limit" || name === "roundsLimit" || name === "trailLimit" || name === "trailBefore") {
+    return WHOLE_NUMBER.test(value);
+  }
   if (name === "rounds") return value === "true" || value === "false";
   return CURSOR.test(value);
 }
@@ -30,7 +32,8 @@ export async function handleWorkScopeGet(
   const { path = [] } = await params;
   let allowed: readonly string[];
   if (path.length === 0) {
-    allowed = ["subjectKey", "rounds", "roundsCursor", "trailLimit", "trailBefore"];
+    // `limit` values are byte caps, not counts, everywhere on this API.
+    allowed = ["subjectKey", "rounds", "roundsCursor", "roundsLimit", "trailLimit", "trailBefore"];
   } else if (
     path.length === 3 &&
     path[0] === "rounds" &&
@@ -52,4 +55,24 @@ export async function handleWorkScopeGet(
   }
   const suffix = path.map(encodeURIComponent).join("/");
   return forward(workerProxy, `/api/v1/work-scope${suffix ? `/${suffix}` : ""}?${query.toString()}`);
+}
+
+/**
+ * `PATCH /api/work-scope`: a person's change to a subject's repository record,
+ * forwarded whole to the worker's `PATCH /api/v1/work-scope`.
+ *
+ * The body is passed as it came. What a change may say, who may make one and
+ * whether the version it was decided against still holds are the worker's to
+ * answer, and a second copy of those rules here would be a second place to get
+ * them wrong. Only the path is this route's business: the record is edited at
+ * the route itself, never under `rounds/...`.
+ */
+export async function handleWorkScopeEdit(
+  request: Request,
+  { params }: WorkScopeRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  const { path = [] } = await params;
+  if (path.length > 0) return notFound();
+  return forward(workerProxy, "/api/v1/work-scope", "PATCH", await request.text());
 }
