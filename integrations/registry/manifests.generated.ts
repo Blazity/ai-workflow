@@ -12,3 +12,13 @@
 import type { IntegrationManifest } from "@integrations/sdk";
 
 export const generatedIntegrationManifests: readonly IntegrationManifest[] = [];
+
+/**
+ * Which of the above are fixtures, generated in behind INTEGRATION_FIXTURES.
+ *
+ * Empty in every committed registry and in every deployed build. It exists
+ * so a check about what this build SHIPS can tell the two apart: the
+ * connection-shape guard is committed against the real registry, and a local
+ * fixture run must not read as a shape change nobody made.
+ */
+export const generatedIntegrationFixtureIds: readonly string[] = [];

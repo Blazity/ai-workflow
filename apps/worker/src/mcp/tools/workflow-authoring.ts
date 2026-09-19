@@ -581,7 +581,9 @@ export function registerWorkflowAuthoringTools(
           // carrying a block of an integration this deployment has connected.
           // Agent-facing, so the issue a model reads back names the integration
           // and the page to fix it on, never the variable to paste a value into.
-          const contracts = await agentFacingBlockContracts();
+          const contracts = agentFacingBlockContracts(
+            await deps.loadDeploymentIntegrations(),
+          );
           const candidate = validateWorkflowDefinitionCandidate(
             input.definition,
             contracts.resolveContract,

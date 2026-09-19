@@ -182,7 +182,9 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
               // may read. Passing the raw state would leave the blocker naming
               // the variable an admin has to set, and it would depend on the
               // envelope sanitizer to take it back out.
-              integrations: (await agentFacingDeploymentIntegrations()) ?? undefined,
+              integrations:
+                (await agentFacingDeploymentIntegrations(deps.loadDeploymentIntegrations)) ??
+                undefined,
               adapters: deps.adapters,
               definitionId: input.definitionId,
               triggerNodeId: input.triggerNodeId,

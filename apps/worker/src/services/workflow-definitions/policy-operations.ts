@@ -27,7 +27,6 @@ import { createDefinitionsRepository } from "../../db/repositories/definitions.j
 import { validateWorkflowPromptAuthoringIssues } from "./prompt-authoring.js";
 import {
   blockContractsOn,
-  connectedBlockContracts,
   resolveHarnessProfilesForDefinition,
   type RequestBlockContracts,
 } from "./block-contracts.js";
@@ -53,6 +52,7 @@ import {
   previewConnectedDefinitionPrompt,
   readConnectedDefinitionTriggerRejections,
   readConnectedDefinitionWebhookRejections,
+  connectedDefinitionBlockContracts,
   validateConnectedDefinitionCandidate,
   validateConnectedDefinitionPromptAuthoring,
 } from "./connected-policy-dependencies.js";
@@ -619,7 +619,7 @@ async function createWorkflowDefinitionConnected(
     : input.seedValidation === "structural"
       ? structural(input.seed)
       : await validStored(
-          await connectedBlockContracts(),
+          await connectedDefinitionBlockContracts(),
           input.seed,
           connectedHarnessProfilesForDefinition,
         );
@@ -853,7 +853,7 @@ async function updateWorkflowDefinitionConnected(input: Parameters<typeof update
 }
 
 async function deployableConnected(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
-  const contracts = await connectedBlockContracts();
+  const contracts = await connectedDefinitionBlockContracts();
   const { parsed, analysis, issues } = await definitionDeploymentValidation(
     contracts,
     definition,

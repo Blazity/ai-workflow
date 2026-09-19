@@ -15,6 +15,7 @@ import type { McpToolServices } from "../services/mcp/tool-services.js";
 // Type-only, so it is erased and adds no runtime edge: the paragraph below is
 // about modules this file would actually load.
 import type { RepositoryCatalogSnapshot } from "../services/repository-catalog/index.js";
+import type { DeploymentIntegrations } from "../services/workflow-definitions/block-contracts.js";
 
 // Deliberately the two modules and not the cluster's index.ts. The barrel also
 // publishes the ledgers and the tool services, which reach the database client and from
@@ -68,6 +69,17 @@ export type McpToolDependencies = {
    * dispatch, a save, a publish) still share one snapshot within a call.
    */
   loadRepositoryCatalog: () => Promise<RepositoryCatalogSnapshot>;
+  /**
+   * What this deployment's integrations are in a state to do, on demand.
+   *
+   * A thunk for the same reason the catalog above is one, and read here rather
+   * than inside the tools so the call decides where the state comes from: the
+   * transport passes the connected read, and a test passes a value. The tools
+   * used to reach a database through a function that read like a catalog
+   * question, which meant the whole surface needed a DATABASE_URL the moment
+   * this build shipped its first integration.
+   */
+  loadDeploymentIntegrations: () => Promise<DeploymentIntegrations>;
   requestId: string;
   traceId: string;
   now: () => Date;

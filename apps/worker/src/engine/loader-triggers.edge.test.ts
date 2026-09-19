@@ -17,6 +17,13 @@ const H = vi.hoisted(() => ({
     VCS_BOT_LOGIN: undefined as string | undefined,
   },
 }));
+// This deployment's integrations, stated. The plan load reads them inside the
+// step so a run carries the connection it started with; this file is about
+// which definition the step picks, so it says "none" in one line rather than
+// standing up a database to find out.
+vi.mock("../services/integrations/runtime.js", () => ({
+  readIntegrationStates: async () => new Map(),
+}));
 vi.mock("../infra/vcs-config.js", () => ({
   env: H.env,
 }));

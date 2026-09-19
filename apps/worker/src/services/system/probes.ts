@@ -24,6 +24,8 @@ import {
   type SystemHealthProbes,
 } from "./collect.js";
 import { integrationHealthContributions } from "./integration-health.js";
+import { integrationManifests } from "@integrations/registry";
+import { readConnectedIntegrationConnections } from "../../db/repositories/integrations.js";
 import { integrationHealthEntries } from "./integration-probes.js";
 import {
   getLatestSystemHealthObservations,
@@ -59,7 +61,14 @@ export async function collectDeploymentSystemHealth(
   const config = configFromEnvironment(settings);
   await sweepSystemHealthObservations().catch(() => {});
   // Whatever this build ships, asked of the registry rather than listed here.
-  const contributions = integrationHealthContributions(await integrationHealthEntries());
+  // The connected read, named here: a scan runs against a deployment, and this
+  // is the frame that knows it. `integrationHealthEntries` decides from the
+  // rows and touches nothing.
+  const contributions = integrationHealthContributions(
+    integrationManifests.length === 0
+      ? []
+      : integrationHealthEntries(await readConnectedIntegrationConnections()),
+  );
   return collectSystemHealth({
     config,
     probes: { ...probesForEnvironment(config), ...contributions.probes },

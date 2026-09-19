@@ -45,6 +45,11 @@ vi.mock("./live-trigger-sync.js", () => ({
 }));
 
 vi.mock("./connected-policy-dependencies.js", () => ({
+  // The one line that states this deployment. Policy declares the block data as
+  // a dependency, so this file says "no integration here" as a value instead of
+  // needing a DATABASE_URL to find out.
+  connectedDefinitionBlockContracts: async () =>
+    blockContractsFor(undefined, testDeploymentIntegrations()),
   dispatchConnectedDefinitionManual: vi.fn(),
   preflightConnectedDefinitionManual: vi.fn(),
   previewConnectedDefinitionPrompt: vi.fn(),
@@ -84,6 +89,8 @@ vi.mock("../../engine/definition/block-contract-environment.js", () => ({
   }),
 }));
 
+import { blockContractsFor } from "./block-contracts.js";
+import { testDeploymentIntegrations } from "../../test-support/integrations.js";
 import {
   deployConnectedWorkflowDefinition,
   rollbackConnectedWorkflowDefinition,

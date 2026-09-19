@@ -13,6 +13,7 @@ import {
   canManageIntegrations,
 } from "@shared/contracts";
 
+import type { Db } from "../../db/types.js";
 import {
   disconnectConnectedIntegration,
   readConnectedIntegrationConnections,
@@ -173,7 +174,29 @@ export async function listIntegrations() {
  * building a DTO they would throw most of away.
  */
 export async function readIntegrationStates(): Promise<Map<string, IntegrationState>> {
-  const stored = await readConnectedIntegrationConnections();
+  return readIntegrationStatesFrom(await readConnectedIntegrationConnections());
+}
+
+/** The same states, for a caller that already holds the database this request
+ *  is on. Production reads the connected handle; a caller that has its own
+ *  (a test on pglite, a service already inside a transaction-less batch) reads
+ *  the same rows through the same derivation rather than a second one. */
+export async function readIntegrationStatesOn(db: Db): Promise<Map<string, IntegrationState>> {
+  const { readIntegrationConnections } = await import("../../db/repositories/integrations.js");
+  return readIntegrationStatesFrom(await readIntegrationConnections(db));
+}
+
+/**
+ * The one derivation, over rows somebody else read.
+ *
+ * Both entry points above end here, and so does every other caller: a second
+ * place that turns stored rows into an `IntegrationState` is exactly what
+ * `resolve.ts` exists to prevent, and it would drift the day a rule changes in
+ * one of them.
+ */
+function readIntegrationStatesFrom(
+  stored: Map<string, StoredIntegrationConnection>,
+): Map<string, IntegrationState> {
   const material = secretsKeyMaterial();
   return new Map(
     integrationManifests.map((manifest) => [

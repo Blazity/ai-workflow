@@ -38,9 +38,10 @@ import type {
 import { logger } from "../services/system/logger.js";
 import {
   blockContractsFor,
-  connectedDeploymentIntegrations,
+  type DeploymentIntegrations,
   type RequestBlockContracts,
 } from "../services/workflow-definitions/block-contracts.js";
+
 
 /**
  * One integration as this module reads it.
@@ -176,17 +177,19 @@ export function integrationFactsOf(
  * `blocks.list` and `system.capabilities` would come to describe two different
  * moments inside the same conversation.
  */
-async function agentFacingBlockData(): Promise<{
+function agentFacingBlockData(deployment: DeploymentIntegrations): {
   contracts: RequestBlockContracts;
   integrations: DeploymentIntegrationsView;
-}> {
-  const integrations = agentFacingIntegrations(await connectedDeploymentIntegrations());
+} {
+  const integrations = agentFacingIntegrations(deployment);
   return { contracts: blockContractsFor(undefined, integrations), integrations };
 }
 
 /** The contracts alone, for a tool with no integration facts to publish. */
-export async function agentFacingBlockContracts(): Promise<RequestBlockContracts> {
-  return (await agentFacingBlockData()).contracts;
+export function agentFacingBlockContracts(
+  deployment: DeploymentIntegrations,
+): RequestBlockContracts {
+  return agentFacingBlockData(deployment).contracts;
 }
 
 /**
@@ -197,11 +200,11 @@ export async function agentFacingBlockContracts(): Promise<RequestBlockContracts
  * it would have done on its own rather than answering from an empty deployment,
  * which would read as "no integration is connected" and block nothing.
  */
-export async function agentFacingDeploymentIntegrations(): Promise<
-  Awaited<ReturnType<typeof connectedDeploymentIntegrations>> | null
-> {
+export async function agentFacingDeploymentIntegrations(
+  read: () => Promise<DeploymentIntegrations>,
+): Promise<DeploymentIntegrations | null> {
   try {
-    return agentFacingIntegrations(await connectedDeploymentIntegrations());
+    return agentFacingIntegrations(await read());
   } catch {
     return null;
   }
@@ -220,9 +223,11 @@ export async function agentFacingDeploymentIntegrations(): Promise<
  * a build that ships integrations would otherwise turn a database hiccup into a
  * dependency failure on the one call a client needs to get its bearings.
  */
-export async function deploymentIntegrationFacts(): Promise<McpIntegrationFact[] | null> {
+export async function deploymentIntegrationFacts(
+  read: () => Promise<DeploymentIntegrations>,
+): Promise<McpIntegrationFact[] | null> {
   try {
-    const { contracts, integrations } = await agentFacingBlockData();
+    const { contracts, integrations } = agentFacingBlockData(await read());
     // The registry is built only when there is something to report: a
     // deployment with no integration has no fact to publish and should not
     // resolve forty core contracts to say so.

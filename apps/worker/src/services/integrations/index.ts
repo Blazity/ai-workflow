@@ -11,6 +11,7 @@ export {
   disconnectIntegrationConnection,
   listIntegrations,
   readIntegrationStates,
+  readIntegrationStatesOn,
   saveIntegrationConnection,
   secretsKeyMaterial,
   setIntegrationConnectionSource,

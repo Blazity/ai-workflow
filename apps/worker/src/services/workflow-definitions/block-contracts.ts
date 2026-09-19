@@ -15,6 +15,7 @@
 import type {
   HarnessProfileManifest,
   HarnessProfileReference,
+  IntegrationState,
   VcsProviderKind,
   WorkflowBlockContract,
   WorkflowBlockContractResolver,
@@ -101,59 +102,62 @@ export interface RequestBlockContracts {
  * a module-level cache would keep the block running until the instance
  * recycled.
  */
+/**
+ * Re-exported so the layers above services can name the value they are handed.
+ * The type lives in the engine, which the app tier may not import (the
+ * boundaries gate), and passing it around without being able to name it is how
+ * it ended up being read behind everyone's back in the first place.
+ */
+export type { DeploymentIntegrations };
+
 export async function connectedDeploymentIntegrations(): Promise<DeploymentIntegrations> {
   // A build that ships no integration has nothing to read and no block to
   // decide about, so it asks the database nothing. That is every deployment
-  // until the first integration lands, and it keeps this read off the path of
-  // every validation those deployments run.
+  // until the first integration lands. It is a shortcut, not the reason the
+  // callers below work without a database: each of them is handed its state.
   if (integrationManifests.length === 0) return NO_INTEGRATIONS;
+  return deploymentIntegrationsFrom(await readIntegrationStates());
+}
+
+/**
+ * The assembly, over states somebody else read.
+ *
+ * Pure, and the only place manifests, states and the deployment's built-in
+ * capabilities are put together. Every entry point above ends here, so
+ * "what this build offers" has one answer however the state was obtained.
+ */
+function deploymentIntegrationsFrom(
+  states: Map<string, IntegrationState>,
+): DeploymentIntegrations {
   return deploymentIntegrations({
     manifests: integrationManifests,
-    states: await readIntegrationStates(),
+    states,
     builtinCapabilities: builtinCapabilitiesOfDeployment(),
   });
 }
 
-/** The same, for a caller holding its own database handle. */
+/** The same, for a caller holding its own database handle. Goes through the
+ *  one derivation in `services/integrations`, never a second one. */
 async function deploymentIntegrationsOn(db: Db): Promise<DeploymentIntegrations> {
   if (integrationManifests.length === 0) return NO_INTEGRATIONS;
-  const { readIntegrationConnections } = await import("../../db/repositories/integrations.js");
-  const { resolveIntegrationState, environmentReaderFrom, secretsKeyMaterial } = await import(
-    "../integrations/index.js"
-  );
-  const stored = await readIntegrationConnections(db);
-  const material = secretsKeyMaterial();
-  const environment = environmentReaderFrom();
-  return deploymentIntegrations({
-    manifests: integrationManifests,
-    states: new Map(
-      integrationManifests.map((manifest) => [
-        manifest.id,
-        resolveIntegrationState({
-          manifest,
-          environment,
-          stored: stored.get(manifest.id) ?? null,
-          secretsKey: material.present
-            ? { present: true, keyId: material.keyId }
-            : { present: false },
-        }),
-      ]),
-    ),
-    builtinCapabilities: builtinCapabilitiesOfDeployment(),
-  });
+  const { readIntegrationStatesOn } = await import("../integrations/index.js");
+  return deploymentIntegrationsFrom(await readIntegrationStatesOn(db));
 }
 
 /**
  * The block data for a caller that knows which Harness Profile is in force.
  * Callers without one use the code-owned built-in default profile.
  *
- * `integrations` is read by the asynchronous callers below. A caller that
- * passes none declares a deployment with no integration, which offers no
- * integration block rather than one nothing here could run.
+ * `integrations` is required and has no default. It used to default to
+ * `NO_INTEGRATIONS`, which reads as "this deployment has none" and is a
+ * different statement from "nobody asked": the caller that forgot got a palette
+ * missing every integration block and no way to notice. Deciding with no
+ * integration state is still allowed, in one word - `NO_INTEGRATIONS` - and the
+ * word is now at the call site where a reader can see it.
  */
 export function blockContractsFor(
-  profile?: Pick<HarnessProfileManifest, "harness" | "model">,
-  integrations: DeploymentIntegrations = NO_INTEGRATIONS,
+  profile: Pick<HarnessProfileManifest, "harness" | "model"> | undefined,
+  integrations: DeploymentIntegrations,
 ): RequestBlockContracts {
   const context = workflowBlockRegistryContext(profile, integrations);
   const resolveContract = createWorkflowBlockContractResolver(context);

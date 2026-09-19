@@ -19,7 +19,7 @@ type BlocksListData = {
 // waiting for a restart. The agent default comes from the built-in Harness
 // Profile because this catalog call has no run-specific profile.
 async function buildRegistry(
-  _deps: McpToolDependencies,
+  deps: McpToolDependencies,
 ): Promise<Record<string, WorkflowBlockContract>> {
   // Through the connected variant, so the catalog an agent reads holds the
   // blocks of the integrations this deployment has connected and says which of
@@ -29,7 +29,7 @@ async function buildRegistry(
   // Agent-facing: the verdict is the editor's own, and the sentence beside it
   // is the one a model may read. The admin's version names the variable that is
   // missing, which is the one thing ADR-010 decision 15 keeps off this surface.
-  return (await agentFacingBlockContracts()).blockRegistry();
+  return agentFacingBlockContracts(await deps.loadDeploymentIntegrations()).blockRegistry();
 }
 
 export function registerBlockTools(server: McpServer, deps: McpToolDependencies): void {

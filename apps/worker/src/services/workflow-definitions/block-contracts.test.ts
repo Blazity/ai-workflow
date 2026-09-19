@@ -52,7 +52,7 @@ describe("block contracts per request", () => {
   it("builds the resolver once when validation, available values and models are all consulted", () => {
     mocks.contextFromEnv.mockClear();
 
-    const contracts = blockContractsFor();
+    const contracts = blockContractsFor(undefined, NO_INTEGRATIONS);
     validateWorkflowDefinitionCandidate(
       definition,
       contracts.resolveContract,
@@ -74,14 +74,14 @@ describe("block contracts per request", () => {
 
   it("reads the environment again for the next request", () => {
     mocks.contextFromEnv.mockClear();
-    blockContractsFor().blockRegistry();
-    blockContractsFor().blockRegistry();
+    blockContractsFor(undefined, NO_INTEGRATIONS).blockRegistry();
+    blockContractsFor(undefined, NO_INTEGRATIONS).blockRegistry();
     expect(mocks.contextFromEnv).toHaveBeenCalledTimes(2);
   });
 
   it("resolves the editor's block table only when a request reads it", () => {
     mocks.contextFromEnv.mockClear();
-    const contracts = blockContractsFor();
+    const contracts = blockContractsFor(undefined, NO_INTEGRATIONS);
     expect(contracts.blockRegistry()).toBe(contracts.blockRegistry());
     expect(mocks.contextFromEnv).toHaveBeenCalledTimes(1);
   });

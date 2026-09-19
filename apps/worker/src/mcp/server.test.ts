@@ -7,6 +7,7 @@ import { policyFor } from "./policy.js";
 import { createMcpServer } from "./server.js";
 import { settingsSnapshotFromEnvironment } from "../services/settings/snapshot.js";
 import { unactivatedRepositoryCatalog } from "../test-support/repository-catalog.js";
+import { testDeploymentIntegrations } from "../test-support/integrations.js";
 
 const state = vi.hoisted(() => ({
   executeMcpRead: vi.fn(),
@@ -96,6 +97,7 @@ const deps = {
     scopes: new Set(["mcp:read"]),
     audience: "https://worker.example.com/mcp",
   },
+  loadDeploymentIntegrations: async () => testDeploymentIntegrations(),
   requestId: "request_1",
   traceId: "trace_1",
   now: () => new Date("2026-08-11T12:00:00.000Z"),

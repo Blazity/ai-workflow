@@ -13,10 +13,20 @@
  * nothing here knows an id: a lookup takes the id its caller already holds.
  */
 import type { IntegrationBlockManifest, IntegrationManifest } from "@integrations/sdk";
-import { generatedIntegrationManifests } from "./manifests.generated";
+import {
+  generatedIntegrationFixtureIds,
+  generatedIntegrationManifests,
+} from "./manifests.generated";
 
 export const integrationManifests: readonly IntegrationManifest[] =
   generatedIntegrationManifests;
+
+/**
+ * The ids of the manifests above that are fixtures, generated in behind
+ * INTEGRATION_FIXTURES. Empty in every committed registry and every deployed
+ * build, so a check about what this deployment SHIPS can leave them out.
+ */
+export const integrationFixtureIds: readonly string[] = generatedIntegrationFixtureIds;
 
 const byId = new Map(generatedIntegrationManifests.map((manifest) => [manifest.id, manifest]));
 

@@ -12,7 +12,8 @@ import type {
   WorkflowDefinitionV2,
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { connectedBlockContracts } from "./block-contracts.js";
+import { blockContractsFor } from "./block-contracts.js";
+import type { DeploymentIntegrations } from "../../engine/definition/integration-availability.js";
 import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from "./policy-operations.js";
 import {
   analyzeWorkflowV2Catalog,
@@ -56,14 +57,15 @@ export async function validateWorkflowDefinitionDraftCandidate(candidate: unknow
 /** Which values every block in this candidate may read, and where each comes
  *  from. The API retains its snapshot-shaped input, while block contracts use
  *  the code-owned built-in Harness Profile when no node profile is in force. */
-export async function analyzeWorkflowDefinitionCatalog(
+export function analyzeWorkflowDefinitionCatalog(
   _settings: SettingsSnapshot,
   definition: WorkflowDefinitionV2,
-): Promise<WorkflowDefinitionCatalogResponse> {
-  // Connected, so the fields an integration block promises downstream appear in
-  // the catalog the editor binds from. With the core-only map every integration
-  // node resolves to the contract for a block nothing provides, and its output
-  // offers nothing to bind.
-  const contracts = await connectedBlockContracts();
+  // Taken, not read. The fields an integration block promises downstream have
+  // to appear in the catalog the editor binds from, so this needs the real
+  // state; the route is what says where that state comes from, because the
+  // route is what knows this request may touch a database.
+  integrations: DeploymentIntegrations,
+): WorkflowDefinitionCatalogResponse {
+  const contracts = blockContractsFor(undefined, integrations);
   return analyzeWorkflowV2Catalog(contracts.analyzeValues(definition));
 }

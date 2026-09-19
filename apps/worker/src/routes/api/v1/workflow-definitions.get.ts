@@ -15,6 +15,7 @@ import {
   requireDashboardActor,
   toHttpError,
 } from "../../../services/auth/request-context.js";
+import { connectedDeploymentIntegrations } from "../../../services/workflow-definitions/block-contracts.js";
 import {
   readWorkflowDefinitionsOverview,
 } from "../../../services/workflow-definitions/definition-reads.js";
@@ -80,6 +81,7 @@ export default defineEventHandler(
       await requireDashboardActor(event);
       const overview = await readWorkflowDefinitionsOverview(
         await getRequestSettingsSnapshot(event),
+        await connectedDeploymentIntegrations(),
       );
       return {
         definitions: overview.definitions.map((row) => serializeDefinitionMeta(row)),

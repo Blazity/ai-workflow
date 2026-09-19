@@ -224,7 +224,18 @@ test("the build flag is the only difference between the two registries", async (
 
   assert.doesNotMatch(shipped, /demo/);
   assert.match(withFixtures, /_fixtures\/demo\/manifest/);
-  assert.equal(withFixtures.replace(/^.*_fixtures.*$\n?/gmu, "").replace(/^ {2}demo,$\n?/gmu, ""), shipped);
+  // The flag also declares what it let in, so the shipped registry can tell a
+  // fixture apart from something we actually ship. Empty without the flag, and
+  // exactly the fixtures with it.
+  assert.match(shipped, /generatedIntegrationFixtureIds: readonly string\[\] = \[\];/u);
+  assert.match(withFixtures, /generatedIntegrationFixtureIds: readonly string\[\] = \["demo"\];/u);
+  // Everything else is identical: erase the fixture's import, its entry in the
+  // list and the declaration above, and the two files are the same bytes.
+  const withoutFixtures = withFixtures
+    .replace(/^.*_fixtures.*$\n?/gmu, "")
+    .replace(/^ {2}demo,$\n?/gmu, "")
+    .replace(/= \["demo"\];$/mu, "= [];");
+  assert.equal(withoutFixtures, shipped);
   assert.equal(await registry(), shipped);
 });
 

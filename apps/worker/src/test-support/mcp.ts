@@ -5,6 +5,7 @@ import type { McpActorContext, McpToolDependencies } from "../mcp/contracts.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
 import type { Adapters } from "../engine/support/adapters.js";
 import { unactivatedRepositoryCatalog } from "./repository-catalog.js";
+import { testDeploymentIntegrations } from "./integrations.js";
 
 export function actorFor(overrides: Partial<McpActorContext> = {}): McpActorContext {
   return {
@@ -44,6 +45,10 @@ export function depsFor(
     // loads: a test that is about the catalog overrides this with its own. A
     // thunk, like the transport's, so a tool that never dispatches never asks.
     loadRepositoryCatalog: async () => unactivatedRepositoryCatalog(),
+    // A deployment with no integration usable, which is what a test that is not
+    // about integrations means. A test that IS about them overrides this with
+    // `testDeploymentIntegrations([...])`, one line, no module mocked.
+    loadDeploymentIntegrations: async () => testDeploymentIntegrations(),
     requestId: "request-execute",
     traceId: "trace-execute",
     now,

@@ -62,7 +62,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
         // configuring an integration in the dashboard, so a token never travels
         // through a model's context, and this is the half an agent needs to
         // build a workflow that can actually run here.
-        integrations: await deploymentIntegrationFacts(),
+        integrations: await deploymentIntegrationFacts(deps.loadDeploymentIntegrations),
       }),
     });
     envelope.meta.trust = "system";

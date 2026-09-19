@@ -11,7 +11,7 @@ import { integrationManifests } from "@integrations/registry";
 import { integrationRuntime } from "@integrations/registry/worker";
 import type { IntegrationHealthResult, IntegrationManifest } from "@integrations/sdk";
 
-import { readConnectedIntegrationConnections } from "../../db/repositories/integrations.js";
+import type { StoredIntegrationConnection } from "../integrations/index.js";
 import {
   integrationSecretsKeyId,
   isValidIntegrationSecretsKey,
@@ -27,10 +27,19 @@ import {
 } from "../integrations/index.js";
 import type { IntegrationHealthEntry } from "./integration-health.js";
 
-/** One entry per integration this build ships, in registry order. */
-export async function integrationHealthEntries(): Promise<IntegrationHealthEntry[]> {
+/**
+ * One entry per integration this build ships, in registry order.
+ *
+ * The stored rows come in rather than being read here: this is the same
+ * "non-empty registry means a database" trap the block contracts had, and the
+ * caller is the one that knows whether this scan is running against a
+ * connection. The registry shortcut below stays as a shortcut, not as the
+ * reason a test without a database passes.
+ */
+export function integrationHealthEntries(
+  stored: Map<string, StoredIntegrationConnection>,
+): IntegrationHealthEntry[] {
   if (integrationManifests.length === 0) return [];
-  const stored = await readConnectedIntegrationConnections();
   const material = secretsKeyMaterial();
   const environment = environmentReaderFrom();
 

@@ -1,4 +1,4 @@
-import { integrationManifests } from "@integrations/registry";
+import { integrationFixtureIds, integrationManifests } from "@integrations/registry";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -26,7 +26,14 @@ import { describe, expect, it } from "vitest";
  */
 describe("the connection shape a run pins", () => {
   it("has not changed without somebody saying so", async () => {
-    const shape = integrationManifests.map((manifest) => ({
+    // Fixtures are left out: they enter the registry only behind
+    // INTEGRATION_FIXTURES, which is a local and CI diagnostic build, not
+    // something we ship. Including them would make every fixture run read as a
+    // connection-shape change nobody made, and the drain line this guard exists
+    // to ask for would start arriving on changes that need none.
+    const shape = integrationManifests
+      .filter((manifest) => !integrationFixtureIds.includes(manifest.id))
+      .map((manifest) => ({
       integration: manifest.id,
       fields: [...manifest.connection.fields]
         .sort((a, b) => a.key.localeCompare(b.key))

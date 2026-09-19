@@ -87,18 +87,12 @@ vi.mock("@integrations/registry", async () => {
   };
 });
 
-vi.mock("../services/integrations/index.js", () => ({
-  readIntegrationStates: async () => {
-    if (state.readFails) throw new Error("connection terminated unexpectedly");
-    return state.states;
-  },
-}));
-
 import type { IntegrationState, IntegrationStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { createTestDb } from "../db/test-db.js";
 import { organization } from "../db/schema.js";
 import { actorFor, depsFor } from "../test-support/mcp.js";
+import { testDeploymentIntegrations } from "../test-support/integrations.js";
 import { createMcpServer } from "./server.js";
 
 const DECLARED_VARIABLES = ["DEMO_BASE_URL", "DEMO_API_TOKEN"];
@@ -169,6 +163,13 @@ async function connectedClient(): Promise<Client> {
     actor: actorFor({
       scopes: new Set(["mcp:read", "runs:dispatch", "workflows:write"]),
     }),
+    // This deployment, stated. Read on every call rather than once, because one
+    // of the cases below is an admin changing a connection between two calls,
+    // and a value captured here would answer both from the first read.
+    loadDeploymentIntegrations: async () => {
+      if (state.readFails) throw new Error("connection terminated unexpectedly");
+      return testDeploymentIntegrations([...state.states.values()] as IntegrationState[]);
+    },
   });
   // The real server: every tool an agent can reach, registered exactly once and
   // in the order the contract publishes them.

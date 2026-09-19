@@ -22,6 +22,19 @@ import type { WorkflowDefinition } from "@shared/contracts";
 import type { WorkflowValueAnalysis } from "@shared/workflow-graph";
 import { connectedBlockContracts } from "./block-contracts.js";
 
+/**
+ * The block data definition policy decides against.
+ *
+ * Declared here with policy's other connected dependencies rather than reached
+ * for inside the operations, because resolving it reads the integration
+ * connections: policy that called `connectedBlockContracts` directly took a
+ * database dependency that none of its callers could see, and every test of an
+ * operation needed a DATABASE_URL the moment this build shipped an integration.
+ */
+export function connectedDefinitionBlockContracts() {
+  return connectedBlockContracts();
+}
+
 export function validateConnectedDefinitionPromptAuthoring(
   definition: WorkflowDefinition,
   analysis: WorkflowValueAnalysis,

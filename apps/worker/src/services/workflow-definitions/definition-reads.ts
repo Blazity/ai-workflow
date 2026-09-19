@@ -30,7 +30,8 @@ import {
   readConnectedWorkflowDefinitionVersionRows,
 } from "../../engine/stored-definition-reads.js";
 import { readConnectedWorkflowDefinitionDraft } from "../../engine/definition-draft-read.js";
-import { connectedBlockContracts } from "./block-contracts.js";
+import { blockContractsFor } from "./block-contracts.js";
+import type { DeploymentIntegrations } from "../../engine/definition/integration-availability.js";
 
 export interface WorkflowDefinitionsOverview {
   definitions: WorkflowDefinitionRow[];
@@ -55,6 +56,9 @@ export interface WorkflowDefinitionDetail {
  */
 export async function readWorkflowDefinitionsOverview(
   settings: SettingsSnapshot,
+  /** Taken, not read: the palette carries every integration's blocks and says
+   *  which are usable, and the route names where that state came from. */
+  integrations: DeploymentIntegrations,
 ): Promise<WorkflowDefinitionsOverview> {
   const agentKind = defaultBuiltinHarnessProfile().harness.provider;
   const storedDefinitions = await listConnectedWorkflowDefinitions();
@@ -63,9 +67,7 @@ export async function readWorkflowDefinitionsOverview(
     fetchAvailableModels(),
     fetchTicketStatuses(),
     currentSystemHarnessProfileReference(),
-    // The palette carries every integration's blocks and says which are usable,
-    // so the editor needs the connection state the same request read.
-    connectedBlockContracts(),
+    blockContractsFor(undefined, integrations),
     Promise.all(storedDefinitions.map((row) =>
       row.deployedVersion === null
         ? null
