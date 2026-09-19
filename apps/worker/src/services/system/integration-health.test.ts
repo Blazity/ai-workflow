@@ -387,6 +387,7 @@ describe("integrationHealthContributions", () => {
               version: 1,
               config: { baseUrl: "https://demo.example" },
               secrets: {},
+              secretDigests: {},
               testStatus: "passed",
               testReason: null,
               testMessage: null,
