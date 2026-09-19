@@ -62,6 +62,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   editor: "Workflow editor",
   profiles: "Harness profiles",
   repositories: "Repositories",
+  integrations: "Integrations",
   health: "System health",
   users: "Users",
   settings: "Settings",

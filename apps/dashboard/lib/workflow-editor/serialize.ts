@@ -28,9 +28,26 @@ import {
 // Import it rather than keeping a dashboard copy so the two can never drift (a
 // stale copy previously stripped call_llm's `provider` on save).
 
+/**
+ * The keys this block's params may carry.
+ *
+ * `BLOCK_PARAM_KEYS` covers the block types core owns. An integration's block
+ * type is storable (`isStorableWorkflowBlockType`) and has no row there, and it
+ * cannot have one: the keys come from the integration's own `paramsSchema` and
+ * the graph package may not read a manifest. So a type the allowlist does not
+ * cover keeps the keys the node actually holds, which the editor only ever
+ * filled from that block's own contract, and the worker validates them against
+ * the schema that owns them. Reading the table directly threw
+ * "BLOCK_PARAM_KEYS[node.type] is not iterable" the moment an integration block
+ * reached the canvas, which took the whole editor down.
+ */
+function paramKeysOf(node: FlowNodeDef): readonly string[] {
+  return BLOCK_PARAM_KEYS[node.type] ?? Object.keys(node.params);
+}
+
 function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> {
   const out: Record<string, WorkflowParamValue> = {};
-  for (const key of BLOCK_PARAM_KEYS[node.type]) {
+  for (const key of paramKeysOf(node)) {
     const value = node.params[key];
     if (value === undefined) continue;
     if (Array.isArray(value) && value.length === 0) continue;
@@ -61,7 +78,7 @@ export function serializeWorkflowDefinition(
         y: Math.round(node.y),
       });
       const displayed = serializeParams(node);
-      for (const key of BLOCK_PARAM_KEYS[node.type]) {
+      for (const key of paramKeysOf(node)) {
         if (displayed[key] !== undefined) {
           serialized.configuration[key] = displayed[key];
         } else if (

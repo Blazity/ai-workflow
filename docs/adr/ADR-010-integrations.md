@@ -1371,6 +1371,161 @@ from `[]`, which means this build ships none.
   field added to or removed from a response moves no hash, so the assertions on
   `system.capabilities`, `workflows.save_draft` and the `runs.result` outcome
   are what a client's expectations rest on.
+## The Integrations screens, decided in S6
+
+Two routes. `/integrations` lists every integration this build ships and writes
+nothing. `/integrations/<id>/connection` is the one place a credential is typed
+and the one place a destructive action is confirmed. S7 wraps the second in the
+integration's own area, where it becomes the Connection tab.
+
+The split is deliberate. A list that also saved tokens would put the only
+credential field in the product next to nine other cards, and a first-timer
+reading down the page would meet four ways to change something before meeting
+the one they came for. Separating them also means the list has no failure mode:
+it renders from one read and nothing on it can be clicked into a refusal.
+
+### What the page refuses to do
+
+- **It never decides a status.** `statusChip`, `sourceLine`, `verificationLine`
+  and `statusDetailLines` (`apps/dashboard/lib/integrations/presentation.ts`)
+  turn `IntegrationState` into sentences and compute nothing. The chip reads
+  `status`, never `connection`, so an integration somebody switched off says
+  Disabled rather than Connected with perfectly good credentials.
+- **It never claims a source serves the integration when it does not.** After a
+  first save fails its test, the source is still `environment` and the
+  environment may set nothing; the line says so and names the variables rather
+  than reporting that the values came from there.
+- **It never shows a secret and never re-sends one it does not have.** A secret
+  input starts empty under every source, says whether one is stored, and travels
+  only when something was typed. Emptying one is `clearSecrets`, an action, not
+  a blank input. After a save the secret inputs are cleared, because characters
+  left on screen would suggest the field holds the stored value.
+- **It never invents a number.** Disable and disconnect name their consequences
+  and count nothing: how many published workflows and runs in flight depend on
+  an integration is not in this API (see "What S2 does not decide"), and a count
+  guessed in the browser is worse than a sentence. Delivering the count needs a
+  worker endpoint S6 was scoped out of; it is the one part of decision 9's
+  "impact before change" that is still open.
+- **It never enforces a permission.** A member is shown no control because
+  offering one that 403s is rude, not because the hiding is the rule. The worker
+  refuses, and `canManageIntegrations(session.role)` on a server-verified role is
+  what the screen reads.
+- **It offers no "save it anyway".** Values that failed their test are stored
+  and not used, and the screen says which of those two facts applies to the
+  connection currently running.
+
+### Three surfaces, one sentence, one source
+
+The palette, the badge on a canvas node, the banner over the canvas and the
+selected node's panel all read `options.blockRegistry[type].availability`, which
+is the engine's own sentence (S4). The panel used to prefer the per-node
+contract that validation resolved; that contract is refetched when the canvas
+changes and not when an integration does, so an admin who reached for the kill
+switch in another tab kept reading "this block can run". Ports and outputs are
+per node; availability is a fact about the deployment and the block type, so it
+comes from the registry the server last rendered with.
+
+### How a screen learns something changed
+
+`router.refresh()`, from `useIntegrationChangeRefresh`
+(`apps/dashboard/lib/integrations/change-signal.ts`), on two triggers: a
+`BroadcastChannel` message another tab of the same browser publishes after every
+successful mutation, and this tab regaining focus, which covers a change made by
+anybody else. The channel is one open instance per document: a channel closed
+straight after `postMessage` drops the message, which is the shape this started
+as.
+
+All three screens use it, not just the editor. The gate found the connection
+screen still reading Connected, and still offering a live Disconnect, half a
+minute after another tab had erased everything: a screen that offers a control
+for a connection that no longer exists is worse than one that flickers.
+
+A refresh is not free, though, and the price is paid by anybody typing. These
+pages read their data in an async server component under a `Suspense` boundary,
+and that boundary suspending again unmounts the client tree under it: on the
+connection screen, a colleague's save emptied the form. Worse, it emptied the
+form while handing this tab a current version token, so the next save wrote the
+seeded stale values back over the colleague's change with no conflict at all.
+So the connection screen refuses the refresh while anything is typed and says
+that something changed instead. The stale token is the point: the save that
+follows collides, and the comparison above is what the admin gets. The editor
+takes the refresh: its unsaved canvas was still there afterwards, with the
+palette and the canvas banner both current.
+
+### Saving against somebody else's save
+
+A save carries `expectedVersion` and the worker answers 409 with the version
+that won. The screen then re-reads the connection, takes every field nobody
+here has touched from that read, and names the fields that still differ with
+both values ("Site URL is now X here, and you typed Y") before offering Save
+again, which now carries the version that won.
+
+Seeding the form once is right while somebody is typing and was wrong here: the
+first shape kept the whole form as this tab last knew it, so "Save again",
+exactly as the sentence instructed, wrote a colleague's field back to the value
+it had before they changed it. The read-back is the ordinary list endpoint; when
+it fails, the screen says the values could not be read back and asks for a
+reload rather than offering a second blind write.
+
+### What the card is allowed to promise
+
+A block an integration declares is not a block this build can run: core may
+still own the capability it needs. The list therefore reads the editor's own
+block registry (`/api/v1/workflow-definitions`, the endpoint the editor already
+uses, in parallel with the integrations read) and says which blocks this build
+runs and why the rest are refused. That answer is only read while the
+integration is in use: an integration nobody connected has every block refused
+for that one reason, which would turn the card whose job is to say what
+connecting brings into a list of circular refusals. A deployment that refuses
+the second read leaves the card describing the blocks rather than promising
+them.
+
+### Text from outside, bounded at the render edge
+
+A provider that answers 401 with a sign-in page hands us two kilobytes of HTML,
+and a forwarded worker error carries a stack and the worker's own URL. Both were
+rendered whole. `readableProviderText` keeps the first line, drops markup,
+replaces absolute URLs, collapses whitespace and bounds the length, and every
+provider sentence and forwarded error goes through it. The worker stores the
+same text on the connection, so bounding it at the write as well is S2's to
+decide.
+
+### Refusing to ask a question nobody answers
+
+"Test what is in use" is refused while `connection` is `not_connected`: there is
+nothing in use to ask about. Sent anyway, the worker built a request out of
+empty values, and the `new URL("")` that threw came back as "the provider is not
+answering, try again in a moment" and was written down as a failed verification
+for everybody. The refusal is read off the status the API returned, never off a
+status the browser worked out. The classification of that throw is the worker's
+and is still open.
+
+The same asymmetry decides the advice after a failed test: a save sent exactly
+the values on screen, so "correct them and save again" is right, while a test of
+a deployment reading its environment did not try those values at all, and says
+so instead.
+
+### Two defects this stage had to fix to exist
+
+An integration's block type is storable and is in none of core's tables keyed by
+block type. `BLOCK_PARAM_KEYS[type]` and `BLOCK_TYPE_SPECS[type]` each returned
+`undefined`, and `ConfigFields` handed `createElement` an undefined renderer, so
+the editor died with a client error the moment such a block reached the canvas.
+The dashboard now falls back to the node's own params, to `blockTypeSpecOf`, and
+to no fields. The last one is a gap rather than a fix: an integration block's
+parameters are declared by its own schema and this build has no form for them.
+The stage that ships the first real integration block owns that form.
+
+### What is open
+
+| Question | Owner |
+|---|---|
+| The numeric impact preview before a disable, a disconnect or a reconfiguration | a worker read that counts published workflows and runs in flight |
+| A settings form built from an integration's parameter schema | the first stage that ships a real integration block |
+| Choosing the active provider of a capability two integrations serve | S13, which is the first stage with two |
+| A throw raised while building a request out of unconfigured values is reported as `provider_unreachable`, so a non-answer is recorded as a failed verification | S2, which owns the classifier; the dashboard only stops sending |
+| Whether the text a provider returns is bounded where it is stored, not only where it is read | S2 |
+| Inputs are 12 px on every cockpit form, which makes iOS zoom on focus | DESIGN.md and the shared `Input` primitive, not one screen |
 
 ## Change log
 
