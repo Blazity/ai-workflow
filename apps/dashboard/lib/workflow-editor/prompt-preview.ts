@@ -103,6 +103,10 @@ export function contextLines(context: PreviewContext): ContextLine[] {
 const GAP_TITLES: Record<string, string> = {
   repository_instructions: "Repository instructions",
   repository_memory: "Repo memory",
+  repository_map: "Repository map",
+  ticket_and_pull_request: "Ticket and pull request",
+  run_notes: "The run's own notes",
+  platform_rules: "Our own rules",
 };
 
 /** A section only a run can compose, by name. A kind this build has no name

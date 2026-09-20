@@ -160,11 +160,17 @@ export function EffectivePromptPreviewResultView({
       </div>
 
       {/* Named, not missing: an operator who cannot see a section has no way to
-          tell "a run adds this" from "nothing adds this". */}
+          tell "a run adds this" from "nothing adds this". The heading and the
+          closing line are both load bearing. This list grew once already, when
+          the repository map arrived and nothing came back to add it, and an
+          operator who read the list as the whole difference concluded the map
+          was not being sent and went to change their catalog. A list of what a
+          run adds can always fall behind what a run adds; saying so is the only
+          part of that which cannot. */}
       {gaps.length > 0 && (
         <div className="rounded-xs border border-neutral-200 bg-off-white px-2 py-2">
           <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-neutral-600">
-            Only a run composes these
+            A run composes these, this screen cannot
           </div>
           <ul className="m-0 mt-1 space-y-1 p-0">
             {gaps.map((gap) => (
@@ -175,6 +181,11 @@ export function EffectivePromptPreviewResultView({
               </li>
             ))}
           </ul>
+          <p className="m-0 mt-1.5 font-body text-[10px] leading-[1.35] text-neutral-600">
+            Not a complete list, and it cannot be: a run composes from a workspace, a ticket and a pull request that do
+            not exist yet. A section missing here is not a section a run leaves out. What one run actually sent is on
+            its briefing, under &quot;Sent last time&quot;.
+          </p>
         </div>
       )}
 
@@ -241,10 +252,12 @@ export function EffectivePromptPreview({
   definitionId,
   definition,
   blockId,
+  openVersion,
 }: {
   definitionId: number;
   definition: WorkflowDefinitionV2;
   blockId: string;
+  openVersion?: number | null;
 }) {
   const [result, setResult] =
     useState<EffectivePromptPreviewResponse | null>(null);
@@ -370,7 +383,7 @@ export function EffectivePromptPreview({
           </div>
           <div className="max-h-[560px] overflow-y-auto border-t border-neutral-200 p-2">
             {view === "then" ? (
-              <LastBriefingView definitionId={definitionId} nodeId={blockId} />
+              <LastBriefingView definitionId={definitionId} nodeId={blockId} openVersion={openVersion} />
             ) : error ? (
               <div role="alert" className="rounded-xs border border-red-200 bg-red-50 px-2 py-2 font-body text-[10px] text-red-800">
                 {error}

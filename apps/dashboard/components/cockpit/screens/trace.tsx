@@ -570,7 +570,12 @@ export function TraceDetail({
           >
             {steps.length === 0 ? (
               <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
-                No steps recorded for this run yet.
+                {/* "yet" promises more is coming. Directly under a notice that
+                    this run's observation expired, that is the one thing this
+                    emptiness cannot mean. */}
+                {currentReplay.availability === "expired"
+                  ? "The legacy step trace holds nothing for this run either."
+                  : "No steps recorded for this run yet."}
               </div>
             ) : (
               <div className="mt-[18px] overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">

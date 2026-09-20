@@ -43,9 +43,14 @@ const EMPTY: ViewState = { data: null, failure: null, loading: true };
 export function LastBriefingView({
   definitionId,
   nodeId,
+  openVersion,
 }: {
   definitionId: number;
   nodeId: string;
+  /** The deployed version the canvas in front of the operator was opened from,
+   *  so the notice below can name both numbers. Null when nothing of this
+   *  workflow is deployed, which is also when there is nothing to compare. */
+  openVersion?: number | null;
 }) {
   const [state, setState] = React.useState<ViewState>(EMPTY);
   // Which send and which section are open. Local, not in the URL: the editor's
@@ -132,9 +137,23 @@ export function LastBriefingView({
           what my block sends" and "this is what my block used to send", and
           they should not have to compare two numbers to find out. */}
       {ranIn.definitionVersion === null ? null : (
-        <Notice title={`This went out from workflow version ${ranIn.definitionVersion}`}>
-          The newest run of a block wins whatever version it ran. If this workflow has been edited since, what is
-          below is not what the canvas in front of you would send.
+        <Notice
+          title={
+            openVersion === null || openVersion === undefined
+              ? `This went out from workflow version ${ranIn.definitionVersion}`
+              : openVersion === ranIn.definitionVersion
+                ? `This went out from workflow version ${ranIn.definitionVersion}, the version this canvas is on`
+                : `This went out from workflow version ${ranIn.definitionVersion}, and this canvas is on version ${openVersion}`
+          }
+        >
+          {/* Three states, and "we do not know" is not "they match": a canvas
+              whose version this screen was never given must not be told its
+              run is current. */}
+          {openVersion === null || openVersion === undefined
+            ? "The newest run of a block wins whatever version it ran. If this workflow has been edited since, what is below is not what the canvas in front of you would send."
+            : openVersion === ranIn.definitionVersion
+              ? "So what is below is what this block sent on the version you are editing. Unsaved edits on the canvas are not in it."
+              : "The newest run of a block wins whatever version it ran, and this one is not the version in front of you. What is below is not what this canvas would send."}
         </Notice>
       )}
       {ranIn.capture ? <CaptureLine capture={ranIn.capture} /> : null}

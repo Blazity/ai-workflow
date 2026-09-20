@@ -267,8 +267,38 @@ test("the switches the profile applied are said, both of them, either way", () =
 
 test("a section only a run composes is named instead of silently absent", () => {
   const html = renderToStaticMarkup(<EffectivePromptPreviewResultView result={truthful} />);
-  assert.match(html, /Only a run composes these/);
+  assert.match(html, /A run composes these, this screen cannot/);
   assert.match(html, /Repo memory/);
+});
+
+/**
+ * The list is not a promise. An operator who read it as the whole difference
+ * could not find the repository map, concluded it was not being sent, and went
+ * off to change their catalog: it is in every real send, and this screen simply
+ * cannot build it. The list grew once and will fall behind again; the sentence
+ * that says so is the part that cannot.
+ */
+test("the list of what only a run composes never claims to be complete", () => {
+  const html = renderToStaticMarkup(<EffectivePromptPreviewResultView result={truthful} />);
+  assert.match(html, /Not a complete list, and it cannot be/);
+  assert.match(html, /A section missing here is not a section a run leaves out/);
+  // And it points at the one place that does show a whole send.
+  assert.match(html, /Sent last time/);
+});
+
+test("a gap kind this build has no name for is shown as the worker spelled it", () => {
+  // The read side is open (.claude/rules/agent-visibility.md): a dashboard
+  // older than its worker must render a new kind rather than drop the line.
+  const html = renderToStaticMarkup(
+    <EffectivePromptPreviewResultView
+      result={{
+        ...truthful,
+        notPreviewable: [{ kind: "something_new", reason: "Only a run has it." }],
+      }}
+    />,
+  );
+  assert.match(html, /something_new/);
+  assert.match(html, /Only a run has it\./);
 });
 
 test("a profile that could not be resolved is never shown as somebody else's", () => {

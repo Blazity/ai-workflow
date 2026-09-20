@@ -554,13 +554,15 @@ test("the whole prompt copies as the bytes of every section, in order", async (t
 
   const harness = render(t);
   await settle();
-  assert.match(text(harness.root), /Step 1 of 2: 5 sections are loaded and checked/);
+  assert.match(text(harness.root), /Step 1 of 2: 5 sections to load and check/);
 
   click(harness.root, "Prepare the whole prompt to copy");
   await settle(24);
   assert.match(text(harness.root), /5 sections joined in order, each checked against the stored bytes/);
 
-  click(harness.root, "Copy the whole prompt");
+  // This send's budget trimmed a section, so the button says what it copies
+  // rather than calling it the whole prompt.
+  click(harness.root, "Copy what we kept");
   await settle();
   assert.equal(written.length, 1);
   const kept = store
@@ -568,6 +570,44 @@ test("the whole prompt copies as the bytes of every section, in order", async (t
     .sections.reduce((total, section) => total + section.storedBytes, 0);
   assert.equal(new TextEncoder().encode(written[0]!).length, kept);
   assert.match(text(harness.root), /Every section matched the length and sha256 the worker stored/);
+});
+
+/**
+ * THE CAVEAT OUTLIVES THE CLICK.
+ *
+ * It used to be written only in the idle state, so it disappeared at the
+ * moment a person reached the clipboard: they pressed the button and were told
+ * every section matched the length and sha256 the worker stored, which is true
+ * and reads as "this is all of it". Nobody may reach the clipboard without
+ * knowing what is not in it.
+ */
+test("a send the budget trimmed says so in every state of the whole-prompt copy", async (t) => {
+  const written: string[] = [];
+  const previousNavigator = (globalThis as { navigator?: unknown }).navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: { clipboard: { writeText: (value: string) => { written.push(value); return Promise.resolve(); } } },
+    configurable: true,
+  });
+  t.after(() => {
+    if (previousNavigator === undefined) delete (globalThis as { navigator?: unknown }).navigator;
+    else Object.defineProperty(globalThis, "navigator", { value: previousNavigator, configurable: true });
+  });
+
+  const shortfall = /One section is here only in part: this copy is [\d.]+ KB of the [\d.]+ KB the agent read/;
+  const harness = render(t);
+  await settle();
+  assert.match(text(harness.root), shortfall);
+
+  click(harness.root, "Prepare the whole prompt to copy");
+  await settle(24);
+  assert.match(text(harness.root), shortfall);
+  // And the button itself never claims to be copying the whole prompt.
+  assert.doesNotMatch(text(harness.root), /Copy the whole prompt/);
+
+  click(harness.root, "Copy what we kept");
+  await settle();
+  assert.equal(written.length, 1);
+  assert.match(text(harness.root), shortfall);
 });
 
 test("a run past its retention says we kept it and retention removed it", async (t) => {

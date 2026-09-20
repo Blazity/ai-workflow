@@ -222,7 +222,12 @@ describe("previewWorkflowPromptCandidate", () => {
     expect(result.preview.unresolvedSources.some((source) => source.kind === "repository")).toBe(
       false,
     );
-    expect(result.preview.notPreviewable.map((gap) => gap.kind)).toEqual(["repository_memory"]);
+    // The switch decides this one entry and nothing else: the rest of the list
+    // is what a run composes from a workspace, which no switch turns off.
+    expect(result.preview.notPreviewable.map((gap) => gap.kind)).not.toContain(
+      "repository_instructions",
+    );
+    expect(result.preview.notPreviewable.map((gap) => gap.kind)).toContain("repository_memory");
   });
 
   // Red when: the switches are read from anywhere but the profile that would
@@ -245,10 +250,9 @@ describe("previewWorkflowPromptCandidate", () => {
     if (!result.ok) return;
     expect(result.preview.sections.map((section) => section.kind)).toContain("runtime");
     expect(result.preview.context.includeWorkflowData).toBe(true);
-    expect(result.preview.notPreviewable.map((gap) => gap.kind)).toEqual([
-      "repository_instructions",
-      "repository_memory",
-    ]);
+    expect(result.preview.notPreviewable.map((gap) => gap.kind)).toEqual(
+      expect.arrayContaining(["repository_instructions", "repository_memory"]),
+    );
     expect(result.preview.profile).toMatchObject({ applied: "selected" });
   });
 
@@ -313,13 +317,43 @@ describe("previewWorkflowPromptCandidate", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.preview.notPreviewable).toEqual([
-      expect.objectContaining({ kind: "repository_instructions" }),
-      expect.objectContaining({ kind: "repository_memory" }),
-    ]);
+    // Every section a run composes and this screen cannot, not the two that
+    // happen to come from a checkout. An operator who could not find the
+    // repository map here read the short list as the whole difference and went
+    // to change their catalog: the map is in every real send.
+    expect(result.preview.notPreviewable.map((gap) => gap.kind)).toEqual(
+      expect.arrayContaining([
+        "repository_instructions",
+        "repository_memory",
+        "repository_map",
+        "ticket_and_pull_request",
+        "run_notes",
+        "platform_rules",
+      ]),
+    );
     for (const gap of result.preview.notPreviewable) {
       expect(gap.reason.length).toBeGreaterThan(20);
     }
+  });
+
+  // Red when: the map stops being named here, which is how this list fell
+  // behind the first time. The sentence has to tell an operator the map IS
+  // sent, not merely that it is missing from this screen.
+  it("says the repository map is in every real send, and where it lives there", async () => {
+    mocks.loadPromptReference.mockResolvedValue(reusablePrompt);
+
+    const result = await previewWorkflowPromptCandidate(
+      {} as Db,
+      candidate,
+      "agent",
+      registryContext,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const map = result.preview.notPreviewable.find((gap) => gap.kind === "repository_map");
+    expect(map?.reason).toContain("A run always sends it");
+    expect(map?.reason).toContain("selected-repositories");
   });
 
   // Red when: a block naming a profile this deployment cannot resolve is shown

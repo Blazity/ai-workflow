@@ -162,6 +162,21 @@ function WholePromptCopy({
   // Counted from the sections this button actually joins, never from the
   // send's own total: the label and the bytes must be the same number.
   const keptBytes = sections.reduce((total, header) => total + header.storedBytes, 0);
+  const sentBytes = sections.reduce((total, header) => total + header.sentBytes, 0);
+  /**
+   * WHAT IS NOT IN THE CLIPBOARD, said in every state this button has.
+   *
+   * The caveat used to live only in the idle state, so it vanished at the exact
+   * moment it started to matter: a person read it, pressed the button, and was
+   * then told every section matched the length and sha256 the worker stored.
+   * That sentence is true and reads as a completeness guarantee, which is worse
+   * than saying nothing, because what they paste into a model is short of what
+   * the agent read and nothing on the screen says so any more.
+   */
+  const shortfall =
+    trimmed > 0
+      ? `${trimmed === 1 ? "One section is" : `${trimmed} sections are`} here only in part: this copy is ${formatBytes(keptBytes)} of the ${formatBytes(sentBytes)} the agent read.`
+      : null;
 
   /** Every page of one section's stored text, in order. */
   const readSection = (sectionIndex: number, offset: number) =>
@@ -229,7 +244,11 @@ function WholePromptCopy({
         >
           {copy.state === "copied"
             ? "Copied"
-            : `Copy the whole prompt (${formatBytes(keptBytes)})`}
+            : // The label says what it copies. "The whole prompt" is a claim,
+              // and on a send the budget trimmed it is not a true one.
+              trimmed > 0
+              ? `Copy what we kept (${formatBytes(keptBytes)} of ${formatBytes(sentBytes)})`
+              : `Copy the whole prompt (${formatBytes(keptBytes)})`}
         </Button>
       ) : (
         <Button variant="secondary" size="sm" loading={copy.state === "loading"} onClick={() => void prepare()}>
@@ -241,16 +260,27 @@ function WholePromptCopy({
           <span className="text-fail-fg">{copy.message}</span>
         ) : copy.state === "loading" ? (
           `Loading section ${copy.done + 1} of ${copy.of}…`
-        ) : copy.state === "copied" ? (
-          copy.checked
-            ? "Every section matched the length and sha256 the worker stored."
-            : "Every section matched its stored length; this browser cannot check the sha256 here."
-        ) : ready ? (
-          `${plural(sections.length, "section")} joined in order, each checked against the stored bytes.`
         ) : (
-          `Step 1 of 2: ${plural(sections.length, "section")} are loaded and checked, then one click copies them${
-            trimmed > 0 ? `. ${plural(trimmed, "section")} was kept only in part, so the copy is what we kept` : ""
-          }.`
+          <>
+            {copy.state === "copied"
+              ? copy.checked
+                ? "Every section matched the length and sha256 the worker stored."
+                : "Every section matched its stored length; this browser cannot check the sha256 here."
+              : ready
+                ? `${plural(sections.length, "section")} joined in order, each checked against the stored bytes.`
+                : `Step 1 of 2: ${plural(sections.length, "section")} to load and check, then one click copies ${
+                    sections.length === 1 ? "it" : "them"
+                  }.`}
+            {shortfall ? (
+              // Never a quieter colour than the sentence above it: what a
+              // person is missing must not read as a footnote to what they
+              // have.
+              <>
+                {" "}
+                <span className="text-fail-fg">{shortfall}</span>
+              </>
+            ) : null}
+          </>
         )}
       </span>
     </div>
@@ -390,9 +420,16 @@ export function SendView({
         <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-neutral-200 px-3 py-2.5">
           <h5 className="m-0 font-display text-[14px] font-semibold text-coal">The prompt, section by section</h5>
           <span className="font-body text-[12px] text-neutral-600">
+            {/* A count is a fact about this send. With the list unread it is a
+                fact about our own request, and "0 sections" under an overview
+                saying five reads as a send that lost them. */}
             {headers.loading && sections.length === 0
               ? "loading"
-              : `${plural(sections.length, "section")}${unreadable > 0 ? `, ${unreadable} unreadable` : ""}`}
+              : headers.failure
+                ? sections.length === 0
+                  ? "could not be loaded"
+                  : `${plural(sections.length, "section")} read before the list failed`
+                : `${plural(sections.length, "section")}${unreadable > 0 ? `, ${unreadable} unreadable` : ""}`}
           </span>
         </header>
         <div className="flex flex-col gap-2 px-3 py-2.5">

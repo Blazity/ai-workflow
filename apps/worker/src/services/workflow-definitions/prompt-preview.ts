@@ -88,7 +88,13 @@ interface WorkflowPromptPreviewSource extends EffectivePromptUnresolvedSource {
 
 /** A section a run composes and an editor cannot, named rather than missing. */
 interface WorkflowPromptPreviewGap {
-  kind: "repository_instructions" | "repository_memory";
+  kind:
+    | "repository_instructions"
+    | "repository_memory"
+    | "repository_map"
+    | "ticket_and_pull_request"
+    | "run_notes"
+    | "platform_rules";
   reason: string;
 }
 
@@ -395,14 +401,49 @@ function describeSource(
   }
 }
 
-/** The sections a run composes that no editor can. Named, because "absent" and
- *  "absent here" are different things to an operator reading a prompt. */
+/**
+ * The sections a run composes that no editor can. Named, because "absent" and
+ * "absent here" are different things to an operator reading a prompt.
+ *
+ * This list once held two entries and was read as the whole of the difference,
+ * which sent an operator who could not find the repository map off to change
+ * the catalog: the map is in every real send, as the `selected-repositories`
+ * part of the Runtime data section, and this screen simply cannot build it.
+ * The same silence covered the pull request's state, the run's own notes, the
+ * ticket's clarification answers, the branch, and both of our platform rules,
+ * which the runbook teaches people to look for by origin.
+ *
+ * It is still not a complete list and cannot be: a run composes from a
+ * workspace, a ticket and a pull request that do not exist while somebody is
+ * editing a definition. The panel that shows it says so rather than implying
+ * otherwise, which is the half of this that no list can fix.
+ */
 function notPreviewable(context: WorkflowPromptPreviewContext): WorkflowPromptPreviewGap[] {
   const gaps: WorkflowPromptPreviewGap[] = [
+    {
+      kind: "repository_map",
+      reason:
+        "Which repositories the run holds, what each is for and which it may write to is composed from the prepared workspace and the catalog. A run always sends it, as the selected-repositories part of the Runtime data section; this screen has no workspace to build it from.",
+    },
     {
       kind: "repository_memory",
       reason:
         "What earlier runs learned about a repository is added from the prepared workspace, so it can only be read on a run. It is absent here whether or not a run would carry it.",
+    },
+    {
+      kind: "ticket_and_pull_request",
+      reason:
+        "The pull request's review comments and failing checks, and the answers to any clarification this ticket raised, are read when the run reaches them. A run sends whichever of them exist.",
+    },
+    {
+      kind: "run_notes",
+      reason:
+        "The branch a run works on, and the notes it writes to itself as it goes (a repository it was refused, an expansion it closed), exist only once a run is under way.",
+    },
+    {
+      kind: "platform_rules",
+      reason:
+        "Our own rules that travel with a send, the Repository Access Protocol and the Resolution Check, are added by the run around the text above. They carry origin platform in a briefing, which is where they can be read.",
     },
   ];
   if (!context.includeRepositoryInstructions) return gaps;
