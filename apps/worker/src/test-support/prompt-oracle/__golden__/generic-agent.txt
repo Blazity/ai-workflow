@@ -1,0 +1,56 @@
+<<<AI_WORKFLOW_PROFILE_BEGIN: Harness Profile: Claude>>>
+Follow the block's fixed role, the repository instructions, and the supplied workflow data.
+<<<AI_WORKFLOW_PROFILE_END>>>
+
+<<<AI_WORKFLOW_BLOCK_BEGIN: Block role and task>>>
+Summarize ticket AIW-512 for the on-call engineer and list the next three steps.
+<<<AI_WORKFLOW_BLOCK_END>>>
+
+<<<AI_WORKFLOW_RUNTIME_BEGIN: Runtime data>>>
+Resolved inputs:
+{
+  "plan": "## Plan\n\n1. Stop rotating the signing key on boot in `src/auth/keys.ts`.\n2. Read the previous key on refresh in `src/auth/session.ts`.\n3. Add a regression test that deploys twice.",
+  "severity": "high"
+}
+
+Human clarification answer:
+Focus on the web client; mobile is out of scope for this summary.
+
+
+## Repositories
+
+### In the workspace
+
+Only a repository marked (write) may be changed. A repository marked (read only) is context: read it, never change it.
+
+- `github:acme/api` at `/vercel/sandbox/repos/github__acme__api` (write)
+  Why it is here: the ticket names the signing keys in acme/api
+  What it is: The session and billing API. It owns key rotation, the refresh path and the webhook fan-out.
+  How it relates: It publishes a package used by `github:acme/sdk`. It is the backend for `github:acme/web`.
+- `github:acme/web` at `/vercel/sandbox/repos/github__acme__web` (read only)
+  Why it is here: frontend for acme/api
+  What it is: The customer dashboard. Sign-in and the account screens live here.
+
+### Related to this work, not in the workspace
+
+These are not checked out, and this phase cannot attach them. They are here so you know what the workspace sits next to: do not request one, and do not treat its code as readable. Where the work truly needs one, say which and why in your output.
+
+- `github:acme/sdk` - not in the workspace, and this phase cannot attach it
+  Why it is here: `github:acme/api` publishes a package used by `github:acme/sdk`.
+  What it is: Client SDK for the acme API (the provider's own listing text; nobody here wrote a description)
+
+### Already decided, do not request these
+
+Each of these was already decided for this work, and the reason is on its line. Do not request one: the request is refused, the run pays a pass for it, and nothing changes.
+
+- `github:acme/infra` - switched off in the repository catalog, do not request it: github:acme/infra is switched off on the Repositories page. - Terraform for every environment.
+- `github:acme/legacy-auth` - a person left it out of this work, do not request it: github:acme/legacy-auth was excluded on this ticket by Anna Nowak on 2026-09-17. - The retired auth monolith. Read only, kept for its migration history.
+
+### Also in the catalog
+
+One line each, so you know they exist. This phase cannot attach any of them.
+
+- `github:acme/docs` - The public developer documentation.
+
+
+<<<AI_WORKFLOW_RUNTIME_END>>>

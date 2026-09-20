@@ -3,6 +3,9 @@
 import React from "react";
 
 import { Button, CkCard, CkChip, CkTabs } from "@/components/ui";
+import { BriefingTab } from "@/components/cockpit/agent-visibility/briefing-tab";
+import { PagedCacheProvider } from "@/components/cockpit/agent-visibility/paged";
+import { currentReplayLink, writeReplayLink, type ReplayLink } from "@/lib/agent-visibility/replay-link";
 import { apiClient } from "@/lib/api/client";
 import {
   LIVE_POLL_MS,
@@ -26,7 +29,12 @@ const NODE_HEIGHT = 72;
 const CANVAS_PADDING = 56;
 const REPLAY_GRAPH_HISTORY_MAX_PAGES = 10;
 
-type ReplayTab = "input" | "output" | "logs" | "metadata" | "attempts";
+const REPLAY_TABS = ["input", "briefing", "output", "logs", "metadata", "attempts"] as const;
+type ReplayTab = (typeof REPLAY_TABS)[number];
+
+function isReplayTab(value: string | null): value is ReplayTab {
+  return value !== null && (REPLAY_TABS as readonly string[]).includes(value);
+}
 type ReplayEdge = WorkflowReplayGraphEdge;
 type ReplayNode = WorkflowReplayGraphNode;
 
@@ -1047,6 +1055,7 @@ function AttemptInspector({
   followingLatest,
   onFollowLatest,
   runIsLive,
+  onWriteLink,
 }: {
   runId: string;
   attempts: WorkflowReplayAttemptSummary[];
@@ -1058,8 +1067,59 @@ function AttemptInspector({
   followingLatest: boolean;
   onFollowLatest: () => void;
   runIsLive: boolean;
+  /** Writes the page URL, and only from the replay a person can see. */
+  onWriteLink: (patch: Partial<ReplayLink>) => void;
 }) {
   const [tab, setTab] = React.useState<ReplayTab>("output");
+  // Where a person is inside the replay lives in the URL, so a refresh or a
+  // link sent to a colleague lands on the same attempt, tab, send and section.
+  const [briefingLink, setBriefingLink] = React.useState<{
+    send: string | null;
+    section: string | null;
+  }>({ send: null, section: null });
+  const appliedAttemptRef = React.useRef<number | null>(null);
+  // The attempt the URL named, until it is selected. The replay finds it only
+  // once its page of attempts has loaded, and that arrival must not be read as
+  // a person moving to another attempt: it is the link landing.
+  const linkAttemptRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    const link = currentReplayLink();
+    if (isReplayTab(link.tab)) setTab(link.tab);
+    setBriefingLink({ send: link.send, section: link.section });
+    linkAttemptRef.current = link.attempt;
+    appliedAttemptRef.current = selectedAttempt?.id ?? null;
+    // Once, from the URL this page was opened with.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  React.useEffect(() => {
+    const attemptId = selectedAttempt?.id ?? null;
+    if (appliedAttemptRef.current === attemptId) return;
+    appliedAttemptRef.current = attemptId;
+    if (linkAttemptRef.current !== null && linkAttemptRef.current === attemptId) {
+      linkAttemptRef.current = null;
+      return;
+    }
+    // A send and a section belong to one attempt; another attempt starts fresh.
+    setBriefingLink({ send: null, section: null });
+    onWriteLink({ send: null, section: null });
+  }, [selectedAttempt?.id]);
+  const changeTab = (next: ReplayTab) => {
+    setTab(next);
+    onWriteLink({ tab: next });
+  };
+  // The current value from a ref, not from inside the updater. React may call
+  // an updater while another component renders, and this one wrote the URL,
+  // which is a router update during somebody else's render: React says so out
+  // loud ("Cannot update a component while rendering a different component")
+  // and the next React makes it an error. An updater has to be pure.
+  const briefingLinkRef = React.useRef(briefingLink);
+  briefingLinkRef.current = briefingLink;
+  const changeBriefingLink = (patch: { send?: string | null; section?: string | null }) => {
+    const next = { ...briefingLinkRef.current, ...patch };
+    briefingLinkRef.current = next;
+    setBriefingLink(next);
+    onWriteLink(next);
+  };
   const [detail, setDetail] =
     React.useState<WorkflowReplayAttemptDetail | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -1191,16 +1251,37 @@ function AttemptInspector({
           <CkTabs
             tabs={[
               { id: "input", label: "Input" },
+              { id: "briefing", label: "Briefing" },
               { id: "output", label: "Output" },
               { id: "logs", label: "Logs" },
               { id: "metadata", label: "Metadata" },
               { id: "attempts", label: `Attempts (${attempts.length})` },
             ]}
             active={tab}
-            onChange={(next) => setTab(next as ReplayTab)}
+            onChange={(next) => changeTab(next as ReplayTab)}
           />
         </div>
-        {tab === "attempts" ? (
+        {tab === "briefing" ? (
+          selectedAttempt ? (
+            <BriefingTab
+              runId={runId}
+              attempt={{
+                nodeId: selectedAttempt.nodeId,
+                attempt: selectedAttempt.attempt,
+                activationScopeId: selectedAttempt.activationScopeId,
+                live: isLiveReplayAttempt(selectedAttempt),
+              }}
+              runIsLive={runIsLive}
+              send={briefingLink.send}
+              section={briefingLink.section}
+              onLinkChange={changeBriefingLink}
+            />
+          ) : (
+            <div className="py-8 text-center font-body text-[13px] text-neutral-500">
+              Select a block attempt to see what it sent.
+            </div>
+          )
+        ) : tab === "attempts" ? (
           <div className="flex max-h-[360px] flex-col gap-1 overflow-auto">
             {attempts.map((attempt) => (
               <Button
@@ -1279,6 +1360,20 @@ export function WorkflowReplay({
     React.useState(false);
   const loadedGraphRootCursorRef = React.useRef<string | null>(null);
   const refreshInFlightRef = React.useRef(false);
+  // The URL names the block attempt a person is looking at. It is applied once
+  // the attempt it names is loaded (older attempts arrive page by page), and
+  // written back whenever the selection moves, with replaceState, so Back still
+  // leaves the replay instead of walking through clicks.
+  const linkAppliedRef = React.useRef(false);
+  // The ticket page mounts this screen twice, the desktop split and the phone
+  // view, and hides one with CSS. Both are live React trees, so without this
+  // the hidden twin would write the URL over what the person is reading.
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const writeLink = React.useCallback((patch: Partial<ReplayLink>) => {
+    const root = rootRef.current;
+    if (root && root.getClientRects().length === 0) return;
+    writeReplayLink(patch);
+  }, []);
   const initialSelection = React.useMemo(
     () => replaySelectionForRun(initialResponse),
     [initialResponse],
@@ -1331,6 +1426,7 @@ export function WorkflowReplay({
 
   React.useEffect(() => {
     setLoadedOlder(false);
+    linkAppliedRef.current = false;
     setGraphAttempts(initialResponse.attempts);
     setGraphHistoryPartial(false);
     loadedGraphRootCursorRef.current = null;
@@ -1439,6 +1535,37 @@ export function WorkflowReplay({
     }
   }, [attemptsForNode, followLatest, selectedAttemptId]);
 
+  React.useEffect(() => {
+    if (linkAppliedRef.current) return;
+    const link = currentReplayLink();
+    const known = link.node !== null && (response.snapshot?.graph.nodes.some((node) => node.id === link.node) ?? false);
+    if (!known) {
+      linkAppliedRef.current = true;
+      return;
+    }
+    setSelectedNodeId(link.node);
+    if (link.attempt === null) {
+      linkAppliedRef.current = true;
+      return;
+    }
+    const found = graphAttempts.some(
+      (attempt) => attempt.id === link.attempt && attempt.nodeId === link.node,
+    );
+    if (found) {
+      setFollowLatest(false);
+      setSelectedAttemptId(link.attempt);
+      linkAppliedRef.current = true;
+      return;
+    }
+    // Still paging through older attempts; give up once the history is whole.
+    if (graphHistoryComplete) linkAppliedRef.current = true;
+  }, [graphAttempts, graphHistoryComplete, response.snapshot]);
+
+  React.useEffect(() => {
+    if (!linkAppliedRef.current) return;
+    writeLink({ node: selectedNodeId, attempt: selectedAttempt?.id ?? null });
+  }, [selectedNodeId, selectedAttempt?.id]);
+
   const selectNode = (nodeId: string) => {
     setSelectedNodeId(nodeId);
     const latest = graphAttempts
@@ -1498,7 +1625,9 @@ export function WorkflowReplay({
   )?.type;
 
   return (
+    <PagedCacheProvider>
     <div
+      ref={rootRef}
       className="grid w-full min-w-0 max-w-full gap-3 overflow-hidden 2xl:grid-cols-[minmax(0,1.7fr)_minmax(360px,1fr)]"
       data-replay-root="true"
     >
@@ -1545,6 +1674,7 @@ export function WorkflowReplay({
         ) : null}
       </CkCard>
       <AttemptInspector
+        onWriteLink={writeLink}
         runId={runId}
         attempts={attemptsForNode}
         selectedAttempt={selectedAttempt}
@@ -1561,5 +1691,6 @@ export function WorkflowReplay({
         }}
       />
     </div>
+    </PagedCacheProvider>
   );
 }

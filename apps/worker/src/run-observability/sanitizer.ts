@@ -161,6 +161,29 @@ function isSensitiveValueKey(key: string): boolean {
   );
 }
 
+/**
+ * A field that counts model tokens rather than holding a credential:
+ * `maxTokens: 200000`, `usage.inputTokens`, `tokenLimit`.
+ *
+ * BOTH THE NAME AND THE VALUE decide it. The name alone would let a list of
+ * access tokens through as `accessTokens`, so only a whole number (or a string
+ * of digits, as a manifest may write it) is kept, and only when "token" is the
+ * one credential word in the name. Production served a harness manifest's
+ * `"maxTokens":"[REDACTED:token]"` through runs.logs before this.
+ */
+function isTokenCountEntry(key: string, value: unknown): boolean {
+  const normalized = normalizedKey(key);
+  const namesACount = /tokens|token(?:count|limit|budget|usage)|(?:max|min|num|total)token/.test(normalized);
+  const holdsACount =
+    (typeof value === "number" && Number.isInteger(value)) ||
+    (typeof value === "string" && /^\d{1,15}$/.test(value));
+  return (
+    namesACount &&
+    holdsACount &&
+    !/(?:password|passwd|secret|apikey|accesskey|privatekey|sessionkey|webhookkey)/.test(normalized)
+  );
+}
+
 function isCommandArgumentsKey(key: string): boolean {
   return [
     "args",
@@ -255,9 +278,18 @@ function replaceMatches(
   });
 }
 
+/**
+ * A card number: 13 to 19 digits that pass the Luhn checksum, starting with a
+ * card network's digit (2 to 6), and at least 15 of them when written without
+ * separators. Without the last two checks one millisecond timestamp in ten
+ * passed (1726750000001, 1726750000019), and the card rule runs before the
+ * phone rule.
+ */
 function isLikelyPaymentCard(candidate: string): boolean {
   const digits = candidate.replace(/\D/g, "");
   if (digits.length < 13 || digits.length > 19) return false;
+  if (!/^[2-6]/.test(digits)) return false;
+  if (!/[ -]/.test(candidate) && digits.length < 15) return false;
   let sum = 0;
   let double = false;
   for (let index = digits.length - 1; index >= 0; index -= 1) {
@@ -289,10 +321,71 @@ function isLikelyIban(candidate: string): boolean {
   return remainder === 1;
 }
 
+/** A date inside a candidate: year first (2026-09-19, 2026.09.19) or year
+ *  last (19.09.2026, 09-19-2026), month and day in range in either order. */
+const DATE_INSIDE = /(?<!\d)(?:\d{4}[-.](\d{1,2})[-.](\d{1,2})|(\d{1,2})[-.](\d{1,2})[-.]\d{4})(?!\d)/;
+
+function containsDate(candidate: string): boolean {
+  const match = DATE_INSIDE.exec(candidate);
+  if (!match) return false;
+  const first = Number(match[1] ?? match[3]);
+  const second = Number(match[2] ?? match[4]);
+  return first >= 1 && second >= 1 && first <= 31 && second <= 31 && (first <= 12 || second <= 12);
+}
+
+/**
+ * A phone number as people write one: 7 to 15 digits with a country code, an
+ * area code in parentheses, or groups set apart. A bare run of digits is a
+ * count, an id or a timestamp; one dot between two numbers is a decimal; four
+ * dotted groups are an IP address; and a date, with or without a time after
+ * it, is a date. Each of these came back as `[REDACTED:phone]` before.
+ */
 function isLikelyPhone(candidate: string): boolean {
   const digits = candidate.replace(/\D/g, "");
-  return digits.length >= 7 && digits.length <= 15;
+  if (digits.length < 7 || digits.length > 15) return false;
+  if (!/[+()]|\d[\s.-]+\d/.test(candidate)) return false;
+  if (/^\d+\.\d+$/.test(candidate)) return false;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(candidate)) return false;
+  return !containsDate(candidate);
 }
+
+/**
+ * A text rule the replay sanitizer applies and the briefing detector
+ * (`visibility-detector.ts`) reads from here, so a pattern and the check that
+ * refuses its false positives have one definition. The pattern is global and
+ * is only ever used through `replace` and `matchAll`, which never read or
+ * leave its `lastIndex`.
+ */
+export interface SanitizerTextRule {
+  readonly kind: ReplayRedactionClass;
+  readonly pattern: RegExp;
+  readonly accept?: (match: string) => boolean;
+}
+
+export const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g;
+
+/**
+ * The personal and financial data rules, in the order the replay sanitizer
+ * applies them: an IBAN before a card, a card before a phone number, because
+ * each later pattern also matches parts of the earlier ones.
+ */
+export const PERSONAL_DATA_RULES: readonly SanitizerTextRule[] = [
+  { kind: "iban", pattern: /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b/gi, accept: isLikelyIban },
+  { kind: "payment_card", pattern: /(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)/g, accept: isLikelyPaymentCard },
+  { kind: "email", pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi },
+  {
+    kind: "phone",
+    // Phone separators (hyphens, spaces) overlap UUID segment separators, so a
+    // run of decimal digit groups inside a canonical UUID (8-4-4-4-12 hex) can
+    // otherwise match as a phone number; these lookarounds refuse to start or
+    // end a match at a UUID segment boundary. `(?<!\d[.,])` and `(?![.,]\d)`
+    // refuse the digits on either side of a decimal point (a cost of
+    // 0.0512345 used to come back as `0.[REDACTED:phone]`).
+    pattern:
+      /(?<![A-Za-z0-9])(?<!\d[.,])(?<![0-9a-fA-F]{8}-)(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?){2,4}\d{2,4}(?!-[0-9a-fA-F]{12}\b)(?![.,]\d)(?![A-Za-z0-9])/g,
+    accept: isLikelyPhone,
+  },
+];
 
 function accountInputText(
   value: string,
@@ -446,12 +539,7 @@ function sanitizeText(
     "credential_url",
     context.redactions,
   );
-  value = replaceMatches(
-    value,
-    /\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g,
-    "jwt",
-    context.redactions,
-  );
+  value = replaceMatches(value, JWT_PATTERN, "jwt", context.redactions);
   value = replaceMatches(
     value,
     /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b/gi,
@@ -464,37 +552,9 @@ function sanitizeText(
     "token",
     context.redactions,
   );
-  value = replaceMatches(
-    value,
-    /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b/gi,
-    "iban",
-    context.redactions,
-    isLikelyIban,
-  );
-  value = replaceMatches(
-    value,
-    /(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)/g,
-    "payment_card",
-    context.redactions,
-    isLikelyPaymentCard,
-  );
-  value = replaceMatches(
-    value,
-    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-    "email",
-    context.redactions,
-  );
-  value = replaceMatches(
-    value,
-    // Phone separators (hyphens, spaces) overlap UUID segment separators, so a
-    // run of decimal digit groups inside a canonical UUID (8-4-4-4-12 hex) can
-    // otherwise match as a phone number; these lookarounds refuse to start or
-    // end a match at a UUID segment boundary.
-    /(?<![A-Za-z0-9])(?<![0-9a-fA-F]{8}-)(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?){2,4}\d{2,4}(?!-[0-9a-fA-F]{12}\b)(?![A-Za-z0-9])/g,
-    "phone",
-    context.redactions,
-    isLikelyPhone,
-  );
+  for (const rule of PERSONAL_DATA_RULES) {
+    value = replaceMatches(value, rule.pattern, rule.kind, context.redactions, rule.accept);
+  }
   value = replaceMatches(
     value,
     /\b(?:pi|pm|ch|cus|cs|seti|src|txn)_[A-Za-z0-9]{8,}\b/g,
@@ -769,7 +829,7 @@ function sanitizeValue(
       if (isHardExcludedKey(key)) {
         output[sanitizedKey] = redacted("hard_exclusion");
         addRedaction(context.redactions, "hard_exclusion");
-      } else if (isSensitiveValueKey(key)) {
+      } else if (isSensitiveValueKey(key) && !isTokenCountEntry(key, item)) {
         output[sanitizedKey] = redacted("token");
         addRedaction(context.redactions, "token");
       } else if (isCommandArgumentsKey(key)) {

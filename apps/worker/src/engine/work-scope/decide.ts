@@ -13,9 +13,12 @@ import {
   type WorkScopeOrigin,
   type WorkScopeQuestionAnswer,
   type WorkScopeRefusalReason,
+  type WorkScopeRemovalReason,
   type WorkScopeTrailEvent,
   type WorkScopeUnavailableReason,
   type WorkScopeWritePlan,
+  isGuessEntry,
+  isUnnamedInAnswer,
 } from "@shared/contracts";
 
 // The same workspace bound the expansion protocol enforces
@@ -114,7 +117,12 @@ export type WorkScopeDecisionEvent =
    *  decide between: those raise `text_ambiguous`. */
   | {
       kind: "derived";
-      origin: "workflow_owned_branch" | "ticket_text" | "trigger_policy" | "inferred";
+      origin:
+        | "workflow_owned_branch"
+        | "ticket_text"
+        | "trigger_policy"
+        | "related_repository"
+        | "inferred";
       repositoryKeys: RepositoryKey[];
       /** Repositories this origin's evidence still names and this event does
        *  NOT attach: they are not decided here, and their entries are not
@@ -213,22 +221,13 @@ export interface WorkScopeDecision {
  * guess not taken and a sentence saying so; the other reading would take back
  * an omission somebody made.
  */
-export function isUnnamedInAnswer(
-  repositoryKey: RepositoryKey,
-  answeredRepositoryKeys: readonly RepositoryKey[],
-  entries: readonly WorkScopeEntry[],
-): boolean {
-  if (!answeredRepositoryKeys.includes(repositoryKey)) return false;
-  return entries
-    .filter((entry) => entry.repositoryKey === repositoryKey)
-    .every(isGuessEntry);
-}
-
-/** The one entry shape no person stands behind: a repository a run picked for
- *  itself. Every other entry is a decision somebody or something took. */
-export function isGuessEntry(entry: WorkScopeEntry): boolean {
-  return entry.state === "selected" && entry.origin === "inferred";
-}
+// The predicate itself moved to `@shared/contracts`, unchanged, because the
+// repository map has to mean the same set and may not import the engine: a map
+// that invited a request this rule is about to refuse cost the run a pass, and
+// two readings of "unnamed" would be the bug. The doc comment above is the
+// reasoning; the code is one function, in one place, re-exported here so every
+// caller keeps the name it already uses.
+export { isGuessEntry, isUnnamedInAnswer };
 
 /**
  * A repository this work already holds for a reason an answer does not undo: a
@@ -659,12 +658,17 @@ function recordDecision(context: WorkScopeDecisionContext, facts: Facts) {
         },
       });
     },
-    remove(entry: WorkScopeEntry) {
+    remove(entry: WorkScopeEntry, reason?: WorkScopeRemovalReason) {
       if (!context.carriesRecord) return;
       recorded.push({
         kind: "delete",
         deletion: { repositoryKey: entry.repositoryKey, origin: entry.origin },
-        event: { kind: "entry_removed", entry, removedBy: context.actor },
+        event: {
+          kind: "entry_removed",
+          entry,
+          removedBy: context.actor,
+          ...(reason ? { reason } : {}),
+        },
       });
     },
     finish(): WorkScopeDecision {
@@ -875,17 +879,40 @@ function decideDerived(
       decision.refuse(key, "outside_policy");
     }
   }
-  // The text match and the branch are re-derived on every run, so what they
-  // no longer name is dropped; a person who took the key over meanwhile keeps
-  // it, because the store deletes only a row still carrying this origin.
-  if (event.origin !== "ticket_text" && event.origin !== "workflow_owned_branch") return;
+  // The text match, the branch and the catalog relationship are re-derived on
+  // every run, so what they no longer name is dropped; a person who took the
+  // key over meanwhile keeps it, because the store deletes only a row still
+  // carrying this origin.
+  //
+  // `related_repository` is here for the reason it exists as an origin at all.
+  // An operator deletes the relationship that made us open a repository nobody
+  // asked about; without this, the entry the first run wrote re-attaches it on
+  // every run forever, and the only way back is a database edit. A repository
+  // that attaches itself after the reason was taken away is worse than no
+  // automatic attachment. Only this origin's entries are re-checked, and only
+  // against the catalog they were derived from, which is what makes the check
+  // safe to run at all.
+  if (
+    event.origin !== "ticket_text" &&
+    event.origin !== "workflow_owned_branch" &&
+    event.origin !== "related_repository"
+  ) {
+    return;
+  }
   // Named by the evidence counts as named here, decided or not: the deletion
   // above is for evidence that GOES AWAY, and a repository the caller could
   // still read on the ticket did not.
   const derived = new Set([...keys, ...(event.stillNamedKeys ?? [])]);
   for (const entry of context.scope?.entries ?? []) {
     if (entry.origin === event.origin && !derived.has(entry.repositoryKey)) {
-      decision.remove(entry);
+      // A removal a person has to be able to act on says why. The other two
+      // origins need no sentence, because the origin IS the reason: the ticket
+      // stopped naming it, the branch is gone. This one sends somebody to the
+      // Repositories page, so the trail line names what changed.
+      decision.remove(
+        entry,
+        event.origin === "related_repository" ? "relationship_removed" : undefined,
+      );
     }
   }
 }

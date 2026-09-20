@@ -10,6 +10,8 @@ import {
   RunBudgetError,
 } from "../../helpers/run-budget.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
+import { planLlmBriefing } from "../../agent-visibility/block.js";
+import { recordSendBriefing, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import {
   executionError,
   markBlockPhaseLaunched,
@@ -56,11 +58,22 @@ async function blockCallLlmGenerateStep(input: {
   prompt: string;
   schema?: string;
   timeoutMs: number;
+  /** What this send gave the model. Read as absent on a journal written
+   *  before it existed, which is a send with no briefing. */
+  briefing: AgentBriefingCapture | null;
 }): Promise<CallLlmStepResult> {
   "use step";
   const { generateStructured } = await import("../../llm.js");
+  const { briefing, ...call } = input;
+  // Before the call, so an invocation killed while the model is answering
+  // still leaves the record of what it was asked.
+  await recordSendBriefing(
+    briefing,
+    { prompt: call.prompt, system: call.system, wrapperScript: null },
+    () => import("../../agent-visibility/capture.js"),
+  );
   const startedAt = Date.now();
-  const result = await generateStructured(input);
+  const result = await generateStructured(call);
   return {
     object: result.object ?? null,
     hasObject: result.object !== undefined,
@@ -137,6 +150,21 @@ export const execute: BlockExecuteFn = async (
       timeoutMs,
       ...(system !== undefined ? { system } : {}),
       ...(schema !== undefined ? { schema } : {}),
+      // Nothing compiled this prompt: it came from a bound input or the
+      // block's own parameter, so it is recorded whole and unattributed
+      // rather than as a briefing with no sections.
+      briefing: planLlmBriefing({
+        execution,
+        ctx,
+        prompt,
+        system,
+        harness: {
+          provider: provider ?? ctx.runDefaultKind,
+          model,
+          ...(schema === undefined ? {} : { outputSchema: schema }),
+          profile: null,
+        },
+      }),
     });
     recordBlockPhaseUsage(
       ctx,

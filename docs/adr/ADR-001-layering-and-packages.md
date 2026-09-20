@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-12
+Last-verified: 2026-09-20
 
 # ADR-001: Layering and packages
 
@@ -126,16 +126,54 @@ it `engine/steps/repository-instructions.ts`, a `"use step"` module that
 reach. The pure re-export `schema.ts` was deleted, not moved: its six symbols
 come from `@shared/workflow-graph` directly.
 
+2026-09-19: `packages/agent-visibility` exists, created by stage 1 of
+[docs/plans/2026-09-19-agent-visibility.md](../plans/2026-09-19-agent-visibility.md).
+It owns the Agent Briefing contract (what one send gave a model: sections with
+the origin of every part, the repository context, the harness extras), the
+Clarification Round, the reason a briefing is missing, and the pure functions
+over them: build a stored record with the sanitizer and the storage budget
+passed in, page a section or a list under a byte cap, explain a missing
+briefing from recorded facts, and assemble rounds from rows. It has the two
+consumers this section asks for: the worker writes and serves the records and
+the dashboard parses and renders them, so the page and the MCP tool read one
+shape. It imports `@shared/contracts` and zod only (the default package edge).
+It may not compose a prompt, and it does not import `@shared/prompts`: the
+worker's capture adapter maps a compilation to this package's input, so neither
+package knows the other. It may not read the environment or configured secrets
+(the sanitizer stays in `run-observability` and is passed in), reach the
+database, or own capture, storage, retention or the routes; those stay in the
+worker, as the definition half of `workflow-graph` does.
+
+2026-09-20: the worker's half of agent visibility sits in three places, and the
+split is a tier constraint rather than taste.
+`apps/worker/src/engine/agent-visibility/` decides in workflow scope what a
+send will record and captures it from inside the send step.
+`apps/worker/src/run-observability/agent-briefings.ts` performs the write,
+because the write has to happen in a step body and the engine may not import a
+service; `apps/worker/src/services/agent-visibility/` is the read half and
+re-exports that writer for the surfaces (`routes/`, `mcp/tools/`) that serve
+it. `apps/worker/src/repository-map/` is a new engine-tier top-level directory
+rather than a directory under `engine/`, because both `engine/` and `sandbox/`
+render the map and `engine/` already imports `sandbox/`
+(`engine/blocks/agent-sandbox.ts`), so a map inside `engine/` would have closed
+that loop; a type-only import would have hidden the cycle rather than removed
+it. The table below is the restructure's own record of where the code of
+2026-09-09 went, and it is not extended per delivery: a top-level directory
+added since carries its tier in `scripts/gates/tiers.json`, which the boundary
+gate reads.
+
 The engine, the adapters, the services and the DB layer have one consumer (the
 worker) and stay directories inside `apps/worker/src`, fenced by dependency
 rules rather than by a package boundary.
 
 ### Where today's code goes
 
-This is the D3 table with one row per top-level entry of `apps/worker/src`, so
-it can be checked against `ls apps/worker/src` without reading a group. No
-tier differs from D3. Every entry has exactly one destination, and the
-dependency-cruiser rules of stage 1 reference this table.
+This is the D3 table with one row per top-level entry that `apps/worker/src`
+held on 2026-09-09, so that move could be checked without reading a group. No tier
+differs from D3. Every entry has exactly one destination, and the
+dependency-cruiser rules of stage 1 reference this table. It records that move
+rather than the tree today: a directory created or removed since carries its
+tier in `scripts/gates/tiers.json`, which the boundary gate reads.
 
 The 28 directories:
 

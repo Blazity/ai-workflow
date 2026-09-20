@@ -32,7 +32,7 @@ export type {
   EffectivePromptProfileSource,
   EffectivePromptRepositorySource,
 } from "@shared/prompts";
-export { compatibilityPromptSourceForV2Node } from "@shared/prompts";
+export { compatibilityPromptForV2Node } from "@shared/prompts";
 
 interface ResolveProfileInstructionsInput {
   node: WorkflowDefinitionV2Node;
@@ -64,21 +64,36 @@ export function effectivePromptProfileSource(
   };
 }
 
+/**
+ * The code-owned manifest for a node, or null where the node names a profile
+ * this build does not carry.
+ *
+ * Exported because the manifest says more than its instructions: its `context`
+ * carries the switches that decide whether a run sends workflow data and
+ * repository instructions at all, and a preview that shows the instructions
+ * without the switches shows a prompt no execution would produce.
+ */
+export function builtinHarnessManifestFor({
+  node,
+  defaultProvider,
+}: ResolveProfileInstructionsInput) {
+  const reference = node.configuration.harnessProfile;
+  const resolvedReference = isHarnessProfileReference(reference)
+    ? reference
+    : reference === undefined
+      ? builtinHarnessProfileReference(
+          node.configuration.provider === "claude" ||
+            node.configuration.provider === "codex"
+            ? node.configuration.provider
+            : defaultProvider ?? "codex",
+        )
+      : null;
+  return resolvedReference ? resolveBuiltinHarnessProfile(resolvedReference) : null;
+}
+
 export const resolveProfileInstructions: ResolveProfileInstructions =
   async ({ node, defaultProvider }) => {
-    const reference = node.configuration.harnessProfile;
-    const resolvedReference = isHarnessProfileReference(reference)
-      ? reference
-      : reference === undefined
-        ? builtinHarnessProfileReference(
-            node.configuration.provider === "claude" ||
-              node.configuration.provider === "codex"
-              ? node.configuration.provider
-              : defaultProvider ?? "codex",
-          )
-        : null;
-    if (!resolvedReference) return null;
-    const manifest = resolveBuiltinHarnessProfile(resolvedReference);
+    const manifest = builtinHarnessManifestFor({ node, defaultProvider });
     if (!manifest) return null;
     return {
       profileId: manifest.profileId,

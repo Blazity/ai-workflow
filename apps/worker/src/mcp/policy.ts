@@ -491,6 +491,21 @@ const TOOL_POLICY = {
   // be watching, and it exposes nothing repositories.list does not already.
   "work_scope.get": READ_POLICY,
   "work_scope.edit": WORK_SCOPE_EDIT_POLICY,
+  // A plain read, and deliberately the same scope as runs.logs: a briefing is
+  // what a run's own logs are about, and it is served to whoever the REPLAY is
+  // served to. No new scope exists and no grant was widened.
+  //
+  // What DID widen is the text this scope returns. A briefing is the prompt
+  // itself, so a read token now reaches ticket bodies, `AGENTS.md` and the
+  // memory a run was given, which the log tail never carried. That was the
+  // decision, not an oversight, and the way to act on it is not a token: a
+  // token is a JWT checked against the issuer's keys and no stored token row is
+  // read on this path. `services/mcp/actor-resolution.ts` re-reads the OAuth
+  // client row and the caller's membership on every call, so narrowing that
+  // client's scopes caps the tokens it already issued, deleting the row stops
+  // them, and dropping a membership stops that person's.
+  "runs.briefing": READ_POLICY,
+  "workflows.node_briefing": READ_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

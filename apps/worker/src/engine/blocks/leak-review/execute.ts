@@ -12,6 +12,8 @@ import {
 } from "../../helpers/run-budget.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { resolveCallLlmTarget } from "../call-llm/execute.js";
+import { deferredBriefing } from "../../agent-visibility/block.js";
+import { planDeferredBriefing, recordSendBriefing, type DeferredBriefing } from "../../agent-visibility/plan.js";
 import {
   executionError,
   markBlockPhaseLaunched,
@@ -502,21 +504,38 @@ blockLeakReviewCollectStep.maxRetries = 0;
  * Node module and cannot be reached from workflow scope) and reported as a
  * skipped scan, because this layer must never fail a run.
  */
+/** The one place the scan prompt is built, so the record and the send cannot
+ *  drift apart. */
+function leakReviewScanPrompt(material: string): string {
+  return `Unpublished change material:\n\n${material}`;
+}
+
 async function blockLeakReviewLlmScanStep(input: {
   model: string;
   provider?: "claude" | "codex";
   material: string;
   timeoutMs: number;
+  /** What this send gave the model. Its prompt is composed here, so only the
+   *  identity travels and the record is completed in the step. */
+  briefing: DeferredBriefing | null;
 }): Promise<LeakReviewLlmScanResult> {
   "use step";
   const { generateStructured } = await import("../../llm.js");
+  const prompt = leakReviewScanPrompt(input.material);
+  // Before the call: an invocation killed while the model is answering must
+  // still leave the record of what the leak reviewer was given.
+  await recordSendBriefing(
+    planDeferredBriefing(input.briefing, { prompt, system: LLM_SYSTEM_PROMPT }),
+    { prompt, system: LLM_SYSTEM_PROMPT, wrapperScript: null },
+    () => import("../../agent-visibility/capture.js"),
+  );
   const startedAt = Date.now();
   try {
     const result = await generateStructured({
       model: input.model,
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
       system: LLM_SYSTEM_PROMPT,
-      prompt: `Unpublished change material:\n\n${input.material}`,
+      prompt,
       schema: LLM_OUTPUT_SCHEMA,
       timeoutMs: input.timeoutMs,
     });
@@ -729,6 +748,16 @@ export const execute: BlockExecuteFn = async (
       ...(provider !== undefined ? { provider } : {}),
       material: collected.material,
       timeoutMs,
+      briefing: deferredBriefing({
+        execution,
+        ctx,
+        harness: {
+          provider: provider ?? ctx.runDefaultKind,
+          model,
+          outputSchema: LLM_OUTPUT_SCHEMA,
+          profile: null,
+        },
+      }),
     });
   } catch (err) {
     if (isRunControlError(err)) throw err;

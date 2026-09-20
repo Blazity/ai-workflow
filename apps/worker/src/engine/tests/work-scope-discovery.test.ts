@@ -35,9 +35,15 @@ import { formatExecutionErrorForUser } from "../helpers/execution-error.js";
 import { makeCtx } from "../blocks/support/test-support.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import {
+  discoveryLeftOutAddition,
   repositoryDiscoveryQuestion,
   validateRepositoryDiscoveryResult,
 } from "../repository-discovery/protocol.js";
+import {
+  implementationContextParts,
+  researchPlanContextParts,
+  reviewContextParts,
+} from "../../sandbox/context.js";
 import {
   offerableRepositoryCatalog,
   validateHumanRepositoryExpansion,
@@ -632,6 +638,68 @@ describe("a discovery question about repositories the model was unsure of", () =
     expect(consumeWorkScopeAsk(ctx)).toBeUndefined();
   });
 
+  it("tells every agent what it left out as discovery's note, never as a pre-sandbox addition", () => {
+    // Discovery runs in a sandbox, so the label the pre-sandbox additions carry
+    // ("produced before sandbox creation") would be false of this note.
+    const { decision } = decide({
+      scope: scopeOf(),
+      answeredRepositoryKeys: ["github:acme/web"],
+      mandatory: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "the pull request this run was triggered by",
+        },
+      ],
+      raw: unsureProposal(["acme/web", "the ticket names the dashboard"]),
+    });
+    if (decision.kind !== "selected") throw new Error("expected a selection");
+    const leftOut = discoveryLeftOutAddition(decision.leftOut);
+    const ticket = {
+      identifier: "AWT-1",
+      title: "t",
+      description: "d",
+      acceptanceCriteria: "a",
+      comments: [],
+    };
+    const sends = {
+      research: researchPlanContextParts({ ticket, prompt: "", branchName: "b", preSandboxAdditions: [leftOut] }),
+      implementation: implementationContextParts({
+        ticket,
+        prompt: "",
+        researchPlanMarkdown: "",
+        preSandboxAdditions: [leftOut],
+      }),
+      review: reviewContextParts({ ticket, prompt: "", researchPlanMarkdown: "", preSandboxAdditions: [leftOut] }),
+    };
+
+    expect(leftOut.target).toEqual(["research", "implementation", "review"]);
+    for (const [kind, parts] of Object.entries(sends)) {
+      const note = parts.find((part) => part.id === "repository-discovery:1");
+      expect(note?.origin, kind).toEqual({ kind: "repository_discovery" });
+      expect(note?.content, kind).toContain(
+        "## Repositories left out\n\n- github:acme/web was listed in a repository question already answered on this work",
+      );
+      expect(parts.map((part) => part.content).join(""), kind).not.toContain("Pre-Sandbox");
+    }
+  });
+
+  it("puts discovery's note into every agent's additions from the one place that marks it", () => {
+    // A source tripwire, as the ones below: the push is inside the workflow
+    // body, which no test can invoke. Building the note inline again would
+    // drop the marker the test above holds the helper to.
+    const workflow = readFileSync(
+      fileURLToPath(new URL("../agent-workflow.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(
+      workflow.includes("const leftOut = discoveryLeftOutAddition(decision.leftOut);") &&
+        workflow.includes("for (const target of leftOut.target) ctx.preSandboxAdditions[target].push(leftOut);"),
+      "discovery's left-out note no longer reaches the agents through discoveryLeftOutAddition",
+    ).toBe(true);
+  });
+
   it("is asked once per repository, and afterwards stops rather than asking again", () => {
     // A "none" to this question writes no entry by design, so without a stop the
     // next run reads exactly what this one read, the model repeats its
@@ -782,10 +850,34 @@ describe("the model asks its own question after an answer left every repository 
         " so it has no repository to work on." +
         " Leaving a repository out of an answer is not final: this work's repository list can be" +
         " changed through the work scope API or the work_scope.edit tool, or the repository's full" +
-        " path can be written in a ticket comment, as github:acme/web, and the next run reads both.",
+        // The example is the lowest key, not the first one the refusal handed
+        // in. The sentences above keep the order the run refused in, because
+        // that is what happened; the lever below is a fact about the subject.
+        " path can be written in a ticket comment, as github:acme/api, and the next run reads both.",
       blame: "work_scope",
     });
     expect(consumeWorkScopeAsk(ctx)).toBeUndefined();
+  });
+
+  it("offers the same example repository however the refusal ordered them", () => {
+    // It used to read `unnamedKeys[0]`, so one work refused in two different
+    // orders (a model's request order here, the record's own list elsewhere)
+    // told a person to write two different paths in a comment.
+    const wayBack = (answeredRepositoryKeys: string[]) => {
+      const { decision } = decide({
+        scope: scopeOf(),
+        selectionAnswered: true,
+        answeredRepositoryKeys,
+        raw: MODEL_ASKS,
+      });
+      if (decision.kind !== "failed") throw new Error(`discovery decided ${decision.kind}`);
+      return decision.error.slice(decision.error.lastIndexOf("Leaving a repository"));
+    };
+
+    expect(wayBack(["github:acme/web", "github:acme/api"])).toContain("as github:acme/api,");
+    expect(wayBack(["github:acme/api", "github:acme/web"])).toBe(
+      wayBack(["github:acme/web", "github:acme/api"]),
+    );
   });
 
   it("stops the same way when the model proposes nothing instead of asking", () => {
@@ -949,8 +1041,10 @@ describe("a subject whose selection question has already been answered", () => {
     // Every research report this body builds, not one of them: the run reaches
     // the builder down two paths (a no-change finish and an ordinary one) and a
     // drop is equally invisible on either.
+    // Matched as a shorthand property, so the repository map reading the same
+    // live list (`leftOut: leftOutRepositories`) is not counted as a report.
     expect(
-      workflow.split("leftOutRepositories,").length - 1,
+      (workflow.match(/^\s*leftOutRepositories,$/gm) ?? []).length,
       "a research analysis report is built without what the run left out",
     ).toBe(2);
   });
@@ -985,7 +1079,11 @@ describe("a subject whose selection question has already been answered", () => {
       "the expansion path computes the recovery sentence and throws it away again",
     ).toBe(true);
     expect(
-      workflow.split("repositoryRecoveryNotes,").length - 1,
+      // Anchored on the analysis report's own shape rather than on a bare
+      // count: the expansion loop reads these notes elsewhere too now (the
+      // plan's account of the repositories it could not use), and a count
+      // would go green on the wrong line.
+      workflow.match(/leftOutRepositories,\s*repositoryRecoveryNotes,/g)?.length ?? 0,
       "a research analysis report is built without the sentence saying what to do about it",
     ).toBe(2);
   });

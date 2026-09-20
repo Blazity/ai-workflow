@@ -1186,6 +1186,7 @@ export function WorkflowEditorScreen({
         <FlowEditor
           key={`${selectedId}:${editorGeneration}`}
           definitionId={selectedId}
+          definitionVersion={deployed?.version ?? null}
           nodes={nodes}
           edges={edges}
           limits={budgets}

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 // Protocol values cross the pre-sandbox and engine boundary without service state.
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
+import type { PreSandboxPromptAddition } from "../../sandbox/context.js";
 import {
   repositoryCatalogKey,
   type RepositoryCatalogEntry,
@@ -131,6 +132,26 @@ export type RepositoryDiscoveryDecision =
 interface RepositoryLeftOut {
   repositoryKey: string;
   reason: string;
+}
+
+/**
+ * What the agents are told about the repositories discovery left out, in the
+ * same place the pre-sandbox puts the ones it kept back.
+ *
+ * Here rather than in the workflow body, where no test can reach it: the
+ * marker is what keeps the prompt from calling this a pre-sandbox addition,
+ * which it is not (discovery ran in a sandbox), so dropping it must turn a
+ * test red.
+ */
+export function discoveryLeftOutAddition(
+  leftOut: readonly { reason: string }[],
+): PreSandboxPromptAddition {
+  return {
+    target: ["research", "implementation", "review"],
+    title: "Repositories left out",
+    content: leftOut.map((left) => `- ${left.reason}`).join("\n"),
+    producedBy: "repository_discovery",
+  };
 }
 
 type ProposedRepository = {

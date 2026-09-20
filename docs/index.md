@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-14
+Last-verified: 2026-09-20
 
 # Documentation index
 
@@ -36,7 +36,7 @@ checking the smaller set that is left (ADR-007).
 | [architecture/blocks.md](./architecture/blocks.md) | How block manifests, executor modules, generated catalogs, and the reviewer walkthrough fit together |
 | [architecture/skills.md](./architecture/skills.md) | Product skill manifests, artifact integrity, source boundaries, and the repository-root `skills/` convention |
 | [architecture/overview.md](./architecture/overview.md) | The `services/` tier: what each cluster owns, what it may import, and what its `index.ts` promises |
-| [architecture/data-model.md](./architecture/data-model.md) | The worker's 62 SQL tables, ownership and principal callers |
+| [architecture/data-model.md](./architecture/data-model.md) | The worker's 75 SQL tables, ownership and principal callers |
 | [architecture/gates.md](./architecture/gates.md) | The delivery gate ladder, lint policy, and the stage 11 ratchets |
 
 ## Decision records
@@ -70,6 +70,7 @@ checking the smaller set that is left (ADR-007).
 | [runbooks/GITHUB-APP-SETUP.md](./runbooks/GITHUB-APP-SETUP.md) | Creating and installing the GitHub App, and the events it subscribes to |
 | [runbooks/GITLAB-SETUP.md](./runbooks/GITLAB-SETUP.md) | Setting up a GitLab project, its token and its webhook |
 | [runbooks/agent-runtime-diagnostics.md](./runbooks/agent-runtime-diagnostics.md) | Turning a diagnostic ID from a failed run into the provider detail in the worker log |
+| [runbooks/reading-an-agent-briefing.md](./runbooks/reading-an-agent-briefing.md) | Draft: where to see what an agent was sent, on each surface, and what an empty answer means |
 | [runbooks/ON-PREM-AWS.md](./runbooks/ON-PREM-AWS.md) | Draft proposal for a self-hosted AWS deployment. Not implemented, and it predates the move to Neon Postgres |
 | [releases/artur/README.md](./releases/artur/README.md) | The Artur release contract: the two pull request flow, from preparation to the published tag |
 | [releases/artur/upgrade-preflight.md](./releases/artur/upgrade-preflight.md) | The tenant database check that has to pass before a release pull request merges |
@@ -89,6 +90,7 @@ research file records what was true on its date.
 
 | Document | What it is for |
 |---|---|
+| [research/2026-09-18-agent-briefing-capture-path.md](./research/2026-09-18-agent-briefing-capture-path.md) | Where every prompt is sent from, and how a briefing can be recorded without a new step or a drain |
 | [research/2026-09-09-architecture-audit.md](./research/2026-09-09-architecture-audit.md) | Current state of the codebase, measured: cycles, tiers, gates, documentation inventory, target shape |
 | [research/2026-09-09-agent-navigable-codebase.md](./research/2026-09-09-agent-navigable-codebase.md) | What Anthropic publishes about how agents load a codebase, with the hard rules separated from the recommendations |
 | [research/2026-09-09-monorepo-boundary-enforcement.md](./research/2026-09-09-monorepo-boundary-enforcement.md) | How boundaries can be enforced here, and what Nitro and the Workflow DevKit constrain |
@@ -109,6 +111,7 @@ research file records what was true on its date.
 | [plans/2026-09-11-repository-catalog-and-settings.md](./plans/2026-09-11-repository-catalog-and-settings.md) | Delivered 2026-09-11 to 2026-09-13: repository catalog and dashboard settings replacing the product-behaviour environment variables |
 | [plans/2026-09-14-product-changelog.md](./plans/2026-09-14-product-changelog.md) | The product changelog: an entry folder authors fill per pull request, a daily collation workflow, and the CI check that a product change carries an entry |
 | [plans/2026-09-15-repository-work-scope.md](./plans/2026-09-15-repository-work-scope.md) | Draft, in delivery: one durable record per subject of work for which repositories it touches, a repository policy per trigger, a decision trail readable through MCP, and a repository map in the agent's prompt (AIW-402, AIW-377, roadmap P1 repository scope per trigger) |
+| [plans/2026-09-19-agent-visibility.md](./plans/2026-09-19-agent-visibility.md) | Draft, in delivery: record and show exactly what every agent send was given (Agent Briefing, Clarification Rounds) in the dashboard and MCP, prompt runtime text as named parts with origin, and the Repository Map wired into every repository-working prompt |
 
 Every other file in `plans/` is a historical delivery plan. It stays in place
 for provenance and carries `superseded-by docs/index.md`: read it as a record

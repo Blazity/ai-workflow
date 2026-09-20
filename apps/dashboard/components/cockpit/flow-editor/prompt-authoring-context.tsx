@@ -17,6 +17,12 @@ interface PromptAuthoringContextValue {
     definitionId: number;
     definition: WorkflowDefinitionV2;
     blockId: string;
+    /** The deployed version this canvas was opened from, so a past run's
+     *  briefing can name both numbers instead of one. Null when nothing of
+     *  this workflow is deployed, absent where a caller has no version to
+     *  give; neither is the same as "the same version", and the notice keeps
+     *  the three apart. */
+    openVersion?: number | null;
   };
 }
 

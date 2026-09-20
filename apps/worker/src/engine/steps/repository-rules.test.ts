@@ -137,7 +137,7 @@ describe("repository rules in a compiled prompt", () => {
     const compiled = await compileEffectivePrompt({
       nodeId: "implementation",
       blockPrompt: "Do the work.",
-      runtimeData: "",
+      runtimeData: [],
       repositorySources: sources,
     });
     expect(compiled.prompt).toContain("Repository rules for acme/service");
@@ -161,7 +161,7 @@ describe("repository rules in a compiled prompt", () => {
     const compiled = await compileEffectivePrompt({
       nodeId: "implementation",
       blockPrompt: "Do the work.",
-      runtimeData: "",
+      runtimeData: [],
       repositorySources: await inject({ keys: ["github:acme/service"] }),
     });
 

@@ -2,6 +2,7 @@ import type {
   RunRepositoryAccess,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
+import { joinPromptParts, type EffectivePromptPart } from "@shared/prompts";
 import type { AgentKind } from "../../../sandbox/agents/index.js";
 import type {
   AgentOutput,
@@ -14,6 +15,7 @@ import type { CheckRunResult, PRComment } from "../../../adapters/vcs/types.js";
 import type { WorkspaceManifestV2 } from "../../../sandbox/repo-workspace.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import { resolveBlockAgent } from "../../definition/resolve-agent.js";
+import { repositoryMapContext } from "../../../repository-map/context.js";
 import {
   buildReviewLedgerDurableState,
   buildReviewLedgerGuardSummary,
@@ -22,6 +24,9 @@ import {
   type ReviewLedgerGuardSummary,
 } from "../../helpers/review-ledger.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
+import type { SentRepositoryMap } from "../../../sandbox/context.js";
+import { planBlockAgentBriefing } from "../../agent-visibility/block.js";
+import { recordSendBriefing, recordSkippedSend, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { pollPhaseUntilDone, stopPhaseCommand } from "../poll-phase.js";
 import {
@@ -316,7 +321,11 @@ async function blockFixAgentStartPhaseStep(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-  runtime?: ResolvedHarnessRuntime,
+  runtime: ResolvedHarnessRuntime | undefined,
+  /** What this send gave the model. Required in type so a call site cannot
+   *  quietly stop recording, read as absent on a journal written before it
+   *  existed. See `engine/steps/phase.ts`. */
+  briefing: AgentBriefingCapture | null,
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -338,6 +347,11 @@ async function blockFixAgentStartPhaseStep(
     ]);
     const chmod = await sandbox.runCommand("chmod", ["+x", scriptPath]);
     if (chmod.exitCode !== 0) {
+      // Nothing was sent, and the sequence number this send took is already
+      // spent. A gap a reader has to interpret is a classification made in a
+      // reader's head, so the record says it instead: this place in the order
+      // exists, and nothing went out under it.
+      await recordSkippedSend(briefing, () => import("../../agent-visibility/capture.js"));
       return {
         ok: false,
         failure: await commandProtocolFailure({
@@ -350,6 +364,14 @@ async function blockFixAgentStartPhaseStep(
         }),
       };
     }
+    // Before the agent starts, so a launch that fails still leaves the record
+    // of what it was given. See `engine/steps/phase.ts` for the reasoning and
+    // for why the import itself is guarded.
+    await recordSendBriefing(
+      briefing,
+      { prompt: inputContent, wrapperScript: scriptContent },
+      () => import("../../agent-visibility/capture.js"),
+    );
     const command = await sandbox.runCommand({
       cmd: "bash",
       args: [scriptPath],
@@ -540,8 +562,9 @@ async function buildFixInput(
   reviewFeedback: ReviewFeedback | undefined,
   reviewResults: Extract<ReviewResultsResolution, { ok: true }>["value"],
   includeInstructions = true,
-): Promise<string> {
-  const { assembleFixContext } = await import("../../../sandbox/context.js");
+  sentMap?: SentRepositoryMap,
+): Promise<EffectivePromptPart[]> {
+  const { fixContextParts } = await import("../../../sandbox/context.js");
 
   let prComments: PRComment[] = ctx.repositoryContexts.flatMap(
     (context) => context.prComments,
@@ -572,20 +595,33 @@ async function buildFixInput(
     block.params.instructions.trim().length > 0
       ? block.params.instructions.trim()
       : undefined;
+  const fixMap = repositoryMapContext(ctx, {
+    expansionOpen: false,
+    leftOut: ctx.workScopeLeftOut ?? [],
+  });
 
-  return assembleFixContext({
+  return fixContextParts({
     ticket: { ...ctx.ticket, ...(ctx.clarifications ? { clarifications: ctx.clarifications } : {}) },
     prComments,
     failedChecks,
     ...(reviewResults ? { reviewResults } : {}),
-    ...(conflictRepos.length > 0
-      ? {
-          conflictNotes: `These repositories have merge conflicts: ${conflictRepos.join(", ")}. Resolve the conflict markers, stage the files, and continue the merge in each repository.`,
-        }
-      : {}),
+    ...(conflictRepos.length > 0 ? { conflictRepositories: conflictRepos } : {}),
     ...(instructions ? { instructions } : {}),
     repositories: ctx.selectedRepositories,
     ...(ctx.workspaceManifest ? { workspaceManifest: ctx.workspaceManifest } : {}),
+    // The same repository map every other repository-working send gets, built
+    // by the SAME function rather than a second hand-written copy: the copy
+    // that used to live here had already lost `offeredKeys`, so a repository a
+    // question had put in front of a person read as "offered by a question" to
+    // research and as a plain catalog row to the fix agent, on one run.
+    //
+    // The fix agent has no channel for asking for a repository, so its map
+    // never offers one.
+    ...(fixMap ? { repositoryMap: fixMap } : {}),
+    // The record of this send takes the map the composer actually rendered,
+    // not a second build: the second build would be budgeted differently and
+    // would list different repositories.
+    ...(sentMap ? { sentRepositoryMap: sentMap } : {}),
     // With the ledger on, the aliased thread feed replaces the flat comment
     // list, so the agent answers identified threads instead of a transcript.
     ...(ctx.reviewLedger ? { reviewThreads: ctx.reviewLedger.feed } : {}),
@@ -723,21 +759,25 @@ export const execute: BlockExecuteFn = async (
       ctx.workspaceManifest?.version === 2 ? ctx.workspaceManifest : null,
     );
     const before = await inspectFixWorkspace(sandboxId);
-    const fallbackInput = await buildFixInput(
+    // With a compiler the instructions are the block prompt, so they stay out
+    // of the runtime parts; without one the joined parts are the whole prompt.
+    const fixSentMap: SentRepositoryMap = { map: null };
+    const fixInput = await buildFixInput(
       block,
       ctx,
       reviewFeedback.value,
       fixReviewResults,
-      execution?.compileEffectivePrompt === undefined,
+      execution?.compileInvocationPrompt === undefined,
+      fixSentMap,
     );
     const resolvedInput = await resolveAgentInput({
-      compileEffectivePrompt: execution?.compileEffectivePrompt,
+      compileInvocationPrompt: execution?.compileInvocationPrompt,
       blockPrompt:
         typeof block.params.instructions === "string"
           ? block.params.instructions
           : "",
-      runtimeData: fallbackInput,
-      fallbackInput,
+      runtimeData: fixInput,
+      fallbackInput: joinPromptParts(fixInput),
       sandboxId,
     });
     if (!resolvedInput.ok) return resolvedInput.result;
@@ -777,6 +817,14 @@ export const execute: BlockExecuteFn = async (
       paths.wrapper,
       script,
       runtime,
+      planBlockAgentBriefing({
+        execution,
+        ctx,
+        compilation: resolvedInput.compilation,
+        prompt: input,
+        harness: { kind, model, runtime, schema: AGENT_SCHEMA },
+        repositoryMap: fixSentMap.map,
+      }),
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;

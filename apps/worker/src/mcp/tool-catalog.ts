@@ -112,6 +112,42 @@ const DEFINITION_ID_MAX = 2_147_483_647;
 export const WORKFLOW_MAX_NODES = 200;
 export const WORKFLOW_MAX_EDGES = 400;
 const RUN_ID_MAX_LENGTH = 200;
+// Exactly `@shared/agent-visibility`'s own bounds, restated rather than
+// imported for the reason the module doc above gives: that package publishes
+// only its barrel, and importing it would load the briefing builder and every
+// schema onto the transport path, which decides whether a call is servable
+// before it has read anything. The equalities are claims a test has to hold:
+// tool-catalog.test.ts asserts each against the package's exported constant,
+// where importing it costs nothing.
+export const VISIBILITY_ID_MAX_LENGTH = 200;
+/**
+ * The bound on an id a caller FILTERS by, which is not the bound on one we
+ * serve. A filter names the node the graph names, and capture shortens an id
+ * past `VISIBILITY_ID_MAX_LENGTH` before it stores one: refusing the raw id
+ * here would refuse the only spelling a caller has, for exactly the long-named
+ * loop node the shortening exists for. Wide enough for a nested scope id, still
+ * bounded so a pathological value never reaches a query.
+ */
+const VISIBILITY_FILTER_ID_MAX_LENGTH = 2_000;
+export const BRIEFING_SECTION_INDEX_MAX = 199;
+export const BRIEFING_SECTION_BYTES_MAX = 67_108_864;
+/**
+ * The page limits this schema declares, restated for the reason above the
+ * identifier bounds: this file may not import the visibility package.
+ *
+ * Both are BYTE counts, not item counts. The floor is the package's own and is
+ * exact. The ceiling is only the absolute one: over MCP the servable maximum is
+ * smaller and derived per deployment from `MCP_MAX_RESULT_BYTES`
+ * (`mcp/tools/page-budget.ts`), so a value legal here can still be refused by
+ * name at the call. A schema cannot state a number that moves with a setting;
+ * the descriptions say where the real ceiling comes from.
+ */
+export const BRIEFING_PAGE_MIN_BYTES = 1_024;
+export const BRIEFING_PAGE_MAX_BYTES = 524_288;
+// A cursor of the briefing lists carries a node id and an activation scope id,
+// each up to 200 characters, so it is bounded here rather than nowhere: a
+// pathological value would otherwise be hashed into an audit row for free.
+const BRIEFING_CURSOR_MAX_LENGTH = 1_024;
 // workflow_block_attempts.id is a serial int4, so anything past this cannot name a
 // real attempt. Capped here for the reason the prompt/definition ids are: past it
 // the driver answers an overflow with a numeric error that would reach the agent as
@@ -784,12 +820,21 @@ export const MCP_TOOL_CATALOG = {
   },
   "work_scope.get": {
     description:
-      "The durable record of which repositories one subject's work may touch, and the trail of how that was decided. `subjectKey` is the key a run is claimed under: `ticket:<provider>:<KEY>` for a ticket, `pr:<provider>:<owner/name>#<number>` for a pull request, `webhook:<endpointId>:<subjectId>` for a webhook delivery that resolved a subject. Every entry says its `state` (`selected`, `excluded`, or `unavailable` with the reason), the `origin` that decided it, and `decidedBy`/`decidedAt`. `version` is the concurrency token work_scope.edit expects: a subject nothing was ever recorded for answers version 0 with no entries, which is not an error and is exactly the version an edit of it must send. The trail is paged newest first, so the decision somebody is about to undo is the first line: `trailLimit` defaults to 50 and caps at 200, `nextTrailBeforeId` is the `trailBefore` of the next page and null at the end of it. `carriesRecord` is false for a key of any other shape, a schedule occurrence for instance: that subject kind keeps no record and never will, because every tick is a new key, so the empty answer beside it is final rather than a record waiting to be written, and work_scope.edit refuses it.",
+      "The durable record of which repositories one subject's work may touch, and the trail of how that was decided. `subjectKey` is the key a run is claimed under: `ticket:<provider>:<KEY>` for a ticket, `pr:<provider>:<owner/name>#<number>` for a pull request, `webhook:<endpointId>:<subjectId>` for a webhook delivery that resolved a subject. Every entry says its `state` (`selected`, `excluded`, or `unavailable` with the reason), the `origin` that decided it, and `decidedBy`/`decidedAt`. `version` is the concurrency token work_scope.edit expects: a subject nothing was ever recorded for answers version 0 with no entries, which is not an error and is exactly the version an edit of it must send. The trail is paged newest first, so the decision somebody is about to undo is the first line: `trailLimit` defaults to 50 and caps at 200, `nextTrailBeforeId` is the `trailBefore` of the next page and null at the end of it. `carriesRecord` is false for a key of any other shape, a schedule occurrence for instance: that subject kind keeps no record and never will, because every tick is a new key, so the empty answer beside it is final rather than a record waiting to be written, and work_scope.edit refuses it. `rounds: true` adds the CLARIFICATION ROUNDS of this subject: one round per question, with every distinct delivery of its answer counted (the Jira path re-composes the same answer on every poll tick, so identical consecutive arrivals are one delivery with a count and a first and last time), the asks it was repeated as, and how many Decision Trail events followed from it. A question asked again after a retry joins its round rather than starting a new one. Rounds are OPT IN because assembling them reads every clarification this subject ever carried, and because they are served under the audience of the RUN that asked, not of this record: leave the flag out and this tool answers exactly what it always did. `roundId` with `roundView` returns one round's `deliveries` or `effects` instead of the headers, paged by `roundsCursor` and `roundsLimit`; a round is named by the clarification id of its FIRST ask. `roundsLimit` is a byte cap with the same floor of 1024 and the same deployment-derived ceiling as `limit` on runs.briefing, and is refused by name outside it.",
     inputSchema: z
       .object({
         subjectKey: z.string().trim().min(1).max(WORK_SCOPE_SUBJECT_KEY_MAX_LENGTH),
         trailLimit: z.number().int().positive().max(WORK_SCOPE_TRAIL_PAGE_MAX).optional(),
         trailBefore: z.number().int().positive().max(WORK_SCOPE_INT4_MAX).optional(),
+        /** OPT IN, and left out it changes nothing: a call that does not ask
+         *  for rounds gets exactly the answer this tool gave before they
+         *  existed. Asking reads every clarification this subject carried. */
+        rounds: z.boolean().optional(),
+        /** With `roundId`, one round's children instead of the headers. */
+        roundId: z.string().trim().min(1).max(VISIBILITY_ID_MAX_LENGTH).optional(),
+        roundView: z.enum(["deliveries", "effects"]).optional(),
+        roundsCursor: z.string().trim().min(1).max(BRIEFING_CURSOR_MAX_LENGTH).optional(),
+        roundsLimit: z.number().int().min(BRIEFING_PAGE_MIN_BYTES).max(BRIEFING_PAGE_MAX_BYTES).optional(),
       })
       .strict(),
     annotations: policyFor("work_scope.get").annotations,
@@ -818,6 +863,51 @@ export const MCP_TOOL_CATALOG = {
       })
       .strict(),
     annotations: policyFor("work_scope.edit").annotations,
+  },
+  "runs.briefing": {
+    description:
+      "What a run's agents were really sent, and why anything expected is missing. One tool, seven views, all of them paged: `attempts` (the default) lists every Block Attempt that sent a prompt or could have, each with its briefings' overviews in send order, its `startedAt`, its loop `iteration` where it ran inside one, `sendsPrompts` (false for a script, a transition or a comment block, which have no prompt to be missing), and `missing`, a reason and never a generic message, computed even beside existing briefings so a planning attempt that captured discovery and whose pass never went out says which. Its `state` is about the whole RUN and answers what no attempt can: `available`, `expired` (briefings were captured and retention removed them), `replay_gone` (the attempt rows went with the replay, so attempts that never sent cannot be listed), or `predates_capture` (nothing capture-capable recorded anything for this run, which is also what a run looks like whose every record write was lost). The other six take a `briefingId` from that list: `sections` (every section but its text), `section` (one page of one section's stored text by `sectionIndex` and byte `offset`; continue from the previous page's `nextOffset`, never from a hand-made number), `parts` and `spans` of one section, `repository_context` (the repositories that send described, as it described them), and `unresolved_sources` (what the compiler referenced and could not find, which is why an expected AGENTS.md may be absent). NOTHING IS RE-READ AT READ TIME: the catalog, the prompt library and the profiles are as the send saw them, not as they are now. `limit` is a byte cap, not a count. It is at least 1024, and at most a ceiling this deployment derives from `MCP_MAX_RESULT_BYTES` so a page is neither replaced by a digest nor written to a file by your client; that ceiling is lower than the 524288 this schema states, because a schema cannot carry a number that moves with a setting. A limit outside the range is refused by name, never quietly clamped, and the default sits below what a client shows inline; a list page carries `total`, `nextCursor`, `shortened` (entries whose long texts were cut to fit, with their full size) and `unreadable` (entries that could not be read at all, named rather than silently dropped).",
+    inputSchema: z
+      .object({
+        runId: z.string().trim().min(1).max(RUN_ID_MAX_LENGTH),
+        view: z
+          .enum([
+            "attempts",
+            "sections",
+            "section",
+            "parts",
+            "spans",
+            "repository_context",
+            "unresolved_sources",
+          ])
+          .optional(),
+        /** `attempts` only: narrows to one block, one attempt of it, or one
+         *  iteration of a loop body. */
+        nodeId: z.string().trim().min(1).max(VISIBILITY_FILTER_ID_MAX_LENGTH).optional(),
+        attempt: z.number().int().min(1).max(ATTEMPT_ID_MAX).optional(),
+        activationScopeId: z.string().trim().min(1).max(VISIBILITY_FILTER_ID_MAX_LENGTH).optional(),
+        /** Every view but `attempts`. */
+        briefingId: z.number().int().min(1).max(ATTEMPT_ID_MAX).optional(),
+        /** `section`, `parts` and `spans`. */
+        sectionIndex: z.number().int().min(0).max(BRIEFING_SECTION_INDEX_MAX).optional(),
+        /** `section` only: a byte of the stored text, from the previous page. */
+        offset: z.number().int().min(0).max(BRIEFING_SECTION_BYTES_MAX).optional(),
+        cursor: z.string().trim().min(1).max(BRIEFING_CURSOR_MAX_LENGTH).optional(),
+        limit: z.number().int().min(BRIEFING_PAGE_MIN_BYTES).max(BRIEFING_PAGE_MAX_BYTES).optional(),
+      })
+      .strict(),
+    annotations: policyFor("runs.briefing").annotations,
+  },
+  "workflows.node_briefing": {
+    description:
+      "What one block of a workflow last put in front of a model, without hunting for the run. Given a definition and a node id, this answers with the newest run of that definition that ran the node, ACROSS VERSIONS: an operator asking what a block sends does not care that the definition was bumped since, so `ranIn.definitionVersion` says which version actually ran and may not be the one being edited. `attempt` is that run's newest attempt of the node in exactly the shape runs.briefing serves, so its `briefings`, its `captureDetail` and its `missing` reason read the same way here. `ranIn.state` answers what no attempt can (`expired`, `replay_gone`, `predates_capture`), and `ranIn.capture` counts what this run's capture did, so \"eleven sends, two refused\" is readable without opening a briefing. Where no run can answer, `absent` says which of the two block-level answers it is: `never_ran`, or `sends_no_prompt` for a block that puts no prompt in front of a model. A node the definition no longer has is still answered from the runs, with `blockType` null, because the history is real; a node neither the definition nor any run has reads as `never_ran`. To read the text itself, take `ranIn.runId` and the briefingId from `attempt.briefings` into runs.briefing.",
+    inputSchema: z
+      .object({
+        definitionId: z.number().int().min(1).max(ATTEMPT_ID_MAX),
+        nodeId: z.string().trim().min(1).max(VISIBILITY_FILTER_ID_MAX_LENGTH),
+      })
+      .strict(),
+    annotations: policyFor("workflows.node_briefing").annotations,
   },
 } satisfies Record<McpToolName, McpToolDefinition>;
 

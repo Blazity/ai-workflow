@@ -51,6 +51,7 @@
     "@neondatabase/serverless": "^1.1.0",
     "@octokit/auth-app": "catalog:",
     "@octokit/rest": "^22.0.1",
+    "@shared/agent-visibility": "workspace:*",
     "@shared/conditions": "workspace:*",
     "@shared/contracts": "workspace:*",
     "@shared/costs": "workspace:*",

@@ -5,6 +5,12 @@ import type {
   ReviewThreadFeed,
 } from "../adapters/vcs/types.js";
 import type { ReviewResult } from "@shared/contracts";
+import {
+  concatPromptParts,
+  joinPromptParts,
+  type EffectivePromptPart,
+  type EffectivePromptPartOrigin,
+} from "@shared/prompts";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { DownloadedAttachment } from "./attachments.js";
 import { formatAttachmentsIndex } from "./attachments.js";
@@ -13,7 +19,41 @@ import {
   isValidWorkspaceLocalPath,
   type WorkspaceManifest,
 } from "./repo-workspace.js";
-import { selectReviewLedgerWorkItems as selectWorkItems } from "../adapters/vcs/vcs-bot-identity.js";
+import {
+  resolvePendingReviewFeedback,
+  selectReviewLedgerWorkItems as selectWorkItems,
+} from "../adapters/vcs/vcs-bot-identity.js";
+import {
+  buildRepositoryMap,
+  type RepositoryMap,
+  type RepositoryMapAttachment,
+  type RepositoryMapContext,
+} from "../repository-map/map.js";
+
+/**
+ * WHERE A SEND PUTS THE MAP IT RENDERED, for the briefing to record.
+ *
+ * The briefing must store the SAME pass the model read, and the map depends on
+ * how much room the rest of this prompt left: a second build with a different
+ * budget lists different repositories and renders some of them shorter, which
+ * is prompt-and-briefing drift in exactly the two fields it is easiest to
+ * believe. So the composer hands its own build back rather than letting the
+ * recorder make one, and a caller that wants it passes this and reads `map`
+ * afterwards. Absent means nobody is recording, which is every test and every
+ * path with capture off.
+ */
+export interface SentRepositoryMap {
+  map: RepositoryMap | null;
+}
+
+/*
+ * Every assembler here composes its runtime data as named parts (see
+ * EffectivePromptPart): each piece of text says where it came from, so a person
+ * reading what an agent was sent can tell our own rules (origin `platform`)
+ * from the ticket, a comment, a clarification answer, pull request feedback or
+ * a note the run wrote. The string each `assemble*` function returns is the
+ * join of the same parts, so the two can never disagree.
+ */
 
 interface TicketData {
   identifier: string;
@@ -35,6 +75,42 @@ export interface PreSandboxPromptAddition {
   target: PreSandboxPromptTarget[];
   title: string;
   content: string;
+  /**
+   * Set on an addition the run makes after the pre-sandbox phase: the
+   * repositories discovery left out, and the pull request change set a review
+   * run fetches. Those must not claim to have been produced before sandbox
+   * creation. Absent on every addition a pre-sandbox step returns, including
+   * one journaled before this field existed, and absent reads as exactly that.
+   */
+  producedBy?: "repository_discovery" | "review_change_set";
+}
+
+/** What the planning loop tells the next research pass about the passes before
+ *  it, from engine/agent-workflow.ts. Rendered after the additions. */
+export interface ResearchPassNotes {
+  /** Repositories research asked for earlier in this attempt, now attached. */
+  priorRequests: readonly unknown[];
+  /** One sentence per repository request this run refused. */
+  refusals: ReadonlyArray<{ repositoryKey: string; sentence: string }>;
+  expansionClosed: boolean;
+  /**
+   * Whether this run has already spent its one corrective planning pass on a
+   * request that attached nothing, which makes THIS pass the last one a
+   * repository request can buy.
+   *
+   * A bound the model is told about before it binds. Every other note here has
+   * been in the prompt for months ("requesting these again changes nothing"),
+   * and a model that asks anyway asks anyway; what changed is that the run stops
+   * paying for it. Telling it afterwards would be a rule nobody was given.
+   *
+   * Absent on a journal from before this existed, and absent reads as "not
+   * spent", which is the state every run starts in.
+   */
+  lastExpansionPass?: boolean;
+  /** Which review thread dispositions the ledger rejected; when present it
+   *  replaces the no-change note, which would mislead. */
+  ledgerCorrectionNote: string | null;
+  noChangeRetry: boolean;
 }
 
 export interface SelectedRepositoryPromptContext {
@@ -48,17 +124,32 @@ export interface SelectedRepositoryPromptContext {
 }
 
 export interface ResearchPlanContextInput {
+  /** Where this send puts the map it rendered, for the briefing to record the
+   *  same pass the model read. See `SentRepositoryMap`. */
+  sentRepositoryMap?: SentRepositoryMap;
+  /** The repositories this send works on, as one object for the one renderer:
+   *  the workspace, the neighbourhood and everything already decided. Absent on
+   *  a run whose journal predates it, which the prompt says out loud. */
+  repositoryMap?: RepositoryMapContext;
   ticket: TicketData;
   prompt: string;
   branchName: string;
   attachments?: DownloadedAttachment[];
   preSandboxAdditions?: PreSandboxPromptAddition[];
+  researchNotes?: ResearchPassNotes;
   selectedRepositories?: SelectedRepository[];
   repositoryContexts?: SelectedRepositoryPromptContext[];
   workspaceManifest?: WorkspaceManifest;
 }
 
 export interface ImplementationContextInput {
+  /** Where this send puts the map it rendered, for the briefing to record the
+   *  same pass the model read. See `SentRepositoryMap`. */
+  sentRepositoryMap?: SentRepositoryMap;
+  /** The repositories this send works on, as one object for the one renderer:
+   *  the workspace, the neighbourhood and everything already decided. Absent on
+   *  a run whose journal predates it, which the prompt says out loud. */
+  repositoryMap?: RepositoryMapContext;
   ticket: TicketData;
   prompt: string;
   researchPlanMarkdown: string;
@@ -70,6 +161,13 @@ export interface ImplementationContextInput {
 }
 
 export interface ReviewContextInput {
+  /** Where this send puts the map it rendered, for the briefing to record the
+   *  same pass the model read. See `SentRepositoryMap`. */
+  sentRepositoryMap?: SentRepositoryMap;
+  /** The repositories this send works on, as one object for the one renderer:
+   *  the workspace, the neighbourhood and everything already decided. Absent on
+   *  a run whose journal predates it, which the prompt says out loud. */
+  repositoryMap?: RepositoryMapContext;
   ticket: TicketData;
   prompt: string;
   researchPlanMarkdown: string;
@@ -84,22 +182,45 @@ export interface ReviewContextInput {
   workspaceManifest?: WorkspaceManifest;
 }
 
-export function assembleResearchPlanContext(input: ResearchPlanContextInput): string {
-  const { ticket, prompt, branchName, attachments, preSandboxAdditions, repositoryContexts } = input;
-  const selectedRepositories = input.selectedRepositories ?? repositoryContexts?.map((context) => context.repository);
-  const attachmentsSection = renderAttachmentsSection(attachments);
-  const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
-  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories, input.workspaceManifest);
-  const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
-  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
-  // Same condition as renderRepositoryContexts' remediation section: when the
-  // ticket's PR carries review feedback, that feedback is the task, so the
-  // Resolution Check must not offer the already-resolved exit.
-  const hasPrFeedback =
-    (repositoryContexts ?? []).some((context) => context.prComments.length > 0) ||
-    hasReviewWorkItems(repositoryContexts);
+const PLATFORM: EffectivePromptPartOrigin = { kind: "platform" };
 
-  let md = `# Requirements
+function part(
+  id: string,
+  title: string,
+  origin: EffectivePromptPartOrigin,
+  content: string,
+): EffectivePromptPart {
+  return { id, title, content, origin };
+}
+
+/** A ref only when it is text: a bound ticket can carry anything. */
+function withRef(kind: string, ref: unknown, label?: unknown): EffectivePromptPartOrigin {
+  return {
+    kind,
+    ...(typeof ref === "string" ? { ref } : {}),
+    ...(typeof label === "string" && label.length > 0 ? { label } : {}),
+  };
+}
+
+const ticketOrigin = (ticket: TicketData) => withRef("ticket", ticket.identifier);
+
+/** Groups of parts with `separator` between groups, as pieces for
+ *  concatPromptParts. */
+function separated(
+  groups: readonly (readonly EffectivePromptPart[])[],
+  separator: string,
+): Array<string | readonly EffectivePromptPart[]> {
+  return groups.flatMap((group, index) =>
+    index === 0 ? [group] : [separator, group],
+  );
+}
+
+function ticketHeaderPart(heading: string, ticket: TicketData): EffectivePromptPart {
+  return part(
+    "ticket",
+    "Ticket",
+    ticketOrigin(ticket),
+    `# ${heading}
 
 ## Ticket ID
 
@@ -108,32 +229,11 @@ ${ticket.identifier}
 ## Ticket
 
 ${ticket.title}
-${attachmentsSection}
-## Description
+`,
+  );
+}
 
-${ticket.description}
-
-## Acceptance Criteria
-
-${ticket.acceptanceCriteria || "None specified."}
-
-## Comments
-
-${formatComments(ticket.comments)}
-${clarificationsSection}
-## Branch
-
-${branchName}
-`;
-
-  md += selectedRepositoriesSection;
-
-  md += repositoryContextSection;
-  md += preSandboxSection;
-  if (prompt.length > 0) {
-    md += `\n---\n\n${prompt}\n`;
-  }
-  md += `
+const REPOSITORY_ACCESS_PROTOCOL = `
 
 ## Repository Access Protocol
 
@@ -153,15 +253,15 @@ This protocol extends and overrides any older Output Format instructions above.
   attached repositories the implementation must modify, and include concise
   \`repositoryEvidence\`. Every evidence item must name the exact
   \`provider:repoPath\`, the file, symbol, commit, PR, or ticket fact checked,
-  and the relevant finding (for example: \`github:acme/api src/auth.ts:42 —
+  and the relevant finding (for example: \`github:acme/api src/auth.ts:42 \u2014
   token refresh is delegated to SessionStore\`). A code-changing plan must
   declare at least one write repository.
 - Set fields that do not apply to \`null\`, as required by the structured schema.
 - Research is read-only: do not modify files, create commits, or change branches.
 - A read-only research checkout is checked out again with write access when implementation starts, so needing to write to an attached repository is never a reason to request it again.
 `;
-  if (!hasPrFeedback) {
-    md += `
+
+const RESOLUTION_CHECK = `
 ## Resolution Check
 
 - Before planning any implementation, check whether the ticket is already resolved:
@@ -178,50 +278,120 @@ This protocol extends and overrides any older Output Format instructions above.
   is resolved, do not set \`noChangeNeeded\`; follow the Repository Access
   Protocol instead.
 `;
-  }
-  return md;
+
+export function researchPlanContextParts(input: ResearchPlanContextInput): EffectivePromptPart[] {
+  const { ticket, prompt, branchName, attachments, preSandboxAdditions, repositoryContexts } = input;
+  const selectedRepositories = input.selectedRepositories ?? repositoryContexts?.map((context) => context.repository);
+  // In the order the string assembler evaluated them, so an input one of them
+  // refuses fails with the same message as before.
+  const attachmentsParts = renderAttachmentsParts(attachments, ticket);
+  const additionsParts = renderAdditionsParts(preSandboxAdditions, input.researchNotes);
+  const repositoryContextParts = renderRepositoryContextParts(repositoryContexts);
+  const clarificationsParts = renderClarificationsParts(ticket.clarifications);
+  // The same call renderRepositoryContextParts' remediation framing makes, and
+  // the same call the engine's no-change gate makes: when somebody is still
+  // waiting on the ticket's PR, that is the task, so the Resolution Check must
+  // not offer the already-resolved exit.
+  const hasPrFeedback = resolvePendingReviewFeedback(repositoryContexts).pending;
+
+  // Composed twice: once with no map, to measure what the rest of this send
+  // costs, and once with the map built inside whatever that leaves. Pure, so
+  // the first pass is arithmetic rather than a second decision.
+  const compose = (mapParts: EffectivePromptPart[]): EffectivePromptPart[] =>
+    concatPromptParts([
+      ticketHeaderPart("Requirements", ticket),
+      attachmentsParts,
+      part("description", "Ticket description", ticketOrigin(ticket), `
+## Description
+
+${ticket.description}
+
+`),
+      part("acceptance-criteria", "Acceptance criteria", ticketOrigin(ticket), `## Acceptance Criteria
+
+${ticket.acceptanceCriteria || "None specified."}
+
+`),
+      renderCommentsParts(ticket),
+      clarificationsParts,
+      part("branch", "Branch", { kind: "run" }, `
+## Branch
+
+${branchName}
+`),
+      mapParts,
+      repositoryContextParts,
+      additionsParts,
+      prompt.length > 0 &&
+        part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n---\n\n${prompt}\n`),
+      part("repository-access-protocol", "Repository Access Protocol", PLATFORM, REPOSITORY_ACCESS_PROTOCOL),
+      hasPrFeedback
+        ? {
+            id: "resolution-check",
+            title: "Resolution Check",
+            content: "",
+            origin: PLATFORM,
+            withheld: {
+              reason: "pr_feedback_present",
+              text: "The pull request carries review feedback, which is the task, so the already-resolved exit is not offered.",
+            },
+          }
+        : part("resolution-check", "Resolution Check", PLATFORM, RESOLUTION_CHECK),
+    ]);
+  return compose(
+    renderRepositoryMapParts(
+      input.repositoryMap,
+      selectedRepositories,
+      input.workspaceManifest,
+      repositoryMapBudget(compose([])),
+      input.sentRepositoryMap,
+    ),
+  );
 }
 
-export function assembleImplementationContext(input: ImplementationContextInput): string {
+export function assembleResearchPlanContext(input: ResearchPlanContextInput): string {
+  return joinPromptParts(researchPlanContextParts(input));
+}
+
+export function implementationContextParts(input: ImplementationContextInput): EffectivePromptPart[] {
   const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions, selectedRepositories, repositoryContexts } = input;
-  const attachmentsSection = renderAttachmentsSection(attachments);
-  const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
-  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories, input.workspaceManifest);
+  const attachmentsParts = renderAttachmentsParts(attachments, ticket);
+  const additionsParts = renderAdditionsParts(preSandboxAdditions);
   // On a re-run against an existing workflow-owned PR this surfaces the human PR
   // review feedback (comments, failing checks, conflicts) so the implementation
   // agent actually addresses it. Empty on the first run, so the section vanishes.
-  const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
-  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
-  const runtimeData = `# Requirements
-
-## Ticket ID
-
-${ticket.identifier}
-
-## Ticket
-
-${ticket.title}
-${attachmentsSection}
-## Acceptance Criteria
-
-${ticket.acceptanceCriteria || "None specified."}
-${clarificationsSection}
-## Research & Plan
-
-${researchPlanMarkdown}
-${repositoryContextSection}${selectedRepositoriesSection}
-${preSandboxSection}`;
-  return prompt.length > 0
-    ? `${runtimeData}
-
----
-
-${prompt}
-`
-    : runtimeData;
+  const repositoryContextParts = renderRepositoryContextParts(repositoryContexts);
+  const clarificationsParts = renderClarificationsParts(ticket.clarifications);
+  const compose = (mapParts: EffectivePromptPart[]): EffectivePromptPart[] =>
+    concatPromptParts([
+      ticketHeaderPart("Requirements", ticket),
+      attachmentsParts,
+      acceptanceCriteriaPart(ticket),
+      clarificationsParts,
+      researchPlanPart(researchPlanMarkdown),
+      repositoryContextParts,
+      mapParts,
+      "\n",
+      additionsParts,
+      prompt.length > 0 &&
+        part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n\n---\n\n${prompt}\n`),
+    ]);
+  return compose(
+    renderRepositoryMapParts(
+      input.repositoryMap,
+      selectedRepositories,
+      input.workspaceManifest,
+      repositoryMapBudget(compose([])),
+      input.sentRepositoryMap,
+    ),
+  );
 }
 
-export function assembleReviewContext(input: ReviewContextInput): string {
+export function assembleImplementationContext(input: ImplementationContextInput): string {
+  return joinPromptParts(implementationContextParts(input));
+}
+
+export function reviewContextParts(input: ReviewContextInput): EffectivePromptPart[] {
   const {
     ticket,
     prompt,
@@ -231,75 +401,128 @@ export function assembleReviewContext(input: ReviewContextInput): string {
     preSandboxAdditions,
     selectedRepositories,
   } = input;
-  const attachmentsSection = renderAttachmentsSection(attachments);
-  const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
-  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories, input.workspaceManifest);
-  const siblingRepositoriesSection = renderReviewSiblingRepositories(
-    selectedRepositories,
-    input.workspaceManifest,
+  const attachmentsParts = renderAttachmentsParts(attachments, ticket);
+  const additionsParts = renderAdditionsParts(preSandboxAdditions);
+  const siblingRepositoriesParts = renderReviewSiblingRepositoriesParts(selectedRepositories);
+  const clarificationsParts = renderClarificationsParts(ticket.clarifications);
+  const compose = (mapParts: EffectivePromptPart[]): EffectivePromptPart[] =>
+    concatPromptParts([
+      ticketHeaderPart("Requirements", ticket),
+      attachmentsParts,
+      acceptanceCriteriaPart(ticket),
+      clarificationsParts,
+      researchPlanPart(researchPlanMarkdown),
+      reviewFeedback &&
+        part(
+          "review-feedback",
+          "Pull request review feedback",
+          withRef("pull_request", undefined, reviewFeedback.author),
+          `\n## Pull request review feedback\n\nState: ${reviewFeedback.state}\n\n${reviewFeedback.author}: ${reviewFeedback.body}\n`,
+        ),
+      mapParts,
+      siblingRepositoriesParts,
+      "\n",
+      additionsParts,
+      prompt.length > 0 &&
+        part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n\n---\n\n${prompt}\n`),
+    ]);
+  return compose(
+    renderRepositoryMapParts(
+      input.repositoryMap,
+      selectedRepositories,
+      input.workspaceManifest,
+      repositoryMapBudget(compose([])),
+      input.sentRepositoryMap,
+    ),
   );
-  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
-  const reviewFeedbackSection = reviewFeedback
-    ? `\n## Pull request review feedback\n\nState: ${reviewFeedback.state}\n\n${reviewFeedback.author}: ${reviewFeedback.body}\n`
-    : "";
-  const runtimeData = `# Requirements
+}
 
-## Ticket ID
+export function assembleReviewContext(input: ReviewContextInput): string {
+  return joinPromptParts(reviewContextParts(input));
+}
 
-${ticket.identifier}
-
-## Ticket
-
-${ticket.title}
-${attachmentsSection}
+function acceptanceCriteriaPart(ticket: TicketData): EffectivePromptPart {
+  return part("acceptance-criteria", "Acceptance criteria", ticketOrigin(ticket), `
 ## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
-${clarificationsSection}
+`);
+}
+
+function researchPlanPart(researchPlanMarkdown: string): EffectivePromptPart {
+  return part("research-plan", "Research and plan", { kind: "research_plan" }, `
 ## Research & Plan
 
 ${researchPlanMarkdown}
-${reviewFeedbackSection}${selectedRepositoriesSection}${siblingRepositoriesSection}
-${preSandboxSection}`;
-  return prompt.length > 0
-    ? `${runtimeData}
-
----
-
-${prompt}
-`
-    : runtimeData;
+`);
 }
 
-function renderReviewSiblingRepositories(
+/**
+ * THE RULE ABOUT THE SIBLINGS, AND THE NAME A FINDING HAS TO CARRY. NOT A
+ * SECOND DESCRIPTION OF THEM.
+ *
+ * Where each one is checked out, what may be done to it, which pull request it
+ * is and at which commit are the map's, one line per repository, beside every
+ * other repository this send knows about. This section used to repeat the path
+ * and the access underneath that map, and on a manifest that could not say, the
+ * two disagreed: the map printed `(write)` for a repository this paragraph then
+ * called read-only.
+ *
+ * What is left is what the map cannot carry. The rule is about these
+ * repositories and not about the workspace as a whole, and `repo` takes the
+ * repository's PATH (`acme/sdk`), which is neither the map's provider-qualified
+ * key nor a spelling a reviewer may invent: an unrecognised value fails the
+ * whole review result (`normalizeFindingRepository` in
+ * `engine/helpers/review-results.ts`), so the exact value a finding may carry is
+ * written out here.
+ */
+function renderReviewSiblingRepositoriesParts(
   repositories: SelectedRepository[] | undefined,
-  manifest: WorkspaceManifest | undefined,
-): string {
-  const siblings = (repositories ?? []).filter(
-    (repo) => repo.reviewPullRequest && !repo.workflowOwnedBranch,
-  );
-  if (siblings.length === 0) return "";
-  const lines = siblings.map((repo) => {
-    const index = repositories!.indexOf(repo);
-    const localPath = resolveSelectedRepositoryPath(repo, index, manifest);
-    const pr = repo.reviewPullRequest!;
-    return `- \`${repo.repoPath}\` at \`${localPath}\` (read-only), PR: ${pr.url}, reviewed SHA: \`${pr.headSha ?? "unknown"}\``;
+): EffectivePromptPart[] {
+  const siblings = (repositories ?? []).filter(isReviewSibling);
+  if (siblings.length === 0) return [];
+  const lines = siblings.map((repo, ordinal) => {
+    const key = `${repo.provider}:${repo.repoPath}`;
+    return [
+      part(
+        `review-sibling:${ordinal + 1}`,
+        `Review sibling ${key}`,
+        withRef("workspace", key),
+        `- \`${repo.repoPath}\``,
+      ),
+    ];
   });
-  return `
-## Review Sibling Repositories
-
-These repositories belong to the same workflow run. Inspect them for cross-repository consistency, but do not modify them. If a finding targets one, set its \`repo\` field to the exact repository path above.
-
-${lines.join("\n")}
-`;
+  return concatPromptParts([
+    part(
+      "review-siblings",
+      "Review sibling repositories",
+      { kind: "workspace" },
+      "\n## Review Sibling Repositories\n\n",
+    ),
+    part(
+      "review-siblings-rule",
+      "Inspect sibling repositories, do not modify them",
+      PLATFORM,
+      "These belong to the same workflow run and are in the repository map above, with their checkout, their pull request and the commit under review. Inspect them for cross-repository consistency, but do not modify them. If a finding targets one, set its `repo` field to the repository path exactly as written here:\n\n",
+    ),
+    ...separated(lines, "\n"),
+    "\n",
+  ]);
 }
 
 export interface FixContextInput {
+  /** Where this send puts the map it rendered, for the briefing to record the
+   *  same pass the model read. See `SentRepositoryMap`. */
+  sentRepositoryMap?: SentRepositoryMap;
+  /** See `ResearchPlanContextInput`. */
+  repositoryMap?: RepositoryMapContext;
   ticket: TicketData;
   prComments: PRComment[];
   failedChecks: CheckRunResult[];
   reviewResults?: ReviewResult[];
-  conflictNotes?: string;
+  /** The repositories whose pull request has merge conflicts, as
+   *  `provider:repoPath`. */
+  conflictRepositories?: readonly string[];
   instructions?: string;
   repositories: SelectedRepository[];
   workspaceManifest?: WorkspaceManifest;
@@ -308,79 +531,162 @@ export interface FixContextInput {
 }
 
 /**
- * Assemble the fix-phase prompt context. Mirrors {@link assembleImplementationContext}
+ * Assemble the fix-phase prompt context. Mirrors {@link implementationContextParts}
  * but frames the work as addressing review feedback and failing checks on an
  * existing PR rather than implementing a plan from scratch. Optional sections are
  * omitted when their inputs are empty so the prompt stays focused on the fix.
  */
-export function assembleFixContext(input: FixContextInput): string {
+export function fixContextParts(input: FixContextInput): EffectivePromptPart[] {
   const {
     ticket,
     prComments,
     failedChecks,
     reviewResults,
-    conflictNotes,
+    conflictRepositories,
     instructions,
     repositories,
   } = input;
   // Same substitution as the ticket-side prompt: the aliased feed supersedes the
   // flat list for the threads it carries, and only for those.
   const feed = input.reviewThreads;
-  const reviewThreadsSection = feed ? renderReviewThreads(feed) : "";
+  const reviewThreadsParts = feed ? renderReviewThreadParts(feed) : [];
   const uncovered = feed
     ? prComments.filter((comment) => !feedCoversComment(feed, comment))
     : prComments;
-  const prFeedbackSection =
-    (reviewThreadsSection ? `\n${reviewThreadsSection}\n` : "") +
-    (uncovered.length > 0
-      ? `\n## PR Review Feedback\n\n${formatPRComments(uncovered)}\n`
-      : "");
-  const failedChecksSection =
-    failedChecks.length > 0 ? `\n## CI/CD Check Results\n\n${formatCheckResults(failedChecks)}\n` : "";
-  const internalReviewsSection =
+  const prFeedbackParts = concatPromptParts([
+    ...(reviewThreadsParts.length > 0 ? ["\n", reviewThreadsParts, "\n"] : []),
+    uncovered.length > 0 &&
+      part(
+        "pr-comments",
+        "Pull request comments",
+        { kind: "pull_request" },
+        `\n## PR Review Feedback\n\n${formatPRComments(uncovered)}\n`,
+      ),
+  ]);
+  const failedChecksParts =
+    failedChecks.length > 0
+      ? [
+          part(
+            "ci-checks",
+            "CI/CD check results",
+            { kind: "pull_request" },
+            `\n## CI/CD Check Results\n\n${formatCheckResults(failedChecks)}\n`,
+          ),
+        ]
+      : [];
+  const internalReviewsParts =
     reviewResults && reviewResults.length > 0
-      ? `\n## Internal Review Results\n\n<review-results>\n${JSON.stringify(reviewResults, null, 2)}\n</review-results>\n`
-      : "";
-  const conflictSection = conflictNotes ? `\n## Merge Conflicts\n\n${conflictNotes}\n` : "";
-  const selectedRepositoriesSection = renderSelectedRepositories(repositories, input.workspaceManifest);
-  const instructionsSection = instructions ? `\n## Fix Instructions\n\n${instructions}\n` : "";
-  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
+      ? [
+          part(
+            "internal-review-results",
+            "Internal review results",
+            { kind: "review_result" },
+            `\n## Internal Review Results\n\n<review-results>\n${JSON.stringify(reviewResults, null, 2)}\n</review-results>\n`,
+          ),
+        ]
+      : [];
+  // Which repositories conflict is the pull request's state; how to finish the
+  // merge is our rule.
+  const conflictParts =
+    conflictRepositories && conflictRepositories.length > 0
+      ? [
+          part(
+            "merge-conflicts",
+            "Merge conflicts",
+            { kind: "pull_request" },
+            `\n## Merge Conflicts\n\nThese repositories have merge conflicts: ${conflictRepositories.join(", ")}. `,
+          ),
+          part(
+            "merge-conflicts-rule",
+            "How to finish the merge",
+            PLATFORM,
+            "Resolve the conflict markers, stage the files, and continue the merge in each repository.\n",
+          ),
+        ]
+      : [];
+  const instructionsParts = instructions
+    ? [
+        part(
+          "fix-instructions",
+          "Fix instructions",
+          { kind: "block_prompt" },
+          `\n## Fix Instructions\n\n${instructions}\n`,
+        ),
+      ]
+    : [];
+  const clarificationsParts = renderClarificationsParts(ticket.clarifications);
 
-  return `# Fix Requirements
-
-## Ticket ID
-
-${ticket.identifier}
-
-## Ticket
-
-${ticket.title}
-
-## Acceptance Criteria
-
-${ticket.acceptanceCriteria || "None specified."}
-${clarificationsSection}${prFeedbackSection}${failedChecksSection}${internalReviewsSection}${conflictSection}${selectedRepositoriesSection}${instructionsSection}`;
+  const compose = (mapParts: EffectivePromptPart[]): EffectivePromptPart[] =>
+    concatPromptParts([
+      ticketHeaderPart("Fix Requirements", ticket),
+      acceptanceCriteriaPart(ticket),
+      clarificationsParts,
+      prFeedbackParts,
+      failedChecksParts,
+      internalReviewsParts,
+      conflictParts,
+      mapParts,
+      instructionsParts,
+    ]);
+  return compose(
+    renderRepositoryMapParts(
+      input.repositoryMap,
+      repositories,
+      input.workspaceManifest,
+      repositoryMapBudget(compose([])),
+      input.sentRepositoryMap,
+    ),
+  );
 }
 
-function formatComments(
-  comments: Array<{ author: string; body: string; createdAt?: string }>,
-): string {
-  if (comments.length === 0) return "No comments.";
-  return comments
-    .map((c) => `${c.author}: ${c.body}`)
-    .join("\n\n");
+export function assembleFixContext(input: FixContextInput): string {
+  return joinPromptParts(fixContextParts(input));
+}
+
+function renderCommentsParts(ticket: TicketData): EffectivePromptPart[] {
+  const comments = ticket.comments;
+  if (comments.length === 0) {
+    return [part("comments", "Ticket comments", ticketOrigin(ticket), "## Comments\n\nNo comments.\n")];
+  }
+  return [
+    part("comments", "Ticket comments", ticketOrigin(ticket), "## Comments\n\n"),
+    ...comments.map((c, index) =>
+      part(
+        `comment:${index + 1}`,
+        `Ticket comment ${index + 1}`,
+        withRef("ticket_comment", ticket.identifier, c.author),
+        `${c.author}: ${c.body}${index === comments.length - 1 ? "\n" : "\n\n"}`,
+      ),
+    ),
+  ];
 }
 
 // Prompt-budget protection: a long clarification history must not crowd out the
 // rest of the prompt, so the whole rendered section is capped and truncated.
 const CLARIFICATIONS_MAX_LENGTH = 16000;
-const CLARIFICATIONS_TRUNCATION_NOTE =
-  "[Older clarification rounds omitted to fit the prompt budget.]\n\n";
 
-function renderClarificationsSection(
+/**
+ * Room held back for the note that explains the cut, and nothing else.
+ *
+ * It is a FIXED 62 characters rather than the length of the note actually
+ * written, and that is deliberate. The note is now three different sentences
+ * depending on what was really cut, so paying for the longest of them would
+ * take about two hundred characters of ANSWER away from every run over budget,
+ * including the ones whose note is short. A note two hundred characters over a
+ * sixteen thousand character guard costs a prompt nothing; an answer cut two
+ * hundred characters shorter costs a resumed run the thing it exists to read.
+ *
+ * 64 is what the one note this used to write cost: the 62 characters of
+ * "[Older clarification rounds omitted to fit the prompt budget.]" plus the
+ * blank line after it. Holding the reserve there is what makes what a model
+ * reads of a clarification history byte for byte what it read before.
+ */
+const CLARIFICATIONS_NOTE_RESERVE = 64;
+
+function renderClarificationsParts(
   clarifications: TicketData["clarifications"],
-): string {
-  if (!clarifications || clarifications.length === 0) return "";
+): EffectivePromptPart[] {
+  if (!clarifications || clarifications.length === 0) return [];
 
   // Kept as head/answer pairs so the hard-truncation fallback below can trim
   // the questions and the answer independently.
@@ -406,34 +712,147 @@ function renderClarificationsSection(
   const footer = "\n";
   const separator = "\n\n";
 
+  /** The rounds the section shows, by their 1-based number, with the length
+   *  a shortened one had before the budget cut it. */
+  let kept: Array<{ round: number; text: string; shortenedFrom?: number }> = rounds.map(
+    (text, index) => ({ round: index + 1, text }),
+  );
+  let omitted = false;
   const fullSection = `${header}${rounds.join(separator)}${footer}`;
-  if (fullSection.length <= CLARIFICATIONS_MAX_LENGTH) return fullSection;
+  if (fullSection.length > CLARIFICATIONS_MAX_LENGTH) {
+    omitted = true;
+    // Over budget: keep WHOLE rounds newest-first so the freshest answer (the one
+    // a resume exists to consume) always survives; the oldest rounds are dropped
+    // first. Reserve room for the note that flags the omission.
+    const bodyBudget =
+      CLARIFICATIONS_MAX_LENGTH - header.length - footer.length - CLARIFICATIONS_NOTE_RESERVE;
+    kept = [];
+    let used = 0;
+    for (let i = rounds.length - 1; i >= 0; i--) {
+      const cost = rounds[i]!.length + (kept.length > 0 ? separator.length : 0);
+      if (used + cost > bodyBudget) break;
+      kept.unshift({ round: i + 1, text: rounds[i]! });
+      used += cost;
+    }
+    if (kept.length === 0) {
+      // Even the newest round alone exceeds the budget: truncate its questions
+      // and answer separately, the answer first. The answer is what a resume run
+      // exists to consume, so it must survive even when the questions alone
+      // would eat the whole budget; the questions get whatever room remains.
+      const newest = roundParts.at(-1)!;
+      const answerPart = newest.answer.slice(0, Math.max(0, bodyBudget));
+      const headBudget = bodyBudget - answerPart.length - separator.length;
+      const headPart = headBudget > 0 ? newest.head.slice(0, headBudget) : "";
+      kept.push({
+        round: rounds.length,
+        text: headPart ? `${headPart}${separator}${answerPart}` : answerPart,
+        shortenedFrom: rounds.at(-1)!.length + footer.length,
+      });
+    }
+  }
+  const roundPart = (
+    round: number,
+    content: string,
+    cut?: Pick<EffectivePromptPart, "cutBeforeSend" | "cutCause" | "originalLengthUtf16">,
+  ): EffectivePromptPart => ({
+    id: `clarification:${round}`,
+    title: `Clarification round ${round}`,
+    content,
+    origin: withRef("clarification", String(round), clarifications[round - 1]!.answeredBy),
+    ...cut,
+  });
+  // A round the budget dropped stays in the list as a part cut whole, so a
+  // reader sees which rounds the agent never got and how long they were.
+  const keptRounds = new Set(kept.map((entry) => entry.round));
+  const droppedParts = rounds.flatMap((text, index): EffectivePromptPart[] =>
+    keptRounds.has(index + 1)
+      ? []
+      : [
+          roundPart(index + 1, "", {
+            cutBeforeSend: "whole",
+            cutCause: "clarification_budget",
+            originalLengthUtf16: text.length + separator.length,
+          }),
+        ],
+  );
+  const cut = omitted
+    ? clarificationBudgetNote({
+        total: rounds.length,
+        dropped: rounds.length - kept.length,
+        newestShortened: kept.some((entry) => entry.shortenedFrom !== undefined),
+      })
+    : null;
+  return concatPromptParts([
+    part("clarifications", "Clarification answers", { kind: "clarification" }, header),
+    cut && part("clarifications-omitted", cut.title, PLATFORM, `${cut.text}\n\n`),
+    droppedParts,
+    ...kept.map((entry, index) =>
+      roundPart(
+        entry.round,
+        `${entry.text}${index === kept.length - 1 ? footer : separator}`,
+        entry.shortenedFrom === undefined
+          ? undefined
+          : {
+              cutBeforeSend: "partial",
+              cutCause: "clarification_budget",
+              originalLengthUtf16: entry.shortenedFrom,
+            },
+      ),
+    ),
+  ]);
+}
 
-  // Over budget: keep WHOLE rounds newest-first so the freshest answer (the one
-  // a resume exists to consume) always survives; the oldest rounds are dropped
-  // first. Reserve room for the note that flags the omission.
-  const bodyBudget =
-    CLARIFICATIONS_MAX_LENGTH - header.length - footer.length - CLARIFICATIONS_TRUNCATION_NOTE.length;
-  const kept: string[] = [];
-  let used = 0;
-  for (let i = rounds.length - 1; i >= 0; i--) {
-    const cost = rounds[i]!.length + (kept.length > 0 ? separator.length : 0);
-    if (used + cost > bodyBudget) break;
-    kept.unshift(rounds[i]!);
-    used += cost;
+/**
+ * WHAT THE BUDGET ACTUALLY CUT, said in the prompt where it cut it.
+ *
+ * One note used to be written for three different events: "[Older
+ * clarification rounds omitted to fit the prompt budget.]". It is true when
+ * older rounds were dropped. It is FALSE when the newest round alone was over
+ * budget and was shortened in place, which is the case the model most needs to
+ * know about, because then the question and the answer it is reading are both
+ * partial and it has been told the opposite: that what it holds is whole and
+ * something older is missing. On a subject with one round it is false twice
+ * over, since there is no older round to omit.
+ *
+ * A run is the only reader that can tell the three apart, so it says which one
+ * happened and how much of it. Stage 2 made this text a named part, so what a
+ * briefing shows a person and what the model read are the same bytes: a note
+ * that lies here lies in both places.
+ *
+ * Bounded by construction: two counts and fixed prose. The longest it can write
+ * is measured in `sandbox/clarification-budget.test.ts` rather than asserted
+ * here, because the reserve it is paid from is a fixed number.
+ */
+function clarificationBudgetNote(cut: {
+  total: number;
+  dropped: number;
+  newestShortened: boolean;
+}): { title: string; text: string } {
+  const older =
+    cut.dropped === 1
+      ? `the oldest of this work's ${cut.total} clarification rounds is not here`
+      : `the ${cut.dropped} oldest of this work's ${cut.total} clarification rounds are not here`;
+  // The answer is taken first and the questions get what room is left, so both
+  // can be partial and the answer is the one that survives. Said, because a
+  // model reading half a question guesses at the other half.
+  const shortened =
+    "the round below is shortened: its answer was kept first and its questions got the room that was left";
+  if (cut.dropped === 0) {
+    return {
+      title: "The clarification round was shortened",
+      text: `[Prompt budget: ${shortened}. No round is missing.]`,
+    };
   }
-  if (kept.length === 0) {
-    // Even the newest round alone exceeds the budget: truncate its questions
-    // and answer separately, the answer first. The answer is what a resume run
-    // exists to consume, so it must survive even when the questions alone
-    // would eat the whole budget; the questions get whatever room remains.
-    const newest = roundParts.at(-1)!;
-    const answerPart = newest.answer.slice(0, Math.max(0, bodyBudget));
-    const headBudget = bodyBudget - answerPart.length - separator.length;
-    const headPart = headBudget > 0 ? newest.head.slice(0, headBudget) : "";
-    kept.push(headPart ? `${headPart}${separator}${answerPart}` : answerPart);
+  if (!cut.newestShortened) {
+    return {
+      title: "Older clarification rounds left out",
+      text: `[Prompt budget: ${older}. Every round below is complete.]`,
+    };
   }
-  return `${header}${CLARIFICATIONS_TRUNCATION_NOTE}${kept.join(separator)}${footer}`;
+  return {
+    title: "Older clarification rounds left out and the newest shortened",
+    text: `[Prompt budget: ${older}, and ${shortened}.]`,
+  };
 }
 
 export function formatPRComments(comments: PRComment[]): string {
@@ -487,58 +906,384 @@ export function formatCheckResults(checks: CheckRunResult[]): string {
   return parts.join("\n\n");
 }
 
-function renderAttachmentsSection(
+function renderAttachmentsParts(
   attachments: DownloadedAttachment[] | undefined,
-): string {
-  if (!attachments || attachments.length === 0) return "";
-  return `\n${formatAttachmentsIndex(attachments)}\n`;
+  ticket: TicketData,
+): EffectivePromptPart[] {
+  if (!attachments || attachments.length === 0) return [];
+  return [
+    part(
+      "attachments",
+      "Ticket attachments",
+      withRef("attachment", ticket.identifier),
+      `\n${formatAttachmentsIndex(attachments)}\n`,
+    ),
+  ];
 }
 
-function renderPreSandboxAdditions(
-  additions: PreSandboxPromptAddition[] | undefined,
-): string {
-  if (!additions || additions.length === 0) return "";
-  return `\n${additions
-    .map(
-      (addition) => `## Pre-Sandbox: ${addition.title}
+/** The part an addition becomes: a pre-sandbox step's addition keeps the label
+ *  it has always had, because it is true of it; one the run added later names
+ *  only its title. */
+function additionPart(
+  addition: PreSandboxPromptAddition,
+  ordinal: (kind: string) => number,
+): EffectivePromptPart {
+  switch (addition.producedBy) {
+    case "repository_discovery":
+      return part(
+        `repository-discovery:${ordinal("repository-discovery")}`,
+        addition.title,
+        { kind: "repository_discovery" },
+        `## ${addition.title}\n\n${addition.content}`,
+      );
+    case "review_change_set":
+      return part(
+        `review-change-set:${ordinal("review-change-set")}`,
+        addition.title,
+        { kind: "pull_request", label: "change set" },
+        `## ${addition.title}\n\n${addition.content}`,
+      );
+    default:
+      return part(
+        `pre-sandbox:${ordinal("pre-sandbox")}`,
+        `Pre-sandbox: ${addition.title}`,
+        { kind: "pre_sandbox" },
+        `## Pre-Sandbox: ${addition.title}
 
 This information was produced before sandbox creation.
 
 ${addition.content}`,
-    )
-    .join("\n\n")}\n`;
+      );
+  }
 }
 
-function renderSelectedRepositories(
+const RESEARCH_NOTE: EffectivePromptPartOrigin = { kind: "research_note" };
+
+/** The planning loop's notes, one part per note, and one per refused
+ *  repository, since a run can refuse several. */
+function researchNoteGroups(notes: ResearchPassNotes | undefined): EffectivePromptPart[][] {
+  if (!notes) return [];
+  const groups: EffectivePromptPart[][] = [];
+  if (notes.priorRequests.length > 0) {
+    groups.push([
+      part(
+        "expansion-history",
+        "Repository expansion history",
+        RESEARCH_NOTE,
+        "## Repository expansion history\n\nThe following repositories were requested and are now attached.\n",
+      ),
+      part(
+        "expansion-history-guidance",
+        "Continue the same research",
+        PLATFORM,
+        "Continue the same research; do not restart from assumptions.\n",
+      ),
+      part("prior-requests", "Repositories requested earlier", RESEARCH_NOTE, JSON.stringify(notes.priorRequests)),
+    ]);
+  }
+  if (notes.refusals.length > 0) {
+    // The refusals of this run, said to the model rather than to a person: no
+    // answer to them could be recorded against a repository, so a question
+    // would come back on the next run that behaved the same way.
+    groups.push([
+      part(
+        "refused-requests",
+        "Repository requests this run refused",
+        RESEARCH_NOTE,
+        "## Repository requests this run refused\n\n",
+      ),
+      ...notes.refusals.map((refusal, index) =>
+        part(
+          `refusal:${index + 1}`,
+          `Refused request ${index + 1}`,
+          withRef("research_note", refusal.repositoryKey),
+          `${refusal.sentence}\n`,
+        ),
+      ),
+      part(
+        "refused-requests-guidance",
+        "What to do instead of asking again",
+        PLATFORM,
+        "Requesting these again changes nothing. Plan with the repositories already attached, and if one of them is genuinely required, say so in the result, naming it and what it is needed for, instead of requesting it.",
+      ),
+    ]);
+  }
+  if (notes.expansionClosed) {
+    // Expansion is closed, so the model needs to know that asking again
+    // changes nothing. It is told what it can do instead, and not told what to
+    // conclude: a repository that really is missing has to stay reportable
+    // (AIW-377).
+    //
+    // WHAT THIS NO LONGER CLAIMS: that repeating the request ends the run. It
+    // was true of a loop that counted absorbed requests and then failed, and it
+    // stopped being true when a spent corrective pass began making the run plan
+    // with what it holds instead. The bound that does exist is said once, by the
+    // note below, and only on the pass it actually binds.
+    groups.push([
+      part(
+        "expansion-closed",
+        "Repository expansion closed",
+        RESEARCH_NOTE,
+        "## Repository expansion closed\n\nNo further repository will be attached to this workspace: ",
+      ),
+      part("expansion-closed-guidance", "What to do now that expansion is closed", PLATFORM, [
+        "requesting one again changes nothing.",
+        "A repository checked out read-only is checked out again with write access when implementation starts, so needing to write to one is never a reason to request it.",
+        "Plan with the repositories already attached. If a repository is genuinely required and is not attached, say so in the result, naming it and what it is needed for, instead of requesting it.",
+      ].join("\n")),
+    ]);
+  }
+  if (notes.lastExpansionPass) {
+    // THE ONLY NOTE HERE THAT COSTS THE MODEL ANYTHING, so it is the one that
+    // has to be unmissable and exact. It says what happens next rather than
+    // what to conclude: a repository that really is missing is still reportable,
+    // in the plan, which is where this run will read it from.
+    groups.push([
+      part(
+        "expansion-last-pass",
+        "The last planning pass a repository request buys",
+        RESEARCH_NOTE,
+        "## This is the last planning pass a repository request buys\n\n",
+      ),
+      part(
+        "expansion-last-pass-guidance",
+        "Return a plan on this pass",
+        PLATFORM,
+        [
+          'This run has already spent one pass on a repository request it could not honour. Another `repositories_needed` result will not run research again: this run will take whatever plan you return and record, on the ticket, what it could not do without the repositories you asked for.',
+          'So return `status: "completed"` now, with a plan for the repositories already attached, and write into that plan which repositories you could not get and exactly what you cannot do without each of them.',
+        ].join("\n"),
+      ),
+    ]);
+  }
+  if (notes.ledgerCorrectionNote) {
+    // The ledger rejected specific aliases, so the generic "do not declare this
+    // resolved" note would be misleading: the model is told which claims
+    // failed and why instead.
+    groups.push([
+      part(
+        "ledger-correction",
+        "Fix the rejected review thread dispositions",
+        RESEARCH_NOTE,
+        `## Fix the rejected review thread dispositions\n\n${notes.ledgerCorrectionNote}`,
+      ),
+    ]);
+  } else if (notes.noChangeRetry) {
+    groups.push([
+      part(
+        "no-change-retry",
+        "The previous pass wrongly concluded no change",
+        RESEARCH_NOTE,
+        "## Do not declare this ticket already resolved\n\n" +
+          "A human requested changes in the PR review feedback above, and the previous research pass wrongly concluded no change was needed.\n",
+      ),
+      part(
+        "no-change-retry-guidance",
+        "The review feedback is the task",
+        PLATFORM,
+        "Treat addressing every point of that review feedback as the task: produce an implementation plan for it, declare the writeRepositories it touches, and do not set noChangeNeeded.",
+      ),
+    ]);
+  }
+  return groups;
+}
+
+function renderAdditionsParts(
+  additions: PreSandboxPromptAddition[] | undefined,
+  notes?: ResearchPassNotes,
+): EffectivePromptPart[] {
+  const counts = new Map<string, number>();
+  const ordinal = (kind: string) => {
+    const next = (counts.get(kind) ?? 0) + 1;
+    counts.set(kind, next);
+    return next;
+  };
+  const groups = [
+    ...(additions ?? []).map((addition) => [additionPart(addition, ordinal)]),
+    ...researchNoteGroups(notes),
+  ];
+  if (groups.length === 0) return [];
+  return concatPromptParts(["\n", ...separated(groups, "\n\n"), "\n"]);
+}
+
+/**
+ * THE REPOSITORY MAP, in the place the "Selected Repositories" list used to
+ * sit.
+ *
+ * ONE INPUT OBJECT, ONE RENDERER, FOR EVERY SEND. Research, implementation,
+ * review and the fix agent each used to be handed a different object (one got
+ * the pull request contexts, one got both, one got only the selected list), so
+ * "one renderer" was true of the function and false of what reached the model.
+ * They all pass through here now, from the same `RepositoryMapInput`, which is
+ * what lets a person compare two briefings of one run and see one shape.
+ *
+ * The map decides its own bounds and order (`repository-map/map.ts`). This
+ * function only decides that the workspace facts a prompt already had, the
+ * checkout path, the write access and a sibling's pull request, are the map's
+ * workspace group, so no send describes one repository twice. The review send
+ * still names its siblings afterwards, and that is a rule plus the spelling a
+ * finding must use, never a second description of them
+ * (`renderReviewSiblingRepositoriesParts`).
+ */
+/**
+ * The cap the effective-prompt compiler puts on ONE section
+ * (`MAX_SECTION_LENGTH` in `packages/prompts/effective-prompt.ts`). It slices
+ * from the END, so everything composed last is what a prompt over the cap
+ * loses: the Repository Access Protocol and the Resolution Check, which are
+ * the two rules a research agent most needs. Spelled here rather than imported
+ * because the package keeps it private; `context.section-cap.test.ts` reads
+ * that file and fails if the two numbers drift apart.
+ */
+const PROMPT_SECTION_MAX_LENGTH = 200_000;
+
+/**
+ * The room this send can give the repository map.
+ *
+ * The map bounds itself at 16,000 characters, which bounds THE MAP and not the
+ * section: a 191,000 character ticket plus a bounded map still crosses the cap,
+ * and what falls off the end is our own last rule. So the composer measures
+ * everything else it is about to send and hands the map what is left. Nothing
+ * is pushed out, because the map is the only part that can shrink.
+ */
+function repositoryMapBudget(others: readonly EffectivePromptPart[]): number {
+  const used = others.reduce((total, entry) => total + entry.content.length, 0);
+  // The sanitizer only replaces characters with same-length ones before it
+  // slices, so this arithmetic is exact rather than approximate.
+  return Math.max(0, PROMPT_SECTION_MAX_LENGTH - used);
+}
+
+/**
+ * The repository map for a send this file does not assemble.
+ *
+ * The generic agent composes its own runtime data, and until now it was the
+ * one repository-working phase that received no repository list at all: it
+ * worked in a checkout it was never told the shape of. It gets the same map
+ * from the same builder, measured against the parts it has already composed.
+ */
+export function repositoryMapPromptParts(
+  input: {
+    repositoryMap?: RepositoryMapContext;
+    repositories?: SelectedRepository[];
+    workspaceManifest?: WorkspaceManifest;
+  },
+  others: readonly EffectivePromptPart[],
+  sent?: SentRepositoryMap,
+): EffectivePromptPart[] {
+  return renderRepositoryMapParts(
+    input.repositoryMap,
+    input.repositories,
+    input.workspaceManifest,
+    repositoryMapBudget(others),
+    sent,
+  );
+}
+
+function renderRepositoryMapParts(
+  input: RepositoryMapContext | undefined,
+  repositories: SelectedRepository[] | undefined,
+  manifest: WorkspaceManifest | undefined,
+  budget: number,
+  sent?: SentRepositoryMap,
+): EffectivePromptPart[] {
+  const attached = workspaceAttachments(repositories, manifest);
+  if (input === undefined && attached.length === 0) return [];
+  const map = buildRepositoryMap(
+    {
+      // A send with no map input at all is a run whose journal predates it, and
+      // it says so rather than rendering an empty catalog, which would be a
+      // positive claim that there is nothing else.
+      ...(input ?? { silence: "not_recorded" as const }),
+      attached,
+    },
+    { maxLength: budget },
+  );
+  // The composer measures the budget twice (once to size this, once to
+  // compose), so the LAST build is the one whose parts are returned and the
+  // one a briefing must record.
+  if (sent) sent.map = map;
+  return map.parts;
+}
+
+/** The workspace as the prompt has always known it: where each repository is
+ *  checked out and whether it may be written to. */
+function workspaceAttachments(
   repositories: SelectedRepository[] | undefined,
   manifest?: WorkspaceManifest,
-): string {
-  if (!repositories || repositories.length === 0) return "";
+): RepositoryMapAttachment[] {
+  if (!repositories || repositories.length === 0) return [];
   const seen = new Set<string>();
-  const lines = repositories.map((repo, index) => {
+  return repositories.map((repo, index) => {
     const localPath = resolveSelectedRepositoryPath(repo, index, manifest);
     if (seen.has(localPath)) {
       throw new Error(`Selected repository path is duplicated for ${repo.repoPath}`);
     }
     seen.add(localPath);
-    const manifestAccess =
-      manifest?.version === 2
-        ? manifest.repositories.find(
-            (candidate) =>
-              candidate.provider === repo.provider &&
-              candidate.repoPath === repo.repoPath,
-          )?.access
-        : undefined;
-    const access = manifestAccess
-      ? ` (${manifestAccess === "write" ? "write" : "read-only"})`
-      : "";
-    return `- \`${repo.provider}:${repo.repoPath}\` at \`${localPath}\`${access} - ${repo.selectedRationale}`;
+    const pr = isReviewSibling(repo) ? repo.reviewPullRequest : undefined;
+    return {
+      key: `${repo.provider}:${repo.repoPath.toLowerCase()}`,
+      localPath,
+      access: selectedRepositoryAccess(repo, manifest),
+      rationale: repo.selectedRationale,
+      // THE TWO FACTS A REVIEWER NEEDS ABOUT A SIBLING, on the sibling's own
+      // line. They used to arrive in a second list fifty lines below this one,
+      // which described the same repository a second time and could disagree
+      // with this one about its access.
+      ...(pr
+        ? {
+            reviewPullRequest: {
+              url: pr.url,
+              ...(pr.headSha ? { headSha: pr.headSha } : {}),
+            },
+          }
+        : {}),
+    };
   });
-  const instruction =
+}
+
+/**
+ * A repository attached for somebody else's pull request, carrying no branch of
+ * this run's own.
+ *
+ * ONE PREDICATE, TWO READERS. The map's access resolution and the rule that
+ * tells the agent not to modify these read the same function, so the prompt
+ * cannot mark a repository writable in one section and read-only in the next.
+ */
+function isReviewSibling(repo: SelectedRepository): boolean {
+  return repo.reviewPullRequest !== undefined && repo.workflowOwnedBranch === undefined;
+}
+
+/**
+ * What this send may do to a repository in the workspace.
+ *
+ * AN ACCESS WE CANNOT READ IS NEVER "WRITE". The manifest answers first and
+ * exactly, because provisioning wrote it. Where it cannot answer, the selection
+ * itself still can for the one case that matters: a repository attached for a
+ * pull request this run is reviewing "never grants write scope"
+ * (`SelectedRepository.reviewPullRequest`), so it reads read-only whatever the
+ * manifest's shape. Only a repository nothing says that about keeps the
+ * pre-manifest default, where everything in the workspace was writable and the
+ * prompt said so.
+ *
+ * WHICH MANIFESTS CANNOT ANSWER. A version 1 manifest carries no access field
+ * at all: nothing has written one since 2026-07-24, so it can only reach this
+ * code through the journal of a run suspended since before that day. A version
+ * 2 manifest that does not carry the repository is the other one; provisioning
+ * writes both lists from the same array, so it means the two have drifted, and
+ * a drifted pair is exactly when guessing "write" is most expensive.
+ */
+function selectedRepositoryAccess(
+  repo: SelectedRepository,
+  manifest: WorkspaceManifest | undefined,
+): "write" | "read_only" {
+  const entry =
     manifest?.version === 2
-      ? "Only repositories marked write may be modified. Read-only repositories are context only and must not be changed."
-      : "Edit only these Run Workspace repositories:";
-  return `\n## Selected Repositories\n\n${instruction}\n\n${lines.join("\n")}\n`;
+      ? manifest.repositories.find(
+          (candidate) =>
+            candidate.provider === repo.provider && candidate.repoPath === repo.repoPath,
+        )
+      : undefined;
+  if (entry) return entry.access === "read" ? "read_only" : "write";
+  return isReviewSibling(repo) ? "read_only" : "write";
 }
 
 /**
@@ -630,50 +1375,55 @@ function reviewThreadLocation(thread: ReviewThread): string | null {
  * threads waiting on a human and other vendors' bots are context only, and the
  * verifier rejects a disposition for them as an unknown alias, so the prompt has
  * to keep them visibly out of the answer set.
+ *
+ * The threads are the pull request's and every instruction about them is ours
+ * (origin `platform`): the heading, the threads to answer after the rule that
+ * says to answer each, the context-only threads after the rule that says not
+ * to, our rules for answering, and what did not fit. `ordinal` tells the
+ * repositories of one prompt apart.
  */
-function renderReviewThreads(feed: ReviewThreadFeed, repoLabel?: string): string {
+function renderReviewThreadParts(
+  feed: ReviewThreadFeed,
+  repoLabel?: string,
+  ordinal?: number,
+): EffectivePromptPart[] {
   const workItems = selectWorkItems(feed);
   const contextOnly = feed.threads.filter((thread) => !workItems.includes(thread));
-  if (workItems.length === 0 && contextOnly.length === 0) return "";
+  if (workItems.length === 0 && contextOnly.length === 0) return [];
 
+  const suffix = ordinal === undefined ? "" : `:${ordinal}`;
+  const origin = withRef("pull_request", repoLabel);
   const heading = repoLabel ? `## Review Threads: ${repoLabel}` : "## Review Threads";
-  const parts: string[] = [heading];
 
-  if (workItems.length > 0) {
-    parts.push(
-      "Every open thread on this pull request is listed below with a stable alias. " +
-        "Answer every alias in this list through the `reviewThreads` field of your output.",
+  const openThreads: string[] = [];
+  for (const thread of workItems) {
+    const location = reviewThreadLocation(thread);
+    openThreads.push(
+      `### ${reviewThreadLabel(thread)}${location ? ` ${location}` : ", general comment"}`,
     );
-    for (const thread of workItems) {
-      const location = reviewThreadLocation(thread);
-      parts.push(
-        `### ${reviewThreadLabel(thread)}${location ? ` ${location}` : ", general comment"}`,
-      );
-      const notes = renderReviewThreadNotes(thread);
-      if (notes) parts.push(notes);
-    }
+    const notes = renderReviewThreadNotes(thread);
+    if (notes) openThreads.push(notes);
   }
 
-  if (contextOnly.length > 0) {
-    parts.push("### Context only: do not disposition these", "These threads are part of the review and their content matters, but they are not yours to answer. Leave them out of `reviewThreads`.");
-    for (const thread of contextOnly) {
-      const location = reviewThreadLocation(thread);
-      const reason = thread.awaitingHuman
-        ? "waiting on a human reply"
-        : "not answered by this workflow";
-      parts.push(
-        `#### ${reviewThreadLabel(thread)}${location ? ` ${location}` : ""}: ${reason}`,
-      );
-      // Full bodies, exactly like a work item. A scanner's finding or a request
-      // we already answered is often the only place a constraint is written
-      // down, and the feed is now the only channel carrying it.
-      const notes = renderReviewThreadNotes(thread);
-      if (notes) parts.push(notes);
-    }
+  const contextThreads: string[] = [];
+  for (const thread of contextOnly) {
+    const location = reviewThreadLocation(thread);
+    const reason = thread.awaitingHuman
+      ? "waiting on a human reply"
+      : "not answered by this workflow";
+    contextThreads.push(
+      `#### ${reviewThreadLabel(thread)}${location ? ` ${location}` : ""}: ${reason}`,
+    );
+    // Full bodies, exactly like a work item. A scanner's finding or a request
+    // we already answered is often the only place a constraint is written
+    // down, and the feed is now the only channel carrying it.
+    const notes = renderReviewThreadNotes(thread);
+    if (notes) contextThreads.push(notes);
   }
 
+  const rules: string[] = [];
   if (workItems.length > 0) {
-    parts.push("### How to answer", [
+    rules.push("### How to answer", [
         "Return one entry in `reviewThreads` for every alias listed above the context block, and for no other alias:",
         "",
         "- `actionable`: this run changes the code the thread asks about. Describe the change in `reply` in one line.",
@@ -683,8 +1433,9 @@ function renderReviewThreads(feed: ReviewThreadFeed, repoLabel?: string): string
       ].join("\n"));
   }
 
+  const omitted: string[] = [];
   if (feed.truncated > 0) {
-    parts.push(
+    omitted.push(
       `${feed.truncated} further threads did not fit into this run and are left for the next one.`,
     );
   }
@@ -693,12 +1444,61 @@ function renderReviewThreads(feed: ReviewThreadFeed, repoLabel?: string): string
   // the model treat the visible context as the whole picture and contradict a
   // constraint written down in a thread it was never shown.
   if (feed.contextTruncated > 0) {
-    parts.push(
+    omitted.push(
       `${feed.contextTruncated} further threads are context only and are not shown here at all.`,
     );
   }
 
-  return parts.join("\n\n");
+  // The threads are the pull request's; what to do with each list is ours, so
+  // each list's instruction is a part of its own ahead of the list.
+  const groups: EffectivePromptPart[][] = [
+    concatPromptParts([
+      part(`review-threads${suffix}`, "Review threads", origin, heading),
+      ...(openThreads.length > 0
+        ? [
+            "\n\n",
+            part(
+              `review-threads-rule${suffix}`,
+              "Answer every listed alias",
+              PLATFORM,
+              "Every open thread on this pull request is listed below with a stable alias. " +
+                "Answer every alias in this list through the `reviewThreads` field of your output.",
+            ),
+            "\n\n",
+            part(`review-threads-open${suffix}`, "Review threads to answer", origin, openThreads.join("\n\n")),
+          ]
+        : []),
+    ]),
+  ];
+  if (contextThreads.length > 0) {
+    groups.push([
+      part(
+        `review-context-rule${suffix}`,
+        "Context-only threads are not answered",
+        PLATFORM,
+        "### Context only: do not disposition these\n\n" +
+          "These threads are part of the review and their content matters, but they are not yours to answer. " +
+          "Leave them out of `reviewThreads`.\n\n",
+      ),
+      part(
+        `review-context-threads${suffix}`,
+        "Review threads for context only",
+        origin,
+        contextThreads.join("\n\n"),
+      ),
+    ]);
+  }
+  if (rules.length > 0) {
+    groups.push([
+      part(`review-answer-rules${suffix}`, "How to answer review threads", PLATFORM, rules.join("\n\n")),
+    ]);
+  }
+  if (omitted.length > 0) {
+    groups.push([
+      part(`review-threads-omitted${suffix}`, "Review threads left out", origin, omitted.join("\n\n")),
+    ]);
+  }
+  return concatPromptParts(separated(groups, "\n\n"));
 }
 
 /**
@@ -714,59 +1514,85 @@ function uncoveredPrComments(context: SelectedRepositoryPromptContext): PRCommen
   return context.prComments.filter((comment) => !feedCoversComment(feed, comment));
 }
 
-/** Work items exist, so the run has explicit review requests to answer and the
- * already-resolved exit must stay closed. */
-function hasReviewWorkItems(
+function renderRepositoryContextParts(
   contexts: SelectedRepositoryPromptContext[] | undefined,
-): boolean {
-  return (contexts ?? []).some(
-    (context) => context.reviewThreads && selectWorkItems(context.reviewThreads).length > 0,
-  );
-}
+): EffectivePromptPart[] {
+  if (!contexts || contexts.length === 0) return [];
 
-function renderRepositoryContexts(
-  contexts: SelectedRepositoryPromptContext[] | undefined,
-): string {
-  if (!contexts || contexts.length === 0) return "";
-
-  const sections: string[] = [];
-  // When any repo carries human review feedback, this is a remediation of an
+  const groups: EffectivePromptPart[][] = [];
+  // When somebody is still waiting on a repo's PR, this is a remediation of an
   // existing PR, not a fresh build. Lead with that framing so the plan and the
   // implementation target the requested changes instead of concluding the
   // original ticket is already satisfied (its work is already on the PR branch).
-  if (contexts.some((context) => context.prComments.length > 0)) {
-    sections.push(
-      "## Existing pull request — address this review feedback\n\n" +
-        "A pull request already exists for this ticket and its original implementation is already committed on the PR branch. " +
-        "Human reviewers requested the changes below. For this run, treat addressing every point of this review feedback as the task. " +
-        "Do not stop or report success just because the original ticket looks already implemented.",
-    );
+  // One predicate with the Resolution Check above and with the engine's
+  // no-change gate: this paragraph asserts a person asked for something, and a
+  // run that then closes itself as a no-op has called the paragraph a lie.
+  if (resolvePendingReviewFeedback(contexts).pending) {
+    groups.push([
+      part(
+        "remediation-framing",
+        "Existing pull request: review feedback is the task",
+        PLATFORM,
+        "## Existing pull request \u2014 address this review feedback\n\n" +
+          "A pull request already exists for this ticket and its original implementation is already committed on the PR branch. " +
+          "Human reviewers requested the changes below. For this run, treat addressing every point of this review feedback as the task. " +
+          "Do not stop or report success just because the original ticket looks already implemented.",
+      ),
+    ]);
   }
-  for (const context of contexts) {
+  contexts.forEach((context, index) => {
+    const ordinal = index + 1;
     const repoPath = `${context.repository.provider}:${context.repository.repoPath}`;
+    const origin = withRef("pull_request", repoPath);
     // The ledger feed supersedes the flat list for its own repository: the flat
     // list carries resolved threads and our own replies with no identity, which
     // is exactly the blindness the ledger exists to remove. Feeding both would
     // invite the model to answer the same request twice, once without an alias.
-    const reviewThreadsSection = context.reviewThreads
-      ? renderReviewThreads(context.reviewThreads, repoPath)
-      : "";
-    if (reviewThreadsSection) sections.push(reviewThreadsSection);
+    const reviewThreadsParts = context.reviewThreads
+      ? renderReviewThreadParts(context.reviewThreads, repoPath, ordinal)
+      : [];
+    if (reviewThreadsParts.length > 0) groups.push(reviewThreadsParts);
     const flatComments = uncoveredPrComments(context);
     if (flatComments.length > 0) {
-      sections.push(`## PR Review Feedback: ${repoPath}\n\n${formatPRComments(flatComments)}`);
+      groups.push([
+        part(
+          `pr-comments:${ordinal}`,
+          `Pull request comments on ${repoPath}`,
+          origin,
+          `## PR Review Feedback: ${repoPath}\n\n${formatPRComments(flatComments)}`,
+        ),
+      ]);
     }
     if (context.checkResults.length > 0) {
-      sections.push(`## CI/CD Check Results: ${repoPath}\n\n${formatCheckResults(context.checkResults)}`);
+      groups.push([
+        part(
+          `ci-checks:${ordinal}`,
+          `CI/CD check results on ${repoPath}`,
+          origin,
+          `## CI/CD Check Results: ${repoPath}\n\n${formatCheckResults(context.checkResults)}`,
+        ),
+      ]);
     }
     if (context.hasConflicts) {
-      sections.push(
-        `## Merge Conflicts: ${repoPath}\n\n` +
-          "This PR has merge conflicts. The base branch has already been merged into this repository checkout. " +
+      groups.push([
+        part(
+          `merge-conflicts:${ordinal}`,
+          `Merge conflicts on ${repoPath}`,
+          origin,
+          `## Merge Conflicts: ${repoPath}\n\n` +
+            "This PR has merge conflicts. The base branch has already been merged into this repository checkout. ",
+        ),
+        part(
+          `merge-conflicts-rule:${ordinal}`,
+          "How to finish the merge",
+          PLATFORM,
           "Resolve the markers in this repository, `git add` the files, and run `git merge --continue` from that repository.",
-      );
+        ),
+      ]);
     }
-  }
+  });
 
-  return sections.length > 0 ? `\n${sections.join("\n\n")}\n` : "";
+  return groups.length > 0
+    ? concatPromptParts(["\n", ...separated(groups, "\n\n"), "\n"])
+    : [];
 }

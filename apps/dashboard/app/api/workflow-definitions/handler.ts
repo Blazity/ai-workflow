@@ -122,6 +122,27 @@ export async function handleDefinitionPromptPreview(
   return response;
 }
 
+/**
+ * `GET /api/workflow-definitions/{id}/nodes/{nodeId}/last-briefing`: what one
+ * block last put in front of a model, over every run of this definition.
+ *
+ * It is live operator telemetry about one block's newest run, so no shared
+ * proxy or browser may cache it, exactly as the trigger counters above.
+ */
+export async function handleNodeLastBriefing(
+  { params }: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  const { id, nodeId } = await params;
+  const response = await forward(
+    workerProxy,
+    `/api/v1/workflow-definitions/${encodeURIComponent(id)}/nodes/${encodeURIComponent(nodeId)}/last-briefing`,
+    { method: "GET" },
+  );
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+}
+
 export async function handleDefinitionLayout(
   req: Request,
   context: IdRouteContext,

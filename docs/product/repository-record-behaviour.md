@@ -286,6 +286,8 @@ only in production.
 | D2 | The run's memory file, under "Human decisions" and "do not edit or remove" | The questions and the answers. Never a sentence about reversing somebody's decision | held |
 | D3 | The ticket's comments, rendered verbatim into the research prompt on the NEXT run | Whatever anybody wrote on the ticket, our own comments included | held |
 | D4 | The reversal sentence | May appear in D3, because that is ticket history a person could have written. Never in D1 or D2, because those are instructions the system signs. The way back from an omission in an answer (C11) obeys the same line | held |
+| D5 | The Repository Map, in every repository-working send: research, implementation, review, the fix agent and the generic agent | What the workspace holds and what may be changed in it, the neighbours one relationship away that may be requested, and the repositories already settled, marked "do not request" with the reason a person would act on. Never a repository somebody excluded offered as one to ask for. The operator's catalog description, with the provider's listing text only as a labelled fallback. ONE DESCRIPTION PER REPOSITORY PER SEND, the workspace facts included: where it is checked out, what may be done to it, and, for a repository attached because this run is reviewing somebody's pull request in it, that pull request and the commit under review. A second list of the same repositories is what let one send call a repository writable in one paragraph and read-only in the next, on any manifest that could not answer. The same build produces the structured repository context the briefing records, so what a person reads is what the agent read | held (`apps/worker/src/sandbox/repository-map-context.test.ts`, `apps/worker/src/sandbox/context.test.ts`, and the goldens under `apps/worker/src/test-support/prompt-oracle/__golden__/`) |
+| D6 | Repository discovery, which runs before a workspace exists | The catalog it must choose from, with the operator's description in each row in place of the provider's listing text (labelled as the provider's where only they wrote one) and the relationship sentences, read from the same catalog profiles every send's map reads. NOT the map, and this row used to say otherwise: the map's wording is about a workspace ("in the workspace", "you may request it", "do not request it") and discovery is the step that decides what the workspace will hold, and the map's bound turns the tail of a large catalog into a count, which for discovery would be a candidate it can no longer choose. What the two share is the facts, read once per run, so discovery and every later send describe a repository in the same words | held (`apps/worker/src/engine/repository-discovery/catalog.test.ts`, and the golden `apps/worker/src/test-support/prompt-oracle/__golden__/discovery.txt`) |
 
 The distinction in D4 is the one that cost us a wrong ruling: the halt text was
 believed to be the person's channel, and it is not, because the same string is
@@ -295,8 +297,14 @@ and only tells that person less.
 
 ## What is deliberately not decided here
 
-- **The screen.** The record is editable through the API and MCP. A panel is
-  stage 7.
+- **The screen.** Decided elsewhere and delivered on 2026-09-20 by stage 5b of
+  [the agent visibility plan](../plans/2026-09-19-agent-visibility.md): a
+  ticket page carries a Repositories panel, on desktop and on the phone, where
+  a person can select, exclude and undo an entry (`remove`, which lets a later
+  run decide again; `exclude` is the sticky one). It shows each repository
+  question as a round with every answer as it arrived. The panel decides no
+  refusal of its own: `PATCH /api/v1/work-scope` remains the authority, and the
+  rows above still govern.
 - **An agent's edit versus a person's.** Closing this needs a durable marker in
   the contract and in the database, which is not a change to make days before a
   merge. Until then, an agent holding the edit tool can write what reads as a

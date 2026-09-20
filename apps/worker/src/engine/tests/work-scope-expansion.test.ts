@@ -26,12 +26,17 @@ import type {
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import {
   decideRepositoryExpansion,
+  missingRepositoriesFailure,
+  missingRepositoriesPlanSection,
   offerableRepositoryCatalog,
   repositoryExpansionPlans,
   repositoryExpansionRefusalPlan,
   repositoryExpansionRefusalSentence,
   validateRepositoryExpansionRequests,
 } from "../repository-discovery/runner.js";
+import { createWorkflowExecutionErrorState } from "@shared/contracts";
+import { executionError, sanitizeFailureMessage } from "@shared/workflow-graph";
+import { formatExecutionErrorForUser } from "../helpers/execution-error.js";
 import { appendRunClarificationRound, createRepositoryQuestions } from "../agent-workflow.js";
 import { applyHumanRepositoryExpansion } from "../steps/phase.js";
 import {
@@ -46,6 +51,7 @@ import {
 } from "../support/run-analysis-report.js";
 import type { EngineCtx } from "../blocks/support/types.js";
 import { makeCtx } from "../blocks/support/test-support.js";
+import { researchPlanContextParts } from "../../sandbox/context.js";
 
 const SUBJECT = "ticket:jira:AWT-1";
 const NOW = "2026-09-15T12:00:00.000Z";
@@ -1582,4 +1588,448 @@ describe("every repository question goes through the one door that names its rep
 
     expect(ctx.workScopeAsk).toBeUndefined();
   });
+});
+
+describe("the next research pass is told every request this run refused", () => {
+  // acme/jobs is recorded as unavailable and still is: nobody enabled it.
+  const catalog = [catalogEntry("github", "acme/web"), catalogEntry("github", "acme/api")];
+  const attached = [{ provider: "github" as const, repoPath: "acme/web" }];
+
+  it("sends each refusal as a part of its own, as the run's note and not as a pre-sandbox one", () => {
+    const scope = scopeOf(
+      entry("github:acme/api", "excluded"),
+      entry("github:acme/jobs", "unavailable", { unavailableReason: "not_enabled" }),
+    );
+    // Two rounds of the loop, each refused: the list it collects spans both.
+    const refusedIn = (repoPath: string) => {
+      const verdict = validateAgainstRecord({
+        requests: [requestFor("github", repoPath)],
+        catalog,
+        attached,
+        record: recorderFor({ scope, catalog, attached }),
+      });
+      if (verdict.kind !== "refused") throw new Error("expected a refusal");
+      return verdict.refusals;
+    };
+    // What the loop in agent-workflow.ts collects for each refusal, handed to
+    // the research assembler the way the next pass is composed.
+    const refusals = [...refusedIn("acme/api"), ...refusedIn("acme/jobs")].map((refusal) => ({
+      repositoryKey: refusal.repositoryKey,
+      sentence: repositoryExpansionRefusalSentence(refusal),
+    }));
+    const parts = researchPlanContextParts({
+      ticket: {
+        identifier: "AWT-1",
+        title: "t",
+        description: "d",
+        acceptanceCriteria: "a",
+        comments: [],
+      },
+      prompt: "",
+      branchName: "b",
+      researchNotes: {
+        priorRequests: [],
+        refusals,
+        expansionClosed: false,
+        ledgerCorrectionNote: null,
+        noChangeRetry: false,
+      },
+    });
+
+    expect(
+      parts
+        .filter((part) => part.id.startsWith("refusal:"))
+        .map((part) => ({ id: part.id, origin: part.origin, content: part.content.trim() })),
+    ).toEqual(
+      refusals.map((refusal, index) => ({
+        id: `refusal:${index + 1}`,
+        origin: { kind: "research_note", ref: refusal.repositoryKey },
+        content: refusal.sentence,
+      })),
+    );
+    expect(refusals.map((refusal) => refusal.repositoryKey)).toEqual([
+      "github:acme/api",
+      "github:acme/jobs",
+    ]);
+    expect(parts.map((part) => part.content).join("")).not.toContain("Pre-Sandbox");
+  });
+
+  it("hands the research pass the refusals the loop collected, not an empty list", () => {
+    // A source tripwire, like the ones above: the loop and the research call
+    // are closures inside agentWorkflowBody, which no test can invoke. Handing
+    // the pass an empty list, or no longer collecting into it, would send a
+    // model that asked for a refused repository no word of the refusal, and it
+    // would ask again.
+    //
+    // The reason travels with the sentence because the repository map reads it
+    // too: a refusal that settles a repository must stop the map offering it,
+    // and one that refused only this request must not.
+    const workflow = workflowLines.join("\n");
+    expect(
+      /expansionRefusals\.push\(\{\s*repositoryKey: refusal\.repositoryKey,\s*sentence,\s*reason: refusal\.reason,/.test(
+        workflow,
+      ),
+      "the expansion loop no longer collects each refusal for the next pass",
+    ).toBe(true);
+    expect(
+      /researchNotes: \{[\s\S]{0,200}?refusals: expansionRefusals,/u.test(workflow),
+      "the research pass is no longer handed the refusals the loop collected",
+    ).toBe(true);
+  });
+
+  it("stops the loop when the corrective pass is spent, instead of restarting it", () => {
+    // The same kind of tripwire, on the decision that ends the eleven minutes.
+    // `decideRepositoryExpansion` returning `plan_without` buys nothing unless
+    // the loop stops calling `continue` on it, and the loop is a closure inside
+    // agentWorkflowBody that no test can invoke. A `continue` here would put
+    // the run straight back on the path it died on, with every unit test in
+    // this file still green.
+    const workflow = workflowLines.join("\n");
+    expect(
+      /if \(expansion\.kind === "exit"\) return expansion\.result;\s*if \(expansion\.kind === "restart"\) continue;/u.test(
+        workflow,
+      ),
+      "the planning loop no longer distinguishes a restart from planning within the record",
+    ).toBe(true);
+    // And what follows it plans, rather than restarting: the only `continue`
+    // between the expansion call and the completed-status handling is the one
+    // above.
+    const afterExpansion = workflow.slice(
+      workflow.indexOf('if (expansion.kind === "restart") continue;') +
+        'if (expansion.kind === "restart") continue;'.length,
+      workflow.indexOf('if (research.status === "clarification_needed") {'),
+    );
+    expect(afterExpansion).not.toContain("continue;");
+    expect(afterExpansion).toContain("missingRepositoriesPlanSection");
+    expect(afterExpansion).toContain('status: "completed"');
+    // The model is told before it binds, on the pass the restart bought.
+    expect(workflow).toContain(
+      "lastExpansionPass: ctx.repositoryExpansion.expansionRestartUsed === true",
+    );
+  });
+
+  it("keeps only the writes the workspace holds, and delivers the plan before it stops", () => {
+    // Two rules that live in the same closure and cannot be invoked from a
+    // test, both of which a person pays for if they slip.
+    //
+    // A pass that asked for a repository usually meant to write to it, so the
+    // writes it declares can name one this run just refused. Carrying that
+    // through sends the implementation block at a checkout that is not there,
+    // which is a worse failure than the one this stage removed.
+    //
+    // And when nothing writable is left, the run stops AFTER the analysis
+    // comment, never before: that comment is the only surface the plan and the
+    // list of repositories it could not use travel on, and a block that returns
+    // an execution error never reaches it.
+    const workflow = workflowLines.join("\n");
+    expect(
+      /const writable = \(research\.writeRepositories \?\? \[\]\)\.filter\(\(repository\) =>\s*attachedKeys\.has\(/u.test(
+        workflow,
+      ),
+      "a declared write is no longer held to the repositories the workspace actually has",
+    ).toBe(true);
+    const commentAt = workflow.indexOf("postRunAnalysisCommentStep(");
+    const stopAt = workflow.indexOf("if (nothingToWrite) {");
+    expect(commentAt).toBeGreaterThan(0);
+    expect(stopAt).toBeGreaterThan(commentAt);
+    // And it stops with the honest sentence rather than letting the next block
+    // say "replan required" about repositories nobody has decided on.
+    expect(workflow.slice(stopAt)).toContain('"nothing_to_write"');
+  });
+});
+
+/**
+ * THE PRODUCTION FAILURE, AS A LOOP RATHER THAN AS PROSE.
+ *
+ * A ticket named four repositories, a person answered "just the API", and the
+ * planning agent asked for the other three again and again. Every note it could
+ * be sent was already in its prompt ("Requesting these again changes nothing",
+ * "Plan with the repositories already attached"), and it asked anyway: five
+ * passes, eleven minutes, a dead run, and the only account of why was a
+ * truncated log pulled over MCP.
+ *
+ * So what is proved here is the loop, not the prose: a refused request buys one
+ * corrective pass in the whole run, and the pass after it does not restart
+ * research. The run keeps the plan it can write, and what it could not do is
+ * said in the plan and on the ticket, in the sentences the run had already
+ * written about those repositories.
+ */
+describe("a refused repository request buys one corrective pass, and no more", () => {
+  const FOUR = ["acme/api", "acme/web", "acme/mobile", "acme/infra"];
+  const catalog = FOUR.map((repoPath) => catalogEntry("github", repoPath));
+  const attached = [{ provider: "github" as const, repoPath: "acme/api" }];
+  /** The three the person did not name when they answered "just the API". */
+  const otherThree = ["github:acme/web", "github:acme/mobile", "github:acme/infra"];
+
+  /** One pass of the planning loop: the record decides, the policy decides, and
+   *  the run stores what it returns. The engine closure does exactly this. */
+  function pass(
+    state: Parameters<typeof decideRepositoryExpansion>[0]["state"],
+    repoPaths: string[],
+    record: ReturnType<typeof recorderFor>,
+  ) {
+    const requests = repoPaths.map((repoPath) => requestFor("github", repoPath));
+    const verdict = validateAgainstRecord({
+      requests,
+      catalog,
+      attached,
+      record,
+      completedRounds: state.rounds,
+    });
+    const decided = decideRepositoryExpansion({
+      origin: "model",
+      verdict,
+      state,
+      requests,
+    });
+    const refusals =
+      verdict.kind === "refused"
+        ? verdict.refusals.map((refusal) => ({
+            repositoryKey: refusal.repositoryKey,
+            reason: refusal.reason,
+            sentence: repositoryExpansionRefusalSentence(refusal),
+            rationale: "research needs it",
+          }))
+        : [];
+    return { ...decided, refusals, recoveryNotes: [...record.recoveryNotes] };
+  }
+
+  const answeredRecord = () =>
+    recorderFor({ scope: null, catalog, attached, answeredRepositoryKeys: otherThree });
+
+  it("plans within the one repository the person allowed instead of dying on the other three", () => {
+    const record = answeredRecord();
+    const first = pass({ rounds: 0, priorRequests: [] }, ["acme/web", "acme/mobile", "acme/infra"], record);
+
+    // Pass one is the corrective pass: the model has not been told yet, so it
+    // is told and research runs once more.
+    expect(first.action).toEqual({ kind: "proceed" });
+    expect(first.state.expansionRestartUsed).toBe(true);
+    expect(first.refusals.map((refusal) => refusal.reason)).toEqual([
+      "unnamed_in_answer",
+      "unnamed_in_answer",
+      "unnamed_in_answer",
+    ]);
+
+    // Pass two asks for the same three. Nothing restarts: the run plans with
+    // acme/api, which is what the person asked for in the first place.
+    const second = pass(first.state, ["acme/web", "acme/mobile", "acme/infra"], answeredRecord());
+    expect(second.action).toEqual({ kind: "plan_without" });
+
+    // Two model passes in total, where production spent five.
+    const third = pass(second.state, ["acme/web"], answeredRecord());
+    expect(third.action).toEqual({ kind: "plan_without" });
+  });
+
+  it("writes the three it could not use into the plan, in the words it already used", () => {
+    const record = answeredRecord();
+    const first = pass({ rounds: 0, priorRequests: [] }, ["acme/web", "acme/mobile", "acme/infra"], record);
+
+    const section = missingRepositoriesPlanSection(first.refusals, first.recoveryNotes);
+
+    // Every repository, its own sentence, and the agent's own reason for
+    // wanting it: the plan is what implementation, review and the analysis
+    // comment all read.
+    for (const key of otherThree) expect(section).toContain(key);
+    for (const refusal of first.refusals) expect(section).toContain(refusal.sentence);
+    expect(section).toContain("The agent asked for it: research needs it");
+    // And the way back, composed by the record against the catalog it can see.
+    expect(section).toContain(
+      "Leaving a repository out of an answer is not final: this work's repository list can be changed",
+    );
+  });
+
+  it("renders the same bytes however the model happened to order its request", () => {
+    // A briefing is evidence, and a plan that reorders itself between two reads
+    // of one run proves nothing. The order the model asked in is not a fact
+    // about the work, so it decides nothing here: the ranking is the key.
+    const first = pass({ rounds: 0, priorRequests: [] }, ["acme/web", "acme/mobile"], answeredRecord());
+    const second = pass({ rounds: 0, priorRequests: [] }, ["acme/mobile", "acme/web"], answeredRecord());
+    expect(second.refusals.map((refusal) => refusal.repositoryKey)).not.toEqual(
+      first.refusals.map((refusal) => refusal.repositoryKey),
+    );
+    const notes = first.recoveryNotes;
+    expect(missingRepositoriesPlanSection(second.refusals, notes)).toBe(
+      missingRepositoriesPlanSection(first.refusals, notes),
+    );
+    expect(missingRepositoriesFailure(second.refusals, notes)).toBe(
+      missingRepositoriesFailure(first.refusals, notes),
+    );
+  });
+
+  it("still attaches a repository the person did allow, after refusing one they did not", () => {
+    // The regression this stage could most easily cause. A refusal must not
+    // close the door on a repository nothing has decided against.
+    const record = recorderFor({
+      scope: null,
+      catalog,
+      attached,
+      answeredRepositoryKeys: ["github:acme/infra"],
+    });
+    const requests = [requestFor("github", "acme/infra"), requestFor("github", "acme/web")];
+    const verdict = validateAgainstRecord({ requests, catalog, attached, record });
+    expect(verdict.kind).toBe("refused");
+
+    const { action, state } = decideRepositoryExpansion({
+      origin: "model",
+      verdict,
+      state: { rounds: 0, priorRequests: [] },
+      requests,
+    });
+    expect(action).toMatchObject({ kind: "attach" });
+    if (action.kind !== "attach") return;
+    expect(action.repositories.map((repository) => repository.repoPath)).toEqual(["acme/web"]);
+    // A pass that attached something is not a pass spent on a refusal, so the
+    // corrective budget is untouched and a later legitimate request still runs.
+    expect(state.expansionRestartUsed).toBeUndefined();
+  });
+
+  it("keeps the budget spent across a ledger or no-change retry", () => {
+    // Those retries `continue` the same loop with the same run context, so the
+    // budget has to live where the context lives. It does: a retry re-enters
+    // the loop with the state the expansion returned, and the state still says
+    // the corrective pass is gone.
+    const first = pass({ rounds: 0, priorRequests: [] }, ["acme/web"], answeredRecord());
+    const carried = { ...first.state };
+    const afterRetry = pass(carried, ["acme/web"], answeredRecord());
+    expect(afterRetry.action).toEqual({ kind: "plan_without" });
+  });
+});
+
+describe("the run's last word never asks for something the person cannot do", () => {
+  const RUN_ID = "wrun_01KYSFRC85YWWMD6WH2FQG0C30";
+
+  /** Exactly what the planning loop passes when it has no plan to ship. */
+  function asAPersonReadsIt(text: string): string {
+    return formatExecutionErrorForUser(
+      createWorkflowExecutionErrorState(
+        RUN_ID,
+        "planning",
+        1,
+        executionError(text, { category: "engine", phase: "research", message: text }).error,
+      ),
+    );
+  }
+
+  it("tells somebody to enable a repository nobody enabled, never to select it", () => {
+    // The defect: "Select them in this work's repository list ... and start a
+    // new run", said about a repository that is not in the catalog at all.
+    // Selecting it is refused, so the run's last word was an instruction the
+    // person could not carry out.
+    const text = missingRepositoriesFailure([
+      {
+        repositoryKey: "github:acme/nobody-enabled",
+        reason: "outside_catalog",
+        sentence:
+          "github:acme/nobody-enabled is not on the repository catalog this run may use, so it is not attached.",
+      },
+    ]);
+
+    expect(text).toContain("github:acme/nobody-enabled");
+    expect(text).toContain("enable it on the Repositories page and start a new run");
+    expect(text.toLowerCase()).not.toContain("select it");
+    expect(text.toLowerCase()).not.toContain("select them");
+  });
+
+  it("does not send somebody to a switch that is already on", () => {
+    const text = missingRepositoriesFailure([
+      {
+        repositoryKey: "github:acme/empty",
+        reason: "unusable",
+        sentence:
+          "github:acme/empty is enabled here, and this run could not check it out: the provider listed it as archived, or offered no default branch for it, so it is not attached.",
+      },
+    ]);
+    expect(text).toContain("enabled here already");
+    expect(text).toContain("what the provider offers");
+    expect(text).not.toContain("enable it on the Repositories page");
+  });
+
+  it("reaches the ticket whole, with the way back still in it", () => {
+    // The production defect this repeats: run wrun_01M2SDKXF5QYNCXGCMRJJQ2HFF
+    // told a person "This deployment's confi [...] o continue.", with the
+    // repository, the reason and the lever all in the elided middle.
+    const text = missingRepositoriesFailure(
+      otherThreeRefusals(),
+      [
+        "Leaving a repository out of an answer is not final: this work's repository list can be changed through the work scope API or the work_scope.edit tool, and the next run starts from the changed list.",
+      ],
+    );
+    const out = asAPersonReadsIt(text);
+
+    expect(out).not.toContain("[...]");
+    expect(out).toBe(`${text} Diagnostic ID: AIW-DIAG-${RUN_ID}-planning-1`);
+    expect(out).toContain("this work's repository list can be changed");
+    expect(sanitizeFailureMessage(out)).toBe(out);
+  });
+
+  it("keeps every name and the way back at the worst mix the loop can produce", () => {
+    // Three repositories is what one request may name, 70 characters is the
+    // ceiling the message bound was sized against, and three different reasons
+    // is the most levers this can owe. The bound is spent on the levers first
+    // and on the refusal sentences last, so what gives way is the "why", which
+    // the model's prompt, the ticket and the repository record all still carry.
+    const KEYS = [
+      "github:blazity-engineering-platform/ai-workflow-worker-canary-fixtures",
+      "gitlab:blazity-engineering-platform/ai-workflow-dashboard-e2e-fixtures",
+      "github:blazity-engineering-platform/ai-workflow-arthur-release-fixture",
+    ];
+    for (const key of KEYS) expect(key).toHaveLength(70);
+    const reasons = ["excluded", "outside_catalog", "unusable"] as const;
+    const text = missingRepositoriesFailure(
+      KEYS.map((repositoryKey, index) => ({
+        repositoryKey,
+        reason: reasons[index]!,
+        sentence: `${repositoryKey} was refused on this run, so it is not attached.`,
+      })),
+      [
+        "Excluding a repository is not final: this work's repository list can be changed through the work scope API or the work_scope.edit tool, and the next run starts from the changed list.",
+        `The catalog cannot serve ${KEYS[0]} at the moment, so changing the list brings that repository back only once the catalog can. It is enabled here already: what the provider offers for that repository is what has to change.`,
+      ],
+    );
+
+    // Every repository is named, whatever the bound took away.
+    for (const key of KEYS) expect(text).toContain(key);
+    expect(text).toContain("Excluding a repository is not final");
+    const out = asAPersonReadsIt(text);
+    expect(out).not.toContain("[...]");
+    expect(out).toBe(`${text} Diagnostic ID: AIW-DIAG-${RUN_ID}-planning-1`);
+    expect(sanitizeFailureMessage(out)).toBe(out);
+  });
+
+  it("says what is really wrong when the plan changes nothing this run may touch", () => {
+    // The sentence one block downstream used to be "research declared no
+    // repository changes; nothing to implement, replan required". It is true of
+    // the fields and false about the run: there is nothing to replan until
+    // somebody decides about the repositories, and it names none of them.
+    const text = missingRepositoriesFailure(
+      otherThreeRefusals(),
+      [
+        "Leaving a repository out of an answer is not final: this work's repository list can be changed through the work scope API or the work_scope.edit tool, and the next run starts from the changed list.",
+      ],
+      "nothing_to_write",
+    );
+
+    expect(text).toContain("the plan it returned changes nothing in the repositories this run holds");
+    for (const key of ["github:acme/web", "github:acme/mobile", "github:acme/infra"]) {
+      expect(text).toContain(key);
+    }
+    expect(text).toContain("this work's repository list can be changed");
+    expect(text.toLowerCase()).not.toContain("replan");
+    // And it is still the whole message on every surface.
+    const out = asAPersonReadsIt(text);
+    expect(out).not.toContain("[...]");
+    expect(out).toBe(`${text} Diagnostic ID: AIW-DIAG-${RUN_ID}-planning-1`);
+    expect(sanitizeFailureMessage(out)).toBe(out);
+  });
+
+  function otherThreeRefusals() {
+    return ["github:acme/web", "github:acme/mobile", "github:acme/infra"].map(
+      (repositoryKey) => ({
+        repositoryKey,
+        reason: "unnamed_in_answer" as const,
+        sentence: `${repositoryKey} was listed in a repository question already answered on this work and is not selected on it, so it is not attached.`,
+      }),
+    );
+  }
 });

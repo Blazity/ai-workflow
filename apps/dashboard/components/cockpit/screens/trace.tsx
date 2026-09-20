@@ -548,7 +548,7 @@ export function TraceDetail({
             className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[12px] text-neutral-700"
           >
             {currentReplay.availability === "expired"
-              ? "The replay observation expired. Showing the legacy step trace."
+              ? "The replay observation expired, and what this run's agents were sent expired with it. Showing the legacy step trace."
               : "Visual replay was not captured for this run. Showing the legacy step trace."}
           </div>
           <CkCard
@@ -570,7 +570,12 @@ export function TraceDetail({
           >
             {steps.length === 0 ? (
               <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
-                No steps recorded for this run yet.
+                {/* "yet" promises more is coming. Directly under a notice that
+                    this run's observation expired, that is the one thing this
+                    emptiness cannot mean. */}
+                {currentReplay.availability === "expired"
+                  ? "The legacy step trace holds nothing for this run either."
+                  : "No steps recorded for this run yet."}
               </div>
             ) : (
               <div className="mt-[18px] overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">

@@ -12,6 +12,22 @@ function settlerReply(threadId: string): string {
   return `Addressed in \`deadbeef\`.\nAdded the null check.\n\n${reviewLedgerMarker(threadId)}`;
 }
 
+/** One of our own notes on a pull request, marker and all. */
+const OUR_OWN_NOTE = `Automated fix pushed: 2 files changed.\n\n${AI_WORKFLOW_COMMENT_MARKER}`;
+
+/**
+ * What "Quote reply" produces: the body being answered copied line by line
+ * behind a `>`, marker included, then the reviewer's own words. Built from the
+ * note it quotes, so the fixture cannot drift from what we actually post.
+ */
+function quoteReply(quoted: string, written: string): string {
+  return [
+    ...quoted.split("\n").map((line) => (line ? `> ${line}` : ">")),
+    "",
+    written,
+  ].join("\n");
+}
+
 const options = {
   gateCheckNames: [
     "AI Workflow / code-hygiene",
@@ -703,6 +719,53 @@ describe("normalizeGitHubEvent", () => {
     ).toBeNull();
   });
 
+  it("starts a run for a reviewer who quoted one of our notes to ask for a change", () => {
+    // The reviewer pressed "Quote reply" on our run summary and typed a
+    // request under it, so their comment carries our marker without their
+    // having written it. Dropping it here is the worst version of this whole
+    // problem: no run, no comment, no failure, nothing for them to open, and
+    // they are right to conclude they were ignored.
+    const evt = normalizeGitHubEvent(
+      "pull_request_review_comment",
+      {
+        action: "created",
+        repository: githubRepo(),
+        pull_request: githubPr({ user: { login: "human" } }),
+        comment: {
+          id: 1,
+          user: { login: "piotr", type: "User" },
+          body: quoteReply(OUR_OWN_NOTE, "This did not fix it. The button is still dead."),
+        },
+      },
+      commentOptions,
+    );
+
+    expect(evt?.triggerType).toBe("trigger_pr_review");
+    expect(evt?.pr.review?.author).toBe("piotr");
+  });
+
+  it("still drops one of our own notes that quotes a reviewer", () => {
+    // The mirror, and the echo protection AIW-140 added: our marker sits on a
+    // line of its own however much the note quotes, so it is still ours and
+    // still fires nothing.
+    expect(
+      normalizeGitHubEvent(
+        "pull_request_review_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          pull_request: githubPr(),
+          comment: {
+            id: 1,
+            user: { login: "human", type: "User" },
+            body: `> The button is still dead.\n\nFixed in a1b2c3d.\n\n${AI_WORKFLOW_COMMENT_MARKER}`,
+          },
+        },
+        commentOptions,
+      ),
+    ).toBeNull();
+  });
+
   it("drops a review-comment that is the ledger settler's own thread reply", () => {
     // Without this the ledger would drive itself: every reply it posts into a
     // thread would arrive back as trigger_pr_review and start another run.
@@ -877,6 +940,31 @@ describe("normalizeGitHubEvent", () => {
         commentOptions,
       ),
     ).toBeNull();
+  });
+
+  it("starts a run for a conversation comment quoting one of our notes", () => {
+    const evt = normalizeGitHubEvent(
+      "issue_comment",
+      {
+        action: "created",
+        repository: githubRepo(),
+        issue: {
+          number: 7,
+          title: "Fix things",
+          user: { login: "author-person" },
+          pull_request: { html_url: "https://github.com/acme/app/pull/7" },
+        },
+        comment: {
+          id: 778,
+          user: { login: "piotr", type: "User" },
+          body: quoteReply(OUR_OWN_NOTE, "Reopening: the mobile case is untouched."),
+        },
+      },
+      commentOptions,
+    );
+
+    expect(evt?.triggerType).toBe("trigger_pr_review");
+    expect(evt?.pr.review?.author).toBe("piotr");
   });
 
   it("drops an issue_comment when reviewStates is not opted into commented", () => {
@@ -1178,6 +1266,17 @@ describe("normalizeGitLabEvent", () => {
     expect(
       normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] }),
     ).toBeNull();
+  });
+
+  it("starts a run for a GitLab note quoting one of our notes", () => {
+    const note = notePayload();
+    note.object_attributes.note = quoteReply(
+      OUR_OWN_NOTE,
+      "Still broken on mobile, please look again.",
+    );
+    const evt = normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] });
+
+    expect(evt?.triggerType).toBe("trigger_pr_review");
   });
 
   it("drops a GitLab note that is the ledger settler's own thread reply", () => {

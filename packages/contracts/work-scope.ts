@@ -104,6 +104,34 @@ export const WORK_SCOPE_ORIGINS = [
   "workflow_owned_branch",
   "ticket_text",
   "trigger_policy",
+  /**
+   * THE CATALOG RELATES IT TO A REPOSITORY THIS WORK NAMES.
+   *
+   * An operator wrote on the Repositories page that A is the frontend for B; a
+   * ticket names A; the run opens B as well, read only, without asking anybody.
+   * That is a decision, and the Decision Trail exists to tell a person who
+   * decided: `trigger_policy` would send them to the trigger, where they would
+   * find nothing about relationships at all, and a rationale carrying the truth
+   * that the origin denies is the hidden-decision shape this record exists to
+   * end. So it is its own origin, and the rationale beside it names the source
+   * repository and the relationship.
+   *
+   * IT IS RE-DERIVED, WHICH IS THE POINT OF NAMING IT. Only entries this origin
+   * wrote are checked back against the catalog on the next run, and one whose
+   * relationship the operator has since deleted is removed with a trail line
+   * saying so. A repository that attaches itself forever after the reason was
+   * taken away is worse than no automatic attachment, and an origin of its own
+   * is what makes the re-check safe: nothing else gets re-checked against a
+   * catalog it was never derived from.
+   *
+   * IT RANKS 3, TIED WITH `trigger_policy`. Both are a rule of this run taking
+   * a repository in without asking, so neither outranks the other, and both are
+   * outranked by every person, branch and ticket-text signal above. The tie is
+   * the whole point of the number: what must never happen is `inferred` (4), a
+   * guess, taking back a repository an operator's own recorded relationship put
+   * here, and a rank below 4 is what stops it.
+   */
+  "related_repository",
   "inferred",
 ] as const;
 export const workScopeOriginSchema = z.enum(WORK_SCOPE_ORIGINS);
@@ -129,11 +157,40 @@ export const WORK_SCOPE_ORIGIN_RANKS = {
   workflow_owned_branch: 1,
   ticket_text: 2,
   trigger_policy: 3,
+  related_repository: 3,
   inferred: 4,
 } as const satisfies Record<WorkScopeOrigin, number>;
 
-export function workScopeOriginRank(origin: WorkScopeOrigin): number {
-  return WORK_SCOPE_ORIGIN_RANKS[origin];
+/**
+ * What an origin this build has never heard of is worth.
+ *
+ * The worker and the dashboard deploy separately, and a migration adds an
+ * origin minutes before the code that knows it serves anything, so a reader
+ * WILL meet a value that is not in its own list. Before this, the lookup
+ * returned `undefined`, `undefined - number` was `NaN`, and the comparator that
+ * ranks a subject's entries returned `NaN` for every pair involving that row:
+ * the record came back in an order nobody could predict, which is the "blank"
+ * failure, arriving as scrambled precedence rather than as an error.
+ *
+ * The weakest rank any origin carries, so an unknown origin sorts last and can
+ * never be treated as outranking something this build does understand. Guessing
+ * high would let a value we cannot reason about overwrite a person's decision.
+ */
+export const WORK_SCOPE_UNKNOWN_ORIGIN_RANK = 4;
+
+/**
+ * Total by construction: see `WORK_SCOPE_UNKNOWN_ORIGIN_RANK`.
+ *
+ * It takes a plain string because the callers that matter are readers of
+ * stored rows rather than writers of new ones, and a reader's row may carry an
+ * origin from a migration its own build predates. Writers stay honest through
+ * `WORK_SCOPE_ORIGIN_RANKS` itself, which `satisfies Record<WorkScopeOrigin,
+ * number>`: an origin added without a rank does not compile.
+ */
+export function workScopeOriginRank(origin: string): number {
+  return (
+    WORK_SCOPE_ORIGIN_RANKS[origin as WorkScopeOrigin] ?? WORK_SCOPE_UNKNOWN_ORIGIN_RANK
+  );
 }
 
 export const WORK_SCOPE_REFUSAL_REASONS = [
@@ -562,6 +619,15 @@ export const WORK_SCOPE_ANSWER_READING_JSON_SCHEMA = {
   },
 } as const;
 
+/** Why an entry was taken off the record by something other than a person. */
+export const WORK_SCOPE_REMOVAL_REASONS = [
+  /** The catalog relationship that put a `related_repository` entry here is
+   *  gone, so the run that would re-attach it has nothing to stand on. */
+  "relationship_removed",
+] as const;
+export const workScopeRemovalReasonSchema = z.enum(WORK_SCOPE_REMOVAL_REASONS);
+export type WorkScopeRemovalReason = z.infer<typeof workScopeRemovalReasonSchema>;
+
 export const workScopeTrailEventSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -577,6 +643,17 @@ export const workScopeTrailEventSchema = z.discriminatedUnion("kind", [
       kind: z.literal("entry_removed"),
       entry: workScopeEntrySchema,
       removedBy: workScopeActorSchema,
+      /**
+       * Why it went, where the entry's own origin does not already say it.
+       *
+       * A ticket-text entry removed because the ticket stopped naming the
+       * repository needs no sentence: the origin IS the reason. A repository
+       * taken because the catalog related it to another one does, because what
+       * changed is somewhere a person has to be sent. Optional in the same way
+       * and for the same reason as `purpose` below: absent on every row written
+       * before the field existed, and absent means nothing beyond the entry.
+       */
+      reason: workScopeRemovalReasonSchema.optional(),
     })
     .strict(),
   z
@@ -949,4 +1026,62 @@ export function validateTriggerRepositoryPolicy(
     }
   }
   return issues;
+}
+
+/** The one entry shape no person stands behind: a repository a run picked for
+ *  itself. Every other entry is a decision somebody or something took. */
+export function isGuessEntry(entry: WorkScopeEntry): boolean {
+  return entry.state === "selected" && entry.origin === "inferred";
+}
+
+/**
+ * A repository a question ALREADY ANSWERED on this work listed, and that
+ * nothing on the record has chosen since.
+ *
+ * THE ONE READING OF "UNNAMED", for everything that acts on it. The rule that
+ * stops a guess from taking such a repository, the sentence a person reads when
+ * one was left out, and the repository map that tells an agent not to ask for
+ * it all have to mean the same set, or the map invites a request the rule is
+ * about to refuse and the run pays a pass to discover it.
+ *
+ * `answeredRepositoryKeys` is keyed on questions a person ANSWERED: an open
+ * question tells us nothing about anybody's intent, and a repository in one is
+ * not here.
+ *
+ * A GUESS'S OWN ENTRY IS NOT AN ENTRY HERE. An earlier run may have written
+ * `selected` `inferred` before anybody was asked, and read as an entry it would
+ * shield the key forever: the answer writes nothing for a name it left out, so
+ * the pair never forms. Any other entry (a person's own, delegated, a path in
+ * the ticket, a trigger policy, a workflow-owned branch) means somebody has
+ * chosen since, and the repository is not unnamed any more. That is what keeps
+ * a later positive answer from being swallowed.
+ */
+export function isUnnamedInAnswer(
+  repositoryKey: string,
+  answeredRepositoryKeys: readonly string[],
+  entries: readonly WorkScopeEntry[],
+): boolean {
+  if (!answeredRepositoryKeys.includes(repositoryKey)) return false;
+  return entries
+    .filter((entry) => entry.repositoryKey === repositoryKey)
+    .every(isGuessEntry);
+}
+
+/**
+ * Why such a repository is not in this work, in the words every surface uses.
+ *
+ * It names neither who answered nor when: the run holds the answered set as
+ * keys alone, and a sentence that guessed at a name or a day would be a
+ * fabrication about a person. It does not say "did not name it" either, because
+ * the same fact is true of a repository somebody named and whose entry a person
+ * later removed, and there that clause would be false.
+ *
+ * IT NAMES NO WAY BACK. It reaches the agent's own prompt, through the refusal
+ * and through the repository map, and a lever for reversing a person's decision
+ * may never appear in the channel the system signs (rule 7 and D4 of
+ * `docs/product/repository-record-behaviour.md`). The way back rides the ticket
+ * comment beside it, for the person alone.
+ */
+export function workScopeUnnamedWhy(repositoryKey: string): string {
+  return `${repositoryKey} was listed in a repository question already answered on this work and is not selected on it`;
 }

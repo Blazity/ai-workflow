@@ -36,6 +36,7 @@ export async function executePreSandboxPhase(
   const promptAdditions = emptyPromptAdditions();
   let selectedRepositories: RunPreSandboxPhaseResult["selectedRepositories"];
   let repositoryDiscovery: RunPreSandboxPhaseResult["repositoryDiscovery"];
+  let repositoryMap: RunPreSandboxPhaseResult["repositoryMap"];
   let repositoryScopeNarrowing: RunPreSandboxPhaseResult["repositoryScopeNarrowing"];
   let repositoryCatalogDegradation: RunPreSandboxPhaseResult["repositoryCatalogDegradation"];
   let workScopeAsk: RunPreSandboxPhaseResult["workScopeAsk"];
@@ -91,6 +92,9 @@ export async function executePreSandboxPhase(
       if (result.repositoryDiscovery) {
         repositoryDiscovery = result.repositoryDiscovery;
       }
+      if (result.repositoryMap) {
+        repositoryMap = result.repositoryMap;
+      }
       if (result.repositoryScopeNarrowing) {
         repositoryScopeNarrowing = result.repositoryScopeNarrowing;
       }
@@ -126,6 +130,7 @@ export async function executePreSandboxPhase(
           promptAdditions,
           selectedRepositories,
           repositoryDiscovery,
+          repositoryMap,
           repositoryScopeNarrowing,
           repositoryCatalogDegradation,
           workScopeAsk,
@@ -150,6 +155,7 @@ export async function executePreSandboxPhase(
         cause: errorMessage(err),
         promptAdditions,
         selectedRepositories,
+        repositoryMap,
         // A step that threw does not erase what an earlier step decided. Without
         // these, a run whose selection refused a repository and whose next step
         // then failed reports the failure and says nothing about the repository,
@@ -167,6 +173,7 @@ export async function executePreSandboxPhase(
     promptAdditions,
     selectedRepositories,
     repositoryDiscovery,
+    repositoryMap,
     repositoryScopeNarrowing,
     repositoryCatalogDegradation,
     workScopeAsk,

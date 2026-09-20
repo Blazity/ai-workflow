@@ -3,11 +3,41 @@ import {
   type RepositoryRelationshipKind,
 } from "@shared/contracts";
 import type { RepositoryMetadata } from "../../adapters/vcs/repository-directory.js";
+import type { RepositoryMapFacts } from "../../repository-map/map.js";
 
 /** Repository candidates resolved before sandbox execution begins. */
 
 export const MAX_ACCESSIBLE_REPOSITORIES = 200;
+/**
+ * The provider's listing blurb is one line of marketing and never more.
+ *
+ * The operator's own description is a different thing and gets its own bound
+ * below: somebody typed it for exactly this moment, and cutting it to the size
+ * of a GitHub tagline throws away the half that says which flows live where.
+ */
 const MAX_DESCRIPTION_LENGTH = 240;
+/**
+ * The operator's description inside the discovery catalog.
+ *
+ * Set deliberately rather than inherited: the field may hold 20,000 characters
+ * (`REPOSITORY_CATALOG_MARKDOWN_MAX_LENGTH`), discovery renders the whole
+ * catalog as JSON, and 200 repositories times 20,000 characters is a prompt
+ * nothing survives. Four times the provider's bound is room for the paragraph
+ * an operator actually writes, and a cut one says it was cut.
+ */
+const MAX_CATALOG_DESCRIPTION_LENGTH = 960;
+/**
+ * What every operator description in the discovery catalog costs TOGETHER.
+ *
+ * The per-repository bound above bounds one repository, and the catalog holds
+ * up to 200 of them: 960 characters each is up to 192,000, where the provider
+ * text it replaced was capped at 48,000 for the same catalog. A prompt section
+ * is cut at 200,000 characters from the end, so a catalog of well-documented
+ * repositories was one bound away from deleting whatever discovery says after
+ * it. Past this, the remaining repositories keep the provider's shorter text:
+ * degraded, labelled as the provider's, and never silently half a paragraph.
+ */
+const MAX_CATALOG_DESCRIPTION_TOTAL = 48_000;
 const MAX_TOPIC_COUNT = 8;
 const MAX_TOPIC_LENGTH = 40;
 
@@ -17,6 +47,10 @@ export interface RepositoryCatalogEntry {
   name: string;
   defaultBranch: string;
   description: string;
+  /** Whose words `description` is. Absent on an entry built before the catalog
+   *  profile reached discovery, which reads as the provider's, because that is
+   *  what those entries carried. */
+  descriptionSource?: "catalog" | "provider" | "none";
   topics: string[];
   /** Catalog relationship sentences, loaded when discovery runs. */
   relationships: string[];
@@ -26,7 +60,10 @@ export interface RepositoryCatalogEntry {
 
 export interface RepositoryCatalogRelationship {
   direction: "outgoing" | "incoming";
-  repositoryId: number;
+  /** Absent on a relationship that arrived through the repository map, which
+   *  identifies the other end by its key. Identity de-duplication below uses
+   *  that key, so the id is provenance rather than something it depends on. */
+  repositoryId?: number;
   provider: string;
   path: string;
   enabled: boolean;
@@ -34,10 +71,6 @@ export interface RepositoryCatalogRelationship {
   note: string | null;
 }
 
-export interface RepositoryRelationshipSource {
-  key: string;
-  relationships: RepositoryCatalogRelationship[];
-}
 
 const MAX_RENDERED_REPOSITORY_RELATIONSHIPS = 20;
 
@@ -59,7 +92,10 @@ export function renderRepositoryRelationshipLines(input: {
   for (const direction of ["outgoing", "incoming"] as const) {
     for (const relationship of input.relationships) {
       if (relationship.direction !== direction) continue;
-      const key = `${relationship.repositoryId}:${relationship.kind}`;
+      // The other end plus the kind. It was the row id, which a relationship
+      // read by key does not carry; the key identifies the same repository,
+      // and the catalog fails closed on two rows that collapse to one key.
+      const key = `${relationship.provider}:${relationship.path.toLowerCase()}:${relationship.kind}`;
       if (!byIdentity.has(key)) byIdentity.set(key, relationship);
     }
   }
@@ -108,26 +144,69 @@ export function renderRepositoryRelationshipLines(input: {
   return lines;
 }
 
-/** Add discovery relationship context to provider metadata with no I/O. */
+/**
+ * Add the catalog's own knowledge to provider metadata, with no I/O: the
+ * operator's description in place of the provider's listing blurb, and the
+ * relationship sentences.
+ *
+ * WHOSE WORDS THE MODEL READS. Discovery described every repository with the
+ * provider's listing text, which is whatever somebody typed into a GitHub
+ * "About" box years ago, while the description an operator wrote on the
+ * Repositories page for exactly this purpose reached nothing. The operator's
+ * words win, the provider's stay as a labelled fallback, and every entry says
+ * which it got, so a person auditing a briefing can tell a decision made here
+ * from a blurb we inherited.
+ */
 export function addRepositoryDiscoveryRelationships(input: {
   catalog: readonly RepositoryCatalogEntry[];
-  sources: readonly RepositoryRelationshipSource[];
+  /** The catalog profiles this run read, as the repository map reads them. */
+  facts: readonly RepositoryMapFacts[];
   attachedKeys: readonly string[];
   enabledKeys: readonly string[];
 }): RepositoryCatalogEntry[] {
-  const sources = new Map(input.sources.map((source) => [source.key, source]));
+  const facts = new Map(input.facts.map((entry) => [entry.key, entry] as const));
+  // Spent in catalog order, which is the order the catalog was built in, so
+  // the same catalog spends it the same way on every run.
+  let descriptionBudget = MAX_CATALOG_DESCRIPTION_TOTAL;
   return input.catalog.map((repository) => {
     const key = repositoryCatalogKey(repository);
+    const fact = facts.get(key);
+    const candidate = catalogDescription(fact?.catalogDescription ?? "");
+    const described = candidate !== null && candidate.length <= descriptionBudget ? candidate : null;
+    if (described !== null) descriptionBudget -= described.length;
     return {
       ...repository,
+      ...(described !== null
+        ? { description: described, descriptionSource: "catalog" as const }
+        : {
+            descriptionSource:
+              repository.description.length > 0 ? ("provider" as const) : ("none" as const),
+          }),
       relationships: renderRepositoryRelationshipLines({
         ownerKey: `${repository.provider}:${repository.repoPath}`,
-        relationships: sources.get(key)?.relationships ?? [],
+        relationships: (fact?.relationships ?? []).map((relationship) => ({
+          direction: relationship.direction,
+          provider: relationship.targetKey.slice(0, relationship.targetKey.indexOf(":")),
+          path: relationship.targetKey.slice(relationship.targetKey.indexOf(":") + 1),
+          enabled: input.enabledKeys.includes(relationship.targetKey),
+          kind: relationship.kind as RepositoryRelationshipKind,
+          note: relationship.note ?? null,
+        })),
         attachedKeys: input.attachedKeys,
         enabledKeys: input.enabledKeys,
       }),
     };
   });
+}
+
+/** The operator's description as discovery may carry it, or null when they
+ *  wrote none. A cut one says so, because a model shown half a paragraph with
+ *  no marker reads it as the whole thing an operator meant. */
+function catalogDescription(description: string): string | null {
+  const collapsed = description.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return null;
+  if (collapsed.length <= MAX_CATALOG_DESCRIPTION_LENGTH) return collapsed;
+  return `${collapsed.slice(0, MAX_CATALOG_DESCRIPTION_LENGTH)}... (shortened; the full description is on the Repositories page)`;
 }
 
 export class RepositoryCatalogError extends Error {

@@ -15,6 +15,7 @@ import { configuredReplaySecrets } from "../../run-observability/configured-secr
 import { redactConfiguredSecretsInText } from "../../run-observability/sanitizer.js";
 import type { EffectivePromptMemorySource } from "../helpers/effective-prompt.js";
 import { memoryDocPath, legacyMemoryDocPath } from "./memory-steps.js";
+import { planDeferredBriefing, recordSendBriefing, type DeferredBriefing } from "../agent-visibility/plan.js";
 
 /** Run material handed to the model. The ticket memory document is the long
  * part, so the cap effectively bounds that. */
@@ -633,6 +634,9 @@ function pathToken(raw: string): string | null {
 
 export interface DistillRepoMemoryInput {
   runId: string;
+  /** What this send gave the model. Optional so a journal written before it
+   *  existed still replays, which is a send with no briefing. */
+  briefing?: DeferredBriefing | null;
   /** The run's frozen ENABLE_ORG_MEMORY_PROMOTION. Optional so a journal
    *  written before this field existed still replays; absent reads as off,
    *  which is the registry default and the behaviour before promotion existed.
@@ -917,13 +921,21 @@ export async function distillRepoMemoryStep(
     }
 
     const { generateStructured } = await import("../llm.js");
+    const distillPrompt = buildDistillPrompt(states, material);
+    // The prompt is composed here, out of memory documents this step reads, so
+    // only the send's identity travelled and the record is completed here.
+    await recordSendBriefing(
+      planDeferredBriefing(input.briefing, { prompt: distillPrompt, system: DISTILL_SYSTEM_PROMPT }),
+      { prompt: distillPrompt, system: DISTILL_SYSTEM_PROMPT, wrapperScript: null },
+      () => import("../agent-visibility/capture.js"),
+    );
     let object: unknown;
     try {
       const result = await generateStructured({
         model: input.model,
         ...(input.provider !== undefined ? { provider: input.provider } : {}),
         system: DISTILL_SYSTEM_PROMPT,
-        prompt: buildDistillPrompt(states, material),
+        prompt: distillPrompt,
         schema: DISTILL_OUTPUT_SCHEMA,
         timeoutMs: input.timeoutMs,
       });

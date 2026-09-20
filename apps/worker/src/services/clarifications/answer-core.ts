@@ -67,6 +67,7 @@ import {
   formatAnswerLeftOutComment,
   formatClarificationAnswerComment,
   aLaterRunCanPickUpAskedRepositories,
+  type ClarificationAnswerSurfaceComment,
 } from "./comment-format.js";
 import {
   answerConnectedHookClarification,
@@ -90,6 +91,11 @@ import {
   findConnectedBoundActiveRunOwner,
 } from "../../db/repositories/active-runs.js";
 import { retireClarificationForGoneTicket } from "./retirement.js";
+import {
+  recordAnswerDelivery,
+  type AnswerDeliveryRecord,
+} from "../agent-visibility/index.js";
+import { createAuthRepository, getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 
 /** Re-exported under the name this cluster has always used. The number itself
  *  belongs to the contracts package, which is also what the request schema and
@@ -191,6 +197,23 @@ interface AnswerPersistence extends RepositoryAnswerPersistence {
   }): Promise<"retryable" | "exhausted" | "lost">;
   retireGoneTicket(row: HookClarificationRow): Promise<void>;
   markResumed(runId: string): Promise<void>;
+  /** Keep this arrival of the answer. Never fails a delivery: it returns an
+   *  outcome and logs its own losses. */
+  recordDelivery(delivery: AnswerDeliveryRecord): Promise<unknown>;
+  /** Whoever is behind a user id, for the ticket comment an MCP answer posts,
+   *  or null when the deployment cannot say. */
+  personLabel(userId: string): Promise<string | null>;
+}
+
+/**
+ * A label that is only the id again is no name a person would recognise, and
+ * an email address is not something to publish: the ticket may be a client's,
+ * and the person behind an MCP client never agreed to have their address
+ * posted there. Anonymous beats leaked.
+ */
+function namedPerson(label: string, userId: string): string | null {
+  const trimmed = label.trim();
+  return trimmed.length > 0 && trimmed !== userId && !trimmed.includes("@") ? trimmed : null;
 }
 
 /** The catalog as the answer reader and the decision want it, from whichever
@@ -323,6 +346,20 @@ async function withdrawTicketWhileQuestionWaits(input: {
 }
 
 /**
+ * Which channel this delivery came through, stated by that channel.
+ *
+ * NEVER GUESSED FROM A LABEL. An MCP client signs its answers "MCP
+ * <clientId>" and a dashboard user may be called anything, so a reader of the
+ * record, and the person reading the ticket comment, learn the truth only if
+ * the caller says it. The MCP surface carries the client and whoever is behind
+ * it, because the ticket comment names both.
+ */
+type AnswerClarificationSurface =
+  | { kind: "jira" }
+  | { kind: "dashboard" }
+  | { kind: "mcp"; clientId: string; userId: string | null };
+
+/**
  * Answer a pending clarification and resume its asking run, with the CAS and
  * retry semantics shared by every caller (dashboard and, later, Jira webhook).
  * Returns a tagged outcome instead of throwing HTTP errors so the transport
@@ -341,6 +378,8 @@ type AnswerClarificationInput = {
   row: HookClarificationRow;
   rawAnswer: string;
   actor: { id: string; label: string };
+  /** Where these words arrived from. */
+  surface: AnswerClarificationSurface;
   issueTracker: Pick<
     IssueTrackerAdapter,
     "fetchTicket" | "moveTicket" | "postComment" | "getCurrentUserAccountId"
@@ -383,6 +422,14 @@ export function answerClarificationAndResume(
       finishFailedResume({ db, settings: input.cancelSettings, ...failed }),
     retireGoneTicket: (row) => retireClarificationForGoneTicket(db, row),
     markResumed: (runId) => markRunResumed(db, runId),
+    recordDelivery: (delivery) => recordAnswerDelivery(delivery, { db }),
+    personLabel: async (userId) => {
+      try {
+        return namedPerson(await createAuthRepository(db).dashboardUserLabel(userId), userId);
+      } catch {
+        return null;
+      }
+    },
     repositoryCatalog: () => readRepositoryCatalogKeys(db),
     readWorkScope: (subjectKey) => readWorkScope(db, subjectKey),
     applyAnswerWorkScope: (plan) => applyAnswerWorkScopePlan(db, plan),
@@ -405,24 +452,125 @@ export function answerConnectedClarificationAndResume(
       finishConnectedFailedResume({ settings: input.cancelSettings, ...failed }),
     retireGoneTicket: retireConnectedClarificationForGoneTicket,
     markResumed: markConnectedRunResumed,
+    recordDelivery: (delivery) => recordAnswerDelivery(delivery),
+    personLabel: async (userId) => {
+      try {
+        return namedPerson(await getConnectedDashboardUserLabel(userId), userId);
+      } catch {
+        return null;
+      }
+    },
     repositoryCatalog: loadConnectedRepositoryCatalogKeys,
     readWorkScope: readConnectedWorkScope,
     applyAnswerWorkScope: applyConnectedAnswerWorkScopePlan,
   });
 }
 
+/**
+ * WHAT ARRIVED FROM A PERSON, filled in as this delivery goes, and written
+ * once when it is over.
+ *
+ * Written whatever the delivery then did: an answer that lost the CAS or whose
+ * ticket move failed still arrived, and "I answered three times and nothing
+ * happened" is exactly the question these rows exist to answer. The round's
+ * effects say what the record did with it.
+ */
+interface AnswerArrival {
+  /** False for words that never reached the question: an empty answer, and a
+   *  resume retry, which is our own redelivery of words already recorded. */
+  record: boolean;
+  authorDisplay: string;
+  authorCount: number | undefined;
+  reading: WorkScopeAnswerReading | null;
+  /** What the person was told, in the channel they answered through, and only
+   *  once it really reached them. */
+  note: string | null;
+}
+
 async function answerClarificationAndResumeWithPersistence(
   input: AnswerClarificationInput,
   persistence: AnswerPersistence,
 ): Promise<AnswerClarificationOutcome> {
+  const arrival: AnswerArrival = {
+    record: false,
+    authorDisplay: input.actor.label,
+    authorCount: input.answerAuthorCount,
+    reading: null,
+    note: null,
+  };
+  try {
+    return await deliverAnswer(input, persistence, arrival);
+  } finally {
+    if (arrival.record) {
+      // NEVER ABLE TO CHANGE WHAT THIS ANSWER DID. `recordAnswerDelivery`
+      // catches its own failures, and this catches whatever a persistence
+      // beyond it could still throw: the same status, the same resume, the
+      // same comments and the same reply, whatever the record of the arrival
+      // costs.
+      try {
+        await persistence.recordDelivery({
+          clarificationId: input.row.id,
+          runId: input.row.runId,
+          words: input.rawAnswer.trim(),
+          author: {
+            kind: (arrival.authorCount ?? 1) > 1 ? "several_people" : "person",
+            display: arrival.authorDisplay,
+          },
+          surface: input.surface.kind,
+          reading: arrival.reading,
+          note: arrival.note,
+        });
+      } catch (error) {
+        logger.warn(
+          {
+            runId: input.row.runId,
+            clarificationId: input.row.id,
+            err: (error as Error).message,
+          },
+          "clarification_answer_delivery_failed",
+        );
+      }
+    }
+  }
+}
+
+async function deliverAnswer(
+  input: AnswerClarificationInput,
+  persistence: AnswerPersistence,
+  arrival: AnswerArrival,
+): Promise<AnswerClarificationOutcome> {
   const { row, rawAnswer, actor, issueTracker } = input;
 
   const answer = rawAnswer.trim();
+  const isResumeRetry = row.status === "answered" && row.answer === answer;
+  // Whoever is behind an MCP client, where the deployment knows them: read
+  // once, and used both for the record of the arrival and for the ticket
+  // comment, so neither of them signs a person's answer with an OAuth client
+  // id alone.
+  const mcpPerson =
+    input.surface.kind === "mcp" && input.surface.userId
+      ? await persistence.personLabel(input.surface.userId)
+      : null;
+  const displayOf = (label: string) => (mcpPerson ? `${mcpPerson} (${label})` : label);
+
+  // AN ARRIVAL IS WHAT A PERSON SENT, whatever we then do with it.
+  //
+  // Set before the refusals below, because an answer too long to take, an
+  // answer that lost the race to another one and an answer to a question whose
+  // resume is already spent are exactly the deliveries a person comes looking
+  // for: they said something and nothing happened. The round shows each of
+  // them with no effects.
+  //
+  // A RESUME RETRY IS NOT AN ARRIVAL. The cron redelivers the stored answer to
+  // a run whose resume was lost; recording that as a delivery would credit the
+  // person who answered in the dashboard with a Jira delivery they never made,
+  // and count our retries as their words. Nor is empty text: nothing arrived.
+  arrival.record = answer.length > 0 && !isResumeRetry;
+  arrival.authorDisplay = displayOf(actor.label);
+
   if (!answer || answer.length > MAX_ANSWER_LENGTH) {
     return { kind: "invalid_answer" };
   }
-
-  const isResumeRetry = row.status === "answered" && row.answer === answer;
   if (row.status === RESUME_FAILED_STATUS) return { kind: "resume_terminal" };
   if (row.status !== "pending" && !isResumeRetry) {
     return { kind: "conflict" };
@@ -431,6 +579,7 @@ async function answerClarificationAndResumeWithPersistence(
   const answerer = isResumeRetry
     ? { id: row.answeredById ?? actor.id, label: row.answeredByLabel ?? actor.label }
     : actor;
+  arrival.authorDisplay = displayOf(answerer.label);
   // Which channel this answer came from, and it is the mark the composer put on
   // the actor rather than a guess: only the ticket path composes an answer out
   // of comments. Three things below read it, the reading, the record and the
@@ -524,6 +673,7 @@ async function answerClarificationAndResumeWithPersistence(
             ...(input.answerReadingDeps ? { deps: input.answerReadingDeps } : {}),
           })
         : undefined;
+  arrival.reading = answerReading ?? null;
   // NOT CONFIDENT MEANS ASK, NOT GUESS. Nothing is recorded, the run is not
   // resumed, the question stays pending, and the person is told what we read
   // and what reply ends it. The run waits until they answer or the question
@@ -541,11 +691,6 @@ async function answerClarificationAndResumeWithPersistence(
         "work_scope_answer_reading_unclear",
       );
     }
-    // Stored on every pass, because the reading may have changed: the same
-    // words read by the provider this time carry a different verdict than the
-    // deterministic stand-in did last time, and the row must hold the newest
-    // one. The write is a no-op against a row that is no longer pending.
-    await persistence.recordUnreadable(row.id, answer, answerReading);
     // AND NO TRAIL ROW, DELIBERATELY, WHICH IS A LOSS AND IS WRITTEN DOWN HERE
     // RATHER THAN LEFT TO BE REDISCOVERED.
     //
@@ -606,16 +751,37 @@ async function answerClarificationAndResumeWithPersistence(
     // still open belongs beside it. The caller gets the same words back, so a
     // person answering from the dashboard or an MCP client is told in the
     // surface they used and never has to go and find the ticket.
-    if (row.ticketKey && firstTelling) {
-      const ticketKey = row.ticketKey;
-      await issueTracker.postComment(ticketKey, confirm).catch((error: unknown) => {
-        logger.warn(
-          { ticketKey, runId: row.runId, error: (error as Error).message },
-          "work_scope_answer_reading_comment_failed",
-        );
-        return null;
-      });
+    const posted =
+      row.ticketKey && firstTelling
+        ? await issueTracker
+            .postComment(row.ticketKey, confirm)
+            .then(() => true)
+            .catch((error: unknown) => {
+              logger.warn(
+                { ticketKey: row.ticketKey, runId: row.runId, error: (error as Error).message },
+                "work_scope_answer_reading_comment_failed",
+              );
+              return false;
+            })
+        : null;
+    // TOLD MEANS TOLD, AND ONLY THEN IS IT WRITTEN DOWN.
+    //
+    // The reading used to be stored before the comment went out, so a Jira
+    // comment that failed to post made every later tick read as "already told"
+    // and a person who answers only in Jira was never told at all: the run sat
+    // out its expiry in front of somebody who had answered it.
+    //
+    // Stored on every later pass, because the reading may have changed: the
+    // same words read by the provider this time carry a different verdict than
+    // the deterministic stand-in did last time, and the row must hold the
+    // newest one. The write is a no-op against a row that is no longer
+    // pending.
+    if (posted !== false) {
+      await persistence.recordUnreadable(row.id, answer, answerReading);
     }
+    // What this delivery really told them: the ticket comment where it went
+    // out, and the reply on the channels that have a screen behind them.
+    arrival.note = posted === true || (posted === null && input.surface.kind !== "jira") ? confirm : null;
     return { kind: "answer_unclear", confirm };
   }
 
@@ -669,6 +835,11 @@ async function answerClarificationAndResumeWithPersistence(
     ticketComments,
     ticketCommentsCoverWindow,
   });
+  if (authorship.kind === "write" && authorship.authorCount !== undefined) {
+    // How many people really wrote these words, counted from the ticket rather
+    // than believed from the delivery.
+    arrival.authorCount = authorship.authorCount;
+  }
   if (authorship.kind === "hold") {
     // Nothing is wrong with the answer: what could not be done, right now, is
     // telling how many people wrote it. Fail the delivery the way a failed
@@ -696,12 +867,27 @@ async function answerClarificationAndResumeWithPersistence(
   // not the trace. Best-effort in the strongest sense, because a comment must
   // never fail an answer that is already committed. Safe against the comment
   // path reading it back: that path skips comments authored by the bot account.
-  if (row.ticketKey && !input.skipAnswerComment && !isResumeRetry) {
+  // The surface the caller stated, with the person behind an MCP client where
+  // the deployment knows them: the ticket used to say every answer came "in
+  // the dashboard", signed with an OAuth client id. An answer that arrived as
+  // a comment on this very ticket gets no trace at all, whoever asked for one:
+  // it would echo the person's own comment back at them.
+  const commentSurface: ClarificationAnswerSurfaceComment | null =
+    input.surface.kind === "mcp"
+      ? { kind: "mcp", clientId: input.surface.clientId, person: mcpPerson }
+      : input.surface.kind === "dashboard"
+        ? { kind: "dashboard" }
+        : null;
+  if (row.ticketKey && !input.skipAnswerComment && !isResumeRetry && commentSurface) {
     const ticketKey = row.ticketKey;
     await issueTracker
       .postComment(
         ticketKey,
-        formatClarificationAnswerComment({ answeredByLabel: answerer.label, answer }),
+        formatClarificationAnswerComment({
+          answeredByLabel: answerer.label,
+          answer,
+          surface: commentSurface,
+        }),
       )
       .catch((error: unknown) => {
         logger.warn(
@@ -829,16 +1015,18 @@ async function answerClarificationAndResumeWithPersistence(
   ]
     .filter((sentence): sentence is string => sentence !== undefined)
     .join("\n\n");
+  let postedToTheTicket = false;
   if (toTheTicket.length > 0 && row.ticketKey) {
     const ticketKey = row.ticketKey;
-    await issueTracker
+    postedToTheTicket = await issueTracker
       .postComment(ticketKey, toTheTicket)
+      .then(() => true)
       .catch((error: unknown) => {
         logger.warn(
           { ticketKey, runId: row.runId, error: (error as Error).message },
           "work_scope_answer_not_counted_comment_failed",
         );
-        return null;
+        return false;
       });
   }
 
@@ -894,6 +1082,17 @@ async function answerClarificationAndResumeWithPersistence(
   ]
     .filter((sentence): sentence is string => sentence !== undefined)
     .join("\n\n");
+  // What this delivery told the person who made it: the ticket comment for an
+  // answer that arrived as one, the reply for a channel with a screen behind
+  // it. A comment that failed to post claims nothing.
+  arrival.note =
+    input.surface.kind === "jira"
+      ? postedToTheTicket
+        ? toTheTicket
+        : null
+      : recordOutcome.length > 0
+        ? recordOutcome
+        : null;
   return { kind: "answered", row: answered, ...(recordOutcome ? { recordOutcome } : {}) };
 }
 

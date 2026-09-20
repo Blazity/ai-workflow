@@ -1,0 +1,47 @@
+[profile: Harness Profile: Claude]
+  profile                          91  profile ref=builtin-claude  "Harness Profile instructions"
+
+[repository: acme/api/AGENTS.md]
+  repository-file                  61  repository_file ref=acme/api/AGENTS.md  "Repository file AGENTS.md"
+
+[repository: Repository rules for acme/api]
+  repository-rules                 43  repository_rules ref=acme/api  "Repository rules from the catalog"
+
+[block: Block role and task]
+  authored:1                     6973  block_prompt  "Block prompt text"
+
+[runtime: Runtime data]
+  ticket                           96  ticket ref=AIW-512  "Ticket"
+  attachments                     192  attachment ref=AIW-512  "Ticket attachments"
+  description                     143  ticket ref=AIW-512  "Ticket description"
+  acceptance-criteria             104  ticket ref=AIW-512  "Acceptance criteria"
+  comments                         13  ticket ref=AIW-512  "Ticket comments"
+  comment:1                        76  ticket_comment ref=AIW-512 label=Anna Nowak  "Ticket comment 1"
+  comment:2                        76  ticket_comment ref=AIW-512 label=Piotr  "Ticket comment 2"
+  clarifications                   26  clarification  "Clarification answers"
+  clarification:1                 184  clarification ref=1 label=Anna Nowak  "Clarification round 1"
+  branch                           32  run  "Branch"
+  repository-map                   18  repository_catalog  "Repository map"
+  repository-map-workspace         22  repository_catalog  "Repositories in the workspace"
+  repository-map-workspace-rule    120  platform  "Repositories in the workspace: the rule"
+  repository-map-workspace:1      353  repository_catalog ref=github:acme/api  "Repository github:acme/api"
+  repository-map-workspace:2      199  repository_catalog ref=github:acme/web  "Repository github:acme/web"
+  repository-map-related           48  repository_catalog  "Related repositories"
+  repository-map-related-rule     134  platform  "Related repositories: the rule"
+  repository-map-related:1        256  repository_catalog ref=github:acme/sdk  "Repository github:acme/sdk"
+  repository-map-settled           43  repository_catalog  "Repositories already decided"
+  repository-map-settled-rule     174  platform  "Repositories already decided: the rule"
+  repository-map-settled:1        178  repository_catalog ref=github:acme/infra  "Repository github:acme/infra"
+  repository-map-settled:2        238  repository_catalog ref=github:acme/legacy-auth  "Repository github:acme/legacy-auth"
+  repository-map-rest              25  repository_catalog  "The rest of the catalog"
+  repository-map-rest-rule         96  platform  "The rest of the catalog: the rule"
+  repository-map-rest:1            60  repository_catalog ref=github:acme/docs  "Repository github:acme/docs"
+  remediation-framing             391  platform  "Existing pull request: review feedback is the task"
+  pr-comments:1                   116  pull_request ref=github:acme/api  "Pull request comments on github:acme/api"
+  merge-conflicts:1               137  pull_request ref=github:acme/api  "Merge conflicts on github:acme/api"
+  merge-conflicts-rule:1          114  platform  "How to finish the merge"
+  pre-sandbox:1                   180  pre_sandbox  "Pre-sandbox: Repositories left out"
+  no-change-retry                 178  research_note  "The previous pass wrongly concluded no change"
+  no-change-retry-guidance        178  platform  "The review feedback is the task"
+  repository-access-protocol     1646  platform  "Repository Access Protocol"
+  resolution-check                  0  platform  "Resolution Check" WITHHELD (pr_feedback_present)

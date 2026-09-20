@@ -1,5 +1,6 @@
 /** Stable Drizzle Kit and runtime schema barrel. */
 export * from "./schema/active-runs.js";
+export * from "./schema/agent-visibility.js";
 export * from "./schema/definitions.js";
 export * from "./schema/dispatch.js";
 export * from "./schema/harness.js";
