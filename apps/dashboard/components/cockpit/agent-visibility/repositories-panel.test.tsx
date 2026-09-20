@@ -25,6 +25,7 @@ import {
   serveFixture,
   type FixtureStore,
 } from "@/lib/agent-visibility/test-support/fixtures";
+import { CALL_LLM_DEFAULT_MODEL } from "@shared/harness";
 import { installBrowser } from "@/lib/agent-visibility/test-support/browser";
 
 import { IDLE_POLL_MS } from "@/lib/use-live-poll";
@@ -181,7 +182,7 @@ test("a round shows each delivery: the words, who, where, how it was read and wh
   assert.match(body, /the web one probably/);
   assert.match(body, new RegExp(`${FILIP} · via Jira`));
   assert.match(body, /Unclear\. Best guess: "They may mean github:acme\/shop-web\."/);
-  assert.match(body, /read by claude-haiku-4-5/);
+  assert.ok(body.includes(`read by ${CALL_LLM_DEFAULT_MODEL}`));
   assert.match(body, /read without a model \(the provider could not be reached\)/);
   assert.match(body, /We posted back:/);
   assert.match(body, /I could not tell which repository you meant\. Did you mean github:acme\/shop-web\?/);

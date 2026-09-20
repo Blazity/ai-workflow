@@ -22,6 +22,7 @@ import {
   serveFixture,
   type FixtureStore,
 } from "@/lib/agent-visibility/test-support/fixtures";
+import { DEFAULT_MODELS } from "@shared/harness";
 import { installBrowser } from "@/lib/agent-visibility/test-support/browser";
 
 import { LIVE_POLL_MS } from "@/lib/use-live-poll";
@@ -287,7 +288,7 @@ test("the harness facts say what else went with the prompt", async (t) => {
   await settle();
 
   const body = text(harness.root);
-  assert.match(body, /claude-opus-4-1-20250805/);
+  assert.ok(body.includes(DEFAULT_MODELS.claude));
   assert.match(body, /Skills delivered \(1\) repository-map-check v2/);
   assert.match(body, /Run data in this prompt included/);
   assert.match(body, /Sources the compiler could not resolve/);

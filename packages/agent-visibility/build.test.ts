@@ -146,7 +146,10 @@ test("harness extras record hashes, skills, the pinned profile and its switches"
   const { index } = await buildAgentBriefing(input, { sanitize: noSecrets });
   assert.deepEqual(index.harness, {
     provider: "claude",
-    model: "claude-sonnet-4-5-20250929",
+    // The send's own model, carried through unchanged, read from the input
+    // rather than copied here: this package may not import the model catalog,
+    // so a second literal would be a second thing to keep true.
+    model: input.harness.model,
     outputSchema: { sha256: sha('{"type":"object"}') },
     skills: [{ id: "review-checklist", version: 3, sha256: null }],
     skillCount: 1,

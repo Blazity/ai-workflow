@@ -37,6 +37,7 @@ import {
   type MissingBriefingReason,
   type VisibilitySanitizer,
 } from "@shared/agent-visibility";
+import { CALL_LLM_DEFAULT_MODEL, DEFAULT_MODELS } from "@shared/harness";
 import type {
   LiveRunsResponse,
   RunDetailResponse,
@@ -341,7 +342,7 @@ function repositoryContext(): NonNullable<AgentBriefingBuildInput["repositoryCon
 
 const HARNESS: AgentBriefingBuildInput["harness"] = {
   provider: "claude",
-  model: "claude-opus-4-1-20250805",
+  model: DEFAULT_MODELS.claude,
   outputSchema: '{"type":"object","required":["status"]}',
   skills: [{ id: "repository-map-check", version: 2 }],
   profile: { id: "builtin-claude", version: 7 },
@@ -383,7 +384,7 @@ function discoveryInput(runId: string, nodeId: string): AgentBriefingBuildInput 
   ];
   return {
     identity: identity(runId, nodeId, 1, "discovery", "planning_agent", "2026-09-18T08:59:40.000Z"),
-    harness: { provider: "claude", model: "claude-haiku-4-5", outputSchema: '{"type":"object"}', profile: null, wrapperScript: null },
+    harness: { provider: "claude", model: CALL_LLM_DEFAULT_MODEL, outputSchema: '{"type":"object"}', profile: null, wrapperScript: null },
     sections: [
       {
         kind: "discovery",
@@ -473,7 +474,7 @@ function passInput(pass: 1 | 2 | 3): AgentBriefingBuildInput {
 function llmInput(nodeId: string): AgentBriefingBuildInput {
   return {
     identity: identity(STATES_RUN, nodeId, 1, "llm", "call_llm", "2026-09-19T08:40:00.000Z"),
-    harness: { provider: "claude", model: "claude-haiku-4-5", outputSchema: null, profile: null, wrapperScript: null },
+    harness: { provider: "claude", model: CALL_LLM_DEFAULT_MODEL, outputSchema: null, profile: null, wrapperScript: null },
     sections: [
       { kind: "system", title: "System prompt", text: "You summarize tickets for a release note." },
       { kind: "block", title: "Prompt", text: `Summarize ${FIXTURE_TICKET} in one sentence.` },
@@ -572,7 +573,7 @@ const reading = (outcome: Record<string, unknown>, readAt: string, readBy: "mode
   version: 1,
   outcome: outcome as { kind: string },
   readBy,
-  ...(readBy === "model" ? { model: "claude-haiku-4-5" } : {}),
+  ...(readBy === "model" ? { model: CALL_LLM_DEFAULT_MODEL } : {}),
   readAt,
 });
 
@@ -1183,7 +1184,7 @@ function runRow(run: FixtureRun, started: number): TicketRunsResponse["runs"][nu
     statusReason: run.status === "failed" ? "The implementation attempt failed before its prompt went out." : null,
     ticket: FIXTURE_TICKET,
     actor: "ai-workflow",
-    model: "claude-opus-4-1-20250805",
+    model: DEFAULT_MODELS.claude,
     startedAtMin: started,
     duration: 2_950,
     tokens: 184_000,

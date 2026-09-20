@@ -46,6 +46,16 @@ export const COMMENT_ONE = "Filip: it started after the last deploy.";
 export const COMMENT_TWO = "Anna: reproduced on iOS 18.";
 export const RUNTIME_TEXT = `${RULE}\n\n${TICKET}\n\n${COMMENT_ONE}\n\n${COMMENT_TWO}`;
 
+/**
+ * DELIBERATELY NOT A PRODUCT MODEL ID. This package may import `@shared/contracts`
+ * and nothing else, so it cannot read the model catalog, and a real identifier
+ * written here by hand would be a second place that has to change on the day a
+ * model is renamed, with nothing to say it had gone stale. Nothing these
+ * fixtures prove depends on the string: the record carries whatever the send
+ * reports.
+ */
+const FIXTURE_MODEL = "fixture-model-v1";
+
 /** One planning pass: profile, a repository instruction file, memory, the
  *  block prompt and runtime data whose parts carry their origins. */
 export function planningPassInput(): AgentBriefingBuildInput {
@@ -63,11 +73,11 @@ export function planningPassInput(): AgentBriefingBuildInput {
     },
     harness: {
       provider: "claude",
-      model: "claude-sonnet-4-5-20250929",
+      model: FIXTURE_MODEL,
       outputSchema: '{"type":"object"}',
       skills: [{ id: "review-checklist", version: 3 }],
       profile: { id: "builtin-claude", version: 7 },
-      wrapperScript: "#!/bin/sh\nclaude --print --model claude-sonnet-4-5-20250929\n",
+      wrapperScript: `#!/bin/sh\nclaude --print --model ${FIXTURE_MODEL}\n`,
       includeWorkflowData: true,
       includeRepositoryInstructions: true,
     },

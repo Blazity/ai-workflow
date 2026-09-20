@@ -11,7 +11,7 @@
 /** Bumped when the meaning of a stored or served shape changes. A reader given
  *  a higher number says the record was written by a newer version instead of
  *  guessing at it (`readVisibilityRecord`). */
-export const AGENT_VISIBILITY_SCHEMA_VERSION = 1;
+export const AGENT_VISIBILITY_SCHEMA_VERSION = 1 as const;
 
 /** The plan's 512 KB per briefing, applied to the stored section texts. The
  *  caller passes the budget in; this is the value it passes by default. */
