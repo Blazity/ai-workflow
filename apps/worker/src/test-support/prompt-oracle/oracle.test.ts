@@ -66,17 +66,15 @@ function mismatchesOfRaw<T>(
   });
 }
 
-/** Every byte outside the repository section, held to the base commit. */
+/** Every byte outside the repository section and the two sentences stage 7
+ *  rewrote, held to the base commit. */
 function mismatchesOf<T>(
   rows: MatrixRow<T>[],
   oracle: (input: T) => string,
   current: (input: T) => string,
 ): string[] {
-  return mismatchesOfRaw(
-    rows,
-    (input) => withoutRepositorySection(oracle(input)),
-    (input) => withoutRepositorySection(current(input)),
-  );
+  const pinned = (text: string) => withoutStageSevenRewrites(withoutRepositorySection(text));
+  return mismatchesOfRaw(rows, (input) => pinned(oracle(input)), (input) => pinned(current(input)));
 }
 
 /**
@@ -126,6 +124,44 @@ const midRun = (additions: readonly PreSandboxPromptAddition[] | undefined) =>
 function withoutRepositorySection(text: string): string {
   return [/\n## Selected Repositories\n[\s\S]*?(?=\n## |$)/, /\n## Repositories\n[\s\S]*?(?=\n## |$)/]
     .reduce((carried, pattern) => carried.replace(pattern, "\n"), text);
+}
+
+/**
+ * THE TWO SENTENCES STAGE 7 REWROTE, removed from both sides.
+ *
+ * Same rule as the repository section above: what somebody meant to change is
+ * excised on both sides, so every other byte stays pinned to the base commit.
+ * These are narrower, one paragraph each, because that is all that changed.
+ *
+ * 1. The clarification budget note. One sentence used to explain three
+ *    different cuts, and it was false for two of them: it told the model older
+ *    rounds had been dropped when the truth was that the newest round's own
+ *    question and answer had been shortened in place. It now says which
+ *    happened and how much. What the budget KEEPS is byte for byte what it
+ *    kept, because the reserve it is paid from stayed at the old note's length;
+ *    only the note itself differs, which is why this excision can be one
+ *    paragraph rather than the whole section.
+ * 2. "repeating the request ends the run", on a closed expansion. True of a
+ *    loop that counted absorbed requests and then failed; false once a spent
+ *    corrective pass makes the run plan with what it holds instead. A prompt
+ *    that threatens a consequence the run does not carry out is the thing this
+ *    stage exists to stop.
+ *
+ * What these DO still pin: that each sentence sits in exactly one place. Both
+ * patterns are anchored to their own paragraph, so a change that moved the note
+ * somewhere else, or wrote it twice, would leave the second copy in the
+ * comparison.
+ */
+function withoutStageSevenRewrites(text: string): string {
+  return text
+    .replace(
+      /\[(?:Older clarification rounds omitted to fit the prompt budget\.|Prompt budget: [^\]]*)\]/,
+      "[clarification budget note]",
+    )
+    .replace(
+      /No further repository will be attached to this workspace: requesting one again changes nothing[^\n]*/,
+      "No further repository will be attached to this workspace: <closed>",
+    );
 }
 
 /** The base research prompt: the loop's notes were additions then, pushed after

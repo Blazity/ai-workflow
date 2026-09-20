@@ -34,6 +34,9 @@ import type { AgentKind } from "../sandbox/agents/index.js";
 import type { IssueTrackerMoveTarget } from "../adapters/issue-tracker/types.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import { selectWorkItems } from "./helpers/review-ledger.js";
+// Type only: the values live behind the deferred import every other use of this
+// module goes through, because workflow scope may not pull it in at the top.
+import type { MissingRepository } from "./repository-discovery/runner.js";
 import { executionError, WORKSPACE_GATE_NOT_RECORDED_PREFIX, type StepsRecord } from "@shared/workflow-graph";
 import { formatExecutionErrorForUser, WorkflowExecutionError } from "./helpers/execution-error.js";
 import { executeV2Graph, V2_PRODUCTION_SCHEDULER_BOUNDS, type V2BlockExecutor, type V2SchedulerCheckpoint, type V2SchedulerHooks } from "@shared/workflow-graph";
@@ -2345,23 +2348,46 @@ async function agentWorkflowBody(
         // one named function so a test can drive them. See its own comment.
         return discoveryFailureToExecutionError(decision, phase);
       };
+      /**
+       * What the planning loop does after a repository request, and nothing
+       * about how it is done.
+       *
+       * `restart` used to be the only answer a refused request could get, and a
+       * restart is a whole research pass: the model asked, the run refused,
+       * told the model, and paid for another pass to be asked the same thing.
+       * Five of those killed a production run after eleven minutes with nothing
+       * to show. `plan_within_the_record` is the answer that ends that: the run
+       * keeps the plan it can write and says what it could not do.
+       */
+      type ExpansionOutcome =
+        | { kind: "exit"; result: BlockExecutionResult }
+        | { kind: "restart" }
+        | { kind: "plan_within_the_record"; missing: MissingRepository[] };
       const expandResearchWorkspace = async (
         requests: NonNullable<ResearchResult["repositories"]>,
         execution?: BlockInvocationContext,
-      ): Promise<BlockExecutionResult | null> => {
+      ): Promise<ExpansionOutcome> => {
+        const exit = (result: BlockExecutionResult): ExpansionOutcome => ({
+          kind: "exit",
+          result,
+        });
         // Defense-in-depth: a plan_approved run resumes a frozen approved scope,
         // so repository expansion must never widen it regardless of what the model
         // requests.
         if (ctx.entry.kind === "plan_approved") {
-          return executionError(
-            "repository expansion is not allowed: the repository scope is fixed by the approved plan",
-            { category: "engine", phase: "research" },
+          return exit(
+            executionError(
+              "repository expansion is not allowed: the repository scope is fixed by the approved plan",
+              { category: "engine", phase: "research" },
+            ),
           );
         }
         if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
-          return executionError(
-            "repository expansion requires a trusted V2 research workspace",
-            { category: "sandbox", phase: "research" },
+          return exit(
+            executionError(
+              "repository expansion requires a trusted V2 research workspace",
+              { category: "sandbox", phase: "research" },
+            ),
           );
         }
         const {
@@ -2501,26 +2527,36 @@ async function agentWorkflowBody(
           // that froze no record: there is nothing to name the question against
           // and nothing an answer could be written to, which is what every run
           // did before the record existed.
-          return repositoryQuestions.raise(
-            action.questions,
-            record && verdict.kind === "clarification_needed" && verdict.workScopeAsk
-              ? {
-                  subjectKey: record.subjectKey,
-                  askedRepositories: verdict.workScopeAsk,
-                }
-              : null,
+          return exit(
+            repositoryQuestions.raise(
+              action.questions,
+              record && verdict.kind === "clarification_needed" && verdict.workScopeAsk
+                ? {
+                    subjectKey: record.subjectKey,
+                    askedRepositories: verdict.workScopeAsk,
+                  }
+                : null,
+            ),
           );
         }
         if (action.kind === "fail") {
-          return executionError(action.message, {
-            category: "engine",
-            phase: "research",
-          });
+          return exit(
+            executionError(action.message, {
+              category: "engine",
+              phase: "research",
+              // The authored refusal is the message, not a snippet of it. Passed
+              // only as `detail` it became a 160-character both-ends clamp of
+              // itself behind the generic engine sentence, which is how a person
+              // read the reason with the repository and the way back cut out of
+              // its middle.
+              message: action.message,
+            }),
+          );
         }
         // A round that advanced is a round worth reporting; a request absorbed
         // after expansion closed changes nothing, so it emits nothing.
         const advanced = expansionState.rounds > ctx.repositoryExpansion.rounds;
-        if (action.kind === "proceed") {
+        if (action.kind === "proceed" || action.kind === "plan_without") {
           // Research either asked only for repositories the workspace already
           // holds, or asked for more context without naming a repository at
           // all: nothing to clone, and no question a human could usefully
@@ -2537,7 +2573,32 @@ async function agentWorkflowBody(
               cloneDurationMs: 0,
             });
           }
-          return null;
+          if (action.kind === "proceed") return { kind: "restart" };
+          // The corrective pass is spent. What the run could not do is composed
+          // from the sentences it ALREADY wrote about these repositories, so the
+          // plan, the ticket comment and the prompt the model read all carry one
+          // account of one refusal; the agent's own reason for wanting each is
+          // read off the request it just made.
+          const wanted = new Map(
+            requests.map(
+              (request): [string, string] => [
+                `${request.provider}:${request.repoPath}`,
+                request.rationale,
+              ],
+            ),
+          );
+          const missing: MissingRepository[] = [];
+          for (const refusal of expansionRefusals) {
+            const rationale = wanted.get(refusal.repositoryKey);
+            if (rationale === undefined) continue;
+            missing.push({
+              repositoryKey: refusal.repositoryKey,
+              reason: refusal.reason,
+              sentence: refusal.sentence,
+              ...(rationale.length > 0 ? { rationale } : {}),
+            });
+          }
+          return { kind: "plan_within_the_record", missing };
         }
         const attached = await attachResearchRepositoriesStep(
           ctx.sandboxId,
@@ -2575,7 +2636,7 @@ async function agentWorkflowBody(
           totalCount: repositories.length,
           cloneDurationMs: attached.cloneDurationMs,
         });
-        return null;
+        return { kind: "restart" };
       };
       const hydrateDiscoveredWorkspace = async (
         sandboxId: string,
@@ -2926,6 +2987,10 @@ async function agentWorkflowBody(
                 refusals: expansionRefusals,
                 // Closed by the bound or by a human; either reads the same here.
                 expansionClosed: Boolean(ctx.repositoryExpansion.expansionClosed),
+                // Set by the restart this run already spent, so the pass that
+                // reads it IS the last one a request buys. Told before it binds:
+                // the run stops paying for requests on the pass after this one.
+                lastExpansionPass: ctx.repositoryExpansion.expansionRestartUsed === true,
                 ledgerCorrectionNote,
                 noChangeRetry: noChangeRetryUsed,
               },
@@ -3047,15 +3112,57 @@ async function agentWorkflowBody(
               execution,
             );
             if (!researchResult.ok) return agentProtocolBlockError(researchResult);
-            const research = researchResult.value;
+            let research = researchResult.value;
 
             if (research.status === "repositories_needed") {
               const expansion = await expandResearchWorkspace(
                 research.repositories ?? [],
                 execution,
               );
-              if (expansion) return expansion;
-              continue;
+              if (expansion.kind === "exit") return expansion.result;
+              if (expansion.kind === "restart") continue;
+              // THE LOOP STOPS HERE, AND THE RUN DOES NOT. This run has already
+              // spent its one corrective pass on a request it could not honour,
+              // and another pass would be the eleven minutes again. So the plan
+              // this pass wrote is the plan, with what the run could not do
+              // written under it in the run's own words.
+              const { missingRepositoriesFailure, missingRepositoriesPlanSection } =
+                await import("./repository-discovery/runner.js");
+              const missingSection = missingRepositoriesPlanSection(
+                expansion.missing,
+                repositoryRecoveryNotes,
+              );
+              console.warn(
+                JSON.stringify({
+                  event: "research_planned_within_the_record",
+                  runId: workflowRunId,
+                  missing: expansion.missing.map((one) => one.repositoryKey),
+                  hasPlan: research.body.length > 0,
+                }),
+              );
+              if (research.body.length === 0) {
+                // Nothing to plan with and nothing to ship. Implementation would
+                // receive a plan that is only our own note about what is
+                // missing, which is how a run opens a pull request nobody asked
+                // for. The one honest end, with the whole reason and the way
+                // back as the message rather than a clamped snippet of it.
+                const nothingToPlanWith = missingRepositoriesFailure(
+                  expansion.missing,
+                  repositoryRecoveryNotes,
+                );
+                return executionError(nothingToPlanWith, {
+                  category: "engine",
+                  phase: "research",
+                  message: nothingToPlanWith,
+                });
+              }
+              research = {
+                ...research,
+                status: "completed",
+                body: missingSection
+                  ? `${research.body}\n\n${missingSection}`
+                  : research.body,
+              };
             }
 
             if (research.status === "clarification_needed") {

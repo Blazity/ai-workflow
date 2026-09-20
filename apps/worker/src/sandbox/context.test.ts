@@ -1397,7 +1397,11 @@ describe("clarifications section", () => {
     });
 
     expect(result).toContain("## Clarifications (Q&A)");
-    expect(result).toContain("[Older clarification rounds omitted to fit the prompt budget.]");
+    // The note names what was really cut. `sandbox/clarification-budget.test.ts`
+    // owns the three ways it can read.
+    expect(result).toContain(
+      "[Prompt budget: the oldest of this work's 3 clarification rounds is not here. Every round below is complete.]",
+    );
     // Newest rounds always present, oldest dropped first.
     expect(result).toContain("Round 3 question?");
     expect(result).toContain("Round 2 question?");
@@ -1419,7 +1423,7 @@ describe("clarifications section", () => {
 
     expect(result).toContain("Q1?");
     expect(result).toContain("Q2?");
-    expect(result).not.toContain("[Older clarification rounds omitted to fit the prompt budget.]");
+    expect(result).not.toContain("[Prompt budget:");
   });
 
   it("hard-truncates a single oversized round rather than dropping the newest", () => {
@@ -1433,7 +1437,10 @@ describe("clarifications section", () => {
     });
 
     expect(result).toContain("## Clarifications (Q&A)");
-    expect(result).toContain("[Older clarification rounds omitted to fit the prompt budget.]");
+    // One round, cut in place. Saying "older rounds omitted" here was false
+    // twice over: nothing older exists, and what is below is not whole.
+    expect(result).toContain("the round below is shortened");
+    expect(result).toContain("No round is missing.");
     // The newest round's answer is still present (partially), never dropped.
     expect(result).toContain("Answer (by dan): xxx");
     // The oversized answer must not survive in full.
@@ -1696,6 +1703,9 @@ describe("our rules, apart from the data they govern", () => {
     priorRequests: [{ provider: "github", repoPath: "acme/web", rationale: "the web client" }],
     refusals: [{ repositoryKey: "github:acme/legacy", sentence: "github:acme/legacy: excluded." }],
     expansionClosed: true,
+    // Always true beside a closed expansion: closing by the bound goes through
+    // the one corrective restart, so this is the shape a run really sends.
+    lastExpansionPass: true,
     ledgerCorrectionNote: null,
     noChangeRetry: true,
   };
@@ -1804,8 +1814,11 @@ describe("our rules, apart from the data they govern", () => {
     "Answer every alias in this list through the `reviewThreads` field of your output.",
     "Leave them out of `reviewThreads`.",
     "Continue the same research; do not restart from assumptions.",
-    "requesting one again changes nothing, and repeating the request ends the run.",
+    "requesting one again changes nothing.",
     "Plan with the repositories already attached.",
+    // The only rule here that costs the model a pass, so it is the one that
+    // must never go out inside the data it governs.
+    "Another `repositories_needed` result will not run research again",
     "Treat addressing every point of that review feedback as the task",
   ];
 
@@ -1838,6 +1851,7 @@ describe("our rules, apart from the data they govern", () => {
       "refused-requests",
       "refusal:1",
       "expansion-closed",
+      "expansion-last-pass",
       "no-change-retry",
     ]);
     // The repository the map describes is a catalog fact, attributed to the

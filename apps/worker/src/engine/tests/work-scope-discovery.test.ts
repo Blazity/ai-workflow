@@ -1055,7 +1055,11 @@ describe("a subject whose selection question has already been answered", () => {
       "the expansion path computes the recovery sentence and throws it away again",
     ).toBe(true);
     expect(
-      workflow.split("repositoryRecoveryNotes,").length - 1,
+      // Anchored on the analysis report's own shape rather than on a bare
+      // count: the expansion loop reads these notes elsewhere too now (the
+      // plan's account of the repositories it could not use), and a count
+      // would go green on the wrong line.
+      workflow.match(/leftOutRepositories,\s*repositoryRecoveryNotes,/g)?.length ?? 0,
       "a research analysis report is built without the sentence saying what to do about it",
     ).toBe(2);
   });

@@ -9,6 +9,7 @@ import {
   isExpansionLimitClarification,
   isRefusalAnswer,
   isRepositoryExpansionClarification,
+  missingRepositoriesFailure,
   refusalNamesOneOfSeveral,
   refusalNamesRepositories,
   parseRepositoryExpansionAnswer,
@@ -17,6 +18,7 @@ import {
   type RepositoryExpansionState,
 } from "./runner.js";
 import type { RepositoryCatalogEntry } from "./catalog.js";
+import type { WorkScopeRefusalReason } from "@shared/contracts";
 
 describe("repository discovery harness protocol", () => {
   it("uses a strict bounded output schema", () => {
@@ -1106,7 +1108,7 @@ describe("decideRepositoryExpansion", () => {
       });
     });
 
-    it("counts an all-attached request and keeps researching", () => {
+    it("counts an all-attached request and keeps researching, once", () => {
       const decision = decideRepositoryExpansion({
         origin: "model",
         verdict: { kind: "already_attached" },
@@ -1119,6 +1121,9 @@ describe("decideRepositoryExpansion", () => {
         rounds: 1,
         priorRequests: [request],
         allAttachedRequests: 2,
+        // The pass this restart buys is the only one a request that attached
+        // nothing gets in the whole run.
+        expansionRestartUsed: true,
       });
     });
 
@@ -1149,6 +1154,7 @@ describe("decideRepositoryExpansion", () => {
         rounds: 1,
         priorRequests: [],
         allAttachedRequests: 1,
+        expansionRestartUsed: true,
       });
     });
 
@@ -1209,20 +1215,28 @@ describe("decideRepositoryExpansion", () => {
           // the run keeps going. The only thing counted is the absorbed
           // request, which is what bounds the passes it can buy.
           expect(decision.action).toEqual({ kind: "proceed" });
-          expect(decision.state).toEqual({ ...closed, closedRequests: 1 });
+          expect(decision.state).toEqual({
+            ...closed,
+            closedRequests: 1,
+            expansionRestartUsed: true,
+          });
         }
       },
     );
 
     it.each(["bound", "human"] as const)(
-      "ends the run on the second absorbed request (closed by %s)",
+      "stops re-running research on the second absorbed request (closed by %s)",
       (closedBy) => {
+        // It used to end the RUN here. A run that dies still owes the person
+        // the plan they asked for, and the model had already written one for
+        // the repositories it does hold, so what ends is the loop.
         const closed = {
           rounds: 3,
           priorRequests: [],
           allAttachedRequests: 3,
           expansionClosed: closedBy,
           closedRequests: 1,
+          expansionRestartUsed: true,
         };
 
         const decision = decideRepositoryExpansion({
@@ -1232,16 +1246,8 @@ describe("decideRepositoryExpansion", () => {
           requests: [request],
         });
 
-        expect(decision.action.kind).toBe("fail");
-        if (decision.action.kind === "fail") {
-          expect(decision.action.message).toContain("kept asking for repositories");
-          // The bound the message's own comment states. It moved from 200 when
-        // the branch that does not name the Repositories page started naming a
-        // route instead of saying "attach it", which was a shorter way of
-        // telling the person nothing.
-        expect(decision.action.message.length).toBeLessThanOrEqual(290);
-        }
-        expect(decision.state).toEqual(closed);
+        expect(decision.action).toEqual({ kind: "plan_without" });
+        expect(decision.state).toEqual({ ...closed, closedRequests: 2 });
       },
     );
 
@@ -1264,53 +1270,28 @@ describe("decideRepositoryExpansion", () => {
       expect(decision.state).toEqual(closed);
     });
 
-    it("fails on a missing repository when a human closed expansion", () => {
+    it("asks nobody again when a human closed expansion, and restarts once", () => {
       // The human said there are no further repositories, so re-asking them the
-      // same question is exactly the loop this fix removed.
+      // same question is the loop this fix removed. The pass is granted once so
+      // the model reads the closed-expansion note, and never twice.
       const closed = state({ rounds: 2, expansionClosed: "human" });
 
-      const decision = decideRepositoryExpansion({
+      const first = decideRepositoryExpansion({
         origin: "model",
         verdict: { kind: "clarification_needed", questions: limitQuestions },
         state: closed,
         requests: [request],
       });
+      expect(first.action).toEqual({ kind: "proceed" });
+      expect(first.state.expansionRestartUsed).toBe(true);
 
-      expect(decision.action.kind).toBe("fail");
-      if (decision.action.kind === "fail") {
-        expect(decision.action.message).toContain("gitlab:acme/shared/contracts");
-        // The bound the message's own comment states. It moved from 200 when
-        // the branch that does not name the Repositories page started naming a
-        // route instead of saying "attach it", which was a shorter way of
-        // telling the person nothing.
-        expect(decision.action.message.length).toBeLessThanOrEqual(290);
-      }
-      expect(decision.state).toEqual(closed);
-    });
-
-    it("names the first repository in full and counts the rest", () => {
-      const decision = decideRepositoryExpansion({
+      const second = decideRepositoryExpansion({
         origin: "model",
-        verdict: { kind: "attach", repositories: [fresh] },
-        state: state({ expansionClosed: "human" }),
-        requests: [
-          request,
-          { provider: "github", repoPath: "acme/another-service", rationale: "x" },
-          { provider: "github", repoPath: "acme/third-service", rationale: "y" },
-        ],
+        verdict: { kind: "clarification_needed", questions: limitQuestions },
+        state: first.state,
+        requests: [request],
       });
-
-      expect(decision.action.kind).toBe("fail");
-      if (decision.action.kind === "fail") {
-        // A truncated repository path is not something a reader can act on, so
-        // the first identity is always whole and the rest are counted.
-        expect(decision.action.message).toContain("gitlab:acme/shared/contracts and 2 more");
-        // The bound the message's own comment states. It moved from 200 when
-        // the branch that does not name the Repositories page started naming a
-        // route instead of saying "attach it", which was a shorter way of
-        // telling the person nothing.
-        expect(decision.action.message.length).toBeLessThanOrEqual(290);
-      }
+      expect(second.action).toEqual({ kind: "plan_without" });
     });
   });
 
@@ -1608,34 +1589,26 @@ describe("decideRepositoryExpansion", () => {
       expect(repeated.state.expansionClosed).toBe("human");
       expect(repeated.state.rounds).toBe(0);
 
-      // The pass after that still needs it, which ends the run with a message
-      // that says why and what to do.
+      // The pass after that still needs it. That corrective pass is spent, so
+      // the loop stops and the run plans with what it holds; what it could not
+      // do is said in the plan and on the ticket
+      // (`missingRepositoriesPlanSection`), not by killing the run.
       const closedPass = modelPass(repeated.state, [service, contracts]);
-      expect(closedPass.action.kind).toBe("fail");
-      if (closedPass.action.kind !== "fail") return;
-      expect(closedPass.action.message).toContain("still needs github:acme/private");
-      expect(closedPass.action.message).toContain("which this run cannot use");
-      expect(closedPass.action.message).toContain(
-        "Enable it on the Repositories page and start a new run.",
-      );
-      expect(closedPass.action.message.length).toBeLessThanOrEqual(200);
+      expect(closedPass.action).toEqual({ kind: "plan_without" });
     });
 
-    it("ends a closed run on the repeated request instead of asking again", () => {
+    it("stops re-running research on the repeated request instead of asking again", () => {
       // The bound closed expansion after the person was asked once, so every
       // pass since carried the "expansion closed" note. A repeated request for
-      // the repository they were asked about has nothing new to ask.
+      // the repository they were asked about has nothing new to ask, and after
+      // the one corrective pass it has nothing to buy either.
       const asked = modelPass(state(), [service]);
       const closed = { ...asked.state, expansionClosed: "bound" as const };
 
-      const decision = modelPass(closed, [service]);
+      const corrective = modelPass(closed, [service]);
+      expect(corrective.action).toEqual({ kind: "proceed" });
 
-      expect(decision.action.kind).toBe("fail");
-      if (decision.action.kind !== "fail") return;
-      expect(decision.action.message).toContain("still needs github:acme/private");
-      expect(decision.action.message).toContain(
-        "Enable it on the Repositories page and start a new run.",
-      );
+      expect(modelPass(corrective.state, [service]).action).toEqual({ kind: "plan_without" });
     });
 
     it("still asks about a different unavailable repository", () => {
@@ -1880,103 +1853,85 @@ describe("decideRepositoryExpansion", () => {
       });
     });
 
-    it("advises enabling a repository the run cannot use even when nobody was asked about it", () => {
-      const decision = modelPass(state({ expansionClosed: "human" }), [service]);
-
-      expect(decision.action.kind).toBe("fail");
-      if (decision.action.kind !== "fail") return;
-      expect(decision.action.message).toBe(
-        "The agent still needs github:acme/private, which this run cannot use." +
-          " Enable it on the Repositories page and start a new run.",
-      );
-    });
-
-    // Production, ten minutes after the round before this one. The run asked
-    // "Research requested github:blazity/ai-workflow, which this run cannot use.
-    // To use it, enable it on the Repositories page and start a new run.", the
-    // person answered "none", the agent could not plan without it, and the
-    // failure told them to attach it, which is refused until somebody enables
-    // it. The question was raised by the work scope, which leaves nothing in
-    // this loop's state, so the sentence had no unavailable key to read and took
-    // the wrong branch; the refusal riding the repeated request says it plainly.
-    it("sends a repository this deployment does not enable to the Repositories page", () => {
-      const decision = decideRepositoryExpansion({
-        origin: "model",
-        verdict: {
-          kind: "refused",
-          refusals: [
-            { repositoryKey: "github:blazity/ai-workflow", reason: "outside_catalog" },
+    it("stops the loop rather than the run, however a request was refused", () => {
+      // Each of these used to end the run with a sentence of its own. They now
+      // end the LOOP, once the one corrective pass is spent, and what a person
+      // reads about the repositories is `missingRepositoriesFailure` and
+      // `missingRepositoriesPlanSection`, tested beside them.
+      const closed = state({ expansionClosed: "human", expansionRestartUsed: true });
+      expect(modelPass(closed, [service]).action).toEqual({ kind: "plan_without" });
+      expect(
+        modelPass(closed, [service], [contractsRequest]).action,
+      ).toEqual({ kind: "plan_without" });
+      expect(
+        decideRepositoryExpansion({
+          origin: "model",
+          verdict: {
+            kind: "refused",
+            refusals: [
+              { repositoryKey: "github:blazity/ai-workflow", reason: "outside_catalog" },
+            ],
+            repositories: [],
+          },
+          state: { ...closed, closedRequests: 1 },
+          requests: [
+            { provider: "github", repoPath: "Blazity/ai-workflow", rationale: "the workflow" },
           ],
-          repositories: [],
-        },
-        // Nothing in `askedUnavailable`, which is the state production was in,
-        // and the request spelled with the capital the model used.
-        state: state({ expansionClosed: "human", closedRequests: 1 }),
-        requests: [
-          { provider: "github", repoPath: "Blazity/ai-workflow", rationale: "the workflow" },
-        ],
-      });
+        }).action,
+      ).toEqual({ kind: "plan_without" });
+    });
+  });
 
-      expect(decision.action.kind).toBe("fail");
-      if (decision.action.kind !== "fail") return;
-      expect(decision.action.message).toContain("Enable it on the Repositories page");
-      expect(decision.action.message).not.toContain("this work's repository list");
+  // Production, ten minutes after the round before it. The run asked "Research
+  // requested github:blazity/ai-workflow, which this run cannot use. To use it,
+  // enable it on the Repositories page and start a new run.", the person
+  // answered "none", the agent could not plan without it, and the failure told
+  // them to attach it, which is refused until somebody enables it. One run, two
+  // ways out of one wall, and the one they read last named no action they could
+  // take.
+  describe("what a person is told about a repository the run could not use", () => {
+    const refusal = (repositoryKey: string, reason: WorkScopeRefusalReason) => ({
+      repositoryKey,
+      reason,
+      sentence: `${repositoryKey} was refused on this run, so it is not attached.`,
     });
 
-    it("names the route back for a repository the run can use but did not attach", () => {
-      // NOT "attach it", which is what this said while the other branch told a
-      // person to enable it on the Repositories page: one run, two ways out of
-      // one wall, and the one they read last named no action they could take.
-      const decision = modelPass(state({ expansionClosed: "human" }), [service], [contractsRequest]);
+    it("sends a repository this deployment does not enable to the Repositories page", () => {
+      const text = missingRepositoriesFailure([
+        refusal("github:blazity/ai-workflow", "outside_catalog"),
+      ]);
+      expect(text).toContain("enable it on the Repositories page and start a new run");
+      expect(text).not.toContain("this work's repository list");
+    });
 
-      expect(decision.action.kind).toBe("fail");
-      if (decision.action.kind !== "fail") return;
-      expect(decision.action.message).toBe(
-        "Repository expansion is closed for this run and the agent still needs" +
-          " gitlab:acme/shared/contracts. Select it in this work's repository list," +
-          " through the work scope API or the work_scope.edit tool, and start a new run.",
+    it("names the repository list for one the run could have used", () => {
+      // The one reason where selecting it really is the lever: the repository
+      // is fine, the run simply used up the rounds it may spend asking.
+      const text = missingRepositoriesFailure([
+        refusal("gitlab:acme/shared/contracts", "rounds_exhausted"),
+      ]);
+      expect(text).toContain(
+        "Select gitlab:acme/shared/contracts in this work's repository list, through the work scope API or the work_scope.edit tool, and start a new run.",
       );
+      expect(text).not.toContain("Repositories page");
     });
 
-    it("keeps the failure inside its bound for a long nested GitLab path and 2 more", () => {
-      // An 80-character identity, the bound the message comment states, with
-      // the most a request can add to it: a request names at most 3.
+    it("names every repository even at the longest identities a request may carry", () => {
       const nested = (suffix: string) => {
         const prefix = "gitlab:blazity-clients/arthur/platform/backend-services/";
-        const repoPath = `${prefix}${"r".repeat(80 - prefix.length - suffix.length)}${suffix}`.slice(
-          "gitlab:".length,
-        );
-        return { provider: "gitlab" as const, repoPath, rationale: "x" };
+        return `${prefix}${"r".repeat(80 - prefix.length - suffix.length)}${suffix}`;
       };
-      const requests = [nested("-a"), nested("-b"), nested("-c")];
-      expect(`gitlab:${requests[0].repoPath}`).toHaveLength(80);
-      const keys = requests.map((request) => `gitlab:${request.repoPath}`);
+      const keys = [nested("-a"), nested("-b"), nested("-c")];
+      expect(keys[0]).toHaveLength(80);
 
-      const unusable = modelPass(
-        state({ expansionClosed: "human", askedUnavailable: keys }),
-        [service],
-        requests,
+      const text = missingRepositoriesFailure(
+        keys.map((key) => refusal(key, "outside_catalog")),
       );
-      const attachable = decideRepositoryExpansion({
-        origin: "model",
-        verdict: { kind: "attach", repositories: [] },
-        state: state({ expansionClosed: "human" }),
-        requests,
-      });
-
-      for (const decision of [unusable, attachable]) {
-        expect(decision.action.kind).toBe("fail");
-        if (decision.action.kind !== "fail") continue;
-        expect(decision.action.message).toContain(`gitlab:${requests[0].repoPath} and 2 more`);
-        // The bound the message's own comment states. It moved from 200 when
-        // the branch that does not name the Repositories page started naming a
-        // route instead of saying "attach it", which was a shorter way of
-        // telling the person nothing.
-        expect(decision.action.message.length).toBeLessThanOrEqual(290);
-      }
-      if (unusable.action.kind === "fail") {
-        expect(unusable.action.message).toContain("Enable them on the Repositories page");
-      }
+      for (const key of keys) expect(text).toContain(key);
+      expect(text).toContain("enable them on the Repositories page");
+      // Inside the bound every failure surface renders whole;
+      // `engine/execution-error-invariant.test.ts` proves that end to end.
+      expect(text.length).toBeLessThanOrEqual(900);
     });
   });
 
@@ -2023,14 +1978,13 @@ describe("decideRepositoryExpansion", () => {
       if (decision.action.kind !== "proceed") break;
     }
 
-    // Never a question: the run researches on, and then stops for good.
-    expect(actions).toEqual(["proceed", "proceed", "proceed", "proceed", "fail"]);
-    expect(current.expansionClosed).toBe("bound");
-    expect(current.rounds).toBe(3);
-    expect(current.allAttachedRequests).toBe(3);
-    // The rounds stopped moving when expansion closed; only the absorbed
-    // request counted after that, and the next one ended the run.
-    expect(current.closedRequests).toBe(1);
+    // Never a question, and never five passes: the run researches once more,
+    // and then plans with what it holds. Production spent five of these on one
+    // ticket before dying, at roughly two minutes each.
+    expect(actions).toEqual(["proceed", "plan_without"]);
+    expect(current.expansionClosed).toBeUndefined();
+    expect(current.rounds).toBe(2);
+    expect(current.expansionRestartUsed).toBe(true);
   });
 });
 

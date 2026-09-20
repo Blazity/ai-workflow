@@ -73,6 +73,20 @@ export interface ResearchPassNotes {
   /** One sentence per repository request this run refused. */
   refusals: ReadonlyArray<{ repositoryKey: string; sentence: string }>;
   expansionClosed: boolean;
+  /**
+   * Whether this run has already spent its one corrective planning pass on a
+   * request that attached nothing, which makes THIS pass the last one a
+   * repository request can buy.
+   *
+   * A bound the model is told about before it binds. Every other note here has
+   * been in the prompt for months ("requesting these again changes nothing"),
+   * and a model that asks anyway asks anyway; what changed is that the run stops
+   * paying for it. Telling it afterwards would be a rule nobody was given.
+   *
+   * Absent on a journal from before this existed, and absent reads as "not
+   * spent", which is the state every run starts in.
+   */
+  lastExpansionPass?: boolean;
   /** Which review thread dispositions the ledger rejected; when present it
    *  replaces the no-change note, which would mislead. */
   ledgerCorrectionNote: string | null;
@@ -605,8 +619,24 @@ function renderCommentsParts(ticket: TicketData): EffectivePromptPart[] {
 // Prompt-budget protection: a long clarification history must not crowd out the
 // rest of the prompt, so the whole rendered section is capped and truncated.
 const CLARIFICATIONS_MAX_LENGTH = 16000;
-const CLARIFICATIONS_TRUNCATION_NOTE =
-  "[Older clarification rounds omitted to fit the prompt budget.]\n\n";
+
+/**
+ * Room held back for the note that explains the cut, and nothing else.
+ *
+ * It is a FIXED 62 characters rather than the length of the note actually
+ * written, and that is deliberate. The note is now three different sentences
+ * depending on what was really cut, so paying for the longest of them would
+ * take about two hundred characters of ANSWER away from every run over budget,
+ * including the ones whose note is short. A note two hundred characters over a
+ * sixteen thousand character guard costs a prompt nothing; an answer cut two
+ * hundred characters shorter costs a resumed run the thing it exists to read.
+ *
+ * 64 is what the one note this used to write cost: the 62 characters of
+ * "[Older clarification rounds omitted to fit the prompt budget.]" plus the
+ * blank line after it. Holding the reserve there is what makes what a model
+ * reads of a clarification history byte for byte what it read before.
+ */
+const CLARIFICATIONS_NOTE_RESERVE = 64;
 
 function renderClarificationsParts(
   clarifications: TicketData["clarifications"],
@@ -650,7 +680,7 @@ function renderClarificationsParts(
     // a resume exists to consume) always survives; the oldest rounds are dropped
     // first. Reserve room for the note that flags the omission.
     const bodyBudget =
-      CLARIFICATIONS_MAX_LENGTH - header.length - footer.length - CLARIFICATIONS_TRUNCATION_NOTE.length;
+      CLARIFICATIONS_MAX_LENGTH - header.length - footer.length - CLARIFICATIONS_NOTE_RESERVE;
     kept = [];
     let used = 0;
     for (let i = rounds.length - 1; i >= 0; i--) {
@@ -700,15 +730,16 @@ function renderClarificationsParts(
           }),
         ],
   );
+  const cut = omitted
+    ? clarificationBudgetNote({
+        total: rounds.length,
+        dropped: rounds.length - kept.length,
+        newestShortened: kept.some((entry) => entry.shortenedFrom !== undefined),
+      })
+    : null;
   return concatPromptParts([
     part("clarifications", "Clarification answers", { kind: "clarification" }, header),
-    omitted &&
-      part(
-        "clarifications-omitted",
-        "Older clarification rounds left out",
-        PLATFORM,
-        CLARIFICATIONS_TRUNCATION_NOTE,
-      ),
+    cut && part("clarifications-omitted", cut.title, PLATFORM, `${cut.text}\n\n`),
     droppedParts,
     ...kept.map((entry, index) =>
       roundPart(
@@ -724,6 +755,59 @@ function renderClarificationsParts(
       ),
     ),
   ]);
+}
+
+/**
+ * WHAT THE BUDGET ACTUALLY CUT, said in the prompt where it cut it.
+ *
+ * One note used to be written for three different events: "[Older
+ * clarification rounds omitted to fit the prompt budget.]". It is true when
+ * older rounds were dropped. It is FALSE when the newest round alone was over
+ * budget and was shortened in place, which is the case the model most needs to
+ * know about, because then the question and the answer it is reading are both
+ * partial and it has been told the opposite: that what it holds is whole and
+ * something older is missing. On a subject with one round it is false twice
+ * over, since there is no older round to omit.
+ *
+ * A run is the only reader that can tell the three apart, so it says which one
+ * happened and how much of it. Stage 2 made this text a named part, so what a
+ * briefing shows a person and what the model read are the same bytes: a note
+ * that lies here lies in both places.
+ *
+ * Bounded by construction: two counts and fixed prose. The longest it can write
+ * is measured in `sandbox/clarification-budget.test.ts` rather than asserted
+ * here, because the reserve it is paid from is a fixed number.
+ */
+function clarificationBudgetNote(cut: {
+  total: number;
+  dropped: number;
+  newestShortened: boolean;
+}): { title: string; text: string } {
+  const older =
+    cut.dropped === 1
+      ? `the oldest of this work's ${cut.total} clarification rounds is not here`
+      : `the ${cut.dropped} oldest of this work's ${cut.total} clarification rounds are not here`;
+  // The answer is taken first and the questions get what room is left, so both
+  // can be partial and the answer is the one that survives. Said, because a
+  // model reading half a question guesses at the other half.
+  const shortened =
+    "the round below is shortened: its answer was kept first and its questions got the room that was left";
+  if (cut.dropped === 0) {
+    return {
+      title: "The clarification round was shortened",
+      text: `[Prompt budget: ${shortened}. No round is missing.]`,
+    };
+  }
+  if (!cut.newestShortened) {
+    return {
+      title: "Older clarification rounds left out",
+      text: `[Prompt budget: ${older}. Every round below is complete.]`,
+    };
+  }
+  return {
+    title: "Older clarification rounds left out and the newest shortened",
+    text: `[Prompt budget: ${older}, and ${shortened}.]`,
+  };
 }
 
 export function formatPRComments(comments: PRComment[]): string {
@@ -884,6 +968,12 @@ function researchNoteGroups(notes: ResearchPassNotes | undefined): EffectiveProm
     // changes nothing. It is told what it can do instead, and not told what to
     // conclude: a repository that really is missing has to stay reportable
     // (AIW-377).
+    //
+    // WHAT THIS NO LONGER CLAIMS: that repeating the request ends the run. It
+    // was true of a loop that counted absorbed requests and then failed, and it
+    // stopped being true when a spent corrective pass began making the run plan
+    // with what it holds instead. The bound that does exist is said once, by the
+    // note below, and only on the pass it actually binds.
     groups.push([
       part(
         "expansion-closed",
@@ -892,10 +982,33 @@ function researchNoteGroups(notes: ResearchPassNotes | undefined): EffectiveProm
         "## Repository expansion closed\n\nNo further repository will be attached to this workspace: ",
       ),
       part("expansion-closed-guidance", "What to do now that expansion is closed", PLATFORM, [
-        "requesting one again changes nothing, and repeating the request ends the run.",
+        "requesting one again changes nothing.",
         "A repository checked out read-only is checked out again with write access when implementation starts, so needing to write to one is never a reason to request it.",
         "Plan with the repositories already attached. If a repository is genuinely required and is not attached, say so in the result, naming it and what it is needed for, instead of requesting it.",
       ].join("\n")),
+    ]);
+  }
+  if (notes.lastExpansionPass) {
+    // THE ONLY NOTE HERE THAT COSTS THE MODEL ANYTHING, so it is the one that
+    // has to be unmissable and exact. It says what happens next rather than
+    // what to conclude: a repository that really is missing is still reportable,
+    // in the plan, which is where this run will read it from.
+    groups.push([
+      part(
+        "expansion-last-pass",
+        "The last planning pass a repository request buys",
+        RESEARCH_NOTE,
+        "## This is the last planning pass a repository request buys\n\n",
+      ),
+      part(
+        "expansion-last-pass-guidance",
+        "Return a plan on this pass",
+        PLATFORM,
+        [
+          'This run has already spent one pass on a repository request it could not honour. Another `repositories_needed` result will not run research again: this run will take whatever plan you return and record, on the ticket, what it could not do without the repositories you asked for.',
+          'So return `status: "completed"` now, with a plan for the repositories already attached, and write into that plan which repositories you could not get and exactly what you cannot do without each of them.',
+        ].join("\n"),
+      ),
     ]);
   }
   if (notes.ledgerCorrectionNote) {

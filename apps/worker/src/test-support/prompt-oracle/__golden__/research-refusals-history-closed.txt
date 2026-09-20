@@ -233,9 +233,14 @@ Requesting these again changes nothing. Plan with the repositories already attac
 
 ## Repository expansion closed
 
-No further repository will be attached to this workspace: requesting one again changes nothing, and repeating the request ends the run.
+No further repository will be attached to this workspace: requesting one again changes nothing.
 A repository checked out read-only is checked out again with write access when implementation starts, so needing to write to one is never a reason to request it.
 Plan with the repositories already attached. If a repository is genuinely required and is not attached, say so in the result, naming it and what it is needed for, instead of requesting it.
+
+## This is the last planning pass a repository request buys
+
+This run has already spent one pass on a repository request it could not honour. Another `repositories_needed` result will not run research again: this run will take whatever plan you return and record, on the ticket, what it could not do without the repositories you asked for.
+So return `status: "completed"` now, with a plan for the repositories already attached, and write into that plan which repositories you could not get and exactly what you cannot do without each of them.
 
 
 ## Repository Access Protocol
