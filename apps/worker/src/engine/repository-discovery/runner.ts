@@ -22,6 +22,8 @@ import {
   MAX_WORKSPACE_REPOSITORIES,
   workScopeRefusalSentence,
 } from "../work-scope/refusal-sentence.js";
+// The definition pin reads the same to a person wherever it refused them.
+import { outsidePinNote } from "../work-scope/context.js";
 import {
   workScopeWritePlanSchema,
   type RepositoryKey,
@@ -1447,8 +1449,10 @@ const WAY_BACK: Record<
   // reading as `catalogCannotServeNote` in `work-scope/context.ts`.
   unusable: (keys) =>
     `${keys.join(", ")} ${keys.length === 1 ? "is" : "are"} enabled here already, and the provider offered nothing this run could check out: what the provider offers for ${them(keys)} is what has to change.`,
-  outside_policy: (keys) =>
-    `The workflow that runs this work is limited to a fixed set of repositories, which does not include ${keys.join(", ")}, so changing this work's repository list does not bring ${them(keys)} in.`,
+  // Not written here: `work-scope/context.ts` already says this to a person on
+  // the run-start path, and two spellings of one bound is how one surface
+  // starts telling somebody a rule the other does not.
+  outside_policy: (keys) => outsidePinNote(keys),
   // The repository itself is fine here: the run simply used up the rounds it
   // may spend asking, so putting it on the work is a lever that really works.
   rounds_exhausted: (keys) =>
@@ -1549,6 +1553,18 @@ export function missingRepositoriesPlanSection(
 export function missingRepositoriesFailure(
   missing: readonly MissingRepository[],
   recordNotes: readonly string[] = [],
+  /**
+   * WHICH OF THE TWO EMPTY-HANDED ENDINGS THIS IS.
+   *
+   * `no_plan`: the pass returned no plan text at all. `nothing_to_write`: it
+   * returned a plan, and nothing in that plan changes a repository the run
+   * holds, because every write it declared was for one of the repositories it
+   * could not get. The second used to be told as "research declared no
+   * repository changes; nothing to implement, replan required", one block
+   * downstream, which is true of the fields and false about the run: there is
+   * nothing to replan until somebody decides about the repositories.
+   */
+  outcome: "no_plan" | "nothing_to_write" = "no_plan",
 ): string {
   const ordered = [...missing].sort((left, right) =>
     left.repositoryKey < right.repositoryKey ? -1 : left.repositoryKey > right.repositoryKey ? 1 : 0,
@@ -1557,10 +1573,11 @@ export function missingRepositoriesFailure(
   // THE NAMES RIDE THE SENTENCE THAT CANNOT BE DROPPED. A request names at most
   // three repositories, so this stays bounded by the count; everything below it
   // may give way to the bound, and none of it carries a fact this does not.
+  const asked = keys.length === 0 ? "another repository" : keys.join(", ");
   const opening =
-    keys.length === 0
-      ? "The planning agent returned no plan and asked for another repository instead, so this run has nothing to implement."
-      : `The planning agent returned no plan and asked again for ${keys.join(", ")}, so this run has nothing to implement.`;
+    outcome === "nothing_to_write"
+      ? `The planning agent asked again for ${asked}, and the plan it returned changes nothing in the repositories this run holds, so there is nothing to implement.`
+      : `The planning agent returned no plan and asked again for ${asked}, so this run has nothing to implement.`;
   // WHAT A PERSON DOES NEXT OUTRANKS WHY IT HAPPENED. The refusal sentences are
   // already in the model's prompt, in the ticket's earlier comments and in the
   // repository record; the lever is only here, and losing it is exactly the

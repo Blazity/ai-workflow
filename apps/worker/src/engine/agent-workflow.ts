@@ -3113,6 +3113,18 @@ async function agentWorkflowBody(
             );
             if (!researchResult.ok) return agentProtocolBlockError(researchResult);
             let research = researchResult.value;
+            /**
+             * Set when this pass asked for a repository it could not have and
+             * the loop took its plan anyway, and the plan turned out to change
+             * nothing the run may write to.
+             *
+             * Carried to the END of the success path rather than acted on here,
+             * because the person is owed the plan and the list of repositories
+             * before they are told the run stopped: the analysis comment is the
+             * only surface either of them travels on, and a block that returns
+             * an execution error never reaches it.
+             */
+            let nothingToWrite: MissingRepository[] | null = null;
 
             if (research.status === "repositories_needed") {
               const expansion = await expandResearchWorkspace(
@@ -3156,9 +3168,32 @@ async function agentWorkflowBody(
                   message: nothingToPlanWith,
                 });
               }
+              // The request is dropped rather than carried: a completed result
+              // that still held the repositories it asked for would have the
+              // analysis report list them as requests the run made AND as
+              // repositories it left out, which reads as two different events.
+              const { repositories: requested, ...planned } = research;
+              void requested;
+              // ONLY WHAT THE WORKSPACE HOLDS SURVIVES. A pass that asks for a
+              // repository usually means to write to it, so the writes it
+              // declares can name one this run has just refused; carrying that
+              // through would send implementation at a checkout that is not
+              // there, which is a worse failure than the one this replaces.
+              // Nothing is added here, so this cannot widen what a run may
+              // write to.
+              const attachedKeys = new Set(
+                ctx.selectedRepositories.map(
+                  (repository) => `${repository.provider}:${repository.repoPath}`,
+                ),
+              );
+              const writable = (research.writeRepositories ?? []).filter((repository) =>
+                attachedKeys.has(`${repository.provider}:${repository.repoPath}`),
+              );
+              if (writable.length === 0) nothingToWrite = expansion.missing;
               research = {
-                ...research,
+                ...planned,
                 status: "completed",
+                ...(writable.length > 0 ? { writeRepositories: writable } : {}),
                 body: missingSection
                   ? `${research.body}\n\n${missingSection}`
                   : research.body,
@@ -3452,6 +3487,40 @@ async function agentWorkflowBody(
               }
               ctx.analysisReport = withAnalysisDelivery(ctx.analysisReport, "research_complete", delivery);
               await recordRunAnalysisReportBestEffort(ctx.analysisReport);
+            }
+            if (nothingToWrite) {
+              // THE RUN STOPS HERE, AND NOT ONE BLOCK LATER. Everything above
+              // has run: the plan is on the ticket with the repositories this
+              // run could not use under it, and the record holds the report.
+              // What is left is a workspace with nothing in it this plan
+              // changes, and the block that would find that out next says
+              // "research declared no repository changes; nothing to implement,
+              // replan required" (`researchDeclaredNoWritesGuard`), which is
+              // true of the fields and false about the run: there is nothing to
+              // replan until somebody decides about the repositories.
+              //
+              // RED, NOT GREEN, and deliberately. A green run puts "done" on a
+              // ticket where no code was written and no pull request exists,
+              // and the next person to read the board sees a handled ticket.
+              // This product has paid for that once already: the whole
+              // left-out-repositories machinery exists because a green run and
+              // a pull request covering half the work, with nothing on the
+              // ticket saying why, is the failure nobody catches. Red puts the
+              // ticket back in front of the person who can act, and the first
+              // thing they read names the repositories and the way back.
+              const { missingRepositoriesFailure } = await import(
+                "./repository-discovery/runner.js"
+              );
+              const nothingToImplement = missingRepositoriesFailure(
+                nothingToWrite,
+                repositoryRecoveryNotes,
+                "nothing_to_write",
+              );
+              return executionError(nothingToImplement, {
+                category: "engine",
+                phase: "research",
+                message: nothingToImplement,
+              });
             }
             return {
               kind: "next",

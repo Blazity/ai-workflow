@@ -190,6 +190,38 @@ describe("ClaudeAgentAdapter.parseResearchStatus", () => {
     });
   });
 
+  it("keeps what a repository request said it would change", () => {
+    // Dropped until the planning loop began taking the plan from a pass that
+    // asked, because until then a later pass always declared its own writes.
+    // Now this is the only pass that names them, and a plan with no declared
+    // write reaches implementation as "research declared no repository changes;
+    // nothing to implement, replan required": true of the fields and false
+    // about the run, whose real trouble is a repository nobody allowed it.
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      structured_output: {
+        status: "repositories_needed",
+        plan: "Rotate the signing key in acme/api, then read the client.",
+        questions: null,
+        suggestedAnswers: null,
+        repositories: [
+          { provider: "github", repoPath: "acme/web", rationale: "the client reads the cookie" },
+        ],
+        writeRepositories: [
+          { provider: "github", repoPath: "acme/api", rationale: "the rotation lives here" },
+        ],
+        repositoryEvidence: null,
+        error: null,
+      },
+    });
+
+    expect(adapter.parseResearchStatus(envelope, null)).toMatchObject({
+      status: "repositories_needed",
+      writeRepositories: [{ provider: "github", repoPath: "acme/api" }],
+    });
+  });
+
   it("parses direct JSON output when there is no Claude envelope", () => {
     const raw = JSON.stringify({ status: "completed", plan: "Plan", questions: null, error: null });
     expect(adapter.parseResearchStatus(raw, null).status).toBe("completed");

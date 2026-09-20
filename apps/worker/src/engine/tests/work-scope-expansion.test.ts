@@ -1707,6 +1707,35 @@ describe("the next research pass is told every request this run refused", () => 
       "lastExpansionPass: ctx.repositoryExpansion.expansionRestartUsed === true",
     );
   });
+
+  it("keeps only the writes the workspace holds, and delivers the plan before it stops", () => {
+    // Two rules that live in the same closure and cannot be invoked from a
+    // test, both of which a person pays for if they slip.
+    //
+    // A pass that asked for a repository usually meant to write to it, so the
+    // writes it declares can name one this run just refused. Carrying that
+    // through sends the implementation block at a checkout that is not there,
+    // which is a worse failure than the one this stage removed.
+    //
+    // And when nothing writable is left, the run stops AFTER the analysis
+    // comment, never before: that comment is the only surface the plan and the
+    // list of repositories it could not use travel on, and a block that returns
+    // an execution error never reaches it.
+    const workflow = workflowLines.join("\n");
+    expect(
+      /const writable = \(research\.writeRepositories \?\? \[\]\)\.filter\(\(repository\) =>\s*attachedKeys\.has\(/u.test(
+        workflow,
+      ),
+      "a declared write is no longer held to the repositories the workspace actually has",
+    ).toBe(true);
+    const commentAt = workflow.indexOf("postRunAnalysisCommentStep(");
+    const stopAt = workflow.indexOf("if (nothingToWrite) {");
+    expect(commentAt).toBeGreaterThan(0);
+    expect(stopAt).toBeGreaterThan(commentAt);
+    // And it stops with the honest sentence rather than letting the next block
+    // say "replan required" about repositories nobody has decided on.
+    expect(workflow.slice(stopAt)).toContain('"nothing_to_write"');
+  });
 });
 
 /**
@@ -1962,6 +1991,32 @@ describe("the run's last word never asks for something the person cannot do", ()
     // Every repository is named, whatever the bound took away.
     for (const key of KEYS) expect(text).toContain(key);
     expect(text).toContain("Excluding a repository is not final");
+    const out = asAPersonReadsIt(text);
+    expect(out).not.toContain("[...]");
+    expect(out).toBe(`${text} Diagnostic ID: AIW-DIAG-${RUN_ID}-planning-1`);
+    expect(sanitizeFailureMessage(out)).toBe(out);
+  });
+
+  it("says what is really wrong when the plan changes nothing this run may touch", () => {
+    // The sentence one block downstream used to be "research declared no
+    // repository changes; nothing to implement, replan required". It is true of
+    // the fields and false about the run: there is nothing to replan until
+    // somebody decides about the repositories, and it names none of them.
+    const text = missingRepositoriesFailure(
+      otherThreeRefusals(),
+      [
+        "Leaving a repository out of an answer is not final: this work's repository list can be changed through the work scope API or the work_scope.edit tool, and the next run starts from the changed list.",
+      ],
+      "nothing_to_write",
+    );
+
+    expect(text).toContain("the plan it returned changes nothing in the repositories this run holds");
+    for (const key of ["github:acme/web", "github:acme/mobile", "github:acme/infra"]) {
+      expect(text).toContain(key);
+    }
+    expect(text).toContain("this work's repository list can be changed");
+    expect(text.toLowerCase()).not.toContain("replan");
+    // And it is still the whole message on every surface.
     const out = asAPersonReadsIt(text);
     expect(out).not.toContain("[...]");
     expect(out).toBe(`${text} Diagnostic ID: AIW-DIAG-${RUN_ID}-planning-1`);
