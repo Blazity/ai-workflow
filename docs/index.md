@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-14
+Last-verified: 2026-09-20
 
 # Documentation index
 
@@ -36,7 +36,7 @@ checking the smaller set that is left (ADR-007).
 | [architecture/blocks.md](./architecture/blocks.md) | How block manifests, executor modules, generated catalogs, and the reviewer walkthrough fit together |
 | [architecture/skills.md](./architecture/skills.md) | Product skill manifests, artifact integrity, source boundaries, and the repository-root `skills/` convention |
 | [architecture/overview.md](./architecture/overview.md) | The `services/` tier: what each cluster owns, what it may import, and what its `index.ts` promises |
-| [architecture/data-model.md](./architecture/data-model.md) | The worker's 62 SQL tables, ownership and principal callers |
+| [architecture/data-model.md](./architecture/data-model.md) | The worker's 75 SQL tables, ownership and principal callers |
 | [architecture/gates.md](./architecture/gates.md) | The delivery gate ladder, lint policy, and the stage 11 ratchets |
 
 ## Decision records
@@ -70,6 +70,7 @@ checking the smaller set that is left (ADR-007).
 | [runbooks/GITHUB-APP-SETUP.md](./runbooks/GITHUB-APP-SETUP.md) | Creating and installing the GitHub App, and the events it subscribes to |
 | [runbooks/GITLAB-SETUP.md](./runbooks/GITLAB-SETUP.md) | Setting up a GitLab project, its token and its webhook |
 | [runbooks/agent-runtime-diagnostics.md](./runbooks/agent-runtime-diagnostics.md) | Turning a diagnostic ID from a failed run into the provider detail in the worker log |
+| [runbooks/reading-an-agent-briefing.md](./runbooks/reading-an-agent-briefing.md) | Draft: where to see what an agent was sent, on each surface, and what an empty answer means |
 | [runbooks/ON-PREM-AWS.md](./runbooks/ON-PREM-AWS.md) | Draft proposal for a self-hosted AWS deployment. Not implemented, and it predates the move to Neon Postgres |
 | [releases/artur/README.md](./releases/artur/README.md) | The Artur release contract: the two pull request flow, from preparation to the published tag |
 | [releases/artur/upgrade-preflight.md](./releases/artur/upgrade-preflight.md) | The tenant database check that has to pass before a release pull request merges |

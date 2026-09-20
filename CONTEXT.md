@@ -44,6 +44,11 @@ Its entries are repositories with a state (selected, excluded, unavailable), a
 reason when unavailable, an origin, a short rationale, and who decided, when,
 in which run. Only finite work carries one: a ticket, a pull request, or a
 webhook delivery whose endpoint resolves a subject id, never a schedule.
+An origin of `related_repository` means the catalog relates that repository to
+one this work names: the run took it without asking, it is checked out read
+only (write comes from a plan or a person, never from a catalog edge), and it
+is the one origin re-derived on the next run, so deleting the relationship
+removes the entry with a trail line saying why.
 _Avoid_: Repository scope (that is the definition pin), repo selection
 
 **Trigger Repository Policy**:
@@ -58,6 +63,16 @@ _Avoid_: Repository scope, trigger scope
 The append-only history behind a work scope. The entries are its fold; the
 trail is why each entry looks the way it does.
 _Avoid_: Audit log, scope history
+
+**Clarification Round**:
+One repository question and everything that happened to it: what was asked,
+every distinct delivery of an answer with how it was read and the note posted
+back, and the trail events that followed. A question a retried attempt asks
+again joins its round instead of opening a new one. The Jira path recomposes
+the same answer from the ticket's comments on every poll tick, so identical
+arrivals are one delivery with a count and the first and last time, not two
+hundred rows.
+_Avoid_: Clarification request (that is the stored question alone), thread
 
 **Repository Map**:
 The one description of repositories every repository-working send renders into
@@ -158,6 +173,42 @@ A read-only presentation of recorded Workflow Run observations that highlights
 executed blocks, selected branches, timing, and sanitized data. It never reruns a
 block or repeats a side effect.
 _Avoid_: Retry, re-execution, event-sourced reconstruction
+
+**Agent Briefing**:
+Everything one model send gave an agent, recorded as it was sent: the prompt
+section by section with the origin of every part, the repositories the send
+described, and the harness extras (model, output schema, delivered skills). One
+per send, not one per Block Attempt, because a planning block restarts inside
+one attempt and only the later passes carry the notes that explain the earlier
+ones. Identified by run, node, attempt, activation scope and a sequence number
+that counts every send of that Block Attempt in the order they happened. It is
+recorded from inside the step that sends and redacted once, there, so the
+dashboard and MCP hand back the same bytes. It expires with the run's replay.
+`ENABLE_AGENT_BRIEFINGS` switches recording off for the next run, never for one
+in flight, and a send made while it was off is marked as not recorded rather
+than read as never sent.
+_Avoid_: Prompt log, agent transcript (what the agent then did inside the
+sandbox is not recorded)
+
+**Briefing Section**:
+One named region of a prompt as the compiler builds it: `profile`,
+`repository`, `memory`, `block` and `runtime`, plus `discovery` for the
+discovery prompt and `system` for an in-process model call. A section is the
+unit a harness profile switch turns on or off.
+_Avoid_: Prompt block, chunk
+
+**Prompt Part**:
+The smallest named piece of a Briefing Section, in the order it was sent. The
+parts of a section concatenate to its text, so every byte a model receives
+belongs to exactly one part and can be attributed. A part carries an origin: an
+open slug such as `platform` for our own rule text, and `ticket`,
+`clarification`, `research_note`, `pull_request`, `repository_catalog`,
+`block_prompt` or `bound_data` for the run's own data. A part may be withheld
+(a platform rule this prompt holds back on purpose, kept at zero bytes with the
+reason, so a reader sees it was left out deliberately rather than forgotten) or
+cut before sending. Cut before sending and truncated for storage are different
+fields: the first changed what the agent got, the second only what we kept.
+_Avoid_: Prompt fragment, snippet
 
 **Validation Issue**:
 An authoring error that prevents a Workflow Definition draft from being

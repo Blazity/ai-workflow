@@ -1,5 +1,5 @@
 Status: draft
-Last-verified: 2026-09-19
+Last-verified: 2026-09-20
 
 # Agent visibility: see exactly what an agent was given, and give it the whole repository map
 
@@ -262,11 +262,15 @@ index, bytes, created at; unique on identity plus sequence;
 their sha256, because every planning pass repeats the ticket, the comments and
 the map; the structured repository context is stored the same way, and the
 index itself has a hard size bound. Stripped control characters (a CI trace can
-carry thousands) are counted per part rather than stored as spans. `clarification_answer_deliveries` keeps each distinct delivery (words
+carry thousands) are counted per part rather than stored as spans. A separate
+`agent_briefing_runs` row outlives the briefings and records what a run's
+capture did, so "no briefing" can be told apart from "this code could not
+capture". `clarification_answer_deliveries` keeps each distinct delivery (words
 as delivered, who, via which surface, the reading, the note posted back) with a
 repeat count and first and last time: the Jira path re-composes the answer from
 the ticket's comments on every poll tick (`answer-core.ts:502-505`), so a
-delivery per tick would bury the round. Additive migration `0070`. neon-http has
+delivery per tick would bury the round. Additive migration `0070`; stage 6 adds
+`0071` for the new work scope origin. neon-http has
 no transactions: every write is one statement, and a briefing is never visible
 without its texts. Briefings are deleted with the run's replay observations
 (30 days, `poll-pass.ts:343`), never kept longer than the replay that reaches
@@ -302,10 +306,13 @@ whether the block sends prompts at all, decided by the worker from the block
 type, so a script block never reads as "not recorded"); under
 `/api/v1/runs/{runId}/briefings/{briefingId}`: `sections` (section headers),
 `sections/{index}` (a page of one section's text by offset and limit),
-`sections/{index}/parts` and `sections/{index}/spans`, and `repository-context`
-(its repositories paged). `GET /api/v1/work-scope` gains round headers, with
-`rounds/{roundId}/deliveries` and `rounds/{roundId}/effects` paged. MCP
-`runs.briefing` and `work_scope.get` mirror them.
+`sections/{index}/parts` and `sections/{index}/spans`, `repository-context`
+(its repositories paged) and `unresolved-sources` (what the compiler referenced
+and could not find). `GET /api/v1/work-scope` gains round headers, with
+`rounds/{roundId}/deliveries` and `rounds/{roundId}/effects` paged, and
+`GET /api/v1/workflow-definitions/{id}/nodes/{nodeId}/last-briefing` answers
+the flow editor. MCP `runs.briefing`, `workflows.node_briefing` and
+`work_scope.get` mirror them.
 Every result is paged: section text, the repository context and the rounds.
 Structured items are never cut to fit: the package serves small headers (a
 briefing overview, section headers, round headers) and each growable child list
@@ -337,7 +344,13 @@ offered, and so on), and readers tolerate a cause or state they do not know,
 because the worker and the dashboard deploy separately.
 
 **Access and retention.** Whoever can open a run reads its briefings, the same
-audience as its logs. Retention as Block Attempts.
+audience as its logs. Retention as Block Attempts. Delivered that way, which
+widens what an existing credential reaches: `runs.briefing` and
+`workflows.node_briefing` carry the ordinary MCP read scope
+(`mcp/policy.ts:497-498`), so a token minted months ago for dispatch now also
+reads ticket bodies, `AGENTS.md` and the memory a run was given. Nothing new
+has to be granted and nobody holding such a token was asked, so an operator who
+minds reviews the tokens they have out.
 
 ## Open to the executors
 
@@ -431,11 +444,11 @@ describe; stage 10 closes.
 | 4 | The dashboard and MCP can read briefings and rounds, byte for byte the same | HTTP and MCP | `apps/worker/src/services/agent-visibility/` read half; `routes/api/v1/runs/[runId]/briefings*`; `routes/api/v1/work-scope.get.ts`; `mcp/tools/` runs and work-scope tools, tool catalog, MCP contract | opus | tight | yes | yes | no | route and tool parity on a briefing over the MCP cap, every page under the default and under the cap; `work_scope.get` with rounds stays under the cap on a round with hundreds of poll ticks; each missing reason; `mcp:contract:check` green |
 | 5 | A person sees every pass, section, origin, map and round, on desktop and phone | Dashboard | `apps/dashboard/**` replay Briefing tab, ticket Repositories panel, API client and proxy routes | opus | open | yes | no | yes (fixtures) | component tests; browser at 1440 px and 375 px, each empty state seen |
 | 5b | Someone with only Jira can correct the record from the ticket page | Dashboard | the ticket Repositories panel in `apps/dashboard/` | opus | open | yes | no | no | select, exclude and undo through the existing edit endpoint, seen in the browser; the same edit through `work_scope.edit` |
-| 5c | An operator sees the last real briefing of a block in the flow editor | Dashboard; HTTP and MCP | the flow-editor preview in `apps/dashboard/`; one worker read and its MCP tool | opus | open | yes | no | no | the preview shows the last briefing of the node or says why there is none; the authoring preview applies the selected profile's switches (a profile with `includeWorkflowData` off previews without run data, as execution sends it); route and tool parity |
-| 6 | Every repository-working agent gets the whole ranked map, and related repositories become candidates | Repository Map | `engine/work-scope/map.ts`, `engine/work-scope/context.ts`; `engine/repository-discovery/`; `services/work-scope/record.ts`, `services/work-scope/from-answer.ts`; the selected-repositories renderer in `sandbox/context.ts`; related-key plumbing in `engine/agent-workflow.ts` | opus | open | yes | yes | no | ticket names A, A is `frontend_for` B: the briefing shows the map with A and B related, B taken without a question, and why; discovery shows the operator's description; a 150-repository catalog with 5 KB profiles keeps every `platform` part intact and the runtime section under the cap; proven on production |
+| 5c | An operator sees the last real briefing of a block in the flow editor | Dashboard; HTTP and MCP | the flow-editor preview in `apps/dashboard/`; one worker read and its MCP tool (delivered with stage 4) | opus | open | yes | no | no | the preview shows the last briefing of the node or says why there is none; the authoring preview applies the selected profile's switches (a profile with `includeWorkflowData` off previews without run data, as execution sends it); route and tool parity |
+| 6 | Every repository-working agent gets the whole ranked map, and related repositories become candidates | Repository Map | `apps/worker/src/repository-map/` (delivered as a move out of `engine/work-scope/map.ts`), `engine/work-scope/context.ts`; `engine/repository-discovery/`; `services/work-scope/record.ts`, `services/work-scope/from-answer.ts`; the selected-repositories renderer in `sandbox/context.ts`; related-key plumbing in `engine/agent-workflow.ts` | opus | open | yes | yes | no | ticket names A, A is `frontend_for` B: the briefing shows the map with A and B related, B taken without a question, and why; discovery shows the operator's description; a 150-repository catalog with 5 KB profiles keeps every `platform` part intact and the runtime section under the cap; proven on production |
 | 7 | Planning works within the record and never dies retrying a refused repository | Planning within the record | planning loop and expansion paths in `engine/agent-workflow.ts`; `closedExpansionFailure` and `CATALOG_CANNOT_SERVE` in `engine/repository-discovery/runner.ts`; `engine/support/clarification-comment-format.ts` | opus | tight | yes | yes | no | ticket names four, person picks one: plans within the one, names the three, no failed run; repeated request stops at once with the same message, delivered whole; "select it" never said about a repository nobody enabled; the model is no longer told that older clarification rounds were omitted when only the newest round was shortened (found in stage 2, `sandbox/context.ts:549-579`) |
 | 8 | Pending PR feedback means the same thing to the prompt and to the no-change gate | PR feedback predicate | `sandbox/context.ts`; the retry note and gate call in `engine/agent-workflow.ts`; `engine/review-ledger.ts` | opus | tight | yes | yes | no | with a ledger and with flat comments, prompt and gate agree; the earlier client regression shape stays fixed |
-| 9 | The words and documents tell the truth | none | `CONTEXT.md` (coordinated), `docs/product/`, `docs/product/roadmap-2026-08-27.md` statuses, `docs/index.md` | sonnet | tight | no | no | no | `pnpm run gate:docs-status` green; roadmap items mapped to what shipped |
+| 9 | The words and documents tell the truth | none | `CONTEXT.md` (coordinated), `docs/product/` and its roadmap statuses, `docs/index.md`; delivered wider: the ADR-001 addendum for the worker's homes, the four routing tables, `.claude/rules/agent-visibility.md`, `docs/architecture/data-model.md`, this plan's delivery record | sonnet | tight | no | no | no | `pnpm run gate:docs-status` green; roadmap items mapped to what shipped |
 | 10 | Production proof | all | none | advisor | tight | no | no | no | on runs started after each deploy (a pinned run keeps its old code): every send of a definition 40 run has a briefing on the ticket page and through `runs.briefing`, same bytes; rounds match the Jira comments; the map, related-candidate and planning shapes proven on live tickets |
 
 Order and parallelism: stages 1 and 2 start together (disjoint files, different
@@ -446,6 +459,61 @@ storage stage 3a builds. Stage 4 follows 3a in the same cluster. Stage 6 starts
 after pull request B is on production, so its effect is visible in real
 briefings; stage 7 follows 6 and stage 8 follows 7, because all three touch
 `engine/agent-workflow.ts`.
+
+## What landed, and where
+
+Recorded on 2026-09-20, with stages 8 and 10 still open. The stages did not
+ship as one line of commits, so this is the only place the whole feature is
+listed. Every branch but the first carries a `changelog/unreleased/` entry;
+stage 2 has none, because the only byte it changed for a model is the declared
+label fix (a mid-run discovery or change-set note no longer claims to be
+"Pre-Sandbox": `sandbox/context.ts`).
+
+- **`refactor/prompt-runtime-parts`**, head
+  `1be1ec06f6304ab04003967d1f2d406e9b181b49` (stage 2). `packages/prompts/prompt-parts.ts`
+  turns the run's contribution into ordered named parts with an origin, and the
+  pre-change assemblers live on as an oracle in
+  `apps/worker/src/test-support/prompt-oracle/`, with golden bytes per send
+  kind. Its worktree was `lanes/wt-prompt-parts`, which the stage table names.
+- **`feat/agent-visibility`**, head `abd9a13279884658894d96c2bc2385afaa9301a1`
+  (stages 1, 3a, 3b), contains the branch above. `packages/agent-visibility`,
+  the `agent_briefings`, `agent_briefing_texts`, `agent_briefing_runs` and
+  `clarification_answer_deliveries` tables (migration `0070`), capture from
+  inside every send step, and the `ENABLE_AGENT_BRIEFINGS` setting.
+- **`feat/agent-visibility-routes`**, head
+  `e30b93b53fb6aa3a1b8f42fa80c9b0248fc8556a` (stage 4), branched from stage 3a
+  and does **not** contain stage 3b. `apps/worker/src/services/agent-visibility/`,
+  the briefing routes, the two rounds routes, the node last-briefing route, and
+  the MCP tools `runs.briefing` and `workflows.node_briefing` (the contract goes
+  from 44 tools to 46), plus `rounds` as an opt-in on `work_scope.get`.
+- **`feat/agent-visibility-dashboard`**, head
+  `04a14b0b86ba9dc41f386df3776a03a8dff99f24` (stages 5, 5b, 5c), branched from
+  stage 1 alone and built against fixtures, so it contains neither the capture
+  nor the routes it calls: **it has to merge after the routes branch**, or its
+  proxy handlers address endpoints the worker does not serve. The Briefing tab,
+  the ticket Repositories panel with record editing, the flow editor's last real
+  briefing, and the authoring preview applying the selected profile's switches.
+- **`feat/agent-visibility-map`**, head
+  `2c243792f42c3fd72aa9aded464e93e398248cb8` (stage 6), contains
+  `feat/agent-visibility`. `apps/worker/src/repository-map/` (moved out of
+  `engine/work-scope/map.ts`), the ranked map in every repository-working send
+  and in discovery, `related_repository` as a work scope origin with its CHECK
+  migration `0071`, and the map recorded inside the briefing.
+- **`feat/agent-visibility-planning`**, head
+  `a9b31acf33171121d8033a11ceda53d53af8e213` (stage 7, with stage 8 in
+  progress), contains `feat/agent-visibility-map`. Planning within the record.
+
+Where the stage table and the delivery differ:
+
+- Stage 1 also had to change `scripts/gates/boundaries.mjs`, which scanned only
+  what an app import reached, so a brand new package had no edge to check.
+- Stage 4 shipped the node last-briefing route and its MCP tool, which the
+  table puts in stage 5c; 5c shipped the view that reads them.
+- Stage 6 moved the map to its own top-level directory instead of editing
+  `engine/work-scope/map.ts`, and added a migration the row does not mention.
+- Stage 9 is wider than its row: the words that needed correcting were in
+  ADR-001, all four routing tables, `docs/architecture/data-model.md` and a new
+  `.claude/rules/agent-visibility.md`, not only `CONTEXT.md` and the roadmap.
 
 ## Decisions taken during delivery
 

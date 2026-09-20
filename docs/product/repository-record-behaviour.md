@@ -286,6 +286,7 @@ only in production.
 | D2 | The run's memory file, under "Human decisions" and "do not edit or remove" | The questions and the answers. Never a sentence about reversing somebody's decision | held |
 | D3 | The ticket's comments, rendered verbatim into the research prompt on the NEXT run | Whatever anybody wrote on the ticket, our own comments included | held |
 | D4 | The reversal sentence | May appear in D3, because that is ticket history a person could have written. Never in D1 or D2, because those are instructions the system signs. The way back from an omission in an answer (C11) obeys the same line | held |
+| D5 | The Repository Map, in every repository-working prompt and in discovery | What the workspace holds and what may be changed in it, the neighbours one relationship away that may be requested, and the repositories already settled, marked "do not request" with the reason a person would act on. Never a repository somebody excluded offered as one to ask for. The operator's catalog description, with the provider's listing text only as a labelled fallback. The same build produces the structured repository context the briefing records, so what a person reads is what the agent read | held (`apps/worker/src/sandbox/repository-map-context.test.ts`) |
 
 The distinction in D4 is the one that cost us a wrong ruling: the halt text was
 believed to be the person's channel, and it is not, because the same string is
@@ -295,8 +296,14 @@ and only tells that person less.
 
 ## What is deliberately not decided here
 
-- **The screen.** The record is editable through the API and MCP. A panel is
-  stage 7.
+- **The screen.** Decided elsewhere and delivered on 2026-09-20 by stage 5b of
+  [the agent visibility plan](../plans/2026-09-19-agent-visibility.md): a
+  ticket page carries a Repositories panel, on desktop and on the phone, where
+  a person can select, exclude and undo an entry (`remove`, which lets a later
+  run decide again; `exclude` is the sticky one). It shows each repository
+  question as a round with every answer as it arrived. The panel decides no
+  refusal of its own: `PATCH /api/v1/work-scope` remains the authority, and the
+  rows above still govern.
 - **An agent's edit versus a person's.** Closing this needs a durable marker in
   the contract and in the database, which is not a change to make days before a
   merge. Until then, an agent holding the edit tool can write what reads as a

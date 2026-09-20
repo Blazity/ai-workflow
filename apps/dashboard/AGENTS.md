@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-17
+Last-verified: 2026-09-20
 
 # apps/dashboard
 
@@ -35,14 +35,16 @@ are colocated (`lib/*.test.ts`, `components/**/*.test.tsx`) and render through
 |---|---|
 | `app/(cockpit)/` | the routed screens: runs, tickets, editor, approvals, cost, evals, health, memory, prompts, harness profiles, repositories, settings |
 | `app/*-data.tsx`, `app/*-skeleton.tsx` | the server components that fetch a screen's data and its loading shape |
-| `app/api/` | route handlers that proxy to the worker or serve dashboard-only reads |
+| `app/api/` | route handlers that proxy to the worker or serve dashboard-only reads; they share `app/api/worker-forward.ts` |
 | `components/cockpit/screens/` | the screen bodies |
+| `components/cockpit/agent-visibility/` | what an agent was sent: the Briefing tab of a block attempt, a ticket's Repositories panel and its rounds, the repository map |
 | `components/cockpit/flow-editor/` | the definition editor: block palette, config fields, binding fields, branch and loop editors, harness profile picker |
 | `components/cockpit/prompt-editor/`, `prompt-library/`, `harness-profiles/` | the authoring surfaces for prompts and profiles |
 | `components/ui/` | the canonical primitives, exported from `components/ui/index.ts`; new screens use them |
 | `components/ui.tsx`, `charts.tsx`, `flame-graph.tsx` | shared primitives |
 | `lib/api/` | the worker client, the proxy, error shaping, fallbacks |
 | `lib/settings/`, `lib/repository-catalog/` | the pure helpers behind Settings and Repositories, with colocated tests |
+| `lib/agent-visibility/` | reading what the worker serves about briefings and rounds: envelopes, paging, section text cut into parts, the words for recorded values |
 | `lib/auth/`, `middleware.ts` | session handling and route protection |
 | `lib/*.ts` | pure helpers with colocated tests (run model, run hrefs, live polling, ticket shaping) |
 
@@ -50,7 +52,7 @@ are colocated (`lib/*.test.ts`, `components/**/*.test.tsx`) and render through
 
 The dashboard's traps live in `.claude/rules/`, loaded when a matching file is
 read: `dashboard-ui` (every dashboard file), `dashboard-settings`,
-`dashboard-repositories`.
+`dashboard-repositories`, `agent-visibility`.
 
 ## Where to read next
 

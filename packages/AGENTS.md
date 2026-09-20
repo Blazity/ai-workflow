@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-19
+Last-verified: 2026-09-20
 
 # packages/AGENTS.md
 
@@ -40,8 +40,9 @@ and never application infrastructure. ADR-001 owns the tiers.
   no such script and no zod 4 evidence. Both
   scripts name those packages with `--filter` rather than selecting
   `./packages/*` with `--if-present`, which reported a package that owns no
-  such script as a package that passed, so a run over seven packages proved
-  two. `conditions` has no `test` script at all and no suite in either run;
+  such script as a package that passed: over the seven packages that existed
+  then, a run proved two. `conditions` has no `test` script at all and no
+  suite in either run;
   that is a gap, not a decision recorded here. The test in
   `scripts/ci/verify-changed.test.ts` holds each named list equal to the
   packages that own the script, so adding a package to a run is a deliberate
@@ -56,4 +57,5 @@ and never application infrastructure. ADR-001 owns the tiers.
 matching file is read: `workflow-graph` (what may live in the package, its
 suites and gates), `contracts-requests` (request body schemas),
 `zod-bundle` (the zod the worker bundle really runs),
-`worker-settings` (the settings registry).
+`worker-settings` (the settings registry),
+`agent-visibility` (the record of what one send gave a model).
