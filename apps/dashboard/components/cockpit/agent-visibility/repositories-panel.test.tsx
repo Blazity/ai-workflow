@@ -467,7 +467,7 @@ test("a confirmed change sends one change against the version that was read, and
       body: {
         subjectKey: FIXTURE_SUBJECT,
         expectedVersion: 4,
-        changes: [{ repositoryKey: SHOP_WEB, action: "exclude", rationale: "Corrected on the dashboard." }],
+        changes: [{ repositoryKey: SHOP_WEB, action: "exclude", rationale: "No reason given. Changed from the Repositories panel." }],
       },
     },
   ]);
@@ -477,7 +477,7 @@ test("a confirmed change sends one change against the version that was read, and
   assert.match(body, /record version 5/);
   assert.match(body, /Recorded\./);
   assert.match(body, new RegExp(`${SHOP_WEB} is now: excluded, ${FILIP}`));
-  assert.match(body, /Corrected on the dashboard/);
+  assert.match(body, /No reason given\. Changed from the Repositories panel/);
 });
 
 test("a person's own words are what the record keeps, when they write any", async (t) => {
@@ -525,7 +525,7 @@ test("undo puts the record back, and says so as one correction rather than a sec
   assert.deepEqual(harness.edits[1]!.body, {
     subjectKey: FIXTURE_SUBJECT,
     expectedVersion: 5,
-    changes: [{ repositoryKey: SHOP_WEB, action: "select", rationale: "Corrected on the dashboard." }],
+    changes: [{ repositoryKey: SHOP_WEB, action: "select", rationale: "No reason given. Changed from the Repositories panel." }],
   });
 });
 
@@ -646,7 +646,7 @@ test("removing an entry takes it out of the record, and the undo puts it back wh
   assert.deepEqual(harness.edits[0]!.body, {
     subjectKey: FIXTURE_SUBJECT,
     expectedVersion: 4,
-    changes: [{ repositoryKey: LEGACY, action: "remove", rationale: "Corrected on the dashboard." }],
+    changes: [{ repositoryKey: LEGACY, action: "remove", rationale: "No reason given. Changed from the Repositories panel." }],
   });
 
   await clickText(harness.root, "Undo this change");
@@ -672,7 +672,7 @@ test("a repository a question offered can also be ruled out, not only chosen", a
   assert.deepEqual(harness.edits[0]!.body, {
     subjectKey: FIXTURE_SUBJECT,
     expectedVersion: 4,
-    changes: [{ repositoryKey: SHOP_MOBILE, action: "exclude", rationale: "Corrected on the dashboard." }],
+    changes: [{ repositoryKey: SHOP_MOBILE, action: "exclude", rationale: "No reason given. Changed from the Repositories panel." }],
   });
 });
 
