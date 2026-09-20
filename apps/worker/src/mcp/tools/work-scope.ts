@@ -23,6 +23,20 @@ import {
   type WorkScopeEntry,
   type WorkScopeTrailRow,
 } from "@shared/contracts";
+import type {
+  ClarificationDelivery,
+  ClarificationEffect,
+  ClarificationRoundHeader,
+} from "@shared/agent-visibility";
+import {
+  AgentVisibilityReadError,
+  assembleSubjectRounds,
+  connectedRoundReads,
+  roundDeliveriesPage,
+  roundEffectsPage,
+  roundHeadersPage,
+  type AgentVisibilityPage,
+} from "../../services/agent-visibility/index.js";
 import {
   applyConnectedWorkScopeEdit,
   readConnectedWorkScopeRecord,
@@ -31,6 +45,7 @@ import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { mcpEnvelopeResult, registerCatalogTool } from "../tool-catalog.js";
+import { mcpPageBounds } from "./page-budget.js";
 
 type WorkScopeRecordData = {
   subjectKey: string;
@@ -39,6 +54,14 @@ type WorkScopeRecordData = {
   entries: WorkScopeEntry[];
   trail: WorkScopeTrailRow[];
   nextTrailBeforeId: number | null;
+  /** ABSENT, not null, unless the call asked for them: a caller from before
+   *  rounds existed reads exactly the object it always read, key for key. */
+  rounds?: AgentVisibilityPage<ClarificationRoundHeader>;
+  round?: {
+    id: string;
+    view: "deliveries" | "effects";
+    page: AgentVisibilityPage<ClarificationDelivery> | AgentVisibilityPage<ClarificationEffect>;
+  };
 };
 
 type WorkScopeEditData = {
@@ -63,14 +86,50 @@ export function registerWorkScopeTools(
       // A subject kind that keeps no record answers `carriesRecord: false`
       // rather than an error: an agent asking whether a subject carries one is
       // entitled to the answer, and a read cannot cause a bad write.
-      operation: async (): Promise<WorkScopeRecordData> =>
-        readConnectedWorkScopeRecord({
+      operation: async (): Promise<WorkScopeRecordData> => {
+        const record = await readConnectedWorkScopeRecord({
           subjectKey: input.subjectKey,
           trail: {
             ...(input.trailLimit === undefined ? {} : { limit: input.trailLimit }),
             ...(input.trailBefore === undefined ? {} : { beforeId: input.trailBefore }),
           },
-        }),
+        });
+        if (input.rounds !== true && input.roundId === undefined) return record;
+        try {
+          // The rounds are paged against the tool's own budget, and the record
+          // above it is not: the record is what this tool always returned and
+          // is never the thing that gets dropped.
+          const paging = {
+            bounds: mcpPageBounds(deps.settings),
+            ...(input.roundsCursor === undefined ? {} : { cursor: input.roundsCursor }),
+            ...(input.roundsLimit === undefined ? {} : { limit: input.roundsLimit }),
+          };
+          const assembled = await assembleSubjectRounds(connectedRoundReads, {
+            subjectKey: input.subjectKey,
+            organizationId: deps.actor.organizationId,
+          });
+          if (input.roundId === undefined) {
+            return { ...record, rounds: roundHeadersPage(assembled, paging) };
+          }
+          const view = input.roundView ?? "deliveries";
+          return {
+            ...record,
+            round: {
+              id: input.roundId,
+              view,
+              page:
+                view === "deliveries"
+                  ? roundDeliveriesPage(assembled, input.roundId, paging)
+                  : roundEffectsPage(assembled, input.roundId, paging),
+            },
+          };
+        } catch (error) {
+          if (error instanceof AgentVisibilityReadError) {
+            throw new McpPublicError(error.mcpCode, error.message, false);
+          }
+          throw error;
+        }
+      },
     });
     // No trust override: a rationale is typed by a person and a repository key
     // comes from a catalog an operator filled in, so the default

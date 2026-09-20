@@ -75,6 +75,8 @@ const PUBLISHED: McpToolName[] = [
   "settings.set",
   "settings.reset",
   "work_scope.get",
+  "runs.briefing",
+  "workflows.node_briefing",
   "work_scope.edit",
 ];
 

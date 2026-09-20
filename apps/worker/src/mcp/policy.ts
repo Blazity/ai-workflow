@@ -491,6 +491,11 @@ const TOOL_POLICY = {
   // be watching, and it exposes nothing repositories.list does not already.
   "work_scope.get": READ_POLICY,
   "work_scope.edit": WORK_SCOPE_EDIT_POLICY,
+  // A plain read, and deliberately the same scope as runs.logs: a briefing is
+  // what a run's own logs are about, it is served to whoever the REPLAY is
+  // served to, and no new audience and no new scope were opened for it.
+  "runs.briefing": READ_POLICY,
+  "workflows.node_briefing": READ_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {
