@@ -125,7 +125,6 @@ These are not checked out, and this phase cannot attach them. They are here so y
 
 Each of these was already decided for this work, and the reason is on its line. Do not request one: the request is refused, the run pays a pass for it, and nothing changes.
 
-- `github:acme/infra` - switched off in the repository catalog, do not request it: github:acme/infra is switched off on the Repositories page. - Terraform for every environment.
 - `github:acme/legacy-auth` - a person left it out of this work, do not request it: github:acme/legacy-auth was excluded on this ticket by Anna Nowak on 2026-09-17. - The retired auth monolith. Read only, kept for its migration history.
 
 ### Also in the catalog
@@ -133,6 +132,8 @@ Each of these was already decided for this work, and the reason is on its line. 
 One line each, so you know they exist. This phase cannot attach any of them.
 
 - `github:acme/docs` - The public developer documentation.
+
+Any repository this map does not name or count is closed to this work, and this phase could not attach one in any case.
 
 
 ## Review Sibling Repositories

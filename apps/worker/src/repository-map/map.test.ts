@@ -112,6 +112,10 @@ describe("buildRepositoryMap", () => {
   });
 
   it("marks a disabled, a not-enabled and an unusable repository do not request, each with its own reason", () => {
+    // Each of the three is here because of THIS work: the catalog relates web
+    // to the repository the ticket names, the ticket names ops itself, and the
+    // record holds an entry for docs. A repository closed by configuration that
+    // this work never touched is a different case, covered below.
     const map = buildRepositoryMap(
       neighbourhood({
         repositories: [
@@ -120,6 +124,7 @@ describe("buildRepositoryMap", () => {
           facts({ key: OPS, enabled: true, usable: false }),
           facts({ key: DOCS, enabled: undefined, usable: undefined }),
         ],
+        namedKeys: [API, OPS],
         entries: [
           entry({ repositoryKey: DOCS, state: "unavailable", unavailableReason: "not_enabled" }),
         ],
@@ -371,6 +376,200 @@ describe("buildRepositoryMap", () => {
       expect(map.text).toContain("github:acme/ops");
       expect(map.text).toContain("Ada excluded github:acme/ops.");
       expect(map.unlistedKeys).not.toContain(OPS);
+    });
+  });
+
+  /**
+   * THE SHAPE PRODUCTION ACTUALLY HAS: a catalog with a handful of enabled
+   * repositories, inside an installation that exposes hundreds nobody ever
+   * configured. Run `wrun_01M2Z7HFNA7TE170D14T0N3MZR` sent 73 of those by name
+   * and counted 131 more, under a heading claiming each one had been decided
+   * for that work.
+   */
+  describe("a catalog nobody connected to this work", () => {
+    const OFF = (index: number) => `github:acme/off-${String(index).padStart(3, "0")}`;
+
+    /** Two repositories in the workspace, four more enabled, and however many
+     *  the installation exposes that nobody switched on. */
+    const installation = (
+      switchedOff: number,
+      over: Partial<RepositoryMapInput> = {},
+    ): RepositoryMapInput => ({
+      repositories: [
+        facts({
+          key: API,
+          catalogDescription: "The payments API. It owns the ledger and the webhook fan-out.",
+          relationships: [{ kind: "backend_for", targetKey: WEB, direction: "outgoing" }],
+        }),
+        facts({ key: WEB, catalogDescription: "The customer dashboard." }),
+        ...Array.from({ length: 4 }, (_, index) =>
+          facts({ key: `github:acme/enabled-${index}`, catalogDescription: `Enabled ${index}.` }),
+        ),
+        ...Array.from({ length: switchedOff }, (_, index) =>
+          facts({
+            key: OFF(index),
+            enabled: false,
+            providerDescription: `A private service nobody here configured, number ${index}`,
+          }),
+        ),
+      ],
+      attached: [
+        { key: API, localPath: "/vercel/sandbox", access: "write", rationale: "The ticket names it." },
+        { key: WEB, localPath: "/vercel/sandbox/repos/github__acme__web", access: "read_only" },
+      ],
+      namedKeys: [API],
+      catalogActivated: true,
+      expansionOpen: true,
+      ...over,
+    });
+
+    const workspaceText = (input: RepositoryMapInput) =>
+      buildRepositoryMap(input)
+        .parts.filter((entry) => entry.id.startsWith("repository-map-workspace"))
+        .map((entry) => entry.content)
+        .join("");
+
+    it("does not grow the map, however many repositories the installation exposes", () => {
+      const none = buildRepositoryMap(installation(0));
+      const some = buildRepositoryMap(installation(73));
+      const many = buildRepositoryMap(installation(204));
+      // Byte-identical, not merely similar: the size of somebody's repository
+      // list is not a fact about this work, so it may not move a single byte.
+      expect(some.text).toBe(none.text);
+      expect(many.text).toBe(none.text);
+      expect(many.text.length).toBeLessThan(2_000);
+    });
+
+    it("never names one of them, or repeats what the provider says about it", () => {
+      const map = buildRepositoryMap(installation(204));
+      expect(map.text).not.toContain("off-");
+      expect(map.text).not.toContain("A private service nobody here configured");
+      expect(map.repositories.map((repository) => repository.key)).not.toContain(OFF(0));
+    });
+
+    /**
+     * THE CORRECTNESS HARM, NOT THE TIDINESS ONE, AND THE ONE MOST LIKELY TO
+     * COME BACK.
+     *
+     * The settled group is spent BEFORE the rest of the catalog, so every line
+     * about a repository nobody configured is a line the enabled ones no longer
+     * have. On the production shape that was not a bloated prompt, it was a map
+     * that stopped naming `github:acme/enabled-3`: a repository somebody had
+     * switched on, that this work was allowed to ask for, and that the agent was
+     * never told existed. Each of the four is asserted BY NAME, because a loop
+     * that silently ran zero times would prove nothing.
+     */
+    it("does not push a repository somebody enabled off the end of the map", () => {
+      const map = buildRepositoryMap(installation(204));
+      expect(map.text).toContain("- `github:acme/enabled-0`");
+      expect(map.text).toContain("- `github:acme/enabled-1`");
+      expect(map.text).toContain("- `github:acme/enabled-2`");
+      expect(map.text).toContain("- `github:acme/enabled-3`");
+      expect(map.repositories.map((repository) => repository.key)).toEqual([
+        API,
+        WEB,
+        "github:acme/enabled-0",
+        "github:acme/enabled-1",
+        "github:acme/enabled-2",
+        "github:acme/enabled-3",
+      ]);
+    });
+
+    it("states one rule that covers every one of them, however many there are", () => {
+      const map = buildRepositoryMap(installation(204));
+      expect(map.text).toContain(
+        "Any repository this map does not name or count is closed to this work: a request for one is refused, the run pays a pass for it, and nothing changes.",
+      );
+      // The old heading promised the same thing about a list of 73 with 131
+      // missing from it. Nothing is left over to contradict the rule.
+      expect(map.text).not.toContain("Already decided, do not request these");
+      expect(map.unlistedCount).toBe(0);
+      expect(map.unlistedKeys).toEqual([]);
+    });
+
+    it("leaves the workspace byte-identical whatever the installation exposes", () => {
+      expect(workspaceText(installation(204))).toBe(workspaceText(installation(0)));
+      expect(workspaceText(installation(204))).toBe(
+        "### In the workspace\n\n" +
+          "Only a repository marked (write) may be changed. A repository marked (read only) is context: read it, never change it.\n\n" +
+          "- `github:acme/api` at `/vercel/sandbox` (write)\n" +
+          "  Why it is here: The ticket names it.\n" +
+          "  What it is: The payments API. It owns the ledger and the webhook fan-out.\n" +
+          "  How it relates: It is the backend for `github:acme/web`.\n" +
+          "- `github:acme/web` at `/vercel/sandbox/repos/github__acme__web` (read only)\n" +
+          "  Why it is here: it was attached to this work.\n" +
+          "  What it is: The customer dashboard.\n\n",
+      );
+    });
+
+    it("still names a repository a person excluded on this work, with the record's own reason", () => {
+      const map = buildRepositoryMap(
+        installation(204, {
+          entries: [entry({ repositoryKey: OPS, state: "excluded" })],
+          leftOut: [{ repositoryKey: OPS, reason: "Ada excluded github:acme/ops on 1 September." }],
+        }),
+      );
+      expect(map.text).toContain("### Already decided, do not request these");
+      expect(map.text).toContain(
+        "- `github:acme/ops` - a person left it out of this work, do not request it: Ada excluded github:acme/ops on 1 September.",
+      );
+      // And where the record holds the entry but this run composed no sentence
+      // for it, the entry alone is what keeps the repository on the map.
+      const recordOnly = buildRepositoryMap(
+        installation(204, { entries: [entry({ repositoryKey: OPS, state: "excluded" })] }),
+      );
+      expect(recordOnly.text).toContain(
+        "- `github:acme/ops` - a person left it out of this work, do not request it: Somebody left github:acme/ops out of this work.",
+      );
+    });
+
+    it("still names a repository this run already refused, so the next pass does not ask again", () => {
+      // The refusal is the ONLY thing that puts this key in the map, and the
+      // map gives it the cause `catalog` because nothing else explains it. A
+      // map that read the cause to decide what to keep would drop exactly the
+      // repository the eleven minute planning failure was made of.
+      const requested = "github:acme/enabled-1";
+      const map = buildRepositoryMap(
+        installation(204, {
+          refusedKeys: [requested],
+          leftOut: [{ repositoryKey: requested, reason: "This run already refused github:acme/enabled-1." }],
+        }),
+      );
+      expect(
+        map.repositories.find((repository) => repository.key === requested)?.inclusion.cause,
+      ).toBe("catalog");
+      expect(map.text).toContain(
+        "- `github:acme/enabled-1` - this run already refused a request for it, do not request it again: This run already refused github:acme/enabled-1.",
+      );
+    });
+
+    it("still names a repository the ticket asks for that nobody enabled", () => {
+      const map = buildRepositoryMap(installation(204, { namedKeys: [API, OFF(3)] }));
+      expect(map.text).toContain(
+        "- `github:acme/off-003` - switched off in the repository catalog, do not request it: github:acme/off-003 is switched off on the Repositories page.",
+      );
+    });
+
+    it("records exactly the repositories it named", () => {
+      const map = buildRepositoryMap(
+        installation(204, {
+          entries: [entry({ repositoryKey: OPS, state: "excluded" })],
+          leftOut: [{ repositoryKey: OPS, reason: "Ada excluded it." }],
+        }),
+      );
+      const named = [...map.text.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]);
+      expect(map.repositories.map((repository) => repository.key).sort()).toEqual(
+        [...named].sort(),
+      );
+    });
+
+    it("claims nothing about what it did not name when this run read no catalog", () => {
+      const map = buildRepositoryMap({
+        silence: "not_recorded",
+        attached: [{ key: API, localPath: "/vercel/sandbox", access: "write" }],
+      });
+      expect(map.text).not.toContain("is closed to this work");
+      expect(map.text).toContain("The repository map was not available for this send");
     });
   });
 });

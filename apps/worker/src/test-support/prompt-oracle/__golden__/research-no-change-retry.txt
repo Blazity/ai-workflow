@@ -199,7 +199,6 @@ These are not checked out. Search the workspace first, and request one of these 
 
 Each of these was already decided for this work, and the reason is on its line. Do not request one: the request is refused, the run pays a pass for it, and nothing changes.
 
-- `github:acme/infra` - switched off in the repository catalog, do not request it: github:acme/infra is switched off on the Repositories page. - Terraform for every environment.
 - `github:acme/legacy-auth` - a person left it out of this work, do not request it: github:acme/legacy-auth was excluded on this ticket by Anna Nowak on 2026-09-17. - The retired auth monolith. Read only, kept for its migration history.
 
 ### Also in the catalog
@@ -207,6 +206,8 @@ Each of these was already decided for this work, and the reason is on its line. 
 One line each. Ask for one by its exact provider:path when you can name what you need from it.
 
 - `github:acme/docs` - The public developer documentation.
+
+Any repository this map does not name or count is closed to this work: a request for one is refused, the run pays a pass for it, and nothing changes.
 
 
 ## Existing pull request — address this review feedback
