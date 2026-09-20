@@ -1,5 +1,5 @@
 import type { PrTriggerPayload, TriggerEvent } from "@shared/contracts";
-import { hasAiWorkflowCommentMarker, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
+import { isOurOwnPrComment, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
 import { isManagedGateCheckName } from "../../engine/support/workflow-naming.js";
 
 export type { TriggerEvent } from "@shared/contracts";
@@ -184,7 +184,12 @@ export function normalizeGitHubEvent(
     if (!allowedStates.includes("commented")) return null;
     if (vcsLoginsMatch(comment.user?.login, options.botLogin)) return null;
     if (comment.user?.type === "Bot") return null;
-    if (hasAiWorkflowCommentMarker(comment.body)) return null;
+    // Ours by what the author wrote, not by a marker anywhere in the body:
+    // "Quote reply" copies our marker into a person's own comment, and dropping
+    // that person here starts no run at all, so their request goes nowhere with
+    // nothing to look at. See isOurOwnPrComment; our own comments still carry
+    // the marker on a line of their own and still fire nothing.
+    if (isOurOwnPrComment(comment.body)) return null;
     // GitHub wraps inline comments in a review container, so the N sibling
     // comments and their parent review submission share one semantic key.
     // A reply is its own human action and must never coalesce into the review
@@ -224,7 +229,12 @@ export function normalizeGitHubEvent(
     if (!allowedStates.includes("commented")) return null;
     if (vcsLoginsMatch(comment.user?.login, options.botLogin)) return null;
     if (comment.user?.type === "Bot") return null;
-    if (hasAiWorkflowCommentMarker(comment.body)) return null;
+    // Ours by what the author wrote, not by a marker anywhere in the body:
+    // "Quote reply" copies our marker into a person's own comment, and dropping
+    // that person here starts no run at all, so their request goes nowhere with
+    // nothing to look at. See isOurOwnPrComment; our own comments still carry
+    // the marker on a line of their own and still fire nothing.
+    if (isOurOwnPrComment(comment.body)) return null;
     const semanticKey =
       typeof comment.id === "number" ? `comment:${comment.id}` : undefined;
     return {
@@ -393,7 +403,9 @@ export function normalizeGitLabEvent(
       attrs.system === true ||
       attrs.internal === true ||
       attrs.confidential === true ||
-      hasAiWorkflowCommentMarker(attrs.note)
+      // Same rule as the two GitHub comment paths above: a note quoting one of
+      // ours belongs to the person who wrote around the quote.
+      isOurOwnPrComment(attrs.note)
     ) {
       return null;
     }

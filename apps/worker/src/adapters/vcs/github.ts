@@ -1386,7 +1386,22 @@ export class GitHubAdapter
         // A minimized root comment is a thread the review sweep already retired as
         // outdated. Re-raising it would have the agent answer a finding this
         // workflow itself withdrew, and settling it would resolve it a second time.
-        if (comments[0]?.isMinimized === true) continue;
+        //
+        // Only while we still had the last word. The sweep never collapses a
+        // thread somebody is already talking in (`hasHumanReply`, where
+        // `retireReviewThread` is called), so the shape below can only be a
+        // person who opened the collapsed thread afterwards and wrote in it:
+        // "no, this is still broken". That is a reopened thread by the
+        // definition this codebase already keeps in `isReopenedLedgerThread`,
+        // and dropping it answers the person who wrote it with a run reporting
+        // that every thread is parked. Retirement does not outlive somebody
+        // answering.
+        if (
+          comments[0]?.isMinimized === true &&
+          comments.at(-1)?.viewerDidAuthor === true
+        ) {
+          continue;
+        }
         // `isOurs` is the provider's own answer to authorship; it stays out of
         // the notes the agent reads and only decides which markers are ours.
         const entries = comments.map((comment) => ({

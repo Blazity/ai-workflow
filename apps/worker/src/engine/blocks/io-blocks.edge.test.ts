@@ -88,7 +88,10 @@ import {
   mayRunTouchRepository,
 } from "../../engine/support/repository-access.js";
 import { TEST_BRIDGE_REPOSITORY_ACCESS } from "../../test-support/settings.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
+import {
+  AI_WORKFLOW_COMMENT_MARKER,
+  hasUnquotedAiWorkflowCommentMarker,
+} from "../../adapters/vcs/vcs-bot-identity.js";
 import {
   createRepositoryDirectory,
   createRepositoryDirectoryForProviders,
@@ -481,6 +484,61 @@ describe("post_pr_comment edge cases", () => {
     expect(postPRComment).toHaveBeenCalledTimes(2);
     expect(postPRComment).toHaveBeenCalledWith(7, marked("LGTM"));
     expect(postPRComment).toHaveBeenCalledWith(9, marked("LGTM"));
+  });
+
+  it("marks a body whose only marker it is quoting, so the comment stays ours", () => {
+    // An agent that quotes a previous run's note carries our marker inside a
+    // blockquote. Every reader downstream now treats a quoted marker as
+    // somebody quoting us, so skipping the append here would post a comment of
+    // ours that the trigger filter fires on and the no-change gate reads as a
+    // person still waiting.
+    const quoting = `> Automated fix pushed.\n> ${AI_WORKFLOW_COMMENT_MARKER}\n\nAnd here is round two.`;
+    expect(hasUnquotedAiWorkflowCommentMarker(quoting)).toBe(false);
+    expect(hasUnquotedAiWorkflowCommentMarker(marked(quoting))).toBe(true);
+  });
+
+  it("appends a marker to a body that only quotes one, so the comment stays ours", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: null });
+    mocks.createRepositoryVCS.mockImplementation(({ repoPath }: { repoPath: string }) => ({
+      getPRHead: vi.fn().mockResolvedValue({
+        headSha: repoPath === "acme/web" ? "web-head" : "api-head",
+        baseRef: "main",
+        state: "open",
+      }),
+      postPRComment,
+    }));
+    const quoting = `> ${AI_WORKFLOW_COMMENT_MARKER}\n\nRound two pushed.`;
+
+    const result = await executePostPrComment(
+      makeNode("post_pr_comment", { body: quoting, target: "all" }),
+      {},
+      makeCtx({ publication: publication() }),
+    );
+
+    expect(result.kind).toBe("next");
+    expect(postPRComment).toHaveBeenCalledWith(7, marked(quoting));
+  });
+
+  it("leaves a body that already carries an unquoted marker alone", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: null });
+    mocks.createRepositoryVCS.mockImplementation(({ repoPath }: { repoPath: string }) => ({
+      getPRHead: vi.fn().mockResolvedValue({
+        headSha: repoPath === "acme/web" ? "web-head" : "api-head",
+        baseRef: "main",
+        state: "open",
+      }),
+      postPRComment,
+    }));
+    const alreadyMarked = marked("Round two pushed.");
+
+    const result = await executePostPrComment(
+      makeNode("post_pr_comment", { body: alreadyMarked, target: "all" }),
+      {},
+      makeCtx({ publication: publication() }),
+    );
+
+    expect(result.kind).toBe("next");
+    expect(postPRComment).toHaveBeenCalledWith(7, alreadyMarked);
   });
 
   it("does not infer a missing publication target from the trigger payload", async () => {

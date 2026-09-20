@@ -105,7 +105,7 @@ import { resolveAgentTicketInput, resolveImplementationPlanInput, selectEntryTri
 import { appendClarificationRound, blockRunStateSummary, buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, buildPromptVariables, implementationChangeSummary, optionalPricedModelsForRun, promptOverride, publicationPrForTelemetry, repoMemoryDistillTarget, resolveOpenPrBody, resolveOpenPrTitle, resolveRunPriceLookup, resolveSlackMessageInput, resolveTicketStatusInput, resolveV2PromptConfiguration, reviewAgentExecutionResult, shouldPromoteResearchWriteScope, soleActiveBlockId, v2OpenPrRepositoriesProvenanceIssue, v2TerminalBlockResult } from "./helpers/prompt-output.js";
 import { checksBudgetObserver, definitionRequestsRepairCycles, errorMessage, failureExitPhase, isRepositoryScriptsFailurePhase, nodeCanRecordGate, recoverLatestRepositoryScriptsFailureFromSteps, repositoryScriptsFailureComment, truncateError } from "./helpers/repository-failure.js";
 import { postReviewLedgerFailureNoteStep, readLedgerEvidenceFileStep, settleReviewLedgerThreads } from "./steps/review-ledger.js";
-import { applyReviewLedgerGate, buildResolutionEvidenceComment, pendingPrCheckIntent, resolveNoChangeAction, reviewLedgerOutputFields, reviewLedgerRepoLocalPath, runLedgerEvidenceSecondPass, settledAnswerCount, toLedgerGuardWorkItems, toReviewThreadDispositions, unsettledWorkItemAliases } from "./helpers/review-ledger.js";
+import { applyReviewLedgerGate, buildResolutionEvidenceComment, pendingPrCheckIntent, pendingReviewFeedbackSentence, resolveNoChangeAction, resolvePendingReviewFeedback, reviewLedgerOutputFields, reviewLedgerRepoLocalPath, runLedgerEvidenceSecondPass, settledAnswerCount, toLedgerGuardWorkItems, toReviewThreadDispositions, unsettledWorkItemAliases } from "./helpers/review-ledger.js";
 
 export { execute as executeRunScripts } from "./blocks/run-scripts/execute.js";
 
@@ -1629,10 +1629,11 @@ async function agentWorkflowBody(
             for (const key of Object.keys(checkpointSteps)) delete checkpointSteps[key];
             Object.assign(checkpointSteps, restoredSteps);
             if (ctx.selectedRepositories.length > 0) {
-              const { blockFetchPrContextsStep } = await import("./blocks/fetch-pr-context/execute.js");
+              const { blockFetchPrContextsStep, reviewLedgerFetchOptions } = await import("./blocks/fetch-pr-context/execute.js");
               ctx.repositoryContexts = await blockFetchPrContextsStep(
                 ctx.selectedRepositories,
                 ctx.repositories,
+                reviewLedgerFetchOptions(ctx),
               );
             }
           }
@@ -2625,14 +2626,18 @@ async function agentWorkflowBody(
           ...ctx.selectedRepositories,
           ...action.repositories,
         ];
-        const { blockFetchPrContextsStep } = await import(
+        const { blockFetchPrContextsStep, reviewLedgerFetchOptions } = await import(
           "./blocks/fetch-pr-context/execute.js"
         );
         ctx.workspaceManifest = attached.manifest;
         ctx.selectedRepositories = repositories;
+        // The ledger options travel with every refetch: without them this
+        // restart would hand the next research pass a prompt with no alias
+        // block while ctx.reviewLedger still expects a disposition per thread.
         ctx.repositoryContexts = await blockFetchPrContextsStep(
           repositories,
           ctx.repositories,
+          reviewLedgerFetchOptions(ctx),
         );
         ctx.repositoryExpansion = expansionState;
         await emitRepositoryWorkflowObservation(execution?.observations, {
@@ -2887,10 +2892,14 @@ async function agentWorkflowBody(
                 );
               },
               fetchContexts: async (repositories) => {
-                const { blockFetchPrContextsStep } = await import(
+                const { blockFetchPrContextsStep, reviewLedgerFetchOptions } = await import(
                   "./blocks/fetch-pr-context/execute.js"
                 );
-                return blockFetchPrContextsStep(repositories, ctx.repositories);
+                return blockFetchPrContextsStep(
+                  repositories,
+                  ctx.repositories,
+                  reviewLedgerFetchOptions(ctx),
+                );
               },
             });
             if (humanExpansion.kind === "clarification") {
@@ -2961,13 +2970,14 @@ async function agentWorkflowBody(
             // prep refreshes this later; here it would otherwise be empty
             // because planning runs before any code workspace is provisioned.
             if (ctx.entry.kind === "ticket" && ctx.repositoryContexts.length === 0) {
-              const { resolveTicketWorkflowOwnedReposStep, blockFetchPrContextsStep } =
+              const { resolveTicketWorkflowOwnedReposStep, blockFetchPrContextsStep, reviewLedgerFetchOptions } =
                 await import("./blocks/fetch-pr-context/execute.js");
               const ownedRepos = await resolveTicketWorkflowOwnedReposStep(ctx.ticket.identifier);
               if (ownedRepos.length > 0) {
                 ctx.repositoryContexts = await blockFetchPrContextsStep(
                   ownedRepos,
                   ctx.repositories,
+                  reviewLedgerFetchOptions(ctx),
                 );
               }
             }
@@ -3285,25 +3295,25 @@ async function agentWorkflowBody(
               ? ledgerGate.kind === "no_change"
                 ? "no_change"
                 : "proceed"
-              : resolveNoChangeAction(
-                  research,
-                  // With a ledger in play it is the only definition of pending
-                  // feedback. The flat comment list still holds every note on
-                  // the PR, including ones already answered, so letting it vote
-                  // here would refuse a legitimate no-op forever.
-                  ctx.reviewLedger ? [] : ctx.repositoryContexts,
-                  noChangeRetryUsed,
-                );
+              // The contexts as they are. The gate's own predicate lets a
+              // repository's thread feed supersede its flat comment list, so
+              // the notes already answered no longer vote, and a second
+              // repository's unanswered comment is no longer thrown away with
+              // them. See resolvePendingReviewFeedback.
+              : resolveNoChangeAction(research, ctx.repositoryContexts, noChangeRetryUsed);
+            // Resolved once, so the warning, the refusal and the sentence a
+            // person reads on the ticket all quote the same belief.
+            const pendingFeedback = resolvePendingReviewFeedback(ctx.repositoryContexts);
             if (noChangeAction === "retry") {
               console.warn(
-                "[agent] research declared no_change_needed despite pending PR review feedback; retrying research once with a corrective note",
+                `[agent] research declared no_change_needed but ${pendingReviewFeedbackSentence(pendingFeedback)} (${pendingFeedback.reason}); retrying research once with a corrective note`,
               );
               noChangeRetryUsed = true;
               continue;
             }
             if (noChangeAction === "fail") {
               return executionError(
-                "research declared no change needed but the ticket's PR has unresolved human review feedback; refusing the no_change_needed exit",
+                `research declared no change needed, twice, but ${pendingReviewFeedbackSentence(pendingFeedback)}; refusing the no_change_needed exit`,
                 { category: "engine", phase: "research" },
               );
             }
