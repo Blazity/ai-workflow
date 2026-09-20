@@ -1,0 +1,2 @@
+- A run keeps what each of its agents was given: every model send records the prompt it was sent, section by section, with where each part came from, what the prompt held back, the model and profile behind it, and the repositories in scope. A briefing is kept as long as the run's replay, and at least thirty days.
+- A new setting, agent briefings, turns that recording off for the next run; a send made while it was off is marked as such, so a run that recorded nothing is never confused with one nobody kept.
