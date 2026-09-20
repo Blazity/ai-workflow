@@ -189,6 +189,7 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     selectedRepositories: [],
     repositoryContexts: [],
     repositoryDiscovery: null,
+    repositoryMap: null,
     repositoryExpansion: { rounds: 0, priorRequests: [] },
     researchWriteRepositories: [],
     preSandboxAdditions: { research: [], implementation: [], review: [] },

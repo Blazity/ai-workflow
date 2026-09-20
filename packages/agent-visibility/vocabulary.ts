@@ -106,6 +106,14 @@ export const AGENT_BRIEFING_PROVIDERS = Object.keys(BUILTIN_HARNESS_PROFILE_IDS)
  * `offered` are usable; every other known state carries a reason, because "you
  * may not touch this" without a why is the sentence that sends a person to the
  * wrong screen.
+ *
+ * `disabled` and `unusable` are two values on purpose, the distinction the work
+ * scope contract already keeps between `outside_catalog` and `unusable`
+ * (`packages/contracts/work-scope.ts`): somebody switched a repository off
+ * here, and the provider offered nothing this run could check out, are
+ * different facts with different remedies. Sending an operator to the
+ * Repositories page for the second one costs them a round to discover the
+ * switch is already on.
  */
 export const REPOSITORY_STATES = [
   "write",
@@ -114,7 +122,13 @@ export const REPOSITORY_STATES = [
   "excluded",
   "disabled",
   "not_enabled",
+  "unusable",
   "outside_catalog",
+  // This run asked for it and was refused for a reason that holds for the rest
+  // of the run. Not `excluded`: nobody decided anything about this repository,
+  // the run's own rules closed the door, and sending a person to the
+  // Repositories page to undo a decision that was never made wastes their time.
+  "refused",
 ] as const;
 export const USABLE_REPOSITORY_STATES = ["write", "read_only", "offered"] as const;
 

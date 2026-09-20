@@ -173,19 +173,41 @@ Answer (by Anna Nowak, 2026-09-18T09:12:00.000Z): Only a deploy. A key rotation 
 
 ai-workflow/aiw-512
 
-## Selected Repositories
+## Repositories
 
-Only repositories marked write may be modified. Read-only repositories are context only and must not be changed.
+### In the workspace
 
-- `github:acme/api` at `/vercel/sandbox/repos/github__acme__api` (write) - the ticket names the signing keys in acme/api
-- `github:acme/web` at `/vercel/sandbox/repos/github__acme__web` (read-only) - frontend for acme/api
+Only a repository marked (write) may be changed. A repository marked (read only) is context: read it, never change it.
 
-## Pre-Sandbox: Selected Repositories
+- `github:acme/api` at `/vercel/sandbox/repos/github__acme__api` (write)
+  Why it is here: the ticket names the signing keys in acme/api
+  What it is: The session and billing API. It owns key rotation, the refresh path and the webhook fan-out.
+  How it relates: It publishes a package used by `github:acme/sdk`. It is the backend for `github:acme/web`.
+- `github:acme/web` at `/vercel/sandbox/repos/github__acme__web` (read only)
+  Why it is here: frontend for acme/api
+  What it is: The customer dashboard. Sign-in and the account screens live here.
 
-This information was produced before sandbox creation.
+### Related to this work, not in the workspace
 
-- github:acme/api: the ticket names the signing keys in acme/api
-- github:acme/web: frontend for acme/api
+These are not checked out. Search the workspace first, and request one of these only when you can name the logic you could not find.
+
+- `github:acme/sdk` - not in the workspace; you may request it
+  Why it is here: `github:acme/api` publishes a package used by `github:acme/sdk`.
+  What it is: Client SDK for the acme API (the provider's own listing text; nobody here wrote a description)
+
+### Already decided, do not request these
+
+Each of these was already decided for this work, and the reason is on its line. Do not request one: the request is refused, the run pays a pass for it, and nothing changes.
+
+- `github:acme/infra` - switched off in the repository catalog, do not request it: github:acme/infra is switched off on the Repositories page. - Terraform for every environment.
+- `github:acme/legacy-auth` - a person left it out of this work, do not request it: github:acme/legacy-auth was excluded on this ticket by Anna Nowak on 2026-09-17. - The retired auth monolith. Read only, kept for its migration history.
+
+### Also in the catalog
+
+One line each. Ask for one by its exact provider:path when you can name what you need from it.
+
+- `github:acme/docs` - The public developer documentation.
+
 
 ## Pre-Sandbox: Repositories left out
 

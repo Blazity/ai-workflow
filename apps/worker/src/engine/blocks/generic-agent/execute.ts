@@ -21,6 +21,11 @@ import {
   type ParsedJsonSchema,
 } from "../../definition/json-schema.js";
 import { resolveBlockAgent } from "../../definition/resolve-agent.js";
+import { repositoryMapContext } from "../../../repository-map/context.js";
+import type { RepositoryMapContext } from "../../../repository-map/map.js";
+import { repositoryMapPromptParts } from "../../../sandbox/context.js";
+import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
+import type { WorkspaceManifest } from "../../../sandbox/repo-workspace.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
 import {
   ensureAgentSandbox,
@@ -265,9 +270,44 @@ async function blockGenericAgentSchemaFailureStep(
  * the prompt itself, then the human's answer when the block resumes from a
  * question.
  */
+/** What this phase tells the agent about its repositories, from the same
+ *  builder every other phase reads. */
+function genericAgentRepositories(
+  ctx: Parameters<BlockExecuteFn>[2],
+): {
+  repositoryMap?: RepositoryMapContext;
+  repositories?: SelectedRepository[];
+  workspaceManifest?: WorkspaceManifest;
+} {
+  const map = repositoryMapContext(ctx, {
+    expansionOpen: false,
+    leftOut: ctx.workScopeLeftOut ?? [],
+  });
+  return {
+    ...(map ? { repositoryMap: map } : {}),
+    repositories: ctx.selectedRepositories,
+    ...(ctx.workspaceManifest ? { workspaceManifest: ctx.workspaceManifest } : {}),
+  };
+}
+
 export function genericAgentRuntimeData(
   resolvedInputs: Record<string, unknown>,
   clarificationAnswer: string | undefined,
+  /**
+   * The repositories this phase is standing in, and the ones it is not.
+   *
+   * The generic agent was the one repository-working phase that received no
+   * repository list at all: it worked in a checkout whose shape nobody had
+   * described, next to a catalog it could not see. It gets the same map from
+   * the same builder as every other phase; it has no channel for requesting
+   * one, so the map never offers it one. Absent in the unit tests that only
+   * care about bound inputs.
+   */
+  repositories?: {
+    repositoryMap?: RepositoryMapContext;
+    repositories?: SelectedRepository[];
+    workspaceManifest?: WorkspaceManifest;
+  },
 ): EffectivePromptPart[] {
   const runtimeInputs = Object.fromEntries(
     Object.entries(resolvedInputs).filter(([name]) => name !== "prompt"),
@@ -289,9 +329,12 @@ export function genericAgentRuntimeData(
       content: `Human clarification answer:\n${clarificationAnswer}`,
     });
   }
-  return concatPromptParts(
+  const composed = concatPromptParts(
     parts.flatMap((entry, index) => (index === 0 ? [entry] : ["\n\n", entry])),
   );
+  const mapParts = repositories ? repositoryMapPromptParts(repositories, composed) : [];
+  if (mapParts.length === 0) return composed;
+  return concatPromptParts(composed.length > 0 ? [composed, "\n\n", mapParts] : [mapParts]);
 }
 
 /**
@@ -394,6 +437,7 @@ export const execute: BlockExecuteFn = async (
     runtimeData: genericAgentRuntimeData(
       resolvedInputs,
       execution?.clarificationAnswer,
+      genericAgentRepositories(ctx),
     ),
     sandboxId,
     fallbackInput: execution?.clarificationAnswer

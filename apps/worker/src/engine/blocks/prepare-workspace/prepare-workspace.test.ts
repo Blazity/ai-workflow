@@ -343,6 +343,62 @@ describe("prepare_workspace execute", () => {
     expect(ctx.workScopeRecoveryNotes).toEqual(["Excluding a repository is not final."]);
   });
 
+  /**
+   * A repository nobody chose, cloned with write access, is the third of the
+   * silent failures this feature was written against: the run could commit to
+   * a repository whose only claim on the ticket is an edge somebody drew in a
+   * catalog. The guarantee is only real where it is observable, so this asserts
+   * the WORKSPACE INPUT, which is what provisioning actually clones.
+   */
+  it("clones a related repository read only", async () => {
+    const web: SelectedRepository = {
+      provider: "github",
+      repoPath: "acme/web",
+      defaultBranch: "main",
+      selectedRationale: "Related to github:acme/api, which this work names.",
+    };
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo, web],
+      repositoryMap: {
+        repositories: [],
+        relatedAttachments: [
+          {
+            repositoryKey: "github:acme/web",
+            viaRepositoryKey: "github:acme/api",
+            relationship: "backend_for",
+          },
+        ],
+      },
+    });
+    // Whatever the selection hands on, mirrored back the way the real step
+    // does, so the assertion below is about the run's rule and not the mock.
+    mocks.blockFetchPrContextsStep.mockImplementation(
+      async (repositories: SelectedRepository[]) =>
+        repositories.map((repository) => ({
+          repository,
+          prComments: [],
+          checkResults: [],
+          hasConflicts: false,
+        })),
+    );
+    const ctx = makeCtx({ sandboxId: null });
+
+    await ensureWorkspace(ctx, undefined, {});
+
+    expect(mocks.provisionMultiRepo).toHaveBeenCalledTimes(1);
+    const provisioned = (
+      mocks.provisionMultiRepo.mock.calls[0]![0] as {
+        repositories: Array<{ repoPath: string; access?: string }>;
+      }
+    ).repositories;
+    expect(provisioned.find((entry) => entry.repoPath === "acme/web")?.access).toBe("read");
+    // And the repository the ticket itself names keeps the default, which is
+    // write: this rule narrows one repository, not the workspace.
+    expect(provisioned.find((entry) => entry.repoPath === "acme/api")?.access).toBeUndefined();
+  });
+
   // Memory is an optimization. Even an error crossing the step boundary must not
   // fail a workspace that is already provisioned and registered.
   it("still succeeds when memory hydration throws", async () => {

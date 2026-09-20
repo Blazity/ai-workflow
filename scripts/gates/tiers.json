@@ -50,7 +50,7 @@
     },
     "engine": {
       "patterns": [
-        "^apps/worker/src/(?:engine|harness-profiles|memory|post-pr-gate|pre-pr-checks|pre-sandbox|prompt-library|run-analysis|run-observability|sandbox|workflows)(?:/|$)"
+        "^apps/worker/src/(?:engine|harness-profiles|memory|post-pr-gate|pre-pr-checks|pre-sandbox|prompt-library|repository-map|run-analysis|run-observability|sandbox|workflows)(?:/|$)"
       ]
     },
     "adapters": {

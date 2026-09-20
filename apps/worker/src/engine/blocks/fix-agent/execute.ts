@@ -15,6 +15,7 @@ import type { CheckRunResult, PRComment } from "../../../adapters/vcs/types.js";
 import type { WorkspaceManifestV2 } from "../../../sandbox/repo-workspace.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import { resolveBlockAgent } from "../../definition/resolve-agent.js";
+import { repositoryMapContext } from "../../../repository-map/context.js";
 import {
   buildReviewLedgerDurableState,
   buildReviewLedgerGuardSummary,
@@ -573,6 +574,10 @@ async function buildFixInput(
     block.params.instructions.trim().length > 0
       ? block.params.instructions.trim()
       : undefined;
+  const fixMap = repositoryMapContext(ctx, {
+    expansionOpen: false,
+    leftOut: ctx.workScopeLeftOut ?? [],
+  });
 
   return fixContextParts({
     ticket: { ...ctx.ticket, ...(ctx.clarifications ? { clarifications: ctx.clarifications } : {}) },
@@ -583,6 +588,15 @@ async function buildFixInput(
     ...(instructions ? { instructions } : {}),
     repositories: ctx.selectedRepositories,
     ...(ctx.workspaceManifest ? { workspaceManifest: ctx.workspaceManifest } : {}),
+    // The same repository map every other repository-working send gets, built
+    // by the SAME function rather than a second hand-written copy: the copy
+    // that used to live here had already lost `offeredKeys`, so a repository a
+    // question had put in front of a person read as "offered by a question" to
+    // research and as a plain catalog row to the fix agent, on one run.
+    //
+    // The fix agent has no channel for asking for a repository, so its map
+    // never offers one.
+    ...(fixMap ? { repositoryMap: fixMap } : {}),
     // With the ledger on, the aliased thread feed replaces the flat comment
     // list, so the agent answers identified threads instead of a transcript.
     ...(ctx.reviewLedger ? { reviewThreads: ctx.reviewLedger.feed } : {}),

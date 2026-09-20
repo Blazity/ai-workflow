@@ -1017,8 +1017,10 @@ describe("a subject whose selection question has already been answered", () => {
     // Every research report this body builds, not one of them: the run reaches
     // the builder down two paths (a no-change finish and an ordinary one) and a
     // drop is equally invisible on either.
+    // Matched as a shorthand property, so the repository map reading the same
+    // live list (`leftOut: leftOutRepositories`) is not counted as a report.
     expect(
-      workflow.split("leftOutRepositories,").length - 1,
+      (workflow.match(/^\s*leftOutRepositories,$/gm) ?? []).length,
       "a research analysis report is built without what the run left out",
     ).toBe(2);
   });

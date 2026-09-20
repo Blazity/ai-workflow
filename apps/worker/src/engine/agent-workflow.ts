@@ -14,6 +14,11 @@ import {
   resolveRunTriggerRepositoryPolicy,
   runWorkScopeSubjectKey,
 } from "./work-scope/policy.js";
+import { relatedRepositoryKeys, type RepositoryMapContext } from "../repository-map/map.js";
+import {
+  repositoryMapContext,
+  type RunRepositoryRefusal,
+} from "../repository-map/context.js";
 import {
   consumeWorkScopeAsk,
   createRunWorkScopeRecorder,
@@ -1261,6 +1266,7 @@ async function agentWorkflowBody(
       selectedRepositories: [],
       repositoryContexts: [],
       repositoryDiscovery: null,
+      repositoryMap: null,
       ...(plan.repositoryScope ? { repositoryScope: plan.repositoryScope } : {}),
       repositoryExpansion: { rounds: 0, priorRequests: [] },
       researchWriteRepositories: [],
@@ -1902,6 +1908,51 @@ async function agentWorkflowBody(
        * different plans. A trail row carries the database's own instant; an
        * entry records the moment the run that wrote it began.
        */
+      /**
+       * The candidates of `event_repository_and_related`, which was legal on
+       * every pull request trigger and always empty, so that policy could never
+       * add a repository and a model asking for the obvious neighbour of the
+       * pull request's own repository was refused as outside the policy.
+       *
+       * SEEDED FROM WHAT THE EVENT BROUGHT, NOT FROM THE WORKSPACE AS IT STANDS.
+       * The repositories this run itself took because they were related are
+       * removed from the seeds, or a neighbour taken in round one would make
+       * ITS neighbours candidates in round two, which is a second hop nobody
+       * decided on.
+       */
+      /**
+       * THE MAP THIS SEND DESCRIBES, built at the send and not before it.
+       *
+       * Read at the moment the prompt is composed, because two things it
+       * depends on only exist by then. The run's own map is assigned when the
+       * workspace is prepared, which is AFTER this block starts; and the
+       * refusals grow inside the planning loop, so a context built once would
+       * hand pass two the same bytes as pass one and invite the model to ask
+       * again for the repository the run had just refused. That question cost
+       * eleven minutes on production once already.
+       *
+       * `expansionOpen` is the send's own answer, not the run's: only a
+       * research pass with the expansion still open can attach anything.
+       */
+      const mapContextFor = (options: { expansionOpen: boolean }) =>
+        repositoryMapContext(ctx, {
+          expansionOpen: options.expansionOpen,
+          leftOut: leftOutRepositories,
+          refusals: expansionRefusals,
+        });
+      const withRepositoryMap = (context: RepositoryMapContext | undefined) =>
+        context ? { repositoryMap: context } : {};
+      const eventRelatedKeys = (attachedKeys: string[]): string[] => {
+        const taken = new Set(
+          (ctx.repositoryMap?.relatedAttachments ?? []).map(
+            (attachment) => attachment.repositoryKey,
+          ),
+        );
+        return relatedRepositoryKeys(
+          ctx.repositoryMap?.repositories ?? [],
+          attachedKeys.filter((key) => !taken.has(key)),
+        );
+      };
       const runWorkScopeRecorder = (
         catalog: RepositoryCatalogEntry[],
         attachedKeys: string[],
@@ -1933,6 +1984,7 @@ async function agentWorkflowBody(
           },
           ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
           policy,
+          eventRelatedKeys: eventRelatedKeys(attachedKeys),
           actor: runWorkScopeActor,
           now: new Date(budgetStartedAtMs).toISOString(),
           attachedKeys,
@@ -1955,8 +2007,16 @@ async function agentWorkflowBody(
         return write ?? undefined;
       };
       /** What the run refused the model, in the model's next research prompt.
-       *  A model told only "no" asks again, and the run pays another pass. */
-      const expansionRefusals: Array<{ repositoryKey: string; sentence: string }> = [];
+       *  A model told only "no" asks again, and the run pays another pass.
+       *
+       *  The REASON rides along with the sentence because the map has to tell
+       *  a refusal that settles a repository from one that refused only this
+       *  request: "you asked for four at once" leaves the door open and
+       *  "a person excluded it" does not, and closing the first would be the
+       *  same lie pointing the other way. */
+      const expansionRefusals: Array<
+        { repositoryKey: string; sentence: string } & RunRepositoryRefusal
+      > = [];
       /** Every question this run puts about repositories goes through here, so
        *  none of them can reach a person without naming what it asks about. */
       const repositoryQuestions = createRepositoryQuestions(ctx);
@@ -2314,7 +2374,11 @@ async function agentWorkflowBody(
                   : undefined,
               );
               if (!expansionRefusals.some((seen) => seen.sentence === sentence)) {
-                expansionRefusals.push({ repositoryKey: refusal.repositoryKey, sentence });
+                expansionRefusals.push({
+                  repositoryKey: refusal.repositoryKey,
+                  sentence,
+                  reason: refusal.reason,
+                });
               }
               // The same refusal, on its way to a person. The addition above
               // reaches the model and the model alone, and until this line the
@@ -2792,6 +2856,14 @@ async function agentWorkflowBody(
               },
               repositoryContexts: ctx.repositoryContexts,
               workspaceManifest: ctx.workspaceManifest ?? undefined,
+              // The only send that can act on "you may request it", and only
+              // while the expansion is still open.
+              ...withRepositoryMap(
+                mapContextFor({
+                  expansionOpen: !ctx.repositoryExpansion.expansionClosed,
+                }),
+              ),
+              selectedRepositories: ctx.selectedRepositories,
             };
             const resolvedResearchInput = await resolveAgentInput({
               compileInvocationPrompt: execution?.compileInvocationPrompt,
@@ -3260,6 +3332,7 @@ async function agentWorkflowBody(
               selectedRepositories: ctx.selectedRepositories,
               repositoryContexts: ctx.repositoryContexts,
               workspaceManifest: ctx.workspaceManifest ?? undefined,
+              ...withRepositoryMap(mapContextFor({ expansionOpen: false })),
             };
             const resolvedImplementationInput = await resolveAgentInput({
               compileInvocationPrompt: execution?.compileInvocationPrompt,
@@ -3522,6 +3595,7 @@ async function agentWorkflowBody(
                 preSandboxAdditions: ctx.preSandboxAdditions.review,
                 selectedRepositories: ctx.selectedRepositories,
                 workspaceManifest: ctx.workspaceManifest ?? undefined,
+                ...withRepositoryMap(mapContextFor({ expansionOpen: false })),
               };
               const resolvedReviewInput = await resolveAgentInput({
                 compileInvocationPrompt: execution?.compileInvocationPrompt,

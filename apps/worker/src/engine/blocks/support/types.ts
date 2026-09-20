@@ -48,6 +48,7 @@ import type { WorkspaceGate } from "../../steps/workspace-gate.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
 import type {
   PreSandboxRepositoryDiscovery,
+  PreSandboxRepositoryMap,
   PreSandboxRepositoryScopeNarrowing,
   PreSandboxWorkScopeAsk,
   PreSandboxWorkScopeLeftOut,
@@ -315,6 +316,16 @@ export interface EngineCtx {
   reviewLedgerSettled?: SettledThread[];
   /** Server-authored catalog and mandatory scope used for model-assisted selection. */
   repositoryDiscovery: PreSandboxRepositoryDiscovery | null;
+  /**
+   * The repositories every repository-working send describes, read once in the
+   * pre-sandbox step because composition runs in workflow scope and may not
+   * touch a database.
+   *
+   * NULL IS A FACT. A run whose journal predates this field replays without it,
+   * and a send built from that says the map was not available rather than
+   * rendering an empty catalog, which would claim there is nothing else.
+   */
+  repositoryMap: PreSandboxRepositoryMap | null;
   /** Repositories pinned to the definition, inherited by every run it dispatches.
    *  Absent when the operator pinned none, which keeps unpinned runs on exactly
    *  their pre-pin path. */

@@ -332,11 +332,14 @@ describe("assembleResearchPlanContext", () => {
       ],
     });
 
-    expect(result).toContain("## Selected Repositories");
+    // The workspace is the first group of the repository map now, and the map
+    // is the one description every repository-working send renders.
+    expect(result).toContain("## Repositories");
+    expect(result).toContain("### In the workspace");
     expect(result).toContain("acme/api");
     expect(result).toContain("`github:acme/api` at `/vercel/sandbox`");
     expect(result).toContain("`github:acme/web` at `/vercel/sandbox/repos/github__acme__web`");
-    expect(result).toContain("Edit only these Run Workspace repositories");
+    expect(result).toContain("Only a repository marked (write) may be changed");
   });
 
   it("renders discovery-promoted repositories from their trusted manifest paths", () => {
@@ -360,9 +363,9 @@ describe("assembleResearchPlanContext", () => {
     expect(result).toContain("`github:acme/api` at `/vercel/sandbox/repos/github__acme__api`");
     expect(result).toContain("`github:acme/web` at `/vercel/sandbox/repos/github__acme__web`");
     expect(result).toContain("`/vercel/sandbox/repos/github__acme__api` (write)");
-    expect(result).toContain("`/vercel/sandbox/repos/github__acme__web` (read-only)");
-    expect(result).toContain("Only repositories marked write may be modified");
-    expect(result).toContain("Read-only repositories are context only");
+    expect(result).toContain("`/vercel/sandbox/repos/github__acme__web` (read only)");
+    expect(result).toContain("Only a repository marked (write) may be changed");
+    expect(result).toContain("A repository marked (read only) is context");
   });
 
   it("renders legacy root layout paths from the trusted manifest", () => {
@@ -954,7 +957,7 @@ describe("assembleFixContext", () => {
     expect(result).toContain(
       "These repositories have merge conflicts: github:acme/api. Resolve the conflict markers, stage the files, and continue the merge in each repository.",
     );
-    expect(result).toContain("## Selected Repositories");
+    expect(result).toContain("### In the workspace");
     expect(result).toContain("acme/api");
     expect(result).toContain("## Fix Instructions");
     expect(result).toContain("Address every review comment");
@@ -973,7 +976,7 @@ describe("assembleFixContext", () => {
     expect(result).not.toContain("## PR Review Feedback");
     expect(result).not.toContain("## CI/CD Check Results");
     expect(result).not.toContain("## Merge Conflicts");
-    expect(result).not.toContain("## Selected Repositories");
+    expect(result).not.toContain("## Repositories");
     expect(result).not.toContain("## Fix Instructions");
   });
 });
@@ -1728,13 +1731,73 @@ describe("our rules, apart from the data they govern", () => {
       repositories: [api],
       reviewThreads: feed(true),
     }),
+    // A send whose map has all four groups, so the rules that only appear
+    // beside a neighbourhood, a settled repository or the rest of the catalog
+    // are covered too.
+    ...researchPlanContextParts({
+      ticket,
+      prompt: "",
+      branchName: "b",
+      selectedRepositories: [api],
+      workspaceManifest: manifest,
+      repositoryMap: {
+        repositories: [
+          {
+            key: "github:acme/api",
+            enabled: true,
+            usable: true,
+            relationships: [
+              { kind: "backend_for", targetKey: "github:acme/web", direction: "outgoing" },
+            ],
+          },
+          { key: "github:acme/web", enabled: true, usable: true },
+          { key: "github:acme/legacy", enabled: false, usable: true },
+          { key: "github:acme/docs", enabled: true, usable: true },
+        ],
+        namedKeys: ["github:acme/api"],
+        catalogActivated: true,
+        // The send that can act on "you may request it".
+        expansionOpen: true,
+      },
+    }),
+    // The same four groups on a send with no channel for requesting anything,
+    // so the wording that says so is covered too.
+    ...reviewContextParts({
+      ticket,
+      prompt: "",
+      researchPlanMarkdown: "",
+      selectedRepositories: [api],
+      workspaceManifest: manifest,
+      repositoryMap: {
+        repositories: [
+          {
+            key: "github:acme/api",
+            enabled: true,
+            usable: true,
+            relationships: [
+              { kind: "backend_for", targetKey: "github:acme/web", direction: "outgoing" },
+            ],
+          },
+          { key: "github:acme/web", enabled: true, usable: true },
+          { key: "github:acme/legacy", enabled: false, usable: true },
+          { key: "github:acme/docs", enabled: true, usable: true },
+        ],
+        namedKeys: ["github:acme/api"],
+        catalogActivated: true,
+      },
+    }),
   ];
 
   // Each of these sentences is ours, so wherever it is sent it must sit in a
   // platform part, and never inside the part holding the data it governs.
   const RULES = [
-    "Only repositories marked write may be modified.",
-    "Edit only these Run Workspace repositories:",
+    "Only a repository marked (write) may be changed.",
+    "Search the workspace first, and request one of these only when you can name the logic you could not find.",
+    "Do not request one: the request is refused, the run pays a pass for it, and nothing changes.",
+    "Ask for one by its exact provider:path when you can name what you need from it.",
+    // The same two rules for a send that has no way to attach anything.
+    "These are not checked out, and this phase cannot attach them.",
+    "One line each, so you know they exist. This phase cannot attach any of them.",
     "Inspect them for cross-repository consistency, but do not modify them.",
     "`git add` the files, and run `git merge --continue`",
     "Resolve the conflict markers, stage the files, and continue the merge in each repository.",
@@ -1777,10 +1840,16 @@ describe("our rules, apart from the data they govern", () => {
       "expansion-closed",
       "no-change-retry",
     ]);
-    expect(research.find((entry) => entry.id === "selected-repository:1")?.origin).toEqual({
-      kind: "workspace",
+    // The repository the map describes is a catalog fact, attributed to the
+    // repository it is about; the rule beside it is ours and sits in its own
+    // platform part.
+    expect(research.find((entry) => entry.id === "repository-map-workspace:1")?.origin).toEqual({
+      kind: "repository_catalog",
       ref: "github:acme/api",
     });
+    expect(
+      research.find((entry) => entry.id === "repository-map-workspace-rule")?.origin,
+    ).toEqual({ kind: "platform" });
     expect(research.find((entry) => entry.id === "merge-conflicts:1")).toMatchObject({
       origin: { kind: "pull_request", ref: "github:acme/api" },
       content: expect.stringContaining("This PR has merge conflicts."),

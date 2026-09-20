@@ -20,6 +20,11 @@ import {
   type WorkspaceManifest,
 } from "./repo-workspace.js";
 import { selectReviewLedgerWorkItems as selectWorkItems } from "../adapters/vcs/vcs-bot-identity.js";
+import {
+  buildRepositoryMap,
+  type RepositoryMapAttachment,
+  type RepositoryMapContext,
+} from "../repository-map/map.js";
 
 /*
  * Every assembler here composes its runtime data as named parts (see
@@ -85,6 +90,10 @@ export interface SelectedRepositoryPromptContext {
 }
 
 export interface ResearchPlanContextInput {
+  /** The repositories this send works on, as one object for the one renderer:
+   *  the workspace, the neighbourhood and everything already decided. Absent on
+   *  a run whose journal predates it, which the prompt says out loud. */
+  repositoryMap?: RepositoryMapContext;
   ticket: TicketData;
   prompt: string;
   branchName: string;
@@ -97,6 +106,10 @@ export interface ResearchPlanContextInput {
 }
 
 export interface ImplementationContextInput {
+  /** The repositories this send works on, as one object for the one renderer:
+   *  the workspace, the neighbourhood and everything already decided. Absent on
+   *  a run whose journal predates it, which the prompt says out loud. */
+  repositoryMap?: RepositoryMapContext;
   ticket: TicketData;
   prompt: string;
   researchPlanMarkdown: string;
@@ -108,6 +121,10 @@ export interface ImplementationContextInput {
 }
 
 export interface ReviewContextInput {
+  /** The repositories this send works on, as one object for the one renderer:
+   *  the workspace, the neighbourhood and everything already decided. Absent on
+   *  a run whose journal predates it, which the prompt says out loud. */
+  repositoryMap?: RepositoryMapContext;
   ticket: TicketData;
   prompt: string;
   researchPlanMarkdown: string;
@@ -226,7 +243,6 @@ export function researchPlanContextParts(input: ResearchPlanContextInput): Effec
   // refuses fails with the same message as before.
   const attachmentsParts = renderAttachmentsParts(attachments, ticket);
   const additionsParts = renderAdditionsParts(preSandboxAdditions, input.researchNotes);
-  const selectedRepositoriesParts = renderSelectedRepositoriesParts(selectedRepositories, input.workspaceManifest);
   const repositoryContextParts = renderRepositoryContextParts(repositoryContexts);
   const clarificationsParts = renderClarificationsParts(ticket.clarifications);
   // Same condition as renderRepositoryContextParts' remediation framing: when
@@ -236,46 +252,58 @@ export function researchPlanContextParts(input: ResearchPlanContextInput): Effec
     (repositoryContexts ?? []).some((context) => context.prComments.length > 0) ||
     hasReviewWorkItems(repositoryContexts);
 
-  return concatPromptParts([
-    ticketHeaderPart("Requirements", ticket),
-    attachmentsParts,
-    part("description", "Ticket description", ticketOrigin(ticket), `
+  // Composed twice: once with no map, to measure what the rest of this send
+  // costs, and once with the map built inside whatever that leaves. Pure, so
+  // the first pass is arithmetic rather than a second decision.
+  const compose = (mapParts: EffectivePromptPart[]): EffectivePromptPart[] =>
+    concatPromptParts([
+      ticketHeaderPart("Requirements", ticket),
+      attachmentsParts,
+      part("description", "Ticket description", ticketOrigin(ticket), `
 ## Description
 
 ${ticket.description}
 
 `),
-    part("acceptance-criteria", "Acceptance criteria", ticketOrigin(ticket), `## Acceptance Criteria
+      part("acceptance-criteria", "Acceptance criteria", ticketOrigin(ticket), `## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
 
 `),
-    renderCommentsParts(ticket),
-    clarificationsParts,
-    part("branch", "Branch", { kind: "run" }, `
+      renderCommentsParts(ticket),
+      clarificationsParts,
+      part("branch", "Branch", { kind: "run" }, `
 ## Branch
 
 ${branchName}
 `),
-    selectedRepositoriesParts,
-    repositoryContextParts,
-    additionsParts,
-    prompt.length > 0 &&
-      part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n---\n\n${prompt}\n`),
-    part("repository-access-protocol", "Repository Access Protocol", PLATFORM, REPOSITORY_ACCESS_PROTOCOL),
-    hasPrFeedback
-      ? {
-          id: "resolution-check",
-          title: "Resolution Check",
-          content: "",
-          origin: PLATFORM,
-          withheld: {
-            reason: "pr_feedback_present",
-            text: "The pull request carries review feedback, which is the task, so the already-resolved exit is not offered.",
-          },
-        }
-      : part("resolution-check", "Resolution Check", PLATFORM, RESOLUTION_CHECK),
-  ]);
+      mapParts,
+      repositoryContextParts,
+      additionsParts,
+      prompt.length > 0 &&
+        part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n---\n\n${prompt}\n`),
+      part("repository-access-protocol", "Repository Access Protocol", PLATFORM, REPOSITORY_ACCESS_PROTOCOL),
+      hasPrFeedback
+        ? {
+            id: "resolution-check",
+            title: "Resolution Check",
+            content: "",
+            origin: PLATFORM,
+            withheld: {
+              reason: "pr_feedback_present",
+              text: "The pull request carries review feedback, which is the task, so the already-resolved exit is not offered.",
+            },
+          }
+        : part("resolution-check", "Resolution Check", PLATFORM, RESOLUTION_CHECK),
+    ]);
+  return compose(
+    renderRepositoryMapParts(
+      input.repositoryMap,
+      selectedRepositories,
+      input.workspaceManifest,
+      repositoryMapBudget(compose([])),
+    ),
+  );
 }
 
 export function assembleResearchPlanContext(input: ResearchPlanContextInput): string {
@@ -286,25 +314,33 @@ export function implementationContextParts(input: ImplementationContextInput): E
   const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions, selectedRepositories, repositoryContexts } = input;
   const attachmentsParts = renderAttachmentsParts(attachments, ticket);
   const additionsParts = renderAdditionsParts(preSandboxAdditions);
-  const selectedRepositoriesParts = renderSelectedRepositoriesParts(selectedRepositories, input.workspaceManifest);
   // On a re-run against an existing workflow-owned PR this surfaces the human PR
   // review feedback (comments, failing checks, conflicts) so the implementation
   // agent actually addresses it. Empty on the first run, so the section vanishes.
   const repositoryContextParts = renderRepositoryContextParts(repositoryContexts);
   const clarificationsParts = renderClarificationsParts(ticket.clarifications);
-  return concatPromptParts([
-    ticketHeaderPart("Requirements", ticket),
-    attachmentsParts,
-    acceptanceCriteriaPart(ticket),
-    clarificationsParts,
-    researchPlanPart(researchPlanMarkdown),
-    repositoryContextParts,
-    selectedRepositoriesParts,
-    "\n",
-    additionsParts,
-    prompt.length > 0 &&
-      part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n\n---\n\n${prompt}\n`),
-  ]);
+  const compose = (mapParts: EffectivePromptPart[]): EffectivePromptPart[] =>
+    concatPromptParts([
+      ticketHeaderPart("Requirements", ticket),
+      attachmentsParts,
+      acceptanceCriteriaPart(ticket),
+      clarificationsParts,
+      researchPlanPart(researchPlanMarkdown),
+      repositoryContextParts,
+      mapParts,
+      "\n",
+      additionsParts,
+      prompt.length > 0 &&
+        part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n\n---\n\n${prompt}\n`),
+    ]);
+  return compose(
+    renderRepositoryMapParts(
+      input.repositoryMap,
+      selectedRepositories,
+      input.workspaceManifest,
+      repositoryMapBudget(compose([])),
+    ),
+  );
 }
 
 export function assembleImplementationContext(input: ImplementationContextInput): string {
@@ -323,32 +359,40 @@ export function reviewContextParts(input: ReviewContextInput): EffectivePromptPa
   } = input;
   const attachmentsParts = renderAttachmentsParts(attachments, ticket);
   const additionsParts = renderAdditionsParts(preSandboxAdditions);
-  const selectedRepositoriesParts = renderSelectedRepositoriesParts(selectedRepositories, input.workspaceManifest);
   const siblingRepositoriesParts = renderReviewSiblingRepositoriesParts(
     selectedRepositories,
     input.workspaceManifest,
   );
   const clarificationsParts = renderClarificationsParts(ticket.clarifications);
-  return concatPromptParts([
-    ticketHeaderPart("Requirements", ticket),
-    attachmentsParts,
-    acceptanceCriteriaPart(ticket),
-    clarificationsParts,
-    researchPlanPart(researchPlanMarkdown),
-    reviewFeedback &&
-      part(
-        "review-feedback",
-        "Pull request review feedback",
-        withRef("pull_request", undefined, reviewFeedback.author),
-        `\n## Pull request review feedback\n\nState: ${reviewFeedback.state}\n\n${reviewFeedback.author}: ${reviewFeedback.body}\n`,
-      ),
-    selectedRepositoriesParts,
-    siblingRepositoriesParts,
-    "\n",
-    additionsParts,
-    prompt.length > 0 &&
-      part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n\n---\n\n${prompt}\n`),
-  ]);
+  const compose = (mapParts: EffectivePromptPart[]): EffectivePromptPart[] =>
+    concatPromptParts([
+      ticketHeaderPart("Requirements", ticket),
+      attachmentsParts,
+      acceptanceCriteriaPart(ticket),
+      clarificationsParts,
+      researchPlanPart(researchPlanMarkdown),
+      reviewFeedback &&
+        part(
+          "review-feedback",
+          "Pull request review feedback",
+          withRef("pull_request", undefined, reviewFeedback.author),
+          `\n## Pull request review feedback\n\nState: ${reviewFeedback.state}\n\n${reviewFeedback.author}: ${reviewFeedback.body}\n`,
+        ),
+      mapParts,
+      siblingRepositoriesParts,
+      "\n",
+      additionsParts,
+      prompt.length > 0 &&
+        part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n\n---\n\n${prompt}\n`),
+    ]);
+  return compose(
+    renderRepositoryMapParts(
+      input.repositoryMap,
+      selectedRepositories,
+      input.workspaceManifest,
+      repositoryMapBudget(compose([])),
+    ),
+  );
 }
 
 export function assembleReviewContext(input: ReviewContextInput): string {
@@ -412,6 +456,8 @@ function renderReviewSiblingRepositoriesParts(
 }
 
 export interface FixContextInput {
+  /** See `ResearchPlanContextInput`. */
+  repositoryMap?: RepositoryMapContext;
   ticket: TicketData;
   prComments: PRComment[];
   failedChecks: CheckRunResult[];
@@ -500,7 +546,6 @@ export function fixContextParts(input: FixContextInput): EffectivePromptPart[] {
           ),
         ]
       : [];
-  const selectedRepositoriesParts = renderSelectedRepositoriesParts(repositories, input.workspaceManifest);
   const instructionsParts = instructions
     ? [
         part(
@@ -513,17 +558,26 @@ export function fixContextParts(input: FixContextInput): EffectivePromptPart[] {
     : [];
   const clarificationsParts = renderClarificationsParts(ticket.clarifications);
 
-  return concatPromptParts([
-    ticketHeaderPart("Fix Requirements", ticket),
-    acceptanceCriteriaPart(ticket),
-    clarificationsParts,
-    prFeedbackParts,
-    failedChecksParts,
-    internalReviewsParts,
-    conflictParts,
-    selectedRepositoriesParts,
-    instructionsParts,
-  ]);
+  const compose = (mapParts: EffectivePromptPart[]): EffectivePromptPart[] =>
+    concatPromptParts([
+      ticketHeaderPart("Fix Requirements", ticket),
+      acceptanceCriteriaPart(ticket),
+      clarificationsParts,
+      prFeedbackParts,
+      failedChecksParts,
+      internalReviewsParts,
+      conflictParts,
+      mapParts,
+      instructionsParts,
+    ]);
+  return compose(
+    renderRepositoryMapParts(
+      input.repositoryMap,
+      repositories,
+      input.workspaceManifest,
+      repositoryMapBudget(compose([])),
+    ),
+  );
 }
 
 export function assembleFixContext(input: FixContextInput): string {
@@ -895,16 +949,101 @@ function renderAdditionsParts(
 }
 
 /**
- * The repositories of the workspace, one part each, and between the heading
- * and the list our rule for which of them may be changed.
+ * THE REPOSITORY MAP, in the place the "Selected Repositories" list used to
+ * sit.
+ *
+ * ONE INPUT OBJECT, ONE RENDERER, FOR EVERY SEND. Research, implementation,
+ * review and the fix agent each used to be handed a different object (one got
+ * the pull request contexts, one got both, one got only the selected list), so
+ * "one renderer" was true of the function and false of what reached the model.
+ * They all pass through here now, from the same `RepositoryMapInput`, which is
+ * what lets a person compare two briefings of one run and see one shape.
+ *
+ * The map decides its own bounds and order (`repository-map/map.ts`). This
+ * function only decides that the workspace facts a prompt already had, the
+ * checkout path and the write access, are the map's workspace group, so no send
+ * carries two lists of the same repositories.
  */
-function renderSelectedRepositoriesParts(
+/**
+ * The cap the effective-prompt compiler puts on ONE section
+ * (`MAX_SECTION_LENGTH` in `packages/prompts/effective-prompt.ts`). It slices
+ * from the END, so everything composed last is what a prompt over the cap
+ * loses: the Repository Access Protocol and the Resolution Check, which are
+ * the two rules a research agent most needs. Spelled here rather than imported
+ * because the package keeps it private; `context.section-cap.test.ts` reads
+ * that file and fails if the two numbers drift apart.
+ */
+const PROMPT_SECTION_MAX_LENGTH = 200_000;
+
+/**
+ * The room this send can give the repository map.
+ *
+ * The map bounds itself at 16,000 characters, which bounds THE MAP and not the
+ * section: a 191,000 character ticket plus a bounded map still crosses the cap,
+ * and what falls off the end is our own last rule. So the composer measures
+ * everything else it is about to send and hands the map what is left. Nothing
+ * is pushed out, because the map is the only part that can shrink.
+ */
+function repositoryMapBudget(others: readonly EffectivePromptPart[]): number {
+  const used = others.reduce((total, entry) => total + entry.content.length, 0);
+  // The sanitizer only replaces characters with same-length ones before it
+  // slices, so this arithmetic is exact rather than approximate.
+  return Math.max(0, PROMPT_SECTION_MAX_LENGTH - used);
+}
+
+/**
+ * The repository map for a send this file does not assemble.
+ *
+ * The generic agent composes its own runtime data, and until now it was the
+ * one repository-working phase that received no repository list at all: it
+ * worked in a checkout it was never told the shape of. It gets the same map
+ * from the same builder, measured against the parts it has already composed.
+ */
+export function repositoryMapPromptParts(
+  input: {
+    repositoryMap?: RepositoryMapContext;
+    repositories?: SelectedRepository[];
+    workspaceManifest?: WorkspaceManifest;
+  },
+  others: readonly EffectivePromptPart[],
+): EffectivePromptPart[] {
+  return renderRepositoryMapParts(
+    input.repositoryMap,
+    input.repositories,
+    input.workspaceManifest,
+    repositoryMapBudget(others),
+  );
+}
+
+function renderRepositoryMapParts(
+  input: RepositoryMapContext | undefined,
+  repositories: SelectedRepository[] | undefined,
+  manifest: WorkspaceManifest | undefined,
+  budget: number,
+): EffectivePromptPart[] {
+  const attached = workspaceAttachments(repositories, manifest);
+  if (input === undefined && attached.length === 0) return [];
+  return buildRepositoryMap(
+    {
+      // A send with no map input at all is a run whose journal predates it, and
+      // it says so rather than rendering an empty catalog, which would be a
+      // positive claim that there is nothing else.
+      ...(input ?? { silence: "not_recorded" as const }),
+      attached,
+    },
+    { maxLength: budget },
+  ).parts;
+}
+
+/** The workspace as the prompt has always known it: where each repository is
+ *  checked out and whether it may be written to. */
+function workspaceAttachments(
   repositories: SelectedRepository[] | undefined,
   manifest?: WorkspaceManifest,
-): EffectivePromptPart[] {
+): RepositoryMapAttachment[] {
   if (!repositories || repositories.length === 0) return [];
   const seen = new Set<string>();
-  const lines = repositories.map((repo, index) => {
+  return repositories.map((repo, index) => {
     const localPath = resolveSelectedRepositoryPath(repo, index, manifest);
     if (seen.has(localPath)) {
       throw new Error(`Selected repository path is duplicated for ${repo.repoPath}`);
@@ -914,33 +1053,18 @@ function renderSelectedRepositoriesParts(
       manifest?.version === 2
         ? manifest.repositories.find(
             (candidate) =>
-              candidate.provider === repo.provider &&
-              candidate.repoPath === repo.repoPath,
+              candidate.provider === repo.provider && candidate.repoPath === repo.repoPath,
           )?.access
         : undefined;
-    const access = manifestAccess
-      ? ` (${manifestAccess === "write" ? "write" : "read-only"})`
-      : "";
-    const key = `${repo.provider}:${repo.repoPath}`;
-    return [
-      part(
-        `selected-repository:${index + 1}`,
-        `Selected repository ${key}`,
-        withRef("workspace", key),
-        `- \`${key}\` at \`${localPath}\`${access} - ${repo.selectedRationale}`,
-      ),
-    ];
+    return {
+      key: `${repo.provider}:${repo.repoPath.toLowerCase()}`,
+      localPath,
+      // No manifest is the pre-manifest shape, where everything in the
+      // workspace was writable and the prompt said so.
+      access: manifestAccess === "read" ? ("read_only" as const) : ("write" as const),
+      rationale: repo.selectedRationale,
+    };
   });
-  const instruction =
-    manifest?.version === 2
-      ? "Only repositories marked write may be modified. Read-only repositories are context only and must not be changed."
-      : "Edit only these Run Workspace repositories:";
-  return concatPromptParts([
-    part("selected-repositories", "Selected repositories", { kind: "workspace" }, "\n## Selected Repositories\n\n"),
-    part("selected-repositories-rule", "Which of them may be changed", PLATFORM, `${instruction}\n\n`),
-    ...separated(lines, "\n"),
-    "\n",
-  ]);
 }
 
 /**

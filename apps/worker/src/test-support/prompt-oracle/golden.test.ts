@@ -31,6 +31,7 @@ import {
   GOLDEN_PLAN,
   GOLDEN_PRE_SANDBOX_ADDITIONS,
   GOLDEN_REPOSITORIES,
+  GOLDEN_REPOSITORY_MAP,
   GOLDEN_REPOSITORY_SOURCES,
   GOLDEN_RESEARCH_LOOP,
   GOLDEN_REVIEW_CHANGE_SET,
@@ -147,6 +148,10 @@ const researchContext = {
   branchName: "ai-workflow/aiw-512",
   selectedRepositories: [GOLDEN_REPOSITORIES.api, GOLDEN_REPOSITORIES.web],
   workspaceManifest: GOLDEN_MANIFEST,
+  // The one send that can attach a repository, and only while the expansion is
+  // open, so the golden shows the wording that offers it. Every other send
+  // below keeps the default and shows the wording that does not.
+  repositoryMap: { ...GOLDEN_REPOSITORY_MAP, expansionOpen: true },
 };
 
 const noLoopNotes: ResearchPassNotes = {
@@ -234,6 +239,7 @@ const GOLDENS: Record<string, () => Promise<Golden>> = {
         selectedRepositories: [GOLDEN_REPOSITORIES.api, GOLDEN_REPOSITORIES.web],
         repositoryContexts: GOLDEN_FLAT_FEEDBACK_CONTEXTS,
         workspaceManifest: GOLDEN_MANIFEST,
+        repositoryMap: GOLDEN_REPOSITORY_MAP,
       }),
     }),
   review: () =>
@@ -248,6 +254,7 @@ const GOLDENS: Record<string, () => Promise<Golden>> = {
         preSandboxAdditions: [GOLDEN_REVIEW_CHANGE_SET],
         selectedRepositories: [GOLDEN_REPOSITORIES.api, GOLDEN_REPOSITORIES.sdk],
         workspaceManifest: GOLDEN_MANIFEST,
+        repositoryMap: GOLDEN_REPOSITORY_MAP,
       }),
     }),
   "generic-agent": () =>
@@ -257,6 +264,11 @@ const GOLDENS: Record<string, () => Promise<Golden>> = {
       runtimeData: genericAgentRuntimeData(
         GOLDEN_GENERIC.resolvedInputs,
         GOLDEN_GENERIC.clarificationAnswer,
+        {
+          repositoryMap: GOLDEN_REPOSITORY_MAP,
+          repositories: [GOLDEN_REPOSITORIES.api, GOLDEN_REPOSITORIES.web],
+          workspaceManifest: GOLDEN_MANIFEST,
+        },
       ),
       withRepositorySources: false,
       entryOutput: GOLDEN_GENERIC.entryOutput,
@@ -265,7 +277,11 @@ const GOLDENS: Record<string, () => Promise<Golden>> = {
     compile({
       nodeId: "fix",
       blockPrompt: "Address every review thread and make the failing unit check pass.",
-      runtimeData: fixContextParts({ ticket: GOLDEN_TICKET, ...GOLDEN_FIX_INPUT }),
+      runtimeData: fixContextParts({
+        ticket: GOLDEN_TICKET,
+        ...GOLDEN_FIX_INPUT,
+        repositoryMap: GOLDEN_REPOSITORY_MAP,
+      }),
     }),
   discovery: async () => {
     // No sections: discovery's parts tile the prompt itself.

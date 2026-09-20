@@ -13,6 +13,7 @@ import type {
   SelectedRepositoryPromptContext,
 } from "../../sandbox/context.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
+import type { RepositoryMapContext } from "../../repository-map/map.js";
 
 export const GOLDEN_TICKET = {
   identifier: "AIW-512",
@@ -61,6 +62,78 @@ const sdk: SelectedRepository = {
 
 export const GOLDEN_REPOSITORIES = { api, web, sdk };
 
+/**
+ * What the pre-sandbox step gathered about the repositories: the operator's
+ * descriptions, the relationships they recorded, and the record's own state for
+ * one repository a person excluded. This is what every repository-working send
+ * now renders as its repository map.
+ */
+export const GOLDEN_REPOSITORY_MAP: RepositoryMapContext = {
+  repositories: [
+    {
+      key: "github:acme/api",
+      catalogDescription:
+        "The session and billing API. It owns key rotation, the refresh path and the webhook fan-out.",
+      relationships: [
+        { kind: "backend_for", targetKey: "github:acme/web", direction: "outgoing" },
+        { kind: "depends_on", targetKey: "github:acme/sdk", direction: "incoming" },
+      ],
+      enabled: true,
+      usable: true,
+    },
+    {
+      key: "github:acme/web",
+      catalogDescription: "The customer dashboard. Sign-in and the account screens live here.",
+      providerDescription: "acme web",
+      enabled: true,
+      usable: true,
+    },
+    {
+      key: "github:acme/sdk",
+      providerDescription: "Client SDK for the acme API",
+      enabled: true,
+      usable: true,
+    },
+    {
+      key: "github:acme/legacy-auth",
+      catalogDescription: "The retired auth monolith. Read only, kept for its migration history.",
+      enabled: true,
+      usable: true,
+    },
+    {
+      key: "github:acme/infra",
+      catalogDescription: "Terraform for every environment.",
+      enabled: false,
+      usable: true,
+    },
+    {
+      key: "github:acme/docs",
+      catalogDescription: "The public developer documentation.",
+      enabled: true,
+      usable: true,
+    },
+  ],
+  namedKeys: ["github:acme/api"],
+  entries: [
+    {
+      repositoryKey: "github:acme/legacy-auth",
+      state: "excluded",
+      origin: "person",
+      rationale: "not part of this ticket",
+      decidedBy: { kind: "person", actorId: "u-anna", actorLabel: "Anna Nowak" },
+      decidedAt: "2026-09-17T11:04:00.000Z",
+    },
+  ],
+  leftOut: [
+    {
+      repositoryKey: "github:acme/legacy-auth",
+      reason:
+        "github:acme/legacy-auth was excluded on this ticket by Anna Nowak on 2026-09-17.",
+    },
+  ],
+  catalogActivated: true,
+};
+
 export const GOLDEN_MANIFEST: WorkspaceManifest = {
   version: 2,
   repositories: [
@@ -100,11 +173,9 @@ export const GOLDEN_MANIFEST: WorkspaceManifest = {
 /** What the pre-sandbox step returns for a ticket naming two repositories and
  *  a third that a person excluded earlier. */
 export const GOLDEN_PRE_SANDBOX_ADDITIONS: PreSandboxPromptAddition[] = [
-  {
-    target: ["research", "implementation", "review"],
-    title: "Selected Repositories",
-    content: "- github:acme/api: the ticket names the signing keys in acme/api\n- github:acme/web: frontend for acme/api",
-  },
+  // The "Selected Repositories" addition that used to lead this list is gone:
+  // the repository map says everything it said, in the one shape every send
+  // renders, and two lists of the same repositories is how they drifted.
   {
     target: ["research", "implementation", "review"],
     title: "Repositories left out",

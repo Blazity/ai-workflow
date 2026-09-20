@@ -60,9 +60,17 @@ trail is why each entry looks the way it does.
 _Avoid_: Audit log, scope history
 
 **Repository Map**:
-The compact index of repositories rendered into the agent's context. It is
-deterministic, ranked by relationship first and then lexically.
-_Avoid_: Repository list, catalog dump
+The one description of repositories every repository-working send renders into
+the agent's context: the workspace and what may be changed in it, the
+repositories one relationship away that may be requested, the ones already
+decided and marked "do not request" with their reason, and one line each for
+the rest of the catalog. Descriptions are the operator's catalog profile, with
+the provider's listing text only as a labelled fallback. Deterministic, grouped
+by how a repository may be used and then ordered by key, and bounded by
+construction so it can never push our own rules past the prompt's section cap.
+The same build produces the structured repository context a briefing records.
+_Avoid_: Repository list, catalog dump, Selected Repositories (the map's first
+group, not a section of its own)
 
 **Changed Repository**:
 A selected repository where the agent produced changes that should be published

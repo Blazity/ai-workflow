@@ -54,7 +54,7 @@ function outcome(compose: () => string): Outcome {
   }
 }
 
-function mismatchesOf<T>(
+function mismatchesOfRaw<T>(
   rows: MatrixRow<T>[],
   oracle: (input: T) => string,
   current: (input: T) => string,
@@ -64,6 +64,19 @@ function mismatchesOf<T>(
     const actual = outcome(() => current(row.input));
     return JSON.stringify(expected) === JSON.stringify(actual) ? [] : [row.name];
   });
+}
+
+/** Every byte outside the repository section, held to the base commit. */
+function mismatchesOf<T>(
+  rows: MatrixRow<T>[],
+  oracle: (input: T) => string,
+  current: (input: T) => string,
+): string[] {
+  return mismatchesOfRaw(
+    rows,
+    (input) => withoutRepositorySection(oracle(input)),
+    (input) => withoutRepositorySection(current(input)),
+  );
 }
 
 /**
@@ -94,6 +107,27 @@ function withoutFalsePreSandboxLabel(
 const midRun = (additions: readonly PreSandboxPromptAddition[] | undefined) =>
   (additions ?? []).filter((addition) => addition.producedBy !== undefined);
 
+/**
+ * THE ONE SECTION THIS DELIVERY REPLACED, removed from both sides.
+ *
+ * The oracle's job is to catch a change in what a model reads that nobody
+ * meant. The repository map is a change somebody did mean: the workspace list
+ * ("## Selected Repositories") became the first group of a map that also names
+ * the neighbourhood, what is already decided and the rest of the catalog. So
+ * the section is cut out of the base text and out of the live text, and every
+ * other byte of every send is still pinned to the base commit.
+ *
+ * Deliberately a whole-section cut rather than a rewrite: the two texts do not
+ * correspond line by line, and a rewrite that tried to map one onto the other
+ * would be a second implementation of the map inside its own oracle. What the
+ * map itself renders is proved by `repository-map/map.test.ts`, by
+ * `sandbox/repository-map-context.test.ts` and by the goldens a person reads.
+ */
+function withoutRepositorySection(text: string): string {
+  return [/\n## Selected Repositories\n[\s\S]*?(?=\n## |$)/, /\n## Repositories\n[\s\S]*?(?=\n## |$)/]
+    .reduce((carried, pattern) => carried.replace(pattern, "\n"), text);
+}
+
 /** The base research prompt: the loop's notes were additions then, pushed after
  *  the pre-sandbox ones, and every one of them is a mid-run addition. */
 function baseResearch(input: ResearchPlanContextInput): string {
@@ -122,6 +156,42 @@ function baseFix(input: FixContextInput): string {
 }
 
 describe("prompt oracle: the composers render the bytes they rendered at the base commit", () => {
+  /**
+   * THE EXCISION MUST CUT SOMETHING, ON BOTH SIDES.
+   *
+   * Every assertion below compares the two texts with the repository section
+   * removed. If a heading is ever renamed, or a section stops being rendered,
+   * the patterns stop matching, the excision quietly becomes a no-op on one
+   * side and a whole-file wipe on the other, and the oracle passes because it
+   * is comparing two empty strings or two unmodified ones. So the tool is
+   * checked before the tools it enables: the base text really carries a
+   * "Selected Repositories" section, the live text really carries a
+   * "Repositories" one, and taking each away really removes bytes.
+   */
+  it("removes a real section from the base text and from the live text", () => {
+    const texts = researchRows()
+      .filter(
+        (row) => !("error" in outcome(() => base.assembleResearchPlanContext(row.input))),
+      )
+      .map((row) => ({
+        base: baseResearch(row.input),
+        live: assembleResearchPlanContext(row.input),
+      }));
+    const baseCarries = texts.filter((pair) => pair.base.includes("\n## Selected Repositories\n"));
+    const liveCarries = texts.filter((pair) => pair.live.includes("\n## Repositories\n"));
+    expect(baseCarries.length).toBeGreaterThan(0);
+    expect(liveCarries.length).toBeGreaterThan(0);
+    for (const pair of baseCarries) {
+      expect(withoutRepositorySection(pair.base).length).toBeLessThan(pair.base.length);
+      // And it takes ONE section, not the rest of the prompt with it.
+      expect(withoutRepositorySection(pair.base)).toContain("## Repository Access Protocol");
+    }
+    for (const pair of liveCarries) {
+      expect(withoutRepositorySection(pair.live).length).toBeLessThan(pair.live.length);
+      expect(withoutRepositorySection(pair.live)).toContain("## Repository Access Protocol");
+    }
+  });
+
   it("covers refusals as well as text, so a refusal cannot hide a mismatch", () => {
     const refused = researchRows().filter(
       (row) => "error" in outcome(() => base.assembleResearchPlanContext(row.input)),

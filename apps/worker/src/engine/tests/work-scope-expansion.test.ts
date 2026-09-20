@@ -1655,9 +1655,15 @@ describe("the next research pass is told every request this run refused", () => 
     // the pass an empty list, or no longer collecting into it, would send a
     // model that asked for a refused repository no word of the refusal, and it
     // would ask again.
+    //
+    // The reason travels with the sentence because the repository map reads it
+    // too: a refusal that settles a repository must stop the map offering it,
+    // and one that refused only this request must not.
     const workflow = workflowLines.join("\n");
     expect(
-      workflow.includes("expansionRefusals.push({ repositoryKey: refusal.repositoryKey, sentence });"),
+      /expansionRefusals\.push\(\{\s*repositoryKey: refusal\.repositoryKey,\s*sentence,\s*reason: refusal\.reason,/.test(
+        workflow,
+      ),
       "the expansion loop no longer collects each refusal for the next pass",
     ).toBe(true);
     expect(

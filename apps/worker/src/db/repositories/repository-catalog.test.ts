@@ -21,6 +21,7 @@ import {
   listRepositoriesWithProfiles,
   listRepositoryCatalogRows,
   listRepositoryCatalogRowsWithGroupCounts,
+  listRepositoryCatalogMapRows,
   listRepositoryRules,
   listRepositoryProfileVersionRows,
   seedRepositoryCatalogEntries,
@@ -1070,6 +1071,124 @@ describe("default branches", () => {
     expect(rows.map((row) => [row.path, row.defaultBranch] as const)).toEqual([
       ["acme/api", "trunk"],
       ["acme/web", "main"],
+    ]);
+  });
+});
+
+describe("listRepositoryCatalogMapRows", () => {
+  it("returns a repository whose profile is blank, because the map has to explain it", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(db, profile({ path: "acme/api" }));
+
+    // `listRepositoryRules` drops this row, and it is right to: an empty rules
+    // section helps nobody. The map needs it, because "this repository exists
+    // and nobody described it" is a fact an agent has to be told.
+    await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([]);
+    await expect(
+      listRepositoryCatalogMapRows(db, ["github:acme/api"]),
+    ).resolves.toEqual([
+      {
+        key: "github:acme/api",
+        // A profile save creates a disabled row, so this is what a repository
+        // an operator described but nobody switched on looks like.
+        enabled: false,
+        description: "",
+        relationships: [],
+        unknownRelationshipCount: 0,
+      },
+    ]);
+  });
+
+  it("carries the enabled flag and the operator's description", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(
+      db,
+      profile({ path: "Acme/Api", description: "The payments API." }),
+    );
+    await setRepositoryEnabled(db, { id: created.id, enabled: true });
+
+    await expect(
+      listRepositoryCatalogMapRows(db, ["github:acme/api"]),
+    ).resolves.toEqual([
+      {
+        key: "github:acme/api",
+        enabled: true,
+        description: "The payments API.",
+        relationships: [],
+        unknownRelationshipCount: 0,
+      },
+    ]);
+
+    await setRepositoryEnabled(db, { id: created.id, enabled: false });
+    await expect(
+      listRepositoryCatalogMapRows(db, ["github:acme/api"]),
+    ).resolves.toMatchObject([{ key: "github:acme/api", enabled: false }]);
+  });
+
+  it("names both ends of a relationship, from either side", async () => {
+    const db = await createTestDb();
+    const web = await upsertRepositoryProfile(db, profile({ path: "acme/web" }));
+    await upsertRepositoryProfile(
+      db,
+      profile({
+        path: "acme/api",
+        relationships: [{ repositoryId: web.id, kind: "backend_for", note: "checkout" }],
+      }),
+    );
+
+    await expect(
+      listRepositoryCatalogMapRows(db, ["github:acme/api"]),
+    ).resolves.toMatchObject([
+      {
+        key: "github:acme/api",
+        relationships: [
+          {
+            direction: "outgoing",
+            targetKey: "github:acme/web",
+            targetEnabled: false,
+            kind: "backend_for",
+            note: "checkout",
+          },
+        ],
+        unknownRelationshipCount: 0,
+      },
+    ]);
+    await expect(
+      listRepositoryCatalogMapRows(db, ["github:acme/web"]),
+    ).resolves.toMatchObject([
+      {
+        key: "github:acme/web",
+        relationships: [
+          { direction: "incoming", targetKey: "github:acme/api", kind: "backend_for" },
+        ],
+      },
+    ]);
+  });
+
+  it("counts a relationship whose other end is gone instead of dropping it", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(
+      db,
+      profile({
+        path: "acme/api",
+        // A row id nothing points at: the shape left behind when a repository
+        // an operator linked to is deleted from the catalog.
+        relationships: [{ repositoryId: 99_999, kind: "depends_on" }],
+      }),
+    );
+
+    // The inner join in `listRepositoryRules` loses it entirely.
+    await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([]);
+    await expect(
+      listRepositoryCatalogMapRows(db, ["github:acme/api"]),
+    ).resolves.toEqual([
+      {
+        key: "github:acme/api",
+        enabled: false,
+        description: "",
+        relationships: [],
+        unknownRelationshipCount: 1,
+      },
     ]);
   });
 });

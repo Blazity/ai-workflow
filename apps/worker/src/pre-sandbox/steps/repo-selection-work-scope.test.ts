@@ -191,8 +191,42 @@ function appliedPlans(): WorkScopeWritePlan[] {
   );
 }
 
+/**
+ * The DECISIONS in the trail.
+ *
+ * `map_shown` is not one: every run writes exactly one, recording what the
+ * agent was told about its repositories, and it says nothing about what the
+ * run decided. It has its own tests; folding it into these would make every
+ * case about the record's decisions also assert the map's summary.
+ */
 function appliedTrail(): WorkScopeWritePlan["trail"] {
-  return appliedPlans().flatMap((plan) => plan.trail);
+  return appliedPlans().flatMap((plan) =>
+    plan.trail.filter((event) => event.kind !== "map_shown"),
+  );
+}
+
+/** The one row per run that records what the map said. */
+function appliedMapShown(): WorkScopeWritePlan["trail"] {
+  return appliedPlans().flatMap((plan) =>
+    plan.trail.filter((event) => event.kind === "map_shown"),
+  );
+}
+
+/**
+ * The plans, with the map's own row taken out, for the cases that ask "was
+ * anything written ABOUT this repository". The map names every repository it
+ * described, including the ones the run may not touch, which is the point of
+ * it; those cases are about the RECORD, where naming a repository is a claim
+ * that something was decided about it.
+ */
+function appliedDecisionPlans(): WorkScopeWritePlan[] {
+  const decisions: WorkScopeWritePlan[] = [];
+  for (const plan of appliedPlans()) {
+    const trail = plan.trail.filter((event) => event.kind !== "map_shown");
+    if (plan.upserts.length === 0 && plan.deletes.length === 0 && trail.length === 0) continue;
+    decisions.push({ upserts: plan.upserts, deletes: plan.deletes, trail });
+  }
+  return decisions;
 }
 
 beforeEach(() => {
@@ -1623,6 +1657,34 @@ describe("a repository this deployment holds and this run may not open, named on
     expect(selection.workScopeRecoveryNotes).toContain(THE_WAY_BACK);
   });
 
+  /**
+   * A briefing is kept for thirty days and the repository record outlives it,
+   * so after that the trail line is the only place a person can still see what
+   * the agent was told about its repositories. One row, at the moment the map
+   * is first built, summarizing the same build the prompt renders.
+   */
+  it("records once what the map said, including the repositories it may not use", async () => {
+    await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      ticket: ticketWith([human("acme/ops")]),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    const shown = appliedMapShown();
+    expect(shown).toHaveLength(1);
+    const row = shown[0]!;
+    expect(row.kind).toBe("map_shown");
+    if (row.kind !== "map_shown") throw new Error("unreachable");
+    expect(row.repositoryKeys).toContain("github:acme/ops");
+    expect(row.text).toContain("github:acme/ops:");
+    // The contract bounds this at 1,600 characters. The trail carries a
+    // summary; the map itself is far larger, and a row past the bound is a row
+    // the write refuses.
+    expect(row.text.length).toBeLessThanOrEqual(1600);
+  });
+
   it("writes nothing to the record about it", async () => {
     const selection = await runStep({
       repositories: LISTED,
@@ -1643,7 +1705,7 @@ describe("a repository this deployment holds and this run may not open, named on
     ]);
     // Every statement the step applied, upserts, deletes and trail lines
     // together, because a mention must not reach any of them.
-    const plans = JSON.stringify(appliedPlans());
+    const plans = JSON.stringify(appliedDecisionPlans());
     expect(plans).toContain("github:acme/web");
     expect(plans).not.toContain("github:acme/ops");
   });
@@ -1811,7 +1873,7 @@ describe("a repository the catalog enables and this workflow's pin leaves out", 
     expect(selection.workScopeLeftOut).toEqual([
       { repositoryKey: "github:acme/docs", reason: OUTSIDE_THE_PIN },
     ]);
-    expect(JSON.stringify(appliedPlans())).not.toContain("github:acme/docs");
+    expect(JSON.stringify(appliedDecisionPlans())).not.toContain("github:acme/docs");
   });
 });
 
@@ -1977,7 +2039,7 @@ describe("a repository the catalog enables and no run can check out", () => {
     );
     expect(addition?.content).toContain("github:acme/ops");
     expect(JSON.stringify(selection.promptAdditions ?? [])).not.toContain("cannot serve");
-    expect(JSON.stringify(appliedPlans())).not.toContain("github:acme/ops");
+    expect(JSON.stringify(appliedDecisionPlans())).not.toContain("github:acme/ops");
   });
 });
 
