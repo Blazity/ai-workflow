@@ -544,15 +544,57 @@ export function formatAnswerNotRecordedComment(
 }
 
 /**
- * What a DECLINE recorded, for the channel that took it.
+ * Whether declining a repository the question listed for THIS reason writes an
+ * entry into the record.
+ *
+ * The map is the list, like the two above it, so a fifth ask reason cannot be
+ * declared without somebody answering this question for it.
+ *
+ * It exists because the sentence below used to answer it one way for every
+ * reason and was false for the commonest one. Production, AWP-263 on
+ * 2026-09-20: a person declined the one candidate a which-of-these question
+ * offered, was told "this work is recorded as leaving it out", read the record
+ * straight afterwards, found no entry for it and a dashboard saying nobody had
+ * decided about it, and reported a lost answer. Their answer was not lost; the
+ * sentence named the wrong place.
+ */
+const A_DECLINE_WRITES_AN_ENTRY: Record<WorkScopeAskReason, boolean> = {
+  /** YES, `unavailable`, which expires once the catalog can use the repository
+   *  (A7b): the person could not have it, so they did not refuse it. */
+  not_enabled: true,
+  /** YES, `unavailable` again and for the same reason. */
+  unusable: true,
+  /** YES, `excluded`: the person could have had it and said no, and the
+   *  trigger policy that kept it out of this run does not expire (A7b). */
+  outside_policy: true,
+  /** NO, and that is the product decision A7 holds, not an omission. A name
+   *  left out of an answer is a weaker thing than an entry, so the question,
+   *  the repositories it NAMED and the answer naming none of them are the whole
+   *  of the decision, and they live on the Decision Trail. A later run reads
+   *  them there and neither offers the repository again nor takes it
+   *  (`readWorkScopeAnsweredRepositories`, `isUnnamedInAnswer`). */
+  selection: false,
+};
+
+/**
+ * What a DECLINE decided, for the channel that took it.
  *
  * A bare "no" typed into the dashboard's box or sent through
  * `runs_answer_clarification` is an answer to the question in front of that
- * person, so it declines every repository the question listed: one entry each,
- * permanent, in their name. Those two channels used to say nothing at all about
- * it. The screen said "answered" and the rule lived in an MCP tool description
+ * person, so it declines every repository the question listed, permanently and
+ * in their name. Those two channels used to say nothing at all about it. The
+ * screen said "answered" and the rule lived in an MCP tool description
  * that no human ever reads, so the most consequential thing a one word answer
  * can do was also the least visible.
+ *
+ * WHERE THE DECISION LANDS IS SAID PER REASON, because it differs and a person
+ * goes looking for it. A decline of a repository the deployment cannot serve or
+ * the policy holds back is an entry in the record; a decline on the
+ * which-of-these question writes no entry by design, and telling somebody it
+ * did sends them to a list that will not have it and teaches them the system
+ * loses answers. What is true of that one is the sentence its sibling
+ * `formatAnswerLeftOutComment` already uses for the silent half of the same
+ * decision, word for word, so the two halves of one rule read as one rule.
  *
  * This sentence goes to the answer's own reply and NOT to the ticket: the
  * ticket comment exists for answers that recorded nothing, and a decline
@@ -569,12 +611,40 @@ export function formatAnswerNotRecordedComment(
  * a condition that does not apply to them rather than a route that does not
  * work.
  */
-export function formatAnswerDeclinedComment(repositoryKeys: readonly string[]): string {
-  const them = repositoryKeys.length === 1 ? "it" : "them";
-  return [
-    `Your answer was read as declining ${repositoryKeys.join(", ")}, which the question listed, so this work is recorded as leaving ${them} out.`,
-    theWayBackIntoTheWork(repositoryKeys.length),
-  ].join(" ");
+export function formatAnswerDeclinedComment(
+  repositoryKeys: readonly string[],
+  /** The question's own asks, for the reason each declined repository was put
+   *  in front of this person. A key the list does not carry takes the branch
+   *  that claims nothing about the record: we may under-promise here, never
+   *  over-promise. */
+  askedRepositories?: readonly { repositoryKey: string; askedBecause: WorkScopeAskReason }[],
+): string {
+  const writesAnEntry = (repositoryKey: string) => {
+    const asked = (askedRepositories ?? []).find(
+      (repository) => repository.repositoryKey === repositoryKey,
+    );
+    return asked !== undefined && A_DECLINE_WRITES_AN_ENTRY[asked.askedBecause];
+  };
+  const recorded = repositoryKeys.filter(writesAnEntry);
+  const onTheTrail = repositoryKeys.filter((key) => !writesAnEntry(key));
+  const sentences: string[] = [];
+  if (recorded.length > 0) {
+    sentences.push(
+      `Your answer was read as declining ${recorded.join(", ")}, which the question listed, so this work is recorded as leaving ${recorded.length === 1 ? "it" : "them"} out.`,
+    );
+  }
+  if (onTheTrail.length > 0) {
+    const them = onTheTrail.length === 1 ? "it" : "them";
+    sentences.push(
+      `Your answer was read as declining ${onTheTrail.join(", ")}, which the question listed, so ${onTheTrail.length === 1 ? "it is" : "they are"} left out of this work, and no later run takes ${them} on its own.`,
+      // Where to look, because the person who reads this goes and looks. The
+      // repository list will not carry it, and a list that does not carry a
+      // decision somebody just made reads as a decision that was dropped.
+      `You will find the question and your answer on this work's Decision Trail rather than in its repository list.`,
+    );
+  }
+  sentences.push(theWayBackIntoTheWork(repositoryKeys.length));
+  return sentences.join(" ");
 }
 
 /** The one way back, written once, because a person meeting it after a decline
@@ -813,6 +883,36 @@ export function formatAnswerAlsoNamedComment(input: {
  * the backlog, and without a word about why that reads as the system losing
  * their answer. Said only after the move happened, so it never claims one.
  */
+/**
+ * The reply that decides a question offering candidates, in the vocabulary of
+ * the question the person is actually looking at.
+ *
+ * ONE SENTENCE FOR BOTH READERS, which is why it lives here rather than inside
+ * either of them. The question teaches it before anybody answers, and the
+ * comment that could not read an answer teaches it again; two copies drift, and
+ * the drift lands on the person who did what the first one said.
+ *
+ * Production, AWP-263 on 2026-09-20. The candidate question ended "Reply with
+ * full provider-scoped paths (for example github:acme/app)", somebody wrote a
+ * full provider-scoped path, and it was refused with "Reply yes to use
+ * gitlab:... or no to continue without it": the path named a repository the
+ * question had not listed, and a reading may never widen what was asked. The
+ * refusal was right. The question had invited an answer no reader takes.
+ */
+export function replyThatDecidesCandidates(input: {
+  /** Whether the question offered a list or exactly one repository. */
+  shape: "list" | "one";
+  /** The repository keys the question offered, in the order it listed them. */
+  askedKeys: readonly string[];
+}): string {
+  return input.shape === "one" && input.askedKeys.length === 1
+    ? `Reply "yes" to use ${input.askedKeys[0]} in this work, or "no" to continue without it.`
+    : [
+        `Reply with the repositories this work should use, from ${input.askedKeys.join(", ")},`,
+        `or "none of these" to use none of them.`,
+      ].join(" ");
+}
+
 export function formatAnswerUnreadableComment(input: {
   /** Our best reading of what they may have meant, absent when even that would
    *  be a guess. */
@@ -828,13 +928,7 @@ export function formatAnswerUnreadableComment(input: {
   const opening = input.paraphrase
     ? `I could not be sure what that answer decided. My best reading is: ${input.paraphrase}`
     : "I could not tell what that answer decided about the repositories.";
-  const ask =
-    input.shape === "one" && input.askedKeys.length === 1
-      ? `Reply "yes" to use ${input.askedKeys[0]} in this work, or "no" to continue without it.`
-      : [
-          `Reply with the repositories this work should use, from ${input.askedKeys.join(", ")},`,
-          `or "none of these" to use none of them.`,
-        ].join(" ");
+  const ask = replyThatDecidesCandidates(input);
   const waiting = input.waiting
     ? `This ticket is back in the "${input.waiting.backlogColumnName}" column while the question waits. Reply in a comment here and move it to the "${input.waiting.aiColumnName}" column again, or answer in the dashboard.`
     : undefined;

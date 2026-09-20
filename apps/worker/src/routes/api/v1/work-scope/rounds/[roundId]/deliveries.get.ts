@@ -1,5 +1,6 @@
 import { createError, defineEventHandler, getQuery, getRouterParam } from "h3";
 import { workScopeSubjectKeySchema } from "@shared/contracts";
+import { subjectKeyRefusal } from "../../subject-key.js";
 
 import {
   assembleSubjectRounds,
@@ -30,7 +31,10 @@ export default defineEventHandler(async (event) => {
     const query = getQuery(event);
     const subject = workScopeSubjectKeySchema.safeParse(query.subjectKey);
     if (!subject.success) {
-      throw createError({ statusCode: 400, statusMessage: "subjectKey is required" });
+      throw createError({
+        statusCode: 400,
+        statusMessage: subjectKeyRefusal(query.subjectKey, subject.error),
+      });
     }
     const assembled = await assembleSubjectRounds(connectedRoundReads, {
       subjectKey: subject.data,

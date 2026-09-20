@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { RepositoryCatalogEntry } from "./catalog.js";
 import { TEXT_AMBIGUITY_QUESTION_OPENING } from "../../engine/work-scope/context.js";
+import { replyThatDecidesCandidates } from "../../engine/support/clarification-comment-format.js";
 import {
   repositoryDiscoveryQuestion,
   validateRepositoryDiscoveryResult,
@@ -752,29 +753,60 @@ describe("validateRepositoryDiscoveryResult", () => {
       });
     });
 
-    it("keeps the words the question has said since AIW-147, and says what the answer binds", () => {
-      // The words since AIW-147 stay, so a person who answered this question
-      // yesterday recognises it today. One sentence is added (joint gate round
-      // 3, R6): answering "docs" to this question leaves acme/app out of the
-      // work for good, and the which-of-these question has said so since A11g
-      // while this one did not. It names no lever, because a question is
-      // copied into the agent's prompts (rule 7).
+    it("asks for the one reply its own reader takes, and warns off the one it does not", () => {
+      // AWP-263 on production, 2026-09-20. This question ended "Reply with full
+      // provider-scoped paths (for example github:acme/app)", the person wrote
+      // exactly that, and the reader refused it: the path named a repository the
+      // question had not listed, and a reading may never widen what was asked.
+      // The refusal was right. The instruction above it was inviting an answer
+      // no reader takes, and the person did what it said.
+      //
+      // It still says what the answer binds (joint gate round 3, R6) and still
+      // names no lever, because a question is copied into the agent's prompts
+      // (rule 7).
       const decision = lowConfidence([
         { provider: "github", repoPath: "acme/app", rationale: "the ticket names the app" },
       ]);
 
       expect(decision.kind === "clarification_needed" && decision.questions).toEqual([
         "Repository discovery was not confident enough to select automatically." +
-          " Which repository or repositories should this ticket inspect or modify?" +
-          " Reply with full provider-scoped paths (for example github:acme/app)." +
           " Proposed candidates: github:acme/app (the ticket names the app)." +
+          " Should this ticket inspect or modify it?" +
+          ' Reply "yes" to use github:acme/app in this work, or "no" to continue without it.' +
+          " Naming a repository this question does not list decides nothing about it" +
+          " and does not bring it into this work." +
           " A proposed candidate you do not name is left out of this work from now on, and no later run takes it on its own.",
       ]);
       const [question] = decision.kind === "clarification_needed" ? decision.questions : [""];
+      // THE SAME SENTENCE THE REFUSAL TEACHES, composed once rather than copied:
+      // a question and a refusal that teach two different replies is the defect
+      // above, and a copy here would let it come back quietly.
+      expect(question).toContain(
+        replyThatDecidesCandidates({ shape: "one", askedKeys: ["github:acme/app"] }),
+      );
       expect(question).not.toMatch(/work scope API|work_scope\.edit|repository list/);
       // The answer-not-recorded comment recognises the which-of-these question
       // by its opening, so this one must never carry it.
       expect(question).not.toContain(TEXT_AMBIGUITY_QUESTION_OPENING);
+    });
+
+    /**
+     * And under a list, where the reply that decides is a different sentence:
+     * the names, or "none of these". A question offering two that taught the
+     * one-repository yes/no would be the same defect in the other direction.
+     */
+    it("asks for the names, or none of these, when it offers more than one candidate", () => {
+      const decision = lowConfidence([
+        { provider: "github", repoPath: "acme/app", rationale: "the ticket names the app" },
+        { provider: "gitlab", repoPath: "group/shared", rationale: "shared UI primitives" },
+      ]);
+      const [question] = decision.kind === "clarification_needed" ? decision.questions : [""];
+
+      expect(question).toContain(
+        'Reply with the repositories this work should use, from github:acme/app, gitlab:group/shared,' +
+          ' or "none of these" to use none of them.',
+      );
+      expect(question).not.toContain("provider-scoped paths");
     });
 
     // Joint gate round 3, R7 (the skeptic's probe P7). Nobody is asked again
@@ -1372,10 +1404,13 @@ describe("repositoryDiscoveryQuestion", () => {
     ).toEqual([notEnabledQuestion("github:acme/app")]);
   });
 
-  it("asks about no repository when the clarification is about none", () => {
-    // The duplicate proposal and the confidence clarifications are about the
-    // model's behaviour, not about a repository, so there is nothing an answer
-    // could be recorded against.
+  it("records a clarification about no candidate against the subject all the same", () => {
+    // The duplicate proposal, the low confidence and the model's own question
+    // put no CANDIDATE in front of anybody, and they all still ask which
+    // repository this work is about. So the ask lists nothing and names the
+    // subject: an absent ask is read as a clarification about some other
+    // subject entirely and its answer is recorded nowhere, which on production
+    // (AWP-263) threw away somebody's full repository path in silence.
     expect(
       repositoryDiscoveryQuestion({
         decision: {
@@ -1390,7 +1425,7 @@ describe("repositoryDiscoveryQuestion", () => {
       }),
     ).toEqual({
       questions: ["Which repository or repositories should this ticket inspect or modify?"],
-      ask: null,
+      ask: { subjectKey: SUBJECT, askedRepositories: [] },
     });
   });
 
@@ -1407,10 +1442,13 @@ describe("repositoryDiscoveryQuestion", () => {
   describe("the question raised when the model was not confident", () => {
     const CANDIDATE_QUESTION =
       "Repository discovery was not confident enough to select automatically." +
-      " Which repository or repositories should this ticket inspect or modify?" +
-      " Reply with full provider-scoped paths (for example github:acme/app)." +
       " Proposed candidates: github:acme/app (the ticket names the app)," +
       " gitlab:group/shared (shared UI primitives)." +
+      " Which of these should this ticket inspect or modify?" +
+      " Reply with the repositories this work should use, from github:acme/app, gitlab:group/shared," +
+      ' or "none of these" to use none of them.' +
+      " Naming a repository this question does not list decides nothing about it" +
+      " and does not bring it into this work." +
       " A proposed candidate you do not name is left out of this work from now on, and no later run takes it on its own.";
 
     const CANDIDATES = {

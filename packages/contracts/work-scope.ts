@@ -48,13 +48,47 @@ export const WORK_SCOPE_INT4_MAX = 2_147_483_647;
  *  webhook endpoint and subject id (`engine/support/subject-key.ts`); the
  *  longest of those is a nested GitLab path with a number on it. */
 export const WORK_SCOPE_SUBJECT_KEY_MAX_LENGTH = 400;
-/** One spelling of a subject key for every surface that takes one, so the read
- *  and the write cannot accept different keys for the same record. */
+/**
+ * Every subject kind a key can name, in the spelling `subject-key.ts` writes.
+ *
+ * The list, not a pattern: what follows the kind differs per kind and a pattern
+ * loose enough to cover all of them would accept anything with a colon in it.
+ * A subset of these keeps a work scope record (`services/work-scope/record.ts`),
+ * which is a different question and stays where it is.
+ */
+export const WORK_SCOPE_SUBJECT_KINDS = [
+  "ticket:",
+  "pr:",
+  "webhook:",
+  "schedule:",
+  "repo:",
+  "org:",
+] as const;
+
+/**
+ * One spelling of a subject key for every surface that takes one, so the read
+ * and the write cannot accept different keys for the same record.
+ *
+ * A KEY THAT NAMES NO SUBJECT KIND IS REFUSED, and that is not pedantry about
+ * shapes. The read answers `carriesRecord: false` with an empty record for a
+ * subject kind that legitimately keeps none, and until this refusal existed it
+ * answered a mistyped key exactly the same way. Production, 2026-09-20: a
+ * caller asked for `AWP-261` instead of `ticket:jira:AWP-261`, was handed a
+ * confident empty record for a ticket whose record holds four decisions, and
+ * nearly reported it as a lost record. A typo is worth one error; an empty
+ * record that looks like an answer is worth an hour.
+ */
 export const workScopeSubjectKeySchema = z
   .string()
   .trim()
   .min(1)
-  .max(WORK_SCOPE_SUBJECT_KEY_MAX_LENGTH);
+  .max(WORK_SCOPE_SUBJECT_KEY_MAX_LENGTH)
+  .refine(
+    (key) => WORK_SCOPE_SUBJECT_KINDS.some((kind) => key.startsWith(kind)),
+    {
+      message: `subjectKey must name a subject kind (${WORK_SCOPE_SUBJECT_KINDS.join(" ")}), for example ticket:jira:AWP-1 or pr:github:acme/app#7`,
+    },
+  );
 const WORK_SCOPE_WRITE_PLAN_KEYS_MAX = 16;
 const WORK_SCOPE_WRITE_PLAN_TRAIL_MAX = 32;
 const WORK_SCOPE_ASKED_REPOSITORIES_MAX = 8;

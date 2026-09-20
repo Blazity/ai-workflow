@@ -15,6 +15,7 @@ import {
 import { requireDashboardActor } from "../../../services/auth/request-context.js";
 import { readConnectedWorkScopeRecord } from "../../../services/work-scope/index.js";
 import { parseListQuery, toBriefingHttpError } from "./runs/briefing-route.js";
+import { subjectKeyRefusal } from "./work-scope/subject-key.js";
 
 /**
  * Today's record, plus the clarification rounds when a caller asks for them.
@@ -66,7 +67,10 @@ export default defineEventHandler(
       // different keys for one record.
       const subject = workScopeSubjectKeySchema.safeParse(query.subjectKey);
       if (!subject.success) {
-        throw createError({ statusCode: 400, statusMessage: "subjectKey is required" });
+        throw createError({
+          statusCode: 400,
+          statusMessage: subjectKeyRefusal(query.subjectKey, subject.error),
+        });
       }
       const limit = pageParam(query.trailLimit, "trailLimit", WORK_SCOPE_TRAIL_PAGE_MAX);
       const beforeId = pageParam(query.trailBefore, "trailBefore", WORK_SCOPE_INT4_MAX);

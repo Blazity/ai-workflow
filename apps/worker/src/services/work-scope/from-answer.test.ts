@@ -29,6 +29,7 @@ import {
 import { recordRepositoryAnswer as recordRepositoryAnswerThroughIndex } from "./index.js";
 import type { AnswerReadingModel } from "./read-answer.js";
 import { TEXT_AMBIGUITY_QUESTION_OPENING } from "../../engine/work-scope/context.js";
+import { repositoryDiscoveryQuestion } from "../../engine/repository-discovery/protocol.js";
 import { decideWorkScope } from "../../engine/work-scope/decide.js";
 import {
   appendWorkScopeQuestionAsked,
@@ -1154,6 +1155,205 @@ describe("answerClarificationAndResume records the repository answer on arrival"
         decidedAt: expect.any(String),
       },
     ]);
+  });
+
+  /**
+   * THE SAME ANSWER, REACHED THROUGH THE QUESTION THAT REALLY ASKED IT.
+   *
+   * The row above proves the answer path keeps a path somebody typed into a
+   * repository question that listed nothing. What broke on production was the
+   * link in front of it: the question discovery raises in its OWN words carried
+   * no ask at all, so the row reached the answer path as a clarification about
+   * some other subject and was read as nobody's decision.
+   *
+   * AWP-263, 2026-09-20, definition 40. Discovery asked "Which repository
+   * contains the pricing helper to tidy?", a person answered
+   * github:blazity/ai-workflow-demo through runs.answer_clarification, and the
+   * record ended with no entry, no trail row and no sentence. The next question
+   * offered that repository as a fresh candidate.
+   *
+   * Driven from `repositoryDiscoveryQuestion` rather than from a hand-written
+   * ask, because the ask is the thing that was wrong: a test that seeds one
+   * itself proves the half that already worked.
+   */
+  it("keeps the repository a person names to a discovery question that offered no candidate", async () => {
+    const question = "Which repository contains the pricing helper to tidy?";
+    // The decision `validateRepositoryDiscoveryResult` returns when the model
+    // asks a question of its own: its words, and no candidate.
+    const { ask } = repositoryDiscoveryQuestion({
+      decision: {
+        kind: "clarification_needed",
+        questions: [question],
+        reason: "model_requested_clarification",
+        about: [],
+      },
+      subjectKey: SUBJECT,
+      recorded: [],
+      catalog: [],
+    });
+    const row = await seedPending(ask?.askedRepositories, [question]);
+    // The trail row the asking run writes beside the clarification
+    // (`prepareClarificationHookStep`), which the seed above does not.
+    if (ask) {
+      await appendWorkScopeQuestionAsked(db, {
+        subjectKey: SUBJECT,
+        runId: RUN,
+        clarificationId: row.id,
+        asked: ask.askedRepositories,
+      });
+    }
+
+    const outcome = await answer(makeTracker(), row.id, "github:acme/web");
+
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({
+        repositoryKey: "github:acme/web",
+        state: "selected",
+        origin: "person",
+        decidedBy: PERSON,
+      }),
+    ]);
+    // AND A TRAIL ROW, so somebody can see what the answer did. It is the only
+    // place the answer shows up at all when it decides nothing, and on
+    // production it was missing for an answer that decided plenty.
+    await expect(trailEvents()).resolves.toEqual([
+      {
+        kind: "question_asked",
+        clarificationId: row.id,
+        repositories: [],
+      },
+      {
+        kind: "question_answered",
+        clarificationId: row.id,
+        answer: { kind: "repositories", repositoryKeys: ["github:acme/web"] },
+        answeredBy: PERSON,
+      },
+      expect.objectContaining({ kind: "entry_written", clarificationId: row.id }),
+    ]);
+    // No sentence, which is the contract of the field: absent means the answer
+    // recorded exactly what it named. On production it was absent and nothing
+    // had been recorded at all.
+    expect(outcome).toMatchObject({ kind: "answered" });
+    expect(outcome).not.toHaveProperty("recordOutcome");
+  });
+
+  /**
+   * AND THE SAME QUESTION ANSWERED WITH SOMETHING THAT DECIDES NOTHING.
+   *
+   * The half that costs a person a repeated question rather than a lost
+   * decision, and the one the absent `recordOutcome` used to lie about: on
+   * production the tool returned no sentence, which by its own contract means
+   * the answer recorded what it named, to somebody whose answer recorded
+   * nothing.
+   */
+  it("tells a person their answer to a candidate-less question recorded nothing", async () => {
+    const question = "Which repository contains the pricing helper to tidy?";
+    const { ask } = repositoryDiscoveryQuestion({
+      decision: {
+        kind: "clarification_needed",
+        questions: [question],
+        reason: "model_requested_clarification",
+        about: [],
+      },
+      subjectKey: SUBJECT,
+      recorded: [],
+      catalog: [],
+    });
+    const row = await seedPending(ask?.askedRepositories, [question]);
+    if (ask) {
+      await appendWorkScopeQuestionAsked(db, {
+        subjectKey: SUBJECT,
+        runId: RUN,
+        clarificationId: row.id,
+        asked: ask.askedRepositories,
+      });
+    }
+
+    const outcome = await answer(makeTracker(), row.id, "the one with the pricing code in it");
+
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    await expect(trailEvents()).resolves.toEqual([
+      { kind: "question_asked", clarificationId: row.id, repositories: [] },
+      {
+        kind: "question_answered",
+        clarificationId: row.id,
+        answer: { kind: "unrecognised" },
+        answeredBy: PERSON,
+      },
+    ]);
+    expect(outcome).toMatchObject({
+      kind: "answered",
+      recordOutcome: expect.stringContaining("recorded no repository decision from it"),
+    });
+  });
+
+  /**
+   * WHAT A DECLINE ON THE WHICH-OF-THESE QUESTION IS TOLD, checked against what
+   * the record actually holds rather than against a copy of the sentence.
+   *
+   * A7 is a held product decision: such a decline writes no entry, because
+   * leaving a name out of an answer is a weaker thing than an entry, and the
+   * question plus the answer on the Decision Trail bind it instead. The
+   * sentence said "this work is recorded as leaving it out" anyway.
+   *
+   * AWP-263, 2026-09-20: the person read that sentence, opened the record, found
+   * `entries: []` and a dashboard saying nobody had decided about the
+   * repository, and reported a lost answer. Nothing was lost. The sentence
+   * pointed at the one place the decision is not.
+   */
+  it("never tells a person a which-of-these decline is in a list the record leaves empty", async () => {
+    const question =
+      "Which repository or repositories should this ticket inspect or modify?" +
+      " Proposed candidates: github:acme/api.";
+    const row = await seedPending(asked("github:acme/api", "selection"), [question]);
+    // The trail row the asking run writes beside the clarification: the
+    // answered set is a join over the two, so without it a later run has no
+    // question to find and the promise below could not be read at all.
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey: SUBJECT,
+      runId: RUN,
+      clarificationId: row.id,
+      asked: asked("github:acme/api", "selection"),
+    });
+
+    const outcome = await answer(makeTracker(), row.id, "no");
+
+    // What the record holds, which is what the sentence has to be true about.
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    const recordOutcome =
+      outcome.kind === "answered" ? (outcome.recordOutcome ?? "") : "no answer";
+    expect(recordOutcome).toContain("read as declining github:acme/api");
+    expect(recordOutcome).not.toContain("recorded as leaving");
+    expect(recordOutcome).toContain("Decision Trail");
+    // AND THE DECISION IS SOMEWHERE, which is the other half of being honest
+    // about it: the trail carries it and a later run reads it from there.
+    await expect(readWorkScopeAnsweredRepositories(db, SUBJECT)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  /**
+   * AND WHERE A DECLINE DOES WRITE AN ENTRY, the sentence still says so.
+   *
+   * A7b, the contrast A7 is defined against: a repository the deployment cannot
+   * enable was never refused by the person, so the decline writes `unavailable`
+   * and the record IS where they will find it. Collapsing both cases into the
+   * trail wording would be the same defect with its sign flipped.
+   */
+  it("still names the record where a decline of an unavailable repository writes one", async () => {
+    const row = await seedPending(asked("github:acme/api", "not_enabled"), [
+      "Does this ticket also touch github:acme/api? Reply with none if not.",
+    ]);
+
+    const outcome = await answer(makeTracker(), row.id, "no");
+
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({ repositoryKey: "github:acme/api", state: "unavailable" }),
+    ]);
+    const recordOutcome =
+      outcome.kind === "answered" ? (outcome.recordOutcome ?? "") : "no answer";
+    expect(recordOutcome).toContain("this work is recorded as leaving it out");
+    expect(recordOutcome).not.toContain("Decision Trail");
   });
 });
 
