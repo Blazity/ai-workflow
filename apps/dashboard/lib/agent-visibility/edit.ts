@@ -165,11 +165,19 @@ export function undoSentence(original: EditIntent): string {
  *
  *  SAID ONCE, ABOVE THE LIST. It is the same sentence for every repository in
  *  it, so per row it was the same paragraph two or three times over, and a
- *  person scanning for which repositories are undecided read the explanation
+ *  person scanning for which repositories are here read the explanation
  *  instead of the keys. Worded for one or many, because the list can hold
- *  either. */
+ *  either.
+ *
+ *  IT MAY NOT SAY THAT NOBODY DECIDED. This list is where a candidate an
+ *  answer passed over lands, and that is a decision somebody made: answering
+ *  "none of these" leaves both candidates here. No entry is written for it on
+ *  purpose (`engine/work-scope/decide.ts`), because an entry would put the key
+ *  back on the branch that offers it again, which is the loop this feature
+ *  exists to end. So the sentence says what is true of the record and points
+ *  at the rounds, where the answer itself is shown. */
 export const OFFERED_LINE =
-  "Nothing has been decided about the repositories below. Selecting one puts it in the record; excluding it keeps a later question from offering it again.";
+  "Not in the record, which is not the same as nobody deciding: an answer that passes a candidate over writes no entry, and the questions below are where that shows. Selecting one puts it in the record; excluding it keeps a later question from offering it again.";
 
 export function offeredNotInRecord(
   rounds: readonly { question: { offered: readonly { key: string }[] | null } }[],

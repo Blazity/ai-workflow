@@ -543,9 +543,12 @@ test("a repository a question offered and nobody decided about can be put in the
   assert.match(
     body,
     new RegExp(
-      `Offered in a question, not in the record Nothing has been decided about the repositories below\\. [^.]*\\. ${SHOP_MOBILE} Select Exclude`,
+      `Offered in a question, not in the record Not in the record, which is not the same as nobody deciding.*? ${SHOP_MOBILE} Select Exclude`,
     ),
   );
+  // It may not claim nobody decided: answering "none of these" passes over
+  // every candidate and leaves them all here, with no entry written for any.
+  assert.doesNotMatch(body, /[Nn]obody decided about this one/);
   await click(labelled(harness.root, `Select: ${SHOP_MOBILE}`));
   await clickText(harness.root, "Yes, select it");
 
