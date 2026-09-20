@@ -1107,12 +1107,18 @@ function AttemptInspector({
     setTab(next);
     onWriteLink({ tab: next });
   };
+  // The current value from a ref, not from inside the updater. React may call
+  // an updater while another component renders, and this one wrote the URL,
+  // which is a router update during somebody else's render: React says so out
+  // loud ("Cannot update a component while rendering a different component")
+  // and the next React makes it an error. An updater has to be pure.
+  const briefingLinkRef = React.useRef(briefingLink);
+  briefingLinkRef.current = briefingLink;
   const changeBriefingLink = (patch: { send?: string | null; section?: string | null }) => {
-    setBriefingLink((current) => {
-      const next = { ...current, ...patch };
-      onWriteLink(next);
-      return next;
-    });
+    const next = { ...briefingLinkRef.current, ...patch };
+    briefingLinkRef.current = next;
+    setBriefingLink(next);
+    onWriteLink(next);
   };
   const [detail, setDetail] =
     React.useState<WorkflowReplayAttemptDetail | null>(null);
