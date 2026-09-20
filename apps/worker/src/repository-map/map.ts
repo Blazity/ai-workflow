@@ -50,6 +50,7 @@
  */
 import {
   REPOSITORY_RELATIONSHIP_KINDS,
+  workScopeUnnamedWhy,
   type RepositoryKey,
   type RepositoryRelationshipKind,
   type WorkScopeEntry,
@@ -224,6 +225,19 @@ export interface RepositoryMapInput {
    *  (`SETTLING_REFUSAL_REASONS`). A key here can never read "you may request
    *  it", whatever the catalog says about it. */
   refusedKeys?: readonly RepositoryKey[];
+  /**
+   * Repositories a question ALREADY ANSWERED on this work listed, and that
+   * nothing on the record has chosen since (`isUnnamedInAnswer` in
+   * `@shared/contracts`, the one reading of it).
+   *
+   * THE DOOR IS ALREADY SHUT, SO THE MAP SAYS SO ON THE FIRST PASS. The record
+   * writes nothing for a name an answer left out, so without this the map read
+   * the repository off the catalog as `offered`, told the model it might
+   * request it, and the run refused the request it had just invited. That cost
+   * a corrective pass on every planning run over such a subject, and the model
+   * was doing exactly what the prompt asked.
+   */
+  unnamedInAnswerKeys?: readonly RepositoryKey[];
   /**
    * Whether THIS SEND can actually attach a repository.
    *
@@ -459,6 +473,7 @@ export function buildRepositoryMap(
   const expansionOpen = input.expansionOpen === true;
   const catalogUnreadable = input.silence === "catalog_unreadable";
   const refused = new Set(input.refusedKeys ?? []);
+  const unnamed = new Set(input.unnamedInAnswerKeys ?? []);
   const facts = new Map<RepositoryKey, RepositoryMapFacts>();
   for (const repository of input.repositories ?? []) {
     if (!facts.has(repository.key)) facts.set(repository.key, repository);
@@ -504,14 +519,14 @@ export function buildRepositoryMap(
     const repository = facts.get(key);
     const entry = entries.get(key) ?? null;
     const attachment = attached.get(key);
-    const relationships = [...(repository?.relationships ?? [])].sort(compareRelationships);
+    const relationships = oneEdgeOnce([...(repository?.relationships ?? [])].sort(compareRelationships));
     const state = stateOf({
       attachment,
       entry,
       repository,
       catalogKnown,
       catalogActivated: input.catalogActivated === true,
-      refused: refused.has(key),
+      refused: refused.has(key) || unnamed.has(key),
     });
     const described: RepositoryMapEntry = {
       key,
@@ -526,7 +541,7 @@ export function buildRepositoryMap(
       rendering: "line",
       workScopeEntry: entry,
     };
-    const reason = reasonOf(state, { key, entry, leftOut, repository });
+    const reason = reasonOf(state, { key, entry, leftOut, repository, unnamed: unnamed.has(key) });
     if (reason !== null) described.reason = reason;
     if (attachment) {
       described.workspace = {
@@ -569,7 +584,7 @@ export function buildRepositoryMap(
   // ticket, and nothing turns red when it does.
   const budget = Math.min(options?.maxLength ?? MAP_TEXT_MAX_LENGTH, MAP_TEXT_MAX_LENGTH);
   const rules = groupRules(expansionOpen);
-  const renderContext: RenderContext = { expansionOpen, catalogUnreadable };
+  const renderContext: RenderContext = { expansionOpen, catalogUnreadable, unnamed };
   // The frame is paid for before any entry is, and measured rather than
   // guessed: the section heading, every group heading, every rule, the notes
   // themselves and room for the two closing sentences. Charging entries alone
@@ -910,7 +925,7 @@ function renderEntry(
     const state =
       entry.workspace || entry.state === "offered"
         ? ""
-        : ` - ${statePhrase(entry.state, context.expansionOpen)}`;
+        : ` - ${statePhrase(entry.state, context.expansionOpen, context.unnamed.has(entry.key))}`;
     const reason = !isUsableState(entry.state) && entry.reason ? `: ${entry.reason}` : "";
     const summary = entry.description.text.length > 0 ? ` - ${entry.description.text}` : "";
     return `- \`${entry.key}\`${state}${reason}${summary}\n`;
@@ -949,6 +964,10 @@ function renderEntry(
 interface RenderContext {
   expansionOpen: boolean;
   catalogUnreadable: boolean;
+  /** Repositories shut by an answer rather than by a request this run made.
+   *  Both are `refused`, and the clause that stops the request differs: one
+   *  says the run already said no, the other that a person's answer did. */
+  unnamed: ReadonlySet<RepositoryKey>;
 }
 
 /** What follows the key on a full entry: where it is, and what may be done. */
@@ -957,7 +976,7 @@ function headline(entry: RepositoryMapEntry, context: RenderContext): string {
     const where = entry.workspace.localPath ? ` at \`${entry.workspace.localPath}\`` : "";
     return `${where} (${entry.workspace.access === "read_only" ? "read only" : "write"})`;
   }
-  return ` - ${statePhrase(entry.state, context.expansionOpen)}${entry.reason ? `: ${entry.reason}` : ""}`;
+  return ` - ${statePhrase(entry.state, context.expansionOpen, context.unnamed.has(entry.key))}${entry.reason ? `: ${entry.reason}` : ""}`;
 }
 
 /**
@@ -969,14 +988,38 @@ function headline(entry: RepositoryMapEntry, context: RenderContext): string {
  * reads differently per send: it is the only one that invites an action, and
  * three of the four sends that see this map have no way to take it.
  */
-function statePhrase(state: RepositoryMapState, expansionOpen: boolean): string {
+function statePhrase(
+  state: RepositoryMapState,
+  expansionOpen: boolean,
+  unnamed: boolean,
+): string {
   if (state === "offered") {
     return expansionOpen
       ? "not in the workspace; you may request it"
       : "not in the workspace, and this phase cannot attach it";
   }
+  // Both are `refused`, and saying "this run already refused a request for it"
+  // before any request was made would be false on the pass that matters most.
+  if (state === "refused" && unnamed) return UNNAMED_STATE_PHRASE;
   return SETTLED_STATE_PHRASES[state];
 }
+
+/**
+ * A question on this work has been answered, this repository is not selected on
+ * it, and a request would be refused.
+ *
+ * "NOT SELECTED", never "the answer did not name it". The same fact is true of
+ * a repository somebody DID name and whose entry a person later removed, and
+ * there that clause would be false; the canonical sentence beside it takes the
+ * same care (`workScopeUnnamedWhy`).
+ *
+ * It claims nothing about permanence either. An answer is not an exclusion, and
+ * the way back belongs in the person's channel and never in the prompt the
+ * system signs (rule 7 and D4 of
+ * `docs/product/repository-record-behaviour.md`), so this stops the request
+ * without closing the door in words.
+ */
+const UNNAMED_STATE_PHRASE = "not selected on this work, do not request it";
 
 const SETTLED_STATE_PHRASES: Record<Exclude<RepositoryMapState, "offered">, string> = {
   write: "in the workspace, may be changed",
@@ -1163,9 +1206,10 @@ function stateOf(input: {
   repository: RepositoryMapFacts | undefined;
   catalogKnown: boolean;
   catalogActivated: boolean;
-  /** Refused by this run for a reason that settles it. The LAST thing
-   *  consulted: where the record or the catalog already says why a repository
-   *  is closed, that sentence is the one a person can act on. */
+  /** Refused by this run for a reason that settles it, or shut by an answer
+   *  that did not name it. The LAST thing consulted: where the record or the
+   *  catalog already says why a repository is closed, that sentence is the one
+   *  a person can act on. */
   refused: boolean;
 }): RepositoryMapState {
   // The workspace answers first: a repository that is checked out is usable
@@ -1201,6 +1245,8 @@ function reasonOf(
     entry: WorkScopeEntry | null;
     leftOut: Map<string, string>;
     repository: RepositoryMapFacts | undefined;
+    /** Shut by an answer rather than by a request this run made. */
+    unnamed: boolean;
   },
 ): string | null {
   if (isUsableState(state)) return null;
@@ -1223,7 +1269,11 @@ function reasonOf(
     case "outside_catalog":
       return clamp(`${context.key} is not in the catalog this run may use.`);
     case "refused":
-      return clamp(`This run already refused a request for ${context.key}.`);
+      return clamp(
+        context.unnamed
+          ? `${workScopeUnnamedWhy(context.key)}.`
+          : `This run already refused a request for ${context.key}.`,
+      );
     default:
       return null;
   }
@@ -1262,6 +1312,46 @@ function causeOf(input: {
 
 /** One relationship as the map carries it: the catalog's own fields, and the
  *  note only where the operator wrote one. */
+/**
+ * One edge, listed once, from this repository's point of view.
+ *
+ * The catalog stores a relationship on the row whose operator recorded it, and
+ * the map reader returns every edge TOUCHING a repository: the ones it wrote
+ * down as `outgoing`, and the ones its neighbours wrote down about it as
+ * `incoming`. That is what lets an agent standing in a repository nobody ever
+ * described read the edges its neighbours recorded.
+ *
+ * TWO OPERATORS CAN RECORD THE SAME FACT. Each writes it on their own page, so
+ * the catalog holds two rows, and this repository then sees the pair as its own
+ * `outgoing` edge and its neighbour's `incoming` one. For a symmetric kind the
+ * two render the SAME sentence, so the prompt said "It is related to `x`. It is
+ * related to `x`." and `relationshipCount` said two edges where there is one
+ * fact. A kind with a side keeps both, because "A is the backend for B" and "B
+ * is the backend for A" are two different claims and an agent that sees only
+ * one of them cannot tell that the catalog contradicts itself.
+ *
+ * The survivor of a symmetric pair is the `outgoing` one: this repository's own
+ * operator did record it, and saying so is true and more useful than crediting
+ * the other end.
+ */
+function oneEdgeOnce(
+  relationships: readonly RepositoryMapRelationship[],
+): RepositoryMapRelationship[] {
+  const kept = new Map<string, RepositoryMapRelationship>();
+  for (const relationship of relationships) {
+    const symmetric = RELATIONSHIP_VOCABULARY.get(
+      relationship.kind as RepositoryRelationshipKind,
+    )?.symmetric;
+    const identity = symmetric
+      ? `${relationship.kind}|${relationship.targetKey}`
+      : `${relationship.kind}|${relationship.targetKey}|${relationship.direction}`;
+    const held = kept.get(identity);
+    if (held && (held.direction === "outgoing" || relationship.direction !== "outgoing")) continue;
+    kept.set(identity, relationship);
+  }
+  return [...kept.values()];
+}
+
 function renderedRelationship(
   relationship: RepositoryMapRelationship,
 ): RepositoryMapEntry["relationships"][number] {

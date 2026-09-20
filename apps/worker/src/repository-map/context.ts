@@ -23,7 +23,7 @@
  * below the engine instead of beside it. That is what keeps the engine and the
  * composer from importing each other around this file.
  */
-import type { RepositoryKey, WorkScopeEntry, WorkScopeRefusalReason } from "@shared/contracts";
+import { isUnnamedInAnswer, type RepositoryKey, type WorkScopeEntry, type WorkScopeRefusalReason } from "@shared/contracts";
 import { SETTLING_REFUSAL_REASONS, type RepositoryMapContext, type RepositoryMapFacts } from "./map.js";
 
 /** What a run carries about its repositories, as much of it as this needs.
@@ -36,7 +36,15 @@ export interface RepositoryMapRunFacts {
   } | null;
   workScopeTicketText?: { matchedKeys: readonly RepositoryKey[] } | undefined;
   workScopeAsk?: { askedRepositories: readonly { repositoryKey: string }[] } | undefined;
-  workScope?: { scope: { entries: readonly WorkScopeEntry[] } | null } | undefined;
+  workScope?:
+    | {
+        scope: { entries: readonly WorkScopeEntry[] } | null;
+        /** Repositories a question that a person ANSWERED listed. An open
+         *  question is not here: it tells us nothing about anybody's intent,
+         *  and a repository in one is still genuinely requestable. */
+        answeredRepositoryKeys?: readonly string[];
+      }
+    | undefined;
   repositories: { activated: boolean };
 }
 
@@ -89,15 +97,28 @@ export function repositoryMapContext(
         .map((refusal) => refusal.repositoryKey),
     ),
   ];
+  // A repository a question the person already answered listed, and that
+  // nothing on the record has chosen since. The record writes NO ENTRY for a
+  // name an answer left out, so without this the map read such a repository
+  // off the catalog as `offered`, invited a request, and the run refused the
+  // request it had just invited. The predicate is the one in
+  // `@shared/contracts` that the rule refusing that request also reads, so the
+  // map and the rule cannot disagree about which repositories these are.
+  const entries = facts.workScope?.scope?.entries ?? [];
+  const answered = facts.workScope?.answeredRepositoryKeys ?? [];
+  const unnamedInAnswerKeys = map.repositories
+    .map((repository) => repository.key)
+    .filter((key) => isUnnamedInAnswer(key, answered, entries));
   return {
     repositories: map.repositories,
     ...(map.relationshipsUnreadable ? { relationshipsUnreadable: true } : {}),
     ...(map.catalogUnreadable ? { silence: "catalog_unreadable" as const } : {}),
     namedKeys: [...(facts.workScopeTicketText?.matchedKeys ?? [])],
     offeredKeys: (facts.workScopeAsk?.askedRepositories ?? []).map((asked) => asked.repositoryKey),
-    entries: facts.workScope?.scope?.entries ?? [],
+    entries,
     leftOut: input.leftOut ?? [],
     ...(refusedKeys.length > 0 ? { refusedKeys } : {}),
+    ...(unnamedInAnswerKeys.length > 0 ? { unnamedInAnswerKeys } : {}),
     catalogActivated: facts.repositories.activated,
     ...(input.expansionOpen ? { expansionOpen: true } : {}),
   };

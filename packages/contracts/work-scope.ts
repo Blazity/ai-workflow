@@ -1027,3 +1027,61 @@ export function validateTriggerRepositoryPolicy(
   }
   return issues;
 }
+
+/** The one entry shape no person stands behind: a repository a run picked for
+ *  itself. Every other entry is a decision somebody or something took. */
+export function isGuessEntry(entry: WorkScopeEntry): boolean {
+  return entry.state === "selected" && entry.origin === "inferred";
+}
+
+/**
+ * A repository a question ALREADY ANSWERED on this work listed, and that
+ * nothing on the record has chosen since.
+ *
+ * THE ONE READING OF "UNNAMED", for everything that acts on it. The rule that
+ * stops a guess from taking such a repository, the sentence a person reads when
+ * one was left out, and the repository map that tells an agent not to ask for
+ * it all have to mean the same set, or the map invites a request the rule is
+ * about to refuse and the run pays a pass to discover it.
+ *
+ * `answeredRepositoryKeys` is keyed on questions a person ANSWERED: an open
+ * question tells us nothing about anybody's intent, and a repository in one is
+ * not here.
+ *
+ * A GUESS'S OWN ENTRY IS NOT AN ENTRY HERE. An earlier run may have written
+ * `selected` `inferred` before anybody was asked, and read as an entry it would
+ * shield the key forever: the answer writes nothing for a name it left out, so
+ * the pair never forms. Any other entry (a person's own, delegated, a path in
+ * the ticket, a trigger policy, a workflow-owned branch) means somebody has
+ * chosen since, and the repository is not unnamed any more. That is what keeps
+ * a later positive answer from being swallowed.
+ */
+export function isUnnamedInAnswer(
+  repositoryKey: string,
+  answeredRepositoryKeys: readonly string[],
+  entries: readonly WorkScopeEntry[],
+): boolean {
+  if (!answeredRepositoryKeys.includes(repositoryKey)) return false;
+  return entries
+    .filter((entry) => entry.repositoryKey === repositoryKey)
+    .every(isGuessEntry);
+}
+
+/**
+ * Why such a repository is not in this work, in the words every surface uses.
+ *
+ * It names neither who answered nor when: the run holds the answered set as
+ * keys alone, and a sentence that guessed at a name or a day would be a
+ * fabrication about a person. It does not say "did not name it" either, because
+ * the same fact is true of a repository somebody named and whose entry a person
+ * later removed, and there that clause would be false.
+ *
+ * IT NAMES NO WAY BACK. It reaches the agent's own prompt, through the refusal
+ * and through the repository map, and a lever for reversing a person's decision
+ * may never appear in the channel the system signs (rule 7 and D4 of
+ * `docs/product/repository-record-behaviour.md`). The way back rides the ticket
+ * comment beside it, for the person alone.
+ */
+export function workScopeUnnamedWhy(repositoryKey: string): string {
+  return `${repositoryKey} was listed in a repository question already answered on this work and is not selected on it`;
+}

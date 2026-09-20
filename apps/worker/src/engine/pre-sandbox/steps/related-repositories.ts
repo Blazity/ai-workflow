@@ -72,6 +72,83 @@ interface RepositoryMapCatalog {
   result: { repositoryMap: PreSandboxRepositoryMap };
 }
 
+/** One catalog row as the map reader returns it. Structural rather than
+ *  imported, so this module still pulls in nothing from `db/`. */
+export interface RepositoryMapCatalogRow {
+  key: string;
+  enabled: boolean;
+  description: string;
+  relationships: ReadonlyArray<{
+    kind: string;
+    targetKey: string;
+    direction: "outgoing" | "incoming";
+    note?: string | null;
+  }>;
+  unknownRelationshipCount: number;
+}
+
+/**
+ * The catalog rows as the map reads them.
+ *
+ * BOTH ENDS OF EVERY EDGE ARRIVE HERE ALREADY. The catalog stores a
+ * relationship once, on the row whose operator recorded it, but
+ * `listRepositoryCatalogMapRows` returns it to BOTH repositories in one
+ * statement: `outgoing` to the end that wrote it down and `incoming` to the
+ * other one. So a repository whose operator never opened its own page still
+ * gets the edges its neighbours recorded about it, and `relationshipCount`
+ * counts every edge touching it rather than only the ones it owns. Nothing
+ * here mirrors anything: a second copy made on this side could drift from the
+ * first, and there would be two places to get the side of an edge wrong.
+ *
+ * Extracted from `loadRepositoryMapCatalog` so the promise above is reachable
+ * from a test: the query, this mapping and `buildRepositoryMap` are the three
+ * steps between an operator typing a relationship and an agent reading it, and
+ * only the first and the last were observable before.
+ */
+export function repositoryMapFacts(input: {
+  rows: readonly RepositoryMapCatalogRow[];
+  /** Everything the providers offered, for the labelled fallback description
+   *  and for usability. */
+  listed: readonly RepositoryMetadata[];
+  enabledKeys: readonly string[];
+  catalogActivated: boolean;
+}): RepositoryMapFacts[] {
+  const byKey = new Map(input.rows.map((row) => [row.key, row] as const));
+  const listedByKey = new Map(input.listed.map((repo) => [repositoryKey(repo), repo] as const));
+  const enabled = new Set(input.enabledKeys);
+  /** One repository as the map reads it: the operator's words where they wrote
+   *  any, the provider's listing text as a labelled fallback, and only the
+   *  facts this run actually observed. */
+  const factsOf = (key: string): RepositoryMapFacts => {
+    const row = byKey.get(key);
+    const listedRepository = listedByKey.get(key);
+    const described: RepositoryMapFacts = { key };
+    if (row && row.description.trim().length > 0) described.catalogDescription = row.description;
+    if (listedRepository && listedRepository.description.trim().length > 0) {
+      described.providerDescription = listedRepository.description;
+    }
+    if (row) {
+      described.relationships = row.relationships.map((relationship) => ({
+        kind: relationship.kind,
+        targetKey: relationship.targetKey,
+        direction: relationship.direction,
+        ...(relationship.note ? { note: relationship.note } : {}),
+      }));
+      described.unknownRelationshipCount = row.unknownRelationshipCount;
+      // A row answers for itself; without one, the run's own enabled list is
+      // the only evidence, and on a bridge there is none at all.
+      described.enabled = row.enabled;
+    } else if (input.catalogActivated) {
+      described.enabled = enabled.has(key);
+    }
+    if (listedRepository) {
+      described.usable = listedRepository.defaultBranch.trim().length > 0;
+    }
+    return described;
+  };
+  return [...new Set([...byKey.keys(), ...listedByKey.keys()])].sort().map(factsOf);
+}
+
 /**
  * The operator's descriptions and the catalog's relationships, for every
  * repository this run may have to describe.
@@ -115,40 +192,12 @@ export async function loadRepositoryMapCatalog(input: {
       "repository_map_catalog_unreadable",
     );
   }
-  const byKey = new Map(rows.map((row) => [row.key, row] as const));
-  const listedByKey = new Map(input.listed.map((repo) => [repositoryKey(repo), repo] as const));
-  const enabled = new Set(input.enabledKeys);
-  /** One repository as the map reads it: the operator's words where they wrote
-   *  any, the provider's listing text as a labelled fallback, and only the
-   *  facts this run actually observed. */
-  const factsOf = (key: string): RepositoryMapFacts => {
-    const row = byKey.get(key);
-    const listedRepository = listedByKey.get(key);
-    const described: RepositoryMapFacts = { key };
-    if (row && row.description.trim().length > 0) described.catalogDescription = row.description;
-    if (listedRepository && listedRepository.description.trim().length > 0) {
-      described.providerDescription = listedRepository.description;
-    }
-    if (row) {
-      described.relationships = row.relationships.map((relationship) => ({
-        kind: relationship.kind,
-        targetKey: relationship.targetKey,
-        direction: relationship.direction,
-        ...(relationship.note ? { note: relationship.note } : {}),
-      }));
-      described.unknownRelationshipCount = row.unknownRelationshipCount;
-      // A row answers for itself; without one, the run's own enabled list is
-      // the only evidence, and on a bridge there is none at all.
-      described.enabled = row.enabled;
-    } else if (input.catalogActivated) {
-      described.enabled = enabled.has(key);
-    }
-    if (listedRepository) {
-      described.usable = listedRepository.defaultBranch.trim().length > 0;
-    }
-    return described;
-  };
-  const facts = [...new Set([...byKey.keys(), ...listedByKey.keys()])].sort().map(factsOf);
+  const facts = repositoryMapFacts({
+    rows,
+    listed: input.listed,
+    enabledKeys: input.enabledKeys,
+    catalogActivated: input.catalogActivated,
+  });
   return {
     facts,
     relationshipsUnreadable,

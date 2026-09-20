@@ -17,6 +17,8 @@ import {
   type WorkScopeTrailEvent,
   type WorkScopeUnavailableReason,
   type WorkScopeWritePlan,
+  isGuessEntry,
+  isUnnamedInAnswer,
 } from "@shared/contracts";
 
 // The same workspace bound the expansion protocol enforces
@@ -219,22 +221,13 @@ export interface WorkScopeDecision {
  * guess not taken and a sentence saying so; the other reading would take back
  * an omission somebody made.
  */
-export function isUnnamedInAnswer(
-  repositoryKey: RepositoryKey,
-  answeredRepositoryKeys: readonly RepositoryKey[],
-  entries: readonly WorkScopeEntry[],
-): boolean {
-  if (!answeredRepositoryKeys.includes(repositoryKey)) return false;
-  return entries
-    .filter((entry) => entry.repositoryKey === repositoryKey)
-    .every(isGuessEntry);
-}
-
-/** The one entry shape no person stands behind: a repository a run picked for
- *  itself. Every other entry is a decision somebody or something took. */
-export function isGuessEntry(entry: WorkScopeEntry): boolean {
-  return entry.state === "selected" && entry.origin === "inferred";
-}
+// The predicate itself moved to `@shared/contracts`, unchanged, because the
+// repository map has to mean the same set and may not import the engine: a map
+// that invited a request this rule is about to refuse cost the run a pass, and
+// two readings of "unnamed" would be the bug. The doc comment above is the
+// reasoning; the code is one function, in one place, re-exported here so every
+// caller keeps the name it already uses.
+export { isGuessEntry, isUnnamedInAnswer };
 
 /**
  * A repository this work already holds for a reason an answer does not undo: a

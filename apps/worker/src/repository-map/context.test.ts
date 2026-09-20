@@ -186,3 +186,100 @@ describe("one builder, so two sends cannot tell two stories", () => {
     expect(context?.silence).toBe("catalog_unreadable");
   });
 });
+
+/**
+ * A REPOSITORY THE PERSON'S ANSWER DID NOT CHOOSE, ON THE FIRST PASS.
+ *
+ * An answer that names one repository writes NO ENTRY for the ones it left out:
+ * `unnamed_in_answer` is a refusal reason, not a record state. So the map read
+ * those repositories off the catalog, called them `offered`, and told the model
+ * "you may request it". The model did, the run refused, and only then did the
+ * map settle them. The corrective pass was spent on a door the person had
+ * already closed, and the prompt is what sent the model at it.
+ *
+ * The set is the one `isUnnamedInAnswer` decides, in `@shared/contracts`, which
+ * is the same function the rule that refuses such a request reads. Two readings
+ * of "unnamed" would put the map and the rule in different rooms, and the map
+ * would go on inviting requests the rule refuses.
+ */
+describe("a repository an answered question listed and the answer did not choose", () => {
+  const answered = (over: Partial<RepositoryMapRunFacts> = {}) =>
+    runFacts({
+      workScopeAsk: { askedRepositories: [{ repositoryKey: WEB }, { repositoryKey: OPS }] },
+      workScope: { scope: null, answeredRepositoryKeys: [WEB, OPS] },
+      ...over,
+    });
+
+  it("is settled from the first pass, in the words the refusal would have used", () => {
+    const text = researchText(answered(), { expansionOpen: true });
+    expect(text).toContain("### Already decided, do not request these");
+    expect(text).toContain(
+      `- \`${WEB}\` - not selected on this work, do not request it: ${WEB} was listed in a repository question already answered on this work and is not selected on it.`,
+    );
+    // The invitation the run was about to refuse.
+    expect(text).not.toContain(`- \`${WEB}\` - not in the workspace; you may request it`);
+  });
+
+  it("says nothing about a lever, because this text is the agent's channel", () => {
+    // Rule 7 and D4 of docs/product/repository-record-behaviour.md: a way to
+    // reverse somebody's decision may appear in ticket history and never in the
+    // prompts the system signs. The person's way back rides the ticket comment
+    // beside the question.
+    const text = researchText(answered(), { expansionOpen: true });
+    expect(text).not.toContain("work_scope");
+    expect(text).not.toContain("work scope API");
+    expect(text).not.toContain("is not final");
+  });
+
+  it("leaves a repository alone while its question is still OPEN", () => {
+    // Asked and not yet answered tells us nothing about anybody's intent, and
+    // settling it would decide on the person's behalf while they are still
+    // reading the question.
+    const text = researchText(
+      answered({ workScope: { scope: null, answeredRepositoryKeys: [] } }),
+      { expansionOpen: true },
+    );
+    expect(text).toContain(`- \`${WEB}\` - not in the workspace; you may request it`);
+    expect(text).not.toContain("not selected on this work, do not request it");
+  });
+
+  it("does not swallow a repository somebody chose in a later round", () => {
+    // The second answer said yes. That writes a real entry, which is what
+    // `isUnnamedInAnswer` reads as "somebody has chosen since".
+    const chosen: WorkScopeEntry = {
+      repositoryKey: WEB,
+      state: "selected",
+      origin: "person",
+      rationale: "the second answer named it",
+      decidedBy: { kind: "person", actorId: "u-anna", actorLabel: "Anna Nowak" },
+      decidedAt: "2026-09-18T09:00:00.000Z",
+    } as WorkScopeEntry;
+    const text = researchText(
+      answered({ workScope: { scope: { entries: [chosen] }, answeredRepositoryKeys: [WEB, OPS] } }),
+      { expansionOpen: true },
+    );
+    expect(text).toContain(`- \`${WEB}\` - not in the workspace; you may request it`);
+    // And the one nobody chose is still settled, so this is not the predicate
+    // simply switching off.
+    expect(text).toContain(`- \`${OPS}\` - not selected on this work, do not request it`);
+  });
+
+  it("is not moved by a GUESS an earlier run wrote for it", () => {
+    // `selected` `inferred` is the one entry nobody stands behind. Read as an
+    // entry it would shield the key forever, because the answer writes nothing
+    // for a name it left out and the pair never forms.
+    const guess = {
+      repositoryKey: WEB,
+      state: "selected",
+      origin: "inferred",
+      rationale: "an earlier run picked it",
+      decidedBy: { kind: "workflow" },
+      decidedAt: "2026-09-10T09:00:00.000Z",
+    } as unknown as WorkScopeEntry;
+    const text = researchText(
+      answered({ workScope: { scope: { entries: [guess] }, answeredRepositoryKeys: [WEB, OPS] } }),
+      { expansionOpen: true },
+    );
+    expect(text).toContain(`- \`${WEB}\` - not selected on this work, do not request it`);
+  });
+});
