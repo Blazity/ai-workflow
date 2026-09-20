@@ -196,7 +196,18 @@ const repositoryInputSchema = z
     inclusion: z
       .object({
         cause: visibilitySlugSchema,
-        via: z.object({ key: repositoryKeySchema, relationship: visibilitySlugSchema }).strict().optional(),
+        via: z
+          .object({
+            key: repositoryKeySchema,
+            relationship: visibilitySlugSchema,
+            /** Which side of that edge `key` is on; see
+             *  `agentBriefingRepositorySchema`. Optional, and this shape is
+             *  STRICT, so a field the schema does not know refuses the whole
+             *  send and stores a marker instead, silently. */
+            direction: visibilitySlugSchema.optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict(),
     rendering: visibilitySlugSchema,
@@ -965,7 +976,15 @@ function renderRepository(sanitized: SanitizedRepository, clamp: Clamp): AgentBr
     inclusion: {
       cause: repository.inclusion.cause,
       ...(repository.inclusion.via
-        ? { via: { key: repository.inclusion.via.key, relationship: repository.inclusion.via.relationship } }
+        ? {
+            via: {
+              key: repository.inclusion.via.key,
+              relationship: repository.inclusion.via.relationship,
+              ...(repository.inclusion.via.direction === undefined
+                ? {}
+                : { direction: repository.inclusion.via.direction }),
+            },
+          }
         : {}),
     },
     rendering: repository.rendering,

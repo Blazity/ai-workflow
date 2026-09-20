@@ -520,7 +520,26 @@ export const agentBriefingRepositorySchema = z
      *  `related` names the repository and relationship it came through. */
     inclusion: z.object({
       cause: visibilitySlugSchema,
-      via: z.object({ key: repositoryKeyReadSchema, relationship: visibilitySlugSchema }).optional(),
+      via: z
+        .object({
+          key: repositoryKeyReadSchema,
+          relationship: visibilitySlugSchema,
+          /**
+           * Which side of that edge `key` is on: `outgoing` where `key`
+           * recorded the relationship, `incoming` where this repository's own
+           * row did.
+           *
+           * The catalog stores one edge, on the end whose operator wrote it
+           * down, so a neighbour usually holds no relationship of its own and
+           * `via` is the only place the pair appears on its record. Rendering
+           * "`key` <kind> this one" without the side says the reverse of what
+           * the operator recorded for every edge that hangs on the other end.
+           * Optional because a send whose run predates the repository map
+           * recorded no side, and absent means unknown, not `outgoing`.
+           */
+          direction: visibilitySlugSchema.optional(),
+        })
+        .optional(),
     }),
     /** `full` or `line` (`REPOSITORY_RENDERINGS`). */
     rendering: visibilitySlugSchema,

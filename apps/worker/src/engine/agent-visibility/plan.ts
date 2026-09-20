@@ -56,7 +56,7 @@ export interface BriefingRepositoryPlan {
   relationships: { kind: string; target: string; direction?: string; note?: string }[];
   state: string;
   reason?: string;
-  inclusion: { cause: string; via?: { key: string; relationship: string } };
+  inclusion: { cause: string; via?: { key: string; relationship: string; direction?: string } };
   rendering: string;
   workScopeEntry: WorkScopeEntry | null;
 }

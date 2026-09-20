@@ -93,7 +93,7 @@ const WORKSPACE = [
  *  the workspace's word, not the selection's. */
 const WORKSPACE_INPUT = [{ ...WORKSPACE[0], access: "write" as const }];
 
-function researchParts(sent?: SentRepositoryMap) {
+function researchParts(sent?: SentRepositoryMap, map: RepositoryMapContext = MAP) {
   return researchPlanContextParts({
     ticket: {
       identifier: "AWP-1",
@@ -105,7 +105,7 @@ function researchParts(sent?: SentRepositoryMap) {
     prompt: "",
     branchName: "ai/awp-1",
     selectedRepositories: [...WORKSPACE],
-    repositoryMap: MAP,
+    repositoryMap: map,
     ...(sent ? { sentRepositoryMap: sent } : {}),
   });
 }
@@ -123,7 +123,10 @@ function researchParts(sent?: SentRepositoryMap) {
  * this reproduces, so the text comes from the compiler and the parts are cut
  * out of it by length exactly as the capture cuts them.
  */
-async function sendInput(sent?: SentRepositoryMap): Promise<AgentBriefingBuildInput> {
+async function sendInput(
+  sent?: SentRepositoryMap,
+  map: RepositoryMapContext = MAP,
+): Promise<AgentBriefingBuildInput> {
   const profile = await resolveProfileInstructions({
     node: {
       id: "planning",
@@ -139,7 +142,7 @@ async function sendInput(sent?: SentRepositoryMap): Promise<AgentBriefingBuildIn
   const compilation = await compileEffectivePrompt({
     nodeId: "planning",
     blockPrompt: DEFAULT_AGENT_PROMPTS["research-plan"],
-    runtimeData: researchParts(sent),
+    runtimeData: researchParts(sent, map),
     profileContext: { includeWorkflowData: true, includeRepositoryInstructions: true },
     slots: [],
     promptManifest: [],
@@ -291,9 +294,9 @@ describe("a briefing of a send that carries the repository map", () => {
 describe("the repositories of a send that carries the map", () => {
   /** The map the composer really rendered, and the context a block records
    *  from it, through the one call `planBlockAgentBriefing` makes. */
-  async function sentAndRecorded() {
+  async function sentAndRecorded(map: RepositoryMapContext = MAP) {
     const sent: SentRepositoryMap = { map: null };
-    const base = await sendInput(sent);
+    const base = await sendInput(sent, map);
     // A null map here would make every assertion below vacuous: the context
     // would fall back to the workspace list and still look plausible.
     expect(sent.map).not.toBeNull();
@@ -349,15 +352,18 @@ describe("the repositories of a send that carries the map", () => {
     expect(api?.relationships).toEqual([
       { kind: "backend_for", target: "github:acme/web", direction: "outgoing" },
     ]);
-    // And the other end of the SAME edge, which is the whole reason direction
-    // is on the record. The catalog stores the edge once, on the repository
-    // whose operator recorded it, so the neighbour gets it from its own end
-    // with the side flipped: read forwards without it, "web backend_for api"
-    // is the reverse of what the operator wrote down.
+    // The catalog stores the edge ONCE, on the end whose operator wrote it
+    // down, so the neighbour holds none of its own and `via` is the only place
+    // the pair appears on its record. It carries the side: `outgoing` here
+    // means the API recorded it, which is what makes "the API is the backend
+    // for the dashboard" the right way round.
     const web = document.repositories.find((entry) => entry.key === "github:acme/web");
-    expect(web?.relationships).toEqual([
-      { kind: "backend_for", target: "github:acme/api", direction: "incoming" },
-    ]);
+    expect(web?.relationships).toEqual([]);
+    expect(web?.inclusion.via).toEqual({
+      key: "github:acme/api",
+      relationship: "backend_for",
+      direction: "outgoing",
+    });
   });
 
   it("carries the operator's own words, why each repository is here, and what may be done to it", async () => {
@@ -379,7 +385,7 @@ describe("the repositories of a send that carries the map", () => {
     expect(web?.state).toBe("offered");
     expect(web?.inclusion).toEqual({
       cause: "related",
-      via: { key: "github:acme/api", relationship: "backend_for" },
+      via: { key: "github:acme/api", relationship: "backend_for", direction: "outgoing" },
     });
 
     // Something already decided keeps its reason, which the package requires of
@@ -397,6 +403,46 @@ describe("the repositories of a send that carries the map", () => {
     // really emits or the planner drops the pointer without a word.
     expect(ref.renderedAt?.partId).toBe("repository-map");
     expect(ref.repositoryCount).toBe(4);
+  });
+
+  it("records a REVERSED edge as recorded, and says which end wrote it down", async () => {
+    // The same pair, the other way round in the catalog: the dashboard's own
+    // row says it is the backend for the API. Nothing about the send changes,
+    // and a record that left the side off would say "the API is the backend for
+    // the dashboard", the exact inversion this field exists to stop.
+    const reversed: RepositoryMapContext = {
+      ...MAP,
+      repositories: [
+        { key: "github:acme/api", catalogDescription: "The payments API.", enabled: true, usable: true },
+        {
+          key: "github:acme/web",
+          catalogDescription: "The customer dashboard.",
+          relationships: [
+            { kind: "backend_for", targetKey: "github:acme/api", direction: "outgoing" },
+          ],
+          enabled: true,
+          usable: true,
+        },
+        { key: "github:acme/legacy", catalogDescription: "The retired monolith.", enabled: true, usable: true },
+        { key: "github:acme/docs", catalogDescription: "Developer documentation.", enabled: true, usable: true },
+      ],
+    };
+    const { result } = await sentAndRecorded(reversed);
+    // The whole send, not one field: a `via` shape that refused this would
+    // store a marker and say nothing.
+    expect(result).toEqual({ outcome: "recorded", briefingId: expect.any(Number) });
+
+    const { document } = await storedContext();
+    const web = document.repositories.find((entry) => entry.key === "github:acme/web");
+    expect(web?.inclusion).toEqual({
+      cause: "related",
+      via: { key: "github:acme/api", relationship: "backend_for", direction: "incoming" },
+    });
+    // `incoming` relative to the API: the API did NOT record this edge, the
+    // dashboard did, and its own row says so too.
+    expect(web?.relationships).toEqual([
+      { kind: "backend_for", target: "github:acme/api", direction: "outgoing" },
+    ]);
   });
 
   it("keeps the workspace list, and invents nothing, for a send that carried no map", async () => {

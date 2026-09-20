@@ -164,7 +164,12 @@ function fromRepositoryMap(
         key: entry.key,
         description: { source: entry.description.source, text: entry.description.text },
         rules: entry.rules,
-        relationships: relationshipsOf(entry),
+        relationships: entry.relationships.map((relationship) => ({
+          kind: relationship.kind,
+          target: relationship.target,
+          direction: relationship.direction,
+          ...(relationship.note === undefined ? {} : { note: relationship.note }),
+        })),
         state: entry.state,
         ...(entry.reason === undefined ? {} : { reason: entry.reason }),
         inclusion: {
@@ -174,6 +179,12 @@ function fromRepositoryMap(
                 via: {
                   key: entry.inclusion.via.key,
                   relationship: entry.inclusion.via.relationship,
+                  // Which end recorded the edge. The catalog stores it once, on
+                  // that end, so a neighbour usually holds no relationship of
+                  // its own and this is the only place the pair appears on its
+                  // record. Without the side, a page renders every edge that
+                  // hangs on the other end backwards.
+                  direction: entry.inclusion.via.direction,
                 },
               }
             : {}),
@@ -186,50 +197,6 @@ function fromRepositoryMap(
     workScope: workScopeOf(input.workScope),
     ...(input.renderedAt ? { renderedAt: input.renderedAt } : {}),
   };
-}
-
-/**
- * A map entry's relationships, from this repository's own end.
- *
- * The catalog stores each edge ONCE, on the repository whose operator recorded
- * it. So a neighbour that got into the map because the other end points at it
- * carries none of its own: the map's text still tells the agent about it, on
- * the "Why it is here" line built from `inclusion.via`, but the structured half
- * would show an empty relationship list beside a prose sentence about the same
- * edge. Worse, `via` on the record names the key and the kind and NOT the side,
- * because the package's `via` shape is strict and frozen, so a page rendering
- * "api backend_for web" from it says the reverse of what the operator recorded
- * whenever the edge hangs on the other end.
- *
- * So the edge this repository arrived through is listed here from ITS end, with
- * the direction flipped to match (`via.direction` is relative to `via.key`).
- * Nothing is invented: it is the same edge, from the same build, that the agent
- * read one line above. It is added only when the entry does not already carry
- * it, which is the case where the catalog hung the edge on this end and the map
- * already listed it.
- */
-function relationshipsOf(
-  entry: RepositoryMap["repositories"][number],
-): BriefingRepositoryPlan["relationships"] {
-  const listed = entry.relationships.map((relationship) => ({
-    kind: relationship.kind,
-    target: relationship.target,
-    direction: relationship.direction,
-    ...(relationship.note === undefined ? {} : { note: relationship.note }),
-  }));
-  const via = entry.inclusion.via;
-  if (!via) return listed;
-  if (listed.some((relationship) => relationship.kind === via.relationship && relationship.target === via.key)) {
-    return listed;
-  }
-  return [
-    ...listed,
-    {
-      kind: via.relationship,
-      target: via.key,
-      direction: via.direction === "outgoing" ? "incoming" : "outgoing",
-    },
-  ];
 }
 
 /**
