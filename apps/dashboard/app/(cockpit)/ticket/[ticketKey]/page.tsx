@@ -11,8 +11,6 @@ import {
   TraceDetailSkeleton,
   TicketMobileSkeleton,
 } from "@/app/ticket-skeleton";
-import { RepositoriesPanel } from "@/components/cockpit/agent-visibility/repositories-panel";
-import { MobileBackToRuns } from "@/components/cockpit/mobile/screens/ticket-mobile";
 import {
   TicketSelectionProvider,
   DetailArea,
@@ -42,42 +40,58 @@ export default async function TicketPage({
     </Suspense>
   );
 
+  const shell = (
+    <Suspense key={`shell:${ticketKey}`} fallback={<TicketShellSkeleton />}>
+      <TicketShellData ticketKey={ticketKey} />
+    </Suspense>
+  );
+
   return (
     <TicketSelectionProvider ticketKey={ticketKey}>
-      {/* Desktop: master/detail split (rail+header | trace), independent boundaries.
-          DetailArea shows the skeleton itself while a run switch is pending. */}
-      <div
-        className="hidden lg:grid h-full min-h-0"
-        style={{
-          gridTemplateColumns: "280px minmax(0, 1fr)",
-          gridTemplateRows: "auto minmax(0, 1fr)",
-          gridTemplateAreas: '"header header" "rail detail"',
-        }}
-      >
-        <Suspense key={`shell:${ticketKey}`} fallback={<TicketShellSkeleton />}>
-          <TicketShellData ticketKey={ticketKey} />
-        </Suspense>
-        <DetailArea>{detail}</DetailArea>
-      </div>
-
-      {/* Mobile: one view at a time, a run's trace (with a way back) or the list. */}
-      <div className="lg:hidden">
-        {run ? (
-          <div className="flex flex-col gap-3 px-4 pt-4 pb-6">
-            <MobileBackToRuns ticketKey={ticketKey} />
-            {/* Reachable from the run view as well: a phone never shows the
-                runs list and a run at the same time. Closed until asked: this
-                page was opened for one run, and the record can be two screens
-                tall. */}
-            <RepositoriesPanel ticketKey={ticketKey} />
-            {detail}
+      {run ? (
+        /* A run is named, and both layouts show that run's trace. ONE tree
+           carries it: a grid from `lg` (rail and header beside the trace) and
+           a plain column below (the trace alone, with its own way back). The
+           chrome that differs is hidden by CSS; the trace itself is mounted
+           once, because a second copy would fetch, poll and cache everything
+           again behind `display: none`. Crossing the breakpoint restyles this
+           tree rather than replacing it, so an open section, the scroll
+           position and every poll survive a resize or a rotation. */
+        <div
+          className="lg:grid lg:h-full lg:min-h-0"
+          style={{
+            gridTemplateColumns: "280px minmax(0, 1fr)",
+            gridTemplateRows: "auto minmax(0, 1fr)",
+            gridTemplateAreas: '"header header" "rail detail"',
+          }}
+        >
+          {/* `contents` so the header and rail keep their own grid areas. */}
+          <div className="hidden lg:contents">{shell}</div>
+          <DetailArea>{detail}</DetailArea>
+        </div>
+      ) : (
+        /* No run named: the two widths show different things, not the same
+           thing twice. The desktop opens the newest run's trace beside the
+           rail; a phone shows the runs list and no trace at all. */
+        <>
+          <div
+            className="hidden lg:grid h-full min-h-0"
+            style={{
+              gridTemplateColumns: "280px minmax(0, 1fr)",
+              gridTemplateRows: "auto minmax(0, 1fr)",
+              gridTemplateAreas: '"header header" "rail detail"',
+            }}
+          >
+            {shell}
+            <DetailArea>{detail}</DetailArea>
           </div>
-        ) : (
-          <Suspense key={`mlist:${ticketKey}`} fallback={<TicketMobileSkeleton />}>
-            <TicketMobileListData ticketKey={ticketKey} />
-          </Suspense>
-        )}
-      </div>
+          <div className="lg:hidden">
+            <Suspense key={`mlist:${ticketKey}`} fallback={<TicketMobileSkeleton />}>
+              <TicketMobileListData ticketKey={ticketKey} />
+            </Suspense>
+          </div>
+        </>
+      )}
     </TicketSelectionProvider>
   );
 }
