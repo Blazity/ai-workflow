@@ -15,6 +15,7 @@ import { registerRunStatsTools } from "./tools/run-stats.js";
 import { registerRunLogsTool, registerRunTools } from "./tools/runs.js";
 import { registerSettingsTools } from "./tools/settings.js";
 import { registerWorkScopeTools } from "./tools/work-scope.js";
+import { registerBriefingTools } from "./tools/briefings.js";
 import { registerTicketWriteTools } from "./tools/ticket-write.js";
 import { registerTicketTools } from "./tools/tickets.js";
 import {
@@ -80,6 +81,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerRepositoryCatalogTools(server, deps);
   registerSettingsTools(server, deps);
   registerWorkScopeTools(server, deps);
+  registerBriefingTools(server, deps);
 
   return server;
 }

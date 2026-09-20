@@ -349,6 +349,301 @@ export async function listAgentBriefingRowsOfRun(db: Db, runId: string): Promise
   return rawRows<BriefingRowShape>(result).map(mapBriefingRow);
 }
 
+/** Which sends a read is about: one run, narrowed to a node, an attempt or one
+ *  iteration of a loop. An absent field means every value of it. */
+export interface AgentBriefingFilter {
+  runId: string;
+  nodeId?: string;
+  attempt?: number;
+  activationScopeId?: string;
+}
+
+/**
+ * One send, WITHOUT the section texts and without the parts, spans and
+ * unresolved sources of its index.
+ *
+ * The overview is everything about a send that is not a list, and a run's
+ * briefing list serves one per send. Reading the whole index for each would
+ * mean up to 512 KiB a send for fields the list never shows, so the two
+ * growable arrays are dropped in the statement rather than in the worker.
+ * Marker rows carry no index and answer `overview: null`.
+ */
+export interface AgentBriefingOverviewRow extends AgentBriefingIdentityRow {
+  id: number;
+  kind: string;
+  capture: string;
+  /** The stored index minus `sections` and `unresolvedSources`, or null. */
+  overview: unknown;
+  detail: string | null;
+  capturedAt: Date;
+}
+
+/** The Block Attempt identity as a WHERE clause. Both `agent_briefings`
+ *  and `workflow_block_attempts` carry these four columns under these names,
+ *  which is what lets one filter narrow either of them. */
+function attemptIdentityFilter(filter: AgentBriefingFilter) {
+  return sql`
+    stored.run_id = ${filter.runId}
+    ${filter.nodeId === undefined ? sql`` : sql`AND stored.node_id = ${filter.nodeId}`}
+    ${filter.attempt === undefined ? sql`` : sql`AND stored.attempt = ${filter.attempt}`}
+    ${
+      filter.activationScopeId === undefined
+        ? sql``
+        : sql`AND stored.activation_scope_id = ${filter.activationScopeId}`
+    }
+  `;
+}
+
+export async function listAgentBriefingOverviewRows(
+  db: Db,
+  filter: AgentBriefingFilter,
+): Promise<AgentBriefingOverviewRow[]> {
+  const result = await db.execute(sql`
+    SELECT
+      stored.id, stored.run_id, stored.node_id, stored.attempt, stored.activation_scope_id,
+      stored.sequence, stored.kind, stored.capture, stored.detail, stored.captured_at,
+      stored.briefing_index - 'sections' - 'unresolvedSources' AS overview
+    FROM agent_briefings stored
+    WHERE ${attemptIdentityFilter(filter)}
+    ORDER BY stored.node_id, stored.attempt, stored.activation_scope_id, stored.sequence
+  `);
+  return rawRows<{
+    id: number;
+    run_id: string;
+    node_id: string;
+    attempt: number;
+    activation_scope_id: string;
+    sequence: number;
+    kind: string;
+    capture: string;
+    detail: string | null;
+    captured_at: string | Date;
+    overview: unknown;
+  }>(result).map((row) => ({
+    id: Number(row.id),
+    runId: row.run_id,
+    nodeId: row.node_id,
+    attempt: Number(row.attempt),
+    activationScopeId: row.activation_scope_id,
+    sequence: Number(row.sequence),
+    kind: row.kind,
+    capture: row.capture,
+    overview: row.overview ?? null,
+    detail: row.detail,
+    capturedAt: new Date(row.captured_at),
+  }));
+}
+
+/** One briefing by the id a list handed out, with its whole index and the
+ *  digests of the texts it points at, but none of the text. */
+export async function readAgentBriefingIndexRow(
+  db: Db,
+  input: { runId: string; briefingId: number },
+): Promise<AgentBriefingRow | null> {
+  const result = await db.execute(sql`
+    SELECT stored.*
+    FROM agent_briefings stored
+    WHERE stored.id = ${input.briefingId} AND stored.run_id = ${input.runId}
+  `);
+  const [row] = rawRows<BriefingRowShape>(result);
+  return row ? mapBriefingRow(row) : null;
+}
+
+/** One stored text, by the digest an index points at. Null where the store no
+ *  longer holds it, which a reader says out loud rather than showing a gap. */
+export async function readAgentBriefingText(db: Db, sha256: string): Promise<string | null> {
+  const result = await db.execute(sql`
+    SELECT stored.text FROM agent_briefing_texts stored WHERE stored.sha256 = ${sha256}
+  `);
+  const [row] = rawRows<{ text: string }>(result);
+  return row ? row.text : null;
+}
+
+/**
+ * What every Block Attempt of a run recorded, for the reasons a missing
+ * briefing is explained with.
+ *
+ * These rows live and die with the replay observations, so an attempt that has
+ * no row here either never ran or had its replay swept; a briefing of its own
+ * still names it.
+ */
+export interface BlockAttemptFactRow {
+  nodeId: string;
+  attempt: number;
+  activationScopeId: string;
+  state: string;
+  outcomeKind: string | null;
+  outcomeStatus: string | null;
+  startedAt: Date;
+}
+
+export async function listBlockAttemptFactRows(
+  db: Db,
+  filter: AgentBriefingFilter,
+): Promise<BlockAttemptFactRow[]> {
+  const result = await db.execute(sql`
+    SELECT
+      stored.node_id, stored.attempt, stored.activation_scope_id, stored.state, stored.started_at,
+      stored.outcome ->> 'kind' AS outcome_kind,
+      stored.outcome ->> 'status' AS outcome_status
+    FROM workflow_block_attempts stored
+    WHERE ${attemptIdentityFilter(filter)}
+    ORDER BY stored.node_id, stored.attempt, stored.activation_scope_id
+  `);
+  return rawRows<{
+    node_id: string;
+    attempt: number;
+    activation_scope_id: string;
+    state: string;
+    started_at: string | Date;
+    outcome_kind: string | null;
+    outcome_status: string | null;
+  }>(result).map((row) => ({
+    nodeId: row.node_id,
+    attempt: Number(row.attempt),
+    activationScopeId: row.activation_scope_id,
+    state: row.state,
+    outcomeKind: row.outcome_kind,
+    outcomeStatus: row.outcome_status,
+    startedAt: new Date(row.started_at),
+  }));
+}
+
+/**
+ * The run behind a briefing read: whether it exists at all, how it ended,
+ * whether its replay is still there, and which block each node ran.
+ *
+ * The node types come from the run's OWN captured graph, never from today's
+ * definition: a block whose type changed since must still read back as what it
+ * was when it ran. They are gone once the replay is swept, and then a briefing
+ * of the attempt is the only thing left that names its block type.
+ */
+export interface RunVisibilityFacts {
+  runId: string;
+  status: string | null;
+  statusReason: string | null;
+  /** WHO MAY READ THIS RUN. The same column the replay is scoped by, because a
+   *  briefing is the most sensitive thing this product stores and the runs
+   *  table carries no other tenant. Null where replay capture never claimed the
+   *  run, and then nobody is told what it holds. */
+  replayOrganizationId: string | null;
+  replayExpiresAt: Date | null;
+  /** node id -> the block type the run really executed. */
+  nodeTypes: Map<string, string>;
+  /** Run-level, never narrowed by a filter: what a filtered page cannot say. */
+  capturedBriefings: number;
+  recordedSends: number;
+  hasAttemptRows: boolean;
+}
+
+export async function readRunVisibilityFacts(
+  db: Db,
+  runId: string,
+): Promise<RunVisibilityFacts | null> {
+  const result = await db.execute(sql`
+    SELECT
+      run.run_id, run.status, run.status_reason, run.replay_organization_id, run.replay_expires_at,
+      (
+        SELECT COALESCE(jsonb_agg(jsonb_build_object('id', node ->> 'id', 'type', node ->> 'type')), '[]'::jsonb)
+        FROM workflow_run_observations observation,
+             jsonb_array_elements(COALESCE(observation.graph -> 'nodes', '[]'::jsonb)) AS node
+        WHERE observation.run_id = run.run_id
+      ) AS nodes,
+      (
+        SELECT count(*)::integer FROM agent_briefings stored
+        WHERE stored.run_id = run.run_id AND stored.capture = 'captured'
+      ) AS captured_briefings,
+      (
+        SELECT count(*)::integer FROM agent_briefings stored WHERE stored.run_id = run.run_id
+      ) AS recorded_sends,
+      EXISTS (
+        SELECT 1 FROM workflow_block_attempts stored WHERE stored.run_id = run.run_id
+      ) AS has_attempt_rows
+    FROM workflow_runs run
+    WHERE run.run_id = ${runId}
+  `);
+  const [row] = rawRows<{
+    run_id: string;
+    status: string | null;
+    status_reason: string | null;
+    replay_organization_id: string | null;
+    replay_expires_at: string | Date | null;
+    nodes: { id: string | null; type: string | null }[];
+    captured_briefings: number;
+    recorded_sends: number;
+    has_attempt_rows: boolean;
+  }>(result);
+  if (!row) return null;
+  const nodeTypes = new Map<string, string>();
+  for (const node of row.nodes ?? []) {
+    if (node.id && node.type) nodeTypes.set(node.id, node.type);
+  }
+  return {
+    runId: row.run_id,
+    status: row.status,
+    statusReason: row.status_reason,
+    replayOrganizationId: row.replay_organization_id,
+    replayExpiresAt: row.replay_expires_at === null ? null : new Date(row.replay_expires_at),
+    nodeTypes,
+    capturedBriefings: Number(row.captured_briefings),
+    recordedSends: Number(row.recorded_sends),
+    hasAttemptRows: Boolean(row.has_attempt_rows),
+  };
+}
+
+/** Who may read each of these runs, for a read whose subject is not a run but
+ *  whose rows were written by one. Same column the replay is scoped by. */
+export async function readRunReadAudiences(
+  db: Db,
+  runIds: readonly string[],
+): Promise<Map<string, string | null>> {
+  if (runIds.length === 0) return new Map();
+  const result = await db.execute(sql`
+    SELECT run.run_id, run.replay_organization_id
+    FROM workflow_runs run
+    WHERE run.run_id = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(runIds)}::jsonb)))
+  `);
+  return new Map(
+    rawRows<{ run_id: string; replay_organization_id: string | null }>(result).map((row) => [
+      row.run_id,
+      row.replay_organization_id,
+    ]),
+  );
+}
+
+export function readConnectedRunReadAudiences(
+  runIds: readonly string[],
+): Promise<Map<string, string | null>> {
+  return readRunReadAudiences(getDb(), runIds);
+}
+
+export function readConnectedRunVisibilityFacts(runId: string): Promise<RunVisibilityFacts | null> {
+  return readRunVisibilityFacts(getDb(), runId);
+}
+
+export function listConnectedAgentBriefingOverviewRows(
+  filter: AgentBriefingFilter,
+): Promise<AgentBriefingOverviewRow[]> {
+  return listAgentBriefingOverviewRows(getDb(), filter);
+}
+
+export function readConnectedAgentBriefingIndexRow(input: {
+  runId: string;
+  briefingId: number;
+}): Promise<AgentBriefingRow | null> {
+  return readAgentBriefingIndexRow(getDb(), input);
+}
+
+export function readConnectedAgentBriefingText(sha256: string): Promise<string | null> {
+  return readAgentBriefingText(getDb(), sha256);
+}
+
+export function listConnectedBlockAttemptFactRows(
+  filter: AgentBriefingFilter,
+): Promise<BlockAttemptFactRow[]> {
+  return listBlockAttemptFactRows(getDb(), filter);
+}
+
 export interface AgentBriefingRunSummary {
   runId: string;
   capturedCount: number;
@@ -577,6 +872,120 @@ export async function listClarificationAnswerDeliveryRows(
     lastAt: new Date(row.last_at),
     count: Number(row.count),
   }));
+}
+
+export function listConnectedClarificationAnswerDeliveryRows(
+  clarificationIds: readonly string[],
+): Promise<ClarificationAnswerDeliveryRow[]> {
+  return listClarificationAnswerDeliveryRows(getDb(), clarificationIds);
+}
+
+export function readConnectedAgentBriefingRunSummary(
+  runId: string,
+): Promise<AgentBriefingRunSummary | null> {
+  return readAgentBriefingRunSummary(getDb(), runId);
+}
+
+/** One clarification of a subject, as a round is assembled from it. */
+export interface ClarificationQuestionRow {
+  clarificationId: string;
+  runId: string;
+  nodeId: string | null;
+  questions: string[];
+  askedAt: Date;
+  status: string;
+  /** The repositories the question put in front of a person, or null for a
+   *  question that was not about them. An empty list is not null. */
+  offered: { key: string; askedBecause: string; named?: boolean }[] | null;
+}
+
+/**
+ * Every clarification ever asked on this subject, oldest first.
+ *
+ * Unpaged on purpose: a round is a group of asks of the same question, and a
+ * page of asks could not be grouped without reading the ones it cut off. The
+ * rows are small (a question, its status and at most a handful of offered
+ * keys), and a subject accumulates them one human question at a time.
+ */
+export async function listClarificationQuestionRows(
+  db: Db,
+  subjectKey: string,
+): Promise<ClarificationQuestionRow[]> {
+  const result = await db.execute(sql`
+    SELECT stored.id, stored.run_id, stored.block_id, stored.questions, stored.asked_at,
+           stored.status, stored.asked_repositories
+    FROM clarification_requests stored
+    WHERE stored.subject_key = ${subjectKey}
+    ORDER BY stored.asked_at, stored.id
+  `);
+  return rawRows<{
+    id: string;
+    run_id: string;
+    block_id: string | null;
+    questions: unknown;
+    asked_at: string | Date;
+    status: string;
+    asked_repositories: { repositoryKey: string; askedBecause: string; named?: boolean }[] | null;
+  }>(result).map((row) => ({
+    clarificationId: row.id,
+    runId: row.run_id,
+    nodeId: row.block_id,
+    questions: Array.isArray(row.questions) ? (row.questions as string[]) : [],
+    askedAt: new Date(row.asked_at),
+    status: row.status,
+    offered:
+      row.asked_repositories === null
+        ? null
+        : row.asked_repositories.map((entry) => ({
+            key: entry.repositoryKey,
+            askedBecause: entry.askedBecause,
+            ...(entry.named === undefined ? {} : { named: entry.named }),
+          })),
+  }));
+}
+
+export function listConnectedClarificationQuestionRows(
+  subjectKey: string,
+): Promise<ClarificationQuestionRow[]> {
+  return listClarificationQuestionRows(getDb(), subjectKey);
+}
+
+export interface SubjectTrailRow {
+  id: number;
+  at: Date;
+  event: { kind: string } & Record<string, unknown>;
+}
+
+/**
+ * The Decision Trail rows of a subject that name a clarification, oldest
+ * first.
+ *
+ * Narrowed to the clarification events in the statement: a round shows what
+ * happened to ONE question, and a subject's trail also carries every entry a
+ * person or a run wrote by hand, which belongs to no round.
+ */
+export async function listSubjectClarificationTrailRows(
+  db: Db,
+  subjectKey: string,
+): Promise<SubjectTrailRow[]> {
+  const result = await db.execute(sql`
+    SELECT stored.id, stored.at, stored.event
+    FROM work_scope_trail stored
+    WHERE stored.subject_key = ${subjectKey}
+      -- The function form of the jsonb ? operator, so no driver can read the
+      -- question mark as a placeholder of its own.
+      AND jsonb_exists(stored.event, 'clarificationId')
+    ORDER BY stored.id
+  `);
+  return rawRows<{ id: number; at: string | Date; event: { kind: string } & Record<string, unknown> }>(
+    result,
+  ).map((row) => ({ id: Number(row.id), at: new Date(row.at), event: row.event }));
+}
+
+export function listConnectedSubjectClarificationTrailRows(
+  subjectKey: string,
+): Promise<SubjectTrailRow[]> {
+  return listSubjectClarificationTrailRows(getDb(), subjectKey);
 }
 
 export interface DeleteExpiredAgentBriefingsInput {

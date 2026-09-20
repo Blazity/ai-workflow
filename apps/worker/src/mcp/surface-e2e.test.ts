@@ -169,6 +169,7 @@ const PUBLISHED = [
   "settings.set",
   "settings.reset",
   "work_scope.get",
+  "runs.briefing",
   "work_scope.edit",
 ];
 
@@ -327,6 +328,7 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   },
   // Reading one subject's repository record changes nothing.
   "work_scope.get": READ_ANNOTATIONS,
+  "runs.briefing": READ_ANNOTATIONS,
   // An edit replaces what a person or a run decided before it, and an exclusion
   // takes a repository away from every later run on the subject: destructive,
   // and closed world because no run is started and no ticket moved.

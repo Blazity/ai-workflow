@@ -154,6 +154,7 @@ const PUBLISHED = [
   "settings.set",
   "settings.reset",
   "work_scope.get",
+  "runs.briefing",
   "work_scope.edit",
 ];
 

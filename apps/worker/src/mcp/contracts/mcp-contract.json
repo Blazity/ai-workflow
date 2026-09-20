@@ -1,5 +1,5 @@
 {
-  "contractHash": "48e66de186204b0a402fd038fe4fce8e3f55be56555e2dde8688629b5afee18c",
+  "contractHash": "b71ed6222407eb53cb34226fffdd15d3f32b3035bd94e61e88f2e435068ce60d",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -1539,7 +1539,7 @@
     },
     {
       "name": "work_scope.get",
-      "description": "The durable record of which repositories one subject's work may touch, and the trail of how that was decided. `subjectKey` is the key a run is claimed under: `ticket:<provider>:<KEY>` for a ticket, `pr:<provider>:<owner/name>#<number>` for a pull request, `webhook:<endpointId>:<subjectId>` for a webhook delivery that resolved a subject. Every entry says its `state` (`selected`, `excluded`, or `unavailable` with the reason), the `origin` that decided it, and `decidedBy`/`decidedAt`. `version` is the concurrency token work_scope.edit expects: a subject nothing was ever recorded for answers version 0 with no entries, which is not an error and is exactly the version an edit of it must send. The trail is paged newest first, so the decision somebody is about to undo is the first line: `trailLimit` defaults to 50 and caps at 200, `nextTrailBeforeId` is the `trailBefore` of the next page and null at the end of it. `carriesRecord` is false for a key of any other shape, a schedule occurrence for instance: that subject kind keeps no record and never will, because every tick is a new key, so the empty answer beside it is final rather than a record waiting to be written, and work_scope.edit refuses it.",
+      "description": "The durable record of which repositories one subject's work may touch, and the trail of how that was decided. `subjectKey` is the key a run is claimed under: `ticket:<provider>:<KEY>` for a ticket, `pr:<provider>:<owner/name>#<number>` for a pull request, `webhook:<endpointId>:<subjectId>` for a webhook delivery that resolved a subject. Every entry says its `state` (`selected`, `excluded`, or `unavailable` with the reason), the `origin` that decided it, and `decidedBy`/`decidedAt`. `version` is the concurrency token work_scope.edit expects: a subject nothing was ever recorded for answers version 0 with no entries, which is not an error and is exactly the version an edit of it must send. The trail is paged newest first, so the decision somebody is about to undo is the first line: `trailLimit` defaults to 50 and caps at 200, `nextTrailBeforeId` is the `trailBefore` of the next page and null at the end of it. `carriesRecord` is false for a key of any other shape, a schedule occurrence for instance: that subject kind keeps no record and never will, because every tick is a new key, so the empty answer beside it is final rather than a record waiting to be written, and work_scope.edit refuses it. `rounds: true` adds the CLARIFICATION ROUNDS of this subject: one round per question, with every distinct delivery of its answer counted (the Jira path re-composes the same answer on every poll tick, so identical consecutive arrivals are one delivery with a count and a first and last time), the asks it was repeated as, and how many Decision Trail events followed from it. A question asked again after a retry joins its round rather than starting a new one. Rounds are OPT IN because assembling them reads every clarification this subject ever carried, and because they are served under the audience of the RUN that asked, not of this record: leave the flag out and this tool answers exactly what it always did. `roundId` with `roundView` returns one round's `deliveries` or `effects` instead of the headers, paged by `roundsCursor` and `roundsLimit`; a round is named by the clarification id of its FIRST ask.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1557,6 +1557,31 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 2147483647
+          },
+          "rounds": {
+            "type": "boolean"
+          },
+          "roundId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "roundView": {
+            "type": "string",
+            "enum": [
+              "deliveries",
+              "effects"
+            ]
+          },
+          "roundsCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "roundsLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 524288
           }
         },
         "required": [
@@ -1637,6 +1662,83 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "runs.briefing",
+      "description": "What a run's agents were really sent, and why anything expected is missing. One tool, seven views, all of them paged: `attempts` (the default) lists every Block Attempt that sent a prompt or could have, each with its briefings' overviews in send order, its `startedAt`, its loop `iteration` where it ran inside one, `sendsPrompts` (false for a script, a transition or a comment block, which have no prompt to be missing), and `missing`, a reason and never a generic message, computed even beside existing briefings so a planning attempt that captured discovery and whose pass never went out says which. Its `state` is about the whole RUN and answers what no attempt can: `available`, `expired` (briefings were captured and retention removed them), `replay_gone` (the attempt rows went with the replay, so attempts that never sent cannot be listed), or `predates_capture` (nothing capture-capable recorded anything for this run, which is also what a run looks like whose every record write was lost). The other six take a `briefingId` from that list: `sections` (every section but its text), `section` (one page of one section's stored text by `sectionIndex` and byte `offset`; continue from the previous page's `nextOffset`, never from a hand-made number), `parts` and `spans` of one section, `repository_context` (the repositories that send described, as it described them), and `unresolved_sources` (what the compiler referenced and could not find, which is why an expected AGENTS.md may be absent). NOTHING IS RE-READ AT READ TIME: the catalog, the prompt library and the profiles are as the send saw them, not as they are now. `limit` is a byte cap, not a count, and it defaults below what a client shows inline; a list page carries `total`, `nextCursor`, `shortened` (entries whose long texts were cut to fit, with their full size) and `unreadable` (entries that could not be read at all, named rather than silently dropped).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "attempts",
+              "sections",
+              "section",
+              "parts",
+              "spans",
+              "repository_context",
+              "unresolved_sources"
+            ]
+          },
+          "nodeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "activationScopeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "briefingId": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "sectionIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 199
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 67108864
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 524288
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false
       }
