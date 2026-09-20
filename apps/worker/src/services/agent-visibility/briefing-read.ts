@@ -130,6 +130,15 @@ export type RunBriefingState = "available" | "expired" | "replay_gone" | "predat
 
 /** A briefing of an attempt, as a list of attempts shows it. */
 export interface BriefingListEntry {
+  /**
+   * THE STORE'S ROW SERIAL, AND A PROMISE THAT IT IS A NUMBER. Every surface
+   * takes it back as one: the routes parse it with `parseBriefingId`, the MCP
+   * schema declares an integer, and it ends up in a dashboard URL, so a reader
+   * that stringifies it must be able to turn it back without losing anything.
+   * It is not a display value and carries no meaning beyond identity: newer
+   * briefings have larger ids WITHIN one deployment's table and nothing else
+   * may be read into the number.
+   */
   briefingId: number;
   overview: AgentBriefingOverview;
 }
