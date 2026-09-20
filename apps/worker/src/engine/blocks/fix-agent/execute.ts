@@ -24,6 +24,7 @@ import {
   type ReviewLedgerGuardSummary,
 } from "../../helpers/review-ledger.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
+import type { SentRepositoryMap } from "../../../sandbox/context.js";
 import { planBlockAgentBriefing } from "../../agent-visibility/block.js";
 import { recordSendBriefing, recordSkippedSend, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
@@ -561,6 +562,7 @@ async function buildFixInput(
   reviewFeedback: ReviewFeedback | undefined,
   reviewResults: Extract<ReviewResultsResolution, { ok: true }>["value"],
   includeInstructions = true,
+  sentMap?: SentRepositoryMap,
 ): Promise<EffectivePromptPart[]> {
   const { fixContextParts } = await import("../../../sandbox/context.js");
 
@@ -616,6 +618,10 @@ async function buildFixInput(
     // The fix agent has no channel for asking for a repository, so its map
     // never offers one.
     ...(fixMap ? { repositoryMap: fixMap } : {}),
+    // The record of this send takes the map the composer actually rendered,
+    // not a second build: the second build would be budgeted differently and
+    // would list different repositories.
+    ...(sentMap ? { sentRepositoryMap: sentMap } : {}),
     // With the ledger on, the aliased thread feed replaces the flat comment
     // list, so the agent answers identified threads instead of a transcript.
     ...(ctx.reviewLedger ? { reviewThreads: ctx.reviewLedger.feed } : {}),
@@ -755,12 +761,14 @@ export const execute: BlockExecuteFn = async (
     const before = await inspectFixWorkspace(sandboxId);
     // With a compiler the instructions are the block prompt, so they stay out
     // of the runtime parts; without one the joined parts are the whole prompt.
+    const fixSentMap: SentRepositoryMap = { map: null };
     const fixInput = await buildFixInput(
       block,
       ctx,
       reviewFeedback.value,
       fixReviewResults,
       execution?.compileInvocationPrompt === undefined,
+      fixSentMap,
     );
     const resolvedInput = await resolveAgentInput({
       compileInvocationPrompt: execution?.compileInvocationPrompt,
@@ -815,6 +823,7 @@ export const execute: BlockExecuteFn = async (
         compilation: resolvedInput.compilation,
         prompt: input,
         harness: { kind, model, runtime, schema: AGENT_SCHEMA },
+        repositoryMap: fixSentMap.map,
       }),
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);

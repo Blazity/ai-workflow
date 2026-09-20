@@ -492,6 +492,21 @@ export const agentBriefingRepositorySchema = z
         z.object({
           kind: visibilitySlugSchema,
           target: repositoryKeyReadSchema,
+          /**
+           * Which side of the relationship this repository is on:
+           * `outgoing` where it recorded the relationship, `incoming` where
+           * the other end did.
+           *
+           * NOT DECORATION. The catalog stores one edge and two sentences for
+           * it, and reading an incoming edge forwards says the opposite of
+           * what the operator recorded: "the API holds tests for the e2e
+           * suite" where the e2e suite holds tests for the API. A page that
+           * renders the pair without it tells a person the reverse of what
+           * their agent was told. Optional because a send whose run predates
+           * the repository map recorded no direction, and absent means
+           * exactly that: unknown, not `outgoing`.
+           */
+          direction: visibilitySlugSchema.optional(),
           note: labelSchema.optional(),
         }),
       )

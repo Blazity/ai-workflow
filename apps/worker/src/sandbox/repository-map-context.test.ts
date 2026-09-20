@@ -13,8 +13,10 @@ import type { RepositoryMapContext } from "../repository-map/map.js";
 import {
   fixContextParts,
   implementationContextParts,
+  repositoryMapPromptParts,
   researchPlanContextParts,
   reviewContextParts,
+  type SentRepositoryMap,
 } from "./context.js";
 import type { WorkspaceManifest } from "./repo-workspace.js";
 
@@ -88,7 +90,7 @@ function mapParts(parts: EffectivePromptPart[]): Array<[string, string]> {
     .map((part) => [part.id, part.content.trimEnd()]);
 }
 
-function researchParts(map?: RepositoryMapContext): EffectivePromptPart[] {
+function researchParts(map?: RepositoryMapContext, sent?: SentRepositoryMap): EffectivePromptPart[] {
   return researchPlanContextParts({
     ticket: TICKET,
     prompt: "",
@@ -96,10 +98,11 @@ function researchParts(map?: RepositoryMapContext): EffectivePromptPart[] {
     selectedRepositories: SELECTED,
     workspaceManifest: MANIFEST,
     ...(map ? { repositoryMap: map } : {}),
+    ...(sent ? { sentRepositoryMap: sent } : {}),
   });
 }
 
-function implementationParts(map?: RepositoryMapContext): EffectivePromptPart[] {
+function implementationParts(map?: RepositoryMapContext, sent?: SentRepositoryMap): EffectivePromptPart[] {
   return implementationContextParts({
     ticket: TICKET,
     prompt: "",
@@ -107,10 +110,11 @@ function implementationParts(map?: RepositoryMapContext): EffectivePromptPart[] 
     selectedRepositories: SELECTED,
     workspaceManifest: MANIFEST,
     ...(map ? { repositoryMap: map } : {}),
+    ...(sent ? { sentRepositoryMap: sent } : {}),
   });
 }
 
-function reviewParts(map?: RepositoryMapContext): EffectivePromptPart[] {
+function reviewParts(map?: RepositoryMapContext, sent?: SentRepositoryMap): EffectivePromptPart[] {
   return reviewContextParts({
     ticket: TICKET,
     prompt: "",
@@ -118,10 +122,11 @@ function reviewParts(map?: RepositoryMapContext): EffectivePromptPart[] {
     selectedRepositories: SELECTED,
     workspaceManifest: MANIFEST,
     ...(map ? { repositoryMap: map } : {}),
+    ...(sent ? { sentRepositoryMap: sent } : {}),
   });
 }
 
-function fixParts(map?: RepositoryMapContext): EffectivePromptPart[] {
+function fixParts(map?: RepositoryMapContext, sent?: SentRepositoryMap): EffectivePromptPart[] {
   return fixContextParts({
     ticket: TICKET,
     prComments: [],
@@ -129,6 +134,7 @@ function fixParts(map?: RepositoryMapContext): EffectivePromptPart[] {
     repositories: SELECTED,
     workspaceManifest: MANIFEST,
     ...(map ? { repositoryMap: map } : {}),
+    ...(sent ? { sentRepositoryMap: sent } : {}),
   });
 }
 
@@ -449,5 +455,57 @@ describe("a run whose catalog read failed", () => {
     expect(firstGroup).toBeGreaterThan(-1);
     expect(note).toBeLessThan(firstGroup);
     expect(text).toContain("The repository relationships could not be read for this run");
+  });
+});
+
+/**
+ * THE MAP THE RECORD KEEPS IS THE MAP THE MODEL READ.
+ *
+ * The briefing does not rebuild the map. It cannot: the build takes a budget
+ * derived from the rest of the prompt, so a second pass with a different budget
+ * lists different repositories and renders some of them shorter, and the panel
+ * beside the prompt would quietly describe a send that never happened. The
+ * composer therefore hands its own build over through a sink, and the record
+ * takes that. These are the four sends plus the generic agent, each proving the
+ * sink is filled and filled with the pass that produced the text.
+ *
+ * WHAT TURNS THESE RED, observed: dropping `sent` from `renderRepositoryMapParts`
+ * leaves every sink null, and a null sink is exactly what an older run looks
+ * like, so the record silently falls back to the workspace list.
+ */
+describe("the map a send hands to its own record", () => {
+  it("is the build that produced the text, for all four sends", () => {
+    for (const parts of [researchParts, implementationParts, reviewParts, fixParts]) {
+      const sent: SentRepositoryMap = { map: null };
+      const rendered = mapParts(parts(mapContext(), sent));
+      expect(sent.map).not.toBeNull();
+      // The same object, not a second build: its own parts are the ones that
+      // went into the prompt.
+      expect(mapParts(sent.map!.parts)).toEqual(rendered);
+      expect(sent.map!.repositories.map((entry) => entry.key)).toEqual([
+        "github:acme/api",
+        "github:acme/web",
+      ]);
+    }
+  });
+
+  it("is the build that produced the text for the generic agent too", () => {
+    const sent: SentRepositoryMap = { map: null };
+    const rendered = repositoryMapPromptParts(
+      { repositoryMap: mapContext(), repositories: SELECTED, workspaceManifest: MANIFEST },
+      [],
+      sent,
+    );
+    expect(sent.map).not.toBeNull();
+    expect(sent.map!.parts).toEqual(rendered);
+  });
+
+  it("stays null for a send that rendered no map at all", () => {
+    // No map input and no workspace: the composer writes nothing, so the record
+    // keeps the workspace list rather than a map nobody was shown.
+    const sent: SentRepositoryMap = { map: null };
+    const parts = repositoryMapPromptParts({}, [], sent);
+    expect(parts).toEqual([]);
+    expect(sent.map).toBeNull();
   });
 });

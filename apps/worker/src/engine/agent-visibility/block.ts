@@ -8,6 +8,7 @@
 import type { EffectivePromptCompilation } from "@shared/prompts";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
+import type { RepositoryMap } from "../../repository-map/map.js";
 import type { RunStartWorkScope } from "../steps/run-start-settings.js";
 import { briefingHarness } from "./harness.js";
 import {
@@ -34,6 +35,15 @@ export function planBlockAgentBriefing(input: {
   ctx: BriefingRunContext;
   /** Null on the fallback path, which composed no sections. */
   compilation: EffectivePromptCompilation | null;
+  /** The repository map THIS send rendered, handed over by the composer that
+   *  rendered it. Null where the send composed none, and the record then keeps
+   *  the workspace list it always did rather than inventing facts.
+   *
+   *  REQUIRED, and null is a decision rather than a default: a send that
+   *  forgets to hand its map over records an empty repositories panel beside a
+   *  map the agent plainly read, and nothing goes red. A new send has to say
+   *  which of the two it is, at compile time. */
+  repositoryMap: RepositoryMap | null;
   prompt: string;
   harness: {
     kind: string;
@@ -52,7 +62,10 @@ export function planBlockAgentBriefing(input: {
   // discovery send says it. Without it a person reading an agent briefing can
   // see which repositories were in scope but not where the agent was told
   // about them, and the two kinds of briefing would answer different
-  // questions. The planner drops it again if that part is not there.
+  // questions. The planner drops it again if that part is not there, which is
+  // why the id has to be the one the composer actually emits: the map renders
+  // `repository-map`, and the "selected-repositories" part it replaced has not
+  // existed since the map landed.
   const renderedIn = input.compilation?.sections.findIndex((section) => section.kind === "runtime");
   const common = {
     ...identity,
@@ -60,9 +73,10 @@ export function planBlockAgentBriefing(input: {
     harness: briefingHarness(input.harness),
     repositoryContext: selectedRepositoryContext({
       repositories: input.ctx.selectedRepositories,
+      ...(input.repositoryMap ? { map: input.repositoryMap } : {}),
       ...(input.ctx.workScope ? { workScope: input.ctx.workScope } : {}),
       ...(renderedIn !== undefined && renderedIn >= 0
-        ? { renderedAt: { sectionIndex: renderedIn, partId: "selected-repositories" } }
+        ? { renderedAt: { sectionIndex: renderedIn, partId: "repository-map" } }
         : {}),
     }),
   };

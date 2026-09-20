@@ -22,9 +22,26 @@ import {
 import { selectReviewLedgerWorkItems as selectWorkItems } from "../adapters/vcs/vcs-bot-identity.js";
 import {
   buildRepositoryMap,
+  type RepositoryMap,
   type RepositoryMapAttachment,
   type RepositoryMapContext,
 } from "../repository-map/map.js";
+
+/**
+ * WHERE A SEND PUTS THE MAP IT RENDERED, for the briefing to record.
+ *
+ * The briefing must store the SAME pass the model read, and the map depends on
+ * how much room the rest of this prompt left: a second build with a different
+ * budget lists different repositories and renders some of them shorter, which
+ * is prompt-and-briefing drift in exactly the two fields it is easiest to
+ * believe. So the composer hands its own build back rather than letting the
+ * recorder make one, and a caller that wants it passes this and reads `map`
+ * afterwards. Absent means nobody is recording, which is every test and every
+ * path with capture off.
+ */
+export interface SentRepositoryMap {
+  map: RepositoryMap | null;
+}
 
 /*
  * Every assembler here composes its runtime data as named parts (see
@@ -90,6 +107,9 @@ export interface SelectedRepositoryPromptContext {
 }
 
 export interface ResearchPlanContextInput {
+  /** Where this send puts the map it rendered, for the briefing to record the
+   *  same pass the model read. See `SentRepositoryMap`. */
+  sentRepositoryMap?: SentRepositoryMap;
   /** The repositories this send works on, as one object for the one renderer:
    *  the workspace, the neighbourhood and everything already decided. Absent on
    *  a run whose journal predates it, which the prompt says out loud. */
@@ -106,6 +126,9 @@ export interface ResearchPlanContextInput {
 }
 
 export interface ImplementationContextInput {
+  /** Where this send puts the map it rendered, for the briefing to record the
+   *  same pass the model read. See `SentRepositoryMap`. */
+  sentRepositoryMap?: SentRepositoryMap;
   /** The repositories this send works on, as one object for the one renderer:
    *  the workspace, the neighbourhood and everything already decided. Absent on
    *  a run whose journal predates it, which the prompt says out loud. */
@@ -121,6 +144,9 @@ export interface ImplementationContextInput {
 }
 
 export interface ReviewContextInput {
+  /** Where this send puts the map it rendered, for the briefing to record the
+   *  same pass the model read. See `SentRepositoryMap`. */
+  sentRepositoryMap?: SentRepositoryMap;
   /** The repositories this send works on, as one object for the one renderer:
    *  the workspace, the neighbourhood and everything already decided. Absent on
    *  a run whose journal predates it, which the prompt says out loud. */
@@ -302,6 +328,7 @@ ${branchName}
       selectedRepositories,
       input.workspaceManifest,
       repositoryMapBudget(compose([])),
+      input.sentRepositoryMap,
     ),
   );
 }
@@ -339,6 +366,7 @@ export function implementationContextParts(input: ImplementationContextInput): E
       selectedRepositories,
       input.workspaceManifest,
       repositoryMapBudget(compose([])),
+      input.sentRepositoryMap,
     ),
   );
 }
@@ -391,6 +419,7 @@ export function reviewContextParts(input: ReviewContextInput): EffectivePromptPa
       selectedRepositories,
       input.workspaceManifest,
       repositoryMapBudget(compose([])),
+      input.sentRepositoryMap,
     ),
   );
 }
@@ -456,6 +485,9 @@ function renderReviewSiblingRepositoriesParts(
 }
 
 export interface FixContextInput {
+  /** Where this send puts the map it rendered, for the briefing to record the
+   *  same pass the model read. See `SentRepositoryMap`. */
+  sentRepositoryMap?: SentRepositoryMap;
   /** See `ResearchPlanContextInput`. */
   repositoryMap?: RepositoryMapContext;
   ticket: TicketData;
@@ -576,6 +608,7 @@ export function fixContextParts(input: FixContextInput): EffectivePromptPart[] {
       repositories,
       input.workspaceManifest,
       repositoryMapBudget(compose([])),
+      input.sentRepositoryMap,
     ),
   );
 }
@@ -1006,12 +1039,14 @@ export function repositoryMapPromptParts(
     workspaceManifest?: WorkspaceManifest;
   },
   others: readonly EffectivePromptPart[],
+  sent?: SentRepositoryMap,
 ): EffectivePromptPart[] {
   return renderRepositoryMapParts(
     input.repositoryMap,
     input.repositories,
     input.workspaceManifest,
     repositoryMapBudget(others),
+    sent,
   );
 }
 
@@ -1020,10 +1055,11 @@ function renderRepositoryMapParts(
   repositories: SelectedRepository[] | undefined,
   manifest: WorkspaceManifest | undefined,
   budget: number,
+  sent?: SentRepositoryMap,
 ): EffectivePromptPart[] {
   const attached = workspaceAttachments(repositories, manifest);
   if (input === undefined && attached.length === 0) return [];
-  return buildRepositoryMap(
+  const map = buildRepositoryMap(
     {
       // A send with no map input at all is a run whose journal predates it, and
       // it says so rather than rendering an empty catalog, which would be a
@@ -1032,7 +1068,12 @@ function renderRepositoryMapParts(
       attached,
     },
     { maxLength: budget },
-  ).parts;
+  );
+  // The composer measures the budget twice (once to size this, once to
+  // compose), so the LAST build is the one whose parts are returned and the
+  // one a briefing must record.
+  if (sent) sent.map = map;
+  return map.parts;
 }
 
 /** The workspace as the prompt has always known it: where each repository is

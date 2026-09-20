@@ -15,6 +15,7 @@
 import type { RunStartWorkScope } from "../steps/run-start-settings.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
+import type { RepositoryMap } from "../../repository-map/map.js";
 import { workScopeRepositoryKey } from "../work-scope/context.js";
 import type { BriefingRepositoryContextPlan, BriefingRepositoryPlan } from "./plan.js";
 
@@ -94,17 +95,29 @@ export function discoveryRepositoryContext(input: {
 /**
  * The repositories a sandbox send was working in.
  *
- * `write` and `read_only` come from the access the workspace gave each one, so
- * the record says what the agent could actually change rather than what it was
- * shown. The description and rules are null here: what reaches this send is a
- * checkout, and the operator's words about a repository travel as their own
- * prompt sections with their own provenance.
+ * TWO SHAPES, AND THE MAP IS THE GOOD ONE. When the send rendered a repository
+ * map, the record is that map's own entries: the operator's description in
+ * their words, the relationships with the side of each edge this repository is
+ * on, why each one is here, and what the send was allowed to do with it. It is
+ * the SAME BUILD the model read, handed over by the composer, never a second
+ * pass and never a fresh read of the catalog: a profile somebody edits between
+ * the send and the read must not change what the page shows, and a map rebuilt
+ * against a different prompt budget would list different repositories.
+ *
+ * Without one, the workspace list as it always was: `write` or `read_only`
+ * from the access the workspace gave each repository, and no description or
+ * relationships, because this send genuinely carried none. A run whose journal
+ * predates the map, and a block that composed no map, record what they had
+ * rather than facts nobody put in front of the agent.
  */
 export function selectedRepositoryContext(input: {
   repositories: readonly WorkspaceRepositoryInput[];
+  /** The map this send rendered, from the composer's own build. */
+  map?: RepositoryMap | null;
   workScope?: RunStartWorkScope;
   renderedAt?: { sectionIndex: number; partId: string };
 }): BriefingRepositoryContextPlan {
+  if (input.map) return fromRepositoryMap(input.map, input);
   const repositories = input.repositories.map((repository): BriefingRepositoryPlan => {
     const key = workScopeRepositoryKey(repository);
     const entry = entryFor(input.workScope, key);
@@ -125,6 +138,98 @@ export function selectedRepositoryContext(input: {
     workScope: workScopeOf(input.workScope),
     ...(input.renderedAt ? { renderedAt: input.renderedAt } : {}),
   };
+}
+
+/**
+ * The map's entries as the record keeps them.
+ *
+ * A straight carry, field for field, because the map's entry shape was written
+ * to be exactly this: the one pass that renders the text also produces the
+ * rows, so nothing here decides anything and there is nothing for the two to
+ * disagree about.
+ *
+ * The one thing NOT carried is the map's own `relationshipCount`, which counts
+ * relationships the map did not show (a hub's ninth edge, one whose other end
+ * is no longer a catalog row). The recorder derives its count from the list it
+ * is handed, and what the map held back is said in the map's own text, where
+ * the agent read it.
+ */
+function fromRepositoryMap(
+  map: RepositoryMap,
+  input: { workScope?: RunStartWorkScope; renderedAt?: { sectionIndex: number; partId: string } },
+): BriefingRepositoryContextPlan {
+  return {
+    repositories: map.repositories.map(
+      (entry): BriefingRepositoryPlan => ({
+        key: entry.key,
+        description: { source: entry.description.source, text: entry.description.text },
+        rules: entry.rules,
+        relationships: relationshipsOf(entry),
+        state: entry.state,
+        ...(entry.reason === undefined ? {} : { reason: entry.reason }),
+        inclusion: {
+          cause: entry.inclusion.cause,
+          ...(entry.inclusion.via
+            ? {
+                via: {
+                  key: entry.inclusion.via.key,
+                  relationship: entry.inclusion.via.relationship,
+                },
+              }
+            : {}),
+        },
+        rendering: entry.rendering,
+        workScopeEntry: entry.workScopeEntry,
+      }),
+    ),
+    unlistedCount: map.unlistedCount,
+    workScope: workScopeOf(input.workScope),
+    ...(input.renderedAt ? { renderedAt: input.renderedAt } : {}),
+  };
+}
+
+/**
+ * A map entry's relationships, from this repository's own end.
+ *
+ * The catalog stores each edge ONCE, on the repository whose operator recorded
+ * it. So a neighbour that got into the map because the other end points at it
+ * carries none of its own: the map's text still tells the agent about it, on
+ * the "Why it is here" line built from `inclusion.via`, but the structured half
+ * would show an empty relationship list beside a prose sentence about the same
+ * edge. Worse, `via` on the record names the key and the kind and NOT the side,
+ * because the package's `via` shape is strict and frozen, so a page rendering
+ * "api backend_for web" from it says the reverse of what the operator recorded
+ * whenever the edge hangs on the other end.
+ *
+ * So the edge this repository arrived through is listed here from ITS end, with
+ * the direction flipped to match (`via.direction` is relative to `via.key`).
+ * Nothing is invented: it is the same edge, from the same build, that the agent
+ * read one line above. It is added only when the entry does not already carry
+ * it, which is the case where the catalog hung the edge on this end and the map
+ * already listed it.
+ */
+function relationshipsOf(
+  entry: RepositoryMap["repositories"][number],
+): BriefingRepositoryPlan["relationships"] {
+  const listed = entry.relationships.map((relationship) => ({
+    kind: relationship.kind,
+    target: relationship.target,
+    direction: relationship.direction,
+    ...(relationship.note === undefined ? {} : { note: relationship.note }),
+  }));
+  const via = entry.inclusion.via;
+  if (!via) return listed;
+  if (listed.some((relationship) => relationship.kind === via.relationship && relationship.target === via.key)) {
+    return listed;
+  }
+  return [
+    ...listed,
+    {
+      kind: via.relationship,
+      target: via.key,
+      direction: via.direction === "outgoing" ? "incoming" : "outgoing",
+    },
+  ];
 }
 
 /**

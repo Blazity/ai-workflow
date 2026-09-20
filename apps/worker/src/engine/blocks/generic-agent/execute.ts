@@ -23,7 +23,7 @@ import {
 import { resolveBlockAgent } from "../../definition/resolve-agent.js";
 import { repositoryMapContext } from "../../../repository-map/context.js";
 import type { RepositoryMapContext } from "../../../repository-map/map.js";
-import { repositoryMapPromptParts } from "../../../sandbox/context.js";
+import { repositoryMapPromptParts, type SentRepositoryMap } from "../../../sandbox/context.js";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
 import type { WorkspaceManifest } from "../../../sandbox/repo-workspace.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
@@ -327,6 +327,9 @@ export function genericAgentRuntimeData(
     repositories?: SelectedRepository[];
     workspaceManifest?: WorkspaceManifest;
   },
+  /** Where this send puts the map it rendered, so the briefing records the
+   *  same pass the model read rather than a differently budgeted rebuild. */
+  sent?: SentRepositoryMap,
 ): EffectivePromptPart[] {
   const runtimeInputs = Object.fromEntries(
     Object.entries(resolvedInputs).filter(([name]) => name !== "prompt"),
@@ -351,7 +354,7 @@ export function genericAgentRuntimeData(
   const composed = concatPromptParts(
     parts.flatMap((entry, index) => (index === 0 ? [entry] : ["\n\n", entry])),
   );
-  const mapParts = repositories ? repositoryMapPromptParts(repositories, composed) : [];
+  const mapParts = repositories ? repositoryMapPromptParts(repositories, composed, sent) : [];
   if (mapParts.length === 0) return composed;
   return concatPromptParts(composed.length > 0 ? [composed, "\n\n", mapParts] : [mapParts]);
 }
@@ -450,6 +453,7 @@ export const execute: BlockExecuteFn = async (
       : typeof block.params.prompt === "string"
         ? block.params.prompt
         : "";
+  const genericSentMap: SentRepositoryMap = { map: null };
   const resolvedPrompt = await resolveAgentInput({
     compileInvocationPrompt: execution?.compileInvocationPrompt,
     blockPrompt: basePrompt,
@@ -457,6 +461,7 @@ export const execute: BlockExecuteFn = async (
       resolvedInputs,
       execution?.clarificationAnswer,
       genericAgentRepositories(ctx),
+      genericSentMap,
     ),
     sandboxId,
     fallbackInput: execution?.clarificationAnswer
@@ -526,6 +531,7 @@ export const execute: BlockExecuteFn = async (
         compilation: resolvedPrompt.compilation,
         prompt,
         harness: { kind, model, runtime, schema: jsonSchema },
+        repositoryMap: genericSentMap.map,
       }),
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);

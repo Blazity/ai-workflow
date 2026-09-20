@@ -53,7 +53,7 @@ export interface BriefingRepositoryPlan {
   key: string;
   description: { source: string; text: string };
   rules: string | null;
-  relationships: { kind: string; target: string; note?: string }[];
+  relationships: { kind: string; target: string; direction?: string; note?: string }[];
   state: string;
   reason?: string;
   inclusion: { cause: string; via?: { key: string; relationship: string } };

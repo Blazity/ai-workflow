@@ -62,6 +62,7 @@ import { VARIABLE_PARAM_KEYS, type EffectivePromptCompilation } from "@shared/pr
 import { createBriefingSequence, nextBriefingIdentity, planPartsBriefing, type AgentBriefingCapture, type BriefingIdentity } from "./agent-visibility/plan.js";
 import { discoveryRepositoryContext } from "./agent-visibility/repository-context.js";
 import { deferredBriefing, planBlockAgentBriefing } from "./agent-visibility/block.js";
+import type { SentRepositoryMap } from "../sandbox/context.js";
 import { compatibilityPromptForV2Node, compileEffectivePrompt, effectivePromptProfileSource } from "./helpers/effective-prompt.js";
 import { loadInvocationRepositoryInstructionSources, shouldLoadRepositoryInstructionSources } from "./steps/repository-instructions.js";
 import { transformRegexEvaluator } from "./helpers/transform-regex-evaluator.js";
@@ -2054,6 +2055,10 @@ async function agentWorkflowBody(
           schema?: string;
           passLabel?: string;
         },
+        /** The map the composer rendered for this send, so the record keeps
+         *  the entries the model was actually shown. Required: a send that
+         *  composes no map passes one whose `map` is null. */
+        sentMap: SentRepositoryMap,
       ): AgentBriefingCapture | null =>
         // What the renderers were handed for THIS send, never the catalog as
         // it stands when somebody opens the page.
@@ -2061,6 +2066,7 @@ async function agentWorkflowBody(
           execution,
           ctx,
           compilation,
+          repositoryMap: sentMap.map,
           prompt,
           harness,
           ...(harness.passLabel === undefined ? {} : { passLabel: harness.passLabel }),
@@ -2916,7 +2922,10 @@ async function agentWorkflowBody(
             // What the passes before this one leave for it: the refusals, the
             // closed expansion, the ledger's correction. This says what
             // happened; sandbox/context.ts says how each note reads.
+            /** Filled by the composer with the map this pass rendered. */
+            const researchSentMap: SentRepositoryMap = { map: null };
             const researchContext = {
+              sentRepositoryMap: researchSentMap,
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               branchName,
               attachments: downloadedAttachments,
@@ -2965,6 +2974,7 @@ async function agentWorkflowBody(
               resolvedResearchInput.compilation,
               researchInput,
               { kind, model, runtime, schema: RESEARCH_SCHEMA, passLabel: researchLabel },
+              researchSentMap,
             );
             const researchLaunch = await writeAndStartPhase(
               sandboxId, kind, researchArtifactPhase,
@@ -3407,7 +3417,9 @@ async function agentWorkflowBody(
                 AGENT_SCHEMA,
                 runtime,
               );
+            const implementationSentMap: SentRepositoryMap = { map: null };
             const implementationContext = {
+              sentRepositoryMap: implementationSentMap,
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               researchPlanMarkdown: resolveImplementationPlanInput(
                 resolvedInputs,
@@ -3449,6 +3461,7 @@ async function agentWorkflowBody(
                 resolvedImplementationInput.compilation,
                 implInput,
                 { kind, model, runtime, schema: AGENT_SCHEMA },
+                implementationSentMap,
               ),
             );
             if (!implLaunch.ok) return agentProtocolBlockError(implLaunch.failure);
@@ -3678,7 +3691,9 @@ async function agentWorkflowBody(
                   REVIEW_SCHEMA,
                   runtime,
                 );
+              const reviewSentMap: SentRepositoryMap = { map: null };
               const reviewContext = {
+                sentRepositoryMap: reviewSentMap,
                 ticket: ticketData,
                 researchPlanMarkdown: ctx.researchPlanMarkdown,
                 ...(reviewFeedback.value
@@ -3717,6 +3732,7 @@ async function agentWorkflowBody(
                   resolvedReviewInput.compilation,
                   reviewInput,
                   { kind, model, runtime, schema: REVIEW_SCHEMA },
+                  reviewSentMap,
                 ),
               );
               if (!reviewLaunch.ok) return agentProtocolBlockError(reviewLaunch.failure);

@@ -179,7 +179,16 @@ const repositoryInputSchema = z
     relationships: z
       .array(
         z
-          .object({ kind: visibilitySlugSchema, target: repositoryKeySchema, note: z.string().optional() })
+          .object({
+            kind: visibilitySlugSchema,
+            target: repositoryKeySchema,
+            /** Which side of the edge this repository is on; see
+             *  `agentBriefingRepositorySchema`. The shape is STRICT, so an
+             *  adapter handing over a field the schema does not know refuses
+             *  the whole send and stores a marker instead, silently. */
+            direction: visibilitySlugSchema.optional(),
+            note: z.string().optional(),
+          })
           .strict(),
       ),
     state: visibilitySlugSchema,
@@ -993,6 +1002,7 @@ function renderRelationship(
   return {
     kind: relationship.kind,
     target: relationship.target,
+    ...(relationship.direction === undefined ? {} : { direction: relationship.direction }),
     ...(note === undefined ? {} : { note: clamp(note, AGENT_VISIBILITY_LABEL_MAX_LENGTH) }),
   };
 }
