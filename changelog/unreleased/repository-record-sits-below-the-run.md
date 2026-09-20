@@ -1,0 +1,1 @@
+- On a ticket, the repository record now sits below the run instead of above it. A person opening a ticket came for the run, and the record is what they consult about it, so it no longer pushes the run's own panel off the first screen.

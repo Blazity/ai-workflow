@@ -118,13 +118,14 @@ export function DetailArea({ children }: { children: ReactNode }) {
             <MobileBackToRuns ticketKey={ticketKey} />
           </div>
         ) : null}
-        {/* The repository record belongs to the ticket, not to the run the
-            rail has selected, so it sits above the trace and stays put when
-            the selection moves. It only opens itself when the URL names no
-            run: a link to a run is a person asking for that run, not for the
-            record above it. */}
-        <RepositoriesPanel ticketKey={ticketKey} autoOpen={urlRun === null} />
         {onScreen === false ? null : children}
+        {/* The repository record belongs to the ticket, not to the run the
+            rail has selected, so it stays put when the selection moves. It
+            sits BELOW the run: a person opening a ticket came for the run,
+            and the record is what they consult about it. It only opens itself
+            when the URL names no run, because a link to a run is a person
+            asking for that run rather than for the record. */}
+        <RepositoriesPanel ticketKey={ticketKey} autoOpen={urlRun === null} />
       </div>
       {isPending && (
         <div className="absolute inset-0 overflow-hidden bg-app-bg p-4 lg:p-6">

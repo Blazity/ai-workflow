@@ -12,6 +12,7 @@ import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { SearchParamsContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
+import { RepositoriesPanel } from "@/components/cockpit/agent-visibility/repositories-panel";
 import { installBrowser } from "@/lib/agent-visibility/test-support/browser";
 
 import { DetailArea, TicketSelectionProvider } from "./ticket-selection";
@@ -87,4 +88,17 @@ test("the phone's run view is that same column, and never loses its trace to the
   // Below `lg` with a run named, this column IS the page: what a person came
   // for. Gating must never take the trace away from a column they can see.
   assert.equal(traces(render(t, { visible: true, run: "wrun_fx_planning" })), 1);
+});
+
+test("the repository record sits below the run, not above it", (t) => {
+  // A person opening a ticket came for the run. The record is what they
+  // consult about it, so it follows the run down the column rather than
+  // pushing it off the first screen.
+  const root = render(t, { visible: true, run: null });
+  const nodes = root.findAll(() => true);
+  const trace = nodes.findIndex((node) => node.type === Trace);
+  const record = nodes.findIndex((node) => node.type === RepositoriesPanel);
+  assert.ok(trace >= 0, "the trace is not on the screen at all");
+  assert.ok(record >= 0, "the repository record is not on the screen at all");
+  assert.ok(trace < record, "the repository record rendered above the run instead of below it");
 });
