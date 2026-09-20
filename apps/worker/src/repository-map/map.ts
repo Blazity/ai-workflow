@@ -37,6 +37,28 @@
  * neighbourhood, which keeps a floor of its own so a hundred exclusions cannot
  * starve the thing this map exists for; then the rest of the catalog.
  *
+ * WHAT IT NAMES, AND WHAT ONE RULE COVERS INSTEAD. Everything decided ABOUT
+ * THIS WORK is named, one repository per line, with its reason: a repository a
+ * person excluded, one this run already refused, one an answer left unselected,
+ * one the ticket names that nobody enabled. Those are the ones a model asks for
+ * again and again, and naming them is the behaviour the eleven minute planning
+ * failure bought.
+ *
+ * A repository closed by CONFIGURATION ALONE, switched off in the catalog or
+ * offering nothing to check out, that nothing on this work named, requested,
+ * excluded, or related to, is not named at all: `CLOSED_RULES` at the foot of
+ * the map covers every one of them in one sentence. Naming them was this
+ * file's first shape, and on production it enumerated 73 repositories nobody
+ * had ever configured, about 80 percent of the run's Runtime data and 45
+ * percent of the whole prompt, sent an organization's private repository names
+ * and descriptions to a third-party model on every send, and pushed an ENABLED
+ * repository off the end of the map to do it. It could not even do its job:
+ * the list is bounded, so 131 further repositories were missing from a list
+ * headed "Each of these was already decided for this work". A list that is 36
+ * percent complete buys none of the guarantee that header claims, and a model
+ * wanting one of the missing ones asks anyway. One complete rule beats fifteen
+ * kilobytes of incomplete list.
+ *
  * DETERMINISTIC. The same record and the same catalog render byte-identical
  * text. The ranking is total: no tie is left to object key order or to a
  * database order with no ORDER BY. A briefing is evidence, and evidence that
@@ -324,7 +346,17 @@ export interface RepositoryMap {
   text: string;
   /** The repositories the map described, in the order it described them. */
   repositories: RepositoryMapEntry[];
-  /** Catalog repositories the map summarized as a count instead of listing. */
+  /**
+   * Repositories the map would have described and turned into a count because
+   * the budget ran out, and that the text therefore counts.
+   *
+   * IT COUNTS WHAT THE TEXT COUNTS, AND NOTHING ELSE. A repository closed by
+   * configuration that this work never touched is not here, because the map
+   * does not count it either: it is covered by `CLOSED_RULES`, a rule with no
+   * number in it. Counting them here would put the old contradiction back in
+   * the record after taking it out of the prompt, and a briefing exists to say
+   * what the model was told.
+   */
   unlistedCount: number;
   /** Their keys, so a briefing can say which ones they were. */
   unlistedKeys: RepositoryKey[];
@@ -573,6 +605,37 @@ export function buildRepositoryMap(
   };
   const described = keys.map(describe);
 
+  /**
+   * Every key ANYTHING ON THIS WORK touched, whatever the catalog says about
+   * it. The union of the sources of `keys` above, minus the catalog itself: a
+   * repository is on this work because it is checked out, because the record
+   * holds an entry or a refusal for it, because the ticket or the event names
+   * it, because a question offered it, because this run already refused it,
+   * because an answer left it unselected, or because a relationship from one of
+   * those reaches it.
+   *
+   * IT IS NOT `inclusion.cause`, though it looks like it. A repository this run
+   * refused gets the cause `catalog`, because nothing else in the map explains
+   * how it got here, and reading the cause would drop from the map exactly the
+   * repository the next pass must not ask for again.
+   */
+  const onThisWork = new Set<RepositoryKey>([
+    ...attached.keys(),
+    ...entries.keys(),
+    ...named,
+    ...eventRepositories,
+    ...offered,
+    ...refused,
+    ...unnamed,
+    ...leftOut.keys(),
+    ...via.keys(),
+  ]);
+
+  // `byKey` keeps EVERY described repository, including the ones no group will
+  // render: a workspace repository's relationship clause asks it whether the
+  // other end is a repository this run knows, and answering "we do not know
+  // this repository on this run" about one we do know would be a new lie told
+  // to save bytes.
   const byKey = new Map(described.map((entry) => [entry.key, entry] as const));
   const grouped: Record<MapGroup, RepositoryMapEntry[]> = {
     workspace: [],
@@ -580,8 +643,13 @@ export function buildRepositoryMap(
     settled: [],
     rest: [],
   };
+  /** Closed by configuration, and untouched by this work: `CLOSED_RULES` says
+   *  what is true of all of them, so none of them is named. */
+  const closed: RepositoryMapEntry[] = [];
   for (const entry of described) {
-    grouped[groupOf(entry, attached, seeds, via)].push(entry);
+    const group = groupOf(entry, attached, seeds, via, onThisWork);
+    if (group === "closed") closed.push(entry);
+    else grouped[group].push(entry);
   }
   // Ranked inside each group by key alone, so the order is total and two runs
   // on the same record render the same bytes.
@@ -603,6 +671,8 @@ export function buildRepositoryMap(
   // ticket, and nothing turns red when it does.
   const budget = Math.min(options?.maxLength ?? MAP_TEXT_MAX_LENGTH, MAP_TEXT_MAX_LENGTH);
   const rules = groupRules(expansionOpen);
+  // Only a run that listed repositories may say what it did not name is closed.
+  const closedRule = catalogKnown ? CLOSED_RULES[expansionOpen ? "open" : "shut"] : null;
   const renderContext: RenderContext = { expansionOpen, catalogUnreadable, unnamed };
   // The frame is paid for before any entry is, and measured rather than
   // guessed: the section heading, every group heading, every rule, the notes
@@ -613,6 +683,7 @@ export function buildRepositoryMap(
     MAP_SECTION_HEADING.length +
     sumLengths(Object.values(GROUP_HEADINGS)) +
     sumLengths(Object.values(rules)) +
+    (closedRule?.length ?? 0) +
     sumLengths(notes) +
     notes.length +
     MAP_CLOSING_RESERVE;
@@ -696,10 +767,14 @@ export function buildRepositoryMap(
     renderContext,
     unlistedCount: hidden.length,
     unlistedSettledCount: hiddenSettled.length,
+    closedRule,
     notes,
-    // Everything the map knows of, so a map that cannot afford even its frame
-    // still tells the agent how many repositories it is not seeing.
-    totalCount: described.length,
+    // Everything the map would have described, so a map that cannot afford even
+    // its frame still tells the agent how many repositories it is not seeing.
+    // Never the closed ones: "206 repositories are in scope for this work" said
+    // of a catalog with six enabled rows is the same false claim of completeness
+    // in a shorter sentence.
+    totalCount: described.length - closed.length,
     budget,
   });
   const listed = [...shown.workspace, ...shown.related, ...shown.settled, ...shown.rest];
@@ -787,9 +862,10 @@ const TRAIL_WORKSPACE_UNDECIDED = "in the workspace";
 /** Room for the "and N more" line, whatever N turns out to be. */
 const TRAIL_TAIL_RESERVE = 24;
 
-/** Room for the two closing lines: the catalog's "N further repositories" and
+/** Room for the two closing COUNTS: the catalog's "N further repositories" and
  *  the settled group's "N more were already decided". Measured against the
- *  longest either can be, which is the wording plus a count. */
+ *  longest either can be, which is the wording plus a count. `CLOSED_RULES` is
+ *  charged separately and exactly, because its length is known up front. */
 const MAP_CLOSING_RESERVE = 320;
 
 /** The section's own heading, charged to the frame like everything else. */
@@ -803,14 +879,27 @@ const MAP_RELATED_FLOOR = 4_000;
 
 type MapGroup = "workspace" | "related" | "settled" | "rest";
 
+/**
+ * Which part of the map a repository belongs to, or `closed` for the ones the
+ * map's one closing rule speaks for instead of naming.
+ *
+ * THE SPLIT INSIDE "NOT USABLE" IS THE WHOLE POINT. "A person excluded it on
+ * this ticket" and "nobody ever switched this one on" are both closed, and only
+ * the first is a decision about this work. The first earns its name and its
+ * reason on the model's screen; the second is one of however many the
+ * installation happens to expose, and naming them all is neither possible
+ * (the list is bounded) nor ours to do (they are somebody's private repository
+ * names).
+ */
 function groupOf(
   entry: RepositoryMapEntry,
   attached: Map<RepositoryKey, RepositoryMapAttachment>,
   seeds: Set<RepositoryKey>,
   via: Map<RepositoryKey, unknown>,
-): MapGroup {
+  onThisWork: ReadonlySet<RepositoryKey>,
+): MapGroup | "closed" {
   if (attached.has(entry.key)) return "workspace";
-  if (!isUsableState(entry.state)) return "settled";
+  if (!isUsableState(entry.state)) return onThisWork.has(entry.key) ? "settled" : "closed";
   if (seeds.has(entry.key) || via.has(entry.key) || entry.workScopeEntry !== null) return "related";
   return "rest";
 }
@@ -850,6 +939,28 @@ function groupRules(expansionOpen: boolean): Record<MapGroup, string> {
   };
 }
 
+/**
+ * THE ONE SENTENCE THAT REPLACES A LIST OF THE CATALOG, and what earns the map
+ * the right to leave a repository out at all.
+ *
+ * It is a rule rather than a fact, so it is a `platform` part. It is worded
+ * against what the map DID, not against what the catalog holds: "does not name
+ * or count" is true whether the budget let the map name everything it can use
+ * or only count the tail of it, where "everything you may use is listed above"
+ * becomes false the first time a catalog overflows the budget. And it is
+ * complete where the list it replaced could not be, because it needs no room
+ * per repository.
+ *
+ * ONLY WHERE THIS RUN ACTUALLY READ A CATALOG. Without one the map does not
+ * know what exists, and a completeness claim resting on no evidence is the
+ * failure this file was written against. There `notes` says what happened
+ * instead, and nothing here claims anything.
+ */
+const CLOSED_RULES = {
+  open: "Any repository this map does not name or count is closed to this work: a request for one is refused, the run pays a pass for it, and nothing changes.\n",
+  shut: "Any repository this map does not name or count is closed to this work, and this phase could not attach one in any case.\n",
+} as const;
+
 function renderParts(input: {
   shown: Record<MapGroup, RepositoryMapEntry[]>;
   byKey: Map<RepositoryKey, RepositoryMapEntry>;
@@ -857,6 +968,9 @@ function renderParts(input: {
   renderContext: RenderContext;
   unlistedCount: number;
   unlistedSettledCount: number;
+  /** `CLOSED_RULES`, or null where this run read no catalog and may claim
+   *  nothing about what it did not name. */
+  closedRule: string | null;
   notes: string[];
   totalCount: number;
   budget: number;
@@ -886,7 +1000,7 @@ function renderParts(input: {
       ];
     },
   );
-  const tail = [
+  const counts = [
     ...(input.unlistedCount > 0
       ? [
           part(
@@ -912,10 +1026,24 @@ function renderParts(input: {
         ]
       : []),
   ];
+  // LAST, because it is the sentence that makes the counts above complete: what
+  // is named is named, what is counted is counted, and this says what is true
+  // of everything else. Above them it would read as a preamble to a list.
+  //
+  // AND ONLY OVER SOMETHING. "Everything this map does not name is closed",
+  // under a map that names nothing, is a sentence with no subject, and the
+  // degraded shapes below answer "why did it not look at my repository" better
+  // than a rule with nothing to be a rule about.
+  const tail = [
+    ...counts,
+    ...(input.closedRule !== null && (groups.length > 0 || counts.length > 0)
+      ? [part("repository-map-closed", "Every other repository", PLATFORM, input.closedRule)]
+      : []),
+  ];
   const noteParts = input.notes.map((note, index) =>
     part(`repository-map-note:${index + 1}`, "What this map could not say", CATALOG, `${note}\n`),
   );
-  if (groups.length === 0 && tail.length === 0) {
+  if (groups.length === 0 && counts.length === 0) {
     // NOT NOTHING. A prompt so large that the map cannot afford even its frame
     // is exactly the prompt where somebody later asks why the agent never
     // looked at their repository, so the count survives when the list cannot.
@@ -1062,7 +1190,7 @@ function renderEntry(
     lines.push(
       `  How it relates: ${entry.relationships
         .map((relationship) => relationshipClause(relationship, byKey))
-        .join(" ")}`,
+        .join(" ")}${RECORDED_NOT_CHECKED}`,
     );
   }
   const rest =
@@ -1166,6 +1294,31 @@ const SETTLED_STATE_PHRASES: Record<Exclude<RepositoryMapState, "offered">, stri
   refused: "this run already refused a request for it, do not request it again",
 };
 
+/**
+ * WHERE THE SENTENCE CAME FROM, SAID ON THE SENTENCE.
+ *
+ * A description and a relationship are both somebody typing on the Repositories
+ * page. Nothing reads them against the code, and until this clause existed
+ * nothing said so: on production an operator's line, "this repository calls
+ * into `blazity/ai-workflow-demo`", reached an implementation agent as an
+ * unqualified statement, and it shipped a pull request documenting a call that
+ * does not exist. The review agent caught it as a High finding, which is the
+ * system working and is also two agent passes spent on a sentence nobody had
+ * checked.
+ *
+ * IT SAYS WHAT THE TEXT IS AND STOPS. "Do not trust this" would be the wrong
+ * instruction: the operator's note is usually right, it is the best guide to
+ * the neighbourhood we have, and an agent told to distrust it stops using the
+ * one thing that saves it a pass. Saying where a sentence comes from lets the
+ * model do what it would do with any second-hand claim, which is check it
+ * before writing it down as fact.
+ *
+ * ON FULL ENTRIES ONLY. A one-line entry is read to decide whether to ask for a
+ * repository, not to work in one, and sixty-four characters on every line of a
+ * long catalog is the bloat this file has just finished removing.
+ */
+const RECORDED_NOT_CHECKED = " (recorded on the Repositories page, not checked against the code)";
+
 function descriptionCredit(
   source: RepositoryMapDescriptionSource,
   context: RenderContext,
@@ -1180,8 +1333,11 @@ function descriptionCredit(
   // work having vanished. On that run the credit says what actually happened.
   switch (source) {
     case "catalog":
-      return "";
+      return RECORDED_NOT_CHECKED;
     case "provider":
+      // The provider's credit already says whose words they are, and adding
+      // "not checked against the code" to a listing blurb nobody here wrote
+      // would be two qualifications of one sentence.
       return context.catalogUnreadable
         ? " (the provider's own listing text; the catalog could not be read on this run, so we cannot tell whether somebody wrote a description here)"
         : " (the provider's own listing text; nobody here wrote a description)";

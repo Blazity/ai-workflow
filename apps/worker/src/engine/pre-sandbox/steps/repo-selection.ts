@@ -210,6 +210,18 @@ function recordMapShown(
         ...(repo.selectedRationale ? { rationale: repo.selectedRationale } : {}),
       })),
       namedKeys: [...(recorder.ticketText?.matchedKeys ?? [])],
+      // WHAT THIS RUN HAS ALREADY REFUSED, which the prompt's map gets from
+      // `ctx.workScopeLeftOut` and this row used to get from nowhere.
+      //
+      // `matchedKeys` above is the ticket's names ALREADY NARROWED to what this
+      // run may touch, so a repository the ticket names that nobody enabled is
+      // not in it. The refusal is the only input that still carries such a
+      // repository, and without it the row and the prompt describe two
+      // different maps of one send: the prompt names the repository with the
+      // record's own sentence, and the trail, which outlives the briefing and
+      // is what a person is left with after thirty days, does not name it at
+      // all.
+      leftOut: recorder.leftOut,
       entries,
       catalogActivated,
     }),

@@ -181,11 +181,11 @@ Only a repository marked (write) may be changed. A repository marked (read only)
 
 - `github:acme/api` at `/vercel/sandbox/repos/github__acme__api` (write)
   Why it is here: the ticket names the signing keys in acme/api
-  What it is: The session and billing API. It owns key rotation, the refresh path and the webhook fan-out.
-  How it relates: It publishes a package used by `github:acme/sdk`. It is the backend for `github:acme/web`.
+  What it is: The session and billing API. It owns key rotation, the refresh path and the webhook fan-out. (recorded on the Repositories page, not checked against the code)
+  How it relates: It publishes a package used by `github:acme/sdk`. It is the backend for `github:acme/web`. (recorded on the Repositories page, not checked against the code)
 - `github:acme/web` at `/vercel/sandbox/repos/github__acme__web` (read only)
   Why it is here: frontend for acme/api
-  What it is: The customer dashboard. Sign-in and the account screens live here.
+  What it is: The customer dashboard. Sign-in and the account screens live here. (recorded on the Repositories page, not checked against the code)
 
 ### Related to this work, not in the workspace
 
@@ -199,7 +199,6 @@ These are not checked out. Search the workspace first, and request one of these 
 
 Each of these was already decided for this work, and the reason is on its line. Do not request one: the request is refused, the run pays a pass for it, and nothing changes.
 
-- `github:acme/infra` - switched off in the repository catalog, do not request it: github:acme/infra is switched off on the Repositories page. - Terraform for every environment.
 - `github:acme/legacy-auth` - a person left it out of this work, do not request it: github:acme/legacy-auth was excluded on this ticket by Anna Nowak on 2026-09-17. - The retired auth monolith. Read only, kept for its migration history.
 
 ### Also in the catalog
@@ -207,6 +206,8 @@ Each of these was already decided for this work, and the reason is on its line. 
 One line each. Ask for one by its exact provider:path when you can name what you need from it.
 
 - `github:acme/docs` - The public developer documentation.
+
+Any repository this map does not name or count is closed to this work: a request for one is refused, the run pays a pass for it, and nothing changes.
 
 
 ## Pre-Sandbox: Repositories left out

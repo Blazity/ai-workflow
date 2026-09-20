@@ -1846,6 +1846,10 @@ describe("our rules, apart from the data they govern", () => {
           { key: "github:acme/docs", enabled: true, usable: true },
         ],
         namedKeys: ["github:acme/api"],
+        // The settled group is the repositories decided ABOUT THIS WORK, so a
+        // repository that is merely switched off in the catalog does not put
+        // one there. This one is on the record's own left-out list.
+        leftOut: [{ repositoryKey: "github:acme/legacy", reason: "Nobody enabled github:acme/legacy." }],
         catalogActivated: true,
         // The send that can act on "you may request it".
         expansionOpen: true,
@@ -1874,6 +1878,7 @@ describe("our rules, apart from the data they govern", () => {
           { key: "github:acme/docs", enabled: true, usable: true },
         ],
         namedKeys: ["github:acme/api"],
+        leftOut: [{ repositoryKey: "github:acme/legacy", reason: "Nobody enabled github:acme/legacy." }],
         catalogActivated: true,
       },
     }),
@@ -1889,6 +1894,10 @@ describe("our rules, apart from the data they govern", () => {
     // The same two rules for a send that has no way to attach anything.
     "These are not checked out, and this phase cannot attach them.",
     "One line each, so you know they exist. This phase cannot attach any of them.",
+    // The rule that stands in for naming every repository the installation
+    // happens to expose, in both its wordings.
+    "Any repository this map does not name or count is closed to this work: a request for one is refused, the run pays a pass for it, and nothing changes.",
+    "Any repository this map does not name or count is closed to this work, and this phase could not attach one in any case.",
     "Inspect them for cross-repository consistency, but do not modify them.",
     "`git add` the files, and run `git merge --continue`",
     "Resolve the conflict markers, stage the files, and continue the merge in each repository.",
