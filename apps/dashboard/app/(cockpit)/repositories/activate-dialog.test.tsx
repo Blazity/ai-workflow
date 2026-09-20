@@ -40,12 +40,14 @@ function entry(path: string, enabled: boolean): RepositoryCatalogEntry {
   };
 }
 
+/** A read a test holds open on purpose, to watch the dialog while it waits.
+ *  `resolve` is what ends it; the waiter for quiet below is `settle`. */
 function deferred<T>() {
-  let settle!: (value: T) => void;
-  const promise = new Promise<T>((resolve) => {
-    settle = resolve;
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settleIt) => {
+    resolve = settleIt;
   });
-  return { promise, settle };
+  return { promise, resolve };
 }
 
 /** Every activate request the dialog sent, in order. */
@@ -60,12 +62,30 @@ function render(
   } = {},
 ): ReactTestInstance {
   sent.length = 0;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = ((url: string, init?: RequestInit) => {
     if (String(url) === "/api/repository-catalog/activate") {
       sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      return Promise.resolve(
-        options.onActivate?.() ??
+    } else {
+      assert.equal(String(url), "/api/repositories");
+    }
+    mine.inFlight += 1;
+    mine.started += 1;
+    // Every answer lands a turn later, the way a response does: resolving in
+    // the caller's own microtask is what let a counted wait look reliable.
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      if (String(url) === "/api/repository-catalog/activate") {
+        return (
+          options.onActivate?.() ??
           Response.json({
             state: {
               activated: true,
@@ -75,11 +95,14 @@ function render(
               activatedByLabel: "Ada",
               activationReason: "the bridge is over",
             },
-          }),
-      );
-    }
-    assert.equal(String(url), "/api/repositories");
-    return options.directory ?? Promise.resolve(Response.json({ repositories: [] }));
+          })
+        );
+      }
+      return options.directory ?? Response.json({ repositories: [] });
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
   }) as typeof globalThis.fetch;
 
   let renderer!: ReturnType<typeof create>;
@@ -97,6 +120,71 @@ function render(
     globalThis.fetch = originalFetch;
   });
   return renderer.root;
+}
+
+/** What `settle` watches: the reads this file has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One render per test, and this file's tests run one at a time. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of reads this dialog starts finish, and waits for exactly
+ * that.
+ *
+ * NEVER A COUNT OF TURNS. How many turns a chain costs is the runner's
+ * business, so a fixed count passes on an idle machine and, on a loaded one,
+ * returns while reads are still in flight: the assertion then reads a dialog
+ * that is still loading and the failure looks like the product. Quiet is the
+ * condition those assertions mean, and it is two things, because a read that
+ * lands may start the next one: nothing in flight, and a turn that started
+ * nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a dialog that never settles fails as a readable timeout rather
+ * than hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the dialog was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
+  }
+}
+
+/**
+ * Waits for the thing the next assertion is about, and fails with what the
+ * dialog showed instead. For a state the dialog is in while a read is still
+ * out, where waiting for quiet would wait past it.
+ */
+async function waitForText(root: ReactTestInstance, expected: RegExp, timeoutMs = 10_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const seen = text(root);
+    if (expected.test(seen)) return seen;
+    if (Date.now() >= deadline) {
+      assert.fail(`waited ${timeoutMs} ms for ${expected}, and the dialog showed: ${seen.slice(0, 900)}`);
+    }
+    await turn();
+  }
 }
 
 /** Every string the tree renders, flattened. Runs of whitespace collapse, and
@@ -126,13 +214,17 @@ test("confirm is disabled while the provider directory is still being read", asy
   const pending = deferred<Response>();
   const root = render(t, { directory: pending.promise });
 
+  // The loading state itself is what this test observes, so it waits for the
+  // words that say so rather than for the read to land.
+  await waitForText(root, /Reading the provider directory/);
   assert.equal(confirmButton(root).props.disabled, true);
   assert.match(text(root), /Activate is disabled: the provider directory is still being read\./);
   assert.match(text(root), /Reading the provider directory/);
 
-  await act(async () => {
-    pending.settle(Response.json({ repositories: [] }));
+  act(() => {
+    pending.resolve(Response.json({ repositories: [] }));
   });
+  await settle();
 
   // Still disabled, but now for the reason it was always going to be: no reason
   // has been typed.
@@ -146,7 +238,7 @@ test("a directory that refuses does not block activation for ever", async (t) =>
   const root = render(t, {
     directory: Promise.resolve(Response.json({ error: "nope" }, { status: 500 })),
   });
-  await act(async () => undefined);
+  await settle();
 
   assert.match(text(root), /could not be read/);
   assert.match(text(root), /Activate is disabled: a reason is required\./);
@@ -154,7 +246,7 @@ test("a directory that refuses does not block activation for ever", async (t) =>
 
 test("a catalog with nothing enabled refuses outright rather than disabling a button", async (t) => {
   const root = render(t, { repositories: [entry("acme/web", false)] });
-  await act(async () => undefined);
+  await settle();
 
   assert.match(text(root), /Activation is refused: no repository in this catalog is enabled/);
   assert.equal(confirmButton(root).props.disabled, true);
@@ -179,16 +271,17 @@ test("a 409 saying nothing is enabled is shown as the sentence it carries", asyn
         { status: 409 },
       ),
   });
-  await act(async () => undefined);
+  await settle();
   act(() => {
     root
       .findByProps({ placeholder: "Why the bridge is ending" })
       .props.onChange({ target: { value: "the bridge is over" } });
   });
 
-  await act(async () => {
-    await confirmButton(root).props.onClick();
+  act(() => {
+    confirmButton(root).props.onClick();
   });
+  await settle();
 
   assert.match(text(root), /no repository in this catalog is enabled/);
   // Not rendered as a population to acknowledge: there is nothing to tick, and
@@ -201,15 +294,16 @@ test("the typed reason travels with the request and is not left on the screen", 
   // the copy promised an audit line nobody wrote. It is stored now, and the
   // dialog is where it comes from.
   const root = render(t);
-  await act(async () => undefined);
+  await settle();
 
   const reason = root.findByProps({ placeholder: "Why the bridge is ending" });
   act(() => reason.props.onChange({ target: { value: "  the bridge is over  " } }));
   assert.equal(confirmButton(root).props.disabled, false);
 
-  await act(async () => {
+  act(() => {
     confirmButton(root).props.onClick();
   });
+  await settle();
 
   assert.deepEqual(sent, [
     { acknowledgedRepositoryKeys: [], reason: "the bridge is over" },
@@ -218,7 +312,7 @@ test("the typed reason travels with the request and is not left on the screen", 
 
 test("the copy says the reason is stored, because it is", async (t) => {
   const root = render(t);
-  await act(async () => undefined);
+  await settle();
   assert.match(text(root), /Your name, the time and this reason are stored/);
   assert.doesNotMatch(text(root), /The reason is not:/);
 });

@@ -43,15 +43,42 @@ function served(path: string): { status: number; body: unknown } {
   return answer ?? { status: 404, body: { error: "not served" } };
 }
 
+/** What `settle` watches: the reads this screen has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One render per test, and this file's tests run one at a time. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
 function render(t: TestContext, search: string): { root: ReactTestInstance; requests: string[]; urls: string[] } {
   const requests: string[] = [];
   const urls: string[] = [];
   const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
   globalThis.fetch = ((input: string) => {
     const path = String(input);
     requests.push(path);
-    const answer = served(path);
-    return Promise.resolve(Response.json(answer.body, { status: answer.status }));
+    mine.inFlight += 1;
+    mine.started += 1;
+    // Every answer lands a turn later, the way a response does: resolving in
+    // the caller's own microtask is what let a counted wait look reliable.
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      const body = served(path);
+      return Response.json(body.body, { status: body.status });
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
   }) as typeof globalThis.fetch;
 
   const previousWindow = (globalThis as { window?: unknown }).window;
@@ -82,11 +109,45 @@ function render(t: TestContext, search: string): { root: ReactTestInstance; requ
   return { root: renderer.root, requests, urls };
 }
 
-async function settle(times = 10) {
-  for (let turn = 0; turn < times; turn += 1) {
-    await act(async () => {
-      await Promise.resolve();
-    });
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of loads the replay starts finish, and waits for exactly
+ * that.
+ *
+ * NEVER A COUNT OF TURNS. The replay loads in a chain (attempts, then the
+ * attempt the link names, then that send's section), each hop a fetch whose
+ * body lands a turn or more after the call. How many turns that costs is the
+ * runner's business, so a fixed count passes on an idle machine and, on a
+ * loaded one, returns while the attempts page is still in flight: the
+ * assertion then reads a screen that never got as far as the link and the
+ * failure looks like the product. Quiet is the condition those assertions
+ * mean, and it is two things, because a read that lands starts the next one:
+ * nothing in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing. `FIXTURE_SLOW_MS` delays every fixture answer by that many
+ * milliseconds, which is how this harness reproduces a runner slow enough to
+ * break a counted wait.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the replay was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
   }
 }
 

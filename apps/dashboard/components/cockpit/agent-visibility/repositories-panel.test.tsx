@@ -61,16 +61,21 @@ function render(
   const edits: { body: unknown }[] = [];
   resetFixtureScope(store);
   const originalFetch = globalThis.fetch;
-  inFlight = 0;
-  requestsStarted = 0;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
   globalThis.fetch = ((input: string, init?: RequestInit) => {
     const path = String(input);
     const method = init?.method ?? "GET";
     requests.push(path);
     const sent = init?.body === undefined ? undefined : (JSON.parse(String(init.body)) as unknown);
     if (method !== "GET") edits.push({ body: sent });
-    inFlight += 1;
-    requestsStarted += 1;
+    mine.inFlight += 1;
+    mine.started += 1;
     // Every answer lands a turn later, the way a response does.
     const answer = async () => {
       const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
@@ -97,7 +102,7 @@ function render(
       return Response.json(body, { status: served.status });
     };
     return answer().finally(() => {
-      inFlight -= 1;
+      mine.inFlight -= 1;
     });
   }) as typeof globalThis.fetch;
 
@@ -120,8 +125,11 @@ function render(
 
 /** What `settle` watches: the reads this panel has out, and how many it has
  *  started. One render per test, and this file's tests run one at a time. */
-let inFlight = 0;
-let requestsStarted = 0;
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
 
 /** One turn of what a browser does between two paints: the microtasks a
  *  resolved promise queues, and the macrotask a fetch body lands on. */
@@ -147,13 +155,13 @@ async function settle(timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     await turn();
-    if (inFlight === 0) {
-      const started = requestsStarted;
+    if (reads.inFlight === 0) {
+      const started = reads.started;
       await turn();
-      if (inFlight === 0 && requestsStarted === started) return;
+      if (reads.inFlight === 0 && reads.started === started) return;
     }
     if (Date.now() >= deadline) {
-      assert.fail(`the panel was still loading after ${timeoutMs} ms: ${inFlight} request(s) in flight`);
+      assert.fail(`the panel was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
     }
   }
 }

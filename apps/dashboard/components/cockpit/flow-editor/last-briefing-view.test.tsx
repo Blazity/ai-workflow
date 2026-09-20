@@ -43,21 +43,39 @@ function render(
 ): { root: ReactTestInstance; requests: string[] } {
   const requests: string[] = [];
   const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
   globalThis.fetch = ((input: string) => {
     const path = String(input);
     requests.push(path);
-    if (options.fail?.pattern.test(path)) {
-      return Promise.resolve(Response.json({ error: "on purpose" }, { status: options.fail.status }));
-    }
-    const asked = new URL(path, "http://dashboard.test");
-    // The proxy forwards `/api/...` to the worker's `/api/v1/...`.
-    const served = serveFixture(
-      store,
-      "GET",
-      new URL(`/api/v1${asked.pathname.slice("/api".length)}${asked.search}`, "http://worker.test"),
-    );
-    if (!served) return Promise.resolve(Response.json({ error: "not served" }, { status: 404 }));
-    return Promise.resolve(Response.json(served.body, { status: served.status }));
+    mine.inFlight += 1;
+    mine.started += 1;
+    // Every answer lands a turn later, the way a response does: resolving in
+    // the caller's own microtask is what let a counted wait look reliable.
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      if (options.fail?.pattern.test(path)) {
+        return Response.json({ error: "on purpose" }, { status: options.fail.status });
+      }
+      const asked = new URL(path, "http://dashboard.test");
+      // The proxy forwards `/api/...` to the worker's `/api/v1/...`.
+      const served = serveFixture(
+        store,
+        "GET",
+        new URL(`/api/v1${asked.pathname.slice("/api".length)}${asked.search}`, "http://worker.test"),
+      );
+      if (!served) return Response.json({ error: "not served" }, { status: 404 });
+      return Response.json(served.body, { status: served.status });
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
   }) as typeof globalThis.fetch;
   let renderer!: ReturnType<typeof create>;
   act(() => {
@@ -74,11 +92,53 @@ function render(
   return { root: renderer.root, requests };
 }
 
-async function settle(times = 8) {
-  for (let turn = 0; turn < times; turn += 1) {
-    await act(async () => {
-      await Promise.resolve();
-    });
+/** What `settle` watches: the reads this view has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One render per test, and this file's tests run one at a time. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of loads this view starts finish, and waits for exactly that.
+ *
+ * NEVER A COUNT OF TURNS. The view loads in a chain (the block's last
+ * briefing, then that send's sections and the first page of their text), each
+ * hop a fetch whose body lands a turn or more after the call. How many turns
+ * that costs is the runner's business, so a fixed count passes on an idle
+ * machine and, on a loaded one, returns while reads are still in flight: the
+ * assertion then reads a view that is still loading, and "has not run yet" is
+ * exactly the sentence this file exists to keep honest. Quiet is the condition
+ * these assertions mean, and it is two things, because a read that lands
+ * starts the next one: nothing in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing. `FIXTURE_SLOW_MS` delays every fixture answer by that many
+ * milliseconds, which is how this harness reproduces a runner slow enough to
+ * break a counted wait.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the view was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
   }
 }
 

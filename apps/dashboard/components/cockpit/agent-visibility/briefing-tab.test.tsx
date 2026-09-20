@@ -63,8 +63,11 @@ interface Harness {
 /** What `settle` watches: the reads this screen has out, and how many it has
  *  started, so a turn that started another one is not mistaken for quiet.
  *  One render per test, and this file's tests run one at a time. */
-let inFlight = 0;
-let requestsStarted = 0;
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
 
 /** The tab with the link state its screen holds, over a fetch that answers
  *  from the fixtures the way the proxy would. */
@@ -115,13 +118,18 @@ function render(
 ): Harness {
   const requests: string[] = [];
   const originalFetch = globalThis.fetch;
-  inFlight = 0;
-  requestsStarted = 0;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
   globalThis.fetch = ((input: string) => {
     const path = String(input);
     requests.push(path);
-    inFlight += 1;
-    requestsStarted += 1;
+    mine.inFlight += 1;
+    mine.started += 1;
     // Every answer lands a turn later, the way a response does: resolving in
     // the caller's own microtask is what let a counted wait look reliable.
     const answer = async () => {
@@ -141,7 +149,7 @@ function render(
       return Response.json(served.body, { status: served.status });
     };
     return answer().finally(() => {
-      inFlight -= 1;
+      mine.inFlight -= 1;
     });
   }) as typeof globalThis.fetch;
 
@@ -200,13 +208,13 @@ async function settle(timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     await turn();
-    if (inFlight === 0) {
-      const started = requestsStarted;
+    if (reads.inFlight === 0) {
+      const started = reads.started;
       await turn();
-      if (inFlight === 0 && requestsStarted === started) return;
+      if (reads.inFlight === 0 && reads.started === started) return;
     }
     if (Date.now() >= deadline) {
-      assert.fail(`the screen was still loading after ${timeoutMs} ms: ${inFlight} request(s) in flight`);
+      assert.fail(`the screen was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
     }
   }
 }

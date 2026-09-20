@@ -93,6 +93,92 @@ function screenText(root: ReactTestInstance): string {
 type FetchCall = { url: string; init: RequestInit | undefined };
 type ScreenProps = Partial<React.ComponentProps<typeof MemoryScreen>>;
 
+/** What `settle` watches: the requests this screen has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One render per test, and this file's tests run one at a time. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/**
+ * Installs the stubbed fetch for one test and returns the undo.
+ *
+ * Every answer lands a turn later, the way a response does: resolving in the
+ * caller's own microtask is what let a counted wait look reliable.
+ * `FIXTURE_SLOW_MS` delays every answer by that many milliseconds, which is how
+ * this harness reproduces a runner slow enough to break a counted wait.
+ */
+function installFetch(calls: FetchCall[], respond: () => Response): () => void {
+  const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
+  (globalThis as { fetch: unknown }).fetch = (url: string, init?: RequestInit) => {
+    calls.push({ url: String(url), init });
+    mine.inFlight += 1;
+    mine.started += 1;
+    // `respond` runs now, when the request goes out, so a test that holds its
+    // own answer open still takes the resolver from this very call.
+    const answered = respond();
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      return answered;
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the requests this screen has out finish, and waits for exactly that.
+ *
+ * NEVER A COUNT OF TURNS. A delete here is a request whose body lands a turn or
+ * more after the call, and the screen only then says what became of the
+ * document. How many turns that costs is the runner's business, so a fixed
+ * count passes on an idle machine and, on a loaded one, returns while the
+ * request is still in flight: the assertion then reads a screen that has not
+ * heard back and the failure looks like the product. Quiet is the condition
+ * those assertions mean, and it is two things, because a request that lands can
+ * start the next one: nothing in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of failing,
+ * and a screen that never settles fails as a readable timeout rather than
+ * hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the screen was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
+  }
+}
+
 /** Minimal app router: the screen only calls refresh, and next/link needs the
  *  context to exist at all. */
 function stubRouter(refreshes: string[]) {
@@ -121,10 +207,7 @@ function renderScreen(
 } {
   const calls: FetchCall[] = [];
   const refreshes: string[] = [];
-  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    return respond();
-  };
+  const uninstallFetch = installFetch(calls, respond);
 
   const tree = (extra: ScreenProps) => (
     <AppRouterContext.Provider value={stubRouter(refreshes) as never}>
@@ -144,6 +227,7 @@ function renderScreen(
   });
   t.after(() => {
     act(() => renderer.unmount());
+    uninstallFetch();
   });
   return {
     root: renderer.root,
@@ -234,9 +318,10 @@ test("confirming deletes through the proxy route and drops the row from the list
   act(() => {
     button(root, "Delete").props.onClick();
   });
-  await act(async () => {
+  act(() => {
     button(root, "Confirm delete").props.onClick();
   });
+  await settle();
 
   assert.equal(calls.length, 1);
   assert.equal(
@@ -261,9 +346,10 @@ test("a fresh server render supersedes the local post-delete state", async (t) =
   act(() => {
     button(root, "Delete").props.onClick();
   });
-  await act(async () => {
+  act(() => {
     button(root, "Confirm delete").props.onClick();
   });
+  await settle();
   assert.match(screenText(root), /Deleted from the store/);
 
   // What router.refresh() eventually delivers: the row is gone server-side and
@@ -284,9 +370,10 @@ test("a rejected delete keeps the document and shows the worker message", async 
   act(() => {
     button(root, "Delete").props.onClick();
   });
-  await act(async () => {
+  act(() => {
     button(root, "Confirm delete").props.onClick();
   });
+  await settle();
 
   const text = screenText(root);
   assert.match(text, /Forbidden/);
