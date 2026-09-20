@@ -663,49 +663,130 @@ describe("runtime-only context assembly", () => {
   });
 });
 
-describe("assembleReviewContext", () => {
-  it("renders read-only sibling repositories with their local path, URL, and SHA", () => {
-    const result = assembleReviewContext({
-      ticket: {
-        identifier: "TEST-SIBLING",
-        title: "Cross-repository review",
-        description: "Check the API contract.",
-        acceptanceCriteria: "The caller matches the API.",
-        comments: [],
-      },
+/**
+ * A repository attached for somebody else's pull request, in a review send.
+ *
+ * The prompt used to describe one of these TWICE: in the workspace list, where
+ * its access came from the manifest, and again under its own heading, where it
+ * was called read-only unconditionally. On a manifest that cannot answer (a
+ * version 1 one, or one that does not carry the repository) the workspace list
+ * said `(write)` and the paragraph below it said read-only, about one
+ * repository, twenty lines apart. An agent that reads the first one changes a
+ * repository somebody else's pull request owns.
+ */
+describe("assembleReviewContext: a repository this run is only reviewing", () => {
+  const SIBLING_PATH = "/vercel/sandbox/repos/github__acme__api";
+  const ticket = {
+    identifier: "TEST-SIBLING",
+    title: "Cross-repository review",
+    description: "Check the API contract.",
+    acceptanceCriteria: "The caller matches the API.",
+    comments: [],
+  };
+  const owned = {
+    provider: "github" as const,
+    repoPath: "acme/web",
+    defaultBranch: "main",
+    selectedRationale: "current PR",
+    workflowOwnedBranch: {
+      branchName: "feature",
+      pr: { id: 1, url: "https://github/web/pull/1", branch: "feature" },
+    },
+  };
+  const sibling = {
+    provider: "github" as const,
+    repoPath: "acme/api",
+    defaultBranch: "main",
+    selectedRationale: "sibling PR",
+    reviewPullRequest: {
+      id: 2,
+      url: "https://github/api/pull/2",
+      branch: "main",
+      headSha: "api-sha",
+    },
+  };
+  const review = (workspaceManifest?: WorkspaceManifest) =>
+    assembleReviewContext({
+      ticket,
       prompt: "",
       researchPlanMarkdown: "plan",
-      selectedRepositories: [
-        {
-          provider: "github",
-          repoPath: "acme/web",
-          defaultBranch: "main",
-          selectedRationale: "current PR",
-          workflowOwnedBranch: { branchName: "feature", pr: { id: 1, url: "https://github/web/pull/1", branch: "feature" } },
-        },
-        {
-          provider: "github",
-          repoPath: "acme/api",
-          defaultBranch: "main",
-          selectedRationale: "sibling PR",
-          reviewPullRequest: {
-            id: 2,
-            url: "https://github/api/pull/2",
-            branch: "main",
-            headSha: "api-sha",
-          },
-        },
-      ],
+      selectedRepositories: [owned, sibling],
+      ...(workspaceManifest ? { workspaceManifest } : {}),
     });
+  const occurrences = (text: string, needle: string) => text.split(needle).length - 1;
 
-    expect(result).toContain("## Review Sibling Repositories");
-    expect(result).toContain("acme/api");
-    expect(result).toContain("/vercel/sandbox/repos/github__acme__api");
-    expect(result).toContain("https://github/api/pull/2");
-    expect(result).toContain("api-sha");
-    expect(result).toContain("set its `repo` field");
+  /** The three manifests that cannot say what may be done to the sibling: none
+   *  at all, the version 1 shape that has no access field, and a version 2 one
+   *  that does not carry the repository. */
+  const unanswerable: Array<[string, WorkspaceManifest | undefined]> = [
+    ["no manifest", undefined],
+    [
+      "a version 1 manifest",
+      {
+        version: 1,
+        repositories: [owned, sibling].map((repository, index) => {
+          const { access: _access, researchBaseSha: _sha, ...v1 } = manifestRepo(
+            repository.provider,
+            repository.repoPath,
+            index === 0 ? "/vercel/sandbox" : SIBLING_PATH,
+            "write",
+          );
+          return v1;
+        }),
+      },
+    ],
+    [
+      "a version 2 manifest that does not carry it",
+      {
+        version: 2,
+        repositories: [manifestRepo("github", "acme/web", "/vercel/sandbox", "write")],
+      },
+    ],
+  ];
+
+  it.each(unanswerable)("is never called writable with %s", (_name, manifest) => {
+    const text = review(manifest);
+    expect(text).toContain(`- \`github:acme/api\` at \`${SIBLING_PATH}\` (read only)`);
+    expect(text).not.toMatch(/`github:acme\/api`[^\n]*\(write\)/);
   });
 
+  it("is described once, with the pull request and the commit under review", () => {
+    const text = review();
+    expect(text).toContain(
+      `- \`github:acme/api\` at \`${SIBLING_PATH}\` (read only), under review: https://github/api/pull/2 at \`api-sha\``,
+    );
+    // ONE DESCRIPTION. Each of these facts is stated in the map and nowhere
+    // else, so a second list of the same repositories brings the count back up
+    // and turns this red.
+    expect(occurrences(text, "`github:acme/api`")).toBe(1);
+    expect(occurrences(text, SIBLING_PATH)).toBe(1);
+    expect(occurrences(text, "https://github/api/pull/2")).toBe(1);
+    expect(occurrences(text, "api-sha")).toBe(1);
+  });
+
+  it("names the siblings and the exact spelling a finding must carry", () => {
+    const text = review();
+    expect(text).toContain("## Review Sibling Repositories");
+    expect(text).toContain("do not modify them");
+    // `repo` is matched against the run's repositories by PATH
+    // (`normalizeFindingRepository`), and an unrecognised value fails the whole
+    // review result, so the map's provider-qualified key is the one spelling a
+    // finding may not use.
+    expect(text).toMatch(/set its `repo` field to the repository path[^\n]*\n\n- `acme\/api`\n/);
+  });
+
+  it("says nothing about a sibling when the run is reviewing its own branch alone", () => {
+    const text = assembleReviewContext({
+      ticket,
+      prompt: "",
+      researchPlanMarkdown: "plan",
+      selectedRepositories: [owned],
+    });
+    expect(text).not.toContain("## Review Sibling Repositories");
+  });
+});
+
+describe("assembleReviewContext", () => {
   it("includes plan and prompt", () => {
     const result = assembleReviewContext({
       ticket: {

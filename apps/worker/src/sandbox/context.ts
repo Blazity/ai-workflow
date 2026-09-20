@@ -403,10 +403,7 @@ export function reviewContextParts(input: ReviewContextInput): EffectivePromptPa
   } = input;
   const attachmentsParts = renderAttachmentsParts(attachments, ticket);
   const additionsParts = renderAdditionsParts(preSandboxAdditions);
-  const siblingRepositoriesParts = renderReviewSiblingRepositoriesParts(
-    selectedRepositories,
-    input.workspaceManifest,
-  );
+  const siblingRepositoriesParts = renderReviewSiblingRepositoriesParts(selectedRepositories);
   const clarificationsParts = renderClarificationsParts(ticket.clarifications);
   const compose = (mapParts: EffectivePromptPart[]): EffectivePromptPart[] =>
     concatPromptParts([
@@ -460,25 +457,38 @@ ${researchPlanMarkdown}
 `);
 }
 
+/**
+ * THE RULE ABOUT THE SIBLINGS, AND THE NAME A FINDING HAS TO CARRY. NOT A
+ * SECOND DESCRIPTION OF THEM.
+ *
+ * Where each one is checked out, what may be done to it, which pull request it
+ * is and at which commit are the map's, one line per repository, beside every
+ * other repository this send knows about. This section used to repeat the path
+ * and the access underneath that map, and on a manifest that could not say, the
+ * two disagreed: the map printed `(write)` for a repository this paragraph then
+ * called read-only.
+ *
+ * What is left is what the map cannot carry. The rule is about these
+ * repositories and not about the workspace as a whole, and `repo` takes the
+ * repository's PATH (`acme/sdk`), which is neither the map's provider-qualified
+ * key nor a spelling a reviewer may invent: an unrecognised value fails the
+ * whole review result (`normalizeFindingRepository` in
+ * `engine/helpers/review-results.ts`), so the exact value a finding may carry is
+ * written out here.
+ */
 function renderReviewSiblingRepositoriesParts(
   repositories: SelectedRepository[] | undefined,
-  manifest: WorkspaceManifest | undefined,
 ): EffectivePromptPart[] {
-  const siblings = (repositories ?? []).filter(
-    (repo) => repo.reviewPullRequest && !repo.workflowOwnedBranch,
-  );
+  const siblings = (repositories ?? []).filter(isReviewSibling);
   if (siblings.length === 0) return [];
   const lines = siblings.map((repo, ordinal) => {
-    const index = repositories!.indexOf(repo);
-    const localPath = resolveSelectedRepositoryPath(repo, index, manifest);
-    const pr = repo.reviewPullRequest!;
     const key = `${repo.provider}:${repo.repoPath}`;
     return [
       part(
         `review-sibling:${ordinal + 1}`,
         `Review sibling ${key}`,
         withRef("workspace", key),
-        `- \`${repo.repoPath}\` at \`${localPath}\` (read-only), PR: ${pr.url}, reviewed SHA: \`${pr.headSha ?? "unknown"}\``,
+        `- \`${repo.repoPath}\``,
       ),
     ];
   });
@@ -493,7 +503,7 @@ function renderReviewSiblingRepositoriesParts(
       "review-siblings-rule",
       "Inspect sibling repositories, do not modify them",
       PLATFORM,
-      "These repositories belong to the same workflow run. Inspect them for cross-repository consistency, but do not modify them. If a finding targets one, set its `repo` field to the exact repository path above.\n\n",
+      "These belong to the same workflow run and are in the repository map above, with their checkout, their pull request and the commit under review. Inspect them for cross-repository consistency, but do not modify them. If a finding targets one, set its `repo` field to the repository path exactly as written here:\n\n",
     ),
     ...separated(lines, "\n"),
     "\n",
@@ -1109,8 +1119,11 @@ function renderAdditionsParts(
  *
  * The map decides its own bounds and order (`repository-map/map.ts`). This
  * function only decides that the workspace facts a prompt already had, the
- * checkout path and the write access, are the map's workspace group, so no send
- * carries two lists of the same repositories.
+ * checkout path, the write access and a sibling's pull request, are the map's
+ * workspace group, so no send describes one repository twice. The review send
+ * still names its siblings afterwards, and that is a rule plus the spelling a
+ * finding must use, never a second description of them
+ * (`renderReviewSiblingRepositoriesParts`).
  */
 /**
  * The cap the effective-prompt compiler puts on ONE section
@@ -1205,22 +1218,72 @@ function workspaceAttachments(
       throw new Error(`Selected repository path is duplicated for ${repo.repoPath}`);
     }
     seen.add(localPath);
-    const manifestAccess =
-      manifest?.version === 2
-        ? manifest.repositories.find(
-            (candidate) =>
-              candidate.provider === repo.provider && candidate.repoPath === repo.repoPath,
-          )?.access
-        : undefined;
+    const pr = isReviewSibling(repo) ? repo.reviewPullRequest : undefined;
     return {
       key: `${repo.provider}:${repo.repoPath.toLowerCase()}`,
       localPath,
-      // No manifest is the pre-manifest shape, where everything in the
-      // workspace was writable and the prompt said so.
-      access: manifestAccess === "read" ? ("read_only" as const) : ("write" as const),
+      access: selectedRepositoryAccess(repo, manifest),
       rationale: repo.selectedRationale,
+      // THE TWO FACTS A REVIEWER NEEDS ABOUT A SIBLING, on the sibling's own
+      // line. They used to arrive in a second list fifty lines below this one,
+      // which described the same repository a second time and could disagree
+      // with this one about its access.
+      ...(pr
+        ? {
+            reviewPullRequest: {
+              url: pr.url,
+              ...(pr.headSha ? { headSha: pr.headSha } : {}),
+            },
+          }
+        : {}),
     };
   });
+}
+
+/**
+ * A repository attached for somebody else's pull request, carrying no branch of
+ * this run's own.
+ *
+ * ONE PREDICATE, TWO READERS. The map's access resolution and the rule that
+ * tells the agent not to modify these read the same function, so the prompt
+ * cannot mark a repository writable in one section and read-only in the next.
+ */
+function isReviewSibling(repo: SelectedRepository): boolean {
+  return repo.reviewPullRequest !== undefined && repo.workflowOwnedBranch === undefined;
+}
+
+/**
+ * What this send may do to a repository in the workspace.
+ *
+ * AN ACCESS WE CANNOT READ IS NEVER "WRITE". The manifest answers first and
+ * exactly, because provisioning wrote it. Where it cannot answer, the selection
+ * itself still can for the one case that matters: a repository attached for a
+ * pull request this run is reviewing "never grants write scope"
+ * (`SelectedRepository.reviewPullRequest`), so it reads read-only whatever the
+ * manifest's shape. Only a repository nothing says that about keeps the
+ * pre-manifest default, where everything in the workspace was writable and the
+ * prompt said so.
+ *
+ * WHICH MANIFESTS CANNOT ANSWER. A version 1 manifest carries no access field
+ * at all: nothing has written one since 2026-07-24, so it can only reach this
+ * code through the journal of a run suspended since before that day. A version
+ * 2 manifest that does not carry the repository is the other one; provisioning
+ * writes both lists from the same array, so it means the two have drifted, and
+ * a drifted pair is exactly when guessing "write" is most expensive.
+ */
+function selectedRepositoryAccess(
+  repo: SelectedRepository,
+  manifest: WorkspaceManifest | undefined,
+): "write" | "read_only" {
+  const entry =
+    manifest?.version === 2
+      ? manifest.repositories.find(
+          (candidate) =>
+            candidate.provider === repo.provider && candidate.repoPath === repo.repoPath,
+        )
+      : undefined;
+  if (entry) return entry.access === "read" ? "read_only" : "write";
+  return isReviewSibling(repo) ? "read_only" : "write";
 }
 
 /**

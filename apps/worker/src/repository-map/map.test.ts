@@ -409,6 +409,52 @@ describe("a workspace the budget pushed onto one line each", () => {
       { maxLength: 400 },
     );
 
+  it("keeps the pull request a sibling is here for, even on one line", () => {
+    // The pull request and the commit under review reach the agent here and
+    // nowhere else. A sibling the budget shortened used to keep its path and
+    // its access and lose them, which leaves a reviewer told to inspect a
+    // repository and not told what it is inspecting.
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [facts({ key: API }), facts({ key: WEB })],
+        attached: [
+          { key: API, localPath: "/vercel/sandbox/repos/github__acme__api", access: "write" },
+          {
+            key: WEB,
+            localPath: "/vercel/sandbox/repos/github__acme__web",
+            access: "read_only",
+            reviewPullRequest: { url: "https://github.com/acme/web/pull/7", headSha: "abc1234" },
+          },
+        ],
+      }),
+      { maxLength: 400 },
+    );
+    const web = map.repositories.find((repository) => repository.key === WEB);
+    expect(web?.rendering).toBe("line");
+    expect(map.text).toContain(
+      `- \`${WEB}\` at \`/vercel/sandbox/repos/github__acme__web\` (read only), under review: https://github.com/acme/web/pull/7 at \`abc1234\``,
+    );
+  });
+
+  it("says the commit is unknown rather than inventing one", () => {
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [facts({ key: WEB })],
+        attached: [
+          {
+            key: WEB,
+            localPath: "/vercel/sandbox/repos/github__acme__web",
+            access: "read_only",
+            reviewPullRequest: { url: "https://github.com/acme/web/pull/7" },
+          },
+        ],
+      }),
+    );
+    expect(map.text).toContain(
+      "under review: https://github.com/acme/web/pull/7 at an unknown commit",
+    );
+  });
+
   it("still says where each one is and what may be done to it", () => {
     // A repository the budget shortened used to read as a bare key: no path to
     // look in, and nothing saying whether it may be written to. An agent
@@ -427,10 +473,30 @@ describe("a workspace the budget pushed onto one line each", () => {
 describe("repositoryMapTrailSummary", () => {
   it("summarizes the same build inside the trail's own bound", () => {
     const map = buildRepositoryMap(neighbourhood());
-    const summary = repositoryMapTrailSummary(map);
+    const summary = repositoryMapTrailSummary(map, "provisioned");
     expect(summary.text.length).toBeLessThanOrEqual(1600);
     expect(summary.text).toContain(`${API}: write`);
     expect(summary.repositoryKeys).toEqual(map.repositories.map((repository) => repository.key));
+  });
+
+  /**
+   * The row a run writes before it has a workspace. A trail line outlives the
+   * briefing beside it, so it is the copy a person is left with, and until this
+   * it said `write` for every repository the run had chosen: provisioning
+   * clones them read and promotes one later, so the record claimed an access
+   * nothing had decided, on the surface that lasts longest.
+   */
+  it("says a repository is in the workspace without claiming what may be done to it", () => {
+    const map = buildRepositoryMap(neighbourhood());
+    const summary = repositoryMapTrailSummary(map, "not_provisioned_yet");
+    expect(summary.text).toContain(`${API}: in the workspace`);
+    expect(summary.text).not.toContain(": write");
+    expect(summary.text).not.toContain(": read_only");
+    // And nothing the workspace did not decide changes: a repository somebody
+    // switched off still says so, in the same words.
+    expect(summary.text).toBe(
+      repositoryMapTrailSummary(map, "provisioned").text.replace(`${API}: write`, `${API}: in the workspace`),
+    );
   });
 
   it("stays inside the bound and says how many it left out on a large catalog", () => {
@@ -441,7 +507,7 @@ describe("repositoryMapTrailSummary", () => {
       attached: [],
       catalogActivated: true,
     });
-    const summary = repositoryMapTrailSummary(map);
+    const summary = repositoryMapTrailSummary(map, "provisioned");
     expect(summary.text.length).toBeLessThanOrEqual(1600);
     expect(summary.text).toMatch(/\nand \d+ more$/);
   });

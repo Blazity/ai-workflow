@@ -66,14 +66,15 @@ function mismatchesOfRaw<T>(
   });
 }
 
-/** Every byte outside the repository section and the two sentences stage 7
- *  rewrote, held to the base commit. */
+/** Every byte outside the repository section, the review siblings and the two
+ *  sentences stage 7 rewrote, held to the base commit. */
 function mismatchesOf<T>(
   rows: MatrixRow<T>[],
   oracle: (input: T) => string,
   current: (input: T) => string,
 ): string[] {
-  const pinned = (text: string) => withoutStageSevenRewrites(withoutRepositorySection(text));
+  const pinned = (text: string) =>
+    withoutStageSevenRewrites(withoutReviewSiblingSection(withoutRepositorySection(text)));
   return mismatchesOfRaw(rows, (input) => pinned(oracle(input)), (input) => pinned(current(input)));
 }
 
@@ -124,6 +125,25 @@ const midRun = (additions: readonly PreSandboxPromptAddition[] | undefined) =>
 function withoutRepositorySection(text: string): string {
   return [/\n## Selected Repositories\n[\s\S]*?(?=\n## |$)/, /\n## Repositories\n[\s\S]*?(?=\n## |$)/]
     .reduce((carried, pattern) => carried.replace(pattern, "\n"), text);
+}
+
+/**
+ * THE SECOND DESCRIPTION OF THE REVIEW SIBLINGS, removed from both sides.
+ *
+ * Same rule as the repository section above, and the same reason: the base
+ * described each sibling twice, once in the workspace list and once here with
+ * its path, its access, its pull request and its reviewed commit. The map now
+ * carries all four on the sibling's own line, and what is left under this
+ * heading is the rule about these repositories plus the spelling a finding's
+ * `repo` field must use. The two texts no longer correspond line by line, so
+ * the section is cut out of both rather than rewritten.
+ *
+ * WHAT STILL PINS IT: the goldens a person reads (`__golden__/review.txt`), and
+ * `sandbox/context.test.ts`, which holds the pull request, the commit and the
+ * access to one statement each per prompt.
+ */
+function withoutReviewSiblingSection(text: string): string {
+  return text.replace(/\n## Review Sibling Repositories\n[\s\S]*?(?=\n## |$)/, "\n");
 }
 
 /**
@@ -225,6 +245,31 @@ describe("prompt oracle: the composers render the bytes they rendered at the bas
     for (const pair of liveCarries) {
       expect(withoutRepositorySection(pair.live).length).toBeLessThan(pair.live.length);
       expect(withoutRepositorySection(pair.live)).toContain("## Repository Access Protocol");
+    }
+  });
+
+  /**
+   * THE SIBLING EXCISION MUST CUT SOMETHING, ON BOTH SIDES, for the reason the
+   * repository one must: a heading that stopped being rendered would make the
+   * cut a no-op on one side and a wipe on the other, and the comparison would
+   * pass on two texts nobody wrote.
+   */
+  it("removes the review sibling section from the base text and from the live text", () => {
+    const texts = reviewRows()
+      .filter((row) => !("error" in outcome(() => base.assembleReviewContext(row.input))))
+      .map((row) => ({
+        base: base.assembleReviewContext(row.input),
+        live: assembleReviewContext(row.input),
+      }))
+      .filter((pair) => pair.base.includes("\n## Review Sibling Repositories\n"));
+    expect(texts.length).toBeGreaterThan(0);
+    for (const pair of texts) {
+      expect(pair.live).toContain("\n## Review Sibling Repositories\n");
+      for (const text of [pair.base, pair.live]) {
+        expect(withoutReviewSiblingSection(text).length).toBeLessThan(text.length);
+        // And it takes ONE section, not the rest of the prompt with it.
+        expect(withoutReviewSiblingSection(text)).toContain("## Research & Plan");
+      }
     }
   });
 

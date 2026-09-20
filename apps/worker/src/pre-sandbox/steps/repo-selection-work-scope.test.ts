@@ -1685,6 +1685,34 @@ describe("a repository this deployment holds and this run may not open, named on
     expect(row.text.length).toBeLessThanOrEqual(1600);
   });
 
+  /**
+   * NOTHING HAS DECIDED THE ACCESS WHEN THIS ROW IS WRITTEN, AND IT SAYS SO.
+   *
+   * The row used to read `github:acme/web: write` for every chosen repository.
+   * Provisioning clones the workspace read and gives write to a workflow-owned
+   * branch (`blocks/prepare-workspace/execute.ts`), so the record claimed an
+   * access that had not been decided, and it claimed it on the surface that
+   * outlives the briefing.
+   */
+  it("does not say a repository may be written to before anything provisioned it", async () => {
+    await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      ticket: ticketWith([human("acme/ops")]),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    const row = appliedMapShown()[0]!;
+    if (row.kind !== "map_shown") throw new Error("unreachable");
+    expect(row.text).toContain("github:acme/web: in the workspace");
+    expect(row.text).not.toMatch(/: write$/m);
+    expect(row.text).not.toMatch(/: read_only$/m);
+    // Everything the workspace did not decide is untouched: a repository
+    // switched off in the catalog still reads as switched off.
+    expect(row.text).toContain("github:acme/ops: disabled");
+  });
+
   it("writes nothing to the record about it", async () => {
     const selection = await runStep({
       repositories: LISTED,

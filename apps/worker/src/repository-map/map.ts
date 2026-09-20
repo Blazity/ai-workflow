@@ -181,12 +181,22 @@ export interface RepositoryMapAttachment {
   key: RepositoryKey;
   /** Where it is checked out, when the caller holds a trusted manifest. */
   localPath?: string;
-  /** `write` only where the manifest says so. A caller with no manifest passes
-   *  nothing, and every attached repository then reads as write, which is what
-   *  the prompt said before a manifest existed. */
-  access?: "write" | "read_only";
+  /**
+   * What may be done to it, and the caller must say.
+   *
+   * It used to be optional and to read as `write` when it was absent, which put
+   * the cost of an unanswerable manifest on the one side that cannot be taken
+   * back: an agent told it may change a repository it may not touch has already
+   * changed it by the time anybody reads the prompt. The composer resolves it
+   * (`selectedRepositoryAccess` in `sandbox/context.ts`), so every caller of
+   * this builder decides it rather than inheriting a default nobody chose.
+   */
+  access: "write" | "read_only";
   /** The one line the selection recorded about why this repository is here. */
   rationale?: string;
+  /** The pull request this run is reviewing in it, for a read-only sibling
+   *  checkout: the two facts a reviewer needs and the workspace alone holds. */
+  reviewPullRequest?: { url: string; headSha?: string };
 }
 
 /** What the run could not find out, so the map says it instead of implying a
@@ -296,9 +306,15 @@ interface RepositoryMapEntry {
   /** The record's entry, where there is one, so a briefing can show who decided
    *  and when without a second read. */
   workScopeEntry: WorkScopeEntry | null;
-  /** Where the repository is checked out, what may be done to it, and the one
-   *  line the selection recorded about why it is here. */
-  workspace?: { localPath?: string; access: "write" | "read_only"; rationale?: string };
+  /** Where the repository is checked out, what may be done to it, the one line
+   *  the selection recorded about why it is here, and the pull request this run
+   *  is reviewing in it. */
+  workspace?: {
+    localPath?: string;
+    access: "write" | "read_only";
+    rationale?: string;
+    reviewPullRequest?: { url: string; headSha?: string };
+  };
 }
 
 export interface RepositoryMap {
@@ -546,8 +562,11 @@ export function buildRepositoryMap(
     if (attachment) {
       described.workspace = {
         ...(attachment.localPath ? { localPath: attachment.localPath } : {}),
-        access: attachment.access ?? "write",
+        access: attachment.access,
         ...(attachment.rationale ? { rationale: attachment.rationale } : {}),
+        ...(attachment.reviewPullRequest
+          ? { reviewPullRequest: attachment.reviewPullRequest }
+          : {}),
       };
     }
     return described;
@@ -699,6 +718,18 @@ function sumLengths(texts: readonly string[]): number {
 }
 
 /**
+ * What the caller writing a trail line knows about the workspace half of the
+ * map it is summarizing.
+ *
+ * `provisioned` is a map built from a manifest: what may be done to each
+ * checkout has been decided and written down, so the summary reports it.
+ * `not_provisioned_yet` is a map built before the workspace exists, where the
+ * run knows which repositories it will hold and nothing has yet decided what
+ * may be done to them.
+ */
+export type TrailWorkspaceKnowledge = "provisioned" | "not_provisioned_yet";
+
+/**
  * The Decision Trail's line about the map: the same build, summarized.
  *
  * A SUMMARY AND A RECORD, NOT TWO MAPS. The trail's `map_shown` text is bounded
@@ -707,8 +738,20 @@ function sumLengths(texts: readonly string[]): number {
  * one was shown in, derived from the entries the prompt was built from, so a
  * person reading the trail and a person reading the briefing can never be shown
  * two different maps of one send.
+ *
+ * AND IT SAYS LESS WHEN IT KNOWS LESS, rather than repeating somebody else's
+ * rule. The manifest is the one thing that decides what may be done to a
+ * checkout, and a caller that holds none cannot borrow provisioning's rule to
+ * guess: a second place deriving access is a second place to drift, and this
+ * row outlives the briefing beside it, so it is the copy a person is left
+ * with. Told `not_provisioned_yet`, the summary says a repository is in the
+ * workspace and stops there. Nothing else in the line changes, because nothing
+ * else in it came from the workspace.
  */
-export function repositoryMapTrailSummary(map: RepositoryMap): {
+export function repositoryMapTrailSummary(
+  map: RepositoryMap,
+  workspace: TrailWorkspaceKnowledge,
+): {
   text: string;
   repositoryKeys: RepositoryKey[];
 } {
@@ -716,7 +759,11 @@ export function repositoryMapTrailSummary(map: RepositoryMap): {
   const lines: string[] = [];
   let used = 0;
   for (const entry of map.repositories) {
-    const line = `${entry.key}: ${entry.state}`;
+    const state =
+      entry.workspace && workspace === "not_provisioned_yet"
+        ? TRAIL_WORKSPACE_UNDECIDED
+        : entry.state;
+    const line = `${entry.key}: ${state}`;
     const cost = line.length + (lines.length > 0 ? 1 : 0);
     if (used + cost > MAP_TRAIL_TEXT_MAX_LENGTH - TRAIL_TAIL_RESERVE) break;
     lines.push(line);
@@ -727,6 +774,15 @@ export function repositoryMapTrailSummary(map: RepositoryMap): {
   if (left > 0) lines.push(`and ${left} more`);
   return { text: lines.join("\n").slice(0, MAP_TRAIL_TEXT_MAX_LENGTH), repositoryKeys: shown };
 }
+
+/**
+ * What the trail says about a repository the run will hold and has not yet
+ * provisioned. The same opening as the states that DO name an access
+ * (`SETTLED_STATE_PHRASES`), minus the clause nothing has decided, so a person
+ * reading a trail can tell the two apart at a glance: a row saying `write` is a
+ * row written where a manifest had said so.
+ */
+const TRAIL_WORKSPACE_UNDECIDED = "in the workspace";
 
 /** Room for the "and N more" line, whatever N turns out to be. */
 const TRAIL_TAIL_RESERVE = 24;
@@ -983,8 +1039,9 @@ function renderEntry(
           // and its access marker and read as a bare key, so the second
           // repository of a workspace on a large ticket reached the agent with
           // no checkout to look in and nothing saying whether it may be
-          // written to. Those two facts cost about fifty characters and are
-          // the ones the prompt exists to carry.
+          // written to. Those facts, and the pull request a sibling is here
+          // for, cost about fifty characters each and are the ones the prompt
+          // exists to carry.
           headline(entry, context)
         : entry.state === "offered"
           ? ""
@@ -1033,11 +1090,25 @@ interface RenderContext {
   unnamed: ReadonlySet<RepositoryKey>;
 }
 
-/** What follows the key on a full entry: where it is, and what may be done. */
+/**
+ * What follows the key: where it is, what may be done, and the pull request
+ * this run is reviewing in it.
+ *
+ * THE PULL REQUEST RIDES HERE, WITH THE PATH AND THE ACCESS, for the reason
+ * those two do (see `renderEntry`): it is what a one-line entry may not lose.
+ * A reviewer that knows a repository is read-only and does not know which pull
+ * request of it it is looking at, or at which commit, cannot file a finding
+ * against it, and this is the only line in the prompt that says so.
+ */
 function headline(entry: RepositoryMapEntry, context: RenderContext): string {
   if (entry.workspace) {
     const where = entry.workspace.localPath ? ` at \`${entry.workspace.localPath}\`` : "";
-    return `${where} (${entry.workspace.access === "read_only" ? "read only" : "write"})`;
+    const access = entry.workspace.access === "read_only" ? "read only" : "write";
+    const pr = entry.workspace.reviewPullRequest;
+    const reviewing = pr
+      ? `, under review: ${pr.url} at ${pr.headSha ? `\`${pr.headSha}\`` : "an unknown commit"}`
+      : "";
+    return `${where} (${access})${reviewing}`;
   }
   return ` - ${statePhrase(entry.state, context.expansionOpen, context.unnamed.has(entry.key))}${entry.reason ? `: ${entry.reason}` : ""}`;
 }

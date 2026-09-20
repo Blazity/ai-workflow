@@ -237,9 +237,22 @@ export async function loadRepositoryMapCatalog(input: {
  * somebody, and removing a question is the whole point of this feature.
  *
  * THE OTHER GUARDS ARE SOMEBODY'S DECISION. The record decides: an exclusion,
- * an unavailable entry, the definition pin and the trigger's own expansion
- * rule all refuse through `decide`, so nothing here can take a repository a
- * person said no to. And the ACCESS decides: read only, always. Workspace
+ * an unavailable entry and the definition pin all refuse through `decide`, so
+ * nothing here can take a repository a person said no to.
+ *
+ * THE EXPANSION RULE IS NOT ONE OF THOSE GUARDS, whatever this comment used to
+ * claim. `isAllowed` is `isCandidate(key) || expansion === "attach" || ...`
+ * (`work-scope/decide.ts`), and under the `enabled_catalog` policy a webhook
+ * defaults to, `isCandidate` is just "enabled and usable". So under that
+ * policy every enabled repository is a candidate and an `ask_once` rule
+ * refuses no neighbour at all. That is deliberate, and it is the feature:
+ * a neighbour costs nobody a question, it arrives read only, the Decision
+ * Trail says which relationship brought it, and the workspace ceiling bounds
+ * how many can arrive. Under a narrower policy (`listed`,
+ * `event_repository_and_related`) a neighbour outside the candidate set is
+ * refused, which is why this reads as a guard until you check it.
+ *
+ * And the ACCESS decides: read only, always. Workspace
  * access defaults to write, so a neighbour taken on the strength of a
  * relationship nobody was asked about would silently widen what the run may
  * commit to. Write comes from the plan's write repositories or from a person,

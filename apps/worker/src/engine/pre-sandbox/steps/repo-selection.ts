@@ -174,6 +174,12 @@ async function recordWorkScopeDecisions(
  * the workspace will hold. The prompt builds again later with the run's live
  * refusals, and those refusals write their own trail rows, so the two never
  * claim to be the same thing.
+ *
+ * ONE HALF OF THE PROMPT'S MAP IS NOT KNOWN HERE, and the row says so rather
+ * than guessing it: nothing has provisioned the workspace yet, so no manifest
+ * says what may be done to a checkout. This row outlives the briefing beside
+ * it, which is the reason it may not carry a guess: after thirty days it is
+ * what a person is left with.
  */
 function recordMapShown(
   carrier: WorkScopeCarrier,
@@ -184,25 +190,30 @@ function recordMapShown(
 ): void {
   const recorder = carrier.recorder;
   if (!recorder || recorder.runId === null || carrier.mapShown) return;
-  const relatedKeys = new Set(
-    (repositoryMap.relatedAttachments ?? []).map((attachment) => attachment.repositoryKey),
-  );
   const summary = repositoryMapTrailSummary(
     buildRepositoryMap({
       repositories: repositoryMap.repositories,
       ...(repositoryMap.relationshipsUnreadable ? { relationshipsUnreadable: true } : {}),
       ...(repositoryMap.catalogUnreadable ? { silence: "catalog_unreadable" as const } : {}),
-      // Read only for the neighbours this run took on its own, which is what
-      // `prepare-workspace` is about to clone them as.
+      // THE ACCESS IS NOT DECIDED YET, AND THIS LINE NO LONGER GUESSES IT.
+      // Provisioning clones the whole workspace read and gives write to a
+      // repository carrying a workflow-owned branch
+      // (`blocks/prepare-workspace/execute.ts`), and a promotion can change
+      // that later; the manifest it writes is what the prompt's map reads. None
+      // of that exists yet here, so the summary below is told so and says a
+      // repository is in the workspace without claiming what may be done to it.
+      // The value passed here is therefore never printed; read-only is the side
+      // that cannot invite a wrong belief if it ever were.
       attached: chosen.map((repo) => ({
         key: repositoryKey(repo),
-        ...(relatedKeys.has(repositoryKey(repo)) ? { access: "read_only" as const } : {}),
+        access: "read_only" as const,
         ...(repo.selectedRationale ? { rationale: repo.selectedRationale } : {}),
       })),
       namedKeys: [...(recorder.ticketText?.matchedKeys ?? [])],
       entries,
       catalogActivated,
     }),
+    "not_provisioned_yet",
   );
   // Parsed rather than trusted, exactly as a decided plan is: this is about to
   // be spelled into one SQL statement as jsonb, where a shape the contract

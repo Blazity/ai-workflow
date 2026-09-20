@@ -465,7 +465,9 @@ briefings; stage 7 follows 6 and stage 8 follows 7, because all three touch
 
 ## What landed, and where
 
-Recorded on 2026-09-20, with stages 8 and 10 still open. The stages did not
+Recorded on 2026-09-20. Stage 8 shipped after the first version of this
+section was written and is listed below; stage 10, the proof on production,
+is the only stage still open. The stages did not
 ship as one line of commits, so this is the only place the whole feature is
 listed. Every branch but the first carries a `changelog/unreleased/` entry;
 stage 2 has none, because the only byte it changed for a model is the declared
@@ -499,12 +501,17 @@ label fix (a mid-run discovery or change-set note no longer claims to be
 - **`feat/agent-visibility-map`**, head
   `2c243792f42c3fd72aa9aded464e93e398248cb8` (stage 6), contains
   `feat/agent-visibility`. `apps/worker/src/repository-map/` (moved out of
-  `engine/work-scope/map.ts`), the ranked map in every repository-working send
-  and in discovery, `related_repository` as a work scope origin with its CHECK
-  migration `0071`, and the map recorded inside the briefing.
+  `engine/work-scope/map.ts`), the ranked map in every repository-working send,
+  `related_repository` as a work scope origin with its CHECK migration `0071`,
+  and the map recorded inside the briefing. NOT in discovery: that step carries
+  the same operator descriptions and relationship sentences row by row, and is
+  deliberately not given the map, because at discovery time nothing is checked
+  out yet and every row would read as "not in the workspace". Rule D6 in
+  `docs/product/repository-record-behaviour.md` says so, pinned by the
+  discovery golden.
 - **`feat/agent-visibility-planning`**, head
-  `a9b31acf33171121d8033a11ceda53d53af8e213` (stage 7, with stage 8 in
-  progress), contains `feat/agent-visibility-map`. Planning within the record.
+  `03a5be5b` (stages 7 and 8), contains `feat/agent-visibility-map`. Planning
+  within the record, and one answer to whether a reviewer is still waiting.
 
 Where the stage table and the delivery differ:
 
@@ -549,8 +556,14 @@ would otherwise live only in a chat transcript.
   measures `{data, meta}`, so the package's maximum page was unservable and a
   48 KB page crossed the wire at about 98 KB. The tool derives its own default
   and maximum from a measured allowance and refuses above it.
-- **Lists page on an append-only key.** A positional cursor over a live run
-  serves one item twice and skips another, with nothing red anywhere.
+- **Lists page on a position that proves it is still valid.** The first
+  version of this line said the cursor would be on an append-only key, because
+  a positional cursor over a live run serves one item twice and skips another
+  with nothing red anywhere. It shipped as a position, and the review caught
+  the gap between the two. Rather than move the rule to fit the code, the
+  cursor now carries the length of the list it was minted against and a list
+  that grew or shrank refuses it by name, which is the property the keyed
+  cursor was for. The rule in `.claude/rules/agent-visibility.md` says that.
 - **Rounds are an opt-in on `work_scope.get`**, so a client that has called it
   for months keeps today's answer inline.
 - **`map_shown` gets its writer.** A briefing lives thirty days and the work
@@ -560,3 +573,47 @@ would otherwise live only in a chat transcript.
   by the sandbox composer, because the obvious home created an
   `engine <-> sandbox` cycle and a type-only import would have hidden it rather
   than removed it.
+
+### Recorded late, after the code review found them unrecorded
+
+The three below were decided while the work ran and were not written here at
+the time. A decision nobody can find is the failure mode this section exists to
+prevent, so they are recorded now with what they cost, late rather than never.
+
+- **A send made while capture is off writes a marker, where stage 3b's
+  definition of done said it writes nothing.** The reason is the one the
+  changelog states: a run that recorded nothing and a run nobody kept anything
+  for are different facts, and without a row per send the reader cannot tell
+  them apart. The cost is a row per send on a deployment that has capture
+  switched off, which is the price of that distinction.
+- **Stage 8 changed when a run starts, which no plan line asked for.** Its file
+  scope named the gate, the prompt and the review ledger. It also changed
+  `services/dispatch/trigger-events.ts` at all three echo filters, because the
+  same identity rule that decided "is this comment ours" at the gate decided it
+  at the trigger, and a reviewer using GitHub's Quote reply on one of our notes
+  was starting no run at all: no run, no comment, no failure, nothing to look
+  at. The advisor directed it deliberately and it is in the changelog; it
+  belongs here because it widened production trigger behaviour.
+- **The prompt preview names four more things a run composes than stage 5c
+  scoped**, and the panel stopped claiming its list is complete. The list had
+  already fallen behind once, when stage 6 added the repository map and nothing
+  came back to it.
+
+### Still open, and it is the owner's
+
+- **Briefing retention outlives the replay, where this plan first said it never
+  would.** The first version of the plan stated the invariant "never kept
+  longer than the replay that reaches them". What shipped is a floor of thirty
+  days from each send (`GREATEST(replay_expires_at, captured_at + 30 days)`),
+  so a send made in a long-parked run outlives the replay that no longer
+  reaches it. The amendment describing that behaviour was written by the person
+  who directed the work, which is the code writing the specification. It is
+  recorded here as an open question rather than a settled decision: briefings
+  carry ticket bodies, `AGENTS.md` and repository memory, so how long they live
+  is the owner's call, and the alternative (expire with the replay and say so)
+  is one condition in the sweep.
+- **Which stored harness profiles set `includeWorkflowData` off** was listed
+  out of scope as "stage 2 reports which profiles set it and the owner
+  decides". No such report was ever produced, so the decision is blocked on a
+  fact nobody has gathered. It is a read over production data and it is in
+  `lanes/prod-test-av.md`.
