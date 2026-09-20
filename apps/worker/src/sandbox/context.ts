@@ -19,7 +19,10 @@ import {
   isValidWorkspaceLocalPath,
   type WorkspaceManifest,
 } from "./repo-workspace.js";
-import { selectReviewLedgerWorkItems as selectWorkItems } from "../adapters/vcs/vcs-bot-identity.js";
+import {
+  resolvePendingReviewFeedback,
+  selectReviewLedgerWorkItems as selectWorkItems,
+} from "../adapters/vcs/vcs-bot-identity.js";
 import {
   buildRepositoryMap,
   type RepositoryMapAttachment,
@@ -259,12 +262,11 @@ export function researchPlanContextParts(input: ResearchPlanContextInput): Effec
   const additionsParts = renderAdditionsParts(preSandboxAdditions, input.researchNotes);
   const repositoryContextParts = renderRepositoryContextParts(repositoryContexts);
   const clarificationsParts = renderClarificationsParts(ticket.clarifications);
-  // Same condition as renderRepositoryContextParts' remediation framing: when
-  // the ticket's PR carries review feedback, that feedback is the task, so the
-  // Resolution Check must not offer the already-resolved exit.
-  const hasPrFeedback =
-    (repositoryContexts ?? []).some((context) => context.prComments.length > 0) ||
-    hasReviewWorkItems(repositoryContexts);
+  // The same call renderRepositoryContextParts' remediation framing makes, and
+  // the same call the engine's no-change gate makes: when somebody is still
+  // waiting on the ticket's PR, that is the task, so the Resolution Check must
+  // not offer the already-resolved exit.
+  const hasPrFeedback = resolvePendingReviewFeedback(repositoryContexts).pending;
 
   // Composed twice: once with no map, to measure what the rest of this send
   // costs, and once with the map built inside whatever that leaves. Pure, so
@@ -1408,27 +1410,20 @@ function uncoveredPrComments(context: SelectedRepositoryPromptContext): PRCommen
   return context.prComments.filter((comment) => !feedCoversComment(feed, comment));
 }
 
-/** Work items exist, so the run has explicit review requests to answer and the
- * already-resolved exit must stay closed. */
-function hasReviewWorkItems(
-  contexts: SelectedRepositoryPromptContext[] | undefined,
-): boolean {
-  return (contexts ?? []).some(
-    (context) => context.reviewThreads && selectWorkItems(context.reviewThreads).length > 0,
-  );
-}
-
 function renderRepositoryContextParts(
   contexts: SelectedRepositoryPromptContext[] | undefined,
 ): EffectivePromptPart[] {
   if (!contexts || contexts.length === 0) return [];
 
   const groups: EffectivePromptPart[][] = [];
-  // When any repo carries human review feedback, this is a remediation of an
+  // When somebody is still waiting on a repo's PR, this is a remediation of an
   // existing PR, not a fresh build. Lead with that framing so the plan and the
   // implementation target the requested changes instead of concluding the
   // original ticket is already satisfied (its work is already on the PR branch).
-  if (contexts.some((context) => context.prComments.length > 0)) {
+  // One predicate with the Resolution Check above and with the engine's
+  // no-change gate: this paragraph asserts a person asked for something, and a
+  // run that then closes itself as a no-op has called the paragraph a lie.
+  if (resolvePendingReviewFeedback(contexts).pending) {
     groups.push([
       part(
         "remediation-framing",

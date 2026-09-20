@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitHubAdapter } from "./github.js";
 import { reviewFindingDigest } from "./types.js";
 import type { ReviewThread } from "./types.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
+import {
+  AI_WORKFLOW_COMMENT_MARKER,
+  selectReviewLedgerWorkItems,
+} from "../../adapters/vcs/vcs-bot-identity.js";
 import { logger } from "../../infra/logger.js";
 
 vi.mock("../../infra/logger.js", () => ({
@@ -2300,6 +2303,88 @@ describe("GitHubAdapter", () => {
       const feed = await ghAdapter().listReviewThreads(42);
 
       expect(feed.threads.map((thread) => thread.threadId)).toEqual(["PRRT_live"]);
+    });
+
+    // Retirement does not outlive somebody answering. The sweep never collapses
+    // a thread a person is already talking in, so the only way to reach this
+    // shape is a reviewer opening the collapsed thread afterwards and writing in
+    // it. Dropping that thread answers the person who wrote it with a run
+    // reporting that every thread on the pull request is parked.
+    it("keeps a retired thread a reviewer has written in since, as an ordinary work item", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_reopened",
+              isResolved: false,
+              path: "src/a.ts",
+              line: 4,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "an outdated finding",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    isMinimized: true,
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: "No, this is still broken on mobile.",
+                    createdAt: "2026-08-22T09:00:00Z",
+                    isMinimized: false,
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+            {
+              id: "PRRT_retired",
+              isResolved: false,
+              path: "src/b.ts",
+              line: 7,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_3",
+                    databaseId: 3,
+                    body: "another outdated finding",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    isMinimized: true,
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      // Exactly as narrow as it should be: the retired thread nobody answered
+      // is still gone.
+      expect(feed.threads.map((thread) => thread.threadId)).toEqual(["PRRT_reopened"]);
+      // And it comes back as an ordinary thread, not a special case: our own
+      // inline finding, awaiting us rather than a human, anchored to its file.
+      expect(feed.threads[0]).toMatchObject({
+        source: "bot",
+        awaitingHuman: false,
+        filePath: "src/a.ts",
+      });
+      // So the work-item predicate every reader shares selects it, the agent
+      // owes it a disposition like any other, and no run can end in "no
+      // disposition survived verification" because of it.
+      expect(selectReviewLedgerWorkItems(feed).map((thread) => thread.threadId)).toEqual([
+        "PRRT_reopened",
+      ]);
+      expect(feed.threads[0]?.notes.at(-1)?.body).toBe("No, this is still broken on mobile.");
     });
 
     // Our own notes are two different things. An inline finding is this

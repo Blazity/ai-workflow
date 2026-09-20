@@ -1,0 +1,4 @@
+- A run treats a pull request review as its task whenever somebody there is still waiting on it, whether the request arrived as a review thread or as a plain comment, and it keeps working until that request is answered.
+- A reviewer who answers one of the workflow's own pull request comments starts a run, Quote reply included, on GitHub and GitLab alike.
+- A pull request carrying only this workflow's own comments and review findings counts as quiet, so a run on a ticket that is already done reports the ticket resolved instead of looking for a review to address.
+- A run that refuses to close while a review is open names the pull request it means and what it found there, in the note it leaves on the ticket.

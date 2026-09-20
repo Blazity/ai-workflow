@@ -12,10 +12,18 @@ import type {
 } from "../../adapters/vcs/types.js";
 import {
   isReviewLedgerWorkItem,
+  resolvePendingReviewFeedback,
   reviewLedgerMarker,
   selectReviewLedgerWorkItems as selectWorkItems,
+  type PendingReviewFeedback,
+  type PendingReviewFeedbackContext,
 } from "../../adapters/vcs/vcs-bot-identity.js";
-export { selectReviewLedgerWorkItems as selectWorkItems } from "../../adapters/vcs/vcs-bot-identity.js";
+// Re-exported so the workflow module reaches the shared predicate without a
+// top-level adapter import of its own; see .claude/rules/workflow-steps.md.
+export {
+  resolvePendingReviewFeedback,
+  selectReviewLedgerWorkItems as selectWorkItems,
+} from "../../adapters/vcs/vcs-bot-identity.js";
 import type { ResearchResult } from "../../sandbox/agents/types.js";
 import type { ExecutionErrorCategory } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../agent-input.js";
@@ -923,17 +931,51 @@ export function buildResolutionEvidenceComment(research: ResearchResult): string
 }
 
 /**
- * Decide what to do with research's already-resolved declaration. A review
- * comment on the ticket's own PR means a person explicitly asked for changes,
- * so the no_change_needed exit must not be taken: the first declaration earns
- * one corrective research retry, a repeat fails the block. Uses the same
- * prComments condition as renderRepositoryContexts' remediation section, so
- * the prompt and the engine agree on what counts as pending feedback. Pure so
- * the decision table stays unit-testable.
+ * Decide what to do with research's already-resolved declaration. Somebody
+ * still waiting on the ticket's own PR means a person explicitly asked for
+ * changes, so the no_change_needed exit must not be taken: the first
+ * declaration earns one corrective research retry, a repeat fails the block.
+ *
+ * "Still waiting" is {@link resolvePendingReviewFeedback}, the same call the
+ * prompt's remediation framing and its Resolution Check make. Not the same
+ * rule written out twice: this function used to count any comment on the PR,
+ * which answered yes to a thread a reviewer had resolved and yes to this
+ * workflow's own run summary, and the prompt counted something else again.
+ * Pure so the decision table stays unit-testable.
  */
+/**
+ * What the run believed, in the sentence a person receives.
+ *
+ * The refusal used to read "the ticket's PR has unresolved human review
+ * feedback" whatever had actually happened, and it named no pull request. On a
+ * run across several repositories that is a person opening a red run and having
+ * to guess which conversation it means, and when the belief was wrong the
+ * sentence gave them nothing to argue with. The reason this builds is the one
+ * the gate decided on, so what a person reads and what the run did cannot come
+ * apart.
+ */
+export function pendingReviewFeedbackSentence(feedback: PendingReviewFeedback): string {
+  const where =
+    feedback.repositories.length > 0
+      ? feedback.repositories.join(", ")
+      : "the ticket's pull request";
+  switch (feedback.reason) {
+    case "open_review_threads":
+      return `${where} has review threads still waiting for an answer`;
+    case "unanswered_pr_comments":
+      return `${where} has pull request comments nobody has answered`;
+    case "no_thread_awaits_an_answer":
+      return `every review thread on ${where} is answered, parked on a human or another tool's`;
+    case "only_our_own_notes":
+      return `${where} carries only this workflow's own notes`;
+    case "no_pull_request_feedback":
+      return `${where} carries no review feedback`;
+  }
+}
+
 export function resolveNoChangeAction(
   research: ResearchResult,
-  repositoryContexts: ReadonlyArray<{ prComments: readonly unknown[] }>,
+  repositoryContexts: readonly PendingReviewFeedbackContext[],
   retryUsed: boolean,
 ): "proceed" | "no_change" | "retry" | "fail" {
   const noChangeSignal =
@@ -941,10 +983,7 @@ export function resolveNoChangeAction(
     (research.resolutionEvidence ?? []).length > 0 &&
     (research.writeRepositories ?? []).length === 0;
   if (!noChangeSignal) return "proceed";
-  const hasPrFeedback = repositoryContexts.some(
-    (context) => context.prComments.length > 0,
-  );
-  if (!hasPrFeedback) return "no_change";
+  if (!resolvePendingReviewFeedback(repositoryContexts).pending) return "no_change";
   return retryUsed ? "fail" : "retry";
 }
 
