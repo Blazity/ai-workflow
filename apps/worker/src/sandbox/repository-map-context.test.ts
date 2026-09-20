@@ -8,7 +8,11 @@
  * it matters, the text each send actually receives.
  */
 import { describe, expect, it } from "vitest";
-import { joinPromptParts, type EffectivePromptPart } from "@shared/prompts";
+import { DEFAULT_AGENT_PROMPTS, joinPromptParts, type EffectivePromptPart } from "@shared/prompts";
+import {
+  compileEffectivePrompt,
+  resolveProfileInstructions,
+} from "../engine/helpers/effective-prompt.js";
 import type { RepositoryMapContext } from "../repository-map/map.js";
 import {
   fixContextParts,
@@ -381,12 +385,16 @@ describe("a ticket large enough to fill the section on its own", () => {
     expect(text).toContain("github:acme/api");
   });
 
-  it("still says where the workspace is when there is no room for anything else", () => {
-    // A ticket that fills the section on its own leaves the map nothing, not
-    // even its own frame. The workspace list is what the prompt carried before
-    // this map existed, so losing it here would make the map a REGRESSION on
-    // exactly the runs that most need help: an agent that does not know which
-    // checkout it is standing in cannot start.
+  it("drops its PROSE, never the paths and the access markers, when the section is full", () => {
+    // A ticket that fills the section on its own leaves the map no room for a
+    // frame. What it keeps is what an agent cannot work without: where each
+    // repository is checked out and whether it may be written to. What it
+    // gives up is the paragraph explaining those two words, which the agent
+    // can survive one prompt without.
+    //
+    // THE FRAME USED TO WIN THAT ARGUMENT AND THE COMPILER PAID FOR IT: the
+    // section went past the cap, the compiler slices from the END, and the
+    // prompt finished mid-word inside our own Resolution Check.
     const text = joinPromptParts(
       researchPlanContextParts({
         ticket: { ...TICKET, description: "d".repeat(199_000) },
@@ -397,9 +405,78 @@ describe("a ticket large enough to fill the section on its own", () => {
         repositoryMap: wideCatalog(),
       }),
     );
+    // Still labelled, so the lines are a repository list and not two stray
+    // bullets, and so every reader that finds this section by its heading
+    // still finds it.
     expect(text).toContain("## Repositories");
-    expect(text).toContain("### In the workspace");
-    expect(text).toContain("`github:acme/api`");
+    // The facts.
+    expect(text).toContain(
+      "- `github:acme/api` at `/vercel/sandbox/repos/github__acme__api` (write)",
+    );
+    // The prose.
+    expect(text).not.toContain("### In the workspace");
+    expect(text).not.toContain("Only a repository marked (write) may be changed");
+  });
+
+  it("keeps our own last rule whole at a ticket inside the band that used to cut it", async () => {
+    // A catalog whose descriptions are big enough that the map is worth real
+    // bytes. `wideCatalog` above is wide and CHEAP: 150 short descriptions
+    // render to less than the "map not available" note the mapless prompt
+    // carries, so with that one the map is never what crosses the cap and this
+    // test would pass with the fix removed. The band only exists where the map
+    // costs more than the baseline.
+    const fat = wideCatalog();
+    for (const repository of fat.repositories ?? []) {
+      repository.catalogDescription = "x".repeat(5 * 1024);
+    }
+    // 196,850 characters, a size chosen because it is INSIDE the band: without
+    // the map the section is 199,935 and fits; with the map's old frame it was
+    // 200,083 and did not, so the map's own floor was what cut the rule. The
+    // bare form brings it to 199,683.
+    //
+    // Compiled, not composed: the cut is the compiler's, so the only honest
+    // way to say "nothing was cut" is to ask the compiler.
+    const profile = await resolveProfileInstructions({
+      node: {
+        id: "planning",
+        type: "planning_agent",
+        x: 0,
+        y: 0,
+        configuration: { provider: "claude" },
+        inputs: {},
+        additionalInputs: [],
+      } as never,
+    });
+    const compilation = await compileEffectivePrompt({
+      nodeId: "planning",
+      blockPrompt: DEFAULT_AGENT_PROMPTS["research-plan"],
+      runtimeData: researchPlanContextParts({
+        ticket: { ...TICKET, description: "d".repeat(196_850) },
+        prompt: "",
+        branchName: "ai/awp-1",
+        selectedRepositories: SELECTED,
+        workspaceManifest: MANIFEST,
+        repositoryMap: fat,
+      }),
+      profileContext: { includeWorkflowData: true, includeRepositoryInstructions: true },
+      slots: [],
+      promptManifest: [],
+      profileSource: profile!,
+      repositorySources: [],
+      memorySources: [],
+      bindingContext: {
+        entryOutput: { status: "fired" } as never,
+        getStepOutput: () => undefined,
+      },
+    });
+    const runtime = compilation.sections.find((section) => section.kind === "runtime");
+    expect(runtime).toBeDefined();
+    expect(runtime!.content.length).toBeLessThanOrEqual(MAX_SECTION_LENGTH);
+    // NOTHING cut, named rather than counted: this used to be
+    // ["resolution-check"], and the prompt ended mid-word inside it.
+    expect(runtime!.parts.filter((part) => part.cutBeforeSend).map((part) => part.id)).toEqual([]);
+    // And the last rule's last sentence really is the last thing sent.
+    expect(runtime!.content.trimEnd()).toMatch(/Protocol instead\.$/);
   });
 });
 

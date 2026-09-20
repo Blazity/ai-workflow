@@ -394,6 +394,36 @@ describe("relatedRepositoryKeys", () => {
   });
 });
 
+describe("a workspace the budget pushed onto one line each", () => {
+  /** Two checkouts and almost no room: the first gets a full entry, the rest
+   *  fall to a line. */
+  const cramped = () =>
+    buildRepositoryMap(
+      neighbourhood({
+        repositories: [facts({ key: API }), facts({ key: WEB })],
+        attached: [
+          { key: API, localPath: "/vercel/sandbox/repos/github__acme__api", access: "write" },
+          { key: WEB, localPath: "/vercel/sandbox/repos/github__acme__web", access: "read_only" },
+        ],
+      }),
+      { maxLength: 400 },
+    );
+
+  it("still says where each one is and what may be done to it", () => {
+    // A repository the budget shortened used to read as a bare key: no path to
+    // look in, and nothing saying whether it may be written to. An agent
+    // standing in a checkout it cannot name, beside one it must not change,
+    // is how a read-only repository gets written to.
+    const map = cramped();
+    const web = map.repositories.find((repository) => repository.key === WEB);
+    expect(web?.rendering).toBe("line");
+    expect(map.text).toContain(
+      `- \`${WEB}\` at \`/vercel/sandbox/repos/github__acme__web\` (read only)`,
+    );
+    expect(map.text).toContain(`- \`${API}\` at \`/vercel/sandbox/repos/github__acme__api\` (write)`);
+  });
+});
+
 describe("repositoryMapTrailSummary", () => {
   it("summarizes the same build inside the trail's own bound", () => {
     const map = buildRepositoryMap(neighbourhood());

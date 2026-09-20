@@ -884,13 +884,67 @@ function renderParts(input: {
     ]);
     return joinPromptParts(counted).length <= input.budget ? counted : [];
   }
-  return concatPromptParts([
+  const composed = concatPromptParts([
     part("repository-map", "Repository map", CATALOG, MAP_SECTION_HEADING),
     ...(noteParts.length > 0 ? [noteParts, "\n"] : []),
     ...groups.flatMap((group, index) => (index === 0 ? [group] : ["\n", group])),
     ...(tail.length > 0 ? ["\n", tail] : []),
     "\n",
   ]);
+  if (joinPromptParts(composed).length <= input.budget) return composed;
+  const bare = bareWorkspaceParts(input);
+  if (!bare) return composed;
+  return joinPromptParts(bare).length < joinPromptParts(composed).length ? bare : composed;
+}
+
+/**
+ * THE WORKSPACE WITHOUT THE FRAME, for the ticket that leaves no room for one.
+ *
+ * The map already refuses to drop the workspace group, because an agent that
+ * does not know which checkout it is standing in cannot start and the prompt
+ * carried that list before this map existed. The cost of that promise was a
+ * floor of a few hundred characters that a section cannot always afford: at a
+ * ticket around 197,000 characters the frame tipped the section over the
+ * compiler's cap and the compiler cut the END of the section, which is where
+ * OUR OWN last rule sits. The prompt then finished mid-word inside the
+ * Resolution Check.
+ *
+ * So at that one extreme the prose goes and the facts stay: the path each
+ * repository is checked out at, and whether it may be written to. Those are
+ * things the agent cannot work without. The group heading and the paragraph
+ * explaining what `(write)` means are prose it can survive one prompt without,
+ * and the markers are the same two words they have always been.
+ *
+ * THE SECTION HEADING STAYS, for eighteen characters out of four hundred. An
+ * unlabelled pair of bullet lines dropped between other parts of a prompt is a
+ * list of paths with nothing saying what they are, and `## Repositories` is
+ * also what every reader of this prompt, the oracle's excision included, finds
+ * the repository section by. Dropping it saved almost nothing and cost the
+ * lines their meaning.
+ *
+ * ONLY when the workspace is all that is left. If anything settled or related
+ * still fits, the frame is carrying sentences that stop requests, and dropping
+ * it to save bytes would trade a cut rule for a wasted pass.
+ *
+ * ONE PART, not one per repository: the part id `repository-map` is the one a
+ * briefing points `renderedAt` at, and a degraded map that emitted no part by
+ * that name would silently unlink the record from the text it describes. The
+ * per-repository attribution inside the record is what this mode trades away,
+ * and it says so here rather than anywhere a reader would have to guess.
+ */
+function bareWorkspaceParts(input: {
+  shown: Record<MapGroup, RepositoryMapEntry[]>;
+  renderContext: RenderContext;
+}): EffectivePromptPart[] | null {
+  const workspace = input.shown.workspace;
+  if (workspace.length === 0) return null;
+  if (input.shown.related.length + input.shown.settled.length + input.shown.rest.length > 0) {
+    return null;
+  }
+  const lines = workspace
+    .map((entry) => `- \`${entry.key}\`${headline(entry, input.renderContext)}\n`)
+    .join("");
+  return [part("repository-map", "Repository map", CATALOG, `${MAP_SECTION_HEADING}${lines}\n`)];
 }
 
 function groupTitle(name: MapGroup): string {
@@ -923,9 +977,18 @@ function renderEntry(
 ): string {
   if (rendering === "line") {
     const state =
-      entry.workspace || entry.state === "offered"
-        ? ""
-        : ` - ${statePhrase(entry.state, context.expansionOpen, context.unnamed.has(entry.key))}`;
+      entry.workspace
+        ? // WHERE IT IS AND WHAT MAY BE DONE TO IT, EVEN ON ONE LINE. A
+          // repository the budget pushed down to a line used to lose its path
+          // and its access marker and read as a bare key, so the second
+          // repository of a workspace on a large ticket reached the agent with
+          // no checkout to look in and nothing saying whether it may be
+          // written to. Those two facts cost about fifty characters and are
+          // the ones the prompt exists to carry.
+          headline(entry, context)
+        : entry.state === "offered"
+          ? ""
+          : ` - ${statePhrase(entry.state, context.expansionOpen, context.unnamed.has(entry.key))}`;
     const reason = !isUsableState(entry.state) && entry.reason ? `: ${entry.reason}` : "";
     const summary = entry.description.text.length > 0 ? ` - ${entry.description.text}` : "";
     return `- \`${entry.key}\`${state}${reason}${summary}\n`;
