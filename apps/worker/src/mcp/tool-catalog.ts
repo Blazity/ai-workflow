@@ -128,7 +128,7 @@ export const VISIBILITY_ID_MAX_LENGTH = 200;
  * loop node the shortening exists for. Wide enough for a nested scope id, still
  * bounded so a pathological value never reaches a query.
  */
-export const VISIBILITY_FILTER_ID_MAX_LENGTH = 2_000;
+const VISIBILITY_FILTER_ID_MAX_LENGTH = 2_000;
 export const BRIEFING_SECTION_INDEX_MAX = 199;
 export const BRIEFING_SECTION_BYTES_MAX = 67_108_864;
 export const BRIEFING_PAGE_MAX_BYTES = 524_288;

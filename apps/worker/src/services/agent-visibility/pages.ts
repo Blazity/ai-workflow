@@ -66,7 +66,7 @@ export interface AgentVisibilityUnreadable {
  * few, says how many there are in `unreadableTotal`, and can no longer be the
  * reason a page cannot be served.
  */
-export const AGENT_VISIBILITY_UNREADABLE_PER_PAGE = 5;
+const AGENT_VISIBILITY_UNREADABLE_PER_PAGE = 5;
 const UNREADABLE_PROBLEM_MAX_LENGTH = 200;
 
 function clampUnreadable(entry: AgentVisibilityUnreadable): AgentVisibilityUnreadable {
@@ -152,7 +152,7 @@ export function paging<T>(work: () => T): T {
  */
 /** What HTTP serves: the package's own numbers, because neither of the two
  *  reasons MCP needs smaller ones applies to a plain response body. */
-export const HTTP_PAGE_BOUNDS = {
+const HTTP_PAGE_BOUNDS = {
   default: AGENT_VISIBILITY_PAGE_DEFAULT_BYTES,
   maximum: AGENT_VISIBILITY_PAGE_MAX_BYTES,
 } as const;

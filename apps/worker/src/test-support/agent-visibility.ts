@@ -10,8 +10,6 @@
  * author imagined. A run, its graph and its attempt rows go through the replay
  * store for the same reason.
  */
-import { createHash } from "node:crypto";
-
 import { eq } from "drizzle-orm";
 import type {
   ReplayAttemptOutcome,
@@ -20,6 +18,7 @@ import type {
   WorkScopeAskedRepository,
 } from "@shared/contracts";
 import type { AgentBriefingBuildInput } from "@shared/agent-visibility";
+import { DEFAULT_MODELS } from "@shared/harness";
 
 import type { Db } from "../db/types.js";
 import {
@@ -45,14 +44,11 @@ export const OTHER_ORG = "org-elsewhere";
 export const CAPTURED_AT = new Date("2026-09-19T10:15:00.000Z");
 /** Far enough ahead that a fixture is never accidentally expired by the clock
  *  of the machine the suite runs on. */
-export const REPLAY_EXPIRES_AT = new Date("2099-01-01T00:00:00.000Z");
+const REPLAY_EXPIRES_AT = new Date("2099-01-01T00:00:00.000Z");
 
 /** The detector with no configured secrets: credential SHAPES are still found,
  *  which is what makes stored text a fixed point of MCP's sanitizer. */
 export const detector = createVisibilityDetector({ secrets: [] });
-
-export const sha256 = (text: string): string =>
-  createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
 
 export interface SeededWorld {
   definitionId: number;
@@ -236,7 +232,7 @@ export interface BriefingFixture {
  * frozen schemas refuse null for the 36 fields that are optional. A fixture
  * that filled them in could not catch that.
  */
-export function briefingInput(fixture: BriefingFixture): AgentBriefingBuildInput {
+function briefingInput(fixture: BriefingFixture): AgentBriefingBuildInput {
   return {
     identity: {
       runId: fixture.runId,
@@ -248,7 +244,7 @@ export function briefingInput(fixture: BriefingFixture): AgentBriefingBuildInput
       blockType: fixture.blockType ?? "planning_agent",
       capturedAt: (fixture.capturedAt ?? CAPTURED_AT).toISOString(),
     },
-    harness: { provider: "claude", model: "claude-sonnet-4-5-20250929" },
+    harness: { provider: "claude", model: DEFAULT_MODELS.claude },
     sections: fixture.sections ?? [
       { kind: "runtime", title: "Runtime data", text: "AWP-235: the checkout button does nothing." },
       { kind: "block", title: "Block role", text: "Plan the change." },
@@ -268,10 +264,10 @@ export function briefingInput(fixture: BriefingFixture): AgentBriefingBuildInput
  * of a briefing. No fixture can reach that state by content alone, so the
  * refusal is injected.
  */
-export const CAPTURE_REFUSAL =
+const CAPTURE_REFUSAL =
   "after 8 rounds the capture detector still found a credential in what it would store";
 
-export const refusingDetector: VisibilitySanitizer = (text) => {
+const refusingDetector: VisibilitySanitizer = (text) => {
   // Its own one-line reason passes, which is what lets capture store a sentence
   // a reader can be shown. A detector broken for every text has that sentence
   // replaced by capture's fallback, which is a different, quieter marker.

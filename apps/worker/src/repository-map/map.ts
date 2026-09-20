@@ -93,7 +93,7 @@ export const REPOSITORY_MAP_STATES = [
   "outside_catalog",
   "refused",
 ] as const;
-export type RepositoryMapState = (typeof REPOSITORY_MAP_STATES)[number];
+type RepositoryMapState = (typeof REPOSITORY_MAP_STATES)[number];
 
 /**
  * The refusals that SETTLE a repository for the rest of the run.
@@ -132,16 +132,16 @@ export const REPOSITORY_MAP_CAUSES = [
   "work_scope_entry",
   "catalog",
 ] as const;
-export type RepositoryMapCause = (typeof REPOSITORY_MAP_CAUSES)[number];
+type RepositoryMapCause = (typeof REPOSITORY_MAP_CAUSES)[number];
 
 /** Whether the map gave a repository its full entry or one line. */
-export type RepositoryMapRendering = "full" | "line";
+type RepositoryMapRendering = "full" | "line";
 
 /** Whose words the description is. */
-export type RepositoryMapDescriptionSource = "catalog" | "provider" | "none";
+type RepositoryMapDescriptionSource = "catalog" | "provider" | "none";
 
 /** One relationship as the catalog holds it, from the owner's side. */
-export interface RepositoryMapRelationship {
+interface RepositoryMapRelationship {
   kind: RepositoryRelationshipKind | string;
   /** The repository at the other end. */
   targetKey: RepositoryKey;
@@ -191,7 +191,7 @@ export interface RepositoryMapAttachment {
 
 /** What the run could not find out, so the map says it instead of implying a
  *  fact it does not hold. */
-export type RepositoryMapSilence =
+type RepositoryMapSilence =
   /** This send's run predates the map, or the step that gathers it returned
    *  nothing: we do not know what the catalog holds. */
   | "not_recorded"
@@ -261,7 +261,7 @@ export interface RepositoryMapInput {
 
 /** One repository as the map describes it. The field names are
  *  `AgentBriefingRepository`'s on purpose: a recorder takes this as data. */
-export interface RepositoryMapEntry {
+interface RepositoryMapEntry {
   key: RepositoryKey;
   description: { source: RepositoryMapDescriptionSource; text: string };
   /** The map never renders catalog rules: they are a prompt section of their

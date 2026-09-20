@@ -18,6 +18,7 @@
  * an edit that has nothing to do with it. `blockType` is null in that case, and
  * a node neither the definition nor any run has is simply one that never ran.
  */
+import { AGENT_VISIBILITY_SCHEMA_VERSION } from "@shared/agent-visibility";
 import {
   readConnectedNodeLastRunRow,
   readNodeLastRunRow,
@@ -47,7 +48,7 @@ import {
 } from "../../engine/stored-definition-reads.js";
 
 /** The node, as the definition an operator is editing has it. */
-export interface DefinitionNode {
+interface DefinitionNode {
   nodeId: string;
   blockType: string;
 }
@@ -81,7 +82,7 @@ export type NodeBriefingAbsence =
   | { kind: "sends_no_prompt" };
 
 export interface NodeLastBriefing {
-  schemaVersion: 1;
+  schemaVersion: typeof AGENT_VISIBILITY_SCHEMA_VERSION;
   definitionId: number;
   /** As the caller named it, which is how the definition spells it. */
   nodeId: string;
@@ -182,7 +183,7 @@ export async function readNodeLastBriefing(
   }
   const blockType = nodes.find((node) => node.nodeId === input.nodeId)?.blockType ?? null;
   const answer = {
-    schemaVersion: 1 as const,
+    schemaVersion: AGENT_VISIBILITY_SCHEMA_VERSION,
     definitionId: input.definitionId,
     nodeId: input.nodeId,
     blockType,

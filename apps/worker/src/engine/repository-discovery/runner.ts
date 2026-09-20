@@ -1476,7 +1476,7 @@ function them(keys: readonly string[]): string {
  * (an exclusion, an answer that left one unnamed). They come first because they
  * are the ones a person controls today.
  */
-export function missingRepositoryWaysBack(
+function missingRepositoryWaysBack(
   missing: readonly MissingRepository[],
   recordNotes: readonly string[] = [],
 ): string[] {

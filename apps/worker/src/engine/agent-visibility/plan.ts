@@ -26,7 +26,7 @@ import type { WorkScopeEntry } from "@shared/contracts";
 export type BriefingTextSource = "prompt" | "system";
 
 /** One named piece of a section, as a length inside the section's range. */
-export interface BriefingPartPlan {
+interface BriefingPartPlan {
   id: string;
   title: string;
   origin: { kind: string; ref?: string; label?: string };
@@ -39,7 +39,7 @@ export interface BriefingPartPlan {
   withheld?: { reason: string; text: string };
 }
 
-export interface BriefingSectionPlan {
+interface BriefingSectionPlan {
   kind: string;
   title: string;
   provenance?: { kind: string; id: string; version: number | null; hash: string }[];

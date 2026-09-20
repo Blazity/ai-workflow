@@ -22,11 +22,11 @@
 import { configuredVisibilityDetector, redactForStorage } from "../../run-observability/visibility-detector.js";
 import type { VisibilitySanitizer } from "@shared/agent-visibility";
 
-export const UNSERVABLE_TEXT = "[REDACTED: this text could not be made safe to serve]";
+const UNSERVABLE_TEXT = "[REDACTED: this text could not be made safe to serve]";
 
 /** The detector over this deployment's configured secrets, made once per read
  *  rather than per field: building it compiles every secret's forms. */
-export function serveSafeTextWith(detect: VisibilitySanitizer): (text: string) => string {
+function serveSafeTextWith(detect: VisibilitySanitizer): (text: string) => string {
   return (text) => {
     if (text.length === 0) return text;
     try {

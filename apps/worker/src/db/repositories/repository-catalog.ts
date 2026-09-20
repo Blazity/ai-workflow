@@ -873,7 +873,7 @@ export interface RepositoryCatalogMapRow {
   unknownRelationshipCount: number;
 }
 
-export interface RepositoryCatalogMapRelationship {
+interface RepositoryCatalogMapRelationship {
   direction: "outgoing" | "incoming";
   /** `provider:owner/name` of the repository at the other end, cased down. */
   targetKey: string;

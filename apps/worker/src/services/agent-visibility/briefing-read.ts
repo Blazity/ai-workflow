@@ -129,7 +129,7 @@ const ENDED_RUN_STATUSES: ReadonlySet<string> = new Set(["success", "failed", "b
 export type RunBriefingState = "available" | "expired" | "replay_gone" | "predates_capture";
 
 /** A briefing of an attempt, as a list of attempts shows it. */
-export interface BriefingListEntry {
+interface BriefingListEntry {
   /**
    * THE STORE'S ROW SERIAL, AND A PROMISE THAT IT IS A NUMBER. Every surface
    * takes it back as one: the routes parse it with `parseBriefingId`, the MCP
