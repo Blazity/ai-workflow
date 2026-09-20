@@ -10,17 +10,20 @@
  */
 import React from "react";
 
-import { Button, CkChip } from "@/components/ui";
+import { CkChip } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
-import { readAttemptBriefingsPage, type AttemptBriefings } from "@/lib/agent-visibility/contract";
-import { formatMoment } from "@/lib/agent-visibility/format";
+import {
+  readAttemptBriefingsPage,
+  type AttemptBriefings,
+  type CaptureCounts,
+} from "@/lib/agent-visibility/contract";
 import { loadVisibility, type LoadFailure } from "@/lib/agent-visibility/load";
-import { iterationLine, runStateSentence, sendTitle } from "@/lib/agent-visibility/wording";
+import { runStateSentence } from "@/lib/agent-visibility/wording";
 import { LIVE_POLL_MS, useLivePoll } from "@/lib/use-live-poll";
 
-import { LoadFailureNotice, Loading, MissingReason, Notice } from "./notices";
+import { AttemptSends } from "./attempt-sends";
+import { CaptureLine, LoadFailureNotice, Loading, Notice } from "./notices";
 import { useOnScreen } from "./on-screen";
-import { SendView } from "./send-view";
 
 export interface BriefingAttempt {
   nodeId: string;
@@ -36,11 +39,21 @@ interface TabState {
   absent: boolean;
   /** What the run itself can still say, whether or not it has attempts. */
   runState: string | null;
+  /** What capture did with the whole run's sends: a refusal is invisible until
+   *  somebody opens the one briefing that is missing, so it is counted here. */
+  capture: CaptureCounts | null;
   failure: LoadFailure | null;
   loading: boolean;
 }
 
-const EMPTY: TabState = { data: null, absent: false, runState: null, failure: null, loading: true };
+const EMPTY: TabState = {
+  data: null,
+  absent: false,
+  runState: null,
+  capture: null,
+  failure: null,
+  loading: true,
+};
 
 export function BriefingTab({
   runId,
@@ -76,6 +89,7 @@ export function BriefingTab({
     try {
       const items: AttemptBriefings[] = [];
       let runState: string | null = null;
+      let capture: CaptureCounts | null = null;
       const filter = {
         nodeId: attempt.nodeId,
         attempt: attempt.attempt,
@@ -96,6 +110,7 @@ export function BriefingTab({
         }
         items.push(...page.value.items);
         runState = page.value.runState;
+        capture = page.value.capture;
         cursor = page.value.nextCursor;
         if (cursor === null) break;
       }
@@ -107,7 +122,7 @@ export function BriefingTab({
             item.attempt === attempt.attempt &&
             item.activationScopeId === attempt.activationScopeId,
         ) ?? null;
-      setState({ data: found, absent: found === null, runState, failure: null, loading: false });
+      setState({ data: found, absent: found === null, runState, capture, failure: null, loading: false });
     } finally {
       inFlight.current = false;
     }
@@ -125,12 +140,6 @@ export function BriefingTab({
     onTick: () => void load(),
   });
 
-  const sends = state.data?.briefings ?? [];
-  const named = send === null ? null : (sends.find((entry) => entry.briefingId === send) ?? null);
-  const selected = named ?? sends.at(-1) ?? null;
-  // A link outlives a briefing: they are kept as long as the run's replay is.
-  const linkIsDead = send !== null && named === null && sends.length > 0;
-
   const failureNotice = state.failure ? (
     <LoadFailureNotice failure={state.failure} what="Briefings" onRetry={() => void load()} />
   ) : null;
@@ -143,6 +152,10 @@ export function BriefingTab({
       {runSentence.body}
     </Notice>
   ) : null;
+
+  // Above everything, because it is about the whole run: a person reading one
+  // attempt still needs to know that two of the run's sends were refused.
+  const captureNotice = state.capture ? <CaptureLine capture={state.capture} /> : null;
 
   const frame = (children: React.ReactNode) => (
     <div ref={frameRef} data-briefing-frame="true" className="flex min-w-0 flex-col gap-3">
@@ -157,6 +170,7 @@ export function BriefingTab({
     return frame(
       <>
         {failureNotice}
+        {captureNotice}
         {runNotice}
         {state.absent && runNotice === null ? (
           <Notice title="No record of this attempt">
@@ -171,6 +185,7 @@ export function BriefingTab({
     return frame(
       <>
         {failureNotice}
+        {captureNotice}
         {runNotice}
         <Notice title="No prompt goes out from this block">
           Briefings record what a model was sent. This block sends no prompt, so it has none.
@@ -182,103 +197,16 @@ export function BriefingTab({
   return frame(
     <>
       {failureNotice}
+      {captureNotice}
       {runNotice}
-      {/* Which turn of a loop this is, and when it began: fifty rows of one
-          loop body are otherwise told apart only by an opaque scope id. */}
-      {state.data.iteration || state.data.startedAt ? (
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-[10px] text-neutral-600">
-          {state.data.iteration ? <span className="text-coal">{iterationLine(state.data.iteration)}</span> : null}
-          {state.data.startedAt ? <span>started {formatMoment(state.data.startedAt)}</span> : null}
-        </div>
-      ) : null}
-      {state.data.sendsPrompts === null ? (
-        <Notice title="Whether this block sends a prompt is no longer known">
-          The stored definition this run executed is gone, so the worker cannot say whether this block ever sends a
-          prompt. Anything recorded for it is below; nothing below means nothing was kept, not that nothing was sent.
-        </Notice>
-      ) : null}
-      {sends.length > 0 ? (
-        <div className="flex flex-col gap-1.5">
-          <span className="font-mono text-[9px] font-medium uppercase tracking-[0.06em] text-neutral-600">
-            Sends of this attempt, in order
-          </span>
-          <div className="flex flex-wrap gap-1.5">
-            {sends.map((entry) => {
-              const active = entry === selected;
-              const overview = entry.overview;
-              return (
-                <Button
-                  key={entry.briefingId}
-                  variant={active ? "selected" : "secondary"}
-                  size="sm"
-                  aria-pressed={active}
-                  onClick={() => onLinkChange({ send: entry.briefingId, section: null })}
-                  className="h-auto py-1.5 text-left"
-                >
-                  <span className="flex flex-col gap-0.5">
-                    {/* Numbered by the worker's own send number, the same one
-                        the panel below prints as "send N". A record this build
-                        cannot read has none, and gets no number rather than a
-                        made-up one. */}
-                    <span className="font-mono text-[10px]">
-                      {overview.ok
-                        ? `${overview.value.identity.sequence}. ${sendTitle(overview.value.identity)}`
-                        : "Could not be read"}
-                    </span>
-                    <span className="font-mono text-[9px] font-normal text-neutral-600">
-                      {overview.ok
-                        ? formatMoment(overview.value.identity.capturedAt)
-                        : overview.reason === "newer_version"
-                          ? "written by a newer AI Workflow"
-                          : "this record is broken"}
-                    </span>
-                  </span>
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {linkIsDead ? (
-        <Notice title="The send this link names is gone">
-          Briefings are kept as long as the run's replay is. Showing the latest send of this attempt instead, which is
-          not the one the link was made for.
-        </Notice>
-      ) : null}
-
-      {/* When the run itself has already said why there is nothing here, the
-          same sentence per attempt is noise. */}
-      {state.data.missing?.ok && !(runSentence && sends.length === 0) ? (
-        <MissingReason reason={state.data.missing.value} afterSends={sends.length > 0} />
-      ) : state.data.missing && !state.data.missing.ok ? (
-        <Notice title="Why there is no briefing could not be read">{state.data.missing.message}</Notice>
-      ) : null}
-
-      {sends.length === 0 && !state.data.missing ? (
-        <Notice title="No briefing, and no reason given">
-          The worker recorded no send for this attempt and gave no reason. Its logs for this run and block are the
-          next place to look.
-        </Notice>
-      ) : null}
-
-      {selected ? (
-        selected.overview.ok ? (
-          <SendView
-            key={selected.briefingId}
-            runId={runId}
-            briefingId={selected.briefingId}
-            overview={selected.overview.value}
-            section={section}
-            onSectionChange={(next) => onLinkChange({ section: next })}
-          />
-        ) : (
-          <Notice title="This send was written by a version this dashboard does not read">
-            <p className="m-0">{selected.overview.message}</p>
-            <p className="m-0 mt-1 font-mono text-[11px] text-neutral-700">briefing {selected.briefingId}</p>
-          </Notice>
-        )
-      ) : null}
+      <AttemptSends
+        runId={runId}
+        attempt={state.data}
+        send={send}
+        section={section}
+        onLinkChange={onLinkChange}
+        runExplained={runSentence !== null}
+      />
       {attempt.live && runIsLive ? (
         <div>
           <CkChip tone="running">Watching for later sends</CkChip>

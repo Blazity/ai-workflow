@@ -855,6 +855,14 @@ export const apiClient = {
         `/api/workflow-definitions/${id}/prompt-preview`,
         jsonInit("POST", { definition, blockId }, { cache: "no-store", ...options }),
       ),
+    /** What this block last put in front of a model, over every run of this
+     *  definition, or the reason there is none. Read, not authored: it says
+     *  nothing about the unsaved definition in the editor. */
+    nodeLastBriefing: (id: number, nodeId: string, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(
+        `/api/workflow-definitions/${id}/nodes/${encodeURIComponent(nodeId)}/last-briefing`,
+        { cache: "no-store", ...options },
+      ),
   },
 
   triggers: {

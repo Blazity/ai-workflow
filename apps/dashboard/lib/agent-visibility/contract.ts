@@ -41,6 +41,10 @@
  *   today plus `rounds`, a list page of round headers. Rounds are opt-in, so a
  *   caller from before they existed keeps its inline answer unchanged;
  *   `.../rounds/{roundId}/deliveries` and `.../effects`: list pages.
+ * - `GET /api/v1/workflow-definitions/{id}/nodes/{nodeId}/last-briefing`: what
+ *   one block last put in front of a model, over every run of that definition.
+ *   Read in `./node-briefing`, which carries the same attempt shape as the
+ *   list above so the flow editor and the run replay render one thing.
  * - `PATCH /api/v1/work-scope` answers a person's change with `{ scope }`, the
  *   whole record as it stands after it, or with 409
  *   `{ error: "version_conflict", latestVersion }` when the version the person
@@ -115,6 +119,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/** A non-empty string, or nothing said. */
+function text(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 function isCursor(value: unknown): value is string | null {
@@ -237,12 +246,64 @@ export interface AttemptBriefings {
   missing: VisibilityRead<MissingBriefingReason> | null;
 }
 
+/**
+ * What capture itself did with this run's sends.
+ *
+ * `sends` is the worker's own sum and the authority: it adds the counters up
+ * once so two screens cannot disagree about what a send is, and a counter a
+ * newer worker adds shows up as the difference between it and the five named
+ * here rather than disappearing.
+ *
+ * The worker also serves `firstRecordedAt` and `lastRecordedAt`; nothing on
+ * these screens asks when capture started, so they are not read.
+ */
+export interface CaptureCounts {
+  captured: number;
+  disabled: number;
+  skipped: number;
+  failed: number;
+  conflict: number;
+  sends: number;
+}
+
+/** All six counts, or nothing said: half a set of counters is worse than none,
+ *  because the missing one is the refusal a person came to see. */
+function readCapture(value: unknown): CaptureCounts | null {
+  if (!isRecord(value)) return null;
+  const names = ["captured", "disabled", "skipped", "failed", "conflict", "sends"] as const;
+  const counts: Partial<CaptureCounts> = {};
+  for (const name of names) {
+    if (!isCount(value[name])) return null;
+    counts[name] = value[name] as number;
+  }
+  return counts as CaptureCounts;
+}
+
 /** The attempts of a run, and what the run itself can still say. */
 export interface AttemptBriefingsPage extends ListPageRead<AttemptBriefings> {
   /** `available`, `expired`, `replay_gone`, `predates_capture`, or a state a
    *  newer worker knows and this build does not. Null when the worker did not
    *  say, which is an older worker, not a claim about the run. */
   runState: string | null;
+  /** What capture did with this run's sends, null where nothing capture-capable
+   *  ever recorded for it (the same fact `predates_capture` carries). */
+  capture: CaptureCounts | null;
+}
+
+/**
+ * A briefing id, as this dashboard uses it: a path segment, a link parameter
+ * and a React key, so text.
+ *
+ * The worker keeps briefings in a table and serves the id as that row's NUMBER
+ * (`briefings.push({ briefingId: row.id, ... })` in
+ * `apps/worker/src/services/agent-visibility/briefing-read.ts`). Reading only a
+ * string here would cost the whole attempt, and with it every send of the run,
+ * for a difference that is invisible once the value is in a URL.
+ */
+function briefingIdOf(value: unknown): string | null {
+  if (typeof value === "string") return value === "" ? null : value;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return String(value);
+  return null;
 }
 
 function readAttemptBriefings(value: unknown): VisibilityRead<AttemptBriefings> {
@@ -257,12 +318,13 @@ function readAttemptBriefings(value: unknown): VisibilityRead<AttemptBriefings> 
   if (!Array.isArray(value.briefings)) return invalid("briefings: expected a list");
   const briefings: BriefingSend[] = [];
   for (const [position, entry] of value.briefings.entries()) {
-    if (!isRecord(entry) || typeof entry.briefingId !== "string" || entry.briefingId === "") {
+    const briefingId = isRecord(entry) ? briefingIdOf(entry.briefingId) : null;
+    if (briefingId === null) {
       return invalid(`briefings.${position}.briefingId: expected a briefing id`);
     }
     briefings.push({
-      briefingId: entry.briefingId,
-      overview: readVisibilityRecord(agentBriefingOverviewSchema, entry.overview),
+      briefingId,
+      overview: readVisibilityRecord(agentBriefingOverviewSchema, (entry as Record<string, unknown>).overview),
     });
   }
   return {
@@ -289,6 +351,93 @@ function readAttemptBriefings(value: unknown): VisibilityRead<AttemptBriefings> 
   };
 }
 
+/** The run the briefing of a block came out of. */
+interface NodeBriefingRun {
+  runId: string;
+  /** The definition version that ran, which may not be the one being edited.
+   *  Null where the run did not record one. */
+  definitionVersion: number | null;
+  /** When that run reached this block. Null where the worker did not say. */
+  at: string | null;
+  /** The run's own briefing state, carried as itself, exactly as `runState`
+   *  above: this build may not know every state a newer worker serves. */
+  state: string | null;
+  /** The same counters the run's attempts page carries, so a refused capture
+   *  is readable here without opening the run. */
+  capture: CaptureCounts | null;
+}
+
+/**
+ * What one block last put in front of a model, over every run of its
+ * definition: the question an operator editing that block has, which is not
+ * "show me run 412".
+ *
+ * ACROSS DEFINITION VERSIONS, DELIBERATELY: the newest run wins whatever
+ * version it ran, and `ranIn.definitionVersion` is what says so, because the
+ * briefing being read may have come from a definition that is not the one on
+ * the canvas.
+ */
+export interface NodeLastBriefing {
+  definitionId: number;
+  nodeId: string;
+  /** The block's type as the definition being edited has it; null when the
+   *  node is not in it, whose run history is real and still shown. */
+  blockType: string | null;
+  /** False for a block that puts no prompt in front of a model, null where
+   *  nothing left can say. */
+  sendsPrompts: boolean | null;
+  ranIn: NodeBriefingRun | null;
+  /** That run's newest attempt of this node, in the replay's own shape. An
+   *  attempt this build cannot read says so and costs only itself. */
+  attempt: VisibilityRead<AttemptBriefings> | null;
+  /** Why there is nothing where no run can say it (`never_ran`,
+   *  `sends_no_prompt`, or a kind a newer worker knows), else null. */
+  absent: string | null;
+}
+
+/**
+ * Only the two fields that address the answer are required: without them this
+ * dashboard cannot tell which block the screen is about, and an answer about
+ * another block is worse than none. The rest is read tolerantly, because the
+ * worker deploys separately and nothing it adds should cost the briefing.
+ */
+export function readNodeLastBriefing(value: unknown): VisibilityRead<NodeLastBriefing> {
+  if (!isRecord(value)) return invalid("(root): expected what this block last sent");
+  if (typeof value.nodeId !== "string" || value.nodeId === "") {
+    return invalid("nodeId: expected the block this answer is about");
+  }
+  if (!Number.isInteger(value.definitionId)) {
+    return invalid("definitionId: expected the workflow this answer is about");
+  }
+  const run = value.ranIn;
+  return {
+    ok: true,
+    value: {
+      definitionId: value.definitionId as number,
+      nodeId: value.nodeId,
+      blockType: text(value.blockType),
+      sendsPrompts: typeof value.sendsPrompts === "boolean" ? value.sendsPrompts : null,
+      ranIn:
+        isRecord(run) && typeof run.runId === "string" && run.runId !== ""
+          ? {
+              runId: run.runId,
+              definitionVersion: Number.isInteger(run.definitionVersion)
+                ? (run.definitionVersion as number)
+                : null,
+              at: text(run.at),
+              state: text(run.state),
+              capture: readCapture(run.capture),
+            }
+          : null,
+      attempt:
+        value.attempt === null || value.attempt === undefined
+          ? null
+          : readAttemptBriefings(value.attempt),
+      absent: isRecord(value.absent) ? text(value.absent.kind) : null,
+    },
+  };
+}
+
 export function readAttemptBriefingsPage(value: unknown): VisibilityRead<AttemptBriefingsPage> {
   const page = readList(value, readAttemptBriefings);
   if (!page.ok) return page;
@@ -296,7 +445,10 @@ export function readAttemptBriefingsPage(value: unknown): VisibilityRead<Attempt
   // itself: the worker deploys separately and may know states this build does
   // not. A worker that says nothing is not a run in an unknown state.
   const state = isRecord(value) && typeof value.state === "string" && value.state !== "" ? value.state : null;
-  return { ok: true, value: { ...page.value, runState: state } };
+  return {
+    ok: true,
+    value: { ...page.value, runState: state, capture: isRecord(value) ? readCapture(value.capture) : null },
+  };
 }
 export const readSectionHeadersPage = listOf<AgentBriefingSectionHeader>(agentBriefingSectionHeaderSchema);
 export const readPartsPage = listOf<AgentBriefingPart>(agentBriefingPartSchema);

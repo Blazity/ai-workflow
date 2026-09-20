@@ -12,10 +12,12 @@ import type { AgentBriefingPart } from "@shared/agent-visibility";
 
 import { buildFixtureStore, type FixtureStore } from "./test-support/fixtures";
 import {
+  captureLine,
   inclusionSentence,
   runStateSentence,
   isOurs,
   missingBriefingSentence,
+  nodeAbsenceSentence,
   originLabel,
   partFates,
   readingSentence,
@@ -186,4 +188,50 @@ test("a run with nothing left says which nothing it is", () => {
   const invented = runStateSentence("quarantined")!;
   assert.match(invented.body, /recorded the state "quarantined"/);
   assert.match(invented.body, /no words for yet/);
+});
+
+
+test("a block nobody ran and a block that sends nothing read as different things", () => {
+  const never = nodeAbsenceSentence("never_ran");
+  const silent = nodeAbsenceSentence("sends_no_prompt");
+  assert.notEqual(never.title, silent.title);
+  // One of them has something to do about it, and only one.
+  assert.match(never.body, /Dispatch the workflow/);
+  assert.doesNotMatch(silent.body, /Dispatch/);
+  assert.match(silent.body, /sends no prompt/);
+});
+
+test("a reason for having no briefing that this build has no words for is quoted, not guessed", () => {
+  const unknown = nodeAbsenceSentence("retired_with_the_block");
+  assert.match(unknown.body, /"retired_with_the_block"/);
+  assert.doesNotMatch(unknown.body, /Dispatch/);
+});
+
+
+test("a run that recorded every send says so quietly, and one that did not names each miss", () => {
+  const whole = captureLine({ captured: 11, disabled: 0, skipped: 0, failed: 0, conflict: 0, sends: 11 });
+  assert.equal(whole.whole, true);
+  assert.equal(whole.text, "11 sends, all recorded");
+
+  // The case the counters exist for: without this line a person only finds the
+  // two refusals by opening the briefings that are not there.
+  const partial = captureLine({ captured: 9, disabled: 0, skipped: 2, failed: 0, conflict: 0, sends: 11 });
+  assert.equal(partial.whole, false);
+  assert.match(partial.text, /11 sends/);
+  assert.match(partial.text, /2 refused/);
+});
+
+test("a send a newer worker counted some other way is shown as a gap, not swallowed", () => {
+  // `sends` is the worker's own sum, so a counter this build does not know
+  // shows up as the difference and must not vanish into the recorded ones.
+  const line = captureLine({ captured: 4, disabled: 0, skipped: 0, failed: 0, conflict: 0, sends: 6 });
+  assert.equal(line.whole, false);
+  assert.match(line.text, /2 this dashboard has no words for/);
+});
+
+test("one send is a send, not 1 sends", () => {
+  assert.match(
+    captureLine({ captured: 1, disabled: 0, skipped: 0, failed: 0, conflict: 0, sends: 1 }).text,
+    /^1 send,/,
+  );
 });

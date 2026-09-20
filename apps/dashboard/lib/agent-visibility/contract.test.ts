@@ -10,11 +10,13 @@ import { AGENT_VISIBILITY_SCHEMA_VERSION } from "@shared/agent-visibility";
 
 import {
   readAttemptBriefingsPage,
+  readNodeLastBriefing,
   readSectionPage,
   readWorkScopeWithRounds,
 } from "./contract";
 import {
   EXPIRED_RUN,
+  FIXTURE_DEFINITION,
   FIXTURE_SUBJECT,
   PLANNING_RUN,
   STATES_RUN,
@@ -215,4 +217,128 @@ test("an item this build cannot read joins the worker's own refusals on the page
   const mine = read.value.unreadable.filter((entry) => entry.rows === null);
   assert.equal(mine.length, 1);
   assert.match(mine[0]!.problem, /expected the attempt's node/);
+});
+
+/* ── What one block last sent ──────────────────────────────────────────── */
+
+function lastBriefing(nodeId: string) {
+  const read = readNodeLastBriefing(
+    get(`/api/v1/workflow-definitions/${FIXTURE_DEFINITION}/nodes/${nodeId}/last-briefing`),
+  );
+  assert.ok(read.ok, read.ok ? "" : read.message);
+  return read.value;
+}
+
+test("a briefing id the worker serves as a row number is read, not refused", () => {
+  // The worker types `briefingId` as the briefing row's number
+  // (`briefings.push({ briefingId: row.id })`,
+  // apps/worker/src/services/agent-visibility/briefing-read.ts). A reader that
+  // insisted on a string would lose the whole attempt, and with it every send
+  // of the run, on the day the real route replaces these fixtures.
+  const page = readAttemptBriefingsPage({
+    schemaVersion: AGENT_VISIBILITY_SCHEMA_VERSION,
+    cursor: null,
+    nextCursor: null,
+    total: 1,
+    shortened: [],
+    unreadable: [],
+    state: "available",
+    items: [
+      {
+        nodeId: "planning",
+        attempt: 1,
+        activationScopeId: "root",
+        startedAt: "2026-09-19T08:29:00.000Z",
+        iteration: null,
+        sendsPrompts: true,
+        briefings: [{ briefingId: 4210, overview: null }],
+        missing: null,
+      },
+    ],
+  });
+  assert.ok(page.ok, page.ok ? "" : page.message);
+  assert.equal(page.value.unreadable.length, 0);
+  assert.equal(page.value.items[0]!.briefings[0]!.briefingId, "4210");
+});
+
+test("the last briefing of a block names the run and the version that ran it", () => {
+  const read = lastBriefing("research");
+  assert.equal(read.absent, null);
+  assert.equal(read.ranIn?.runId, STATES_RUN);
+  // Not the version on the canvas: the newest run of a block wins whatever
+  // version it ran, which is the whole reason the number is served.
+  assert.equal(read.ranIn?.definitionVersion, 9);
+  assert.equal(read.ranIn?.state, "available");
+  assert.ok(read.attempt?.ok);
+  assert.equal(read.attempt.ok ? read.attempt.value.briefings.length : 0, 2);
+});
+
+test("a block nobody has run and a block that sends nothing are two different answers", () => {
+  const never = lastBriefing("cleanup");
+  assert.equal(never.ranIn, null);
+  assert.equal(never.attempt, null);
+  assert.equal(never.absent, "never_ran");
+  assert.equal(never.sendsPrompts, true);
+
+  const silent = lastBriefing("trigger");
+  assert.equal(silent.sendsPrompts, false);
+  assert.equal(silent.attempt?.ok, true);
+});
+
+test("an answer about another block, or about none, is refused rather than shown", () => {
+  const noNode = readNodeLastBriefing({ definitionId: 7, ranIn: null });
+  assert.equal(noNode.ok, false);
+  const noDefinition = readNodeLastBriefing({ nodeId: "planning", ranIn: null });
+  assert.equal(noDefinition.ok, false);
+});
+
+test("a run that says nothing about its state or its version claims neither", () => {
+  const read = readNodeLastBriefing({
+    definitionId: 7,
+    nodeId: "planning",
+    ranIn: { runId: "wrun_1" },
+    attempt: null,
+    absent: null,
+  });
+  assert.ok(read.ok, read.ok ? "" : read.message);
+  assert.equal(read.value.ranIn?.definitionVersion, null);
+  assert.equal(read.value.ranIn?.state, null);
+  assert.equal(read.value.ranIn?.at, null);
+  assert.equal(read.value.sendsPrompts, null);
+});
+
+test("a capture record missing one counter is not shown as a whole one", () => {
+  // The counter that did not arrive is exactly the one a person came to see.
+  // Five out of six would read as "eleven sends, all recorded" and be a lie.
+  const page = readAttemptBriefingsPage({
+    schemaVersion: AGENT_VISIBILITY_SCHEMA_VERSION,
+    cursor: null,
+    nextCursor: null,
+    total: 0,
+    shortened: [],
+    unreadable: [],
+    items: [],
+    state: "available",
+    capture: { captured: 9, disabled: 0, failed: 0, conflict: 0, sends: 11 },
+  });
+  assert.ok(page.ok, page.ok ? "" : page.message);
+  assert.equal(page.value.capture, null);
+});
+
+test("the run's capture counters arrive on both reads of the same run", () => {
+  const page = readAttemptBriefingsPage(
+    get(`/api/v1/runs/${STATES_RUN}/briefings?nodeId=research&attempt=1&activationScopeId=root`),
+  );
+  assert.ok(page.ok, page.ok ? "" : page.message);
+  assert.deepEqual(page.value.capture, {
+    captured: 3,
+    disabled: 1,
+    skipped: 2,
+    failed: 1,
+    conflict: 0,
+    sends: 7,
+  });
+  // The flow editor reads the same run through the block, and must be told the
+  // same thing: one fact, not two screens with two ideas of it.
+  assert.deepEqual(lastBriefing("research").ranIn?.capture, page.value.capture);
 });

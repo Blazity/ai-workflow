@@ -3,8 +3,9 @@
 import React from "react";
 
 import { Button } from "@/components/ui";
+import type { CaptureCounts } from "@/lib/agent-visibility/contract";
 import { failureSentence, type LoadFailure } from "@/lib/agent-visibility/load";
-import { missingBriefingSentence } from "@/lib/agent-visibility/wording";
+import { captureLine, missingBriefingSentence } from "@/lib/agent-visibility/wording";
 import type { MissingBriefingReason } from "@shared/agent-visibility";
 
 type NoticeTone = "neutral" | "waiting" | "lost" | "failure";
@@ -79,6 +80,25 @@ export function LoadFailureNotice({
   return (
     <Notice tone="failure" role="alert" action={action}>
       {failureSentence(failure, what)}
+    </Notice>
+  );
+}
+
+/**
+ * What capture did with the whole run's sends, in one line.
+ *
+ * A run where every send was recorded says so quietly, in the grey the rest of
+ * the metadata is in. A run where one was not gets the "lost" tone, because a
+ * refused capture is the one thing on this screen a person cannot discover by
+ * reading further: the briefing it would have been is simply not in the list.
+ */
+export function CaptureLine({ capture }: { capture: CaptureCounts }) {
+  const line = captureLine(capture);
+  return line.whole ? (
+    <p className="m-0 font-mono text-[10px] text-neutral-600">{line.text}</p>
+  ) : (
+    <Notice tone="lost" title="Not every send of this run was recorded">
+      {line.text}
     </Notice>
   );
 }

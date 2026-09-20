@@ -57,6 +57,37 @@ export const EXPIRED_RUN = "wrun_fx_expired";
 /** A run whose replay is still here, from before briefings were recorded. */
 export const OLD_RUN = "wrun_fx_old";
 
+/** The workflow whose blocks the flow editor asks about. */
+export const FIXTURE_DEFINITION = 7;
+
+/**
+ * The blocks of that workflow, as the editor shows them: what the worker reads
+ * out of the draft (else the deployed version) to answer "what does THIS block
+ * send". A node here that no run touched has never run; a node no run and no
+ * definition has is simply not a block.
+ */
+const FIXTURE_DEFINITION_NODES: readonly { nodeId: string; blockType: string }[] = [
+  { nodeId: "trigger", blockType: "trigger_ticket_ai" },
+  { nodeId: "planning", blockType: "planning_agent" },
+  { nodeId: "implementation", blockType: "implementation_agent" },
+  { nodeId: "research", blockType: "call_llm" },
+  { nodeId: "fix", blockType: "fix_agent" },
+  { nodeId: "cleanup", blockType: "generic_agent" },
+];
+
+/** Blocks that put a prompt in front of a model, as the worker decides it
+ *  (`PROMPT_SENDING_BLOCK_TYPES`, apps/worker/src/services/agent-visibility). */
+const PROMPT_SENDING = new Set([
+  "planning_agent",
+  "implementation_agent",
+  "review_agent",
+  "fix_agent",
+  "generic_agent",
+  "prepare_workspace",
+  "call_llm",
+  "investigate",
+]);
+
 export const SHOP_WEB = "github:acme/shop-web";
 export const SHOP_API = "github:acme/shop-api";
 export const LEGACY = "github:acme/legacy-checkout";
@@ -468,6 +499,18 @@ interface FixtureAttempt {
 interface FixtureRun {
   runId: string;
   status: "failed" | "awaiting" | "success";
+  /** The workflow version this run executed, which is not always the one being
+   *  edited: the newest run of a block wins whatever version it ran. */
+  definitionVersion: number;
+  /** What capture did with this run's sends, as the worker counts them beside
+   *  the run state. Null where nothing capture-capable ever recorded for it. */
+  capture: {
+    captured: number;
+    disabled: number;
+    skipped: number;
+    failed: number;
+    conflict: number;
+  } | null;
   nodes: WorkflowReplayGraphNode[];
   attempts: FixtureAttempt[];
   availability: "available" | "expired";
@@ -758,6 +801,8 @@ export async function buildFixtureStore(): Promise<FixtureStore> {
   store.runs.set(PLANNING_RUN, {
     runId: PLANNING_RUN,
     status: "failed",
+    definitionVersion: 7,
+    capture: { captured: 4, disabled: 0, skipped: 0, failed: 0, conflict: 0 },
     availability: "available",
     briefingsState: "available",
     nodes: [
@@ -793,6 +838,8 @@ export async function buildFixtureStore(): Promise<FixtureStore> {
   store.runs.set(STATES_RUN, {
     runId: STATES_RUN,
     status: "awaiting",
+    definitionVersion: 9,
+    capture: { captured: 3, disabled: 1, skipped: 2, failed: 1, conflict: 0 },
     availability: "available",
     briefingsState: "available",
     nodes: [
@@ -864,6 +911,8 @@ export async function buildFixtureStore(): Promise<FixtureStore> {
   store.runs.set(OLD_RUN, {
     runId: OLD_RUN,
     status: "success",
+    definitionVersion: 3,
+    capture: null,
     availability: "available",
     briefingsState: "predates_capture",
     nodes: [node("planning", "planning_agent", "Plan the change", 0, 0)],
@@ -882,6 +931,8 @@ export async function buildFixtureStore(): Promise<FixtureStore> {
   store.runs.set(EXPIRED_RUN, {
     runId: EXPIRED_RUN,
     status: "success",
+    definitionVersion: 1,
+    capture: null,
     availability: "expired",
     briefingsState: "expired",
     nodes: [],
@@ -934,6 +985,84 @@ function listOptions(query: URLSearchParams, cursorName = "cursor") {
   return { cursor: query.get(cursorName), ...(limit === undefined ? {} : { maxBytes: limit }) };
 }
 
+/** What capture did with a run's sends, as the worker serves it beside the run
+ *  state: the five counters plus the worker's own sum, so no reader adds up a
+ *  different idea of what a send is. */
+function captureCounts(run: FixtureRun) {
+  if (run.capture === null) return null;
+  const { captured, disabled, skipped, failed, conflict } = run.capture;
+  return {
+    captured,
+    disabled,
+    skipped,
+    failed,
+    conflict,
+    sends: captured + disabled + skipped + failed + conflict,
+    firstRecordedAt: "2026-09-19T08:29:00.000Z",
+    lastRecordedAt: "2026-09-19T08:46:00.000Z",
+  };
+}
+
+/** One Block Attempt as every read of a briefing serves it: the run's list, and
+ *  the flow editor's "what did this block last send". */
+function attemptItem(store: FixtureStore, entry: FixtureAttempt) {
+  return {
+    nodeId: entry.summary.nodeId,
+    attempt: entry.summary.attempt,
+    activationScopeId: entry.summary.activationScopeId,
+    startedAt: entry.summary.startedAt,
+    iteration: entry.iteration ?? null,
+    sendsPrompts: entry.sendsPrompts,
+    briefings: entry.briefingIds.map((briefingId) => ({ briefingId, overview: store.overviews.get(briefingId) })),
+    missing: entry.missing,
+  };
+}
+
+/**
+ * `GET /workflow-definitions/{id}/nodes/{nodeId}/last-briefing`: what one block
+ * last put in front of a model, over every run of the definition.
+ *
+ * It searches the runs rather than the definition, exactly as the worker does:
+ * the newest run that touched the node wins whatever version it ran, and a
+ * node that no run touched is answered from the block type alone.
+ */
+function nodeLastBriefingRoute(store: FixtureStore, definitionId: number, nodeId: string): FixtureResponse {
+  const blockType = FIXTURE_DEFINITION_NODES.find((node) => node.nodeId === nodeId)?.blockType ?? null;
+  let found: { run: FixtureRun; entry: FixtureAttempt } | null = null;
+  for (const run of store.runs.values()) {
+    for (const entry of run.attempts) {
+      if (entry.summary.nodeId !== nodeId) continue;
+      if (found === null || entry.summary.startedAt > found.entry.summary.startedAt) {
+        found = { run, entry };
+      }
+    }
+  }
+  const answer = { schemaVersion: AGENT_VISIBILITY_SCHEMA_VERSION, definitionId, nodeId, blockType };
+  if (found === null) {
+    const sends = blockType === null ? null : PROMPT_SENDING.has(blockType);
+    return ok({
+      ...answer,
+      sendsPrompts: sends,
+      ranIn: null,
+      attempt: null,
+      absent: { kind: sends === false ? "sends_no_prompt" : "never_ran" },
+    });
+  }
+  return ok({
+    ...answer,
+    sendsPrompts: found.entry.sendsPrompts,
+    ranIn: {
+      runId: found.run.runId,
+      definitionVersion: found.run.definitionVersion,
+      at: found.entry.summary.startedAt,
+      state: found.run.briefingsState,
+      capture: captureCounts(found.run),
+    },
+    attempt: attemptItem(store, found.entry),
+    absent: null,
+  });
+}
+
 function briefingRoute(store: FixtureStore, runId: string, rest: string[], query: URLSearchParams): FixtureResponse {
   const run = store.runs.get(runId);
   if (!run) return notFound("run");
@@ -947,17 +1076,8 @@ function briefingRoute(store: FixtureStore, runId: string, rest: string[], query
           (query.get("activationScopeId") === null ||
             entry.summary.activationScopeId === query.get("activationScopeId")),
       )
-      .map((entry) => ({
-        nodeId: entry.summary.nodeId,
-        attempt: entry.summary.attempt,
-        activationScopeId: entry.summary.activationScopeId,
-        startedAt: entry.summary.startedAt,
-        iteration: entry.iteration ?? null,
-        sendsPrompts: entry.sendsPrompts,
-        briefings: entry.briefingIds.map((briefingId) => ({ briefingId, overview: store.overviews.get(briefingId) })),
-        missing: entry.missing,
-      }));
-    return ok({ ...servedPage(items, listOptions(query)), state: run.briefingsState });
+      .map((entry) => attemptItem(store, entry));
+    return ok({ ...servedPage(items, listOptions(query)), state: run.briefingsState, capture: captureCounts(run) });
   }
   const [briefingId, collection, indexText, child] = rest;
   const index = store.briefings.get(briefingId!);
@@ -1259,6 +1379,14 @@ export function serveFixture(store: FixtureStore, method: string, url: URL, body
   const path = url.pathname.slice("/api/v1/".length).split("/").filter(Boolean).map(decodeURIComponent);
   try {
     if (path[0] === "work-scope") return workScopeRoute(store, path.slice(1), url.searchParams);
+    if (
+      path[0] === "workflow-definitions" &&
+      path[2] === "nodes" &&
+      path[4] === "last-briefing" &&
+      path.length === 5
+    ) {
+      return nodeLastBriefingRoute(store, Number(path[1]), path[3]!);
+    }
     return uiRoute(store, path, url.searchParams);
   } catch (error) {
     if (error instanceof AgentVisibilityPageError) return { status: 400, body: { error: error.message } };

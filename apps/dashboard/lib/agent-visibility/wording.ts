@@ -18,6 +18,9 @@ import {
 } from "@shared/agent-visibility";
 import { REPOSITORY_RELATIONSHIP_KINDS } from "@shared/contracts";
 
+import type { CaptureCounts } from "./contract";
+import { plural } from "./format";
+
 function labelFrom(labels: Record<string, string>, value: string): string {
   return Object.hasOwn(labels, value) ? labels[value]! : value;
 }
@@ -128,6 +131,62 @@ export function runStateSentence(state: string): RunStateSentence | null {
         title: "This run is in a state this dashboard does not know",
         body: `The worker recorded the state "${state}", which this build has no words for yet. A newer dashboard will say what it means.`,
         tone: "not_kept",
+      };
+  }
+}
+
+/**
+ * What capture did with a run's sends, at a glance.
+ *
+ * A refusal is invisible until somebody opens the one briefing that is not
+ * there, which is the whole point of the counters: "eleven sends, two refused"
+ * is readable without opening anything. So the line always leads with how many
+ * sends there were, and names every send that was not recorded.
+ *
+ * A counter a newer worker adds shows up as the gap between the worker's own
+ * sum and the five named here, and is said as a gap rather than swallowed.
+ */
+export function captureLine(capture: CaptureCounts): { text: string; whole: boolean } {
+  const named: [number, string][] = [
+    [capture.skipped, "refused"],
+    [capture.disabled, "made while recording was off"],
+    [capture.failed, "lost"],
+    [capture.conflict, "already recorded differently"],
+  ];
+  const counted = capture.captured + named.reduce((sum, [count]) => sum + count, 0);
+  const parts = named.filter(([count]) => count > 0).map(([count, label]) => `${count} ${label}`);
+  if (capture.sends > counted) {
+    parts.push(`${capture.sends - counted} this dashboard has no words for`);
+  }
+  const sends = plural(capture.sends, "send");
+  return parts.length === 0
+    ? { text: `${sends}, all recorded`, whole: true }
+    : { text: `${sends}: ${capture.captured} recorded, ${parts.join(", ")}`, whole: false };
+}
+
+/**
+ * Why a block has no briefing at all, where no run exists to say it.
+ *
+ * "Has not run yet" ends in dispatching the workflow; "sends no prompt" ends
+ * in nothing at all. They must never read alike, which is why the worker sends
+ * them as two kinds rather than one empty answer.
+ */
+export function nodeAbsenceSentence(kind: string): { title: string; body: string } {
+  switch (kind) {
+    case "never_ran":
+      return {
+        title: "This block has not run yet",
+        body: "No run of this workflow has reached this block, so nothing has gone out from it. Dispatch the workflow and what it sent will be here.",
+      };
+    case "sends_no_prompt":
+      return {
+        title: "No prompt goes out from this block",
+        body: "Briefings record what a model was sent. This block sends no prompt, so it has none.",
+      };
+    default:
+      return {
+        title: "There is no briefing, for a reason this dashboard does not know",
+        body: `The worker answered "${kind}", which this build has no words for yet. A newer dashboard will say what it means.`,
       };
   }
 }

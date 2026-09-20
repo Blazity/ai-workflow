@@ -618,3 +618,15 @@ test("a run older than briefings says so once, not once per attempt", async (t) 
   assert.equal(body.match(/before AI Workflow recorded what agents are sent/g)?.length, 1);
   assert.doesNotMatch(body, /Not recorded/);
 });
+
+test("what capture refused to record is on the run's own screen, not only in the editor", async (t) => {
+  // The same counters the flow editor shows: a refused capture is invisible
+  // until somebody opens the one briefing that is not in the list, so both
+  // screens that list sends have to carry it.
+  const { root } = render(t, { runId: STATES_RUN, node: "research" });
+  await settle();
+  const shown = text(root);
+  assert.match(shown, /7 sends/);
+  assert.match(shown, /2 refused/);
+  assert.match(shown, /1 lost/);
+});

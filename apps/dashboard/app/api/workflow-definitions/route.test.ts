@@ -15,6 +15,7 @@ import {
   handleDefinitionValidate,
   handleManualDispatch,
   handleManualDispatchPreflight,
+  handleNodeLastBriefing,
   handleTriggerRejections,
   handleWebhookConfig,
   handleWebhookDeliveries,
@@ -287,6 +288,29 @@ test("trigger rejections GETs the per-node worker path and is never cached", asy
   assert.equal(res.headers.get("cache-control"), "private, no-store");
   assert.deepEqual(await res.json(), {
     rejectionsToday: [{ reason: "rate_limited", count: 3 }],
+  });
+});
+
+test("the node's last briefing GETs the per-node worker path and is never cached", async () => {
+  const res = await handleNodeLastBriefing(
+    triggerParams("12", "fix loop/body"),
+    async (path, init) => {
+      assert.equal(
+        path,
+        "/api/v1/workflow-definitions/12/nodes/fix%20loop%2Fbody/last-briefing",
+      );
+      assert.equal(init?.method, "GET");
+      assert.equal(init?.body, undefined);
+      return Response.json({ nodeId: "fix loop/body", definitionId: 12, ranIn: null });
+    },
+  );
+
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("cache-control"), "private, no-store");
+  assert.deepEqual(await res.json(), {
+    nodeId: "fix loop/body",
+    definitionId: 12,
+    ranIn: null,
   });
 });
 
