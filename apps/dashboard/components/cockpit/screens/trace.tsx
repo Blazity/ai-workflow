@@ -548,7 +548,7 @@ export function TraceDetail({
             className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[12px] text-neutral-700"
           >
             {currentReplay.availability === "expired"
-              ? "The replay observation expired. Showing the legacy step trace."
+              ? "The replay observation expired, and what this run's agents were sent expired with it. Showing the legacy step trace."
               : "Visual replay was not captured for this run. Showing the legacy step trace."}
           </div>
           <CkCard

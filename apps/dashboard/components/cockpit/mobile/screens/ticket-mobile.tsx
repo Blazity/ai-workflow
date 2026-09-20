@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CkChip, CkStatusPill, PRLinks } from "@/components/ui";
+import { RepositoriesPanel } from "@/components/cockpit/agent-visibility/repositories-panel";
 import { useCockpit } from "@/components/cockpit/context";
 import type { TicketRunsResponse } from "@shared/contracts";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
@@ -75,6 +76,12 @@ export function TicketMobileScreen({
           onRefresh={refresh}
         />
       </div>
+
+      {/* On a phone this panel is often why the ticket was opened: check how
+          a repository question went before answering in Jira. This is the
+          ticket's own view, with no run selected, so a waiting question opens
+          it; the runs list is right below. */}
+      <RepositoriesPanel ticketKey={ticketKey} autoOpen />
 
       <div className="flex flex-col gap-2.5">
         {runs.length === 0 && (

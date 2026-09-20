@@ -71,6 +71,9 @@ importers:
       '@phosphor-icons/react':
         specifier: 2.1.10
         version: 2.1.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@shared/agent-visibility':
+        specifier: workspace:*
+        version: link:../../packages/agent-visibility
       '@shared/conditions':
         specifier: workspace:*
         version: link:../../packages/conditions
