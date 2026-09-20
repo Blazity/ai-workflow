@@ -17,6 +17,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 
+import { SETTINGS_REGISTRY } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization, settings, settingsVersions } from "../../db/schema.js";
@@ -108,7 +109,13 @@ describe("settings.list", () => {
     const rows = settingsOf(result);
 
     expect(result.isError).not.toBe(true);
-    expect(rows).toHaveLength(26);
+    // AGAINST THE REGISTRY ITSELF, not against a number. A count had to be
+    // bumped by whoever added a setting, in a file they had no reason to open,
+    // so the check failed for the one person who could not act on it and said
+    // nothing about which key was missing. This says exactly that.
+    expect(rows.map((row) => row.key).sort()).toEqual(
+      SETTINGS_REGISTRY.map((entry) => entry.key).sort(),
+    );
     expect(rows.some((row) => row.group === "harness")).toBe(false);
     const concurrency = rows.find((row) => row.key === "MAX_CONCURRENT_AGENTS");
     expect(concurrency).toMatchObject({

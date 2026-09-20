@@ -2870,10 +2870,12 @@ describe("what the ticket's text may decide after the answer it raised", () => {
     // and a path written after the answer would be taken. Telling the person
     // the comment door is shut, because an older question once asked about five,
     // would be false; the sentence counts what this run just counted.
+    // The example is the lowest key of the three left out, not the first of
+    // them, so the sentence reads the same whatever order they were refused in.
     expect(result.workScopeRecoveryNotes).toEqual([
       "Leaving a repository out of an answer is not final: this work's repository list can be" +
         " changed through the work scope API or the work_scope.edit tool, or the repository's" +
-        " full path can be written in a ticket comment, as github:acme/web, and the next run" +
+        " full path can be written in a ticket comment, as github:acme/api, and the next run" +
         " reads both.",
     ]);
   });
