@@ -10,12 +10,14 @@
  * evidence is what this whole surface exists to stop.
  *
  * WHAT A PREVIEW CANNOT KNOW is said on the preview rather than left to be
- * discovered. The worker's preview compiles the same sections execution does
- * (`packages/prompts/effective-prompt.ts`), but it has no prepared workspace
- * and no run, so runtime values are examples derived from each binding's
- * schema and the repository instructions and repo memory a run adds are only
- * named, under "Resolved at runtime". The alternative, a preview that looks
- * complete and is not, is how an operator ends up debugging the wrong prompt.
+ * discovered, and the worker now knows most of it
+ * (`apps/worker/src/services/workflow-definitions/prompt-preview.ts`): which
+ * profile compiled this and what its switches let a run send, which unresolved
+ * values STOP a run rather than being filled in, and which sections only a
+ * prepared workspace composes. Each of those replaces a sentence this screen
+ * used to guess at. What is left of the guess is one line, and a worker that
+ * reports none of it falls back to that line alone rather than to a default
+ * switch position, which would invent the fact the panel exists to show.
  */
 import { useRef, useState } from "react";
 import type {
@@ -27,6 +29,12 @@ import {
   type EffectivePromptPreviewResponse,
 } from "@/lib/api/client";
 import { Button, IconButton } from "@/components/ui";
+import {
+  contextLines,
+  gapTitle,
+  profileLine,
+  sourceFate,
+} from "@/lib/workflow-editor/prompt-preview";
 
 import { LastBriefingView } from "./last-briefing-view";
 
@@ -66,18 +74,38 @@ export function EffectivePromptPreviewResultView({
 }: {
   result: EffectivePromptPreviewResponse;
 }) {
+  // A source this build cannot classify joins the ordinary ones with the
+  // worker's own words: claiming it is fatal would cry wolf, and claiming it is
+  // harmless is the mistake this whole split exists to stop.
+  const fatal = result.unresolvedSources.filter((source) => sourceFate(source.atRun) === "fatal");
+  const rest = result.unresolvedSources.filter((source) => sourceFate(source.atRun) !== "fatal");
+  const gaps = result.notPreviewable ?? [];
   return (
     <div className="space-y-2">
-      <div className="rounded-xs border border-neutral-200 bg-off-white px-2 py-2">
-        <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-neutral-600">
-          A preview is not a send
+      {/* What a run would stop on, first and loudest: the value in the prompt
+          below is one this screen made up, and a preview that reads as green
+          for a definition that dies on its first run is the whole defect. */}
+      {fatal.length > 0 && (
+        <div role="alert" className="rounded-xs border border-red-300 bg-red-50 px-2 py-2">
+          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-red-800">
+            A run would stop here
+          </div>
+          <ul className="m-0 mt-1 space-y-1 p-0">
+            {fatal.map((source, index) => (
+              <li
+                key={`${source.kind}:${source.reference}:${index}`}
+                className="list-none font-body text-[10px] leading-[1.35] text-red-800"
+              >
+                <span className="font-mono">
+                  {source.kind} · {source.reference}
+                </span>
+                {": "}
+                {source.message}
+              </li>
+            ))}
+          </ul>
         </div>
-        <p className="m-0 mt-1 font-body text-[10px] leading-[1.35] text-neutral-600">
-          The values below are examples built from each binding&apos;s schema, not what a run would carry. Repository
-          instructions and repo memory are added when a workspace is prepared, so they are named under &ldquo;Resolved
-          at runtime&rdquo; rather than shown.
-        </p>
-      </div>
+      )}
 
       {result.issues.length > 0 && (
         <div role="alert" className="rounded-xs border border-red-200 bg-red-50 px-2 py-2">
@@ -100,13 +128,63 @@ export function EffectivePromptPreviewResultView({
         </div>
       )}
 
-      {result.unresolvedSources.length > 0 && (
+      <div className="rounded-xs border border-neutral-200 bg-off-white px-2 py-2">
+        <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-neutral-600">
+          A preview is not a send
+        </div>
+        {/* The profile decides which sections exist at all, so the prompt below
+            cannot be read without knowing which one made it. */}
+        <p className="m-0 mt-1 font-body text-[10px] leading-[1.35] text-neutral-700">
+          {profileLine(result.profile)}
+        </p>
+        {result.context ? (
+          <ul className="m-0 mt-1 space-y-1 p-0">
+            {contextLines(result.context).map((line) => (
+              <li
+                key={line.text}
+                className={`list-none font-body text-[10px] leading-[1.35] ${line.sends ? "text-neutral-600" : "text-coal"}`}
+              >
+                {line.text}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          // A worker from before the switches were reported. It composed the
+          // preview without reading them, so the old, weaker sentence is the
+          // only true one left.
+          <p className="m-0 mt-1 font-body text-[10px] leading-[1.35] text-neutral-600">
+            The values below are examples built from each binding&apos;s schema, not what a run would carry. This
+            worker does not say which switches the profile applied.
+          </p>
+        )}
+      </div>
+
+      {/* Named, not missing: an operator who cannot see a section has no way to
+          tell "a run adds this" from "nothing adds this". */}
+      {gaps.length > 0 && (
+        <div className="rounded-xs border border-neutral-200 bg-off-white px-2 py-2">
+          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-neutral-600">
+            Only a run composes these
+          </div>
+          <ul className="m-0 mt-1 space-y-1 p-0">
+            {gaps.map((gap) => (
+              <li key={gap.kind} className="list-none font-body text-[10px] leading-[1.35] text-neutral-600">
+                <span className="font-semibold text-neutral-700">{gapTitle(gap.kind)}</span>
+                {": "}
+                {gap.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {rest.length > 0 && (
         <div className="rounded-xs border border-neutral-200 bg-off-white px-2 py-2">
           <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-neutral-600">
             Resolved at runtime
           </div>
           <ul className="m-0 mt-1 space-y-1 p-0">
-            {result.unresolvedSources.map((source, index) => (
+            {rest.map((source, index) => (
               <li
                 key={`${source.kind}:${source.reference}:${index}`}
                 className="list-none font-body text-[10px] leading-[1.35] text-neutral-600"

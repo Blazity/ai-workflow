@@ -204,10 +204,106 @@ test("what it sent last time and what it would send now are two named, separate 
   assert.match(text(root), /Compiled prompt/);
 });
 
-test("the preview says what it cannot know before an operator trusts it", () => {
+test("a worker that reports no switches gets the weaker sentence, never an invented switch", () => {
+  // `result` is what a worker from before the truthful preview serves. The
+  // screen must not fill in a switch position: it would be inventing the one
+  // fact this panel exists to show.
   const html = renderToStaticMarkup(<EffectivePromptPreviewResultView result={result} />);
   assert.match(html, /A preview is not a send/);
   assert.match(html, /examples built from each binding/);
-  // The two sources a preview never holds are named, not silently absent.
-  assert.match(html, /Repository instructions and repo memory/);
+  assert.match(html, /does not say which switches the profile applied/);
+  assert.doesNotMatch(html, /This profile receives/);
+});
+
+/* ── What the worker now reports about the run this claims to be ───────── */
+
+const truthful: EffectivePromptPreviewResponse = {
+  ...result,
+  issues: [],
+  profile: { profileId: "acme-review", version: 4, name: "Review (sol/high)", applied: "selected" },
+  context: { includeWorkflowData: false, includeRepositoryInstructions: false },
+  unresolvedSources: [
+    {
+      kind: "data",
+      reference: "planning.output.plan",
+      message:
+        '"planning.output.plan" is not guaranteed when this block runs, so a run stops here instead of calling the agent. The value in the prompt above is an example this screen made up.',
+      atRun: "fails_the_run",
+    },
+    {
+      kind: "slot",
+      reference: "ticket.key",
+      message: "Resolved when this block runs.",
+      atRun: "filled_at_run",
+    },
+  ],
+  notPreviewable: [
+    { kind: "repository_memory", reason: "What earlier runs learned is added from the prepared workspace." },
+  ],
+};
+
+test("a value that stops a run is louder than one that gets filled in", () => {
+  const html = renderToStaticMarkup(<EffectivePromptPreviewResultView result={truthful} />);
+  const stops = html.indexOf("A run would stop here");
+  const atRun = html.indexOf("Resolved at runtime");
+  // Both are shown, the fatal one first and under its own heading: a preview
+  // that reads as green for a definition that dies on its first run is the
+  // defect this contract exists to end.
+  assert.ok(stops >= 0 && atRun > stops);
+  assert.match(html, /an example this screen made up/);
+  assert.match(html, /planning.output.plan/);
+  assert.match(html, /ticket.key/);
+});
+
+test("the switches the profile applied are said, both of them, either way", () => {
+  const html = renderToStaticMarkup(<EffectivePromptPreviewResultView result={truthful} />);
+  assert.match(html, /Review \(sol\/high\) v4, the profile this block selects/);
+  // "Not coming" rather than "not shown here": the difference the screen could
+  // not say before.
+  assert.match(html, /no workflow data/);
+  assert.match(html, /not coming, here or on a run/);
+  assert.doesNotMatch(html, /does not say which switches/);
+});
+
+test("a section only a run composes is named instead of silently absent", () => {
+  const html = renderToStaticMarkup(<EffectivePromptPreviewResultView result={truthful} />);
+  assert.match(html, /Only a run composes these/);
+  assert.match(html, /Repo memory/);
+});
+
+test("a profile that could not be resolved is never shown as somebody else's", () => {
+  const html = renderToStaticMarkup(
+    <EffectivePromptPreviewResultView result={{ ...truthful, profile: null }} />,
+  );
+  assert.match(html, /No Harness Profile applied/);
+  assert.doesNotMatch(html, /Review \(sol\/high\)/);
+});
+
+test("a fate this build does not know is not read as harmless", () => {
+  const html = renderToStaticMarkup(
+    <EffectivePromptPreviewResultView
+      result={{
+        ...truthful,
+        unresolvedSources: [
+          { kind: "data", reference: "x.y", message: "Something a newer worker knows.", atRun: "retried_at_run" },
+        ],
+      }}
+    />,
+  );
+  // Not claimed fatal (that would cry wolf) and not dressed up as resolved:
+  // the worker's own sentence, with nothing added.
+  assert.doesNotMatch(html, /A run would stop here/);
+  assert.match(html, /Something a newer worker knows/);
+});
+
+test("everything wrong with this prompt sits together, above what is merely absent", () => {
+  const html = renderToStaticMarkup(
+    <EffectivePromptPreviewResultView result={{ ...truthful, issues: result.issues }} />,
+  );
+  const stops = html.indexOf("A run would stop here");
+  const errors = html.indexOf("Preview errors");
+  const caveat = html.indexOf("A preview is not a send");
+  // A grey block between two red ones reads as two unrelated problems, and the
+  // second one is the one that gets skipped.
+  assert.ok(stops >= 0 && errors > stops && caveat > errors);
 });

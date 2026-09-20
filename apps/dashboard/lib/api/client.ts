@@ -148,8 +148,18 @@ interface EffectivePromptPreviewUnresolvedSource {
   kind: "profile" | "repository" | "data" | "slot";
   reference: string;
   message: string;
+  /** `filled_at_run`, `fails_the_run` or `not_in_preview`: what execution does
+   *  with this source. Absent from a worker older than the contract, and read
+   *  as a claim nobody made rather than as a harmless one. */
+  atRun?: string;
 }
 
+/**
+ * The fields below `issues` arrived with the worker's truthful preview and are
+ * all OPTIONAL here, because the worker and the dashboard deploy separately: a
+ * worker from before it says nothing about the profile switches, and a screen
+ * that filled in a default would be inventing the very fact it exists to show.
+ */
 export interface EffectivePromptPreviewResponse {
   blockId: string;
   prompt: string;
@@ -158,6 +168,13 @@ export interface EffectivePromptPreviewResponse {
   provenance: EffectivePromptPreviewProvenance[];
   unresolvedSources: EffectivePromptPreviewUnresolvedSource[];
   issues: WorkflowDefinitionValidationIssue[];
+  /** The applied profile's own switches, as execution reads them. */
+  context?: { includeWorkflowData: boolean; includeRepositoryInstructions: boolean };
+  /** The profile this prompt was compiled with; null where the one the block
+   *  names could not be resolved, which a run refuses to start on. */
+  profile?: { profileId: string; version: number; name: string; applied: string } | null;
+  /** Sections only a prepared workspace composes, named rather than missing. */
+  notPreviewable?: { kind: string; reason: string }[];
 }
 
 interface RunSearchHit {
