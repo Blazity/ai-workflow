@@ -1,2 +1,3 @@
 - A run's Block Attempt has a Briefing tab: read the exact prompt each agent was sent, section by section, with where every part came from, what was held back before sending, and the repositories it was given.
 - A ticket page has a Repositories panel: see the repository record and every repository question as a round with each answer as it arrived, and select, exclude or undo an entry yourself.
+- The prompt preview in the editor now shows the prompt your block would really send: it applies the selected profile's switches (a profile with workflow data off no longer previews a Runtime data section), marks the values that would stop a run instead of being filled in, and names the sections only a run can compose rather than leaving them silently out.
