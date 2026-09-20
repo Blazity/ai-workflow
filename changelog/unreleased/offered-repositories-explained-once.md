@@ -1,1 +1,0 @@
-- On a ticket's Repositories panel, the repositories a question offered and nobody decided about are explained once, above the list, instead of repeating the same sentence under every one of them. The keys and their two buttons are what a person scans there, and with three or four repositories offered the explanation stood between them three or four times over.
