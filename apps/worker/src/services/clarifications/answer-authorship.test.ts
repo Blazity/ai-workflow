@@ -138,7 +138,11 @@ async function answer(
   tracker: ReturnType<typeof makeTracker>,
   id: string,
   text: string,
-  extra: { actor?: { id: string; label: string }; answerAuthorCount?: number } = {},
+  extra: {
+    actor?: { id: string; label: string };
+    answerAuthorCount?: number;
+    surface?: Parameters<typeof answerClarificationAndResume>[0]["surface"];
+  } = {},
 ) {
   const row = await getHookClarification(db, id);
   if (!row) throw new Error("clarification vanished");
@@ -147,6 +151,7 @@ async function answer(
     row,
     rawAnswer: text,
     actor: extra.actor ?? ACTOR,
+    surface: extra.surface ?? { kind: "dashboard" },
     ...(extra.answerAuthorCount === undefined
       ? {}
       : { answerAuthorCount: extra.answerAuthorCount }),

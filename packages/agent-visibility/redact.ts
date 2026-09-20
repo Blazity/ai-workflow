@@ -93,7 +93,9 @@ export interface AppliedSpan {
   kind: string;
 }
 
-interface Removal {
+/** A reported span once it is checked and widened: what `applyRemovals`
+ *  writes into the text. */
+export interface VisibilityRemoval {
   start: number;
   end: number;
   kind: string;
@@ -101,13 +103,22 @@ interface Removal {
 }
 
 /**
- * The sanitizer's reports on a well-formed `text`, checked, widened to whole
- * characters and merged: overlapping reports become one removal that keeps the
- * first report's kind and replacement (a token inside a credential URL is one
- * removal, not two).
+ * Reports on a well-formed `text`, checked, widened to whole characters and
+ * merged: overlapping reports become one removal that keeps the first report's
+ * kind and replacement (a token inside a credential URL is one removal, not
+ * two).
+ *
+ * Exported for the worker's detector, which proves what it reports leaves text
+ * MCP will not rewrite: the proof has to run on the text this package will
+ * store, so it merges and applies with these two functions rather than with a
+ * second implementation of them.
  */
-function removals(text: string, sanitize: VisibilitySanitizer, where: string): Removal[] {
-  const checked = [...sanitize(text)].map((span) => {
+export function mergeRedactions(
+  text: string,
+  reported: readonly VisibilityRedaction[],
+  where: string,
+): VisibilityRemoval[] {
+  const checked = [...reported].map((span) => {
     const valid =
       Number.isInteger(span.start) &&
       Number.isInteger(span.end) &&
@@ -132,7 +143,7 @@ function removals(text: string, sanitize: VisibilitySanitizer, where: string): R
     };
   });
   checked.sort((left, right) => left.start - right.start || right.end - left.end);
-  const merged: Removal[] = [];
+  const merged: VisibilityRemoval[] = [];
   for (const span of checked) {
     const last = merged.at(-1);
     if (last && span.start < last.end) {
@@ -144,8 +155,16 @@ function removals(text: string, sanitize: VisibilitySanitizer, where: string): R
   return merged;
 }
 
-/** Writes `removals` (sorted, apart, inside `text`) into `text`. */
-function apply(text: string, list: readonly Removal[]): { text: string; spans: AppliedSpan[] } {
+/** What the sanitizer wants removed from `text`, checked and merged. */
+function removals(text: string, sanitize: VisibilitySanitizer, where: string): VisibilityRemoval[] {
+  return mergeRedactions(text, sanitize(text), where);
+}
+
+/** Writes `list` (sorted, apart, inside `text`) into `text`. */
+export function applyRemovals(
+  text: string,
+  list: readonly VisibilityRemoval[],
+): { text: string; spans: AppliedSpan[] } {
   let out = "";
   let byte = 0;
   let cursor = 0;
@@ -205,7 +224,7 @@ export function redactSection(
         },
       ];
     });
-    const applied = apply(text.slice(from, to), local);
+    const applied = applyRemovals(text.slice(from, to), local);
     const control = applied.spans.filter((span) => span.kind === CONTROL_CHARACTERS_REDACTION_KIND);
     return {
       text: applied.text,
@@ -235,7 +254,7 @@ export function sanitizeText(
   counter: { redactions: number },
 ): SanitizedText {
   const text = wellFormed(value);
-  const applied = apply(text, removals(text, sanitize, where));
+  const applied = applyRemovals(text, removals(text, sanitize, where));
   counter.redactions += applied.spans.filter((span) => span.kind !== CONTROL_CHARACTERS_REDACTION_KIND).length;
   if (applied.text.length === 0 && text.length > 0) {
     const end = DEFAULT_REDACTION_REPLACEMENT.length;

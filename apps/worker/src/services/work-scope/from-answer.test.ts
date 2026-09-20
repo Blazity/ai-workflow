@@ -179,6 +179,7 @@ async function answer(
     /** The provider, when a test needs it to be something other than the
      *  stand-in: unreachable, for the fallback rows. */
     generate?: AnswerReadingModel;
+    surface?: Parameters<typeof answerClarificationAndResume>[0]["surface"];
   } = {},
 ) {
   const row = await getHookClarification(db, id);
@@ -188,6 +189,7 @@ async function answer(
     row,
     rawAnswer: text,
     actor: extra.actor ?? ACTOR,
+    surface: extra.surface ?? { kind: "dashboard" },
     ...(extra.answerAuthorCount === undefined
       ? {}
       : { answerAuthorCount: extra.answerAuthorCount }),

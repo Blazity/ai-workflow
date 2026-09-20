@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  captureAgentBriefing: vi.fn(async (_briefing: unknown) => ({ outcome: "recorded", briefingId: 1 })),
   sleep: vi.fn().mockResolvedValue(undefined),
   checkPhaseDone: vi.fn(),
   collectPhase: vi.fn(),
@@ -44,6 +45,10 @@ const FIX_INPUT_PARTS = [
   { id: "ticket", title: "Ticket", content: "FIX INPUT", origin: { kind: "ticket" } },
 ];
 vi.mock("../../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
+vi.mock("../../agent-visibility/capture.js", () => ({
+  captureAgentBriefing: mocks.captureAgentBriefing,
+  captureSkippedSend: vi.fn(async () => ({ outcome: "refused", reason: "skipped" })),
+}));
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
     get: vi.fn(async () => ({ writeFiles: mocks.writeFiles, runCommand: mocks.runCommand })),
@@ -237,9 +242,21 @@ describe("fix_agent execute", () => {
       {},
       ctx,
       {},
-      makeInvocation(ctx, { compileInvocationPrompt }),
+      makeInvocation(ctx, {
+        nodeId: block.id,
+        blockType: "fix_agent",
+        compileInvocationPrompt,
+      }),
     );
 
+    // Red when: this send stops passing a briefing, or is reached with no
+    // invocation so the plan returns null. A send that silently stops
+    // recording is invisible from anywhere but here.
+    expect(mocks.captureAgentBriefing).toHaveBeenCalledTimes(1);
+    expect(
+      (mocks.captureAgentBriefing.mock.calls[0] as unknown as [{ identity: Record<string, unknown> }])[0]
+        .identity,
+    ).toMatchObject({ nodeId: block.id, blockType: "fix_agent", kind: "agent", sequence: 1 });
     expect(mocks.fixContextParts).toHaveBeenCalledWith(
       expect.not.objectContaining({ instructions: expect.anything() }),
     );

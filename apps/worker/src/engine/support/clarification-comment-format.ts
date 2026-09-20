@@ -107,12 +107,46 @@ export function formatClarificationNudgeComment(input: {
 }
 
 /**
+ * Where an answer came from, as the channel that took it states it.
+ *
+ * NEVER READ OUT OF A LABEL. An MCP client answers signed with its OAuth
+ * client id ("MCP fBEUsk..."), and a person in the dashboard may be called
+ * anything at all, so only the surface that took the answer can say which one
+ * it was.
+ */
+/**
+ * Where an answer arrived, as the caller states it.
+ *
+ * Only the surfaces this comment is posted for: an answer that arrived as a
+ * comment on this very ticket is its own trace and gets none, so there is no
+ * wording for one.
+ */
+export type ClarificationAnswerSurfaceComment =
+  | { kind: "dashboard" }
+  /** `person` is whoever is behind the client, when the deployment knows and
+   *  the label is a name rather than an address. */
+  | { kind: "mcp"; clientId: string; person: string | null };
+
+function answeredWhere(label: string, surface: ClarificationAnswerSurfaceComment): string {
+  if (surface.kind === "dashboard") {
+    return `${label} answered the clarification in the dashboard; the run is resuming.`;
+  }
+  return surface.person
+    ? `${surface.person} answered the clarification through the MCP client ${surface.clientId}; the run is resuming.`
+    : `The MCP client ${surface.clientId} answered the clarification; the run is resuming.`;
+}
+
+/**
  * Trace posted to the ticket when a clarification is answered somewhere other
- * than the ticket itself, which today means the dashboard. Without it the public
+ * than the ticket itself: the dashboard, or an MCP client. Without it the public
  * questions comment ends in silence: the ticket shows a question, then a status
  * change, and nothing that explains what unblocked the run. The Jira comment
  * path needs no trace, because the human's own comment already is one and this
  * would echo it back at them.
+ *
+ * IT SAYS WHERE THE ANSWER REALLY CAME FROM. Every answer used to read as "in
+ * the dashboard", so an MCP client's answer arrived on the ticket signed with
+ * an OAuth client id and a sentence that was not true.
  *
  * The answer is human-authored, not agent-authored, and goes back into the
  * ticket that same human is invited to comment on, so it is published verbatim:
@@ -122,9 +156,10 @@ export function formatClarificationNudgeComment(input: {
 export function formatClarificationAnswerComment(input: {
   answeredByLabel: string;
   answer: string;
+  surface: ClarificationAnswerSurfaceComment;
 }): string {
   return [
-    `${input.answeredByLabel} answered the clarification in the dashboard; the run is resuming.`,
+    answeredWhere(input.answeredByLabel, input.surface),
     ["Answer:", input.answer.trim()].join("\n"),
   ].join("\n\n");
 }
