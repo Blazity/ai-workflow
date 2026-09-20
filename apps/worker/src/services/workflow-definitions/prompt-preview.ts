@@ -65,7 +65,7 @@ import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 
 /** The two profile switches execution reads before it composes a prompt
  *  (`agent-workflow.ts`), reported so a screen can name the prompt it shows. */
-export interface WorkflowPromptPreviewContext {
+interface WorkflowPromptPreviewContext {
   includeWorkflowData: boolean;
   includeRepositoryInstructions: boolean;
 }
@@ -79,19 +79,19 @@ export interface WorkflowPromptPreviewContext {
  * - `not_in_preview`: only a prepared workspace has it. Absent here, and its
  *   absence at run time is not itself a failure.
  */
-export type PreviewSourceFate = "filled_at_run" | "fails_the_run" | "not_in_preview";
+type PreviewSourceFate = "filled_at_run" | "fails_the_run" | "not_in_preview";
 
-export interface WorkflowPromptPreviewSource extends EffectivePromptUnresolvedSource {
+interface WorkflowPromptPreviewSource extends EffectivePromptUnresolvedSource {
   atRun: PreviewSourceFate;
 }
 
 /** A section a run composes and an editor cannot, named rather than missing. */
-export interface WorkflowPromptPreviewGap {
+interface WorkflowPromptPreviewGap {
   kind: "repository_instructions" | "repository_memory";
   reason: string;
 }
 
-export interface WorkflowPromptPreviewProfile {
+interface WorkflowPromptPreviewProfile {
   profileId: string;
   version: number;
   name: string;

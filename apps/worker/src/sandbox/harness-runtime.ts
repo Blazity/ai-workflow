@@ -38,7 +38,11 @@ const SAFE_FILE_MODES = new Set([
   0o755,
 ]);
 
-export const HARNESS_TOOL_CATALOG = new Set<string>(
+/** The tool ids a manifest may name, as a membership test for the audit below
+ *  (line ~203). The stored schema is enforced by `z.enum(HARNESS_TOOL_IDS)` in
+ *  `harness-profiles/manifest.ts`; this is the runtime's own second look. Not
+ *  exported: nothing outside this file has ever asked. */
+const HARNESS_TOOL_CATALOG = new Set<string>(
   HARNESS_TOOL_IDS,
 );
 
@@ -46,12 +50,19 @@ export const HARNESS_TOOL_CATALOG = new Set<string>(
  * MCP configuration is deliberately closed until an integration has a
  * code-owned materializer. Persisted arbitrary server commands must never
  * become an execution path merely because they appeared in a profile row.
+ *
+ * Read when a runtime is resolved (line ~211). Not exported: the closed list is
+ * this file's rule to enforce, and nothing outside has ever read it.
  */
-export const HARNESS_MCP_INTEGRATION_CATALOG = new Set<string>(
+const HARNESS_MCP_INTEGRATION_CATALOG = new Set<string>(
   HARNESS_MCP_INTEGRATION_IDS,
 );
 
-export const HARNESS_CREDENTIAL_REFERENCE_CATALOG = new Set([
+/** The credential names a manifest may reference, checked when a runtime is
+ *  resolved (line ~261). Which ONE a profile must carry is decided per provider
+ *  in `harness-profiles/manifest.ts`; this only refuses a name nothing here can
+ *  ever materialize. Not exported, for the same reason as above. */
+const HARNESS_CREDENTIAL_REFERENCE_CATALOG = new Set([
   "anthropic",
   "openai",
   "github",
@@ -300,7 +311,10 @@ export function resolveRuntimeCredentials(
   };
 }
 
-export function runtimePathsForManifestHash(
+/** The `/tmp/aiw-harness/<manifest hash>` layout every sandboxed agent runs
+ *  under. Live code: `resolveHarnessRuntime` calls it (line ~144) and passes
+ *  the result to the agents as `runtime.paths`. Only its export was unused. */
+function runtimePathsForManifestHash(
   provider: "claude" | "codex",
   manifestHash: string,
 ): AgentRuntimePaths {
