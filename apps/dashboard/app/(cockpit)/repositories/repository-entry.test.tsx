@@ -131,34 +131,46 @@ function render(
   } = {},
 ): Harness {
   const calls: Call[] = [];
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = ((url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     const body = init?.body === undefined ? null : JSON.parse(String(init.body));
     calls.push({ url: String(url), method, body });
-    if (String(url).startsWith("/api/repository-catalog/7/suggestions")) {
-      return Promise.resolve(
-        Response.json({ suggestions: options.suggestions ?? [], nextCursor: null }),
-      );
-    }
-    if (String(url).startsWith("/api/repository-catalog/7/versions")) {
-      return Promise.resolve(
-        options.onVersions
+    mine.inFlight += 1;
+    mine.started += 1;
+    // Every answer lands a turn later, the way a response does: resolving in
+    // the caller's own microtask is what let a counted wait look reliable.
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      if (String(url).startsWith("/api/repository-catalog/7/suggestions")) {
+        return Response.json({ suggestions: options.suggestions ?? [], nextCursor: null });
+      }
+      if (String(url).startsWith("/api/repository-catalog/7/versions")) {
+        return options.onVersions
           ? options.onVersions(String(url))
-          : Response.json({ versions: [], hasMore: false }),
-      );
-    }
-    if (String(url) === "/api/repository-catalog/7" && method === "PUT") {
-      return Promise.resolve(
-        options.onSave
+          : Response.json({ versions: [], hasMore: false });
+      }
+      if (String(url) === "/api/repository-catalog/7" && method === "PUT") {
+        return options.onSave
           ? options.onSave(body)
-          : Response.json({ repository: REPOSITORY, version: 4 }),
-      );
-    }
-    if (String(url).startsWith("/api/memory")) {
-      return Promise.resolve(options.onDelete ? options.onDelete() : Response.json({}));
-    }
-    throw new Error(`unexpected ${method} ${url}`);
+          : Response.json({ repository: REPOSITORY, version: 4 });
+      }
+      if (String(url).startsWith("/api/memory")) {
+        return options.onDelete ? options.onDelete() : Response.json({});
+      }
+      throw new Error(`unexpected ${method} ${url}`);
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
   }) as typeof globalThis.fetch;
 
   const replaced: Array<{ url: string }> = [];
@@ -222,6 +234,54 @@ function render(
   return { root: renderer.root, calls, replaced, routed };
 }
 
+/** What `settle` watches: the reads this file has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One render per test, and this file's tests run one at a time. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of calls this screen starts finish, and waits for exactly
+ * that.
+ *
+ * NEVER A COUNT OF TURNS. How many turns a chain costs is the runner's
+ * business, so a fixed count passes on an idle machine and, on a loaded one,
+ * returns while calls are still in flight: the assertion then reads a screen
+ * mid-save and the failure looks like the product. Quiet is the condition
+ * those assertions mean, and it is two things, because an answer that lands
+ * may start the next call: nothing in flight, and a turn that started nothing
+ * new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a screen that never settles fails as a readable timeout rather
+ * than hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the screen was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
+  }
+}
+
 /** Every string the tree renders, flattened. Runs of whitespace collapse: JSX
  *  splits `Erase {docPath}` into two children and joining them would otherwise
  *  produce a double space no assertion could be written against. */
@@ -271,9 +331,10 @@ test("the save carries the version this screen loaded, and only the field that m
   typeInto(harness.root, "Rules", "new rules");
   typeReason(harness.root, "because");
 
-  await act(async () => {
+  act(() => {
     button(harness.root, "Save changes").props.onClick();
   });
+  await settle();
 
   assert.deepEqual(
     harness.calls.map((call) => call.method),
@@ -300,9 +361,10 @@ test("a 409 says which version the profile moved to and keeps the draft", async 
   typeInto(harness.root, "Rules", "new rules");
   typeReason(harness.root, "because");
 
-  await act(async () => {
+  act(() => {
     button(harness.root, "Save changes").props.onClick();
   });
+  await settle();
 
   assert.match(
     text(harness.root),
@@ -323,9 +385,10 @@ test("a save the worker answers as unchanged is reported as such, not as a versi
   typeInto(harness.root, "Rules", "new rules");
   typeReason(harness.root, "because");
 
-  await act(async () => {
+  act(() => {
     button(harness.root, "Save changes").props.onClick();
   });
+  await settle();
 
   assert.match(text(harness.root), /Nothing was saved/);
   assert.doesNotMatch(text(harness.root), /Saved as version/);
@@ -346,9 +409,10 @@ test("a refused group name still points at the Scripts tab", async (t) => {
   openTab(harness.root, "Rules");
   typeInto(harness.root, "Rules", "new rules");
   typeReason(harness.root, "because");
-  await act(async () => {
+  act(() => {
     button(harness.root, "Save changes").props.onClick();
   });
+  await settle();
 
   assert.match(text(harness.root), /A script group name is not valid/);
   assert.match(text(harness.root), /The Scripts tab holds/);
@@ -363,9 +427,10 @@ test("the rules editor hands the markdown back unchanged", async (t) => {
   openTab(harness.root, "Rules");
   typeInto(harness.root, "Rules", markdown);
   typeReason(harness.root, "because");
-  await act(async () => {
+  act(() => {
     button(harness.root, "Save changes").props.onClick();
   });
+  await settle();
 
   assert.equal((harness.calls[0].body as { rules: string }).rules, markdown);
 });
@@ -379,9 +444,10 @@ test("restoring an old version saves it forward with a reason that says what it 
     .findAll((node) => node.type === "button" && text(node).includes("Restore this version"));
   assert.equal(restores.length, 1, "only the versions that are not current are restorable");
 
-  await act(async () => {
+  act(() => {
     restores[0].props.onClick();
   });
+  await settle();
 
   const put = harness.calls.find((call) => call.method === "PUT");
   assert.ok(put, "restore sends a PUT like any other save");
@@ -428,17 +494,19 @@ test("erasing a memory document takes two clicks, and the first one sends nothin
   const harness = render(t, { memory: MEMORY });
   openTab(harness.root, "Memory");
 
-  await act(async () => {
+  act(() => {
     button(harness.root, "Erase facts").props.onClick();
   });
+  await settle();
 
   assert.equal(harness.calls.length, 0, "arming is not deleting");
   assert.match(text(harness.root), /Erase facts from the store\?/);
   assert.match(text(harness.root), /A later run can learn it again\./);
 
-  await act(async () => {
+  act(() => {
     button(harness.root, "Confirm erase").props.onClick();
   });
+  await settle();
 
   assert.equal(harness.calls.length, 1);
   assert.equal(harness.calls[0].method, "DELETE");
@@ -449,12 +517,14 @@ test("the confirmation does not carry from one document to the next", async (t) 
   const harness = render(t, { memory: MEMORY });
   openTab(harness.root, "Memory");
 
-  await act(async () => {
+  act(() => {
     button(harness.root, "Erase facts").props.onClick();
   });
-  await act(async () => {
+  await settle();
+  act(() => {
     button(harness.root, "Erase lessons").props.onClick();
   });
+  await settle();
 
   // One armed document at a time: the first row is back to its plain button, so
   // a second click there arms rather than erases.
@@ -473,12 +543,14 @@ test("cancelling an armed erase leaves the document alone", async (t) => {
   const harness = render(t, { memory: MEMORY });
   openTab(harness.root, "Memory");
 
-  await act(async () => {
+  act(() => {
     button(harness.root, "Erase facts").props.onClick();
   });
-  await act(async () => {
+  await settle();
+  act(() => {
     button(harness.root, "Cancel").props.onClick();
   });
+  await settle();
 
   assert.equal(harness.calls.length, 0);
   assert.match(text(harness.root), /The storefront runs on Next\.js\./);
@@ -510,9 +582,10 @@ test("a checks ceiling the contract would refuse disables Save and stays on scre
 
   typeCeiling(harness.root, "45");
   assert.equal(button(harness.root, "Save changes").props.disabled, false);
-  await act(async () => {
+  act(() => {
     button(harness.root, "Save changes").props.onClick();
   });
+  await settle();
 
   assert.equal(
     (harness.calls[0].body as { batchTimeoutMinutes: number }).batchTimeoutMinutes,
@@ -653,7 +726,7 @@ test("a failed suggestion row renders its redacted reason", async (t) => {
     ],
   });
 
-  await act(async () => {});
+  await settle();
 
   assert.match(text(harness.root), /Suggestion calls/);
   assert.match(text(harness.root), /profile source: GitHub answered 403 Forbidden/);
@@ -667,9 +740,10 @@ test("Load more asks for what is older than the oldest row it is showing", async
     onVersions: () => Response.json({ versions: [version(1)], hasMore: false }),
   });
 
-  await act(async () => {
-    await button(harness.root, "Load more").props.onClick();
+  act(() => {
+    button(harness.root, "Load more").props.onClick();
   });
+  await settle();
 
   const asked = harness.calls.filter((call) => call.url.includes("/versions"));
   assert.equal(asked.length, 1);
@@ -702,9 +776,10 @@ test("a tab switch keeps the history pages already loaded", async (t) => {
     onVersions: () => Response.json({ versions: [version(1)], hasMore: false }),
   });
 
-  await act(async () => {
-    await button(harness.root, "Load more").props.onClick();
+  act(() => {
+    button(harness.root, "Load more").props.onClick();
   });
+  await settle();
   assert.match(text(harness.root), /reason for v1/);
 
   openTab(harness.root, "Overview");

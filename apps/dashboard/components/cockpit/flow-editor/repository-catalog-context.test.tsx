@@ -79,12 +79,122 @@ function directoryBody(paths: string[]) {
   return { repositories: paths.map((path) => repository(path)), providers };
 }
 
+/** A read a test holds open on purpose, to observe the screen while it waits.
+ *  `resolve` is what ends it; the waiter below is `settle`. */
 function deferred<T>() {
-  let settle!: (value: T) => void;
-  const promise = new Promise<T>((resolve) => {
-    settle = resolve;
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settleIt) => {
+    resolve = settleIt;
   });
-  return { promise, settle };
+  return { promise, resolve };
+}
+
+/** What `settle` watches: the reads this provider has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One mount per test, and this file's tests run one at a time. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/**
+ * Installs `handler` as the fetch for one test and returns the undo.
+ *
+ * The handler is called at the call, not inside `answer`, so a queue keyed by
+ * URL still hands out its bodies in the order the provider asked in, and an
+ * unexpected extra request still fails at the request. Only the answer is
+ * delayed: it lands a turn later, the way a response does, because resolving
+ * in the caller's own microtask is what let a counted wait look reliable.
+ * `FIXTURE_SLOW_MS` delays every answer by that many milliseconds, which is
+ * how this harness reproduces a runner slow enough to break a counted wait.
+ * A read a test holds open deliberately stays in flight until that test ends
+ * it: the knob adds to the wait, it does not shorten it.
+ */
+function installFetch(
+  handler: (url: string, init?: RequestInit) => Promise<Response>,
+): () => void {
+  const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    mine.inFlight += 1;
+    mine.started += 1;
+    const answered = handler(String(url), init);
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      return answered;
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
+  }) as typeof globalThis.fetch;
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of reads the provider starts finish, and waits for exactly
+ * that.
+ *
+ * NEVER A COUNT OF TURNS. One refresh is two reads whose bodies land a turn or
+ * more after the call, and a landed read can start the next one. How many
+ * turns that costs is the runner's business, so a fixed count passes on an
+ * idle machine and, on a loaded one, returns while a read is still in flight:
+ * the assertion then reads a half-loaded provider and the failure looks like
+ * the product. Quiet is the condition those assertions mean, and it is two
+ * things: nothing in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a provider that never settles fails as a readable timeout
+ * rather than hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(
+        `the provider was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`,
+      );
+    }
+  }
+}
+
+/**
+ * Waits for the thing the next assertion is about, and fails saying what it
+ * was still waiting for. For the tests that hold a read open on purpose, where
+ * "nothing in flight" never becomes true and is not what they mean anyway.
+ */
+async function waitFor(condition: () => boolean, what: string, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (condition()) return;
+    if (Date.now() >= deadline) {
+      assert.fail(`waited ${timeoutMs} ms for ${what}`);
+    }
+    await turn();
+  }
 }
 
 interface Harness {
@@ -110,15 +220,14 @@ async function mount(responses: {
     "/api/repository-catalog": [...(responses.catalog ?? [])],
     "/api/repositories": [...(responses.directory ?? [])],
   };
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((url: string) => {
-    urls.push(String(url));
-    const queue = queues[String(url)];
+  const uninstallFetch = installFetch((url) => {
+    urls.push(url);
+    const queue = queues[url];
     assert.ok(queue, `no queue for ${url}`);
     const next = queue.shift();
     assert.notEqual(next, undefined, `an unexpected extra request was made to ${url}`);
     return next!;
-  }) as typeof globalThis.fetch;
+  });
 
   let captured!: RepositoryCatalogState;
   function Probe() {
@@ -134,7 +243,7 @@ async function mount(responses: {
     );
   });
   renderer.unmount = ((original) => () => {
-    globalThis.fetch = originalFetch;
+    uninstallFetch();
     original.call(renderer);
   })(renderer.unmount);
   return { renderer, state: () => captured, urls };
@@ -146,7 +255,7 @@ test("the provider reads the repository catalog and the directory once on mount"
     directory: [Promise.resolve(Response.json(directoryBody(["Blazity/a"])))],
   });
 
-  await act(async () => undefined);
+  await settle();
 
   assert.deepEqual(harness.urls.toSorted(), [
     "/api/repositories",
@@ -189,7 +298,7 @@ test("an activated catalog offers its enabled rows only, and not the rest of the
     ],
   });
 
-  await act(async () => undefined);
+  await settle();
 
   assert.equal(harness.state().activated, true);
   assert.deepEqual(
@@ -229,7 +338,7 @@ test("while the bridge is on the directory is the list, with the catalog's disab
     ],
   });
 
-  await act(async () => undefined);
+  await settle();
 
   assert.deepEqual(
     harness.state().repositories.map((option) => [
@@ -256,7 +365,7 @@ test("a catalog read that fails falls back to the directory and says the enabled
     directory: [Promise.resolve(Response.json(directoryBody(["Blazity/a"])))],
   });
 
-  await act(async () => undefined);
+  await settle();
 
   assert.equal(harness.state().status, "ready");
   assert.equal(harness.state().catalogAvailable, false);
@@ -280,7 +389,7 @@ test("a directory read that fails renders the catalog and reports the providers 
     directory: [Promise.resolve(Response.json({ error: "nope" }, { status: 500 }))],
   });
 
-  await act(async () => undefined);
+  await settle();
 
   assert.equal(harness.state().status, "ready");
   assert.deepEqual(
@@ -312,7 +421,7 @@ test("a directory read that fails while the bridge is on is an error", async () 
     directory: [Promise.resolve(Response.json({ error: "nope" }, { status: 500 }))],
   });
 
-  await act(async () => undefined);
+  await settle();
 
   assert.equal(harness.state().status, "error");
   await act(async () => harness.renderer.unmount());
@@ -329,19 +438,26 @@ test("a stale catalog response never replaces a newer one", async () => {
     directory: [first.promise, second.promise],
   });
 
-  // Refresh supersedes the in-flight mount request.
+  // Refresh supersedes the in-flight mount request. Both reads stay open: that
+  // is the state this test exists to observe, so it waits for the second
+  // request to have been made and never for quiet.
   await act(async () => harness.state().refresh());
-  assert.equal(
-    harness.urls.filter((url) => url === "/api/repositories").length,
-    2,
+  await waitFor(
+    () => harness.urls.filter((url) => url === "/api/repositories").length === 2,
+    "the refresh to issue its own directory read",
   );
 
   await act(async () => {
-    second.settle(Response.json(directoryBody(["Blazity/new"])));
+    second.resolve(Response.json(directoryBody(["Blazity/new"])));
   });
+  await waitFor(
+    () => harness.state().repositories.some((option) => option.repoPath === "Blazity/new"),
+    "the newer directory to land",
+  );
   await act(async () => {
-    first.settle(Response.json(directoryBody(["Blazity/stale"])));
+    first.resolve(Response.json(directoryBody(["Blazity/stale"])));
   });
+  await settle();
 
   assert.equal(harness.state().status, "ready");
   assert.deepEqual(
@@ -363,13 +479,21 @@ test("a stale failure never downgrades a newer successful catalog", async () => 
     ],
   });
 
+  // Both catalog reads stay open on purpose, so the waits here are for the
+  // newer body landing and then for the whole pair being done.
   await act(async () => harness.state().refresh());
+  await waitFor(
+    () => harness.urls.filter((url) => url === "/api/repository-catalog").length === 2,
+    "the refresh to issue its own catalog read",
+  );
   await act(async () => {
-    second.settle(Response.json(catalogBody({ activated: false, rows: [] })));
+    second.resolve(Response.json(catalogBody({ activated: false, rows: [] })));
   });
+  await waitFor(() => harness.state().status === "ready", "the newer catalog to land");
   await act(async () => {
-    first.settle(Response.json({ error: "boom" }, { status: 500 }));
+    first.resolve(Response.json({ error: "boom" }, { status: 500 }));
   });
+  await settle();
 
   assert.equal(harness.state().status, "ready");
   assert.deepEqual(
@@ -396,7 +520,7 @@ test("a 200 with an unusable body counts as the catalog not answering, never as 
       directory: [Promise.resolve(Response.json(directoryBody(["Blazity/a"])))],
     });
 
-    await act(async () => undefined);
+    await settle();
 
     assert.equal(
       harness.state().catalogAvailable,
@@ -418,7 +542,7 @@ test("losing both reads is the one case that loses the picker", async () => {
     directory: [Promise.resolve(Response.json({ error: "nope" }, { status: 500 }))],
   });
 
-  await act(async () => undefined);
+  await settle();
 
   assert.equal(harness.state().status, "error");
   assert.deepEqual(harness.state().repositories, []);
@@ -427,11 +551,10 @@ test("losing both reads is the one case that loses the picker", async () => {
 
 test("an injected catalog renders without any request", async () => {
   const urls: string[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((url: string) => {
-    urls.push(String(url));
+  const uninstallFetch = installFetch((url) => {
+    urls.push(url);
     return Promise.reject(new Error("must not fetch"));
-  }) as typeof globalThis.fetch;
+  });
 
   let captured!: RepositoryCatalogState;
   function Probe() {
@@ -456,5 +579,5 @@ test("an injected catalog renders without any request", async () => {
     ["Blazity/given"],
   );
   await act(async () => renderer.unmount());
-  globalThis.fetch = originalFetch;
+  uninstallFetch();
 });
