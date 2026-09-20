@@ -2,9 +2,9 @@
  * Why an attempt has no briefing for a send a person expected to see.
  *
  * Never a generic "not recorded": each answer points somewhere different. Not
- * sent yet means wait. Never sent means read the failure. Not recorded means
- * we cannot show it, and says why. Expired means we kept it and retention
- * removed it.
+ * sent yet means wait. Never sent means read the cause, and the failure with
+ * it where there is one. Not recorded means we cannot show it, and says why.
+ * Expired means we kept it and retention removed it.
  *
  * WHETHER THE PROMPT WENT OUT IS DECIDED FIRST, and only then whether we kept
  * it. A run that failed while preparing says "never sent" with its failure even
@@ -26,6 +26,14 @@ export const missingBriefingReasonSchema = z.discriminatedUnion("kind", [
   z.object({
     schemaVersion: version,
     kind: z.literal("never_sent"),
+    /**
+     * `NEVER_SENT_CAUSES`, read as a slug, and ABSENT on the commonest answer:
+     * an attempt that ended before its prompt went out has a failure to read
+     * rather than a cause. A build that does not know a cause still reads the
+     * record, because zod leaves an unknown key out rather than refusing the
+     * whole reason, and falls back to the attempt's own ending.
+     */
+    cause: visibilitySlugSchema.optional(),
     /** As the attempt row recorded it; null when the row is gone. */
     attemptState: visibilitySlugSchema.nullable(),
     runStatus: visibilitySlugSchema.nullable(),
@@ -66,6 +74,29 @@ export interface MissingBriefingFacts {
   failure: { category: string; message: string; beforeSend?: boolean } | null;
   /** Whether the attempt's send step completed, when that is known. */
   promptSent: boolean | "unknown";
+  /**
+   * Whether this block's kind of send happens on EVERY attempt of it, or only
+   * when the block cannot work the answer out itself.
+   *
+   * A property of the block type the run recorded, not of this attempt. Only
+   * `prepare_workspace` is conditional today: it asks a model which
+   * repositories a ticket touches only when selection resolved none, which is
+   * why a ticket that names its repository leaves a finished attempt with
+   * nothing recorded under it. True wherever the block type is unknown: a
+   * silence we cannot name has to keep the older, louder answer.
+   */
+  sendsEveryAttempt: boolean;
+  /**
+   * Whether this RUN recorded a send whose write was lost.
+   *
+   * The run's own counter (`agent_briefing_runs.failed_count`), bumped by
+   * capture on every outcome that kept nothing, which is what turns "this
+   * attempt has no record" into "this attempt made no send": a run that lost
+   * nothing cannot be hiding a send behind an empty attempt. Per run and not
+   * per attempt, so a run that DID lose one keeps the louder answer for every
+   * attempt of it.
+   */
+  runLostASend: boolean;
   /** Could the code this attempt ran capture briefings? Decided from the code
    *  version the attempt ran, never from a date, because a run pinned to an old
    *  deployment starts attempts long after a deploy. Null when unknown. */
@@ -138,6 +169,27 @@ export function explainMissingBriefing(facts: MissingBriefingFacts): MissingBrie
     waitingBeforePass ||
     ((attemptLive || facts.attemptState === null) && runEndedWithoutCompleting);
   if (facts.promptSent === "unknown" && endedWithoutCompleting) return neverSent();
+
+  // 5. A block that asks a model only when it needs to, an attempt of it that
+  // finished, and no send recorded under it. NOTHING IS MISSING: this attempt
+  // never asked. Reaching this line already means the send is not still ahead
+  // (1), is not known to have failed before going out (2), and left no marker
+  // row saying it went out at all, so the only two readings left are "it never
+  // asked" and "it asked and we lost the record". The run's own counter tells
+  // them apart, which is why this is a deduction and not a guess.
+  if (facts.promptSent !== true && !facts.sendsEveryAttempt && !facts.runLostASend) {
+    return {
+      schemaVersion,
+      kind: "never_sent",
+      cause: "not_needed",
+      attemptState: facts.attemptState,
+      runStatus: facts.runStatus,
+      // The attempt did not fail, so it has no failure to quote. A run that
+      // failed later, somewhere else, is not this attempt's reason for asking
+      // nothing, and quoting it here would read as one.
+      failure: null,
+    };
+  }
 
   // The send happened, or the attempt completed, and nothing was written: the
   // write was refused or lost.

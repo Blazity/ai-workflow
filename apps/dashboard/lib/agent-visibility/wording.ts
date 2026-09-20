@@ -36,7 +36,10 @@ export interface MissingSentence {
   body: string;
   /** The recorded failure, when there is one, shown as it was recorded. */
   failure: string | null;
-  tone: "waiting" | "lost" | "not_kept";
+  /** `settled` is the one tone that is not a problem: there is no briefing
+   *  because there was nothing to send, and the screen says so quietly rather
+   *  than in the colour it uses for a record it could not keep. */
+  tone: "waiting" | "lost" | "not_kept" | "settled";
 }
 
 const ATTEMPT_ENDINGS: Record<string, string> = {
@@ -55,11 +58,29 @@ export function missingBriefingSentence(reason: MissingBriefingReason): MissingS
         tone: "waiting",
       };
     case "never_sent": {
+      // Nothing went wrong here, and the words have to say so plainly: this is
+      // what every run whose ticket names its own repository shows, and a
+      // sentence about a record that was not kept would send a person hunting
+      // a defect that does not exist.
+      if (reason.cause === "not_needed") {
+        return {
+          title: "No prompt was needed",
+          body: "This block asks a model only when it cannot work the answer out on its own, and this attempt did not have to. Nothing went out to a model here, and nothing is missing.",
+          failure: null,
+          tone: "settled",
+        };
+      }
       const ending =
         reason.attemptState === null ? "ended" : (ATTEMPT_ENDINGS[reason.attemptState] ?? `ended as ${reason.attemptState}`);
+      // A cause a newer worker writes is shown as itself beside what this
+      // build still knows for certain: the prompt never went out.
+      const unknownCause =
+        reason.cause === undefined
+          ? ""
+          : ` The worker recorded the cause "${reason.cause}", which this dashboard has no words for yet.`;
       return {
         title: "Never sent",
-        body: `This attempt ${ending} before its prompt went out, so the agent got nothing.`,
+        body: `This attempt ${ending} before its prompt went out, so the agent got nothing.${unknownCause}`,
         failure: reason.failure ? `${reason.failure.category}: ${reason.failure.message}` : null,
         tone: "lost",
       };
@@ -147,6 +168,12 @@ export function runStateSentence(state: string): RunStateSentence | null {
  *
  * A counter a newer worker adds shows up as the gap between the worker's own
  * sum and the five named here, and is said as a gap rather than swallowed.
+ *
+ * IT SAYS WHOSE COUNT IT IS, because it is rendered at the top of ONE Block
+ * Attempt's panel while counting the whole run. Without those two words the
+ * panel reads "all recorded" and then, two lines down, the reason this
+ * attempt has no briefing, and a person reading top to bottom is told both
+ * that everything was kept and that this was not.
  */
 export function captureLine(capture: CaptureCounts): { text: string; whole: boolean } {
   const named: [number, string][] = [
@@ -162,8 +189,8 @@ export function captureLine(capture: CaptureCounts): { text: string; whole: bool
   }
   const sends = plural(capture.sends, "send");
   return parts.length === 0
-    ? { text: `${sends}, all recorded`, whole: true }
-    : { text: `${sends}: ${capture.captured} recorded, ${parts.join(", ")}`, whole: false };
+    ? { text: `This whole run: ${sends}, all recorded`, whole: true }
+    : { text: `This whole run: ${sends}, ${capture.captured} recorded, ${parts.join(", ")}`, whole: false };
 }
 
 /**

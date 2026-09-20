@@ -396,6 +396,31 @@ test("a block that sends no prompt says so instead of looking broken", async (t)
   assert.doesNotMatch(body, /Not recorded/);
 });
 
+// Red when: the panel a person opens on the commonest run of all tells them a
+// record was lost. `prepare_workspace` asks a model which repositories a
+// ticket touches only where selection resolved none, so every ticket naming
+// its own repository ends here: nothing was sent, nothing is missing, and a
+// sentence about a write that failed sends somebody hunting a defect that does
+// not exist while devaluing the same words on the runs that really lost one.
+//
+// It also reads the two lines together, top to bottom, the way a person does:
+// the run's counters and this attempt's own answer may not contradict each
+// other on one screen.
+test("an attempt that never needed a model says so, and does not contradict the run's counters", async (t) => {
+  const harness = render(t, { node: "prepare" });
+  await settle();
+
+  const body = text(harness.root);
+  assert.match(body, /No prompt was needed/);
+  assert.match(body, /asks a model only when it cannot work the answer out on its own/);
+  assert.match(body, /nothing is missing/);
+  // Neither of the two neighbouring sentences, which mean something else.
+  assert.doesNotMatch(body, /Not recorded|The prompt went out|logged a warning|got nothing/);
+  // The counters are the run's, and they say so before they say "all
+  // recorded" above an attempt that has no briefing of its own.
+  assert.match(body, /This whole run: 4 sends, all recorded/);
+});
+
 test("an attempt that failed before sending says what failed", async (t) => {
   const harness = render(t, { node: "implementation" });
   await settle();

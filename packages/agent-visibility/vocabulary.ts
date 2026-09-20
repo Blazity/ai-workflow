@@ -175,6 +175,22 @@ export const WITHHELD_KEY_REASONS = ["too_long", "redacted"] as const;
 /** Why a briefing that should exist was not recorded. */
 export const NOT_RECORDED_CAUSES = ["predates_capture", "capture_disabled", "capture_skipped"] as const;
 
+/**
+ * Why a prompt never went out, where nothing went wrong.
+ *
+ * `not_needed`: the block asks a model only when it cannot work the answer out
+ * itself, and this attempt did not have to. Repository discovery is the one
+ * today: a ticket that names its repository is resolved by
+ * `engine/pre-sandbox/steps/repo-selection.ts` and no prompt is composed at
+ * all, so the attempt finishes with nothing recorded under it and no send to
+ * be missing.
+ *
+ * A `never_sent` with no cause is the older answer and the commoner one: the
+ * attempt ended before its prompt went out, and the failure beside it says
+ * what stopped it.
+ */
+export const NEVER_SENT_CAUSES = ["not_needed"] as const;
+
 /** The read model maps each clarification row to one of these; a question a
  *  retried attempt wrote again joins its round, whose status is the latest
  *  ask's. `resume_failed`: the answer was taken and the run could not resume;

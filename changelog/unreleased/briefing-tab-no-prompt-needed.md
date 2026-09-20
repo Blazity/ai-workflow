@@ -1,0 +1,2 @@
+- The Briefing tab of a run says "No prompt was needed" for a block that finished without asking a model, such as workspace preparation on a ticket that names its own repository or a leak review with nothing to scan, and keeps "not recorded" for the sends whose briefing really was not kept.
+- The send counters at the top of the Briefing tab now say they count the whole run, so they read alongside one block attempt's own answer rather than against it.

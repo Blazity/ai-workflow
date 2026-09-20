@@ -5,7 +5,7 @@ import React from "react";
 import { Button } from "@/components/ui";
 import type { CaptureCounts } from "@/lib/agent-visibility/contract";
 import { failureSentence, type LoadFailure } from "@/lib/agent-visibility/load";
-import { captureLine, missingBriefingSentence } from "@/lib/agent-visibility/wording";
+import { captureLine, missingBriefingSentence, type MissingSentence } from "@/lib/agent-visibility/wording";
 import type { MissingBriefingReason } from "@shared/agent-visibility";
 
 type NoticeTone = "neutral" | "waiting" | "lost" | "failure";
@@ -105,10 +105,11 @@ export function CaptureLine({ capture }: { capture: CaptureCounts }) {
 
 /** When sends are already on the screen, the reason is about the send that
  *  did not follow them, and is titled as that rather than as the attempt. */
-const NEXT_SEND_TITLES: Record<"waiting" | "lost" | "not_kept", string> = {
+const NEXT_SEND_TITLES: Record<MissingSentence["tone"], string> = {
   waiting: "The next send has not gone out yet",
   lost: "The next send never went out",
   not_kept: "The next send was not kept",
+  settled: "No further send was needed",
 };
 
 /** Why a briefing a person expected is not here, in the worker's words. */
