@@ -53,7 +53,10 @@ import { resolveTicketMoveTarget } from "./helpers/ticket-move-target.js";
 import { runKindForAgentWorkflowInput, type AgentWorkflowInput } from "./agent-input.js";
 import { moveTicketStep } from "./steps/ticket-transition-step.js";
 import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockError, blockBudgetObserver, buildV2AgentArtifactKeys, recordBlockPhaseUsage, researchPhaseIdentity, type BlockInvocationContext, type EngineCtx, type InvocationPromptCompiler } from "./blocks/support/types.js";
-import { VARIABLE_PARAM_KEYS } from "@shared/prompts";
+import { VARIABLE_PARAM_KEYS, type EffectivePromptCompilation } from "@shared/prompts";
+import { createBriefingSequence, nextBriefingIdentity, planPartsBriefing, type AgentBriefingCapture, type BriefingIdentity } from "./agent-visibility/plan.js";
+import { discoveryRepositoryContext } from "./agent-visibility/repository-context.js";
+import { deferredBriefing, planBlockAgentBriefing } from "./agent-visibility/block.js";
 import { compatibilityPromptForV2Node, compileEffectivePrompt, effectivePromptProfileSource } from "./helpers/effective-prompt.js";
 import { loadInvocationRepositoryInstructionSources, shouldLoadRepositoryInstructionSources } from "./steps/repository-instructions.js";
 import { transformRegexEvaluator } from "./helpers/transform-regex-evaluator.js";
@@ -1960,6 +1963,48 @@ async function agentWorkflowBody(
       /** Every question this run puts about repositories goes through here, so
        *  none of them can reach a person without naming what it asks about. */
       const repositoryQuestions = createRepositoryQuestions(ctx);
+      /** The send about to happen, or null for an invocation with no context,
+       *  which nothing in V2 reaches. */
+      const briefingFor = (
+        execution: BlockInvocationContext | undefined,
+        describeSend: (identity: BriefingIdentity) => AgentBriefingCapture | null,
+      ): AgentBriefingCapture | null => {
+        const identity = nextBriefingIdentity(execution, {
+          runId: workflowRunId,
+          enabled: ctx.settings.ENABLE_AGENT_BRIEFINGS,
+        });
+        return identity ? describeSend(identity) : null;
+      };
+      /**
+       * A sandbox send whose prompt the compiler produced.
+       *
+       * A null compilation is the fallback path, which composed no sections:
+       * it records the exact prompt bytes as one unattributed section rather
+       * than a briefing with nothing in it, which reads to a person as an
+       * agent that was given nothing.
+       */
+      const compiledBriefing = (
+        execution: BlockInvocationContext | undefined,
+        compilation: EffectivePromptCompilation | null,
+        prompt: string,
+        harness: {
+          kind: AgentKind;
+          model: string;
+          runtime?: ResolvedHarnessRuntime | undefined;
+          schema?: string;
+          passLabel?: string;
+        },
+      ): AgentBriefingCapture | null =>
+        // What the renderers were handed for THIS send, never the catalog as
+        // it stands when somebody opens the page.
+        planBlockAgentBriefing({
+          execution,
+          ctx,
+          compilation,
+          prompt,
+          harness,
+          ...(harness.passLabel === undefined ? {} : { passLabel: harness.passLabel }),
+        });
       const discoverRepositories = async (
         discovery: NonNullable<EngineCtx["repositoryDiscovery"]>,
         execution?: BlockInvocationContext,
@@ -2027,6 +2072,33 @@ async function agentWorkflowBody(
           ticket: ctx.ticket,
           discovery: { ...discovery, catalog: offered },
         });
+        // Discovery runs on the legacy, unpinned harness path: no profile, no
+        // profile switches, and the model and provider the run defaults to.
+        // Claiming a profile here would put values on the record that this
+        // send never had.
+        const discoveryBriefing = briefingFor(execution, (identity) =>
+          planPartsBriefing({
+            ...identity,
+            kind: "discovery",
+            sectionKind: "discovery",
+            sectionTitle: label,
+            prompt: discoveryPrompt.prompt,
+            parts: discoveryPrompt.parts,
+            harness: {
+              provider: ctx.runDefaultKind,
+              model: defaultModel,
+              outputSchema: REPOSITORY_DISCOVERY_SCHEMA,
+              profile: null,
+            },
+            repositoryContext: discoveryRepositoryContext({
+              offered,
+              catalogSize: discovery.catalog.length,
+              mandatory: discovery.mandatoryRepositories,
+              ...(ctx.workScope ? { workScope: ctx.workScope } : {}),
+              renderedAt: { sectionIndex: 0, partId: "catalog" },
+            }),
+          }),
+        );
         const launched = await writeAndStartPhase(
           sandboxId,
           ctx.runDefaultKind,
@@ -2035,6 +2107,9 @@ async function agentWorkflowBody(
           discoveryPrompt.prompt,
           paths.wrapper,
           script,
+          undefined,
+          undefined,
+          discoveryBriefing,
         );
         if (!launched.ok) return agentProtocolBlockError(launched.failure);
         ctx.markLaunched(label, execution?.attempt);
@@ -2809,6 +2884,16 @@ async function agentWorkflowBody(
             if (!resolvedResearchInput.ok) return resolvedResearchInput.result;
             const researchInput = resolvedResearchInput.input;
 
+            // Its own briefing, not the attempt's: this pass carries notes the
+            // pass before it did not (a refusal, a closed expansion, the
+            // ledger's correction), and those notes are usually the reason a
+            // planning run ended the way it did.
+            const researchBriefing = compiledBriefing(
+              execution,
+              resolvedResearchInput.compilation,
+              researchInput,
+              { kind, model, runtime, schema: RESEARCH_SCHEMA, passLabel: researchLabel },
+            );
             const researchLaunch = await writeAndStartPhase(
               sandboxId, kind, researchArtifactPhase,
               researchPaths.input, researchInput,
@@ -2819,6 +2904,7 @@ async function agentWorkflowBody(
               // dead invocation costs nothing; a retried one would read as an
               // agent that asked twice.
               takePendingWorkScopeWrite(),
+              researchBriefing,
             );
             if (!researchLaunch.ok) return agentProtocolBlockError(researchLaunch.failure);
             const researchCommandId = researchLaunch.commandId;
@@ -3284,6 +3370,13 @@ async function agentWorkflowBody(
               implPaths.input, implInput,
               implPaths.wrapper, implScript,
               runtime,
+              undefined,
+              compiledBriefing(
+                execution,
+                resolvedImplementationInput.compilation,
+                implInput,
+                { kind, model, runtime, schema: AGENT_SCHEMA },
+              ),
             );
             if (!implLaunch.ok) return agentProtocolBlockError(implLaunch.failure);
             const implCommandId = implLaunch.commandId;
@@ -3544,6 +3637,13 @@ async function agentWorkflowBody(
                 reviewPaths.input, reviewInput,
                 reviewPaths.wrapper, reviewScript,
                 runtime,
+                undefined,
+                compiledBriefing(
+                  execution,
+                  resolvedReviewInput.compilation,
+                  reviewInput,
+                  { kind, model, runtime, schema: REVIEW_SCHEMA },
+                ),
               );
               if (!reviewLaunch.ok) return agentProtocolBlockError(reviewLaunch.failure);
               const reviewCommandId = reviewLaunch.commandId;
@@ -4262,6 +4362,13 @@ async function agentWorkflowBody(
             cancellation: invocation.cancellation,
             observations: invocation.observations,
             compileInvocationPrompt,
+            nodeId: node.id,
+            blockType: node.type,
+            // One counter for this invocation, created here because this is
+            // where one Block Attempt begins and ends. The workflow body
+            // re-executes on a resume, so a pass reached a second time asks it
+            // for the same number the first execution did.
+            briefingSequence: createBriefingSequence(),
             budget: invocationBudget
               ? {
                   observeBudget: invocationBudget.observeBudget,
@@ -4513,6 +4620,18 @@ async function agentWorkflowBody(
             const startedAt = Date.now();
             const distilled = await distillRepoMemoryStep({
               runId: ctx.runId,
+              // The distill runs after the graph, under no Block Attempt, so
+              // it names itself: a reader looking through the blocks will not
+              // find it, which is correct, because it is not one of them.
+              briefing: deferredBriefing({
+                execution: {
+                  nodeId: "run:repo-memory-distill",
+                  blockType: "repo_memory_distill",
+                  briefingSequence: createBriefingSequence(),
+                },
+                ctx,
+                harness: { provider: provider ?? ctx.runDefaultKind, model, profile: null },
+              }),
               promoteOrgMemory: runSettings.ENABLE_ORG_MEMORY_PROMOTION,
               subjectKey: ctx.entry.subjectKey,
               taskId: ctx.ticket.identifier,

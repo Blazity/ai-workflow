@@ -54,6 +54,7 @@ import type {
 } from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../../sandbox/agents/types.js";
 import type { RepositoryExpansionState } from "../../repository-discovery/runner.js";
+import type { BriefingSequence } from "../../agent-visibility/plan.js";
 import type { ReviewLedgerState } from "../../../adapters/vcs/types.js";
 import type { SettledThread } from "../../steps/review-ledger-settle.js";
 import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
@@ -444,6 +445,31 @@ export interface BlockInvocationContext
   extends Omit<BlockExecutionContext, "compileEffectivePrompt"> {
   budget: RunBudgetHooks;
   compileInvocationPrompt?: InvocationPromptCompiler;
+  /**
+   * Which block this invocation is of.
+   *
+   * Every executor already knows it from its own node argument, but the
+   * closures the workflow body shares between blocks (repository discovery,
+   * workspace provisioning) do not, and the record of a send is keyed by the
+   * node it belongs to. One place, so a send can never be filed under the
+   * wrong block.
+   */
+  nodeId: string;
+  blockType: string;
+  /**
+   * The numbering of this Block Attempt's sends, for the record of what each
+   * one gave the model.
+   *
+   * It belongs to the invocation and to nothing wider. One attempt sends many
+   * times (a planning pass, the discovery it triggers, the next pass), and two
+   * runs in one worker instance reach the same node id at the same moment, so
+   * a counter held anywhere above this object would hand two different sends
+   * the same identity and the insert would drop one of them in silence.
+   *
+   * Not optional, for the same reason the budget is not: an invocation without
+   * a counter and a caller that forgot would otherwise look alike.
+   */
+  briefingSequence: BriefingSequence;
 }
 
 /**

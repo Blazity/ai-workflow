@@ -23,6 +23,8 @@ import {
   type ReviewLedgerGuardSummary,
 } from "../../helpers/review-ledger.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
+import { planBlockAgentBriefing } from "../../agent-visibility/block.js";
+import { recordSendBriefing, recordSkippedSend, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { pollPhaseUntilDone, stopPhaseCommand } from "../poll-phase.js";
 import {
@@ -317,7 +319,11 @@ async function blockFixAgentStartPhaseStep(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-  runtime?: ResolvedHarnessRuntime,
+  runtime: ResolvedHarnessRuntime | undefined,
+  /** What this send gave the model. Required in type so a call site cannot
+   *  quietly stop recording, read as absent on a journal written before it
+   *  existed. See `engine/steps/phase.ts`. */
+  briefing: AgentBriefingCapture | null,
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -339,6 +345,11 @@ async function blockFixAgentStartPhaseStep(
     ]);
     const chmod = await sandbox.runCommand("chmod", ["+x", scriptPath]);
     if (chmod.exitCode !== 0) {
+      // Nothing was sent, and the sequence number this send took is already
+      // spent. A gap a reader has to interpret is a classification made in a
+      // reader's head, so the record says it instead: this place in the order
+      // exists, and nothing went out under it.
+      await recordSkippedSend(briefing, () => import("../../agent-visibility/capture.js"));
       return {
         ok: false,
         failure: await commandProtocolFailure({
@@ -351,6 +362,14 @@ async function blockFixAgentStartPhaseStep(
         }),
       };
     }
+    // Before the agent starts, so a launch that fails still leaves the record
+    // of what it was given. See `engine/steps/phase.ts` for the reasoning and
+    // for why the import itself is guarded.
+    await recordSendBriefing(
+      briefing,
+      { prompt: inputContent, wrapperScript: scriptContent },
+      () => import("../../agent-visibility/capture.js"),
+    );
     const command = await sandbox.runCommand({
       cmd: "bash",
       args: [scriptPath],
@@ -776,6 +795,13 @@ export const execute: BlockExecuteFn = async (
       paths.wrapper,
       script,
       runtime,
+      planBlockAgentBriefing({
+        execution,
+        ctx,
+        compilation: resolvedInput.compilation,
+        prompt: input,
+        harness: { kind, model, runtime, schema: AGENT_SCHEMA },
+      }),
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;
