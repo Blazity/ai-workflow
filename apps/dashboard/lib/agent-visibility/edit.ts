@@ -38,8 +38,14 @@ export interface EditIntent {
 }
 
 /** What is written when a person adds nothing of their own. The trail carries
- *  their name and the time either way; this says which surface they used. */
-export const DEFAULT_RATIONALE = "Corrected on the dashboard.";
+ *  their name and the time either way; this says which surface they used.
+ *
+ *  IT HAS TO SAY THAT NOBODY WROTE IT. This sentence is rendered in the very
+ *  slot a run's own reason is rendered in, after the same colon, so anything
+ *  that reads like a reason reads as the person's reason. "Corrected on the
+ *  dashboard." did, and somebody reading the record months later had no way
+ *  to tell it from a sentence that was typed. */
+export const DEFAULT_RATIONALE = "No reason given. Changed from the Repositories panel.";
 
 /** The bound the endpoint puts on a rationale, from the write contract itself
  *  so the field cannot take more than the record will keep. */

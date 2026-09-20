@@ -1,0 +1,1 @@
+- Changing a ticket's repository record without typing a reason now records "No reason given", so a person reading that line later can tell it from a reason somebody wrote.
