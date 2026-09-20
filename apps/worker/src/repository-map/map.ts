@@ -1190,7 +1190,7 @@ function renderEntry(
     lines.push(
       `  How it relates: ${entry.relationships
         .map((relationship) => relationshipClause(relationship, byKey))
-        .join(" ")}`,
+        .join(" ")}${RECORDED_NOT_CHECKED}`,
     );
   }
   const rest =
@@ -1294,6 +1294,31 @@ const SETTLED_STATE_PHRASES: Record<Exclude<RepositoryMapState, "offered">, stri
   refused: "this run already refused a request for it, do not request it again",
 };
 
+/**
+ * WHERE THE SENTENCE CAME FROM, SAID ON THE SENTENCE.
+ *
+ * A description and a relationship are both somebody typing on the Repositories
+ * page. Nothing reads them against the code, and until this clause existed
+ * nothing said so: on production an operator's line, "this repository calls
+ * into `blazity/ai-workflow-demo`", reached an implementation agent as an
+ * unqualified statement, and it shipped a pull request documenting a call that
+ * does not exist. The review agent caught it as a High finding, which is the
+ * system working and is also two agent passes spent on a sentence nobody had
+ * checked.
+ *
+ * IT SAYS WHAT THE TEXT IS AND STOPS. "Do not trust this" would be the wrong
+ * instruction: the operator's note is usually right, it is the best guide to
+ * the neighbourhood we have, and an agent told to distrust it stops using the
+ * one thing that saves it a pass. Saying where a sentence comes from lets the
+ * model do what it would do with any second-hand claim, which is check it
+ * before writing it down as fact.
+ *
+ * ON FULL ENTRIES ONLY. A one-line entry is read to decide whether to ask for a
+ * repository, not to work in one, and sixty-four characters on every line of a
+ * long catalog is the bloat this file has just finished removing.
+ */
+const RECORDED_NOT_CHECKED = " (recorded on the Repositories page, not checked against the code)";
+
 function descriptionCredit(
   source: RepositoryMapDescriptionSource,
   context: RenderContext,
@@ -1308,8 +1333,11 @@ function descriptionCredit(
   // work having vanished. On that run the credit says what actually happened.
   switch (source) {
     case "catalog":
-      return "";
+      return RECORDED_NOT_CHECKED;
     case "provider":
+      // The provider's credit already says whose words they are, and adding
+      // "not checked against the code" to a listing blurb nobody here wrote
+      // would be two qualifications of one sentence.
       return context.catalogUnreadable
         ? " (the provider's own listing text; the catalog could not be read on this run, so we cannot tell whether somebody wrote a description here)"
         : " (the provider's own listing text; nobody here wrote a description)";

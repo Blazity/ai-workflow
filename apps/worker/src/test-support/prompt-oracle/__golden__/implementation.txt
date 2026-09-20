@@ -153,11 +153,11 @@ Only a repository marked (write) may be changed. A repository marked (read only)
 
 - `github:acme/api` at `/vercel/sandbox/repos/github__acme__api` (write)
   Why it is here: the ticket names the signing keys in acme/api
-  What it is: The session and billing API. It owns key rotation, the refresh path and the webhook fan-out.
-  How it relates: It publishes a package used by `github:acme/sdk`. It is the backend for `github:acme/web`.
+  What it is: The session and billing API. It owns key rotation, the refresh path and the webhook fan-out. (recorded on the Repositories page, not checked against the code)
+  How it relates: It publishes a package used by `github:acme/sdk`. It is the backend for `github:acme/web`. (recorded on the Repositories page, not checked against the code)
 - `github:acme/web` at `/vercel/sandbox/repos/github__acme__web` (read only)
   Why it is here: frontend for acme/api
-  What it is: The customer dashboard. Sign-in and the account screens live here.
+  What it is: The customer dashboard. Sign-in and the account screens live here. (recorded on the Repositories page, not checked against the code)
 
 ### Related to this work, not in the workspace
 

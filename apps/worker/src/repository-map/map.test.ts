@@ -144,6 +144,59 @@ describe("buildRepositoryMap", () => {
     }
   });
 
+  /**
+   * A description and a relationship are somebody typing on the Repositories
+   * page, and nothing reads them against the code. Unlabelled, one such line
+   * reached an implementation agent on production as a plain statement and it
+   * shipped a pull request documenting a call that does not exist.
+   */
+  it("says where the operator's description and relationship sentences came from", () => {
+    const map = buildRepositoryMap(neighbourhood());
+    expect(map.text).toContain(
+      "What it is: The customer dashboard. Checkout and the invoice screens live here. (recorded on the Repositories page, not checked against the code)",
+    );
+    expect(map.text).toContain(
+      "How it relates: It is the backend for `github:acme/web`. (recorded on the Repositories page, not checked against the code)",
+    );
+    // Said once per line, not once per relationship: a hub repository carries
+    // eight of them and eight copies of one qualification is a paragraph.
+    const api = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({
+            key: API,
+            catalogDescription: "The payments API.",
+            relationships: [
+              { kind: "backend_for", targetKey: WEB, direction: "outgoing" },
+              { kind: "depends_on", targetKey: DOCS, direction: "outgoing" },
+            ],
+          }),
+          facts({ key: WEB }),
+          facts({ key: DOCS }),
+        ],
+      }),
+    );
+    const clauses = api.text.match(/recorded on the Repositories page/g) ?? [];
+    expect(clauses).toHaveLength(2);
+  });
+
+  it("does not qualify a description nobody here wrote", () => {
+    // The provider's credit already says whose words they are. Two
+    // qualifications on one sentence is the map arguing with itself.
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({ key: API, relationships: [{ kind: "backend_for", targetKey: WEB, direction: "outgoing" }] }),
+          facts({ key: WEB, providerDescription: "acme web app" }),
+        ],
+      }),
+    );
+    expect(map.text).toContain(
+      "What it is: acme web app (the provider's own listing text; nobody here wrote a description)",
+    );
+    expect(map.text).not.toContain("acme web app (recorded on the Repositories page");
+  });
+
   it("renders byte-identical text for the same input twice", () => {
     expect(buildRepositoryMap(neighbourhood()).text).toBe(
       buildRepositoryMap(neighbourhood()).text,
@@ -489,16 +542,18 @@ describe("buildRepositoryMap", () => {
 
     it("leaves the workspace byte-identical whatever the installation exposes", () => {
       expect(workspaceText(installation(204))).toBe(workspaceText(installation(0)));
+      // The whole workspace section, spelled out, because it is the part of the
+      // map no budget and no catalog may move.
       expect(workspaceText(installation(204))).toBe(
         "### In the workspace\n\n" +
           "Only a repository marked (write) may be changed. A repository marked (read only) is context: read it, never change it.\n\n" +
           "- `github:acme/api` at `/vercel/sandbox` (write)\n" +
           "  Why it is here: The ticket names it.\n" +
-          "  What it is: The payments API. It owns the ledger and the webhook fan-out.\n" +
-          "  How it relates: It is the backend for `github:acme/web`.\n" +
+          "  What it is: The payments API. It owns the ledger and the webhook fan-out. (recorded on the Repositories page, not checked against the code)\n" +
+          "  How it relates: It is the backend for `github:acme/web`. (recorded on the Repositories page, not checked against the code)\n" +
           "- `github:acme/web` at `/vercel/sandbox/repos/github__acme__web` (read only)\n" +
           "  Why it is here: it was attached to this work.\n" +
-          "  What it is: The customer dashboard.\n\n",
+          "  What it is: The customer dashboard. (recorded on the Repositories page, not checked against the code)\n\n",
       );
     });
 
