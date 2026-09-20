@@ -4,12 +4,14 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   useTransition,
   type ReactNode,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { TraceDetailSkeleton } from "@/app/ticket-skeleton";
+import { useOnScreen } from "@/components/cockpit/agent-visibility/on-screen";
 import { RepositoriesPanel } from "@/components/cockpit/agent-visibility/repositories-panel";
 import { MobileBackToRuns } from "@/components/cockpit/mobile/screens/ticket-mobile";
 
@@ -96,8 +98,18 @@ export function useTicketSelection(): TicketSelection {
  */
 export function DetailArea({ children }: { children: ReactNode }) {
   const { isPending, ticketKey, urlRun } = useTicketSelection();
+  // With no run named, this column is the desktop's alone: a phone shows the
+  // runs list instead, and this one sits behind `display: none`. It used to
+  // load the newest run's trace there and poll it every five seconds for as
+  // long as the page stayed open, which is a cost every phone paid on every
+  // ticket for something nobody can look at. A column nobody can see holds no
+  // trace; when the width changes back, the trace comes back and rebuilds
+  // itself from the URL, which already names the run, node, attempt, tab,
+  // send and section.
+  const frameRef = useRef<HTMLDivElement>(null);
+  const onScreen = useOnScreen(frameRef);
   return (
-    <div style={{ gridArea: "detail" }} className="relative lg:min-h-0 lg:min-w-0">
+    <div ref={frameRef} style={{ gridArea: "detail" }} className="relative lg:min-h-0 lg:min-w-0">
       <div className="flex flex-col gap-3 px-4 pt-4 pb-6 lg:h-full lg:gap-4 lg:overflow-y-auto lg:p-6">
         {/* A phone has no rail beside the trace, so this is the way back to
             the runs list. The desktop rail is that way back already. */}
@@ -112,7 +124,7 @@ export function DetailArea({ children }: { children: ReactNode }) {
             run: a link to a run is a person asking for that run, not for the
             record above it. */}
         <RepositoriesPanel ticketKey={ticketKey} autoOpen={urlRun === null} />
-        {children}
+        {onScreen === false ? null : children}
       </div>
       {isPending && (
         <div className="absolute inset-0 overflow-hidden bg-app-bg p-4 lg:p-6">
