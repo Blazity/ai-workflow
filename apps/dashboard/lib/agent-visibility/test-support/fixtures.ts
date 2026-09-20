@@ -613,6 +613,8 @@ const facts = (overrides: Partial<MissingBriefingFacts>): MissingBriefingFacts =
   captureDisabled: false,
   capturedKinds: [],
   replayExpired: false,
+  sendsEveryAttempt: true,
+  runLostASend: false,
   ...overrides,
 });
 
@@ -893,11 +895,21 @@ export async function buildFixtureStore(): Promise<FixtureStore> {
     briefingsState: "available",
     nodes: [
       node("trigger", "trigger_ticket_ai", "Ticket in AI column", 0, 40),
+      // The ticket named its own repository, so this block resolved the
+      // workspace without asking a model: the commonest shape in production,
+      // and the one whose silence must not read as a record that was lost.
+      node("prepare", "prepare_workspace", "Prepare the workspace", 130, 40),
       node("planning", "planning_agent", "Plan the change", 260, 40),
       node("implementation", "implementation_agent", "Implement", 520, 40),
     ],
     attempts: [
       { summary: summary("trigger", "completed", "2026-09-18T08:59:00.000Z", 120), sendsPrompts: false, briefingIds: [], missing: null },
+      {
+        summary: summary("prepare", "completed", "2026-09-18T08:59:10.000Z", 18_000),
+        sendsPrompts: true,
+        briefingIds: [],
+        missing: explainMissingBriefing(facts({ runStatus: "success", sendsEveryAttempt: false })),
+      },
       { summary: summary("planning", "completed", "2026-09-18T08:59:30.000Z", 2_880_000), sendsPrompts: true, briefingIds: planningIds, missing: null },
       {
         summary: summary("implementation", "failed", "2026-09-18T09:48:00.000Z", 94_000),

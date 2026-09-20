@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { agentBriefingTexts, agentBriefings, workflowRuns } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import { captureSkippedSend } from "../../engine/agent-visibility/capture.js";
+import { noteAgentBriefingLoss } from "../../run-observability/agent-briefings.js";
 import { planTextBriefing } from "../../engine/agent-visibility/plan.js";
 import {
   briefingReadsOf,
@@ -144,6 +145,265 @@ describe("the attempts of a run", () => {
       failure: { category: "sandbox_unavailable" },
     });
   });
+
+  /**
+   * The run this block of tests is about, as production makes it: a
+   * `prepare_workspace` whose repositories came out of the ticket text and a
+   * planning block that did send and was recorded.
+   *
+   * `prepare_workspace` asks a model which repositories a ticket touches only
+   * where selection resolved none, so every ticket that names its own
+   * repository leaves exactly this: a finished attempt of a block that CAN
+   * send, with nothing recorded under it.
+   */
+  const seedTicketThatNamedItsRepository = async () => {
+    await seedRun(db, {
+      runId: RUN,
+      world,
+      status: "success",
+      nodes: { prepare: "prepare_workspace", planning: "planning_agent" },
+    });
+    await seedAttempt(db, { runId: RUN, nodeId: "prepare", state: "completed" });
+    await seedAttempt(db, { runId: RUN, nodeId: "planning", state: "completed" });
+    // The planning pass went out and was kept, which is what makes this run
+    // capture-capable: without it the prepare attempt's silence would mean
+    // "this run predates capture" and say nothing about discovery at all.
+    await captureBriefing(db, { runId: RUN, nodeId: "planning" });
+  };
+
+  const prepareOf = async () => {
+    const page = await attemptsOf({ runId: RUN, organizationId: VISIBILITY_ORG });
+    return { page, prepare: page.items.find((item) => item.nodeId === "prepare")! };
+  };
+
+  // Red when: a block that asks a model only when it needs to is told its
+  // briefing was refused or lost for every attempt that did not need to ask.
+  // That is not an edge case: it is what every ticket naming its repository
+  // produces, and it sends a person hunting a data-loss bug that does not
+  // exist while devaluing the same sentence on the runs that really lost one.
+  it("says a prepare attempt that never needed a model asked nothing", async () => {
+    await seedTicketThatNamedItsRepository();
+
+    const { page, prepare } = await prepareOf();
+
+    expect(prepare.briefings).toEqual([]);
+    // Still true: the block CAN send, which is why the tab is offered at all.
+    expect(prepare.sendsPrompts).toBe(true);
+    expect(prepare.missing).toEqual({
+      schemaVersion: 1,
+      kind: "never_sent",
+      cause: "not_needed",
+      attemptState: "completed",
+      runStatus: "success",
+      failure: null,
+    });
+    // Nothing was lost, and the run's own counters say the same thing.
+    expect(page.capture).toMatchObject({ sends: 1, captured: 1, skipped: 0, failed: 0 });
+  }, 120_000);
+
+  // Red when: a run whose OTHER blocks sent several times over is read as one
+  // where the quiet block must have sent too. A pull-request review run keeps
+  // the same shape as the ticket run above with three sends instead of one,
+  // and the answer for the block that asked nothing has to be the same: the
+  // deduction is about what the run LOST, never about how much it sent.
+  it("says the same on a run with several sends elsewhere and none here", async () => {
+    await seedRun(db, {
+      runId: RUN,
+      world,
+      status: "success",
+      nodes: {
+        prepare: "prepare_workspace",
+        review: "review_agent",
+        summarize: "call_llm",
+      },
+    });
+    await seedAttempt(db, { runId: RUN, nodeId: "prepare", state: "completed" });
+    await seedAttempt(db, { runId: RUN, nodeId: "review", state: "completed" });
+    await seedAttempt(db, { runId: RUN, nodeId: "summarize", state: "completed" });
+    await captureBriefing(db, { runId: RUN, nodeId: "review", blockType: "review_agent" });
+    await captureBriefing(db, {
+      runId: RUN,
+      nodeId: "review",
+      blockType: "review_agent",
+      sequence: 2,
+    });
+    await captureBriefing(db, {
+      runId: RUN,
+      nodeId: "summarize",
+      kind: "llm",
+      blockType: "call_llm",
+    });
+
+    const { page, prepare } = await prepareOf();
+
+    expect(page.capture).toMatchObject({ sends: 3, captured: 3, failed: 0 });
+    expect(prepare.missing).toEqual({
+      schemaVersion: 1,
+      kind: "never_sent",
+      cause: "not_needed",
+      attemptState: "completed",
+      runStatus: "success",
+      failure: null,
+    });
+    // And the blocks that did send are untouched by any of this.
+    expect(page.items.find((item) => item.nodeId === "review")!.missing).toBeNull();
+    expect(page.items.find((item) => item.nodeId === "summarize")!.missing).toBeNull();
+  }, 120_000);
+
+  /**
+   * Every other block that asks a model only when it needs to, each named with
+   * the completion that reaches this state.
+   *
+   * Red when: one of them is dropped from the reader's list, or a block whose
+   * every success sends is added to it. `prepare_workspace` has its own tests
+   * above, because it is the one a person meets on nearly every run.
+   */
+  it.each([
+    // `engine/blocks/leak-review/execute.ts:648, :688, :715`: nothing writable
+    // has a baseline, nothing changed, or `llmScan` is off for this block.
+    { blockType: "leak_review", ends: "with no scan to run" },
+    // `engine/blocks/fix-agent/execute.ts:694`: a pull-request run whose
+    // review ledger left no open thread.
+    { blockType: "fix_agent", ends: "with no review thread left open" },
+    // `engine/blocks/investigate/execute.ts:531`: a ticket with neither a
+    // summary nor a description.
+    { blockType: "investigate", ends: "with nothing in the ticket to read" },
+  ])("says a $blockType that finished $ends asked nothing either", async ({ blockType }) => {
+    await seedRun(db, {
+      runId: RUN,
+      world,
+      status: "success",
+      nodes: { quiet: blockType, planning: "planning_agent" },
+    });
+    await seedAttempt(db, { runId: RUN, nodeId: "quiet", state: "completed" });
+    await captureBriefing(db, { runId: RUN, nodeId: "planning" });
+
+    const page = await attemptsOf({ runId: RUN, organizationId: VISIBILITY_ORG });
+    const quiet = page.items.find((item) => item.nodeId === "quiet")!;
+
+    expect(quiet.sendsPrompts).toBe(true);
+    expect(quiet.missing).toMatchObject({ kind: "never_sent", cause: "not_needed", failure: null });
+  }, 120_000);
+
+  // Red when: a block whose every successful path sends is put on the list,
+  // which would tell a person nothing was missing while a send of theirs was
+  // lost. These five are checked in the reader's own comment, each with the
+  // line that plans its briefing; the list must not quietly grow to them.
+  it.each(["planning_agent", "implementation_agent", "review_agent", "generic_agent", "call_llm"])(
+    "still blames capture for a completed %s that recorded nothing",
+    async (blockType) => {
+      await seedRun(db, {
+        runId: RUN,
+        world,
+        status: "success",
+        nodes: { sender: blockType, other: "planning_agent" },
+      });
+      await seedAttempt(db, { runId: RUN, nodeId: "sender", state: "completed" });
+      await captureBriefing(db, { runId: RUN, nodeId: "other" });
+
+      const page = await attemptsOf({ runId: RUN, organizationId: VISIBILITY_ORG });
+      const sender = page.items.find((item) => item.nodeId === "sender")!;
+
+      expect(sender.missing).toEqual({
+        schemaVersion: 1,
+        kind: "not_recorded",
+        cause: "capture_skipped",
+      });
+    },
+    120_000,
+  );
+
+  // Red when: "there was nothing to ask" is claimed on a run that DID lose a
+  // record. The run's loss counter is the only thing that tells an attempt
+  // that never asked from one whose write disappeared, and a false all-clear
+  // is worse than the noisy answer it replaces.
+  it("keeps blaming capture for a prepare attempt on a run that lost a record", async () => {
+    await seedTicketThatNamedItsRepository();
+    // A write that could not be reached at all: no row, only the run fact,
+    // exactly as `captureAgentBriefing` records a timeout.
+    await noteAgentBriefingLoss(
+      { runId: RUN, nodeId: "prepare", attempt: 1, activationScopeId: "root", sequence: 1, kind: "discovery" },
+      { db },
+    );
+
+    const { page, prepare } = await prepareOf();
+
+    expect(prepare.missing).toEqual({ schemaVersion: 1, kind: "not_recorded", cause: "capture_skipped" });
+    expect(page.capture).toMatchObject({ failed: 1 });
+  }, 120_000);
+
+  // Red when: a prepare attempt whose discovery send really did go out and
+  // whose record was refused reads as a block that never asked. The marker row
+  // is what proves the prompt went out, and it has to keep winning.
+  it("still says the record was refused when the discovery send did go out", async () => {
+    await seedTicketThatNamedItsRepository();
+    await captureBriefing(
+      db,
+      { runId: RUN, nodeId: "prepare", kind: "discovery", blockType: "prepare_workspace" },
+      { refuse: true },
+    );
+
+    const { prepare } = await prepareOf();
+
+    expect(prepare.missing).toEqual({ schemaVersion: 1, kind: "not_recorded", cause: "capture_skipped" });
+    expect(prepare.captureDetail).toContain("capture detector");
+  }, 120_000);
+
+  // Red when: a prepare attempt that died before it could ask reads as one
+  // that had nothing to ask, so the failure a person came to read is dropped.
+  it("still reads the failure of a prepare attempt that died before asking", async () => {
+    await seedRun(db, {
+      runId: RUN,
+      world,
+      status: "failed",
+      statusReason: "the sandbox could not be created",
+      nodes: { prepare: "prepare_workspace" },
+    });
+    await seedAttempt(db, {
+      runId: RUN,
+      nodeId: "prepare",
+      state: "failed",
+      outcome: { kind: "failed", status: "sandbox_unavailable" },
+    });
+    await captureBriefing(db, { runId: RUN, nodeId: "elsewhere" });
+
+    const { prepare } = await prepareOf();
+
+    expect(prepare.missing).toMatchObject({
+      kind: "never_sent",
+      attemptState: "failed",
+      failure: { category: "sandbox_unavailable", message: "the sandbox could not be created" },
+    });
+    expect((prepare.missing as { cause?: string }).cause).toBeUndefined();
+  }, 120_000);
+
+  // Red when: the briefing a prepare attempt DID capture is swept by retention
+  // and the attempt then reads as one that never asked. Its own rows are what
+  // told the two apart, and the sweep is what took them.
+  it("says a swept prepare attempt expired rather than claiming it asked nothing", async () => {
+    await seedRun(db, {
+      runId: RUN,
+      world,
+      status: "success",
+      nodes: { prepare: "prepare_workspace", planning: "planning_agent" },
+    });
+    await seedAttempt(db, { runId: RUN, nodeId: "prepare", state: "completed" });
+    await captureBriefing(db, { runId: RUN, nodeId: "planning" });
+    const discovery = await captureBriefing(db, {
+      runId: RUN,
+      nodeId: "prepare",
+      kind: "discovery",
+      blockType: "prepare_workspace",
+    });
+    // The sweep took the discovery send and left the planning one.
+    await db
+      .delete(agentBriefings)
+      .where(eq(agentBriefings.id, discovery.outcome === "recorded" ? discovery.briefingId : -1));
+
+    const { prepare } = await prepareOf();
+
+    expect(prepare.missing).toEqual({ schemaVersion: 1, kind: "expired" });
+  }, 120_000);
 
   // Red when: an attempt row that still says running on a cancelled run is
   // read as "not sent yet", so a person waits for a send that can never come.

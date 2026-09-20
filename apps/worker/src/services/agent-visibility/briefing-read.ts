@@ -105,6 +105,58 @@ export const PROMPT_SENDING_BLOCK_TYPES: ReadonlyMap<string, "discovery" | "agen
   ["leak_review", "agent"],
 ]);
 
+/**
+ * Of the blocks above, the ones that ask a model only WHEN THEY NEED TO.
+ *
+ * THE STANDARD FOR MEMBERSHIP, and every entry below was read against it: the
+ * block has a path that COMPLETES (`kind: "next"`, so the attempt row ends
+ * `completed`) before any briefing is planned. A failure or a pause does not
+ * count, because those already have their own answers, and neither does a path
+ * that reached `recordSendBriefing` or `recordSkippedSend`, because a row then
+ * exists. Such an attempt leaves the same silence a lost write leaves, and the
+ * two are told apart by the run's own loss counter rather than by this list.
+ *
+ * `prepare_workspace`: its discovery send happens only where selection came
+ * back with nothing. A ticket that names its repository is resolved by
+ * `engine/pre-sandbox/steps/repo-selection.ts`, and the discovery prompt is
+ * composed only inside `selected.length === 0 && preSandbox.repositoryDiscovery`
+ * (`engine/blocks/prepare-workspace/execute.ts:1238`).
+ *
+ * `leak_review`: three completions before its scan prompt exists, all of them
+ * `engine/blocks/leak-review/execute.ts` and all before the `deferredBriefing`
+ * at :751 is even constructed. :648 nothing writable has a baseline; :688
+ * nothing changed; :715 `llmScan` is switched off for the block. Its fourth
+ * quiet ending, :741 after a provider error, is NOT one of these: the step
+ * records the send before it calls the model (:525), so a row is there.
+ *
+ * `fix_agent`: `engine/blocks/fix-agent/execute.ts:694`, an honest no-op on a
+ * pull-request run whose review ledger left no open thread (guard at :675).
+ * `planBlockAgentBriefing` is not reached until :820.
+ *
+ * `investigate`: `engine/blocks/investigate/execute.ts:531`, a ticket with
+ * neither a summary nor a description, answered `insufficient_data` without
+ * asking anything. Its two `planLlmBriefing` calls are at :575 and :632.
+ *
+ * The blocks deliberately NOT here, each checked the same way and each with
+ * its briefing planned on the way to every success it has: `planning_agent`
+ * (`engine/agent-workflow.ts:3047`), `implementation_agent` (:3645),
+ * `review_agent` (:3916), `generic_agent`
+ * (`engine/blocks/generic-agent/execute.ts:528`) and `call_llm`
+ * (`engine/blocks/call-llm/execute.ts:156`). Every earlier exit of those five
+ * is a failure or a pause, which already have answers of their own.
+ *
+ * NOTHING GOES IN HERE WITHOUT THAT EVIDENCE. A block listed by mistake tells
+ * a person nothing was missing while a send of theirs really was lost, which
+ * is the one failure this whole feature exists to prevent; a block left out
+ * keeps today's louder answer, which is merely noisy.
+ */
+const CONDITIONALLY_SENDING_BLOCK_TYPES: ReadonlySet<string> = new Set([
+  "prepare_workspace",
+  "leak_review",
+  "fix_agent",
+  "investigate",
+]);
+
 /** Run statuses that mean the run is over. A run still queued or still working
  *  has not failed to record anything yet. */
 const ENDED_RUN_STATUSES: ReadonlySet<string> = new Set(["success", "failed", "blocked"]);
@@ -457,6 +509,14 @@ function describeAttempt(
     captureDisabled,
     capturedKinds,
     replayExpired: run.replayExpiresAt !== null && run.replayExpiresAt.getTime() <= now.getTime(),
+    // A block type this deployment cannot name is taken as sending every
+    // time, so the quieter answer is never given about a block we cannot
+    // identify.
+    sendsEveryAttempt: blockType === null || !CONDITIONALLY_SENDING_BLOCK_TYPES.has(blockType),
+    // Counted by capture as each send happened, and the reason the line above
+    // is allowed to be quiet at all: a run that lost nothing is not hiding a
+    // send behind an attempt that recorded none.
+    runLostASend: runSummary !== null && runSummary.failedCount > 0,
   };
 
   return {
@@ -488,6 +548,14 @@ function describeAttempt(
  * incident report about a run that is fine, so where the run counted more
  * captures than it still holds, retention is the answer for an attempt holding
  * none.
+ *
+ * IT OVERRULES "THERE WAS NOTHING TO ASK" FOR THE SAME REASON, and this is the
+ * more dangerous of the two. A block that asks a model only when it needs to
+ * leaves the same empty attempt whether it never asked or whether the briefing
+ * it did capture has since been swept, and "nothing is missing" told about a
+ * briefing retention removed is a false all-clear rather than merely a noisy
+ * one. Only the attempt's own rows can tell those apart, and they are exactly
+ * what the sweep took.
  */
 function sweptOrMissing(
   facts: MissingBriefingFacts,
@@ -498,7 +566,10 @@ function sweptOrMissing(
   const reason = explainMissingBriefing(facts);
   const partlySwept = runSummary !== null && run.capturedBriefings < runSummary.capturedCount;
   const holdsNone = entry.rows.every((row) => row.capture !== "captured");
-  if (reason.kind === "not_recorded" && reason.cause === "capture_skipped" && partlySwept && holdsNone) {
+  const couldBeSwept =
+    (reason.kind === "not_recorded" && reason.cause === "capture_skipped") ||
+    (reason.kind === "never_sent" && reason.cause === "not_needed");
+  if (couldBeSwept && partlySwept && holdsNone) {
     return { schemaVersion: reason.schemaVersion, kind: "expired" };
   }
   return reason;

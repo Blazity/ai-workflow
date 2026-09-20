@@ -158,6 +158,44 @@ test("a cause from a newer worker is quoted, never read as one we know", () => {
   const unknown = missingBriefingSentence({ schemaVersion: 1, kind: "not_recorded", cause: "sampled_out" });
   assert.match(unknown.body, /recorded the cause "sampled_out"/);
   assert.match(unknown.body, /no words for yet/);
+
+  // The same on the other kind that now carries one: what this build still
+  // knows for certain (the prompt never went out) is said, and the cause it
+  // does not know is shown as itself rather than swallowed.
+  const neverSent = missingBriefingSentence({
+    schemaVersion: 1,
+    kind: "never_sent",
+    cause: "sampled_out",
+    attemptState: "completed",
+    runStatus: "success",
+    failure: null,
+  });
+  assert.match(neverSent.body, /before its prompt went out/);
+  assert.match(neverSent.body, /recorded the cause "sampled_out"/);
+});
+
+// Red when: an attempt of a block that asks a model only when it needs to is
+// told its record was lost. The two words that matter are that nothing went
+// out and that nothing is missing: a sentence about a write that failed sends
+// a person hunting a defect on the run where every ticket names its own
+// repository, which is most of them.
+test("an attempt that never needed to ask reads as settled, not as a record we lost", () => {
+  const settled = missingBriefingSentence({
+    schemaVersion: 1,
+    kind: "never_sent",
+    cause: "not_needed",
+    attemptState: "completed",
+    runStatus: "success",
+    failure: null,
+  });
+  assert.equal(settled.tone, "settled");
+  assert.equal(settled.title, "No prompt was needed");
+  assert.match(settled.body, /asks a model only when it cannot work the answer out on its own/);
+  assert.match(settled.body, /nothing is missing/);
+  assert.equal(settled.failure, null);
+  // The three sentences a person must be able to tell apart: this one may not
+  // borrow a word from the send that was lost or from the attempt that died.
+  assert.doesNotMatch(settled.body, /The prompt went out|failed|refused|logged a warning|got nothing/);
 });
 
 test("a send is titled by its pass, so three passes are not three identical rows", () => {
@@ -293,7 +331,7 @@ test("a reason for having no briefing that this build has no words for is quoted
 test("a run that recorded every send says so quietly, and one that did not names each miss", () => {
   const whole = captureLine({ captured: 11, disabled: 0, skipped: 0, failed: 0, conflict: 0, sends: 11 });
   assert.equal(whole.whole, true);
-  assert.equal(whole.text, "11 sends, all recorded");
+  assert.equal(whole.text, "This whole run: 11 sends, all recorded");
 
   // The case the counters exist for: without this line a person only finds the
   // two refusals by opening the briefings that are not there.
@@ -301,6 +339,18 @@ test("a run that recorded every send says so quietly, and one that did not names
   assert.equal(partial.whole, false);
   assert.match(partial.text, /11 sends/);
   assert.match(partial.text, /2 refused/);
+});
+
+// Red when: the line counts the whole run and does not say so. It is rendered
+// at the top of ONE attempt's panel, so "all recorded" above that attempt's
+// own reason for having no briefing reads as a contradiction two lines apart.
+test("the capture line says whose sends it is counting", () => {
+  for (const capture of [
+    { captured: 1, disabled: 0, skipped: 0, failed: 0, conflict: 0, sends: 1 },
+    { captured: 9, disabled: 0, skipped: 2, failed: 0, conflict: 0, sends: 11 },
+  ]) {
+    assert.match(captureLine(capture).text, /^This whole run: /);
+  }
 });
 
 test("a send a newer worker counted some other way is shown as a gap, not swallowed", () => {
@@ -314,6 +364,6 @@ test("a send a newer worker counted some other way is shown as a gap, not swallo
 test("one send is a send, not 1 sends", () => {
   assert.match(
     captureLine({ captured: 1, disabled: 0, skipped: 0, failed: 0, conflict: 0, sends: 1 }).text,
-    /^1 send,/,
+    /: 1 send,/,
   );
 });

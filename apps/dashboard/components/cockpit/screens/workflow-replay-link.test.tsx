@@ -160,9 +160,10 @@ function text(node: ReactTestInstance): string {
 }
 
 test("a link to a send and a section lands on that send and that section", async (t) => {
-  // attempt 2 is the planning attempt, `brf_plan_3` its second pass, and
+  // attempt 3 is the planning attempt (the fixture run numbers its attempts in
+  // the order it lists them), `brf_plan_3` its second pass, and
   // section 1 that send's AGENTS.md.
-  const harness = render(t, "?run=wrun_fx_planning&node=planning&attempt=2&tab=briefing&send=brf_plan_3&section=1");
+  const harness = render(t, "?run=wrun_fx_planning&node=planning&attempt=3&tab=briefing&send=brf_plan_3&section=1");
   await settle();
 
   assert.ok(
@@ -184,7 +185,7 @@ test("a link to a send and a section lands on that send and that section", async
 });
 
 test("moving to another attempt clears the send and the section from the link", async (t) => {
-  const harness = render(t, "?run=wrun_fx_planning&node=planning&attempt=2&tab=briefing&send=brf_plan_3&section=1");
+  const harness = render(t, "?run=wrun_fx_planning&node=planning&attempt=3&tab=briefing&send=brf_plan_3&section=1");
   await settle();
 
   const implementation = harness.root

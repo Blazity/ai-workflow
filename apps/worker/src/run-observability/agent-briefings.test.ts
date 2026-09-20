@@ -59,6 +59,9 @@ function factsFrom(summary: AgentBriefingRunSummary | null): MissingBriefingFact
     captureDisabled: (summary?.disabledCount ?? 0) > 0,
     capturedKinds: [],
     replayExpired: false,
+    // A planning block, which sends on every attempt of it.
+    sendsEveryAttempt: true,
+    runLostASend: (summary?.failedCount ?? 0) > 0,
   };
 }
 

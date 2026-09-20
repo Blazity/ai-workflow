@@ -18,6 +18,8 @@ const live: MissingBriefingFacts = {
   captureDisabled: false,
   capturedKinds: [],
   replayExpired: false,
+  sendsEveryAttempt: true,
+  runLostASend: false,
 };
 
 const explain = (change: Partial<MissingBriefingFacts>) => explainMissingBriefing({ ...live, ...change });
@@ -147,6 +149,97 @@ test("a completed attempt whose briefing was not written says capture was skippe
     kind: "not_recorded",
     cause: "capture_skipped",
   });
+});
+
+/** A block that asks a model only when it cannot work the answer out itself,
+ *  finished, on a run that is over and lost no record: the shape of every
+ *  ticket that names its own repository. */
+const resolvedWithoutAsking = {
+  attemptState: "completed",
+  runStatus: "success",
+  promptSent: "unknown" as const,
+  sendsEveryAttempt: false,
+};
+
+// Red when: a block that asks a model only when it needs to is told its record
+// was lost for every attempt that did not need to ask. That is a false alarm
+// on the COMMON case (a ticket that names its repository), and it sends a
+// person hunting a data-loss bug that does not exist.
+test("an attempt that never needed to ask says so, and quotes no failure", () => {
+  const reason = explain(resolvedWithoutAsking);
+  assert.deepEqual(reason, {
+    schemaVersion: 1,
+    kind: "never_sent",
+    cause: "not_needed",
+    attemptState: "completed",
+    runStatus: "success",
+    failure: null,
+  });
+  assert.equal(readVisibilityRecord(missingBriefingReasonSchema, JSON.parse(JSON.stringify(reason))).ok, true);
+});
+
+// Red when: a run that failed somewhere else lends its failure to an attempt
+// that simply had nothing to ask, which reads as the reason it asked nothing.
+test("a run that failed elsewhere does not become the reason this attempt asked nothing", () => {
+  const reason = explain({
+    ...resolvedWithoutAsking,
+    runStatus: "failed",
+    failure: { category: "provider", message: "The AI provider rejected the request." },
+  });
+  assert.deepEqual(reason, {
+    schemaVersion: 1,
+    kind: "never_sent",
+    cause: "not_needed",
+    attemptState: "completed",
+    runStatus: "failed",
+    failure: null,
+  });
+});
+
+// Red when: "it did not need to ask" is claimed on a run that DID lose a
+// record. That is a false all-clear on the one run where something really is
+// wrong, and it is the only thing that tells the two silences apart.
+test("a run that lost a record keeps the louder answer for a block that may not have asked", () => {
+  assert.deepEqual(explain({ ...resolvedWithoutAsking, runLostASend: true }), {
+    schemaVersion: 1,
+    kind: "not_recorded",
+    cause: "capture_skipped",
+  });
+});
+
+// Red when: the new answer overrules its two neighbours. A send that really
+// was lost left a marker row saying it went out; an attempt that died before
+// sending has its failure to read. Neither is "there was nothing to ask".
+test("a block that may not have asked keeps both neighbouring answers", () => {
+  assert.deepEqual(explain({ ...resolvedWithoutAsking, promptSent: true }), {
+    schemaVersion: 1,
+    kind: "not_recorded",
+    cause: "capture_skipped",
+  });
+  const failure = { category: "sandbox", message: "The sandbox could not be created." };
+  assert.deepEqual(explain({ ...resolvedWithoutAsking, attemptState: "failed", runStatus: "failed", failure }), {
+    schemaVersion: 1,
+    kind: "never_sent",
+    attemptState: "failed",
+    runStatus: "failed",
+    failure,
+  });
+});
+
+// Red when: a cause a newer worker writes makes the whole reason unreadable,
+// so a dashboard one deploy behind shows nothing at all instead of what it
+// still knows: the prompt never went out.
+test("a never-sent cause this build does not know still reads", () => {
+  const read = readVisibilityRecord(missingBriefingReasonSchema, {
+    schemaVersion: 1,
+    kind: "never_sent",
+    cause: "sampled_out",
+    attemptState: "completed",
+    runStatus: "success",
+    failure: null,
+  });
+  assert.equal(read.ok, true);
+  assert.equal(read.ok && read.value.kind === "never_sent" && read.value.cause, "sampled_out");
 });
 
 // Red when: an expired replay is claimed for an attempt that never had a

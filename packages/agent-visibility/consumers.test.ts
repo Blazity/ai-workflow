@@ -347,6 +347,8 @@ test("a planning attempt that discovers and plans twice, and a call_llm send, as
       captureDisabled: false,
       capturedKinds: ["discovery", "agent", "agent"],
       replayExpired: false,
+      sendsEveryAttempt: true,
+      runLostASend: false,
     }).kind,
     "never_sent",
   );
