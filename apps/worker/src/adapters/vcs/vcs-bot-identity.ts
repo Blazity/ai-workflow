@@ -221,7 +221,7 @@ export function selectReviewLedgerWorkItems<
  *  alongside the boolean because a person reading a run needs the reason more
  *  than the verdict: "it stopped" and "it stopped because every thread on the
  *  PR was already answered" are not the same message. */
-export type PendingReviewFeedbackReason =
+type PendingReviewFeedbackReason =
   /** At least one review thread is still waiting on this workflow. */
   | "open_review_threads"
   /** Comments from somebody other than us on a PR with no thread feed. */
