@@ -535,15 +535,28 @@ test("a repository a question offered and nobody decided about can be put in the
 
   const body = text(harness.root);
   assert.match(body, /Offered in a question, not in the record/);
-  assert.match(body, new RegExp(`${SHOP_MOBILE} Nobody decided about this one`));
+  // The sentence explains the group and reads the same for every row in it, so
+  // it is said once, between the heading and the keys. Per row it was the same
+  // paragraph over and over, between a person and the keys they came to read.
+  // Asserted as an order rather than as a count, because this fixture offers
+  // one repository and a count of one cannot tell the two arrangements apart.
+  assert.match(
+    body,
+    new RegExp(
+      `Offered in a question, not in the record Nothing has been decided about the repositories below\\. [^.]*\\. ${SHOP_MOBILE} Select Exclude`,
+    ),
+  );
   await click(labelled(harness.root, `Select: ${SHOP_MOBILE}`));
   await clickText(harness.root, "Yes, select it");
 
   const after = text(harness.root);
   assert.match(after, new RegExp(`${SHOP_MOBILE} Selected`));
   assert.match(after, /6 repositories decided/);
-  // It is in the record now, so it is no longer offered as one nobody decided.
-  assert.doesNotMatch(after, new RegExp(`${SHOP_MOBILE} Nobody decided about this one`));
+  // It is in the record now, so it is no longer offered as one nobody decided,
+  // and it was the only one: the whole group goes with it rather than standing
+  // there as a heading and an explanation above nothing.
+  assert.doesNotMatch(after, new RegExp(`${SHOP_MOBILE} Select Exclude`));
+  assert.doesNotMatch(after, /Offered in a question, not in the record/);
   // And it can be taken straight back out, where the undo lives.
   assert.equal(buttons(harness.root, "Undo this change").length, 1);
 });

@@ -393,11 +393,11 @@ export function RecordEditor({
           <h5 className="m-0 font-mono text-[9px] font-medium uppercase tracking-[0.06em] text-neutral-600">
             Offered in a question, not in the record
           </h5>
+          <span className="font-body text-[12px] leading-[1.5] text-neutral-700">{OFFERED_LINE}</span>
           <ul className="m-0 flex list-none flex-col p-0">
             {offered.map((repositoryKey) => (
               <li key={repositoryKey} className="flex flex-col gap-1 border-t border-neutral-200 py-2 first:border-t-0">
                 <span className="break-all font-mono text-[12px] font-medium text-coal">{repositoryKey}</span>
-                <span className="font-body text-[12px] leading-[1.5] text-neutral-700">{OFFERED_LINE}</span>
                 {row(repositoryKey, null)}
               </li>
             ))}

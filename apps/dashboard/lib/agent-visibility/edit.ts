@@ -161,9 +161,15 @@ export function undoSentence(original: EditIntent): string {
  */
 /** What a repository nobody has decided about can become here. Excluding one
  *  is a decision in its own right, and the worker's edit path writes it
- *  whether or not an entry exists (`engine/work-scope/decide.ts`). */
+ *  whether or not an entry exists (`engine/work-scope/decide.ts`).
+ *
+ *  SAID ONCE, ABOVE THE LIST. It is the same sentence for every repository in
+ *  it, so per row it was the same paragraph two or three times over, and a
+ *  person scanning for which repositories are undecided read the explanation
+ *  instead of the keys. Worded for one or many, because the list can hold
+ *  either. */
 export const OFFERED_LINE =
-  "Nobody decided about this one. Selecting it puts it in the record; excluding it keeps a later question from offering it again.";
+  "Nothing has been decided about the repositories below. Selecting one puts it in the record; excluding it keeps a later question from offering it again.";
 
 export function offeredNotInRecord(
   rounds: readonly { question: { offered: readonly { key: string }[] | null } }[],
