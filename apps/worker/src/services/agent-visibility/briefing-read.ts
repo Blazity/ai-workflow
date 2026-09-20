@@ -607,6 +607,74 @@ export async function readBriefingAttempts(
   reads: BriefingReads,
   input: ReadBriefingAttemptsInput,
 ): Promise<BriefingAttemptsPage> {
+  const { described, limit, extra } = await describeRunAttempts(reads, input);
+  // An unreadable briefing belongs to one attempt, so a page reports the ones
+  // whose attempt it is showing and counts the rest: a schema version this
+  // build does not know makes every briefing of a run unreadable at once, and a
+  // page carrying all of them carried nothing else.
+  const byAttempt = new Map(
+    described.map((entry) => [attemptKey(entry.item), entry.unreadable] as const),
+  );
+  const page = keyedListPage(
+    described.map((entry) => entry.item),
+    {
+      keyOf: attemptKey,
+      cursor: input.cursor ?? null,
+      limit,
+      unreadable: described.flatMap((entry) => entry.unreadable),
+      unreadableFor: (served) => served.flatMap((item) => byAttempt.get(attemptKey(item)) ?? []),
+      extra,
+    },
+  );
+  return dropUndefined(page as BriefingAttemptsPage);
+}
+
+/** The newest Block Attempt of a run, and what the run itself can still say. */
+export interface NewestBriefingAttempt {
+  /** Null where the filter matched no attempt at all. */
+  attempt: BlockAttemptBriefings | null;
+  state: RunBriefingState;
+  capture: RunCaptureCounts | null;
+}
+
+/**
+ * The NEWEST attempt of the filtered set, whatever fits.
+ *
+ * NOT the last item of the first page. Attempts are served oldest first, so a
+ * block with more attempts than one page holds would hand back the last one
+ * that FITTED and call it the last one sent, which is an older prompt under the
+ * word "newest": an operator would edit against text the block no longer
+ * produces. The one attempt served still goes through the pager, so a single
+ * enormous attempt is shortened rather than blowing the caller's cap.
+ */
+export async function readNewestBriefingAttempt(
+  reads: BriefingReads,
+  input: ReadBriefingAttemptsInput,
+): Promise<NewestBriefingAttempt> {
+  const { described, limit, extra } = await describeRunAttempts(reads, input);
+  const newest = described.at(-1);
+  if (newest === undefined) return { attempt: null, ...extra };
+  const page = keyedListPage([newest.item], {
+    keyOf: attemptKey,
+    limit,
+    total: described.length,
+    unreadable: newest.unreadable,
+  });
+  return { attempt: dropUndefined(page.items[0] ?? null), ...extra };
+}
+
+interface DescribedAttempts {
+  /** Every Block Attempt the filter matched, oldest first. */
+  described: AttemptDescription[];
+  limit: number;
+  /** What the run itself says, which no attempt can: carried on every page. */
+  extra: { state: RunBriefingState; capture: RunCaptureCounts | null };
+}
+
+async function describeRunAttempts(
+  reads: BriefingReads,
+  input: ReadBriefingAttemptsInput,
+): Promise<DescribedAttempts> {
   const limit = pageLimit(input.limit, input.bounds);
   const run = await runOf(reads, input);
   // ONE FILTER PER SPELLING. The caller names the node the graph names, and the
@@ -632,25 +700,11 @@ export async function readBriefingAttempts(
   const described = groupAttempts(overviews, attempts).map((entry, position) =>
     describeAttempt(entry, position, run, runSummary, now, safe),
   );
-  // An unreadable briefing belongs to one attempt, so a page reports the ones
-  // whose attempt it is showing and counts the rest: a schema version this
-  // build does not know makes every briefing of a run unreadable at once, and a
-  // page carrying all of them carried nothing else.
-  const byAttempt = new Map(
-    described.map((entry) => [attemptKey(entry.item), entry.unreadable] as const),
-  );
-  const page = keyedListPage(
-    described.map((entry) => entry.item),
-    {
-      keyOf: attemptKey,
-      cursor: input.cursor ?? null,
-      limit,
-      unreadable: described.flatMap((entry) => entry.unreadable),
-      unreadableFor: (served) => served.flatMap((item) => byAttempt.get(attemptKey(item)) ?? []),
-      extra: { state: runBriefingState(run, runSummary), capture: captureCounts(runSummary) },
-    },
-  );
-  return dropUndefined(page as BriefingAttemptsPage);
+  return {
+    described,
+    limit,
+    extra: { state: runBriefingState(run, runSummary), capture: captureCounts(runSummary) },
+  };
 }
 
 /** One briefing's stored index, read and parsed, with the row it came from. */

@@ -226,7 +226,50 @@ export function byteRangeInPage(
   };
 }
 
-const CURSOR_PATTERN = /^(?:0|[1-9][0-9]*)$/;
+/**
+ * A POSITION CURSOR: how far into a list a page reached, and how long that list
+ * was when it said so.
+ *
+ * THE RULE IS THAT A LIST PAGES ON AN APPEND-ONLY KEY, because a position over
+ * rows something is still writing serves one entry twice and skips another with
+ * nothing red anywhere. A list read out of ONE STORED BRIEFING is the exception:
+ * its row is inserted once with `ON CONFLICT DO NOTHING` and never updated, so
+ * entry 40 is the same entry on every page of every read of it.
+ *
+ * The length travels in the cursor so that exception is CHECKED rather than
+ * trusted. Hand this pager a list that grew or shrank between two pages and the
+ * cursor is refused out loud, exactly as a keyed list refuses a cursor whose
+ * entry is gone; the silent double-serve the rule was written against cannot
+ * happen here even if a caller one day pages something alive. Both halves mint
+ * and read a cursor of this kind here and nowhere else (the worker's
+ * `storedListPage` calls the same three functions), so the reader and the
+ * writer cannot drift apart.
+ */
+const POSITION_CURSOR = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+
+/** Where a page starting at `cursor` begins, or a refusal naming what to do. */
+export function positionCursor(cursor: string, length: number): number {
+  const parsed = POSITION_CURSOR.exec(cursor);
+  const at = parsed === null ? -1 : Number(parsed[1]);
+  if (parsed === null || at > length || Number(parsed[2]) !== length) {
+    throw new AgentVisibilityPageError(
+      "cursor_invalid",
+      `The cursor "${cursor}" is not one this list handed out, or the list is no longer the one that handed it out; read the list again from the start.`,
+    );
+  }
+  return at;
+}
+
+/** The cursor of the page after one that reached `next`, null at the end. */
+export function positionCursorAfter(next: number, length: number): string | null {
+  return next < length ? `${next}.${length}` : null;
+}
+
+/** The widest cursor a list of this length can hand out, for a caller that has
+ *  to reserve room for one before it knows which one it will be. */
+export function widestPositionCursor(length: number): string {
+  return `${length}.${length}`;
+}
 
 /**
  * The page of `items` that starts at `cursor`, as many whole items as fit.
@@ -236,6 +279,11 @@ const CURSOR_PATTERN = /^(?:0|[1-9][0-9]*)$/;
  * text shortened (`shortenStrings`) and is listed in `shortened` with its full
  * size, so the cursor always moves; one that does not fit even then is
  * refused with `item_too_large`, naming its full size.
+ *
+ * ONLY FOR A LIST THAT CANNOT CHANGE BETWEEN TWO READS: see `positionCursor`
+ * for what that means and for what happens to a caller that ignores it. A list
+ * built from rows something is still writing pages on a key of its own entries
+ * and hands this function an already-sliced window with no cursor at all.
  */
 export function pageList<T>(
   items: readonly T[],
@@ -243,22 +291,13 @@ export function pageList<T>(
 ): AgentVisibilityListPage<T> {
   const cap = checkedCap(options.maxBytes);
   const cursor = options.cursor ?? null;
-  let start = 0;
-  if (cursor !== null) {
-    if (!CURSOR_PATTERN.test(cursor) || Number(cursor) > items.length) {
-      throw new AgentVisibilityPageError(
-        "cursor_invalid",
-        `The cursor "${cursor}" is not one this list handed out; start again without a cursor.`,
-      );
-    }
-    start = Number(cursor);
-  }
+  const start = cursor === null ? 0 : positionCursor(cursor, items.length);
   const page: AgentVisibilityListPage<T> = {
     schemaVersion: AGENT_VISIBILITY_SCHEMA_VERSION,
     cursor,
     items: [],
     shortened: [],
-    nextCursor: String(items.length),
+    nextCursor: widestPositionCursor(items.length),
     total: items.length,
   };
   // Measured with nextCursor at its widest (the last index, or null), so the
@@ -289,7 +328,7 @@ export function pageList<T>(
     next += 1;
     break;
   }
-  page.nextCursor = next < items.length ? String(next) : null;
+  page.nextCursor = positionCursorAfter(next, items.length);
   if (jsonBytes(page) > cap) {
     throw new Error(`A list page came out at ${jsonBytes(page)} bytes against a cap of ${cap}.`);
   }

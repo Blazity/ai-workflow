@@ -52,10 +52,12 @@ paths:
 - **The map lives in `apps/worker/src/repository-map/`** because `sandbox/` and
   `engine/` both import it and the engine already imports `sandbox/`; inside
   `engine/` it would close that loop.
-- **Pages cursor on an append-only key**, never on a position: a positional
-  cursor over a live run serves one item twice and skips another with nothing
-  red anywhere. The MCP budget is measured on the whole result, not on the
-  page, because the envelope goes out twice (a text block and
+- **Pages cursor on an append-only key**, except over a stored briefing, whose
+  row is written once. There a position carries the list length it was minted
+  against, through the package's one `positionCursor` pair that both halves use,
+  so a list that changed refuses the cursor rather than serving one item twice
+  and skipping another. The MCP budget is measured on the whole result, not on
+  the page, because the envelope goes out twice (a text block and
   `structuredContent`): see `mcp/tools/page-budget.ts`.
 - **A missing briefing always says which kind of missing.** Whether the prompt
   went out is decided first, and only then whether we kept it; "not recorded"

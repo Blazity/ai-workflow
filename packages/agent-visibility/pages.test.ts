@@ -218,7 +218,7 @@ test("an item bigger than the cap is shortened, its full size stated, and the cu
   assert.match(shortenedText, /^d+\u2026 \(10000 characters in full\)$/);
   // Everything else in the item is whole: a shortened key would not parse.
   assert.equal((second.items[0] as typeof huge).key, huge.key);
-  assert.equal(second.nextCursor, "2");
+  assert.equal(second.nextCursor, "2.3");
   const read = readVisibilityRecord(
     agentVisibilityListPageSchema(agentBriefingRepositorySchema),
     JSON.parse(JSON.stringify(second)),
@@ -252,10 +252,36 @@ test("an item that fits only by cutting an array is refused with its full size",
 // Red when: a malformed cursor restarts the list or skips to its end.
 test("a malformed cursor is refused, and the end is an empty final page", () => {
   const items = [1, 2, 3];
-  for (const cursor of ["abc", "-1", "4", "01"]) {
+  // The bare position is the form this pager used to hand out, and it is
+  // refused now: it says nothing about which list it came from.
+  for (const cursor of ["abc", "-1", "4", "01", "2", "4.3", "2.03"]) {
     assert.throws(() => pageList(items, { cursor }), (error: unknown) =>
       error instanceof AgentVisibilityPageError && error.code === "cursor_invalid");
   }
-  const end = pageList(items, { cursor: "3" });
+  const end = pageList(items, { cursor: "3.3" });
   assert.deepEqual([end.items, end.nextCursor, end.total], [[], null, 3]);
+});
+
+// Red when: a position cursor is taken at face value over a list that grew or
+// shrank between two pages. That serves one entry twice and skips another with
+// nothing red anywhere, which is why the rule is that lists page on an
+// append-only key; this pager is the one exception and has to prove it is
+// looking at the same list, not merely assert it in a comment.
+test("a cursor is refused once the list it was handed out for has changed", () => {
+  const items = [1, 2, 3, 4, 5];
+  const first = pageList(items, { maxBytes: 1_024 * 4, cursor: "2.5" });
+  assert.deepEqual(first.items, [3, 4, 5]);
+
+  for (const changed of [[0, 1, 2, 3, 4, 5], [1, 2, 3, 4]]) {
+    assert.throws(
+      () => pageList(changed, { cursor: "2.5" }),
+      (error: unknown) => {
+        assert.ok(error instanceof AgentVisibilityPageError);
+        assert.equal(error.code, "cursor_invalid");
+        // The same answer a keyed list gives: read it again from the start.
+        assert.match(error.message, /read the list again from the start/);
+        return true;
+      },
+    );
+  }
 });

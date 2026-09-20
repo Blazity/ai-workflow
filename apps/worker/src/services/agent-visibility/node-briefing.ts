@@ -27,7 +27,7 @@ import {
 import type { Db } from "../../db/types.js";
 import {
   PROMPT_SENDING_BLOCK_TYPES,
-  readBriefingAttempts,
+  readNewestBriefingAttempt,
   type BlockAttemptBriefings,
   type BriefingReads,
   type PageBounds,
@@ -207,16 +207,17 @@ export async function readNodeLastBriefing(
   // itself belongs to `readBriefingAttempts`, which is where every other read
   // of a run gets it: one tenant rule, in one place.
 
-  const page = await readBriefingAttempts(reads, {
+  // The NEWEST try of this node in that run, which is what an operator means by
+  // "last time it ran". Asked for by name rather than taken off the end of a
+  // page: a page ends where the bytes ran out, and a block with more attempts
+  // than one page holds would answer with an older prompt under that word.
+  const { attempt, state, capture } = await readNewestBriefingAttempt(reads, {
     runId: lastRun.runId,
     organizationId: input.organizationId,
     nodeId: input.nodeId,
     ...(input.now === undefined ? {} : { now: input.now }),
     ...(input.bounds === undefined ? {} : { bounds: input.bounds }),
   });
-  // The attempts of one node in one run, oldest first: the last one is the
-  // newest try, which is the one an operator means by "last time it ran".
-  const attempt = page.items.at(-1) ?? null;
   return {
     ...answer,
     sendsPrompts: attempt?.sendsPrompts ?? (blockType === null ? null : PROMPT_SENDING_BLOCK_TYPES.has(blockType)),
@@ -224,8 +225,8 @@ export async function readNodeLastBriefing(
       runId: lastRun.runId,
       definitionVersion: lastRun.definitionVersion,
       at: lastRun.at.toISOString(),
-      state: page.state,
-      capture: page.capture,
+      state,
+      capture,
     },
     attempt,
     absent: null,

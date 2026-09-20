@@ -38,7 +38,7 @@ import {
   reviewRows,
 } from "../../test-support/prompt-oracle/matrix.js";
 import { agentBriefingIndexSchema, shortenVisibilityId, type AgentBriefingIndex } from "@shared/agent-visibility";
-import { captureAgentBriefing } from "./capture.js";
+import { captureAgentBriefing, captureSkippedSend } from "./capture.js";
 import {
   createBriefingSequence,
   nextBriefingIdentity,
@@ -665,6 +665,28 @@ describe("what a briefing claims about its harness and its repositories", () => 
   });
 });
 
+/**
+ * A database whose FIRST statement never answers, and which works after that.
+ *
+ * That is the shape of the failure this path is bounded against: the write of
+ * the send hangs, and the one-line run fact that follows it does not. A proxy
+ * that stalled everything would hide the fact write behind the same stall and
+ * prove nothing about it.
+ */
+function stallsOnce(real: Db): Db {
+  let stalled = false;
+  return new Proxy(real, {
+    get(target, property, receiver) {
+      if (property !== "execute") return Reflect.get(target, property, receiver);
+      return (...args: unknown[]) => {
+        if (stalled) return (Reflect.get(target, property, receiver) as (...a: unknown[]) => unknown).apply(target, args);
+        stalled = true;
+        return new Promise(() => {});
+      };
+    },
+  }) as Db;
+}
+
 describe("capture never gets in the way of a run", () => {
   // Red when: a send made while capture was off is recorded as nothing at all,
   // so a person is told "not recorded" when the truth is "switched off". Four
@@ -692,6 +714,58 @@ describe("capture never gets in the way of a run", () => {
     expect(await readAgentBriefingRunSummary(db, RUN)).toMatchObject({ capturedCount: 0, disabledCount: 4 });
     // No text of any send is stored when capture is off.
     expect(await readAgentBriefingRecord(db, { runId: RUN, nodeId: "planning", attempt: 1, activationScopeId: "root", sequence: 1 })).toMatchObject({ texts: [] });
+  });
+
+  // Red when: a send that never went out is recorded with no run fact when its
+  // write does not finish in time. The run fact is what later says "this run's
+  // code could capture": without it a run whose sends all ended this way reads
+  // back as a run from before the feature, which is a lie told exactly when
+  // something else has already gone wrong.
+  it("says the run could capture when the skipped record does not finish", async () => {
+    const warn = vi.spyOn(logger, "warn").mockReturnValue(undefined);
+    const capture = planTextBriefing({
+      ...identity(),
+      kind: "agent",
+      prompt: "plan the change",
+      harness: { ...HARNESS, profile: null },
+    });
+
+    const outcome = await captureSkippedSend(
+      capture,
+      "the wrapper could not be made executable",
+      { db: stallsOnce(db), timeoutMs: 50 },
+    );
+
+    expect(outcome).toEqual({ outcome: "timed_out" });
+    expect(warn).toHaveBeenCalledWith(expect.anything(), "agent_briefing_skip_timeout");
+    // No row for the send itself: the write never landed. The run says so.
+    expect(await listAgentBriefingRowsOfRun(db, RUN)).toHaveLength(0);
+    expect(await readAgentBriefingRunSummary(db, RUN)).toMatchObject({ failedCount: 1 });
+  });
+
+  // Red when: a skipped send that meets a DIFFERENT briefing under its own
+  // identity is counted nowhere. Two sends numbered the same is exactly the
+  // state the counts exist to surface, and the skip path used to return the
+  // conflict and write nothing.
+  it("counts a skipped send that collides with a briefing already stored", async () => {
+    vi.spyOn(logger, "warn").mockReturnValue(undefined);
+    const sent = planTextBriefing({
+      ...identity(),
+      kind: "agent",
+      prompt: "plan the change",
+      harness: { ...HARNESS, profile: null },
+    });
+    expect(await captureAgentBriefing(sent, { prompt: "plan the change" }, { db })).toMatchObject({
+      outcome: "recorded",
+    });
+
+    const outcome = await captureSkippedSend(sent, "the wrapper could not be made executable", { db });
+
+    expect(outcome).toEqual({ outcome: "conflict" });
+    expect(await readAgentBriefingRunSummary(db, RUN)).toMatchObject({
+      capturedCount: 1,
+      conflictCount: 1,
+    });
   });
 
   // Red when: a journal written before this argument existed makes the step

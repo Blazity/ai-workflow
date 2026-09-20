@@ -14,6 +14,8 @@ import type { Db } from "../../db/client.js";
 import { eq } from "drizzle-orm";
 import { agentBriefingTexts, agentBriefings, workflowRuns } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
+import { captureSkippedSend } from "../../engine/agent-visibility/capture.js";
+import { planTextBriefing } from "../../engine/agent-visibility/plan.js";
 import {
   briefingReadsOf,
   readBriefingAttempts,
@@ -48,6 +50,25 @@ function attemptsOf(input: Parameters<typeof readBriefingAttempts>[1]) {
 }
 
 const sha = (text: string) => createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
+
+/** A database whose FIRST statement never answers and which works after that:
+ *  the shape of a stuck write, with the one-line run fact behind it still
+ *  reachable. */
+function stallsOnce(real: Db): Db {
+  let stalled = false;
+  return new Proxy(real, {
+    get(target, property, receiver) {
+      if (property !== "execute") return Reflect.get(target, property, receiver);
+      return (...args: unknown[]) => {
+        if (stalled) {
+          return (Reflect.get(target, property, receiver) as (...a: unknown[]) => unknown).apply(target, args);
+        }
+        stalled = true;
+        return new Promise(() => {});
+      };
+    },
+  }) as Db;
+}
 
 // The first database of the run replays every migration from disk, which on a
 // cold cache passes the default hook timeout.
@@ -390,6 +411,42 @@ describe("the attempts of a run", () => {
       conflict: 0,
       sends: 3,
     });
+  }, 120_000);
+
+  // Red when: a run whose sends were all lost is told to a person as a run from
+  // before capture existed. It is not: its code tried, and the writes did not
+  // land. The two answers send a person to different places, one of them being
+  // "stop looking, this predates the feature", and this one is false. The send
+  // is recorded through the real skip path, against a database whose first
+  // statement never answers, which is what a stuck write looks like from inside
+  // a step.
+  it("says a run whose only send was lost could capture, not that it predates it", async () => {
+    await seedRun(db, { runId: RUN, world, status: "success" });
+    const capture = planTextBriefing({
+      enabled: true,
+      runId: RUN,
+      nodeId: "planning",
+      blockType: "planning_agent",
+      attempt: 1,
+      activationScopeId: "root",
+      sequence: 1,
+      kind: "agent",
+      prompt: "plan the change",
+      harness: { provider: "claude", model: "claude-sonnet-4-5-20250929", profile: null },
+    });
+
+    const outcome = await captureSkippedSend(capture, "the wrapper could not be made executable", {
+      db: stallsOnce(db),
+      timeoutMs: 50,
+    });
+
+    expect(outcome).toEqual({ outcome: "timed_out" });
+    const page = await attemptsOf({ runId: RUN, organizationId: VISIBILITY_ORG });
+    // What a person is told now: this run's rows are gone, and capture counted
+    // one send it could not keep. What they were told before: nothing here can
+    // capture, and no counts at all.
+    expect(page.state).toBe("replay_gone");
+    expect(page.capture).toMatchObject({ captured: 0, failed: 1, sends: 1 });
   }, 120_000);
 
   // Red when: a run nothing ever recorded for reports zeroes, which a person

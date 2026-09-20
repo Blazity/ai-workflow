@@ -12,6 +12,8 @@
  *   spans, the repository context's repositories, the unresolved sources) is
  *   immutable: the row is written once with `ON CONFLICT DO NOTHING` and never
  *   updated, so a position is a stable cursor and `total` is exact and free.
+ *   The cursor carries the length it was minted against, so the immutability
+ *   that makes it honest is checked on every page rather than assumed.
  * - A list built from ROWS A LIVE RUN IS STILL WRITING (the Block Attempts of a
  *   run, the rounds of a subject) is not. A position there serves one entry
  *   twice and skips another the moment something is inserted between two pages,
@@ -26,6 +28,9 @@ import {
   AGENT_VISIBILITY_PAGE_MAX_BYTES,
   AGENT_VISIBILITY_PAGE_MIN_BYTES,
   pageList,
+  positionCursor,
+  positionCursorAfter,
+  widestPositionCursor,
   type AgentVisibilityListPage,
   type VisibilityRead,
 } from "@shared/agent-visibility";
@@ -287,7 +292,10 @@ function assemble<T>(input: AssembleInput<T>): AgentVisibilityPage<T> {
  *
  * The cursor is a position because the source cannot change: a briefing row is
  * inserted once and never updated, so entry 40 is the same entry on every page
- * of every read of it.
+ * of every read of it. Minted and read through the package's own pair, which is
+ * the same pair `pageList` uses, so the two halves cannot drift on what a
+ * cursor of this kind looks like, and the length it carries refuses a list that
+ * turned out to be alive after all.
  */
 export function storedListPage<T>(
   items: readonly T[],
@@ -299,26 +307,17 @@ export function storedListPage<T>(
   },
 ): AgentVisibilityPage<T> {
   const cursor = options.cursor ?? null;
-  const from = cursor === null ? 0 : positionCursor(cursor, items.length);
+  const from = cursor === null ? 0 : paging(() => positionCursor(cursor, items.length));
   return assemble({
     window: items.slice(from),
     cursor,
-    nextCursorOf: (served) => (from + served < items.length ? String(from + served) : null),
+    nextCursorOf: (served) => positionCursorAfter(from + served, items.length),
     total: items.length,
     limit: options.limit,
     unreadable: options.unreadable ?? [],
     ...(options.extra === undefined ? {} : { extra: options.extra }),
-    widestCursorBytes: jsonBytes(String(items.length)),
+    widestCursorBytes: jsonBytes(widestPositionCursor(items.length)),
   });
-}
-
-const POSITION_CURSOR = /^(?:0|[1-9][0-9]*)$/;
-
-function positionCursor(cursor: string, length: number): number {
-  if (!POSITION_CURSOR.test(cursor) || Number(cursor) > length) {
-    throw badRequest(`The cursor "${cursor}" is not one this list handed out; start again without a cursor.`);
-  }
-  return Number(cursor);
 }
 
 /**

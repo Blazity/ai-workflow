@@ -11,6 +11,12 @@
  * because the engine may not import a service (ADR-001, `scripts/gates/
  * tiers.json`); the service cluster re-exports it for the surfaces that read
  * briefings.
+ *
+ * EVERY WRITE TO THE TWO BRIEFING TABLES IS HERE: the briefing row, the marker
+ * that says a send happened with nothing kept, and the run's durable facts. A
+ * second writer is not a duplicate that merely costs a reader an extra file; it
+ * is a second, quieter opinion about which outcomes deserve a run fact, and the
+ * run fact is what later tells a person this run could capture at all.
  */
 import {
   AgentVisibilityInputError,
@@ -57,13 +63,26 @@ export type RecordAgentBriefingOutcome =
   /** Nothing could be written at all. */
   | { outcome: "failed"; reason: string };
 
-function identityOf(input: AgentBriefingBuildInput) {
+/**
+ * One send, as a caller that has no briefing to build still knows it.
+ *
+ * Taken from the builder's own input rather than spelled out again, so the two
+ * ways into this module cannot drift: a field the package adds to a send's
+ * identity has to be answered on the skipped path too.
+ */
+export type AgentBriefingSendIdentity = Pick<
+  AgentBriefingBuildInput["identity"],
+  "runId" | "nodeId" | "attempt" | "activationScopeId" | "sequence" | "kind"
+>;
+
+function identityOf(input: AgentBriefingBuildInput): AgentBriefingSendIdentity {
   return {
     runId: input.identity.runId,
     nodeId: input.identity.nodeId,
     attempt: input.identity.attempt,
     activationScopeId: input.identity.activationScopeId,
     sequence: input.identity.sequence,
+    kind: input.identity.kind,
   };
 }
 
@@ -105,35 +124,79 @@ async function store(
  */
 async function note(
   options: RecordAgentBriefingOptions,
-  input: AgentBriefingBuildInput,
+  identity: AgentBriefingSendIdentity,
   fact: "captured" | "disabled" | "skipped" | "failed" | "conflict",
 ): Promise<void> {
   try {
     const repository = await import("../db/repositories/agent-visibility.js");
     await (options.db
-      ? repository.recordAgentBriefingRunFact(options.db, input.identity.runId, fact)
-      : repository.recordConnectedAgentBriefingRunFact(input.identity.runId, fact));
+      ? repository.recordAgentBriefingRunFact(options.db, identity.runId, fact)
+      : repository.recordConnectedAgentBriefingRunFact(identity.runId, fact));
   } catch (error) {
-    await warn(input, error, "agent_briefing_run_fact_failed");
+    await warn(identity, error, "agent_briefing_run_fact_failed");
   }
 }
 
 async function warn(
-  input: AgentBriefingBuildInput,
+  identity: AgentBriefingSendIdentity,
   error: unknown,
   message: string,
 ): Promise<void> {
   const { logger } = await import("../infra/logger.js");
   logger.warn(
     {
-      runId: input.identity.runId,
-      nodeId: input.identity.nodeId,
-      attempt: input.identity.attempt,
-      sequence: input.identity.sequence,
+      runId: identity.runId,
+      nodeId: identity.nodeId,
+      attempt: identity.attempt,
+      sequence: identity.sequence,
       err: error instanceof Error ? error.message : String(error),
     },
     message,
   );
+}
+
+/**
+ * The row that says a send happened and no briefing was kept, plus the run
+ * fact that goes with it.
+ *
+ * THE ONLY PLACE THIS ROW IS BUILT. Capture used to build its own copy against
+ * the repository, and the copy wrote no run fact on two of its outcomes, so a
+ * run whose sends were all lost read back as a run from before the feature.
+ * No text is stored on this path, so nobody is shown a briefing that is
+ * nothing but `[REDACTED]`.
+ */
+async function marker(
+  options: RecordAgentBriefingOptions,
+  identity: AgentBriefingSendIdentity,
+  written: {
+    capture: "capture_disabled" | "capture_skipped";
+    detail: string | null;
+    capturedAt: Date;
+  },
+): Promise<"recorded" | "already_recorded" | "conflict"> {
+  const stored = await store(options, {
+    runId: identity.runId,
+    nodeId: identity.nodeId,
+    attempt: identity.attempt,
+    activationScopeId: identity.activationScopeId,
+    sequence: identity.sequence,
+    kind: identity.kind,
+    capture: written.capture,
+    index: null,
+    contentSha256: null,
+    texts: [],
+    bytes: 0,
+    detail: written.detail,
+    capturedAt: written.capturedAt,
+  });
+  if (stored.outcome === "conflict") {
+    await note(options, identity, "conflict");
+    return "conflict";
+  }
+  // A REPLAY BUMPS NOTHING. The same send arriving again is not a second send.
+  if (stored.outcome === "already_recorded") return "already_recorded";
+  await note(options, identity, written.capture === "capture_disabled" ? "disabled" : "skipped");
+  return "recorded";
 }
 
 /**
@@ -151,23 +214,12 @@ export async function recordAgentBriefing(
   const kind = input.identity.kind;
   try {
     if (options.capture === false) {
-      const marker = await store(options, {
-        ...identity,
-        kind,
+      const written = await marker(options, identity, {
         capture: "capture_disabled",
-        index: null,
-        contentSha256: null,
-        texts: [],
-        bytes: 0,
         detail: null,
         capturedAt,
       });
-      if (marker.outcome === "conflict") {
-        await note(options, input, "conflict");
-        return { outcome: "conflict" };
-      }
-      if (marker.outcome === "recorded") await note(options, input, "disabled");
-      return { outcome: "capture_disabled" };
+      return written === "conflict" ? { outcome: "conflict" } : { outcome: "capture_disabled" };
     }
 
     const sanitize = options.sanitize ?? configuredVisibilityDetector();
@@ -183,24 +235,13 @@ export async function recordAgentBriefing(
         error instanceof AgentVisibilityInputError || error instanceof VisibilityCaptureRefusal;
       if (!refused) throw error;
       const reason = safeDetail(error.message, sanitize);
-      await warn(input, error, "agent_briefing_refused");
-      const marker = await store(options, {
-        ...identity,
-        kind,
+      await warn(identity, error, "agent_briefing_refused");
+      const written = await marker(options, identity, {
         capture: "capture_skipped",
-        index: null,
-        contentSha256: null,
-        texts: [],
-        bytes: 0,
         detail: reason,
         capturedAt,
       });
-      if (marker.outcome === "conflict") {
-        await note(options, input, "conflict");
-        return { outcome: "conflict" };
-      }
-      if (marker.outcome === "recorded") await note(options, input, "skipped");
-      return { outcome: "refused", reason };
+      return written === "conflict" ? { outcome: "conflict" } : { outcome: "refused", reason };
     }
 
     const encoder = new TextEncoder();
@@ -216,7 +257,6 @@ export async function recordAgentBriefing(
     }));
     const result = await store(options, {
       ...identity,
-      kind,
       capture: "captured",
       index: built.index,
       contentSha256: await sha256Hex(JSON.stringify({ ...built.index, identity: timeless })),
@@ -226,16 +266,16 @@ export async function recordAgentBriefing(
       capturedAt,
     });
     if (result.outcome === "recorded") {
-      await note(options, input, "captured");
+      await note(options, identity, "captured");
       return { outcome: "recorded", briefingId: result.briefingId };
     }
     // A REPLAY BUMPS NOTHING. The same send arriving again is not a second
     // send, and a run whose step replayed all weekend would otherwise read as
     // a run that captured hundreds of times.
     if (result.outcome === "already_recorded") return { outcome: "already_recorded" };
-    await note(options, input, "conflict");
+    await note(options, identity, "conflict");
     await warn(
-      input,
+      identity,
       new Error(
         `a ${result.stored.kind} ${result.stored.capture} briefing is already stored under this identity; this one is ${kind} captured`,
       ),
@@ -243,10 +283,65 @@ export async function recordAgentBriefing(
     );
     return { outcome: "conflict" };
   } catch (error) {
-    await warn(input, error, "agent_briefing_write_failed");
+    await warn(identity, error, "agent_briefing_write_failed");
     // The send happened and nothing kept it: the run says so even here, so a
     // reader meets "capture failed" instead of "this run predates capture".
-    await note(options, input, "failed");
+    await note(options, identity, "failed");
     return { outcome: "failed", reason: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * Record that a send took its place in the order and nothing went out under it.
+ *
+ * The same marker row and the same run fact a refusal writes, because it IS the
+ * same fact about the same table: a send step can fail before it launches
+ * anything, and the sequence number is already spent by then. Without the row a
+ * reader meets sequences 1 and 3 with a silent 2 and has to guess what became
+ * of the middle one.
+ *
+ * The reason is redacted and bounded exactly like a refusal's, because it is
+ * stored text like any other: a caller that builds it from an error message has
+ * no way of knowing what the message picked up.
+ */
+export async function recordSkippedAgentBriefing(
+  identity: AgentBriefingSendIdentity,
+  skip: { reason: string; capturedAt: Date },
+  options: RecordAgentBriefingOptions = {},
+): Promise<RecordAgentBriefingOutcome> {
+  // A send made while capture was off is the same row whether it went out or
+  // not: a run that started with capture off says so for every one of its
+  // sends, and no reason is kept for a send nobody asked to keep.
+  const disabled = options.capture === false;
+  try {
+    const reason = safeDetail(skip.reason, options.sanitize ?? configuredVisibilityDetector());
+    const written = await marker(options, identity, {
+      capture: disabled ? "capture_disabled" : "capture_skipped",
+      detail: disabled ? null : reason,
+      capturedAt: skip.capturedAt,
+    });
+    if (written === "conflict") return { outcome: "conflict" };
+    if (written === "already_recorded") return { outcome: "already_recorded" };
+    return disabled ? { outcome: "capture_disabled" } : { outcome: "refused", reason };
+  } catch (error) {
+    await warn(identity, error, "agent_briefing_skip_failed");
+    await note(options, identity, "failed");
+    return { outcome: "failed", reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Say this run's code could capture and this send was lost, where no outcome
+ * could be written at all.
+ *
+ * The caller stopped waiting, or could not reach this module, so the row that
+ * would have carried the outcome does not exist. The run fact still has to, or
+ * the run reads back as one from before the feature: a lie told exactly when
+ * something else has already gone wrong.
+ */
+export async function noteAgentBriefingLoss(
+  identity: AgentBriefingSendIdentity,
+  options: RecordAgentBriefingOptions = {},
+): Promise<void> {
+  await note(options, identity, "failed");
 }

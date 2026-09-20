@@ -203,12 +203,10 @@ async function noteFailure(
   budgetMs: number,
 ): Promise<void> {
   try {
-    const repository = await import("../../db/repositories/agent-visibility.js");
+    const { noteAgentBriefingLoss } = await import("../../run-observability/agent-briefings.js");
     await within(
       Math.min(RUN_FACT_TIMEOUT_MS, budgetMs),
-      options.db
-        ? repository.recordAgentBriefingRunFact(options.db, capture.identity.runId, "failed")
-        : repository.recordConnectedAgentBriefingRunFact(capture.identity.runId, "failed"),
+      noteAgentBriefingLoss(capture.identity, options.db ? { db: options.db } : {}),
     );
   } catch (error) {
     await warn(capture, error, "agent_briefing_run_fact_failed");
@@ -245,6 +243,12 @@ async function warn(capture: AgentBriefingCapture, error: unknown, message: stri
  * No text is stored on this path, so it is the same record whether capture is
  * on or off; a run that started with capture off still says so, because that
  * is what every other send of that run says.
+ *
+ * THE ROW ITSELF IS NOT BUILT HERE. `run-observability/agent-briefings.ts`
+ * owns every write to this table, including this one: the copy that used to
+ * live here wrote no run fact when the write timed out or met a conflict, and
+ * a run whose sends all ended that way then read back as a run from before the
+ * feature existed.
  */
 export async function captureSkippedSend(
   capture: AgentBriefingCapture | null | undefined,
@@ -252,46 +256,30 @@ export async function captureSkippedSend(
   options: CaptureAgentBriefingOptions = {},
 ): Promise<AgentBriefingCaptureOutcome> {
   if (!capture) return { outcome: "not_requested" };
-  const disabled = capture.enabled === false;
+  const timeoutMs = options.timeoutMs ?? BRIEFING_CAPTURE_TIMEOUT_MS;
   try {
-    const repository = await import("../../db/repositories/agent-visibility.js");
-    const row = {
-      runId: capture.identity.runId,
-      nodeId: capture.identity.nodeId,
-      attempt: capture.identity.attempt,
-      activationScopeId: capture.identity.activationScopeId,
-      sequence: capture.identity.sequence,
-      kind: capture.identity.kind,
-      capture: (disabled ? "capture_disabled" : "capture_skipped") as
-        | "capture_disabled"
-        | "capture_skipped",
-      index: null,
-      contentSha256: null,
-      texts: [],
-      bytes: 0,
-      detail: disabled ? null : reason,
-      capturedAt: new Date(),
-    };
-    const written = await within(
-      options.timeoutMs ?? BRIEFING_CAPTURE_TIMEOUT_MS,
-      options.db
-        ? repository.recordAgentBriefingRow(options.db, row)
-        : repository.recordConnectedAgentBriefingRow(row),
+    const { recordSkippedAgentBriefing } = await import("../../run-observability/agent-briefings.js");
+    const outcome = await within(
+      timeoutMs,
+      recordSkippedAgentBriefing(
+        capture.identity,
+        { reason, capturedAt: new Date() },
+        {
+          capture: capture.enabled,
+          ...(options.db ? { db: options.db } : {}),
+          ...(options.sanitize ? { sanitize: options.sanitize } : {}),
+        },
+      ),
     );
-    if (written === TIMED_OUT) return { outcome: "timed_out" };
-    if (written.outcome === "conflict") return { outcome: "conflict" };
-    if (written.outcome === "recorded") {
-      await within(
-        RUN_FACT_TIMEOUT_MS,
-        options.db
-          ? repository.recordAgentBriefingRunFact(options.db, capture.identity.runId, disabled ? "disabled" : "skipped")
-          : repository.recordConnectedAgentBriefingRunFact(capture.identity.runId, disabled ? "disabled" : "skipped"),
-      );
-      return disabled ? { outcome: "capture_disabled" } : { outcome: "refused", reason };
-    }
-    return { outcome: "already_recorded" };
+    if (outcome !== TIMED_OUT) return outcome;
+    await warn(capture, `the record did not finish within ${timeoutMs} ms`, "agent_briefing_skip_timeout");
+    // Same reason as above: the run has to say its code could capture, or this
+    // send disappears into "this run predates capture".
+    await noteFailure(capture, options, timeoutMs);
+    return { outcome: "timed_out" };
   } catch (error) {
     await warn(capture, error, "agent_briefing_skip_failed");
+    await noteFailure(capture, options, timeoutMs);
     return { outcome: "unavailable", reason: error instanceof Error ? error.message : String(error) };
   }
 }

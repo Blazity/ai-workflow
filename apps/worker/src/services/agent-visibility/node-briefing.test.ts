@@ -22,18 +22,19 @@ import {
   VISIBILITY_ORG,
   type SeededWorld,
 } from "../../test-support/agent-visibility.js";
-import { briefingReadsOf } from "./briefing-read.js";
+import { briefingReadsOf, readBriefingAttempts, type PageBounds } from "./briefing-read.js";
 import { nodeBriefingReadsOf, readNodeLastBriefing } from "./node-briefing.js";
 import { AgentVisibilityReadError } from "./pages.js";
 
 let db: Db;
 let world: SeededWorld;
 
-function lastBriefingOf(nodeId: string, organizationId = VISIBILITY_ORG) {
+function lastBriefingOf(nodeId: string, organizationId = VISIBILITY_ORG, bounds?: PageBounds) {
   return readNodeLastBriefing(nodeBriefingReadsOf(db, briefingReadsOf(db)), {
     definitionId: world.definitionId,
     nodeId,
     organizationId,
+    ...(bounds === undefined ? {} : { bounds }),
   });
 }
 
@@ -243,6 +244,52 @@ describe("the last briefing of one block", () => {
     const answer = await lastBriefingOf("planning");
 
     expect(answer.attempt?.attempt).toBe(2);
+    expect(answer.attempt?.briefings).toHaveLength(1);
+  }, 120_000);
+
+  // Red when: the answer is the last attempt that FITTED a page rather than the
+  // last one that ran. Attempts are served oldest first, so a block retried
+  // more times than one page holds answers with a prompt from the middle of the
+  // afternoon while calling it the last one sent, and an operator edits against
+  // text the block no longer produces. A page is bounded in BYTES, so nothing
+  // about the number of attempts warns them.
+  it("answers with the newest attempt even when the attempts outgrow one page", async () => {
+    await seedRun(db, { runId: "wrun_many", world, nodes: { planning: "planning_agent" } });
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      await seedAttempt(db, {
+        runId: "wrun_many",
+        nodeId: "planning",
+        attempt,
+        state: "completed",
+        startedAt: new Date(Date.UTC(2026, 8, 19, 10, attempt)),
+      });
+      await captureBriefing(db, {
+        runId: "wrun_many",
+        attempt,
+        capturedAt: new Date(Date.UTC(2026, 8, 19, 10, attempt, 30)),
+        sections: [{ kind: "runtime", title: "Runtime data", text: `try ${attempt}` }],
+      });
+    }
+    // Smaller than the default page and larger than the floor: what MCP serves
+    // is smaller than HTTP for measured reasons, so this is a page a real
+    // caller gets, not one invented for the test.
+    const bounds: PageBounds = { default: 2_048, maximum: 2_048 };
+
+    // The control this test needs: the boundary falls INSIDE the ten attempts.
+    // Without it a page that happened to hold them all would prove nothing.
+    const page = await readBriefingAttempts(briefingReadsOf(db), {
+      runId: "wrun_many",
+      organizationId: VISIBILITY_ORG,
+      nodeId: "planning",
+      bounds,
+    });
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(page.items.length).toBeLessThan(10);
+    expect(page.items.at(-1)?.attempt).toBeLessThan(10);
+
+    const answer = await lastBriefingOf("planning", VISIBILITY_ORG, bounds);
+
+    expect(answer.attempt?.attempt).toBe(10);
     expect(answer.attempt?.briefings).toHaveLength(1);
   }, 120_000);
 });
