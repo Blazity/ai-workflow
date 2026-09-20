@@ -79,6 +79,16 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
     const message = `${entry.block.ui.label} could not start: this run could not read the deployment's integration settings (${runState.reason}). Nothing was asked of the integration; retry the run.`;
     return executionError(message, { category: "engine", message });
   }
+  if (runState.status === "unavailable") {
+    // The integration moved under the run, and the cause is what an admin acts
+    // on. Never "the provider created no state": nobody asked it for one.
+    const message = `${entry.block.ui.label} could not start: ${runState.message}`;
+    return executionError(message, {
+      category: "configuration",
+      message,
+      failureCode: integrationUnavailableFailureCode(runState.reason),
+    });
+  }
   try {
     const result = await runIntegrationBlockStep({
       integrationId: entry.integrationId,
@@ -130,29 +140,43 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
 
 /**
  * The block's inputs with every unbound one that names a default filled from
- * the run's ticket, or the reason it cannot be.
+ * the run's subject, or the reason it cannot be.
  *
  * Bound means present in `resolvedInputs`, even when the binding resolved to
  * nothing: an author who bound a value chose that value, and a default quietly
  * standing in for it would screen, or send, something they did not pick. An
- * unbound input whose ticket fields are all empty is refused here rather than
- * handed on as an empty string the block would have to guess about.
+ * unbound input is refused here, rather than filled, in the two cases where
+ * the text would not be what the author was promised: the subject holds none
+ * of the named fields, and the subject's text is a snapshot core composed for
+ * a run with no ticket. The second is the one that matters for a screen:
+ * screening our own sentence finds nothing every time, and a verdict of "ok"
+ * on text nobody sent is worse than no screen at all, because the graph's
+ * author believes it looked.
  */
 function withSubjectDefaults(
   block: IntegrationBlockManifest,
   resolvedInputs: Readonly<Record<string, unknown>>,
-  ticket: Parameters<typeof subjectDefaultText>[1] | null | undefined,
+  ticket:
+    | (Parameters<typeof subjectDefaultText>[1] & { subjectTextIsPlaceholder?: true })
+    | null
+    | undefined,
 ): { ok: true; values: Record<string, unknown> } | { ok: false; message: string } {
   const values: Record<string, unknown> = { ...resolvedInputs };
   for (const [name, input] of Object.entries(block.inputs ?? {})) {
     const fields = input.defaultFromSubject;
     if (!fields || fields.length === 0) continue;
     if (Object.prototype.hasOwnProperty.call(resolvedInputs, name)) continue;
+    if (ticket?.subjectTextIsPlaceholder) {
+      return {
+        ok: false,
+        message: `${block.ui.label} reads "${name}" from ${describeSubjectDefault(fields)} when nothing is bound, and this run carries no text a person wrote: it has no ticket, so core composed the description it would have read. Bind "${name}" to the text it should use.`,
+      };
+    }
     const text = ticket ? subjectDefaultText(fields, ticket) : "";
     if (text.length === 0) {
       return {
         ok: false,
-        message: `${block.ui.label} reads "${name}" from ${describeSubjectDefault(fields)} when nothing is bound, and this run's ticket has none of them. Bind "${name}" to the text it should use.`,
+        message: `${block.ui.label} reads "${name}" from ${describeSubjectDefault(fields)} when nothing is bound, and this run's subject has none of them. Bind "${name}" to the text it should use.`,
       };
     }
     values[name] = text;

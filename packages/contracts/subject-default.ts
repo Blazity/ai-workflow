@@ -47,10 +47,16 @@ export function subjectDefaultText(
   return parts.filter(Boolean).join("\n\n");
 }
 
-/** "the ticket's description and comments", in the order declared. */
+/**
+ * "the run's description and comments", in the order declared.
+ *
+ * The run's, never the ticket's: the same graph can be started by a delivery
+ * to a webhook, and a field that promised an author "the ticket's description"
+ * there would be naming something the run does not have.
+ */
 export function describeSubjectDefault(fields: readonly WorkflowSubjectField[]): string {
   const names = [...fields];
   const last = names.pop();
   const list = names.length === 0 ? (last ?? "") : `${names.join(", ")} and ${last}`;
-  return `the ticket's ${list}`;
+  return `the run's ${list}`;
 }

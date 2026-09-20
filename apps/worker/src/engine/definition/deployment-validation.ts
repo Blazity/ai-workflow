@@ -22,6 +22,7 @@ import type {
   HarnessProfileManifest,
   VcsProviderKind,
   WorkflowBlockContractResolver,
+  WorkflowBlockInputContract,
   WorkflowDefinition,
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
@@ -29,6 +30,7 @@ import type {
   WorkflowParamValue,
 } from "@shared/contracts";
 import {
+  describeSubjectDefault,
   isHarnessProfileReference,
   isTriggerBlockType,
   triggerRepositoryPolicySchema,
@@ -44,6 +46,7 @@ import {
   validateWorkflowV2WorkspaceAccessIssues,
   workflowDefinitionIssue,
   workflowScheduleGraphIssues,
+  workflowSubjectDefaultIssues,
   workflowUnreadOutputIssues,
   workflowValueReferenceIssues,
   type WorkflowBlockParamsSchemas,
@@ -196,8 +199,9 @@ function workerDeploymentIssues(
     ),
     ...analysis.issues,
     ...workflowValueReferenceIssues(def, catalogAnalysis.catalogByNode),
-    // Publish only. A graph deployed before a block declared a field it must
-    // read keeps running; refusing it at run load would stop runs over a rule
+    // Publish only, both of them. A graph deployed before a block declared a
+    // field it must read, or before an unbound default had to be answerable
+    // for, keeps running; refusing it at run load would stop runs over a rule
     // its author never saw, and the next publish is where they meet it.
     ...(checkEnvironmentAvailability === false
       ? []
@@ -209,9 +213,41 @@ function workerDeploymentIssues(
               v2ConfigurationParams(node, blockParamsSchemas, resolvedHarnessProfiles),
             ).output.mustRead ?? [],
         )),
+    ...(checkEnvironmentAvailability === false
+      ? []
+      : workflowSubjectDefaultIssues(def, (node) =>
+          unboundSubjectDefaults(
+            node,
+            resolveContract(
+              node.type,
+              v2ConfigurationParams(node, blockParamsSchemas, resolvedHarnessProfiles),
+            ),
+          ),
+        )),
     ...validateWorkflowV2WorkspaceAccessIssues(def),
     ...repositoryScopePinIssues(def, configuredVcsProviders, { checkEnvironmentAvailability }),
   ];
+}
+
+/**
+ * The node's inputs that would be filled from the run's subject, because the
+ * contract names a default and the author bound nothing.
+ *
+ * The description comes from `describeSubjectDefault` and nowhere else, so the
+ * refusal, the editor's hint and the block's own run-time message cannot name
+ * the same default three different ways.
+ */
+function unboundSubjectDefaults(
+  node: WorkflowDefinitionV2Node,
+  contract: { inputs: Record<string, WorkflowBlockInputContract> },
+): Array<{ name: string; describes: string }> {
+  const unbound: Array<{ name: string; describes: string }> = [];
+  for (const [name, input] of Object.entries(contract.inputs)) {
+    const fields = input.defaultFromSubject;
+    if (!fields || fields.length === 0 || node.inputs[name]) continue;
+    unbound.push({ name, describes: describeSubjectDefault(fields) });
+  }
+  return unbound;
 }
 
 function v2ConfigurationParams(

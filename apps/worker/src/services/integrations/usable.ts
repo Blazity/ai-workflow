@@ -16,6 +16,7 @@ import type {
   IntegrationContext,
   IntegrationManifest,
 } from "@integrations/sdk";
+import type { IntegrationState } from "@shared/contracts";
 
 /** One integration this deployment can actually use right now. */
 export interface UsableIntegration {
@@ -47,12 +48,22 @@ export async function usableIntegrations(input: {
  * needs the difference: a database that did not answer for a moment is not an
  * integration that is off, and remembering it as one would refuse every later
  * use in the run while blaming the provider.
+ *
+ * `states` is the resolver's own reading of the candidates, handed back rather
+ * than re-derived: a caller that has to tell a person WHY an integration it
+ * asked for is missing from `usable` (disabled, never connected) would
+ * otherwise decide that a second time, which is the one thing `resolve.ts`
+ * exists to prevent. It carries no secret and no ciphertext.
  */
 export async function resolveUsableIntegrations(input: {
   readonly signal: AbortSignal;
   readonly filter?: (manifest: IntegrationManifest) => boolean;
 }): Promise<
-  | { readonly readable: true; readonly usable: UsableIntegration[] }
+  | {
+      readonly readable: true;
+      readonly usable: UsableIntegration[];
+      readonly states: ReadonlyMap<string, IntegrationState>;
+    }
   | { readonly readable: false; readonly reason: string }
 > {
   const { integrationManifests } = await import("@integrations/registry");
@@ -70,7 +81,7 @@ export async function resolveUsableIntegrations(input: {
   const { logger } = await import("../../infra/logger.js");
 
   const candidates = integrationManifests.filter((manifest) => input.filter?.(manifest) ?? true);
-  if (candidates.length === 0) return { readable: true, usable: [] };
+  if (candidates.length === 0) return { readable: true, usable: [], states: new Map() };
 
   // A database this caller cannot reach is not a failure of the caller's work:
   // every caller here is doing something alongside it (tracing a run, naming a
@@ -122,5 +133,5 @@ export async function resolveUsableIntegrations(input: {
       }),
     });
   }
-  return { readable: true, usable };
+  return { readable: true, usable, states };
 }

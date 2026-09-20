@@ -137,6 +137,51 @@ export const NON_DISPATCHABLE_TRIGGER_TYPES = [
 export type ManuallyDispatchableTrigger =
   (typeof MANUALLY_DISPATCHABLE_TRIGGER_TYPES)[number];
 
+/**
+ * Triggers whose run subject carries text somebody wrote: a ticket a person
+ * filled in, and a delivery's own payload. An unbound input that names a
+ * default gets something real on every run these start.
+ *
+ * Declared as two exhaustive halves rather than one list, the way
+ * `MANUALLY_DISPATCHABLE_TRIGGER_TYPES` is, because the omission is the
+ * failure mode: a trigger nobody classified would default to "authored" and
+ * hand a screen a sentence we composed. A gate test asserts the halves
+ * partition `TRIGGER_BLOCK_TYPES` exactly.
+ */
+export const AUTHORED_SUBJECT_TEXT_TRIGGER_TYPES = [
+  "trigger_ticket_ai",
+  "trigger_plan_approved",
+  "trigger_webhook",
+] as const satisfies readonly WorkflowBlockType[];
+
+/**
+ * The other half: core composes the subject snapshot, because the run has no
+ * ticket to read. A pull request trigger is here even though such a run may
+ * carry a ticket key, because "may" is not a guarantee, and publishing is
+ * where a guarantee is what a graph author is owed: the snapshot of a pull
+ * request without a ticket holds the pull request's URL and head, never its
+ * body or its review comments.
+ */
+export const COMPOSED_SUBJECT_TEXT_TRIGGER_TYPES = [
+  "trigger_pr_created",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
+  "trigger_pr_checks_failed",
+  "trigger_pr_review",
+  "trigger_pr_merged",
+  "trigger_schedule",
+] as const satisfies readonly WorkflowBlockType[];
+
+const AUTHORED_SUBJECT_TEXT_TRIGGER_SET: ReadonlySet<string> = new Set(
+  AUTHORED_SUBJECT_TEXT_TRIGGER_TYPES,
+);
+
+/** Does every run this trigger starts carry subject text a person wrote? */
+export function triggerCarriesAuthoredSubjectText(type: string): boolean {
+  return AUTHORED_SUBJECT_TEXT_TRIGGER_SET.has(type);
+}
+
+
 export function isManuallyDispatchableTrigger(
   type: WorkflowBlockType,
 ): type is ManuallyDispatchableTrigger {

@@ -8,11 +8,14 @@
  * so both halves of "once per run" are the Workflow DevKit's rather than ours.
  *
  * A use is a block of the integration, or an agent sandbox traced by an
- * integration that provides `agent_tracing`. Each is a use of that one
- * integration only: running one integration's block never creates another's
- * state, whichever of them declares it.
+ * integration that provides `agent_tracing`. Each use makes exactly one step
+ * call, whatever the build ships: a block asks for its own integration and a
+ * sandbox asks for every tracing provider at once, including for none. What a
+ * run's step sequence depends on is its graph, never the set of integrations
+ * compiled in, or shipping an integration would strand every suspended run
+ * (see `steps/integration-run-state-step.ts`).
  */
-import { integrationManifest, integrationsProviding } from "@integrations/registry";
+import { integrationsProviding } from "@integrations/registry";
 import type { IntegrationRunState } from "@integrations/sdk";
 import type { EngineCtx } from "../blocks/support/types.js";
 import type { IntegrationRunStateOutcome } from "../steps/integration-run-state-step.js";
@@ -33,26 +36,9 @@ export async function integrationRunState(
   ctx: EngineCtx,
   integrationId: string,
 ): Promise<IntegrationRunStateOutcome> {
-  // A declaration is a fact about the build, the same on every replay of it,
-  // so an integration that declares no state costs the run no step at all.
-  if (integrationManifest(integrationId)?.runState !== true) return { status: "none" };
   const cached = ctx.integrationRunStates?.[integrationId];
   if (cached) return cached;
-
-  const { createIntegrationRunStateStep } = await import(
-    "../steps/integration-run-state-step.js"
-  );
-  const outcome = await createIntegrationRunStateStep({
-    integrationId,
-    runId: ctx.runId,
-    subjectKey: runSubjectKey(ctx),
-  });
-  // Settings that could not be read are a moment, not an answer: the next use
-  // asks again rather than carrying the refusal through the rest of the run.
-  if (outcome.status !== "unreadable") {
-    ctx.integrationRunStates = { ...ctx.integrationRunStates, [integrationId]: outcome };
-  }
-  return outcome;
+  return createMissing(ctx, [integrationId]).pending.get(integrationId)!;
 }
 
 /** The state an integration's own code is handed: the value, or nothing. */
@@ -70,15 +56,102 @@ export async function agentTracingRun(
   ctx: EngineCtx,
   invocation?: { readonly nodeId: string; readonly attempt: number },
 ): Promise<AgentTracingRun> {
-  const states: Record<string, IntegrationRunState | null> = {};
-  for (const manifest of integrationsProviding("agent_tracing")) {
-    if (manifest.runState !== true) continue;
-    states[manifest.id] = stateOf(await integrationRunState(ctx, manifest.id));
+  const ids = integrationsProviding("agent_tracing").map((manifest) => manifest.id);
+  const pending = new Map<string, Promise<IntegrationRunStateOutcome>>();
+  const missing: string[] = [];
+  for (const id of ids) {
+    const cached = ctx.integrationRunStates?.[id];
+    if (cached) pending.set(id, cached);
+    else missing.push(id);
   }
+  // One call per sandbox, always: with the ids this sandbox still needs, and
+  // with none when it needs none. The empty call is the price of a deployment
+  // being able to gain its first tracing integration without stranding every
+  // run suspended past a sandbox.
+  const created = createMissing(ctx, missing);
+  for (const [id, promise] of created.pending) pending.set(id, promise);
+  // Awaited even when it asked for nothing, so the call sits at the same place
+  // in this run's step sequence on a deployment that traces and one that does
+  // not, and gaining the first tracing provider moves nothing.
+  await created.call;
+  const states: Record<string, IntegrationRunState | null> = {};
+  for (const id of ids) states[id] = stateOf(await pending.get(id)!);
   return {
     runId: ctx.runId,
     subjectKey: runSubjectKey(ctx),
     states,
     ...(invocation ? { invocation } : {}),
   };
+}
+
+/**
+ * One step call for these ids, and the per-integration promises it answers.
+ *
+ * The promise is cached before it settles, not after: two blocks starting in
+ * the same tick would otherwise both miss a cache written after the await and
+ * ask the provider twice, which for the provider this port was designed from
+ * is two buckets for one run.
+ */
+function createMissing(
+  ctx: EngineCtx,
+  integrationIds: readonly string[],
+): {
+  readonly call: Promise<Record<string, IntegrationRunStateOutcome>>;
+  readonly pending: Map<string, Promise<IntegrationRunStateOutcome>>;
+} {
+  const call = callStep(ctx, integrationIds);
+  const pending = new Map<string, Promise<IntegrationRunStateOutcome>>();
+  for (const integrationId of integrationIds) {
+    const answer = call.then(
+      (outcomes) => outcomes[integrationId] ?? { status: "none" as const },
+    );
+    remember(ctx, integrationId, answer);
+    pending.set(integrationId, answer);
+  }
+  return { call, pending };
+}
+
+async function callStep(
+  ctx: EngineCtx,
+  integrationIds: readonly string[],
+): Promise<Record<string, IntegrationRunStateOutcome>> {
+  const { createIntegrationRunStatesStep } = await import(
+    "../steps/integration-run-state-step.js"
+  );
+  return createIntegrationRunStatesStep({
+    integrationIds: [...integrationIds],
+    runId: ctx.runId,
+    subjectKey: runSubjectKey(ctx),
+  });
+}
+
+function remember(
+  ctx: EngineCtx,
+  integrationId: string,
+  pending: Promise<IntegrationRunStateOutcome>,
+): void {
+  ctx.integrationRunStates = { ...ctx.integrationRunStates, [integrationId]: pending };
+  // Two answers are about this moment rather than about the run: settings that
+  // could not be read, and an integration an admin turned off. Neither is
+  // carried through the rest of the run, so the next use asks again and a
+  // connection restored mid-run is used.
+  void pending.then(
+    (outcome) => {
+      if (outcome.status === "unreadable" || outcome.status === "unavailable") {
+        forget(ctx, integrationId, pending);
+      }
+    },
+    () => forget(ctx, integrationId, pending),
+  );
+}
+
+function forget(
+  ctx: EngineCtx,
+  integrationId: string,
+  pending: Promise<IntegrationRunStateOutcome>,
+): void {
+  // Only this attempt: a later use may already have started its own.
+  if (ctx.integrationRunStates?.[integrationId] !== pending) return;
+  const { [integrationId]: _dropped, ...rest } = ctx.integrationRunStates;
+  ctx.integrationRunStates = rest;
 }

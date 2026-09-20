@@ -1,5 +1,5 @@
 Status: draft
-Last-verified: 2026-09-19
+Last-verified: 2026-09-20
 
 # Integrations: every third party as one package that unlocks blocks, screens and tools
 
@@ -269,6 +269,69 @@ Consequences, and they are deliberate:
   through it on production and demo before merge, and its DoD includes
   `workflow-import-boundary.test.ts` and `step-registration-coverage.test.ts`.**
   R1 does the same for the Arthur tenant.
+
+#### The drain, as somebody who was not here would run it
+
+Every read and write below goes through the authorized product MCP of the
+deployment being drained (its own `/mcp`, as an admin account) or that
+deployment's dashboard. Not a local server: `aiw-dogfood` is a fake and
+proves nothing about production.
+
+1. **Announce** the pause in the team channel, with the window you expect and
+   the sentence that anything dispatched during it has to be dispatched again
+   afterwards.
+2. **Freeze the triggers.** `workflows_list`, then `workflows_set_enabled`
+   `false` for each enabled definition. Record the ids: that list is what goes
+   back on in step 7, and nothing else does.
+3. **Close the other two doors, and say so.** The enabled flag stops the
+   webhook, the poll and the schedule. It stops neither the dashboard's Run
+   manually nor `workflows.dispatch` over MCP: both dispatch a disabled
+   definition without complaint. That half of the freeze is an agreement with
+   the people who hold those two doors, so it is verified rather than trusted:
+   step 4 is counted again in step 6, immediately before the merge.
+4. **Count the runs that have not finished, in the dashboard.** Open
+   `/runs?window=all&status=running` and `/runs?window=all&status=awaiting`.
+   Both lists must be empty. Use `runs_stats` for nothing here: it answers the
+   newest page of a window (20 rows by default, 100 at most) and says
+   `runsTruncated`, so it can show a clean page while a run parked three weeks
+   ago sits underneath it. A page is not a proof of zero. `blocked` and
+   `failed` are finished and are not counted; `awaiting` is a live run parked
+   on a person and is.
+5. **Empty both lists.** For each run:
+   - Post a Jira comment first, with `tickets_comment`, telling the person that
+     the run is being stopped for a redeploy and that moving the ticket back
+     into the AI column after it restarts the work. `runs_cancel` posts no
+     comment of its own, so a run cancelled without this one is a person
+     waiting for an answer that will never come.
+   - Then `runs_cancel` with a reason naming the redeploy. `cancelled` and
+     `already_terminal` are both done.
+   - A `CONFLICT` answer means nothing was changed AND may still mean the run
+     is over (a cancel that worked has reported this): re-read the run with
+     `runs_get` before deciding, and only retry with the same
+     `idempotencyKey` while it still reads `running` or `awaiting`.
+   - **A run that will not leave RUNNING** is its own case. Read it with
+     `runs_diagnose`, then `runs_logs`, and read it again a few minutes later:
+     a row whose steps have not moved is a leaked row rather than work in
+     flight (it has happened: a reconciler that lost its database handle left
+     several). Cancel it the same way, and if the row still will not move,
+     stop: an id that stays RUNNING is a blocker to escalate and to record in
+     the pull request, not a number to round down to zero.
+6. **Count again, immediately before the merge**, the same two lists. A run
+   that appeared during the window came through one of the two open doors in
+   step 3: cancel it the same way and count again. Merge only from a zero you
+   have just seen.
+7. **After the deploy**, wait for `/health` to report the merge commit, put the
+   recorded definitions back with `workflows_set_enabled` `true`, and run the
+   smoke: `/health`, the dashboard login page, and a `workflows_get_graph`
+   sweep that returns every definition.
+8. **Record** in the pull request: the window, every run id you cancelled, and
+   every id that would not move.
+
+**Demo is a second deployment, not a second database.** Today it reports the
+production database, which means steps 4 to 6 on production cover it, and that
+is a fact to check rather than assume: read `databaseFingerprint` from
+`/health` on both deployments and compare. Equal means one count covers both;
+different means demo has its own parked runs, and steps 2 to 6 run there too.
 
 ### 6. The context is the only thing an integration receives
 

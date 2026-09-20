@@ -9,8 +9,19 @@ import type { AgentWorkflowInput } from "../agent-input.js";
  * one request per run rather than one per read. The field is optional on
  * purpose: a stored result from before this shipped is still a valid
  * `TicketContent`, and a tracker that exposes no current user answers nothing.
+ *
+ * `subjectTextIsPlaceholder` says the other thing a reader cannot tell by
+ * looking: whether the title and description are words somebody wrote or a
+ * sentence this file composed to give a run without a ticket a ticket-shaped
+ * snapshot. A block that screens untrusted text has to know, because screening
+ * our own sentence and reporting a verdict is worse than not screening at all.
+ * Absent means authored, which is what every recorded result from before this
+ * field existed was.
  */
-type WorkflowTicket = TicketContent & { botAccountId?: string };
+export type WorkflowTicket = TicketContent & {
+  botAccountId?: string;
+  subjectTextIsPlaceholder?: true;
+};
 
 export async function resolveWorkflowTicketStep(
   entry: AgentWorkflowInput,
@@ -28,6 +39,9 @@ export async function resolveWorkflowTicketStep(
       labels: [],
       trackerStatus: "",
       attachments: [],
+      // Core wrote every word above. The pull request's own body and review
+      // comments are the untrusted text on this trigger, and they are not here.
+      subjectTextIsPlaceholder: true,
     };
   }
 
@@ -43,6 +57,8 @@ export async function resolveWorkflowTicketStep(
     return {
       id: identifier,
       identifier,
+      // Authored: the subject and description are the payload the sender sent,
+      // which is exactly the text a screen exists to look at.
       title: entry.entry.subject || `Webhook delivery ${entry.deliveryId}`,
       description: entry.entry.description,
       acceptanceCriteria: "",
@@ -93,6 +109,10 @@ export async function resolveWorkflowTicketStep(
       labels: [],
       trackerStatus: "",
       attachments: [],
+      // Composed here, around the schedule's own instruction: an occurrence
+      // receives nothing from outside the workflow, so there is no text a
+      // person wrote at this run for anything to read.
+      subjectTextIsPlaceholder: true,
     };
   }
 

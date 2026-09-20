@@ -290,8 +290,10 @@ test("an unbound input with a default says where its value comes from, and is no
     />,
   );
 
-  assert.match(unbound, /Not bound, so it uses the ticket&#x27;s description and comments/);
-  assert.match(unbound, /From the ticket&#x27;s description and comments/);
+  // The run's, not the ticket's: the same graph can be started by a delivery
+  // to a webhook, which has no ticket to promise anything about.
+  assert.match(unbound, /Not bound, so it uses the run&#x27;s description and comments/);
+  assert.match(unbound, /From the run&#x27;s description and comments/);
   assert.doesNotMatch(unbound, />Required</);
 
   const bound = renderToStaticMarkup(

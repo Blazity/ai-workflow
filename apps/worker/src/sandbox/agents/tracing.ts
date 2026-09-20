@@ -155,16 +155,21 @@ async function installOne(
     }
   }
 
+  // Every path judged before anything is written, so a refusal on the third
+  // file cannot leave the first two staged in /tmp.
+  const files = plan.setup.files ?? [];
+  const refused = files.find((file) => !isSafeRelativePath(file.path));
+  if (refused) {
+    logger.warn(
+      { integration: plan.integrationId, path: refused.path },
+      "agent_tracing_file_path_refused",
+    );
+    return false;
+  }
+
   const directory = quotedTracingDirectory(plan.integrationId);
   const staged: Array<{ path: string; target: string; mode: "600" | "700" }> = [];
-  for (const [index, file] of (plan.setup.files ?? []).entries()) {
-    if (!isSafeRelativePath(file.path)) {
-      logger.warn(
-        { integration: plan.integrationId, path: file.path },
-        "agent_tracing_file_path_refused",
-      );
-      return false;
-    }
+  for (const [index, file] of files.entries()) {
     const staging = `/tmp/aiw-tracing-${plan.integrationId}-${index}`;
     await sandbox.writeFiles([
       { path: staging, content: Buffer.from(file.contentBase64, "base64") },
@@ -196,7 +201,16 @@ async function installOne(
       `chmod ${mode} ${target}`,
     ]),
   ].join(" && ");
-  const move = await sandbox.runCommand("bash", ["-c", withRuntimeHome(runtime, script)]);
+  // The staging copies go whatever happens to the moves. One of them holds the
+  // provider's key, and a chain that stopped at the second file would
+  // otherwise leave it world-readable in /tmp for the rest of the sandbox's
+  // life. `rm -f` after a successful `mv` is a no-op, so the exit code the
+  // caller reads is still the moves' own.
+  const discardStaged = `rm -f ${staged.map(({ path }) => path).join(" ")}`;
+  const move = await sandbox.runCommand("bash", [
+    "-c",
+    withRuntimeHome(runtime, `{ ${script}; }; moved=$?; ${discardStaged}; exit $moved`),
+  ]);
   if (move.exitCode !== 0) {
     logger.warn({ integration: plan.integrationId }, "agent_tracing_files_failed");
     return false;

@@ -49,12 +49,14 @@ describe("subjectDefaultText", () => {
 
 describe("describeSubjectDefault", () => {
   it("names the fields in the words the editor and a refusal both use", () => {
+    // The run's, never the ticket's: the same graph runs on a webhook
+    // delivery, where a promise about "the ticket" names nothing.
     expect(describeSubjectDefault(["description", "comments"])).toBe(
-      "the ticket's description and comments",
+      "the run's description and comments",
     );
-    expect(describeSubjectDefault(["title"])).toBe("the ticket's title");
+    expect(describeSubjectDefault(["title"])).toBe("the run's title");
     expect(describeSubjectDefault(["title", "description", "comments"])).toBe(
-      "the ticket's title, description and comments",
+      "the run's title, description and comments",
     );
   });
 });

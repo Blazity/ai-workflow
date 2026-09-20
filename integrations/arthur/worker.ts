@@ -179,7 +179,7 @@ const definition: IntegrationRuntimeDefinition<ArthurManifest> = {
         return {
           kind: "failed",
           message:
-            "Prompt injection check had nothing to screen: its content input is empty. Bind it to the text an agent will read, or leave it unbound to screen the ticket's description and comments.",
+            "Prompt injection check had nothing to screen: its content input is empty. Bind it to the text an agent will read, or leave it unbound to screen the description and comments of whatever the run is about.",
         };
       }
 

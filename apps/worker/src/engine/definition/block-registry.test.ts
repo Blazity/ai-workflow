@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTHORED_SUBJECT_TEXT_TRIGGER_TYPES,
   BLOCK_CATALOG,
   BLOCK_TYPE_SPECS,
+  COMPOSED_SUBJECT_TEXT_TRIGGER_TYPES,
   GENERATED_TRIGGER_BLOCK_TYPES,
   MANUALLY_DISPATCHABLE_TRIGGER_TYPES,
   NON_DISPATCHABLE_TRIGGER_TYPES,
   TRIGGER_BLOCK_TYPES,
+  triggerCarriesAuthoredSubjectText,
   type WorkflowBlockType,
 } from "@shared/contracts";
 import {
@@ -1111,6 +1114,27 @@ describe("manual dispatch allowlist", () => {
       ...NON_DISPATCHABLE_TRIGGER_TYPES,
     ].filter((type) => BLOCK_TYPE_SPECS[type].category !== "trigger");
     expect(notTriggers).toEqual([]);
+  });
+});
+
+describe("which triggers carry subject text a person wrote", () => {
+  // Same force as the allowlist above, for the same reason: an input that
+  // reads the run's description when nothing is bound gets a sentence core
+  // composed on a run with no ticket, and a trigger nobody classified would
+  // default to "a person wrote this" and be screened as if it had.
+  it("partitions every trigger type into authored or composed, with no overlap", () => {
+    const authored = [...AUTHORED_SUBJECT_TEXT_TRIGGER_TYPES] as WorkflowBlockType[];
+    const composed = [...COMPOSED_SUBJECT_TEXT_TRIGGER_TYPES] as WorkflowBlockType[];
+
+    expect([...authored, ...composed].sort()).toEqual([...TRIGGER_BLOCK_TYPES].sort());
+    expect(authored.filter((type) => composed.includes(type))).toEqual([]);
+  });
+
+  it("reads a pull request trigger as composed, because its runs may carry no ticket", () => {
+    expect(triggerCarriesAuthoredSubjectText("trigger_pr_review")).toBe(false);
+    expect(triggerCarriesAuthoredSubjectText("trigger_schedule")).toBe(false);
+    expect(triggerCarriesAuthoredSubjectText("trigger_ticket_ai")).toBe(true);
+    expect(triggerCarriesAuthoredSubjectText("trigger_webhook")).toBe(true);
   });
 });
 

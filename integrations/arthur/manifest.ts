@@ -23,10 +23,13 @@ export const injectionCheckBlock = defineIntegrationBlock({
   defaults: {},
   inputs: {
     // Left unbound, it screens what this check has always screened: the
-    // ticket's description and every comment, which is where an injection is
-    // easiest to plant. A graph published before the block moved binds
-    // nothing and keeps working; binding it narrows or widens the text on
-    // purpose.
+    // description and every comment of whatever the run is about, which is
+    // where an injection is easiest to plant. A graph published before the
+    // block moved binds nothing and keeps working; binding it narrows or
+    // widens the text on purpose. A run whose subject core composed rather
+    // than received (a pull request with no ticket, a schedule occurrence) has
+    // no such text, so publishing refuses an unbound input under those
+    // triggers and the block refuses at run time.
     content: {
       required: true,
       schema: { type: "string" },

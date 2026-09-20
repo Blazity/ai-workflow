@@ -168,8 +168,8 @@ describe("applying a tracing provider's setup to a sandbox", () => {
     expect((commands[0] ?? "").replace(/'[^']*'/g, "")).not.toContain("$(touch");
   });
 
-  it("refuses a file path that would escape the provider's directory", async () => {
-    const { sandbox, commands } = fakeSandbox();
+  it("refuses a file path that would escape the provider's directory, having staged nothing", async () => {
+    const { sandbox, commands, written } = fakeSandbox();
 
     const ready = await installTracingPlans(
       sandbox as never,
@@ -178,7 +178,10 @@ describe("applying a tracing provider's setup to a sandbox", () => {
           integrationId: "acmetrace",
           setup: setup({
             packages: [],
-            files: [{ path: "../../.ssh/authorized_keys", contentBase64: "eA==" }],
+            files: [
+              { path: "tracer.py", contentBase64: "eA==" },
+              { path: "../../.ssh/authorized_keys", contentBase64: "eA==" },
+            ],
           }),
         },
       ],
@@ -186,9 +189,43 @@ describe("applying a tracing provider's setup to a sandbox", () => {
     );
 
     // Nothing ready means nothing hooked either: a hook calling a script that
-    // never landed would fail on every tool call the agent makes.
+    // never landed would fail on every tool call the agent makes. And the
+    // refusal is decided before the first write, so the file that came before
+    // the bad one is not sitting in /tmp afterwards.
     expect(ready).toEqual([]);
     expect(commands).toEqual([]);
+    expect(written).toEqual([]);
+  });
+
+  it("removes its staging copies even when the move fails, key file included", async () => {
+    // The hook file holds the provider's key, and /tmp is readable by
+    // everything the agent starts. A chain that stopped on the first move
+    // would leave it there for the life of the sandbox.
+    const commands: string[] = [];
+    const failing = {
+      runCommand: async (_bin: string, args: string[]) => {
+        commands.push(args.join(" "));
+        // The package install succeeds; the move does not.
+        return { exitCode: commands.length === 1 ? 0 : 1 };
+      },
+      writeFiles: async () => {},
+    };
+
+    const ready = await installTracingPlans(
+      failing as never,
+      [{ integrationId: "acmetrace", setup: setup() }],
+      "claude",
+    );
+
+    expect(ready).toEqual([]);
+    const move = commands[1] ?? "";
+    expect(move).toContain(
+      "rm -f /tmp/aiw-tracing-acmetrace-0 /tmp/aiw-tracing-acmetrace-hook.env",
+    );
+    // Sequenced after the moves rather than chained to their success, and the
+    // caller still reads the moves' own exit code.
+    expect(move).toContain("; moved=$?; rm -f ");
+    expect(move.trimEnd().endsWith("exit $moved")).toBe(true);
   });
 
   it("leaves a provider whose install failed out, and says the sandbox is untraced", async () => {

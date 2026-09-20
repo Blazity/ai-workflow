@@ -118,7 +118,7 @@ describe("a run reaching an integration block", () => {
     expect(runStep.mock.calls[0]?.[0].inputs).toEqual({ content: undefined });
   });
 
-  it("refuses, naming the input and the fields, when the ticket holds none of them", async () => {
+  it("refuses, naming the input and the fields, when the subject holds none of them", async () => {
     blockEntry.mockReturnValue({ integrationId: "acmenotify", block: screen });
     const empty = {
       ...ctx,
@@ -130,7 +130,52 @@ describe("a run reaching an integration block", () => {
     if (result.kind !== "execution_error") throw new Error("expected a refusal");
     expect(result.error.category).toBe("configuration");
     expect(result.error.message).toContain("\"content\"");
-    expect(result.error.message).toContain("the ticket's description and comments");
+    expect(result.error.message).toContain("the run's description and comments");
+    expect(runStep).not.toHaveBeenCalled();
+  });
+
+  it("refuses rather than screening a subject core composed, and asks no provider", async () => {
+    // A pull request run with no ticket, or a schedule occurrence: the
+    // description is a sentence core wrote. Screening it finds nothing every
+    // time, and the graph's author would read that "ok" as a screen that ran.
+    blockEntry.mockReturnValue({ integrationId: "acmenotify", block: screen });
+    const composed = {
+      ...ctx,
+      ticket: {
+        identifier: "pr-31",
+        title: "Review acme/web#31",
+        description: "Pull request: https://example.test/pr/31\nHead: fix@abc123",
+        comments: [],
+        subjectTextIsPlaceholder: true,
+      },
+    } as unknown as EngineCtx;
+
+    const result = await executeIntegrationBlock(node, {}, composed, {});
+
+    if (result.kind !== "execution_error") throw new Error("expected a refusal");
+    expect(result.error.category).toBe("configuration");
+    expect(result.error.message).toContain("\"content\"");
+    expect(result.error.message).toContain("no text a person wrote");
+    expect(runState).not.toHaveBeenCalled();
+    expect(runStep).not.toHaveBeenCalled();
+  });
+
+  it("names the connection the admin changed, never a provider that made no state", async () => {
+    // "This integration declares no run state" and "it is disabled right now"
+    // used to arrive as the same answer, and the block then reported the one
+    // thing that is never true: that the provider produced nothing.
+    runState.mockResolvedValue({
+      status: "unavailable",
+      reason: "disabled",
+      message: "Acme Notify is disabled on this deployment.",
+    });
+
+    const result = await executeIntegrationBlock(node, {}, ctx, {});
+
+    if (result.kind !== "execution_error") throw new Error("expected a refusal");
+    expect(result.error.category).toBe("configuration");
+    expect(result.error.message).toContain("Acme Notify is disabled on this deployment.");
+    expect(result.error.failureCode).toBe("integration_unavailable.disabled");
     expect(runStep).not.toHaveBeenCalled();
   });
 

@@ -57,6 +57,59 @@ describe("resolveWorkflowTicketStep", () => {
     });
   });
 
+  it("marks a pull request snapshot as text core composed, not text a person wrote", async () => {
+    // Everything in that snapshot is ours: the URL and the head ref. The pull
+    // request's body and its review comments, which are the untrusted text on
+    // this trigger, are not in it. A screen reading it by default would find
+    // nothing every time and report a verdict its author would believe.
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+    const ticket = await resolveWorkflowTicketStep(
+      {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        subjectKey: "pr:github:acme/api#42",
+        ownerToken: "owner-a",
+        definitionId: 7,
+        definitionVersion: 11,
+        scope: "any",
+        pr,
+      },
+      "AI",
+    );
+
+    expect(ticket!.subjectTextIsPlaceholder).toBe(true);
+  });
+
+  it("leaves a fetched ticket unmarked, because a person wrote it", async () => {
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+    fetchTicket.mockResolvedValue({
+      id: "AWT-42",
+      identifier: "AWT-42",
+      title: "Checkout breaks",
+      description: "It charges twice.",
+      acceptanceCriteria: "",
+      comments: [],
+      labels: [],
+      trackerStatus: "AI",
+      attachments: [],
+    });
+
+    const ticket = await resolveWorkflowTicketStep(
+      {
+        kind: "ticket",
+        ticketKey: "AWT-42",
+        subjectKey: "ticket:jira:AWT-42",
+        ownerToken: "owner-a",
+        definitionId: 7,
+        definitionVersion: 11,
+        scope: "any",
+      } as never,
+      "AI",
+    );
+
+    expect(ticket!.subjectTextIsPlaceholder).toBeUndefined();
+  });
+
   it("synthesizes a git-ref-safe identifier for webhook deliveries", async () => {
     const { branchForTicket } = await import("../../engine/support/workflow-naming.js");
     const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
@@ -89,6 +142,9 @@ describe("resolveWorkflowTicketStep", () => {
       description: "It started smoking after the firmware update.",
       attachments: [],
     });
+    // Authored: both lines are the payload the sender sent, which is exactly
+    // the text a screen exists to look at.
+    expect(ticket!.subjectTextIsPlaceholder).toBeUndefined();
     // Endpoint ids are "wh_" + 24 hex, so the last 6 characters are hex too.
     expect(ticket!.identifier).toMatch(/^webhook-d0e1f2-[0-9a-f]{8}$/);
 
@@ -148,6 +204,9 @@ describe("resolveWorkflowTicketStep", () => {
 
     expect(fetchTicket).not.toHaveBeenCalled();
     expect(ticket).toMatchObject({ title: "Sweep the backlog", attachments: [] });
+    // Composed here, around the schedule's own instruction: an occurrence
+    // receives nothing from outside the workflow for a screen to look at.
+    expect(ticket!.subjectTextIsPlaceholder).toBe(true);
     expect(ticket!.identifier).toBe(
       "schedule-sch_a1b2c3d4e5f6a7b8c9d0e1f2-20260805T1400",
     );

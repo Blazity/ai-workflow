@@ -18,10 +18,7 @@ import type {
 import { executionError, failureEvidenceFromDiagnostic } from "@shared/workflow-graph";
 import type { AgentKind } from "../../../sandbox/agents/index.js";
 import type { AgentProtocolResult, PhaseUsage } from "../../../sandbox/agents/types.js";
-import type {
-  IssueTrackerMoveTarget,
-  TicketContent,
-} from "../../../adapters/issue-tracker/types.js";
+import type { IssueTrackerMoveTarget } from "../../../adapters/issue-tracker/types.js";
 import type {
   PreSandboxPromptAddition,
   SelectedRepositoryPromptContext,
@@ -36,6 +33,7 @@ import type { RunTriggerRepositoryPolicySource } from "../../work-scope/policy.j
 import type { TicketTextReading } from "../../work-scope/context.js";
 import type { LoadedPrompts } from "../../steps/prompts-step.js";
 import type { IntegrationRunStateOutcome } from "../../steps/integration-run-state-step.js";
+import type { WorkflowTicket } from "../../steps/workflow-ticket.js";
 import type { AgentWorkflowInput } from "../../agent-input.js";
 import type {
   RunBudgetAttribution,
@@ -235,7 +233,9 @@ export interface EngineCtx {
   definitionNodes: WorkflowDefinitionNode[];
   /** What started this run. */
   entry: AgentWorkflowInput;
-  ticket: TicketContent;
+  /** The run's subject: a fetched ticket, or the ticket-shaped snapshot core
+   *  gave a run that has none. `subjectTextIsPlaceholder` tells them apart. */
+  ticket: WorkflowTicket;
   /** Ticket URL in the issue tracker (JIRA_BASE_URL/browse/<key>); empty when the
    *  run has no ticket. Backs the {{ticket_url}} prompt variable so open_pr and
    *  comment templates can link back to the ticket. */
@@ -370,12 +370,16 @@ export interface EngineCtx {
   /**
    * Per-run integration state, by integration id: created at the run's first
    * use of each integration that declares it and shared by every later use (a
-   * provider's per-run bucket, session or task). An answer of "settings could
-   * not be read" is never stored, so the next use asks again. Null until
-   * something asks; `engine/support/integration-run-state.ts` is the only
-   * writer.
+   * provider's per-run bucket, session or task).
+   *
+   * The IN-FLIGHT answer, not the settled one: two uses starting in the same
+   * tick would both miss a cache written after the await, and ask the provider
+   * twice. An answer about this moment rather than about the run (settings
+   * that could not be read, an integration an admin turned off) is dropped
+   * once it settles, so the next use asks again. Null until something asks;
+   * `engine/support/integration-run-state.ts` is the only writer.
    */
-  integrationRunStates: Readonly<Record<string, IntegrationRunStateOutcome>> | null;
+  integrationRunStates: Readonly<Record<string, Promise<IntegrationRunStateOutcome>>> | null;
   /**
    * The run's checks ceiling in milliseconds, resolved once and cached.
    *
