@@ -13,6 +13,7 @@ import {
   compatibilityPromptForV2Node,
   type EffectivePromptCompilation,
   type EffectivePromptCompileInput,
+  type EffectivePromptProfileContext,
   type EffectivePromptProfileSource,
   type EffectivePromptRepositorySource,
 } from "./effective-prompt";
@@ -53,6 +54,13 @@ export interface ResolveNodePromptAuthoringInput {
   unresolvedRepositorySources?: readonly string[];
   /** What the preview shows as the run's contribution; empty when omitted. */
   runtimeData?: readonly EffectivePromptPart[];
+  /**
+   * The profile switches this block would run with. Passed through so the
+   * COMPILER decides what a switch leaves out, exactly as it does for a send:
+   * a caller that withheld the input itself would keep its own copy of that
+   * rule and drift from execution the day the rule changes.
+   */
+  profileContext?: EffectivePromptProfileContext;
   compile: (
     input: Omit<
       EffectivePromptCompileInput,
@@ -219,6 +227,7 @@ export async function resolveNodePromptAuthoringPure(
     blockPrompt: text,
     ...(compatibility ? { blockPromptOrigin: compatibility.origin } : {}),
     runtimeData: input.runtimeData ?? [],
+    ...(input.profileContext ? { profileContext: input.profileContext } : {}),
     slots,
     slotBindings: input.node.configuration.promptSlotBindings,
     promptManifest,

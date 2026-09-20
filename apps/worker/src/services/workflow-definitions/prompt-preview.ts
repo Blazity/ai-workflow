@@ -260,11 +260,15 @@ async function compilePreview(input: {
     unresolvedRepositorySources: applied.context.includeRepositoryInstructions
       ? unresolvedRepositoryInstructionSources()
       : [],
-    // Exactly execution's own line (`agent-workflow.ts`): the section is empty
-    // when the profile says this agent does not get workflow data.
-    runtimeData: applied.context.includeWorkflowData
-      ? renderPreviewRuntimeData(availableValues)
-      : [],
+    // The run's contribution and the switches, both handed over whole: the
+    // COMPILER leaves the runtime section out when `includeWorkflowData` is
+    // off, for a preview exactly as for a send. Zeroing the input here instead
+    // would be this screen keeping its own copy of that rule, and the day the
+    // rule changes (whether a profile with workflow data off still gets our
+    // platform rules is an open decision) the preview would quietly stop being
+    // what the run would do, which is its only reason to exist.
+    runtimeData: renderPreviewRuntimeData(availableValues),
+    profileContext: applied.context,
   });
   const validationIssues = validated.response.issues.filter(
     (issue) => issue.nodeId === null || issue.nodeId === blockId,
