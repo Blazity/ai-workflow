@@ -272,9 +272,12 @@ the ticket's comments on every poll tick (`answer-core.ts:502-505`), so a
 delivery per tick would bury the round. Additive migration `0070`; stage 6 adds
 `0071` for the new work scope origin. neon-http has
 no transactions: every write is one statement, and a briefing is never visible
-without its texts. Briefings are deleted with the run's replay observations
-(30 days, `poll-pass.ts:343`), never kept longer than the replay that reaches
-them.
+without its texts. Briefings are swept beside the run's replay observations
+(30 days, `poll-pass.ts`), and a briefing's own expiry is the LATER of the
+run's replay expiry and thirty days from its send, so a send made by a run
+parked past its replay is not born expired. Delivered that way: the sweep
+deletes only once both have passed, which means a late send outlives the
+replay that no longer reaches it.
 
 **Why a briefing is missing**, derived from the attempt: not sent yet (still
 preparing), never sent (failed before sending, with its recorded failure), not

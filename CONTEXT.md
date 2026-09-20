@@ -183,7 +183,8 @@ one attempt and only the later passes carry the notes that explain the earlier
 ones. Identified by run, node, attempt, activation scope and a sequence number
 that counts every send of that Block Attempt in the order they happened. It is
 recorded from inside the step that sends and redacted once, there, so the
-dashboard and MCP hand back the same bytes. It expires with the run's replay.
+dashboard and MCP hand back the same bytes. It is kept thirty days from its
+own send, and longer where the run's replay outlasts that.
 `ENABLE_AGENT_BRIEFINGS` switches recording off for the next run, never for one
 in flight, and a send made while it was off is marked as not recorded rather
 than read as never sent.
