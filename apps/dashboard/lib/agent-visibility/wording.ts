@@ -8,6 +8,8 @@
 import {
   AGENT_BRIEFING_CUT_CAUSES,
   isKnownSlug,
+  REPOSITORY_STATES,
+  USABLE_REPOSITORY_STATES,
   type AgentBriefingOrigin,
   type AgentBriefingPart,
   type AgentBriefingRepository,
@@ -366,27 +368,64 @@ export function partFates(part: AgentBriefingPart): PartFate[] {
 
 /* ── Repositories in a briefing ────────────────────────────────────────── */
 
+/**
+ * Two facts that reach a person on three surfaces at once: the map's state
+ * chip, the record's entry chip one row below it, and the line saying why a
+ * question offered a repository. The words live here once, because the same
+ * fact spelled "unusable" on one row and "nothing to check out" on the next
+ * reads as two different problems, and a person then looks for two remedies.
+ *
+ * Both are the same slug in all three vocabularies: `WORK_SCOPE_ASK_REASONS`
+ * records why a repository was asked about, `WORK_SCOPE_UNAVAILABLE_REASONS`
+ * what the record made of the answer, and `REPOSITORY_STATES` what the send
+ * could then do with it (`repository-map/map.ts` maps one to the next).
+ */
+const CLOSED_DOOR_WORDS = {
+  not_enabled: "not enabled",
+  unusable: "nothing to check out",
+} as const;
+
+function sentenceCase(words: string): string {
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * One chip, next to the repository key, above the worker's own reason.
+ *
+ * The two closed states this build must never blur into the others: `disabled`
+ * and `not_enabled` are a switch on the Repositories page, and `unusable` is
+ * not, so it says what is true of the provider instead of sending an operator
+ * to a switch that is already on. `refused` is this run's own rule closing the
+ * door, never a person's decision, so it says whose door and for how long:
+ * reading it as `excluded` sends somebody looking for a decision nobody made.
+ */
 const REPOSITORY_STATE_LABELS: Record<string, string> = {
   write: "Write",
   read_only: "Read only",
   offered: "Offered",
   excluded: "Excluded",
   disabled: "Disabled",
-  not_enabled: "Not enabled",
+  not_enabled: sentenceCase(CLOSED_DOOR_WORDS.not_enabled),
+  unusable: sentenceCase(CLOSED_DOOR_WORDS.unusable),
   outside_catalog: "Outside the catalog",
+  refused: "Refused for this run",
 };
 
 export function repositoryStateLabel(state: string): string {
   return labelFrom(REPOSITORY_STATE_LABELS, state);
 }
 
+/**
+ * Usable is not a list to keep here. The package owns which states let a send
+ * touch a repository (`USABLE_REPOSITORY_STATES`), and a second copy of that
+ * rule in the dashboard is a copy that drifts: the first new usable state
+ * would arrive coloured as a failure. A state this build has never heard of
+ * stays neutral, because colouring a slug we cannot read is a guess.
+ */
 export function repositoryStateTone(state: string): "success" | "running" | "neutral" | "failed" | "warn" {
   if (state === "write") return "success";
-  if (state === "read_only" || state === "offered") return "running";
-  if (state === "excluded" || state === "disabled" || state === "not_enabled" || state === "outside_catalog") {
-    return "failed";
-  }
-  return "neutral";
+  if (isKnownSlug(USABLE_REPOSITORY_STATES, state)) return "running";
+  return isKnownSlug(REPOSITORY_STATES, state) ? "failed" : "neutral";
 }
 
 function relationshipSentence(kind: string, target: string): string {
@@ -450,11 +489,12 @@ const ENTRY_STATE_LABELS: Record<string, string> = {
   unavailable: "Unavailable",
 };
 
+/** `Unavailable` alone says a door is shut and not which one, so the reason
+ *  rides the chip, in the words the map's own chip uses for that same fact. */
 export function entryStateLabel(entry: Pick<AgentBriefingWorkScopeEntry, "state" | "unavailableReason">): string {
   const state = labelFrom(ENTRY_STATE_LABELS, entry.state);
   if (entry.state !== "unavailable" || !entry.unavailableReason) return state;
-  const reasons: Record<string, string> = { not_enabled: "not enabled", unusable: "unusable" };
-  return `${state}: ${labelFrom(reasons, entry.unavailableReason)}`;
+  return `${state}: ${labelFrom(CLOSED_DOOR_WORDS, entry.unavailableReason)}`;
 }
 
 export function entryStateTone(state: string): "success" | "failed" | "neutral" {
@@ -469,6 +509,10 @@ const ENTRY_ORIGIN_LABELS: Record<string, string> = {
   workflow_owned_branch: "the workflow's own branch",
   ticket_text: "the ticket names it",
   trigger_policy: "the trigger's repository policy",
+  // Not a guess and not a person's decision: an edge an operator drew on the
+  // Repositories page, re-read on the next run, which is why this entry can
+  // disappear on its own when that edge goes.
+  related_repository: "the catalog relates it to a repository this work names",
   inferred: "a guess the next answer may overrule",
 };
 
@@ -505,8 +549,7 @@ export function roundStatusTone(status: string): "awaiting" | "success" | "faile
 
 export function askedBecauseLabel(reason: string): string {
   const reasons: Record<string, string> = {
-    not_enabled: "not enabled",
-    unusable: "unusable",
+    ...CLOSED_DOOR_WORDS,
     outside_policy: "outside the trigger's policy",
     selection: "to choose from",
   };

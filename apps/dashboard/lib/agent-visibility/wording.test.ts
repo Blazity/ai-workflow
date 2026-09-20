@@ -8,11 +8,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { AgentBriefingPart } from "@shared/agent-visibility";
+import {
+  REPOSITORY_STATES,
+  USABLE_REPOSITORY_STATES,
+  type AgentBriefingPart,
+} from "@shared/agent-visibility";
+import {
+  WORK_SCOPE_ASK_REASONS,
+  WORK_SCOPE_ENTRY_STATES,
+  WORK_SCOPE_ORIGINS,
+  WORK_SCOPE_UNAVAILABLE_REASONS,
+} from "@shared/contracts";
 
 import { buildFixtureStore, type FixtureStore } from "./test-support/fixtures";
 import {
+  askedBecauseLabel,
   captureLine,
+  entryOriginLabel,
+  entryStateLabel,
   inclusionSentence,
   runStateSentence,
   isOurs,
@@ -21,6 +34,8 @@ import {
   originLabel,
   partFates,
   readingSentence,
+  repositoryStateLabel,
+  repositoryStateTone,
   sendTitle,
 } from "./wording";
 
@@ -175,6 +190,73 @@ test("being in the catalog says nothing about being enabled", () => {
   assert.doesNotMatch(inclusionSentence({ cause: "catalog" }), /enabled/);
   assert.equal(inclusionSentence({ cause: "named" }), "The ticket or event names it.");
   assert.match(inclusionSentence({ cause: "invented_by_a_newer_worker" }), /"invented_by_a_newer_worker"/);
+});
+
+test("every value shipped with this build has words, and only a newer worker's is shown as a slug", () => {
+  // The open vocabulary is there so a NEWER worker's value degrades to itself.
+  // It is not a licence to ship a value and its screen in one commit with no
+  // words: what a person then reads is "unusable" in grey where a sentence
+  // belongs. This is the check that fails the day a value is added.
+  for (const state of REPOSITORY_STATES) {
+    assert.notEqual(repositoryStateLabel(state), state, `repository state "${state}" has no words`);
+  }
+  for (const origin of WORK_SCOPE_ORIGINS) {
+    assert.notEqual(entryOriginLabel(origin), origin, `work scope origin "${origin}" has no words`);
+  }
+  for (const state of WORK_SCOPE_ENTRY_STATES) {
+    assert.notEqual(entryStateLabel({ state }), state, `record state "${state}" has no words`);
+  }
+  for (const reason of WORK_SCOPE_UNAVAILABLE_REASONS) {
+    const label = entryStateLabel({ state: "unavailable", unavailableReason: reason });
+    assert.doesNotMatch(label, new RegExp(reason), `record reason "${reason}" is shown as its slug`);
+  }
+  for (const reason of WORK_SCOPE_ASK_REASONS) {
+    assert.notEqual(askedBecauseLabel(reason), reason, `ask reason "${reason}" has no words`);
+  }
+  // Colour follows the package's own list of what a send may use, so a usable
+  // state added there is never painted as a failure here.
+  for (const state of USABLE_REPOSITORY_STATES) {
+    assert.notEqual(repositoryStateTone(state), "failed", `usable state "${state}" is coloured as a failure`);
+  }
+
+  assert.equal(repositoryStateLabel("quarantined"), "quarantined");
+  assert.equal(entryOriginLabel("drawn_by_a_newer_worker"), "drawn_by_a_newer_worker");
+  assert.equal(repositoryStateTone("quarantined"), "neutral");
+});
+
+test("a repository with nothing to check out and one this run refused are not a person's decision", () => {
+  // Both are closed doors, and neither is the Repositories page: sending an
+  // operator there costs them the round it takes to find the switch already on
+  // and no decision to undo.
+  assert.equal(repositoryStateLabel("unusable"), "Nothing to check out");
+  assert.equal(repositoryStateLabel("refused"), "Refused for this run");
+  assert.notEqual(repositoryStateLabel("unusable"), repositoryStateLabel("disabled"));
+  assert.notEqual(repositoryStateLabel("refused"), repositoryStateLabel("excluded"));
+  assert.equal(repositoryStateTone("unusable"), "failed");
+  assert.equal(repositoryStateTone("refused"), "failed");
+});
+
+test("one shut door reads the same on the map, on the record and in the question that offered it", () => {
+  // These three sit within a row of each other on the ticket page. Two words
+  // for one fact send a person looking for two remedies, and the one they
+  // cannot act on is the one they try first.
+  for (const reason of WORK_SCOPE_UNAVAILABLE_REASONS) {
+    const onTheMap = repositoryStateLabel(reason);
+    assert.equal(
+      entryStateLabel({ state: "unavailable", unavailableReason: reason }),
+      `Unavailable: ${onTheMap.toLowerCase()}`,
+      `the record says something else than "${onTheMap}"`,
+    );
+    assert.equal(askedBecauseLabel(reason), onTheMap.toLowerCase(), `the question says something else than "${onTheMap}"`);
+  }
+  assert.equal(entryStateLabel({ state: "unavailable", unavailableReason: "unusable" }), "Unavailable: nothing to check out");
+});
+
+test("an entry the catalog put here says so, and does not read as a guess or as a person", () => {
+  const related = entryOriginLabel("related_repository");
+  assert.match(related, /catalog relates it/);
+  assert.notEqual(related, entryOriginLabel("inferred"));
+  assert.notEqual(related, entryOriginLabel("person"));
 });
 
 test("a run with nothing left says which nothing it is", () => {

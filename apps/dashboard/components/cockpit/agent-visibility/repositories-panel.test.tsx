@@ -12,6 +12,7 @@ import { act, create, type ReactTestInstance } from "react-test-renderer";
 
 import {
   ANNA,
+  DESIGN_SYSTEM,
   FILIP,
   FIXTURE_SUBJECT,
   FIXTURE_TICKET,
@@ -151,7 +152,7 @@ test("a question still waiting opens the panel and says so in its header", async
 
   const body = text(harness.root);
   assert.match(body, /1 question waiting/);
-  assert.match(body, /4 repositories decided, 4 questions/);
+  assert.match(body, /5 repositories decided, 4 questions/);
   // The waiting question is open, with the words that were asked.
   assert.match(body, /This run holds 11 repositories and may work on 3/);
   assert.match(body, /Nobody has answered this question yet/);
@@ -170,6 +171,12 @@ test("every entry says who decided it, when and why", async (t) => {
   assert.match(body, new RegExp(`${LEGACY} Excluded`));
   assert.match(body, new RegExp(`${OLD_ADMIN} Unavailable: not enabled`));
   assert.match(body, /the trigger's repository policy/);
+  // An entry the catalog's own edge wrote reads as that, not as a slug and not
+  // as somebody's decision: it is the one entry a later run may withdraw by
+  // itself, and a person deciding whether to keep it needs to know that.
+  assert.match(body, new RegExp(`${DESIGN_SYSTEM} Selected`));
+  assert.match(body, /the catalog relates it to a repository this work names/);
+  assert.doesNotMatch(body, /related_repository/);
   assert.match(body, /record version 4/);
 });
 
@@ -320,7 +327,7 @@ test("a page opened for one run keeps the record closed, and still says a questi
 
   const body = text(harness.root);
   assert.match(body, /1 question waiting/);
-  assert.match(body, /4 repositories decided, 4 questions/);
+  assert.match(body, /5 repositories decided, 4 questions/);
   // Closed: the trace below is what the person came for.
   assert.doesNotMatch(body, /What is decided/);
   assert.doesNotMatch(body, /This run holds 11 repositories/);
@@ -482,7 +489,7 @@ test("a repository a question offered and nobody decided about can be put in the
 
   const after = text(harness.root);
   assert.match(after, new RegExp(`${SHOP_MOBILE} Selected`));
-  assert.match(after, /5 repositories decided/);
+  assert.match(after, /6 repositories decided/);
   // It is in the record now, so it is no longer offered as one nobody decided.
   assert.doesNotMatch(after, new RegExp(`${SHOP_MOBILE} Nobody decided about this one`));
   // And it can be taken straight back out, where the undo lives.
@@ -579,7 +586,7 @@ test("removing an entry takes it out of the record, and the undo puts it back wh
 
   const gone = text(harness.root);
   assert.match(gone, new RegExp(`${LEGACY} is not in the record`));
-  assert.match(gone, /3 repositories decided/);
+  assert.match(gone, /4 repositories decided/);
   assert.match(gone, /record version 5/);
   // The entry is gone from the list, and the notice that offers the undo is
   // not: it sits above the list for exactly this case.
@@ -597,7 +604,7 @@ test("removing an entry takes it out of the record, and the undo puts it back wh
   const back = text(harness.root);
   assert.match(back, new RegExp(`${LEGACY} Excluded`));
   assert.match(back, /Put back\./);
-  assert.match(back, /4 repositories decided/);
+  assert.match(back, /5 repositories decided/);
 });
 
 test("a repository a question offered can also be ruled out, not only chosen", async (t) => {
@@ -625,5 +632,5 @@ test("a question the worker itself could not read is named, not silently missing
   assert.match(body, /1 round could not be read and is not listed/);
   // The worker leaves such a row out of `total` as well, so the count of
   // questions stays the count of questions a person can actually open.
-  assert.match(body, /4 repositories decided, 4 questions/);
+  assert.match(body, /5 repositories decided, 4 questions/);
 });

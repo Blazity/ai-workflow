@@ -13,10 +13,16 @@ import { act, create, type ReactTestInstance } from "react-test-renderer";
 
 import {
   ANNA,
+  DESIGN_SYSTEM,
   EXPIRED_RUN,
+  OLD_ADMIN,
   OLD_RUN,
+  PAYMENTS,
   PLANNING_RUN,
   SECRET,
+  SHOP_CMS,
+  SHOP_SEARCH,
+  SHOP_WEB,
   STATES_RUN,
   buildFixtureStore,
   serveFixture,
@@ -402,16 +408,33 @@ test("the repository map leads to the place in the prompt where the agent read i
   click(harness.root, "Repositories the agent was told about");
   await settle();
   const map = text(harness.root);
-  assert.match(map, /5 repositories described to the agent.*12 more repositories summarized as a count/);
+  assert.match(map, /9 repositories described to the agent.*12 more repositories summarized as a count/);
   assert.match(map, /is a frontend for github:acme\/shop-api/);
   // Each repository as the agent read it: why it is there, whose description,
   // and the ones it may not touch.
   assert.match(map, /The ticket or event names it/);
-  assert.match(map, /Related: github:acme\/shop-web is a frontend for this repository/);
+  assert.match(map, new RegExp(`Related: ${SHOP_WEB} depends on a package published from this repository`));
   assert.match(map, /THE PROVIDER'S LISTING TEXT; THE CATALOG HAS NO DESCRIPTION|The provider's listing text; the catalog has no description/i);
   assert.match(map, /github:acme\/legacy-checkout.*Excluded/);
-  assert.match(map, /github:acme\/old-admin.*Disabled/);
-  assert.match(map, /Disabled in the catalog by an administrator: do not request it/);
+  // The switch on the Repositories page, and the entry that speaks before it:
+  // a key the record calls unavailable can never read as the catalog switch.
+  assert.match(map, new RegExp(`${SHOP_CMS} Disabled`));
+  assert.match(map, new RegExp(`${SHOP_CMS} is switched off on the Repositories page`));
+  assert.match(map, new RegExp(`${OLD_ADMIN} Not enabled`));
+  assert.match(map, new RegExp(`Nobody has enabled ${OLD_ADMIN} on the Repositories page`));
+  // Every closed door this build knows says which door it is, in words. A raw
+  // slug here sends a person to the Repositories page for a state that page
+  // cannot change, or looking for a decision nobody made.
+  assert.match(map, new RegExp(`${SHOP_SEARCH} Nothing to check out`));
+  assert.match(map, /the provider offers nothing this run could check out for it/);
+  assert.match(map, new RegExp(`${PAYMENTS} Refused for this run`));
+  assert.match(map, new RegExp(`This run already refused a request for ${PAYMENTS}`));
+  assert.doesNotMatch(map, /\bunusable\b/);
+  // The record entry the catalog's own edge wrote, told apart from a person's
+  // decision and from a guess.
+  assert.match(map, new RegExp(`${DESIGN_SYSTEM} Read only`));
+  assert.match(map, /the catalog relates it to a repository this work names/);
+  assert.doesNotMatch(map, /related_repository/);
   // Why it is listed is not a claim about its state.
   assert.match(map, /It is listed in the catalog/);
   assert.doesNotMatch(map, /in the enabled catalog/);

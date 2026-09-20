@@ -115,7 +115,7 @@ test("a worker that does not serve rounds yet leaves the record readable", () =>
   const { rounds: _rounds, ...withoutRounds } = body;
   const read = readWorkScopeWithRounds(withoutRounds);
   assert.ok(read.ok, read.ok ? "" : read.message);
-  assert.equal(read.value.entries.length, 4);
+  assert.equal(read.value.entries.length, 5);
   assert.equal(read.value.rounds.ok, false);
   assert.equal(read.value.rounds.ok === false ? read.value.rounds.reason : null, "absent");
 });
@@ -126,7 +126,7 @@ test("an entry the dashboard cannot read is counted, not dropped silently", () =
   };
   const read = readWorkScopeWithRounds({ ...body, entries: [...body.entries, { repositoryKey: 7 }] });
   assert.ok(read.ok, read.ok ? "" : read.message);
-  assert.equal(read.value.entries.length, 4);
+  assert.equal(read.value.entries.length, 5);
   assert.equal(read.value.unreadableEntries, 1);
   assert.ok(read.value.rounds.ok);
   assert.equal(read.value.rounds.ok ? read.value.rounds.value.items.length : 0, 4);
@@ -139,7 +139,7 @@ test("a record asked for without rounds reads as a record with no rounds served"
   assert.equal(Object.hasOwn(body as object, "rounds"), false, "the fixture served rounds nobody asked for");
   const read = readWorkScopeWithRounds(body);
   assert.ok(read.ok, read.ok ? "" : read.message);
-  assert.equal(read.value.entries.length, 4);
+  assert.equal(read.value.entries.length, 5);
   assert.equal(read.value.rounds.ok, false);
 });
 

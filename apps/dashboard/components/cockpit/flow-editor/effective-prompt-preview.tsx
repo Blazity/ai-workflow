@@ -86,15 +86,15 @@ export function EffectivePromptPreviewResultView({
           below is one this screen made up, and a preview that reads as green
           for a definition that dies on its first run is the whole defect. */}
       {fatal.length > 0 && (
-        <div role="alert" className="rounded-xs border border-red-300 bg-red-50 px-2 py-2">
-          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-red-800">
+        <div role="alert" className="rounded-xs border border-fail bg-fail-bg px-2 py-2">
+          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-fail-fg">
             A run would stop here
           </div>
           <ul className="m-0 mt-1 space-y-1 p-0">
             {fatal.map((source, index) => (
               <li
                 key={`${source.kind}:${source.reference}:${index}`}
-                className="list-none font-body text-[10px] leading-[1.35] text-red-800"
+                className="list-none font-body text-[10px] leading-[1.35] text-fail-fg"
               >
                 <span className="font-mono">
                   {source.kind} · {source.reference}
@@ -108,15 +108,15 @@ export function EffectivePromptPreviewResultView({
       )}
 
       {result.issues.length > 0 && (
-        <div role="alert" className="rounded-xs border border-red-200 bg-red-50 px-2 py-2">
-          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-red-800">
+        <div role="alert" className="rounded-xs border border-fail-bg bg-fail-bg px-2 py-2">
+          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-fail-fg">
             Preview errors
           </div>
           <ul className="m-0 mt-1 space-y-1 p-0">
             {result.issues.map((issue, index) => (
               <li
                 key={`${issue.code}:${issue.path}:${index}`}
-                className="list-none font-body text-[10px] leading-[1.35] text-red-800"
+                className="list-none font-body text-[10px] leading-[1.35] text-fail-fg"
               >
                 {issue.path && (
                   <span className="font-mono">{issue.path}: </span>
@@ -385,7 +385,7 @@ export function EffectivePromptPreview({
             {view === "then" ? (
               <LastBriefingView definitionId={definitionId} nodeId={blockId} openVersion={openVersion} />
             ) : error ? (
-              <div role="alert" className="rounded-xs border border-red-200 bg-red-50 px-2 py-2 font-body text-[10px] text-red-800">
+              <div role="alert" className="rounded-xs border border-fail-bg bg-fail-bg px-2 py-2 font-body text-[10px] text-fail-fg">
                 {error}
               </div>
             ) : result ? (

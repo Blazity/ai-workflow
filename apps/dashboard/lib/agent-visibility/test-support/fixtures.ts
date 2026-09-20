@@ -96,6 +96,19 @@ export const OLD_ADMIN = "github:acme/old-admin";
 /** Offered in the first question, named in its words, and never decided about:
  *  the repository somebody may have meant and nobody recorded. */
 export const SHOP_MOBILE = "github:acme/shop-mobile";
+/** Nobody chose it: the catalog says the storefront depends on a package from
+ *  it, so the run took it in read only and recorded that relationship as the
+ *  reason. Delete the edge and the next run drops the entry again. */
+export const DESIGN_SYSTEM = "github:acme/design-system";
+/** Enabled here, and the provider has nothing this run could check out. The
+ *  Repositories page cannot fix it, which is why it is not `disabled`. */
+export const SHOP_SEARCH = "github:acme/shop-search";
+/** The agent asked for it and this run refused, for a reason that holds for
+ *  the rest of the run. Nobody decided anything about it. */
+export const PAYMENTS = "github:acme/payments-service";
+/** Switched off in the catalog and in nobody's record: the only shape where
+ *  the catalog switch, and not an entry, decides the state. */
+export const SHOP_CMS = "github:acme/shop-cms";
 
 export const SECRET = "sk-live-4f9Qm2Lx8Rt7Zp";
 export const FILIP = "Filip Maszota";
@@ -273,6 +286,16 @@ const WORK_SCOPE_ENTRIES: WorkScopeEntry[] = [
     decidedBy: { kind: "run", runId: PLANNING_RUN, definitionId: 40, definitionVersion: 12 },
     decidedAt: "2026-09-18T09:02:00.000Z",
   },
+  // An entry no person and no guess put here: the catalog's own edge did, and
+  // it is the one origin a later run re-checks and can withdraw.
+  {
+    repositoryKey: DESIGN_SYSTEM,
+    state: "selected",
+    origin: "related_repository",
+    rationale: `the catalog says ${SHOP_WEB} depends on a package published from it`,
+    decidedBy: { kind: "run", runId: PLANNING_RUN, definitionId: 40, definitionVersion: 12 },
+    decidedAt: "2026-09-18T09:02:20.000Z",
+  },
 ];
 
 function repositoryContext(): NonNullable<AgentBriefingBuildInput["repositoryContext"]> {
@@ -291,13 +314,19 @@ function repositoryContext(): NonNullable<AgentBriefingBuildInput["repositoryCon
         rendering: "full",
         workScopeEntry: WORK_SCOPE_ENTRIES[0]!,
       },
+      // A PERSON'S ENTRY IS NEVER `related`. `causeOf` reads the record's own
+      // origin first (`repository-map/map.ts`), and only `related_repository`,
+      // or a `trigger_policy` entry with a via, comes out as `related`: an
+      // entry a person decided lands on `work_scope_entry`. The catalog edge
+      // between this repository and the storefront is still on screen, on the
+      // storefront's own Relationships line, where the operator recorded it.
       {
         key: SHOP_API,
         description: { source: "provider", text: "Shop API" },
         rules: null,
         relationships: [],
         state: "read_only",
-        inclusion: { cause: "related", via: { key: SHOP_WEB, relationship: "frontend_for" } },
+        inclusion: { cause: "work_scope_entry" },
         rendering: "full",
         workScopeEntry: WORK_SCOPE_ENTRIES[1]!,
       },
@@ -312,13 +341,69 @@ function repositoryContext(): NonNullable<AgentBriefingBuildInput["repositoryCon
         rendering: "line",
         workScopeEntry: WORK_SCOPE_ENTRIES[2]!,
       },
+      // A KEY THE RECORD HAS AN ENTRY FOR ALWAYS CARRIES IT. The map looks the
+      // entry up for every key it describes and derives the state from it
+      // (`describe` in `repository-map/map.ts`), so an `unavailable` entry
+      // makes the state `not_enabled`, never `disabled`: `disabled` is the
+      // catalog switch, and it can only be the answer where no entry spoke
+      // first. The row below carries that switch instead.
       {
         key: OLD_ADMIN,
         description: { source: "none", text: "" },
         rules: null,
         relationships: [],
+        state: "not_enabled",
+        reason: `Nobody has enabled ${OLD_ADMIN} on the Repositories page.`,
+        inclusion: { cause: "work_scope_entry" },
+        rendering: "line",
+        workScopeEntry: WORK_SCOPE_ENTRIES[3]!,
+      },
+      {
+        key: SHOP_CMS,
+        description: { source: "catalog", text: "The CMS behind the storefront's marketing pages." },
+        rules: null,
+        relationships: [],
         state: "disabled",
-        reason: "Disabled in the catalog by an administrator: do not request it.",
+        reason: `${SHOP_CMS} is switched off on the Repositories page.`,
+        inclusion: { cause: "catalog" },
+        rendering: "line",
+        workScopeEntry: null,
+      },
+      {
+        key: DESIGN_SYSTEM,
+        description: {
+          source: "catalog",
+          text: "The shared component library: buttons, inputs and the checkout form fields.",
+        },
+        rules: null,
+        relationships: [],
+        state: "read_only",
+        inclusion: { cause: "related", via: { key: SHOP_WEB, relationship: "depends_on" } },
+        rendering: "full",
+        workScopeEntry: WORK_SCOPE_ENTRIES[4]!,
+      },
+      // Enabled, and the provider has nothing to check out: the state whose
+      // remedy is NOT the switch on the Repositories page.
+      {
+        key: SHOP_SEARCH,
+        description: { source: "catalog", text: "Search and suggestions for the storefront." },
+        rules: null,
+        relationships: [],
+        state: "unusable",
+        reason: `${SHOP_SEARCH} is enabled here, and the provider offers nothing this run could check out for it.`,
+        inclusion: { cause: "catalog" },
+        rendering: "line",
+        workScopeEntry: null,
+      },
+      // The agent asked for this one on pass 2 and the run said no: a closed
+      // door nobody decided on, so there is no entry to undo.
+      {
+        key: PAYMENTS,
+        description: { source: "provider", text: "Payments service" },
+        rules: null,
+        relationships: [],
+        state: "refused",
+        reason: `This run already refused a request for ${PAYMENTS}.`,
         inclusion: { cause: "catalog" },
         rendering: "line",
         workScopeEntry: null,
