@@ -22,6 +22,7 @@ import {
   AGENT_BRIEFING_SENT_BYTES_MAX,
   AGENT_VISIBILITY_ID_MAX_LENGTH,
   AGENT_VISIBILITY_PAGE_MAX_BYTES,
+  AGENT_VISIBILITY_PAGE_MIN_BYTES,
 } from "@shared/agent-visibility";
 import { FIRST_SLICE_TOOLS } from "./contracts.js";
 import { policyFor } from "./policy.js";
@@ -31,6 +32,7 @@ import {
   MCP_ENABLED_DOMAINS,
   MCP_TOOL_CATALOG,
   BRIEFING_PAGE_MAX_BYTES,
+  BRIEFING_PAGE_MIN_BYTES,
   BRIEFING_SECTION_BYTES_MAX,
   BRIEFING_SECTION_INDEX_MAX,
   PROMPT_BODY_MAX_LENGTH,
@@ -188,6 +190,10 @@ describe("MCP tool catalog", () => {
     expect(BRIEFING_SECTION_INDEX_MAX).toBe(AGENT_BRIEFING_SECTIONS_MAX - 1);
     expect(BRIEFING_SECTION_BYTES_MAX).toBe(AGENT_BRIEFING_SENT_BYTES_MAX);
     expect(BRIEFING_PAGE_MAX_BYTES).toBe(AGENT_VISIBILITY_PAGE_MAX_BYTES);
+    // The declared floor is the one the runtime enforces, so an agent reading
+    // the schema cannot ask for a page that is refused by name for being too
+    // small. It used to declare 1 and refuse anything under 1024.
+    expect(BRIEFING_PAGE_MIN_BYTES).toBe(AGENT_VISIBILITY_PAGE_MIN_BYTES);
   });
 
   // Closes the window C0 accepted on purpose: a name in the catalog but not

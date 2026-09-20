@@ -16,8 +16,13 @@
  * So the tool has its own default and its own maximum, derived from those two
  * numbers, and refuses a larger request by name instead of letting either
  * happen. HTTP keeps the package's cap, because neither reason applies there.
- * THE SAME (offset, limit) STILL RETURNS THE SAME BYTES ON BOTH SURFACES: only
- * what each asks for by default differs.
+ *
+ * WHAT PARITY MEANS HERE, exactly: the same (offset, limit) returns the same
+ * bytes on both surfaces, for any limit both will accept. The two do NOT share
+ * a range. HTTP's maximum is the package's; this one is smaller and derived
+ * from `MCP_MAX_RESULT_BYTES`, so a limit HTTP serves can be refused here, and
+ * the defaults differ as well. Both refuse out of range by name rather than
+ * clamping, so a caller is never handed a page it did not ask for.
  *
  * The three constants below are measured, not guessed: `page-budget.test.ts`
  * builds a real worst-case page, sends it through `mcpEnvelopeResult` and
