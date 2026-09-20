@@ -78,6 +78,7 @@ import {
   type AgentVisibilityUnreadable,
 } from "./pages.js";
 import { serveSafeText } from "./serve-safe.js";
+import { shortenVisibilityId } from "./visibility-id.js";
 
 /**
  * The blocks that put a prompt in front of a model, decided from the block type
@@ -89,7 +90,7 @@ import { serveSafeText } from "./serve-safe.js";
  * capture. `prepare_workspace` is here for the discovery send it makes; the
  * planning block makes one too on the lazy path, which its own briefings show.
  */
-const PROMPT_SENDING_BLOCK_TYPES: ReadonlyMap<string, "discovery" | "agent" | "llm"> = new Map([
+export const PROMPT_SENDING_BLOCK_TYPES: ReadonlyMap<string, "discovery" | "agent" | "llm"> = new Map([
   ["planning_agent", "agent"],
   ["implementation_agent", "agent"],
   ["review_agent", "agent"],
@@ -169,8 +170,15 @@ export interface BlockAttemptBriefings {
   missing: MissingBriefingReason | null;
 }
 
-/** Which sends a read is about. `attempt` and `activationScopeId` narrow a
- *  loop body to one iteration. */
+/**
+ * Which sends a read is about. `attempt` and `activationScopeId` narrow a loop
+ * body to one iteration.
+ *
+ * NAMED AS THE GRAPH NAMES THEM, in full. Capture shortens an id past 200
+ * characters before it stores one, and the replay's attempt rows keep the raw
+ * one, so a filter is carried to each table in the spelling that table uses
+ * rather than made the caller's problem.
+ */
 export interface BriefingFilters {
   nodeId?: string;
   attempt?: number;
@@ -291,13 +299,31 @@ function attemptKey(of: { nodeId: string; attempt: number; activationScopeId: st
   ).toString("base64url");
 }
 
+/**
+ * What the two tables agree on.
+ *
+ * A briefing row carries the SHORTENED id and its attempt row the raw one, so
+ * an attempt whose scope id is past the bound would otherwise group as two
+ * entries: one with the row and no briefing ("never sent"), one with the
+ * briefing and no row. Grouping happens in capture's spelling; what is SERVED
+ * is whichever spelling reached here first, and attempt rows are read first
+ * precisely so a person is given the id their graph shows.
+ */
+function joinKey(of: { nodeId: string; attempt: number; activationScopeId: string }): string {
+  return attemptKey({
+    nodeId: shortenVisibilityId(of.nodeId),
+    attempt: of.attempt,
+    activationScopeId: shortenVisibilityId(of.activationScopeId),
+  });
+}
+
 function groupAttempts(
   overviews: readonly AgentBriefingOverviewRow[],
   attempts: readonly BlockAttemptFactRow[],
 ): AttemptRows[] {
   const grouped = new Map<string, AttemptRows>();
   const reach = (of: { nodeId: string; attempt: number; activationScopeId: string }): AttemptRows => {
-    const key = attemptKey(of);
+    const key = joinKey(of);
     const existing = grouped.get(key);
     if (existing) return existing;
     const created: AttemptRows = {
@@ -337,20 +363,18 @@ function groupAttempts(
 }
 
 /**
- * The block type this attempt ran, from the run's own graph, or from a briefing
- * of the attempt once the graph is gone with the replay.
+ * The block type this attempt ran, from the run's OWN captured graph.
  *
  * Never from today's definition: a block whose type changed since has to read
- * back as what it was.
+ * back as what it was. And never from the briefing's own `blockType` either,
+ * although one is stored there: not every send comes from a graph node. The
+ * repo-memory distill records under `run:repo-memory-distill` with a type no
+ * definition has, and asking the block catalog whether THAT type sends prompts
+ * answers "no" about a send whose briefing is sitting right there. What a send
+ * left behind is the better witness, and `describeAttempt` uses it.
  */
-function blockTypeOf(entry: AttemptRows, run: RunVisibilityFacts): string | null {
-  const recorded = run.nodeTypes.get(entry.nodeId);
-  if (recorded !== undefined) return recorded;
-  for (const row of entry.rows) {
-    const identity = (row.overview as { identity?: { blockType?: unknown } } | null)?.identity;
-    if (typeof identity?.blockType === "string") return identity.blockType;
-  }
-  return null;
+function graphBlockTypeOf(entry: AttemptRows, run: RunVisibilityFacts): string | null {
+  return run.nodeTypes.get(entry.nodeId) ?? null;
 }
 
 interface AttemptDescription {
@@ -398,7 +422,7 @@ function describeAttempt(
   // of this attempt still knows what KIND of send it made, which is the same
   // question `sendsPrompts` is really asking: a marker row left by a planning
   // block would otherwise read as a block with no prompt to be missing.
-  const blockType = blockTypeOf(entry, run);
+  const blockType = graphBlockTypeOf(entry, run);
   // Nothing left to decide it with: neither the graph nor a row of this attempt
   // says what it was. `false` here would be a claim, so it is `null`.
   const unknowable = blockType === null && recordedKinds.length === 0;
@@ -504,9 +528,62 @@ export interface ReadBriefingAttemptsInput extends BriefingFilters {
   now?: Date;
 }
 
+/**
+ * What this run's capture did, counted as it happened, whatever became of the
+ * briefings afterwards.
+ *
+ * WHY IT IS ON EVERY PAGE. `buildAgentBriefing` refuses quietly when a section's
+ * parts do not reproduce its text, and a refusal is invisible until somebody
+ * opens the one briefing that is missing. Counted here beside the state, a
+ * person or an alert reads "eleven sends, two refused" without opening
+ * anything. Null where no capture-capable code ever recorded for this run,
+ * which is the same fact `predates_capture` carries.
+ */
+export interface RunCaptureCounts {
+  /** Sends whose briefing was stored. */
+  captured: number;
+  /** Sends made while capture was switched off. */
+  disabled: number;
+  /** Sends whose record was refused: a credential that survived the detector,
+   *  or a prompt this build could not take apart and put back together. */
+  skipped: number;
+  /** Sends whose write was lost. */
+  failed: number;
+  /** Sends that met a different briefing already stored under their identity. */
+  conflict: number;
+  /**
+   * Every send capture was told about: the five above, added up here rather
+   * than by each reader, so two screens cannot disagree about what a send is.
+   * A counter added to this record later has to be added to this sum too.
+   */
+  sends: number;
+  firstRecordedAt: string;
+  lastRecordedAt: string;
+}
+
 export type BriefingAttemptsPage = AgentVisibilityPage<BlockAttemptBriefings> & {
   state: RunBriefingState;
+  capture: RunCaptureCounts | null;
 };
+
+function captureCounts(summary: AgentBriefingRunSummary | null): RunCaptureCounts | null {
+  if (summary === null) return null;
+  return {
+    captured: summary.capturedCount,
+    disabled: summary.disabledCount,
+    skipped: summary.skippedCount,
+    failed: summary.failedCount,
+    conflict: summary.conflictCount,
+    sends:
+      summary.capturedCount +
+      summary.disabledCount +
+      summary.skippedCount +
+      summary.failedCount +
+      summary.conflictCount,
+    firstRecordedAt: summary.firstRecordedAt.toISOString(),
+    lastRecordedAt: summary.lastRecordedAt.toISOString(),
+  };
+}
 
 /**
  * Every Block Attempt of a run that either sent something or could have, one
@@ -523,15 +600,22 @@ export async function readBriefingAttempts(
 ): Promise<BriefingAttemptsPage> {
   const limit = pageLimit(input.limit, input.bounds);
   const run = await runOf(reads, input);
-  const filter: AgentBriefingFilter = {
+  // ONE FILTER PER SPELLING. The caller names the node the graph names, and the
+  // graph is also what the replay's attempt rows were written from; capture
+  // shortened the same id before storing its briefings. Sending the caller's
+  // words to both tables finds nothing in one of them for every id past the
+  // bound, and an empty list reads as "this block never sent anything".
+  const filter = (of: (id: string) => string): AgentBriefingFilter => ({
     runId: input.runId,
-    ...(input.nodeId === undefined ? {} : { nodeId: input.nodeId }),
+    ...(input.nodeId === undefined ? {} : { nodeId: of(input.nodeId) }),
     ...(input.attempt === undefined ? {} : { attempt: input.attempt }),
-    ...(input.activationScopeId === undefined ? {} : { activationScopeId: input.activationScopeId }),
-  };
+    ...(input.activationScopeId === undefined
+      ? {}
+      : { activationScopeId: of(input.activationScopeId) }),
+  });
   const [overviews, attempts, runSummary] = await Promise.all([
-    reads.overviews(filter),
-    reads.attempts(filter),
+    reads.overviews(filter(shortenVisibilityId)),
+    reads.attempts(filter((id) => id)),
     reads.runSummary(input.runId),
   ]);
   const now = input.now ?? new Date();
@@ -554,7 +638,7 @@ export async function readBriefingAttempts(
       limit,
       unreadable: described.flatMap((entry) => entry.unreadable),
       unreadableFor: (served) => served.flatMap((item) => byAttempt.get(attemptKey(item)) ?? []),
-      extra: { state: runBriefingState(run, runSummary) },
+      extra: { state: runBriefingState(run, runSummary), capture: captureCounts(runSummary) },
     },
   );
   return dropUndefined(page as BriefingAttemptsPage);

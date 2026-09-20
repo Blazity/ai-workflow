@@ -7,6 +7,7 @@ import {
 } from "../../../../../services/agent-visibility/index.js";
 import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
 import {
+  FILTER_ID_MAX_LENGTH,
   parseListQuery,
   parseRunId,
   setBriefingNoStore,
@@ -31,9 +32,13 @@ export default defineEventHandler(
       const actor = await requireDashboardActor(event);
       const runId = parseRunId(event);
       const query = getQuery(event);
-      const nodeId = textParam(query.nodeId, "nodeId");
+      const nodeId = textParam(query.nodeId, "nodeId", FILTER_ID_MAX_LENGTH);
       const attempt = wholeNumber(query.attempt, "attempt", { min: 1, max: ATTEMPT_MAX });
-      const activationScopeId = textParam(query.activationScopeId, "activationScopeId");
+      const activationScopeId = textParam(
+        query.activationScopeId,
+        "activationScopeId",
+        FILTER_ID_MAX_LENGTH,
+      );
       return await readBriefingAttempts(connectedBriefingReads, {
         runId,
         organizationId: actor.organizationId,

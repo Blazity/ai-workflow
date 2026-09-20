@@ -495,6 +495,7 @@ const TOOL_POLICY = {
   // what a run's own logs are about, it is served to whoever the REPLAY is
   // served to, and no new audience and no new scope were opened for it.
   "runs.briefing": READ_POLICY,
+  "workflows.node_briefing": READ_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

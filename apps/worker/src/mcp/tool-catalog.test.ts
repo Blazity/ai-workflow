@@ -90,6 +90,7 @@ const CATALOGUED = [
   "work_scope.get",
   "work_scope.edit",
   "runs.briefing",
+  "workflows.node_briefing",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

@@ -29,6 +29,14 @@ export {
   redactForStorage,
 } from "../../run-observability/visibility-detector.js";
 export {
+  connectedNodeBriefingReadsOf,
+  nodeBriefingReadsOf,
+  readNodeLastBriefing,
+  type NodeBriefingAbsence,
+  type NodeBriefingReads,
+  type NodeLastBriefing,
+} from "./node-briefing.js";
+export {
   briefingReadsOf,
   byteRangeInPage,
   connectedBriefingReads,
@@ -43,6 +51,7 @@ export {
   readBriefingSectionSpans,
   readBriefingUnresolvedSources,
   type BlockAttemptBriefings,
+  type RunCaptureCounts,
   type BriefingChildInput,
   type BriefingFilters,
   type BriefingReads,

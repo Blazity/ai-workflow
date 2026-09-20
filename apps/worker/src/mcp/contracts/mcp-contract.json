@@ -1,5 +1,5 @@
 {
-  "contractHash": "b71ed6222407eb53cb34226fffdd15d3f32b3035bd94e61e88f2e435068ce60d",
+  "contractHash": "06d778e0e7d4eabd115e5c08b71b0c3427c5917f57f4d3a4b4b3f57909cfe6b5",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -1692,7 +1692,7 @@
           "nodeId": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 200
+            "maxLength": 2000
           },
           "attempt": {
             "type": "integer",
@@ -1702,7 +1702,7 @@
           "activationScopeId": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 200
+            "maxLength": 2000
           },
           "briefingId": {
             "type": "integer",
@@ -1732,6 +1732,37 @@
         },
         "required": [
           "runId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "workflows.node_briefing",
+      "description": "What one block of a workflow last put in front of a model, without hunting for the run. Given a definition and a node id, this answers with the newest run of that definition that ran the node, ACROSS VERSIONS: an operator asking what a block sends does not care that the definition was bumped since, so `ranIn.definitionVersion` says which version actually ran and may not be the one being edited. `attempt` is that run's newest attempt of the node in exactly the shape runs.briefing serves, so its `briefings`, its `captureDetail` and its `missing` reason read the same way here. `ranIn.state` answers what no attempt can (`expired`, `replay_gone`, `predates_capture`), and `ranIn.capture` counts what this run's capture did, so \"eleven sends, two refused\" is readable without opening a briefing. Where no run can answer, `absent` says which of the two block-level answers it is: `never_ran`, or `sends_no_prompt` for a block that puts no prompt in front of a model. A node the definition no longer has is still answered from the runs, with `blockType` null, because the history is real; a node neither the definition nor any run has reads as `never_ran`. To read the text itself, take `ranIn.runId` and the briefingId from `attempt.briefings` into runs.briefing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "definitionId": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "nodeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "definitionId",
+          "nodeId"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"

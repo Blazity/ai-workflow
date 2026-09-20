@@ -20,6 +20,11 @@ const POSTGRES_INT_MAX = 2_147_483_647;
 /** A node id, an activation scope id: what the visibility package accepts as
  *  an id, so a filter cannot name something a briefing could never carry. */
 const SAFE_ID_MAX_LENGTH = 200;
+/** The same id as the GRAPH spells it, which is what a caller filtering by a
+ *  node has in hand. Capture shortens one past 200 characters before storing
+ *  it, so refusing the raw spelling here would refuse the only one a caller of
+ *  a long-named loop node can give. */
+export const FILTER_ID_MAX_LENGTH = 2_000;
 
 /** A briefing is read, never cached: it carries ticket bodies and instruction
  *  files, and the audience is decided per request. */

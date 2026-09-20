@@ -82,6 +82,10 @@ export interface SeedRunInput {
   runId: string;
   world: SeededWorld;
   organizationId?: string;
+  /** Written on the run row itself, which is what a read from the DEFINITION
+   *  end joins on. Left out, the run belongs to the seeded definition. */
+  definitionId?: number | null;
+  definitionVersion?: number;
   status?: string;
   statusReason?: string | null;
   /** node id -> block type, as the run's own captured graph holds it. */
@@ -99,6 +103,8 @@ export async function seedRun(db: Db, input: SeedRunInput): Promise<void> {
   await db.insert(workflowRuns).values({
     runId: input.runId,
     status: input.status ?? "running",
+    definitionId: input.definitionId === undefined ? input.world.definitionId : input.definitionId,
+    definitionVersion: input.definitionVersion ?? 1,
     ...(input.statusReason === undefined ? {} : { statusReason: input.statusReason }),
   });
   if (input.observed === false) return;
@@ -131,6 +137,43 @@ export async function seedRun(db: Db, input: SeedRunInput): Promise<void> {
     .update(workflowRuns)
     .set({ replayExpiresAt: input.replayExpiresAt ?? REPLAY_EXPIRES_AT })
     .where(eq(workflowRuns.runId, input.runId));
+}
+
+/**
+ * The nodes the editor shows for the seeded definition: version 1's graph, and
+ * that version marked deployed so a read with no draft still finds them.
+ *
+ * Written through the ordinary tables in the stored shape, because the reader
+ * parses what it reads and a hand-made shape would be rejected there rather
+ * than here.
+ */
+export async function seedDefinitionNodes(
+  db: Db,
+  world: SeededWorld,
+  nodes: readonly { id: string; type: string }[],
+): Promise<void> {
+  await db
+    .update(workflowDefinitionVersions)
+    .set({
+      definition: {
+        schemaVersion: 2,
+        nodes: nodes.map((node, at) => ({
+          id: node.id,
+          type: node.type,
+          x: at * 100,
+          y: 0,
+          configuration: {},
+          inputs: {},
+          additionalInputs: [],
+        })),
+        edges: [],
+      } as never,
+    })
+    .where(eq(workflowDefinitionVersions.definitionId, world.definitionId));
+  await db
+    .update(workflowDefinitions)
+    .set({ deployedVersion: 1 })
+    .where(eq(workflowDefinitions.id, world.definitionId));
 }
 
 export interface SeedAttemptInput {
@@ -176,6 +219,8 @@ export interface BriefingFixture {
   attempt?: number;
   activationScopeId?: string;
   sequence?: number;
+  /** When the send happened. Fixed unless a test is about which send is NEWER. */
+  capturedAt?: Date;
   kind?: "discovery" | "agent" | "llm";
   blockType?: string;
   sections?: AgentBriefingBuildInput["sections"];
@@ -201,7 +246,7 @@ export function briefingInput(fixture: BriefingFixture): AgentBriefingBuildInput
       sequence: fixture.sequence ?? 1,
       kind: fixture.kind ?? "agent",
       blockType: fixture.blockType ?? "planning_agent",
-      capturedAt: CAPTURED_AT.toISOString(),
+      capturedAt: (fixture.capturedAt ?? CAPTURED_AT).toISOString(),
     },
     harness: { provider: "claude", model: "claude-sonnet-4-5-20250929" },
     sections: fixture.sections ?? [

@@ -8,14 +8,19 @@
  * what a briefing is, who may read it and how it pages lives in
  * `services/agent-visibility`.
  *
- * Registered last (server.ts) because `FIRST_SLICE_TOOLS` appends it last and
- * the contract artifact pins `tools/list` to that order.
+ * Registered last (server.ts) because `FIRST_SLICE_TOOLS` appends these two
+ * last and the contract artifact pins `tools/list` to that order.
+ *
+ * `workflows.node_briefing` lives here too rather than beside the workflow
+ * authoring tools: it is the same read model and the same page budget, asked
+ * from the definition end.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import {
   AgentVisibilityReadError,
   connectedBriefingReads,
+  connectedNodeBriefingReadsOf,
   readBriefingAttempts,
   readBriefingRepositoryContext,
   readBriefingSectionPage,
@@ -23,6 +28,7 @@ import {
   readBriefingSections,
   readBriefingSectionSpans,
   readBriefingUnresolvedSources,
+  readNodeLastBriefing,
   type PageBounds,
 } from "../../services/agent-visibility/index.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
@@ -72,6 +78,32 @@ export function registerBriefingTools(server: McpServer, deps: McpToolDependenci
       operation: async () => {
         try {
           return await serve(input, view, bounds, deps.actor.organizationId);
+        } catch (error) {
+          throw asPublicError(error);
+        }
+      },
+    });
+    return mcpEnvelopeResult(envelope);
+  });
+
+  // The same read model, addressed from the definition instead of from a run,
+  // because that is where the operator asking the question is standing.
+  registerCatalogTool(server, "workflows.node_briefing", async (input) => {
+    const envelope = await executeMcpRead({
+      deps,
+      toolName: "workflows.node_briefing",
+      targetRefs: [String(input.definitionId), input.nodeId],
+      operation: async () => {
+        try {
+          return await readNodeLastBriefing(
+            connectedNodeBriefingReadsOf(connectedBriefingReads),
+            {
+              definitionId: input.definitionId,
+              nodeId: input.nodeId,
+              organizationId: deps.actor.organizationId,
+              bounds: mcpPageBounds(deps.settings),
+            },
+          );
         } catch (error) {
           throw asPublicError(error);
         }

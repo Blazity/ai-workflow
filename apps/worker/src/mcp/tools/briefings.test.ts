@@ -68,6 +68,7 @@ import { actorFor, depsFor } from "../../test-support/mcp.js";
 import {
   captureBriefing,
   seedAttempt,
+  seedDefinitionNodes,
   seedRun,
   seedVisibilityWorld,
   VISIBILITY_ORG,
@@ -99,6 +100,11 @@ const spansGet = (
 ).default;
 const contextGet = (
   await import("../../routes/api/v1/runs/[runId]/briefings/[briefingId]/repository-context.get.js")
+).default;
+const nodeLastGet = (
+  await import(
+    "../../routes/api/v1/workflow-definitions/[id]/nodes/[nodeId]/last-briefing.get.js"
+  )
 ).default;
 
 const RUN = "wrun_parity";
@@ -144,6 +150,7 @@ function handler() {
   router.get("/runs/:runId/briefings/:briefingId/unresolved-sources", unresolvedGet);
   router.get("/runs/:runId/briefings/:briefingId/sections/:sectionIndex/spans", spansGet);
   router.get("/runs/:runId/briefings/:briefingId/repository-context", contextGet);
+  router.get("/workflow-definitions/:id/nodes/:nodeId/last-briefing", nodeLastGet);
   app.use(router);
   return toWebHandler(app);
 }
@@ -172,7 +179,15 @@ async function client(): Promise<Client> {
 }
 
 async function tool(connected: Client, args: Record<string, unknown>): Promise<unknown> {
-  const result = await connected.callTool({ name: "runs.briefing", arguments: args });
+  return named(connected, "runs.briefing", args);
+}
+
+async function named(
+  connected: Client,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const result = await connected.callTool({ name, arguments: args });
   const failed = result.isError === true;
   if (failed) throw new RangeError((result.content as { text: string }[])[0]!.text);
   return (result.structuredContent as { data: unknown }).data;
@@ -544,4 +559,41 @@ describe("one briefing, two readers", () => {
     expect(read.ok).toBe(true);
     expect(briefingId).toBeGreaterThan(0);
   }, 120_000);
+
+  // Red when: the operator's view of a block and an agent's view of the same
+  // block differ. This read is addressed from the definition rather than from
+  // a run, so it is a second door onto the same rows, and a second door is
+  // where parity quietly stops holding.
+  it("serves one block's last briefing identically to both surfaces", async () => {
+    await seedDefinitionNodes(db, world, [
+      { id: "planning", type: "planning_agent" },
+      { id: "review", type: "review_agent" },
+    ]);
+    await seedBriefing("A short runtime section.");
+    const connected = await client();
+
+    const viaRoute = (await route(
+      `/workflow-definitions/${world.definitionId}/nodes/planning/last-briefing`,
+    )) as { ranIn: { runId: string } | null; attempt: { briefings: unknown[] } | null };
+    const viaTool = await named(connected, "workflows.node_briefing", {
+      definitionId: world.definitionId,
+      nodeId: "planning",
+    });
+
+    expect(JSON.stringify(viaTool)).toBe(JSON.stringify(viaRoute));
+    expect(viaRoute.ranIn?.runId).toBe(RUN);
+    expect(viaRoute.attempt?.briefings).toHaveLength(1);
+
+    // The block that never sent one, through the same two doors.
+    const emptyRoute = (await route(
+      `/workflow-definitions/${world.definitionId}/nodes/review/last-briefing`,
+    )) as { attempt: { missing: { kind: string } | null } | null };
+    const emptyTool = await named(connected, "workflows.node_briefing", {
+      definitionId: world.definitionId,
+      nodeId: "review",
+    });
+
+    expect(JSON.stringify(emptyTool)).toBe(JSON.stringify(emptyRoute));
+    expect(emptyRoute.attempt?.missing?.kind).toBe("never_sent");
+  }, 300_000);
 });

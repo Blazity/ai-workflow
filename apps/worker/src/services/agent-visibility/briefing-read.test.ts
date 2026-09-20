@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { agentBriefingOverviewSchema, readVisibilityRecord } from "@shared/agent-visibility";
 import type { Db } from "../../db/client.js";
 import { eq } from "drizzle-orm";
+import { shortenVisibilityId } from "./visibility-id.js";
 import { agentBriefingTexts, agentBriefings, workflowRuns } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
@@ -311,6 +312,97 @@ describe("the attempts of a run", () => {
     expect(page.unreadable.every((entry) => entry.rows === "briefings")).toBe(true);
     expect(page.unreadable.every((entry) => entry.position < page.items.length)).toBe(true);
   }, 300_000);
+
+  // Red when: a filter is compared in the caller's spelling. A loop around a
+  // long-named node builds a scope id past the contract's bound, capture
+  // shortens it before storing, and the replay's own attempt row keeps the raw
+  // one. Filtering by the id the graph shows then matches nothing in one table
+  // or the other, and an empty list reads as "this block never sent anything".
+  it("finds a long-named node by the id the graph shows, in both tables", async () => {
+    const node = `planning-${"very-long-".repeat(30)}node`;
+    const scope = `root/loop:${node}:7`;
+    expect(node.length).toBeGreaterThan(200);
+    await seedRun(db, { runId: RUN, world, nodes: { [node]: "planning_agent" } });
+    await seedAttempt(db, { runId: RUN, nodeId: node, activationScopeId: scope, state: "completed" });
+    // As the send records it: capture shortens both ids, because the frozen
+    // schemas refuse an id past the bound.
+    await captureBriefing(db, {
+      runId: RUN,
+      nodeId: shortenVisibilityId(node),
+      activationScopeId: shortenVisibilityId(scope),
+    });
+
+    const page = await attemptsOf({
+      runId: RUN,
+      organizationId: VISIBILITY_ORG,
+      nodeId: node,
+      activationScopeId: scope,
+    });
+
+    // ONE entry: the attempt row and the briefing are the same attempt, and a
+    // reader that grouped them by spelling would show two halves instead.
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]!.briefings).toHaveLength(1);
+    expect(page.items[0]!.missing).toBeNull();
+    // Answered in the caller's own spelling, so the list links back to a node
+    // the canvas can highlight.
+    expect(page.items[0]!.nodeId).toBe(node);
+    expect(page.items[0]!.iteration).toEqual({ loopNodeId: node, index: 7 });
+  }, 120_000);
+
+  // Red when: a send that belongs to no graph node reads as a block with no
+  // prompt to be missing, while its briefing is sitting in the same answer.
+  // The repo-memory distill records under `run:repo-memory-distill` with a type
+  // no definition has.
+  it("describes a send that belongs to no block by what it recorded", async () => {
+    await seedRun(db, { runId: RUN, world, nodes: { planning: "planning_agent" } });
+    await captureBriefing(db, {
+      runId: RUN,
+      nodeId: "run:repo-memory-distill",
+      blockType: "repo_memory_distill",
+      kind: "llm",
+    });
+
+    const page = await attemptsOf({ runId: RUN, organizationId: VISIBILITY_ORG });
+    const distill = page.items.find((item) => item.nodeId === "run:repo-memory-distill")!;
+
+    expect(distill.sendsPrompts).toBe(true);
+    expect(distill.briefings).toHaveLength(1);
+    expect(distill.missing).toBeNull();
+  }, 120_000);
+
+  // Red when: a refusal is counted nowhere a person looks. The builder refuses
+  // quietly when a section's parts do not reproduce its text, and without a
+  // count beside the run state that regression is invisible until somebody
+  // opens the one briefing that is missing.
+  it("counts what capture did to this run, beside the run's state", async () => {
+    await seedRun(db, { runId: RUN, world, nodes: { planning: "planning_agent" } });
+    await captureBriefing(db, { runId: RUN, sequence: 1 });
+    await captureBriefing(db, { runId: RUN, sequence: 2 }, { refuse: true });
+    await captureBriefing(db, { runId: RUN, sequence: 3 }, { capture: false });
+
+    const page = await attemptsOf({ runId: RUN, organizationId: VISIBILITY_ORG });
+
+    expect(page.capture).toMatchObject({
+      captured: 1,
+      skipped: 1,
+      disabled: 1,
+      failed: 0,
+      conflict: 0,
+      sends: 3,
+    });
+  }, 120_000);
+
+  // Red when: a run nothing ever recorded for reports zeroes, which a person
+  // reads as "this run sent nothing" rather than "nothing here recorded".
+  it("counts nothing for a run capture never recorded for", async () => {
+    await seedRun(db, { runId: RUN, world, status: "success" });
+
+    const page = await attemptsOf({ runId: RUN, organizationId: VISIBILITY_ORG });
+
+    expect(page.capture).toBeNull();
+    expect(page.state).toBe("predates_capture");
+  });
 
   // Red when: a run with nothing left at all answers an empty list with no
   // word about why, which reads as "this run sent nothing" rather than "this

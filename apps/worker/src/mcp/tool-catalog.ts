@@ -120,6 +120,15 @@ const RUN_ID_MAX_LENGTH = 200;
 // tool-catalog.test.ts asserts each against the package's exported constant,
 // where importing it costs nothing.
 export const VISIBILITY_ID_MAX_LENGTH = 200;
+/**
+ * The bound on an id a caller FILTERS by, which is not the bound on one we
+ * serve. A filter names the node the graph names, and capture shortens an id
+ * past `VISIBILITY_ID_MAX_LENGTH` before it stores one: refusing the raw id
+ * here would refuse the only spelling a caller has, for exactly the long-named
+ * loop node the shortening exists for. Wide enough for a nested scope id, still
+ * bounded so a pathological value never reaches a query.
+ */
+export const VISIBILITY_FILTER_ID_MAX_LENGTH = 2_000;
 export const BRIEFING_SECTION_INDEX_MAX = 199;
 export const BRIEFING_SECTION_BYTES_MAX = 67_108_864;
 export const BRIEFING_PAGE_MAX_BYTES = 524_288;
@@ -862,9 +871,9 @@ export const MCP_TOOL_CATALOG = {
           .optional(),
         /** `attempts` only: narrows to one block, one attempt of it, or one
          *  iteration of a loop body. */
-        nodeId: z.string().trim().min(1).max(VISIBILITY_ID_MAX_LENGTH).optional(),
+        nodeId: z.string().trim().min(1).max(VISIBILITY_FILTER_ID_MAX_LENGTH).optional(),
         attempt: z.number().int().min(1).max(ATTEMPT_ID_MAX).optional(),
-        activationScopeId: z.string().trim().min(1).max(VISIBILITY_ID_MAX_LENGTH).optional(),
+        activationScopeId: z.string().trim().min(1).max(VISIBILITY_FILTER_ID_MAX_LENGTH).optional(),
         /** Every view but `attempts`. */
         briefingId: z.number().int().min(1).max(ATTEMPT_ID_MAX).optional(),
         /** `section`, `parts` and `spans`. */
@@ -876,6 +885,17 @@ export const MCP_TOOL_CATALOG = {
       })
       .strict(),
     annotations: policyFor("runs.briefing").annotations,
+  },
+  "workflows.node_briefing": {
+    description:
+      "What one block of a workflow last put in front of a model, without hunting for the run. Given a definition and a node id, this answers with the newest run of that definition that ran the node, ACROSS VERSIONS: an operator asking what a block sends does not care that the definition was bumped since, so `ranIn.definitionVersion` says which version actually ran and may not be the one being edited. `attempt` is that run's newest attempt of the node in exactly the shape runs.briefing serves, so its `briefings`, its `captureDetail` and its `missing` reason read the same way here. `ranIn.state` answers what no attempt can (`expired`, `replay_gone`, `predates_capture`), and `ranIn.capture` counts what this run's capture did, so \"eleven sends, two refused\" is readable without opening a briefing. Where no run can answer, `absent` says which of the two block-level answers it is: `never_ran`, or `sends_no_prompt` for a block that puts no prompt in front of a model. A node the definition no longer has is still answered from the runs, with `blockType` null, because the history is real; a node neither the definition nor any run has reads as `never_ran`. To read the text itself, take `ranIn.runId` and the briefingId from `attempt.briefings` into runs.briefing.",
+    inputSchema: z
+      .object({
+        definitionId: z.number().int().min(1).max(ATTEMPT_ID_MAX),
+        nodeId: z.string().trim().min(1).max(VISIBILITY_FILTER_ID_MAX_LENGTH),
+      })
+      .strict(),
+    annotations: policyFor("workflows.node_briefing").annotations,
   },
 } satisfies Record<McpToolName, McpToolDefinition>;
 

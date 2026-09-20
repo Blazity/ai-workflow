@@ -593,6 +593,85 @@ export async function readRunVisibilityFacts(
 
 /** Who may read each of these runs, for a read whose subject is not a run but
  *  whose rows were written by one. Same column the replay is scoped by. */
+/** The newest run of one definition that left a trace of one node, whichever
+ *  table left it. */
+export interface NodeLastRunRow {
+  runId: string;
+  definitionVersion: number | null;
+  /** The run's replay audience, which is what decides who may read it. Null
+   *  where the run recorded none. */
+  organizationId: string | null;
+  at: Date;
+}
+
+/**
+ * Which run last ran this node, over every version of the definition.
+ *
+ * TWO SPELLINGS, ON PURPOSE. Capture shortens an id past the contract's bound
+ * before storing a briefing, while the replay's attempt rows keep the raw one,
+ * so the caller's id is carried to each table in that table's spelling. A run
+ * of ANOTHER organization is not a candidate at all; one that recorded no
+ * organization still is, so the reader can refuse out loud instead of
+ * answering "this node has never run".
+ */
+export async function readNodeLastRunRow(
+  db: Db,
+  input: {
+    definitionId: number;
+    /** The node as the graph spells it, for the attempt rows. */
+    nodeId: string;
+    /** The node as capture stores it, for the briefing rows. */
+    storedNodeId: string;
+    organizationId: string;
+  },
+): Promise<NodeLastRunRow | null> {
+  const result = await db.execute(sql`
+    WITH candidates AS (
+      SELECT stored.run_id, stored.captured_at AS at
+      FROM agent_briefings stored
+      JOIN workflow_runs run ON run.run_id = stored.run_id
+      WHERE run.definition_id = ${input.definitionId}
+        AND stored.node_id = ${input.storedNodeId}
+        AND (run.replay_organization_id IS NULL OR run.replay_organization_id = ${input.organizationId})
+      UNION ALL
+      SELECT tried.run_id, tried.started_at AS at
+      FROM workflow_block_attempts tried
+      JOIN workflow_runs run ON run.run_id = tried.run_id
+      WHERE run.definition_id = ${input.definitionId}
+        AND tried.node_id = ${input.nodeId}
+        AND (run.replay_organization_id IS NULL OR run.replay_organization_id = ${input.organizationId})
+    )
+    SELECT
+      candidate.run_id,
+      run.definition_version,
+      run.replay_organization_id,
+      candidate.at
+    FROM candidates candidate
+    JOIN workflow_runs run ON run.run_id = candidate.run_id
+    ORDER BY candidate.at DESC, candidate.run_id DESC
+    LIMIT 1
+  `);
+  const [row] = rawRows<{
+    run_id: string;
+    definition_version: number | null;
+    replay_organization_id: string | null;
+    at: string | Date;
+  }>(result);
+  if (!row) return null;
+  return {
+    runId: row.run_id,
+    definitionVersion: row.definition_version,
+    organizationId: row.replay_organization_id,
+    at: new Date(row.at),
+  };
+}
+
+export function readConnectedNodeLastRunRow(
+  input: Parameters<typeof readNodeLastRunRow>[1],
+): Promise<NodeLastRunRow | null> {
+  return readNodeLastRunRow(getDb(), input);
+}
+
 export async function readRunReadAudiences(
   db: Db,
   runIds: readonly string[],

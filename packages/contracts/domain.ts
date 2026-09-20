@@ -933,5 +933,6 @@ export const FIRST_SLICE_TOOLS = [
   // nothing; this is the read of it, and it has to exist here as well as in the
   // dashboard or debugging a run would mean leaving the terminal.
   "runs.briefing",
+  "workflows.node_briefing",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
