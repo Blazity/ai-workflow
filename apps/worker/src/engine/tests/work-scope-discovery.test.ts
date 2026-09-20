@@ -745,7 +745,7 @@ describe("a discovery question about repositories the model was unsure of", () =
     ]);
   });
 
-  it("leaves the run context empty for the next question, when that one names nothing", () => {
+  it("carries no candidate into the next question, when that one names nothing", () => {
     // The candidates are the first list on this path long enough for the leak to
     // matter, and the question after them is the one that names nothing: a
     // person answering "yes" to it would settle a selection among repositories
@@ -775,8 +775,10 @@ describe("a discovery question about repositories the model was unsure of", () =
     ]);
 
     // The model asking for clarification itself is the question that names no
-    // repository: it is about the model's behaviour, and there is nothing an
-    // answer to it could be recorded against.
+    // CANDIDATE. It still asks which repository this work is about, so it
+    // carries an ask that lists nothing: a person's full path in the reply is
+    // read and recorded, and none of the previous question's candidates comes
+    // with it.
     raiseThrough({
       status: "clarification_needed",
       confidence: null,
@@ -784,7 +786,55 @@ describe("a discovery question about repositories the model was unsure of", () =
       questions: null,
       error: null,
     });
-    expect(ctx.workScopeAsk).toBeUndefined();
+    expect(ctx.workScopeAsk).toEqual({ subjectKey: SUBJECT, askedRepositories: [] });
+  });
+
+  /**
+   * Production, AWP-263 on 2026-09-20. Discovery asked "Which repository
+   * contains the pricing helper to tidy?" in its own words, the person answered
+   * `github:blazity/ai-workflow-demo`, and nothing at all happened: no entry, no
+   * trail row, and no sentence telling them so. The next question offered that
+   * same repository as a fresh candidate.
+   *
+   * The ask carries no candidate and never should: nobody was shown a name. What
+   * it has to carry is the SUBJECT, because an absent ask and an empty one are
+   * read as two different things by the answer path, and only the empty one is
+   * read as a repository question at all.
+   */
+  it("records a question with no candidate against the subject, so its answer is kept", () => {
+    const { ask } = discover({
+      scope: scopeOf(),
+      raw: {
+        status: "clarification_needed",
+        confidence: null,
+        repositories: null,
+        questions: ["Which repository contains the pricing helper to tidy?"],
+        error: null,
+      },
+    });
+
+    expect(ask).toEqual({ subjectKey: SUBJECT, askedRepositories: [] });
+  });
+
+  /** And the one ask that is genuinely absent: a run that froze no record has
+   *  nowhere to put an answer, so the question carries nothing. */
+  it("carries no ask at all when the run froze no record", () => {
+    const ctx = makeCtx({});
+    const { decision } = decide({ ctx, scope: scopeOf(), raw: {
+      status: "clarification_needed",
+      confidence: null,
+      repositories: null,
+      questions: ["Which repository contains the pricing helper to tidy?"],
+      error: null,
+    } });
+    if (decision.kind !== "clarification_needed") {
+      throw new Error(`discovery decided ${decision.kind}, not a question`);
+    }
+
+    expect(
+      repositoryDiscoveryQuestion({ decision, subjectKey: null, recorded: [], catalog: CATALOG })
+        .ask,
+    ).toBeNull();
   });
 });
 
@@ -1779,11 +1829,19 @@ describe("the answer to the excluded question settles it", () => {
  * that compared an answer against the question AS STORED would fire on no real
  * channel at all. These go through the real comment builder for that reason.
  *
- * `github:acme/app` is in the catalog these tests read against ON PURPOSE. Our
- * own copy names it as the example of a provider-scoped path, so a deployment
- * that happens to hold a repository by that name is the case where nothing but
- * `withoutQuotedQuestions` stands between a quote of our question and a
- * selection recorded in that person's name for a repository nobody proposed.
+ * `github:acme/app` is in the catalog these tests read against ON PURPOSE, and
+ * the question below names it as the example of a provider-scoped path: a
+ * deployment that happens to hold a repository by that name is the case where
+ * nothing but `withoutQuotedQuestions` stands between a quote of our question
+ * and a selection recorded in that person's name for a repository nobody
+ * proposed.
+ *
+ * THE CANDIDATE QUESTION NO LONGER CARRIES THAT EXAMPLE (AWP-263: it invited a
+ * path the reader does not take, so it now teaches the reply the reader does
+ * take). The fixture keeps the older shape deliberately, because it is the
+ * harder input: a question carrying a catalog key it never proposed. The
+ * stripper has to hold for any question that ever named one, and our copy
+ * elsewhere still uses that example.
  */
 describe("the answer to the unsure question settles it", () => {
   const QUESTION =

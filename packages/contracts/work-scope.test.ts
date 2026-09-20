@@ -21,6 +21,7 @@ import {
   workScopeEntrySchema,
   workScopeOriginRank,
   workScopeSchema,
+  workScopeSubjectKeySchema,
   workScopeTrailRowSchema,
   workScopeWritePlanSchema,
 } from "@shared/contracts";
@@ -611,8 +612,12 @@ describe("work scope edit request", () => {
     repositoryKey: `github:blazity/repository-${index}`,
     action: "select",
   });
+  // A subject key as `engine/support/subject-key.ts` writes one. This fixture
+  // used to send the bare ticket key, which no surface can resolve: the schema
+  // took it, the read answered `carriesRecord: false` with an empty record, and
+  // the caller could not tell that from a subject kind that keeps none.
   const request = (changes: unknown[], expectedVersion = 0) => ({
-    subjectKey: "AWP-176",
+    subjectKey: "ticket:jira:AWP-176",
     expectedVersion,
     changes,
   });
@@ -651,6 +656,49 @@ describe("work scope edit request", () => {
 
   it("refuses a negative expected version", () => {
     expect(workScopeEditRequestSchema.safeParse(request([change(1)], -1)).success).toBe(false);
+  });
+});
+
+/**
+ * A MISTYPED KEY IS TOLD, RATHER THAN ANSWERED WITH A CONFIDENT EMPTY RECORD.
+ *
+ * Production, 2026-09-20: a caller read `AWP-261` instead of
+ * `ticket:jira:AWP-261` and got `carriesRecord: false` with no entries, which is
+ * exactly what a subject kind that legitimately keeps no record answers. The
+ * ticket's record held four decisions at the time, and the read was one step
+ * from being reported as a lost record.
+ *
+ * The refusal is in the schema rather than in a route, so every surface that
+ * takes a subject key refuses the same keys: the read, the rounds pages and the
+ * edit cannot disagree about what a key even is.
+ */
+describe("work scope subject key", () => {
+  it("accepts a key of every subject kind this deployment writes", () => {
+    for (const key of [
+      "ticket:jira:AWP-261",
+      "pr:github:acme/app#7",
+      "webhook:endpoint-1:subject-9",
+      "schedule:sched-1:1758000000000",
+      "repo:github:acme/app",
+      "org:github:acme",
+    ]) {
+      expect(workScopeSubjectKeySchema.safeParse(key).success).toBe(true);
+    }
+  });
+
+  it("refuses a key that names no subject kind, and says which kinds there are", () => {
+    const refused = workScopeSubjectKeySchema.safeParse("AWP-261");
+
+    expect(refused.success).toBe(false);
+    // The message has to name the kinds, because the caller's mistake is not
+    // knowing them. "subjectKey is required" about a key they plainly sent is
+    // the sentence this replaces.
+    const message = refused.success === false ? refused.error.issues[0].message : "";
+    expect(message.includes("ticket:") && message.includes("pr:")).toBe(true);
+  });
+
+  it("refuses a bare pull request path, which is the other shape people write", () => {
+    expect(workScopeSubjectKeySchema.safeParse("acme/app#7").success).toBe(false);
   });
 });
 

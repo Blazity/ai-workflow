@@ -956,9 +956,15 @@ async function deliverAnswer(
   // reply and get no ticket comment (C11s), so each person is told once, where
   // they answered. Not on a resume retry, which is the same answer arriving
   // again rather than a second decision.
+  //
+  // WITH THE QUESTION'S OWN ASKS, because what a decline does to the record
+  // depends on why each repository was in front of this person, and only this
+  // row still holds that: a which-of-these decline writes no entry (A7) and a
+  // decline of a repository the catalog or the policy held back writes one
+  // (A7b). The sentence used to claim the entry for both.
   const declinedSentence =
     recorded.declined && recorded.declined.length > 0
-      ? formatAnswerDeclinedComment(recorded.declined)
+      ? formatAnswerDeclinedComment(recorded.declined, row.askedRepositories ?? [])
       : undefined;
   // AND WHAT AN ANSWER THAT NAMED SOMETHING LEFT OUT, which binds the same way
   // and told nobody. It goes back on the answer's own reply only: on the ticket

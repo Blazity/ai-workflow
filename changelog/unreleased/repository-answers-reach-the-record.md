@@ -1,0 +1,3 @@
+- A repository question that proposes no candidate now keeps the repository path you answer with: it lands in the work's repository record and on its Decision Trail, and the next run starts from it.
+- A question that proposes candidates asks for the reply it reads back, "yes" or "no" under a single candidate and the names or "none of these" under a list, and says that naming a repository it does not list decides nothing. After a decline it tells you where that decision is kept: on this work's Decision Trail, or in its repository record where an entry is written.
+- The work scope API and the `work_scope.get` tool say when a subject key names no subject kind, so a mistyped key reads differently from a subject that keeps no record.
