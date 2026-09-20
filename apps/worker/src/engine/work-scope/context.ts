@@ -765,7 +765,14 @@ export function unnamedRecoveryNotes(
   unnamedKeys: readonly RepositoryKey[],
   commentPathIsTaken: boolean,
 ): string[] {
-  const [first] = unnamedKeys;
+  // THE EXAMPLE IS THE LOWEST KEY, NOT THE FIRST ONE HANDED IN. Callers arrive
+  // with whatever order the thing that refused happened to use: a model's
+  // request order, a discovery proposal, the record's own list. Reading
+  // `unnamedKeys[0]` made this sentence a function of that order rather than of
+  // the work, so two runs on one record, refused in a different order, showed a
+  // different repository as the example. It is a fact about the subject; it
+  // reads the same every time.
+  const [first] = [...unnamedKeys].sort();
   if (first === undefined) return [];
   return [
     commentPathIsTaken
@@ -794,8 +801,14 @@ function catalogCannotServeNote(keys: readonly RepositoryKey[]): string {
 /** The third fact, and the same shape as the second. A definition pin is a
  *  capability bound nothing is exempt from, a person's own selection included,
  *  so a repository outside it comes back to the list and is refused again for a
- *  different reason. */
-function outsidePinNote(keys: readonly RepositoryKey[]): string {
+ *  different reason.
+ *
+ *  Exported for the expansion loop's own account of what it could not use
+ *  (`repository-discovery/runner.ts`), which owes a person this same sentence
+ *  about the same bound. A second spelling there was already drifting in the
+ *  one way that matters: it did not say that changing the repository list is
+ *  the thing that will not help. */
+export function outsidePinNote(keys: readonly RepositoryKey[]): string {
   return `The workflow that runs this work is limited to a fixed set of repositories, which does not include ${keys.join(", ")}, so changing the list brings ${keys.length === 1 ? "that repository" : "those repositories"} back only once that limit changes.`;
 }
 

@@ -850,10 +850,34 @@ describe("the model asks its own question after an answer left every repository 
         " so it has no repository to work on." +
         " Leaving a repository out of an answer is not final: this work's repository list can be" +
         " changed through the work scope API or the work_scope.edit tool, or the repository's full" +
-        " path can be written in a ticket comment, as github:acme/web, and the next run reads both.",
+        // The example is the lowest key, not the first one the refusal handed
+        // in. The sentences above keep the order the run refused in, because
+        // that is what happened; the lever below is a fact about the subject.
+        " path can be written in a ticket comment, as github:acme/api, and the next run reads both.",
       blame: "work_scope",
     });
     expect(consumeWorkScopeAsk(ctx)).toBeUndefined();
+  });
+
+  it("offers the same example repository however the refusal ordered them", () => {
+    // It used to read `unnamedKeys[0]`, so one work refused in two different
+    // orders (a model's request order here, the record's own list elsewhere)
+    // told a person to write two different paths in a comment.
+    const wayBack = (answeredRepositoryKeys: string[]) => {
+      const { decision } = decide({
+        scope: scopeOf(),
+        selectionAnswered: true,
+        answeredRepositoryKeys,
+        raw: MODEL_ASKS,
+      });
+      if (decision.kind !== "failed") throw new Error(`discovery decided ${decision.kind}`);
+      return decision.error.slice(decision.error.lastIndexOf("Leaving a repository"));
+    };
+
+    expect(wayBack(["github:acme/web", "github:acme/api"])).toContain("as github:acme/api,");
+    expect(wayBack(["github:acme/api", "github:acme/web"])).toBe(
+      wayBack(["github:acme/web", "github:acme/api"]),
+    );
   });
 
   it("stops the same way when the model proposes nothing instead of asking", () => {
@@ -1055,7 +1079,11 @@ describe("a subject whose selection question has already been answered", () => {
       "the expansion path computes the recovery sentence and throws it away again",
     ).toBe(true);
     expect(
-      workflow.split("repositoryRecoveryNotes,").length - 1,
+      // Anchored on the analysis report's own shape rather than on a bare
+      // count: the expansion loop reads these notes elsewhere too now (the
+      // plan's account of the repositories it could not use), and a count
+      // would go green on the wrong line.
+      workflow.match(/leftOutRepositories,\s*repositoryRecoveryNotes,/g)?.length ?? 0,
       "a research analysis report is built without the sentence saying what to do about it",
     ).toBe(2);
   });

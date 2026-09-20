@@ -418,6 +418,22 @@ export function foldResearchOutput(o: ResearchOutput): ResearchResult {
       status: "repositories_needed",
       body: (o.plan ?? "").trim(),
       repositories: o.repositories ?? [],
+      // WHAT IT SAID IT WOULD CHANGE, CARRIED. Dropping it was free while a
+      // request for another repository always led to another research pass: the
+      // pass that finally said "completed" declared its own writes. It stopped
+      // being free when the planning loop began taking the plan from a pass
+      // that asked, because then this is the only pass that ever names them,
+      // and a plan with no declared write reaches implementation as "research
+      // declared no repository changes; nothing to implement, replan required".
+      // That sentence is true of the fields and false about the run, whose real
+      // trouble is repositories somebody did not allow it.
+      //
+      // Carried, never trusted: the engine keeps only the repositories the
+      // workspace actually holds, because a declared write to a repository this
+      // run refused would send implementation at a checkout that is not there.
+      ...((o.writeRepositories ?? []).length > 0
+        ? { writeRepositories: o.writeRepositories ?? [] }
+        : {}),
     };
   }
   if (o.status === "clarification_needed") {

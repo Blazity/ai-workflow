@@ -197,6 +197,11 @@ const GOLDENS: Record<string, () => Promise<Golden>> = {
           priorRequests: GOLDEN_RESEARCH_LOOP.priorRequests,
           refusals: GOLDEN_RESEARCH_LOOP.refusals,
           expansionClosed: true,
+          // The real shape of this pass. Expansion closes on a refusal that
+          // went through the loop's one corrective restart, so a run that has
+          // closed expansion has always spent it: a golden with the refusals
+          // and without this note would be a prompt no run produces.
+          lastExpansionPass: true,
         },
       }),
     }),

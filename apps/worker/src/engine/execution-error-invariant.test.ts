@@ -16,6 +16,7 @@ import {
 } from "@shared/workflow-graph";
 import { sanitizeDetail, sanitizeFailureMessage } from "@shared/workflow-graph";
 import { validateRepositoryDiscoveryResult } from "./repository-discovery/protocol.js";
+import { missingRepositoriesFailure } from "./repository-discovery/runner.js";
 
 /**
  * AIW-254's headline acceptance criterion, as an executable invariant:
@@ -580,6 +581,39 @@ describe("every authored work-scope refusal reaches the person whole", () => {
     expect(text).toContain(`${"A".repeat(57)}...`);
     // And the sizing claim survives the worst label anybody could store.
     expect(text.length).toBeLessThanOrEqual(909);
+  });
+
+  it("keeps the planning loop's own refusal inside the bound too", () => {
+    // The fourth builder, added when the planning loop stopped dying on a
+    // repository it could not have and started saying why. Same ceiling: three
+    // repositories (what one request may name), 70-character keys, and the
+    // longest mix of levers it can owe. It is bounded by construction rather
+    // than measured, so what this pins is that the construction really holds
+    // and that no surface has to clamp the result.
+    const reasons = ["excluded", "outside_catalog", "unusable"] as const;
+    const text = missingRepositoriesFailure(
+      KEYS.map((repositoryKey, index) => ({
+        repositoryKey,
+        reason: reasons[index]!,
+        sentence: `${repositoryKey} was excluded on this work by ${ACTOR.actorLabel} on 2026-09-18, so it is not attached.`,
+      })),
+      [
+        "Excluding a repository is not final: this work's repository list can be changed through the work scope API or the work_scope.edit tool, and the next run starts from the changed list.",
+        `The catalog cannot serve ${KEYS[0]} at the moment, so changing the list brings that repository back only once the catalog can.`,
+      ],
+    );
+    const out = formatExecutionErrorForUser(
+      createWorkflowExecutionErrorState(
+        RUN_ID,
+        "planning",
+        1,
+        executionError(text, { category: "engine", message: text }).error,
+      ),
+    );
+    expect(out, `the planning refusal was elided: ${out}`).not.toContain("[...]");
+    expect(out).toBe(`${text} Diagnostic ID: AIW-DIAG-${RUN_ID}-planning-1`);
+    for (const key of KEYS) expect(out).toContain(key);
+    expect(sanitizeFailureMessage(out)).toBe(out);
   });
 
   it("keeps the longest of them inside the bound with room to spare", () => {
