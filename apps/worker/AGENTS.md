@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-17
+Last-verified: 2026-09-20
 
 # apps/worker
 
@@ -46,6 +46,12 @@ service-cluster contracts. Runtime entrypoints are under `src/engine`, domain
 code under `src/services`, the Nitro app surface under `src/routes` and
 `src/mcp`, runtime environment and provider configuration under `src/infra`.
 
+What one send gave a model is split by tier: `src/engine/agent-visibility/`
+captures it from inside the send step, `src/run-observability/agent-briefings.ts`
+writes it (the engine may not import a service), `src/services/agent-visibility/`
+serves it. `src/repository-map/` renders the repository map, and both
+`src/engine` and `src/sandbox` import it.
+
 What a definition is and whether it is valid lives in
 `@shared/workflow-graph`. The worker keeps the block registry, the ajv-backed
 JSON Schema helpers, deployment validation, stored-definition reads, models,
@@ -60,8 +66,9 @@ The worker's traps live in `.claude/rules/`, loaded when a matching file is
 read: `worker-settings` (snapshots, what a run may read),
 `worker-repository-catalog`, `worker-database`, `workflow-steps`,
 `workflow-graph`, `zod-bundle`, `worker-mcp`, `worker-observability`,
-`adapters`, `sandbox-agents`, `arthur-engine`, `e2e-tests`. The production
-gotchas that bind every edit are in the root router.
+`agent-visibility`, `adapters`, `sandbox-agents`, `arthur-engine`,
+`e2e-tests`. The production gotchas that bind every edit are in the root
+router.
 
 ## Where to read next
 

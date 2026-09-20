@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-17
+Last-verified: 2026-09-20
 
 # AGENTS.md
 
@@ -28,7 +28,6 @@ to `docs/archive/agent-notes/`; size ceilings: `.claude/context-budget.tsv`.
 | Why the code is shaped this way | [docs/adr/README.md](docs/adr/README.md) |
 | Tiers, allowed imports, which package owns what | [docs/adr/ADR-001-layering-and-packages.md](docs/adr/ADR-001-layering-and-packages.md) |
 | Gates, CI, what may be required and what may be bypassed | [docs/adr/ADR-004-gates-and-required-ci.md](docs/adr/ADR-004-gates-and-required-ci.md) |
-| The delivered restructure, its freezes and the step drain | [docs/plans/2026-09-09-architecture-restructure.md](docs/plans/2026-09-09-architecture-restructure.md) |
 | Environment variables, accounts, deployment, webhooks | [SETUP.md](SETUP.md) |
 | What the product does and what is planned | [README.md](README.md), [docs/product/roadmap-2026-08-27.md](docs/product/roadmap-2026-08-27.md) |
 | The worker: how to run it, its directories | [apps/worker/AGENTS.md](apps/worker/AGENTS.md) |
@@ -48,7 +47,7 @@ it on a matching read, other agents open it themselves.
 | `worker-settings`, `worker-repository-catalog` | settings snapshots and what a run may read; catalog access and dispatch |
 | `worker-database`, `workflow-steps` | migrations, Drizzle, auth invariants; `"use step"` files and their fixtures |
 | `workflow-graph`, `zod-bundle`, `contracts-requests` | the graph package and the worker's definition half; schemas the bundle runs; request bodies |
-| `worker-mcp`, `worker-observability` | the MCP server; logging, telemetry, the runs API |
+| `worker-mcp`, `worker-observability`, `agent-visibility` | the MCP server; logging, telemetry, the runs API; what a send gave a model |
 | `adapters`, `sandbox-agents`, `arthur-engine`, `e2e-tests` | Jira, VCS and chat adapters; sandboxed coding agents; the Arthur client; end-to-end suites |
 | `dashboard-ui`, `dashboard-settings`, `dashboard-repositories` | the dashboard |
 

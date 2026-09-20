@@ -1,17 +1,17 @@
 Status: current
-Last-verified: 2026-09-11
+Last-verified: 2026-09-20
 
 # Worker data model
 
-The stable `db/schema.ts` barrel exposes 62 `pgTable` declarations. Production
+The stable `db/schema.ts` barrel exposes 75 `pgTable` declarations. Production
 worker source has zero executable `.transaction(` calls; tests and test support
 are excluded from that production-only check.
 
-Of those declarations, 45 live in the 13 domain modules under `db/schema/`.
+Of those declarations, 58 live in the 18 domain modules under `db/schema/`.
 The other 17 remain in five pre-existing single-purpose files beside the
 barrel: `auth-schema.ts` has 13, while `approvals-schema.ts`,
 `clarifications-schema.ts`, `email-delivery-schema.ts`, and `memory-schema.ts`
-have one each. The barrel re-exports all 18 modules. Mutually dependent tables
+have one each. The barrel re-exports all 23 modules. Mutually dependent tables
 share a module, and cross-domain foreign keys import their owning module
 directly so initialization order remains explicit.
 
@@ -79,3 +79,16 @@ directly so initialization order remains explicit.
 | clarificationRequests | clarification_requests | clarifications | clarifications repository | clarification services |
 | inviteEmailDelivery | invite_email_delivery | auth | auth repository | invite services |
 | agentMemoryDocuments | agent_memory_documents | memory | residual | memory engine |
+| settings | settings | settings | settings repository | settings services, run start |
+| settingsVersions | settings_versions | settings | settings repository | settings services |
+| repositories | repositories | repositories | repository-catalog repository | repository catalog services |
+| repositoryProfileVersions | repository_profile_versions | repositories | repository-catalog repository | repository catalog services |
+| repositoryCatalogState | repository_catalog_state | repositories | repository-catalog repository | repository catalog services |
+| repositorySuggestions | repository_suggestions | repository-suggestions | repository-suggestions repository | repository catalog services |
+| workScopes | work_scopes | work-scopes | work-scope repository | work scope services, engine |
+| workScopeEntries | work_scope_entries | work-scopes | work-scope repository | work scope services, engine |
+| workScopeTrail | work_scope_trail | work-scopes | work-scope repository | work scope services, engine |
+| agentBriefings | agent_briefings | agent-visibility | agent-visibility repository | run observability, agent visibility services |
+| agentBriefingTexts | agent_briefing_texts | agent-visibility | agent-visibility repository | run observability, agent visibility services |
+| agentBriefingRuns | agent_briefing_runs | agent-visibility | agent-visibility repository | run observability, agent visibility services |
+| clarificationAnswerDeliveries | clarification_answer_deliveries | agent-visibility | agent-visibility repository | clarification services |
