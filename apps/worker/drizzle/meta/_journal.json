@@ -498,6 +498,13 @@
       "when": 1789828240264,
       "tag": "0070_agent_visibility",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1789864099585,
+      "tag": "0071_work_scope_related_repository_origin",
+      "breakpoints": true
     }
   ]
 }

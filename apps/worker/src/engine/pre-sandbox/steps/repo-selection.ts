@@ -602,6 +602,11 @@ const selectRepositoriesForRun = async (
       chosen,
       recorder: carrier.recorder,
       facts: mapCatalog.facts,
+      // Both halves the sweep reads: the catalog relationships this run
+      // actually loaded, and a ticket this run actually read. A failed catalog
+      // read looks like an operator deleting every relationship, and neither
+      // may take a repository off somebody's record.
+      evidenceReadable: !mapCatalog.catalogUnreadable && carrier.recorder?.ticketText != null,
       // The repositories the ticket's own words name, as the one scan this step
       // made read them, so what the map calls named and what this takes a
       // neighbour of are the same set.

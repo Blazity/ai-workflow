@@ -206,27 +206,73 @@ export function takeRelatedRepositories(input: {
   chosen: SelectedRepository[];
   recorder: RunWorkScopeRecorder | null;
   facts: readonly RepositoryMapFacts[];
-  
+  /**
+   * Whether this run actually READ the two things the sweep below decides on:
+   * the catalog relationships, and the ticket's own words.
+   *
+   * A failed catalog read looks exactly like an operator deleting every
+   * relationship, and a path that read no ticket looks exactly like a ticket
+   * that names nothing. Acting on either would take repositories off the
+   * record on the strength of evidence this run never saw, so the caller says
+   * whether it saw it rather than letting an empty array speak for it.
+   */
+  evidenceReadable: boolean;
   /** The repositories the ticket's or the event's own text names. */
   seedKeys: readonly string[];
   repositoriesByKey: Map<string, RepositoryMetadata>;
 }): {
   chosen: SelectedRepository[];
   relatedAttachments: NonNullable<PreSandboxRepositoryMap["relatedAttachments"]>;
+  /** Repositories a previous run took because of a relationship the operator
+   *  has since deleted. Removed from the record, and taken back out of this
+   *  run's workspace. */
+  droppedKeys: string[];
 } {
-  const empty = { chosen: input.chosen, relatedAttachments: [] };
-  if (!input.recorder || input.seedKeys.length === 0) return empty;
+  const empty = { chosen: input.chosen, relatedAttachments: [], droppedKeys: [] };
+  if (!input.recorder || !input.evidenceReadable) return empty;
   const held = new Set(input.chosen.map(repositoryKey));
-  const candidates = relatedRepositoryKeys(input.facts, input.seedKeys).filter(
+  // THE EVIDENCE, whether or not this run acts on it: every repository the
+  // catalog relates to one this work names, plus the named ones themselves. An
+  // entry of this origin outside it is one whose reason has gone away.
+  const neighbourhood = relatedRepositoryKeys(input.facts, input.seedKeys);
+  const stillNamedKeys = [...new Set([...neighbourhood, ...input.seedKeys])];
+  const offered = neighbourhood.filter(
     (key) => !held.has(key) && input.repositoriesByKey.has(key),
   );
-  // Deliberately not `.slice(0, RELATED_ATTACH_MAX)`: the first two of a
-  // hundred and fifty is a coin toss dressed as a decision.
-  if (candidates.length === 0 || candidates.length > RELATED_ATTACH_MAX) return empty;
-  if (input.chosen.length + candidates.length > WORKSPACE_NARROWING_CEILING) return empty;
+  // WHAT THIS RUN TAKES. Deliberately not `.slice(0, RELATED_ATTACH_MAX)`: the
+  // first two of a hundred and fifty is a coin toss dressed as a decision. A
+  // neighbourhood it declines is still evidence, which is why the sweep reads
+  // `stillNamedKeys` and not this.
+  const candidates =
+    offered.length > 0 &&
+    offered.length <= RELATED_ATTACH_MAX &&
+    input.chosen.length + offered.length <= WORKSPACE_NARROWING_CEILING
+      ? offered
+      : [];
   const via = relationshipsIntoNeighbourhood(input.facts, input.seedKeys);
   const chosen = [...input.chosen];
   const relatedAttachments: NonNullable<PreSandboxRepositoryMap["relatedAttachments"]> = [];
+  const droppedKeys = new Set<string>();
+  /** One decision, and the entries it swept. Called for every candidate, and
+   *  once with no candidate at all, so a run that takes nothing still tells
+   *  the record what the catalog no longer relates. */
+  const decide = (key: string | null, rationale: string) => {
+    const decision = input.recorder!.decide({
+      kind: "derived",
+      // ITS OWN ORIGIN, so the Decision Trail sends a person to the catalog
+      // relationship that decided this and not to a trigger that says nothing
+      // about relationships. It is also what makes the re-derivation safe:
+      // only entries this origin wrote are checked back against the catalog,
+      // so nothing decided another way is re-examined against a catalog it did
+      // not come from.
+      origin: "related_repository",
+      repositoryKeys: key === null ? [] : [key],
+      stillNamedKeys,
+      rationale,
+    });
+    for (const deletion of decision.plan.deletes) droppedKeys.add(deletion.repositoryKey);
+    return decision;
+  };
   for (const key of candidates) {
     const source = via.get(key);
     const repository = input.repositoriesByKey.get(key);
@@ -238,19 +284,7 @@ export function takeRelatedRepositories(input: {
       0,
       RELATED_ENTRY_RATIONALE_MAX_LENGTH,
     );
-    const decision = input.recorder.decide({
-      kind: "derived",
-      // NOT an origin of its own, and that is a compromise recorded rather than
-      // hidden: the four derived origins are frozen in the contract AND in a
-      // database CHECK constraint (`work_scope_entries_origin_check`), so a
-      // fifth one needs a migration. `trigger_policy` is the honest one of the
-      // four: on a ticket trigger every usable repository IS a candidate of the
-      // policy, and this rule is what picked this repository out of them. The
-      // rationale above carries the precision the origin cannot.
-      origin: "trigger_policy",
-      repositoryKeys: [key],
-      rationale,
-    });
+    const decision = decide(key, rationale);
     if (decision.attach.length === 0) continue;
     chosen.push(selectedRepository(repository, rationale));
     relatedAttachments.push({
@@ -259,5 +293,24 @@ export function takeRelatedRepositories(input: {
       relationship: source.relationship,
     });
   }
-  return { chosen, relatedAttachments };
+  // THE SWEEP STILL HAPPENS WHEN NOTHING IS TAKEN, which is the case that
+  // matters: the operator deleted the relationship, so there is no candidate
+  // to carry the event, and without this call the entry that relationship
+  // wrote would re-attach the repository on every run from now on.
+  if (candidates.length === 0) decide(null, NO_RELATIONSHIP_RATIONALE);
+  return {
+    // Off the record AND out of this run's workspace. Leaving it checked out
+    // for one more run would have the agent working in a repository the
+    // trail has just said we took away.
+    chosen: chosen.filter((repository) => !droppedKeys.has(repositoryKey(repository))),
+    relatedAttachments: relatedAttachments.filter(
+      (attachment) => !droppedKeys.has(attachment.repositoryKey),
+    ),
+    droppedKeys: [...droppedKeys],
+  };
 }
+
+/** The rationale of an event that attaches nothing. It writes no entry, so
+ *  nobody reads it; the contract wants a string and this says what happened. */
+const NO_RELATIONSHIP_RATIONALE =
+  "The catalog relates no further repository to what this work names.";

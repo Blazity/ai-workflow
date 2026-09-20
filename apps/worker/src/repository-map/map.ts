@@ -1057,6 +1057,8 @@ const ORIGIN_SENTENCES: Record<string, string> = {
   workflow_owned_branch: "this work's own branch already exists in it.",
   ticket_text: "the ticket names it.",
   trigger_policy: "the trigger that started this work takes it in.",
+  related_repository:
+    "the repository catalog relates it to a repository this work names, so an earlier decision on this work took it in.",
   inferred: "an earlier run on this work worked out that it belongs here.",
 };
 
@@ -1245,6 +1247,9 @@ function causeOf(input: {
   if (origin === "delegated") return { cause: "chosen_by_workflow" };
   if (origin === "ticket_text") return { cause: "named" };
   const via = input.via.get(input.key);
+  // The origin says it outright, so the cause holds even where this run can no
+  // longer name the relationship that brought it in.
+  if (origin === "related_repository") return via ? { cause: "related", via } : { cause: "related" };
   if (origin === "trigger_policy" && via) return { cause: "related", via };
   if (input.named.has(input.key)) return { cause: "named" };
   if (input.eventRepositories.has(input.key)) return { cause: "event_repository" };

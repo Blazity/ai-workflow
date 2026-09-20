@@ -1,0 +1,2 @@
+ALTER TABLE "work_scope_entries" DROP CONSTRAINT "work_scope_entries_origin_check";--> statement-breakpoint
+ALTER TABLE "work_scope_entries" ADD CONSTRAINT "work_scope_entries_origin_check" CHECK ("work_scope_entries"."origin" in ('person', 'delegated', 'workflow_owned_branch', 'ticket_text', 'trigger_policy', 'related_repository', 'inferred'));

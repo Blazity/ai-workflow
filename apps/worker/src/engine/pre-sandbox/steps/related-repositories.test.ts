@@ -93,6 +93,7 @@ describe("takeRelatedRepositories", () => {
   it("takes the neighbour of a repository the ticket names, and says which relationship brought it", () => {
     const taken = takeRelatedRepositories({
       chosen,
+      evidenceReadable: true,
       recorder: recorder(),
       facts: FACTS,
       seedKeys: [API],
@@ -108,9 +109,125 @@ describe("takeRelatedRepositories", () => {
     );
   });
 
+  it("records the catalog relationship as the origin, not the trigger policy", () => {
+    // A person reading the Decision Trail and then opening the trigger used to
+    // find nothing about relationships at all, because the entry said
+    // `trigger_policy` while the truth sat in free text beside it. The origin
+    // is what tells them where to go and undo it.
+    const recorder_ = recorder();
+    takeRelatedRepositories({
+      chosen,
+      evidenceReadable: true,
+      recorder: recorder_,
+      facts: FACTS,
+      seedKeys: [API],
+      repositoriesByKey: REPOSITORIES,
+    });
+    const written = recorder_.plans.flatMap((plan) => plan.upserts.map((upsert) => upsert.entry));
+    expect(written.map((entry_) => entry_.repositoryKey).sort()).toEqual([OPS, WEB]);
+    for (const entry_ of written) expect(entry_.origin).toBe("related_repository");
+  });
+
+  it("drops a held entry whose relationship the operator deleted, and says so in the trail", () => {
+    // The run before this one took `web` because the catalog said `api` was its
+    // backend. Somebody has since deleted that relationship. Without this the
+    // entry re-attaches `web` on every run from now on, and the only way back
+    // is a database edit: a repository that attaches itself forever after the
+    // reason was taken away is worse than no automatic attachment.
+    const held = entry({
+      repositoryKey: WEB,
+      origin: "related_repository",
+      rationale: "Related to github:acme/api, which this work names: ...",
+    });
+    const recorder_ = recorder([held]);
+    const taken = takeRelatedRepositories({
+      chosen: [
+        ...chosen,
+        { provider: "github", repoPath: "acme/web", defaultBranch: "main", selectedRationale: "related" },
+      ],
+      evidenceReadable: true,
+      recorder: recorder_,
+      // The catalog this run read: `api` relates to nothing any more.
+      facts: [{ key: API, enabled: true, usable: true }, { key: WEB, enabled: true, usable: true }],
+      seedKeys: [API],
+      repositoriesByKey: REPOSITORIES,
+    });
+    expect(taken.droppedKeys).toEqual([WEB]);
+    // Off the record...
+    const deleted = recorder_.plans.flatMap((plan) => plan.deletes);
+    expect(deleted).toEqual([{ repositoryKey: WEB, origin: "related_repository" }]);
+    // ...with a trail line a person can act on...
+    const removals = recorder_.plans
+      .flatMap((plan) => plan.trail)
+      .filter((event) => event.kind === "entry_removed");
+    expect(removals).toHaveLength(1);
+    const removal = removals[0]!;
+    if (removal.kind !== "entry_removed") throw new Error("unreachable");
+    expect(removal.reason).toBe("relationship_removed");
+    expect(removal.entry.repositoryKey).toBe(WEB);
+    // ...and out of this run's workspace too, or the agent works in a
+    // repository the trail has just said we took away.
+    expect(taken.chosen.map((repo) => `github:${repo.repoPath}`)).toEqual([API]);
+  });
+
+  it("keeps a held entry whose relationship is still there but which this run declines to take", () => {
+    // The neighbourhood is too wide to take whole, so nothing is attached. The
+    // relationships are all still recorded, so nothing is evidence that went
+    // away, and sweeping here would delete an entry over a decision about
+    // WORKSPACE SIZE rather than about the relationship.
+    const wide = Array.from({ length: 9 }, (_, index) => `github:acme/n${index}`);
+    const recorder_ = recorder([entry({ repositoryKey: wide[0]!, origin: "related_repository" })], [
+      API,
+      ...wide,
+    ]);
+    const taken = takeRelatedRepositories({
+      chosen,
+      evidenceReadable: true,
+      recorder: recorder_,
+      facts: [
+        {
+          key: API,
+          enabled: true,
+          usable: true,
+          relationships: wide.map((key) => ({
+            kind: "depends_on" as const,
+            targetKey: key,
+            direction: "outgoing" as const,
+          })),
+        },
+        ...wide.map((key) => ({ key, enabled: true, usable: true })),
+      ],
+      seedKeys: [API],
+      repositoriesByKey: new Map([
+        [API, repository("acme/api")],
+        ...wide.map((key) => [key, repository(key.slice("github:".length))] as const),
+      ]),
+    });
+    expect(taken.droppedKeys).toEqual([]);
+    expect(recorder_.plans.flatMap((plan) => plan.deletes)).toEqual([]);
+  });
+
+  it("drops nothing when this run could not read the catalog or the ticket", () => {
+    // A failed catalog read looks exactly like an operator deleting every
+    // relationship. Acting on that would take repositories off the record on
+    // the strength of evidence this run never saw.
+    const recorder_ = recorder([entry({ repositoryKey: WEB, origin: "related_repository" })]);
+    const taken = takeRelatedRepositories({
+      chosen,
+      evidenceReadable: false,
+      recorder: recorder_,
+      facts: [],
+      seedKeys: [API],
+      repositoriesByKey: REPOSITORIES,
+    });
+    expect(taken.droppedKeys).toEqual([]);
+    expect(recorder_.plans.flatMap((plan) => plan.deletes)).toEqual([]);
+  });
+
   it("never takes a repository a person excluded", () => {
     const taken = takeRelatedRepositories({
       chosen,
+      evidenceReadable: true,
       recorder: recorder([entry({ repositoryKey: WEB, state: "excluded" })]),
       facts: FACTS,
       seedKeys: [API],
@@ -125,6 +242,7 @@ describe("takeRelatedRepositories", () => {
   it("never takes a repository the catalog does not offer this run", () => {
     const taken = takeRelatedRepositories({
       chosen,
+      evidenceReadable: true,
       recorder: recorder(),
       facts: FACTS,
       seedKeys: [API],
@@ -139,6 +257,7 @@ describe("takeRelatedRepositories", () => {
     const wide = Array.from({ length: 9 }, (_, index) => `github:acme/n${index}`);
     const taken = takeRelatedRepositories({
       chosen,
+      evidenceReadable: true,
       recorder: recorder([], [API, ...wide]),
       facts: [
         {
@@ -178,6 +297,7 @@ describe("takeRelatedRepositories", () => {
         defaultBranch: "main",
         selectedRationale: "A person put this on the ticket.",
       })),
+      evidenceReadable: true,
       recorder: recorder([], [...held, ...neighbours]),
       facts: [
         {
@@ -207,6 +327,7 @@ describe("takeRelatedRepositories", () => {
   it("takes nothing when the ticket names nothing", () => {
     const taken = takeRelatedRepositories({
       chosen,
+      evidenceReadable: true,
       recorder: recorder(),
       facts: FACTS,
       seedKeys: [],
