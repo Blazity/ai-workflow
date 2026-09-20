@@ -25,7 +25,9 @@ paths:
   the isolate must replay to the same bytes. `capture.ts` runs inside the step
   body and reaches the database through a deferred import. The plan argument
   never carries the prompt again: the step already holds it, and the DevKit
-  journals every argument.
+  journals every argument. Anything both halves must agree on exactly, such as
+  `shortenVisibilityId`, belongs in `@shared/agent-visibility`: neither half may
+  import the other, so a local copy drifts and a filter then matches nothing.
 - **The write lives in `run-observability/`, not in the service cluster.** The
   engine may not import a service (ADR-001, `scripts/gates/tiers.json`), so
   `run-observability/agent-briefings.ts` owns `recordAgentBriefing` and

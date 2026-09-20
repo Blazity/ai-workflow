@@ -31,6 +31,7 @@ import {
   explainMissingBriefing,
   pageSectionText,
   readVisibilityRecord,
+  shortenVisibilityId,
   type AgentBriefingIndex,
   type AgentBriefingOverview,
   type AgentBriefingPart,
@@ -78,7 +79,6 @@ import {
   type AgentVisibilityUnreadable,
 } from "./pages.js";
 import { serveSafeText } from "./serve-safe.js";
-import { shortenVisibilityId } from "./visibility-id.js";
 
 /**
  * The blocks that put a prompt in front of a model, decided from the block type

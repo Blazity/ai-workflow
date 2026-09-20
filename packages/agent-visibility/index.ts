@@ -112,3 +112,4 @@ export {
   isKnownSlug,
   type AgentBriefingKind,
 } from "./vocabulary";
+export { shortenVisibilityId } from "./visibility-id";

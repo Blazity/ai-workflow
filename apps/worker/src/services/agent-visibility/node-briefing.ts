@@ -18,7 +18,7 @@
  * an edit that has nothing to do with it. `blockType` is null in that case, and
  * a node neither the definition nor any run has is simply one that never ran.
  */
-import { AGENT_VISIBILITY_SCHEMA_VERSION } from "@shared/agent-visibility";
+import { AGENT_VISIBILITY_SCHEMA_VERSION, shortenVisibilityId } from "@shared/agent-visibility";
 import {
   readConnectedNodeLastRunRow,
   readNodeLastRunRow,
@@ -35,7 +35,6 @@ import {
   type RunCaptureCounts,
 } from "./briefing-read.js";
 import { notFound } from "./pages.js";
-import { shortenVisibilityId } from "./visibility-id.js";
 import { getConnectedWorkflowDefinitionName } from "../../db/repositories/definitions/connected.js";
 import { getWorkflowDefinitionName } from "../../db/repositories/definitions/operations.js";
 import {

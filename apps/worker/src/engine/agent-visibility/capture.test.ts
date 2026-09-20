@@ -37,7 +37,7 @@ import {
   researchRows,
   reviewRows,
 } from "../../test-support/prompt-oracle/matrix.js";
-import { agentBriefingIndexSchema, type AgentBriefingIndex } from "@shared/agent-visibility";
+import { agentBriefingIndexSchema, shortenVisibilityId, type AgentBriefingIndex } from "@shared/agent-visibility";
 import { captureAgentBriefing } from "./capture.js";
 import {
   createBriefingSequence,
@@ -47,7 +47,6 @@ import {
   planTextBriefing,
   BRIEFING_CAPTURE_MAX_BYTES,
   planDeferredBriefing,
-  shortenVisibilityId,
   type BriefingIdentity,
 } from "./plan.js";
 import { discoveryRepositoryContext, selectedRepositoryContext } from "./repository-context.js";

@@ -21,6 +21,9 @@ import type {
   EffectivePromptSection,
 } from "@shared/prompts";
 import type { WorkScopeEntry } from "@shared/contracts";
+// The ONE id transform, shared with the read model so a filter joins on what
+// capture wrote. Pure and synchronous, which is what workflow scope allows.
+import { shortenVisibilityId } from "@shared/agent-visibility";
 
 /** Where a recorded section's text is, in the text the step already holds. */
 export type BriefingTextSource = "prompt" | "system";
@@ -296,53 +299,6 @@ function markerOnly(input: CommonPlanInput & { kind: AgentBriefingCapture["ident
   };
 }
 
-/**
- * The longest an id may be on a briefing, and how one too long is shortened.
- *
- * The scheduler builds a loop's activation scope as
- * `${ownerScopeId}/loop:${node.id}:${iteration}` and nests it per level, while
- * a node id is legal up to 200 characters, so one loop around a long-named
- * node already passes the contract's own bound. Refusing there would lose
- * every send inside that loop, which is the opposite of what this feature is
- * for, so an id too long is SHORTENED deterministically instead: a readable
- * head, a tilde, and a hash of the whole id.
- *
- * THE SAME TRANSFORM HAS TO RUN ON ANY FILTER THAT JOINS ON THESE IDS, because
- * a reader filtering by the full scope id would otherwise match nothing.
- */
-const VISIBILITY_ID_MAX = 200;
-const VISIBILITY_ID_HEAD = 150;
-
-/** FNV-1a, 32 bits, over the CODE POINTS of the string, so the same id hashes
- *  the same wherever it is recomputed. Synchronous and pure, because workflow
- *  scope has neither async hashing nor a Node module. */
-function fnv1a32(text: string, seed: number): number {
-  let hash = seed >>> 0;
-  for (const character of text) {
-    hash = Math.imul(hash ^ (character.codePointAt(0) ?? 0), 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
-}
-
-/**
- * `id` unchanged when it fits, else its first 150 characters, a `~`, and two
- * FNV-1a passes over the code points of the WHOLE id (offset basis then
- * prime as the seed) as 16 lower-case hex characters. At most 167
- * characters.
- */
-export function shortenVisibilityId(id: string): string {
-  if (id.length <= VISIBILITY_ID_MAX) return id;
-  let head = VISIBILITY_ID_HEAD;
-  // Never cut between the two halves of one character: a code point above the
-  // basic plane starting one before the cut is exactly that case.
-  const straddling = id.codePointAt(head - 1);
-  if (straddling !== undefined && straddling > 0xffff) head -= 1;
-  const digest = `${fnv1a32(id, 0x811c9dc5).toString(16).padStart(8, "0")}${fnv1a32(id, 0x01000193)
-    .toString(16)
-    .padStart(8, "0")}`;
-  return `${id.slice(0, head)}~${digest}`;
-}
-
 function compiledPlan(
   input: CommonPlanInput & {
     kind: "agent" | "llm";
@@ -371,9 +327,16 @@ function compiledPlan(
     });
     sections.push(unattributedSection("block", "Prompt as sent", input.prompt));
   }
-  // The runtime section the compiler did not render, so what it held back is
-  // still on the record. Dropping it hides the case that confuses people most:
-  // a profile with workflow data off, whose prompt simply has no ticket in it.
+  // The runtime section the compiler was ALLOWED to render and did not, because
+  // every part of it was zero bytes: a rule held back on purpose, a part cut
+  // whole. Without this they vanish with nothing left to explain them.
+  //
+  // It is NOT the workflow-data-off case. There the compiler reports no
+  // unrendered parts at all (`packages/prompts/effective-prompt.ts`), and
+  // deliberately: the ticket, the comments and the answers were dropped the
+  // same way, so listing only the two parts that carry a marker would be a
+  // partial list a reader takes for a complete one. That case is told by
+  // `harness.includeWorkflowData` on the record instead.
   const unrendered = input.compilation.unrenderedRuntimeParts;
   if (unrendered.length > 0) {
     const planned = unrendered.map((part) => planPart(part, notes, sections.length));

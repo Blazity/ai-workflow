@@ -9,10 +9,9 @@
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { agentBriefingOverviewSchema, readVisibilityRecord } from "@shared/agent-visibility";
+import { agentBriefingOverviewSchema, readVisibilityRecord, shortenVisibilityId } from "@shared/agent-visibility";
 import type { Db } from "../../db/client.js";
 import { eq } from "drizzle-orm";
-import { shortenVisibilityId } from "./visibility-id.js";
 import { agentBriefingTexts, agentBriefings, workflowRuns } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
