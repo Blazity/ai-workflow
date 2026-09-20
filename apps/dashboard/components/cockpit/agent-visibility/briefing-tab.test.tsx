@@ -60,6 +60,12 @@ interface Harness {
   requests: string[];
 }
 
+/** What `settle` watches: the reads this screen has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One render per test, and this file's tests run one at a time. */
+let inFlight = 0;
+let requestsStarted = 0;
+
 /** The tab with the link state its screen holds, over a fetch that answers
  *  from the fixtures the way the proxy would. */
 function Screen({
@@ -109,21 +115,34 @@ function render(
 ): Harness {
   const requests: string[] = [];
   const originalFetch = globalThis.fetch;
+  inFlight = 0;
+  requestsStarted = 0;
   globalThis.fetch = ((input: string) => {
     const path = String(input);
     requests.push(path);
-    if (options.fail?.pattern.test(path)) {
-      return Promise.resolve(Response.json({ error: "on purpose" }, { status: options.fail.status }));
-    }
-    const asked = new URL(path, "http://dashboard.test");
-    // The proxy forwards `/api/...` to the worker's `/api/v1/...`.
-    const served = serveFixture(
-      store,
-      "GET",
-      new URL(`/api/v1${asked.pathname.slice("/api".length)}${asked.search}`, "http://worker.test"),
-    );
-    if (!served) return Promise.resolve(Response.json({ error: "not served" }, { status: 404 }));
-    return Promise.resolve(Response.json(served.body, { status: served.status }));
+    inFlight += 1;
+    requestsStarted += 1;
+    // Every answer lands a turn later, the way a response does: resolving in
+    // the caller's own microtask is what let a counted wait look reliable.
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      if (options.fail?.pattern.test(path)) {
+        return Response.json({ error: "on purpose" }, { status: options.fail.status });
+      }
+      const asked = new URL(path, "http://dashboard.test");
+      // The proxy forwards `/api/...` to the worker's `/api/v1/...`.
+      const served = serveFixture(
+        store,
+        "GET",
+        new URL(`/api/v1${asked.pathname.slice("/api".length)}${asked.search}`, "http://worker.test"),
+      );
+      if (!served) return Response.json({ error: "not served" }, { status: 404 });
+      return Response.json(served.body, { status: served.status });
+    };
+    return answer().finally(() => {
+      inFlight -= 1;
+    });
   }) as typeof globalThis.fetch;
 
   // A live run polls, and the poll needs a document to ask whether the tab is
@@ -150,13 +169,62 @@ function render(
   return { root: renderer.root, requests };
 }
 
-/** Lets the chain of loads a screen starts (sends, then sections, then the
- *  first page of text and the part list) finish. */
-async function settle(times = 8) {
-  for (let turn = 0; turn < times; turn += 1) {
-    await act(async () => {
-      await Promise.resolve();
-    });
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of loads a screen starts finish, and waits for exactly that.
+ *
+ * NEVER A COUNT OF TURNS. A screen here loads in chains (sends, then sections,
+ * then the first page of text and the part list), each hop a fetch whose body
+ * lands a turn or more after the call. How many turns that costs is the
+ * runner's business, so a fixed count passes on an idle machine and, on a
+ * loaded one, returns while five section reads are still in flight: the
+ * assertion then reads an idle screen and the failure looks like the product.
+ * Quiet is the condition those assertions mean, and it is two things, because
+ * a read that lands usually starts the next one: nothing in flight, and a
+ * turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a screen that never settles fails as a readable timeout rather
+ * than hanging the suite. `FIXTURE_SLOW_MS` delays every fixture response by
+ * that many milliseconds, which is how this harness reproduces a runner slow
+ * enough to break a counted wait.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (inFlight === 0) {
+      const started = requestsStarted;
+      await turn();
+      if (inFlight === 0 && requestsStarted === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the screen was still loading after ${timeoutMs} ms: ${inFlight} request(s) in flight`);
+    }
+  }
+}
+
+/**
+ * Waits for the thing the next assertion is about, and fails with what the
+ * screen showed instead. For a state a person reaches through work the screen
+ * does after its reads land, where "nothing in flight" is true too early.
+ */
+async function waitForText(root: ReactTestInstance, expected: RegExp, timeoutMs = 10_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const seen = text(root);
+    if (expected.test(seen)) return seen;
+    if (Date.now() >= deadline) {
+      assert.fail(`waited ${timeoutMs} ms for ${expected}, and the screen showed: ${seen.slice(0, 900)}`);
+    }
+    await turn();
   }
 }
 
@@ -443,7 +511,8 @@ test("the repository map leads to the place in the prompt where the agent read i
   // The map is text in the prompt, and this is the way back to it: the run
   // data section opens on the part that held it, however far in it sits.
   click(harness.root, "Show the map as the agent read it");
-  await settle(12);
+  await settle();
+  await waitForText(harness.root, /Selected Repositories/);
   const row = harness.root.find((node) => node.props["data-part-id"] === "selected-repositories");
   assert.match(String(row.props.className), /bg-mariner-700\/15/);
   assert.match(text(row), /Selected Repositories/);
@@ -579,9 +648,10 @@ test("the whole prompt copies as the bytes of every section, in order", async (t
   await settle();
   assert.match(text(harness.root), /Step 1 of 2: 5 sections to load and check/);
 
+  // Preparing reads the five sections whole, so the state this asserts exists
+  // only once every one of them has landed: wait for it, never for a count.
   click(harness.root, "Prepare the whole prompt to copy");
-  await settle(24);
-  assert.match(text(harness.root), /5 sections joined in order, each checked against the stored bytes/);
+  await waitForText(harness.root, /5 sections joined in order, each checked against the stored bytes/);
 
   // This send's budget trimmed a section, so the button says what it copies
   // rather than calling it the whole prompt.
@@ -621,8 +691,10 @@ test("a send the budget trimmed says so in every state of the whole-prompt copy"
   await settle();
   assert.match(text(harness.root), shortfall);
 
+  // The caveat is on the idle screen too, so waiting for it would prove
+  // nothing: wait for the prepared state, then read the caveat off it.
   click(harness.root, "Prepare the whole prompt to copy");
-  await settle(24);
+  await waitForText(harness.root, /Copy what we kept/);
   assert.match(text(harness.root), shortfall);
   // And the button itself never claims to be copying the whole prompt.
   assert.doesNotMatch(text(harness.root), /Copy the whole prompt/);

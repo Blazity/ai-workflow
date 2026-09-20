@@ -61,32 +61,44 @@ function render(
   const edits: { body: unknown }[] = [];
   resetFixtureScope(store);
   const originalFetch = globalThis.fetch;
+  inFlight = 0;
+  requestsStarted = 0;
   globalThis.fetch = ((input: string, init?: RequestInit) => {
     const path = String(input);
     const method = init?.method ?? "GET";
     requests.push(path);
     const sent = init?.body === undefined ? undefined : (JSON.parse(String(init.body)) as unknown);
     if (method !== "GET") edits.push({ body: sent });
-    if (options.refuseEdits && method !== "GET") {
-      return Promise.resolve(Response.json(options.refuseEdits.body, { status: options.refuseEdits.status }));
-    }
-    if (options.fail?.pattern.test(path)) {
-      return Promise.resolve(Response.json({ error: "on purpose" }, { status: options.fail.status }));
-    }
-    const asked = new URL(path, "http://dashboard.test");
-    const served = serveFixture(
-      store,
-      method,
-      new URL(`/api/v1${asked.pathname.slice("/api".length)}${asked.search}`, "http://worker.test"),
-      sent,
-    );
-    if (!served) return Promise.resolve(Response.json({ error: "not served" }, { status: 404 }));
-    let body = served.body;
-    if (options.withoutRounds && body && typeof body === "object" && "rounds" in body) {
-      const { rounds: _rounds, ...rest } = body as Record<string, unknown>;
-      body = rest;
-    }
-    return Promise.resolve(Response.json(body, { status: served.status }));
+    inFlight += 1;
+    requestsStarted += 1;
+    // Every answer lands a turn later, the way a response does.
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      if (options.refuseEdits && method !== "GET") {
+        return Response.json(options.refuseEdits.body, { status: options.refuseEdits.status });
+      }
+      if (options.fail?.pattern.test(path)) {
+        return Response.json({ error: "on purpose" }, { status: options.fail.status });
+      }
+      const asked = new URL(path, "http://dashboard.test");
+      const served = serveFixture(
+        store,
+        method,
+        new URL(`/api/v1${asked.pathname.slice("/api".length)}${asked.search}`, "http://worker.test"),
+        sent,
+      );
+      if (!served) return Response.json({ error: "not served" }, { status: 404 });
+      let body = served.body;
+      if (options.withoutRounds && body && typeof body === "object" && "rounds" in body) {
+        const { rounds: _rounds, ...rest } = body as Record<string, unknown>;
+        body = rest;
+      }
+      return Response.json(body, { status: served.status });
+    };
+    return answer().finally(() => {
+      inFlight -= 1;
+    });
   }) as typeof globalThis.fetch;
 
   // A question is waiting in the fixtures, so the panel polls, and the poll
@@ -106,11 +118,43 @@ function render(
   return { root: renderer.root, requests, edits };
 }
 
-async function settle(times = 8) {
-  for (let turn = 0; turn < times; turn += 1) {
-    await act(async () => {
-      await Promise.resolve();
-    });
+/** What `settle` watches: the reads this panel has out, and how many it has
+ *  started. One render per test, and this file's tests run one at a time. */
+let inFlight = 0;
+let requestsStarted = 0;
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of loads this panel starts finish, and waits for exactly
+ * that: nothing in flight, and a turn that started nothing new, because a
+ * read that lands usually starts the next one.
+ *
+ * NEVER A COUNT OF TURNS. How many turns a chain costs is the runner's
+ * business, so a counted wait passes on an idle machine and returns mid-load
+ * on a busy one, where the assertion then reads a half-built panel and the
+ * failure looks like the product. `FIXTURE_SLOW_MS` delays every fixture
+ * response by that many milliseconds, which is how this harness reproduces a
+ * runner slow enough to break a counted wait.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (inFlight === 0) {
+      const started = requestsStarted;
+      await turn();
+      if (inFlight === 0 && requestsStarted === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the panel was still loading after ${timeoutMs} ms: ${inFlight} request(s) in flight`);
+    }
   }
 }
 
