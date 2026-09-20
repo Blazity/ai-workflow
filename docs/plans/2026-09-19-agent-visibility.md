@@ -339,8 +339,10 @@ listing text only as a labelled fallback), relationships, and its state for this
 work with its reason, including disabled and not enabled ones marked "do not
 request". Every other catalog repository gets one line; above a limit, a count
 and "ask by name". Descriptions and rules are rendered once, not in both the map
-and the repository section. Discovery and every repository-working agent get
-it. `eventRelatedKeys` is filled from the relationships of the repositories a
+and the repository section. Discovery and every repository-working agent of a
+ticket run get it; a pull-request run does not, which was decided and is
+recorded below under "Decided after the production proof".
+`eventRelatedKeys` is filled from the relationships of the repositories a
 ticket or event names. Every repository in a briefing's context carries why it
 is there (named, attached, related via which repository and relationship,
 offered, and so on), and readers tolerate a cause or state they do not know,
@@ -598,6 +600,24 @@ prevent, so they are recorded now with what they cost, late rather than never.
   scoped**, and the panel stopped claiming its list is complete. The list had
   already fallen behind once, when stage 6 added the repository map and nothing
   came back to it.
+
+### Decided after the production proof
+
+- **A pull-request run gets no repository map, and that is accepted.** This
+  plan says "discovery and every repository-working agent get it", and on
+  production a review run does not: `ctx.entry.kind === "pr_trigger"` takes a
+  branch that never runs the pre-sandbox repository selection, so the map is
+  built with `silence: "not_recorded"` and the three review agents of
+  `wrun_01M2ZBQQS4HXR4M38Y7RGWJPXH` were each told "The repository map was not
+  available for this send, so this prompt describes the workspace and nothing
+  else." The sentence is true, and the review still did its job: on that same
+  pull request it raised a High finding about a documented call that does not
+  exist in the code. Giving a review run the map would mean a catalog read on
+  every one of them and a longer prompt, for a run that already works on one
+  pull request in one repository. The owner decided on 2026-09-20 to leave it,
+  so this is a known limit of the map rather than a defect waiting to be
+  fixed. Reopen it if a review is ever asked to judge something that spans
+  repositories.
 
 ### Still open, and it is the owner's
 
