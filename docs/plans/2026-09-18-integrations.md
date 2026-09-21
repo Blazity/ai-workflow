@@ -782,6 +782,39 @@ S9 impact completion, 2026-09-21: disconnect and a save that would move the conn
 | S15 | An external memory engine written from the guide alone proves the guide | the guide as an interface | `integrations/<engine>/**` (Mem0 is the first candidate because it has a hosted API with an API key and an open source server; Zep/Graphiti is equally valid), guide corrections | opus | open | yes | yes | no | The executor receives only the guide and the SDK; every question they had to ask elsewhere becomes a guide fix in the same stage; on demo with the engine's key: memory switched to it, an agent run writes and reads memory there, switching back to built-in finds built-in memory unchanged (INT-061 to INT-064, INT-130) |
 | R1 | The Arthur tenant runs on the new shape | release | release artefacts only | opus | tight | no | no | no | The tenant's operator is warned with the date; its parked and in-flight runs are listed and drained; the upgrade preflight passes; its workflow definitions are re-authored; its integrations show the environment as their source and Connected; one real ticket run completes end to end in the tenant |
 
+S10 implementation audit, 2026-09-21: GitLab ships from
+`integrations/gitlab` and core resolves VCS by repository through the
+capability. The shared head and gate status contracts are provider-neutral,
+trigger and repository provider ids are open registry values, and the database
+migration drops the two provider checks without changing data. Import, save,
+enable and activation now refuse an unregistered provider before persistence.
+The existing webhook URL is served by the generic route, and published GitLab
+merge request, pipeline and note payload examples cover every event in use.
+Environment-backed connections, the legacy default project and the
+single-provider bot-login fallback remain compatible. Local gates do not stand
+in for the stage's GitLab dogfood run or the production drain; those remain
+release evidence.
+
+Corrected S10 drain, 2026-09-21: no step identity is added, removed, moved or
+renamed. The total drain covers recorded inputs for
+`blockPrTriggerRepositoriesWithSiblingsStep`, `blockFetchPrContextsStep`,
+`blockPostPrCommentStep`, `blockPrepareWorkspacePreSandboxStep`,
+`blockApprovedRepositoryScopeStep`, `blockPrepareWorkspaceProvisionStep`,
+`runPreSandboxPhase`, `attachResearchRepositoriesStep`,
+`captureDefaultBranchFilesStep`, `promoteRepositoryWriteScopeStep`,
+`findWorkflowOwnedPullRequestForBranch`,
+`createOrFindWorkflowOwnedPullRequest`, `fetchPullRequestChangeSetStep`,
+`postReviewLedgerFailureNoteStep`, `settleReviewLedgerStep`,
+`publishTrustedWorkspaceFromSandbox`, `publishPrFixStep`, `createPrCheckStep`,
+`completePrCheckStep`, `postPrReviewStep`, `closeTerminalPrChecksStep`,
+`verifySourcePullRequestStep`, `verifyPullRequestStep` and
+`verifyFinalizedBranchHeadStep`. It also covers the recorded results of
+`blockFetchPrContextsStep`, `verifySourcePullRequestStep` and
+`verifyPullRequestStep`: their pull request head data now records `checks`
+instead of the retired pipeline and check-run fields. Replaying any earlier
+record across this boundary is unsupported, so the branch requires a total
+drain before merge.
+
 ## Backlog mapping
 
 | Existing issue | Fate |

@@ -95,9 +95,9 @@ export function SuggestionPanel({
 }: {
   repositoryId: number;
   /** Identity off the stored row. A repository with no scripts entry yet needs
-   *  one built, and building it from a default provider would write a GitLab
+   *  one built, and building it from a default provider would write another
    *  repository into the audited profile blob as a GitHub one. */
-  repository: { provider: "github" | "gitlab"; path: string };
+  repository: { provider: string; path: string };
   /** What the Scripts tab holds right now, which is what the diff is against. */
   currentEntry: PrePrCheckRepositoryConfig | null;
   /** What the Overview and Rules tabs hold right now. "Use this" overwrites

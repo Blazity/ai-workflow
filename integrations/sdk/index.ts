@@ -100,6 +100,22 @@ export {
 
 export { FatalError } from "./errors";
 
+export {
+  boundRepositoryProfileBundle,
+  isRepositoryProfileLockfile,
+  isRepositoryProfileManifest,
+  pickRepositoryProfileReadme,
+  RepositoryMissingAtProviderError,
+  REPOSITORY_PROFILE_DEADLINE_MS,
+  REPOSITORY_PROFILE_MAX_CI_FILES,
+  REPOSITORY_PROFILE_MAX_MANIFESTS,
+  REPOSITORY_PROFILE_TRUNCATION_MARKER,
+  type RepositoryProfileBundle,
+  type RepositoryProfileFile,
+  type RepositoryProfileSource,
+  type VcsProviderId,
+} from "./repository-profile";
+
 /**
  * What core answers a run control command with, and the pull requests a
  * `pr_ready` event carries, re-exported so an integration reaches them the way
@@ -149,11 +165,15 @@ export {
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
-  type LatestCheckRun,
+  type CheckRunConclusion,
+  type GateStatusRef,
+  type GateStatusUpdate,
   type PostRunFailureNoteInput,
   type PRComment,
   type PullRequest,
   type PullRequestHead,
+  type PullRequestHeadChecks,
+  type PullRequestFailedCheck,
   type ReviewThread,
   type ReviewThreadFeed,
   type ReviewThreadNote,
@@ -163,6 +183,10 @@ export {
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
   type VCSAdapter,
+  type VcsIntegrationAdapter,
+  type VcsOpaqueHandle,
+  type VcsRepositoryMetadata,
+  type VcsSandboxCredentials,
 } from "./vcs";
 
 export type {
@@ -184,4 +208,6 @@ export type {
   IntegrationWebhookReception,
   IntegrationWebhookRequest,
   IntegrationWebhookResponse,
+  PrTriggerPayload,
+  TriggerEvent,
 } from "./webhook";

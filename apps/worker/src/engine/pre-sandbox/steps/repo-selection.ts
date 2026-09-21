@@ -381,11 +381,10 @@ const selectRepositoriesForRun = async (
       messageStandsAlone: true,
     };
   }
-  const { listRepositoriesAcrossProviders } = await import("../../../adapters/vcs/repository-directory.js");
+  const { listVcsRepositories } = await import("../../support/vcs-runtime.js");
   const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
     "../../../db/repositories/runs.js"
   );
-  const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
   const ticketIdentifier = context.ticket.identifier;
   const workflowOwnedBranches = ticketIdentifier
     ? (await listConnectedWorkflowOwnedBranchesForTicket(ticketIdentifier)).map((record) => ({
@@ -398,13 +397,10 @@ const selectRepositoriesForRun = async (
       }))
     : [];
   const repositoryScope = context.repositoryScope;
-  const listing = await listRepositoriesAcrossProviders(
-    listedVcsProviders(
-      getConfiguredVcsProviders(),
-      repositoryScope,
-      workflowOwnedBranches,
-    ),
-  );
+  const listing = await listVcsRepositories({
+    neededProviders: neededVcsProviders(repositoryScope, workflowOwnedBranches),
+    integrationPins: context.integrationPins,
+  });
   const repositories = filterRunRepositories(
     context.repositoryAccess,
     listing.repositories,
@@ -1087,17 +1083,14 @@ function incompleteCatalogMessage(
  * would strand that branch's open pull request the moment an operator edits the
  * pin.
  */
-function listedVcsProviders<T extends { kind: RepositoryMetadata["provider"] }>(
-  providers: T[],
+function neededVcsProviders(
   repositoryScope: WorkflowRepositoryScope | undefined,
   workflowOwnedBranches: WorkflowOwnedBranchSelectionInput[],
-): T[] {
+): ReadonlySet<string> | undefined {
   const pinned = repositoryScope?.providers ?? [];
-  if (pinned.length === 0) return providers;
+  if (pinned.length === 0) return undefined;
   const owned = new Set(workflowOwnedBranches.map((branch) => branch.provider));
-  return providers.filter(
-    (provider) => pinned.includes(provider.kind) || owned.has(provider.kind),
-  );
+  return new Set([...pinned, ...owned]);
 }
 
 function scopeNarrowing(
@@ -1597,8 +1590,8 @@ export function selectRepositoriesFromMetadata(input: {
 
   // AND THE PROVIDER THE PIN NEVER QUERIED, WHICH IS IN NONE OF THOSE SETS.
   //
-  // `listedVcsProviders` narrows the providers BEFORE any listing happens, so a
-  // workflow pinned to `providers: ["github"]` never calls GitLab and a GitLab
+  // `neededVcsProviders` narrows the providers BEFORE any listing happens, so a
+  // workflow pinned to one provider never calls another and an excluded
   // repository is in no listing at all: not withheld, not unusable, not outside
   // the pin, because all three are built from a listing. A person writes "the
   // fix is in gitlab:acme/ops", the run works in the GitHub repositories it
@@ -1606,7 +1599,7 @@ export function selectRepositoriesFromMetadata(input: {
   // nothing said. That is the complaint this whole delivery exists to end,
   // arriving through the pin that was supposed to be reported.
   //
-  // ANSWERED FROM THE KEY, NOT FROM A LISTING. `gitlab:acme/ops` says which
+  // ANSWERED FROM THE KEY, NOT FROM A LISTING. `provider:acme/ops` says which
   // provider it is on; querying a provider the pin excludes would be a network
   // call to prove what the person already wrote. Only a path that NAMES its
   // provider counts: a bare "acme/ops" could be on either, and a line claiming

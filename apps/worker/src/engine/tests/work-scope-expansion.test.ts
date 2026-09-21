@@ -69,7 +69,7 @@ const ANY_CATALOG: TriggerRepositoryPolicy = {
 };
 
 function catalogEntry(
-  provider: "github" | "gitlab",
+  provider: string,
   repoPath: string,
   usable = true,
 ): RepositoryCatalogEntry {
@@ -106,7 +106,7 @@ function scopeOf(...entries: WorkScopeEntry[]): WorkScope {
   return { subjectKey: SUBJECT, version: entries.length + 1, entries };
 }
 
-function repository(provider: "github" | "gitlab", repoPath: string) {
+function repository(provider: string, repoPath: string) {
   return { provider, repoPath, defaultBranch: "main", selectedRationale: "attached" };
 }
 
@@ -115,7 +115,7 @@ function repository(provider: "github" | "gitlab", repoPath: string) {
 function recorderFor(input: {
   scope: WorkScope | null;
   catalog: RepositoryCatalogEntry[];
-  attached?: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
+  attached?: Array<{ provider: string; repoPath: string }>;
   policy?: TriggerRepositoryPolicy;
   activated?: boolean;
   answeredRepositoryKeys?: string[];
@@ -150,7 +150,7 @@ function recorderFor(input: {
   });
 }
 
-function requestFor(provider: "github" | "gitlab", repoPath: string) {
+function requestFor(provider: string, repoPath: string) {
   return { provider, repoPath, rationale: "research needs it" };
 }
 
@@ -158,7 +158,7 @@ function requestFor(provider: "github" | "gitlab", repoPath: string) {
 function validateAgainstRecord(input: {
   requests: Array<ReturnType<typeof requestFor>>;
   catalog: RepositoryCatalogEntry[];
-  attached?: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
+  attached?: Array<{ provider: string; repoPath: string }>;
   record: ReturnType<typeof recorderFor>;
   completedRounds?: number;
 }) {

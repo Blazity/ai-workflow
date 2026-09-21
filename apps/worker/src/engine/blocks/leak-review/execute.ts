@@ -59,7 +59,7 @@ const SECRET_PATTERNS: ReadonlyArray<{ kind: string; pattern: RegExp }> = [
   { kind: "github_pat", pattern: /github_pat_[A-Za-z0-9_]{22,}/ },
   { kind: "aws_access_key_id", pattern: /AKIA[0-9A-Z]{16}(?![A-Za-z0-9])/ },
   { kind: "slack_token", pattern: /xox[baprs]-[A-Za-z0-9-]{10,}/ },
-  { kind: "gitlab_token", pattern: /glpat-[A-Za-z0-9_-]{20,}/ },
+  { kind: "provider_access_token", pattern: /glpat-[A-Za-z0-9_-]{20,}/ },
   // The scheme run is bounded so no input can make this backtrack super-linearly.
   { kind: "url_credentials", pattern: /[a-z][a-z0-9+.-]{0,31}:\/\/[^/\s:]+:[^@\s]+@/ },
 ];
@@ -141,7 +141,7 @@ Every excerpt MUST be masked: at most 40 characters, and any secret-looking valu
 Return { "findings": [], "summary": "..." } when the change is clean.`;
 
 interface LeakReviewRepository {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   localPath: string;
   preAgentSha: string;

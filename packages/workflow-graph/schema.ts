@@ -36,8 +36,8 @@ const bindingInputName = z.custom<string>(
   { message: "Input name contains an empty or unsafe path segment." },
 );
 
-const vcsProviders = z.enum(["github", "gitlab"]);
-export const vcsProviderSelection = z.array(vcsProviders).min(1);
+const vcsProviders = z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/);
+export const vcsProviderSelection = z.array(vcsProviders);
 
 const executionBudgetsSchema = z
   .object({
@@ -49,7 +49,7 @@ const executionBudgetsSchema = z
 
 const MAX_PINNED_REPOSITORIES = 8;
 
-// At least one slash, more allowed for nested GitLab group paths. Stricter than
+// At least one slash, with more allowed for nested provider paths. Stricter than
 // REPO_PATH_RE in the worker's lib/repo-allowlist.ts: this also rejects inner
 // whitespace, which neither provider permits in a path. Duplicated rather than
 // imported on purpose, because repo-allowlist.ts pulls in the pino logger and

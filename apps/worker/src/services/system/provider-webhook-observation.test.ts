@@ -9,7 +9,6 @@ vi.mock("@vercel/functions", () => ({ waitUntil: state.waitUntil }));
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     GITHUB_WEBHOOK_SECRET: "github-secret",
-    GITLAB_WEBHOOK_SECRET: "gitlab-secret",
     JIRA_WEBHOOK_SECRET: "jira-secret",
     RESEND_WEBHOOK_SECRET: "resend-secret",
   },
@@ -41,8 +40,8 @@ describe("provider webhook health observations", () => {
   });
 
   it("samples repeated unauthenticated failures instead of amplifying writes", () => {
-    observeProviderWebhook("gitlab", "rejected", "throttle-test");
-    observeProviderWebhook("gitlab", "rejected", "throttle-test");
+    observeProviderWebhook("email", "rejected", "throttle-test");
+    observeProviderWebhook("email", "rejected", "throttle-test");
 
     expect(state.record).toHaveBeenCalledOnce();
     expect(state.waitUntil).toHaveBeenCalledOnce();
@@ -54,7 +53,7 @@ describe("provider webhook health observations", () => {
     });
 
     expect(() =>
-      observeProviderWebhook("gitlab", "rejected", "failure-test"),
+      observeProviderWebhook("email", "rejected", "failure-test"),
     ).not.toThrow();
     expect(state.waitUntil).not.toHaveBeenCalled();
   });

@@ -199,19 +199,6 @@ describe("collectSystemHealth", () => {
     expect(JSON.stringify(result)).not.toContain("unverified");
   });
 
-  it("does not treat the default GitLab host as an enabled integration", async () => {
-    const result = await collectSystemHealth({
-      config: {
-        ...baseConfig,
-        gitlabHost: "https://gitlab.com",
-      },
-      probes: {},
-    });
-    expect(result.integrations.find((entry) => entry.id === "gitlab")).toMatchObject({
-      mode: "not-configured",
-    });
-  });
-
   it("reports orphaned webhook secrets without provider credentials", async () => {
     const result = await collectSystemHealth({
       config: {

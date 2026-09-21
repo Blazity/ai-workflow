@@ -102,7 +102,7 @@ export async function acceptTriggerDelivery(
 
 export async function completeTriggerDelivery(
   db: Db,
-  provider: "github" | "gitlab",
+  provider: string,
   deliveryId: string,
   result: StoredTriggerResult,
 ): Promise<void> {
@@ -111,7 +111,7 @@ export async function completeTriggerDelivery(
 
 export async function getTriggerDelivery(
   db: Db,
-  provider: "github" | "gitlab",
+  provider: string,
   deliveryId: string,
 ): Promise<StoredTriggerDelivery | null> {
   const row = await findTriggerDeliveryRow(db, { provider, deliveryId });
@@ -122,7 +122,7 @@ export async function getTriggerDelivery(
  * semantic-key conflict). */
 async function getTriggerDeliveryBySemanticKey(
   db: Db,
-  provider: "github" | "gitlab",
+  provider: string,
   semanticKey: string,
 ): Promise<StoredTriggerDelivery | null> {
   const row = await findTriggerDeliveryRowBySemanticKey(db, { provider, semanticKey });
@@ -227,7 +227,7 @@ export async function acknowledgeStartedTriggerDelivery(
 }
 
 export async function getConnectedTriggerDelivery(
-  provider: "github" | "gitlab",
+  provider: string,
   deliveryId: string,
 ): Promise<StoredTriggerDelivery | null> {
   const row = await findConnectedTriggerDeliveryRow({ provider, deliveryId });

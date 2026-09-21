@@ -9,7 +9,7 @@ import {
   isManuallyDispatchableTrigger,
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
-import { env, getConfiguredVcsProviders } from "../../infra/vcs-config.js";
+import { env } from "../../infra/vcs-config.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -30,7 +30,10 @@ import {
 } from "../dispatch/index.js";
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
-import { createManualDispatchPrReader } from "../../engine/support/vcs-runtime.js";
+import {
+  createManualDispatchPrReader,
+  resolveConfiguredPullRequestUrl,
+} from "../../engine/support/vcs-runtime.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 import { loadSettingsSnapshot, loadSettingsSnapshotOn } from "../settings/index.js";
 import {
@@ -45,6 +48,7 @@ import type { PrTriggerPayload } from "../../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import { ManualDispatchError } from "./errors.js";
+import { getVcsBotLogin } from "../vcs/index.js";
 import {
   readConnectedDeployedWorkflowDefinitionVersion,
   readConnectedWorkflowDefinitionVersion,
@@ -343,15 +347,12 @@ async function resolvePullRequestDispatch(
     triggerType: Exclude<RunnableTriggerType, "trigger_ticket_ai">;
   },
 ): Promise<Extract<ResolvedManualDispatch, { inputKind: "pull_request" }>> {
-  const parsed = parsePullRequestUrl(input.dispatchInput.url);
-  const providerConfig = getConfiguredVcsProviders().find(
-    (provider) => provider.kind === parsed.provider,
-  );
-  if (!providerConfig) {
+  const parsed = await parsePullRequestUrl(input.dispatchInput.url);
+  if (!parsed) {
     throw new ManualDispatchError(
       422,
       "not_eligible",
-      `${parsed.provider === "github" ? "GitHub" : "GitLab"} is not configured.`,
+      "The pull request provider is not configured.",
     );
   }
   const vcs = createManualDispatchPrReader({
@@ -435,6 +436,9 @@ async function resolvePullRequestDispatch(
       ),
     },
     params,
+    deployed.triggerType === "trigger_pr_review"
+      ? await getVcsBotLogin(pr.provider)
+      : undefined,
   );
   if (!eligible) {
     throw new ManualDispatchError(
@@ -523,6 +527,7 @@ export function selectManualTriggerEvent(
   pr: PrTriggerPayload,
   snapshot: ManualDispatchPullRequestSnapshot,
   params: Record<string, unknown>,
+  botLogin?: string,
 ): TriggerEvent | null {
   if (triggerType === "trigger_pr_created") {
     if (snapshot.state !== "open") return null;
@@ -547,40 +552,27 @@ export function selectManualTriggerEvent(
         ...baseEvent(triggerType, { ...pr, review }, review.author),
         pr: { ...pr, review },
       };
-      const eligible = selectEligibleEvent(event, params);
+      const eligible = selectEligibleEvent(event, params, botLogin);
       if (eligible) return eligible;
     }
     return null;
   }
 
-  if (pr.provider === "github") {
-    const byProducer = new Map<string, NonNullable<PrTriggerPayload["failedChecks"]>>();
-    for (const check of snapshot.failedChecks) {
-      const producer = check.appSlug ?? "";
-      if (!producer) continue;
-      byProducer.set(producer, [...(byProducer.get(producer) ?? []), check]);
-    }
-    for (const [producer, failedChecks] of byProducer) {
-      const eligible = selectEligibleEvent(
-        baseEvent(triggerType, { ...pr, failedChecks }, producer),
-        params,
-      );
-      if (eligible) return eligible;
-    }
-    return null;
+  const byProducer = new Map<string, NonNullable<PrTriggerPayload["failedChecks"]>>();
+  for (const check of snapshot.failedChecks) {
+    if (!check.producer) continue;
+    byProducer.set(check.producer, [...(byProducer.get(check.producer) ?? []), check]);
   }
-  return selectEligibleEvent(
-    {
-      ...baseEvent(triggerType, { ...pr, failedChecks: snapshot.failedChecks }, "gitlab-ci"),
-      delivery: {
-        provider: "gitlab",
-        producer: "gitlab-ci",
-        source: snapshot.pipelineSource ?? "merge_request_event",
-        deliveryId: "manual",
-      },
-    },
-    params,
-  );
+  for (const [producer, failedChecks] of byProducer) {
+    const event = baseEvent(triggerType, { ...pr, failedChecks }, producer);
+    const source = snapshot.failedChecks.find((check) => check.producer === producer)?.source;
+    const eligible = selectEligibleEvent(
+      source ? { ...event, delivery: { ...event.delivery, source } } : event,
+      params,
+    );
+    if (eligible) return eligible;
+  }
+  return null;
 }
 
 function baseEvent(
@@ -600,7 +592,7 @@ function baseEvent(
 }
 
 function snapshotToPayload(
-  provider: "github" | "gitlab",
+  provider: string,
   repoPath: string,
   snapshot: ManualDispatchPullRequestSnapshot,
 ): PrTriggerPayload {
@@ -617,64 +609,24 @@ function snapshotToPayload(
     isDraft: snapshot.isDraft,
     ...(snapshot.mergeSha ? { mergeSha: snapshot.mergeSha } : {}),
     ...(snapshot.mergedAt ? { mergedAt: snapshot.mergedAt } : {}),
-    ...(snapshot.pipelineId !== undefined ? { pipelineId: snapshot.pipelineId } : {}),
     ...(snapshot.failedChecks.length > 0
       ? { failedChecks: snapshot.failedChecks }
       : {}),
   };
 }
 
-export function parsePullRequestUrl(urlText: string): {
-  provider: "github" | "gitlab";
+export async function parsePullRequestUrl(urlText: string): Promise<{
+  provider: string;
   repoPath: string;
   prNumber: number;
-} {
+} | null> {
   let url: URL;
   try {
     url = new URL(urlText.trim());
   } catch {
     throw new ManualDispatchError(422, "invalid_input", "Enter a valid pull or merge request URL.");
   }
-  const provider = getConfiguredVcsProviders().find(
-    (candidate) => new URL(candidate.host).host.toLowerCase() === url.host.toLowerCase(),
-  );
-  if (!provider) {
-    throw new ManualDispatchError(
-      422,
-      "invalid_input",
-      "The URL does not match a configured GitHub or GitLab host.",
-    );
-  }
-  const segments = url.pathname.split("/").filter(Boolean);
-  if (provider.kind === "github") {
-    if (segments.length !== 4 || segments[2] !== "pull") {
-      throw new ManualDispatchError(422, "invalid_input", "Enter a GitHub pull request URL.");
-    }
-    return {
-      provider: "github",
-      repoPath: `${segments[0]}/${segments[1]}`,
-      prNumber: positiveInteger(segments[3]),
-    };
-  }
-  const marker = segments.findIndex(
-    (segment, index) => segment === "-" && segments[index + 1] === "merge_requests",
-  );
-  if (marker < 1 || marker + 2 >= segments.length) {
-    throw new ManualDispatchError(422, "invalid_input", "Enter a GitLab merge request URL.");
-  }
-  return {
-    provider: "gitlab",
-    repoPath: segments.slice(0, marker).join("/"),
-    prNumber: positiveInteger(segments[marker + 2]),
-  };
-}
-
-function positiveInteger(value: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new ManualDispatchError(422, "invalid_input", "Pull request number is invalid.");
-  }
-  return parsed;
+  return resolveConfiguredPullRequestUrl(url);
 }
 
 function normalizeTicketKey(value: string): string {

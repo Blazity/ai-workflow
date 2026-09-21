@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PrTriggerPayload } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import {
   prAutofixAttempts,
@@ -198,7 +199,19 @@ function deps(overrides: Record<string, unknown> = {}) {
     runRegistry: registry,
     maxConcurrentAgents: 3,
     repositoryCatalog,
-    getCurrentHead: vi.fn().mockResolvedValue("abc123"),
+    ...(!("getCurrentHead" in overrides) && !("getCurrentPullRequest" in overrides)
+      ? {
+          getCurrentPullRequest: vi.fn(async (pr: PrTriggerPayload) => ({
+            headSha: pr.headSha,
+            headRef: pr.headRef,
+            baseRef: pr.baseRef,
+            state: "open" as const,
+            checks: pr.failedChecks
+              ? { state: "red" as const, failed: pr.failedChecks }
+              : { state: "green" as const, failed: [] },
+          })),
+        }
+      : {}),
     getLatestCheckRuns: vi.fn().mockResolvedValue([]),
     issueTracker: { fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }) },
     isRepositoryConfigured: vi.fn().mockResolvedValue(true),
@@ -732,6 +745,7 @@ describe("resolveEnabledReviewStates", () => {
       "changes_requested",
     ]);
     await expect(resolveEnabledReviewStates(db, "gitlab", "gitlab-bot")).resolves.toEqual([
+      "changes_requested",
       "commented",
     ]);
   });
@@ -898,7 +912,12 @@ describe("trigger_pr_checks_failed check selection", () => {
 
   function checksEvent(producer = "github-actions"): TriggerEvent {
     return event({
-      delivery: { provider: "github", producer, deliveryId: "ci-1" },
+      delivery: {
+        provider: "github",
+        producer,
+        deliveryId: "ci-1",
+        ...(producer === "github-actions" ? { trustedByDefault: true } : {}),
+      },
       triggerType: "trigger_pr_checks_failed",
       pr: { ...event().pr, failedChecks: failing },
     });
@@ -910,6 +929,14 @@ describe("trigger_pr_checks_failed check selection", () => {
     // [] is the block registry's own default for checkNames, so this is exactly
     // what adding the trigger and saving it produces.
     expect(selectEligibleEvent(checksEvent(), {})?.pr.failedChecks).toEqual(failing);
+  });
+
+  it("keeps the pre-field default trust for a recorded GitHub Actions event", async () => {
+    const { selectEligibleEvent } = await import("./dispatch-trigger.js");
+    const recorded = checksEvent();
+    delete recorded.delivery.trustedByDefault;
+
+    expect(selectEligibleEvent(recorded, {})?.pr.failedChecks).toEqual(failing);
   });
 
   it("still fails closed on an untrusted producer without an allow-list", async () => {
@@ -974,6 +1001,7 @@ describe("pull request auto-fix cap", () => {
         producer: "gitlab-ci",
         source: "merge_request_event",
         deliveryId,
+        trustedByDefault: true,
       },
       triggerType: "trigger_pr_checks_failed",
       pr: {

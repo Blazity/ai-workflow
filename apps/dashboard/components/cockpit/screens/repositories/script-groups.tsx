@@ -1020,7 +1020,7 @@ function GateGroupsEditor({
   /** Only to keep the two radios of one repository in their own native group,
    *  so arrow keys do not walk into a sibling repository's pair. It has to be
    *  repoKey(repo), never the path alone: the same path is allowed once per
-   *  provider (github:acme/web and gitlab:acme/web are two cards), and a name
+   *  provider (two provider ids can name different cards), and a name
    *  shared between them would make all four inputs one native radio group. */
   radioGroupId: string;
   groupNames: string[];
@@ -1812,11 +1812,11 @@ function RepoCard({
  * into yet is not a mistake, and being born with a red error taught nothing.
  *
  * Exported because the suggestion panel accepts groups into the same base: two
- * spellings of "the entry this repository does not have yet" is how a GitLab
- * repository ends up written into the audited profile blob as a GitHub one.
+ * spellings of "the entry this repository does not have yet" can write the
+ * wrong provider into the audited profile blob.
  */
 export function emptyScriptsEntry(repository: {
-  provider: "github" | "gitlab";
+  provider: string;
   path: string;
 }): PrePrCheckRepositoryConfig {
   return {
@@ -1876,7 +1876,7 @@ export function RepositoryScriptGroupsEditor({
   onChange,
   onBlockerChange,
 }: {
-  repository: { provider: "github" | "gitlab"; path: string };
+  repository: { provider: string; path: string };
   entry: PrePrCheckRepositoryConfig | null;
   /** The entry as the current profile version holds it. An off-allowlist env
    *  name already stored is a warning about the runs, not a Save blocker. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubAdapter } from "./github.js";
-import { GitLabAdapter } from "./gitlab.js";
+import { GitLabAdapter } from "../../../../../integrations/gitlab/vcs.js";
 import * as vcs from "./types.js";
 import type { VCSAdapter } from "./types.js";
 
@@ -50,7 +50,6 @@ const CAPABILITY_LEDGER: Record<GuardName, Support> = {
 const OPTIONAL_MEMBER_LEDGER: Record<OptionalMember, Support> = {
   // Only GitHub exposes Check Run identities; `types.ts` says so at the
   // declaration, and this is where that claim is held to account.
-  getLatestCheckRuns: "github-only",
 };
 
 const github = GitHubAdapter.prototype as unknown as VCSAdapter;

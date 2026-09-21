@@ -19,7 +19,7 @@ function isStringArray(value: unknown): value is string[] {
 function validRepository(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
-    ["github", "gitlab"].includes(String(value.provider)) &&
+    typeof value.provider === "string" && value.provider.length > 0 &&
     typeof value.repoPath === "string" &&
     typeof value.defaultBranch === "string" &&
     typeof value.researchBranch === "string" &&
@@ -32,7 +32,7 @@ function validRepository(value: unknown): boolean {
 function validRepositoryRequest(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
-    ["github", "gitlab"].includes(String(value.provider)) &&
+    typeof value.provider === "string" && value.provider.length > 0 &&
     typeof value.repoPath === "string" &&
     typeof value.rationale === "string"
   );
@@ -86,7 +86,7 @@ function validDelivery(value: unknown): boolean {
 function validPullRequest(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
-    ["github", "gitlab"].includes(String(value.provider)) &&
+    typeof value.provider === "string" && value.provider.length > 0 &&
     typeof value.repoPath === "string" &&
     isFiniteNumber(value.id) &&
     typeof value.url === "string" &&

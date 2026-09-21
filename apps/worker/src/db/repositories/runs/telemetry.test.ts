@@ -427,6 +427,21 @@ describe("recordBlockStatuses", () => {
     expect((await row("wrun_1")).repositoryAccess).toEqual(repositoryAccess);
   });
 
+  it("freezes integration pins for durable reconciliation", async () => {
+    const integrationPins = [{
+      integrationId: "gitlab",
+      configFingerprint: "gitlab.example.com",
+    }];
+    await recordBlockStatuses(db, blockWrite({ integrationPins }));
+    expect((await row("wrun_1")).integrationPins).toEqual(integrationPins);
+
+    await recordBlockStatuses(db, blockWrite({
+      blockStatuses: { b1: { status: "ok" } },
+      integrationPins: [{ integrationId: "gitlab", configFingerprint: "changed" }],
+    }));
+    expect((await row("wrun_1")).integrationPins).toEqual(integrationPins);
+  });
+
   it("inserts a row with statuses, version, identity and running status", async () => {
     await recordBlockStatuses(db, blockWrite());
     const r = await row("wrun_1");

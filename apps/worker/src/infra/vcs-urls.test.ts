@@ -3,11 +3,15 @@ import { buildVcsUrls } from "./vcs-urls.js";
 
 describe("buildVcsUrls", () => {
   it("does not expose tokenized git URLs", () => {
-    const urls = buildVcsUrls({ kind: "gitlab", host: "https://gitlab.example.com", repoPath: "acme/api" });
+    const urls = buildVcsUrls({
+      host: "https://vcs.example.com",
+      authUser: "provider-token",
+      repoPath: "acme/api",
+    });
 
     expect(urls).toEqual({
-      cloneUrl: "https://gitlab.example.com/acme/api.git",
-      authUser: "oauth2",
+      cloneUrl: "https://vcs.example.com/acme/api.git",
+      authUser: "provider-token",
     });
     expect(JSON.stringify(urls)).not.toContain("glpat-secret");
   });

@@ -248,6 +248,7 @@ describe("GitHubAdapter", () => {
         headSha: "source-head-sha",
         baseRef: "release",
         state: "open",
+        checks: { state: "green", failed: [] },
       });
       expect(mockOctokit.pulls.get).toHaveBeenCalledWith({
         owner: "test-org",
@@ -271,6 +272,7 @@ describe("GitHubAdapter", () => {
         headSha: "source-head-sha",
         baseRef: "main",
         state: "merged",
+        checks: { state: "green", failed: [] },
       });
     });
   });
@@ -331,8 +333,8 @@ describe("GitHubAdapter", () => {
           {
             name: "ci / build",
             conclusion: "failure",
-            checkRunId: 100,
-            appSlug: "github-actions",
+            handle: { id: 100, owner: "github-actions" },
+            producer: "github-actions",
           },
         ],
         reviews: [
@@ -1569,7 +1571,7 @@ describe("GitHubAdapter", () => {
 
       const adapter = ghAdapter();
       await adapter.updateGateStatus(
-        { provider: "github", id: 123 },
+        { provider: "github", id: 123 } as never,
         { status: "completed", conclusion: "success", summary: "ok" },
       );
 

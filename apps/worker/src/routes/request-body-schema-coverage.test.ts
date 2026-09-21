@@ -128,8 +128,6 @@ const NO_JSON_BODY: Record<string, string> = {
     "reads another format: raw bytes, because the endpoint's signature is computed over exactly what arrived.",
   "webhooks/github.post.ts":
     "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
-  "webhooks/gitlab.post.ts":
-    "reads another format: raw bytes, because the provider's token check reads the body only after the header is trusted.",
   "webhooks/jira.post.ts":
     "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
   "webhooks/resend.post.ts":

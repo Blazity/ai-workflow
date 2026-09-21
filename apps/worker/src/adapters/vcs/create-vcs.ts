@@ -1,8 +1,6 @@
 import type { VcsProviderConfig } from "../../infra/vcs-config.js";
 import { GitHubAdapter } from "./github.js";
 import { createGitHubProfileSource } from "./github/profile-source.js";
-import { GitLabAdapter } from "./gitlab.js";
-import { createGitLabProfileSource } from "./gitlab/profile-source.js";
 import type { RepositoryProfileSource } from "./repository-profile-source.js";
 import type { VCSAdapter } from "./types.js";
 
@@ -15,14 +13,6 @@ export function createVCSForRepository(
   vcs: VcsProviderConfig,
   target: RepoTarget,
 ): VCSAdapter {
-  if (vcs.kind === "gitlab") {
-    return new GitLabAdapter({
-      token: vcs.token,
-      projectId: target.repoPath,
-      baseBranch: target.baseBranch,
-      host: vcs.host,
-    });
-  }
   if (vcs.kind !== "github") {
     throw new Error(`Unreachable: VCS kind ${(vcs as VcsProviderConfig).kind} fell through GitHub branch`);
   }
@@ -52,9 +42,6 @@ export function createRepositoryProfileSource(
   vcs: VcsProviderConfig,
   repoPath: string,
 ): RepositoryProfileSource {
-  if (vcs.kind === "gitlab") {
-    return createGitLabProfileSource({ token: vcs.token, host: vcs.host }, repoPath);
-  }
   if (vcs.kind !== "github") {
     throw new Error(
       `Unreachable: VCS kind ${(vcs as VcsProviderConfig).kind} fell through GitHub branch`,

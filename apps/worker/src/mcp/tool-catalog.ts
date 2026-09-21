@@ -643,7 +643,7 @@ export const MCP_TOOL_CATALOG = {
     inputSchema: z
       .object({
         repositoryId: z.number().int().min(0).max(REPOSITORY_ID_MAX),
-        provider: z.enum(["github", "gitlab"]),
+        provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
         path: z.string().trim().min(1).max(REPOSITORY_LABEL_MAX_LENGTH),
         displayName: z.string().max(REPOSITORY_LABEL_MAX_LENGTH).optional(),
         defaultBranch: z.string().max(REPOSITORY_LABEL_MAX_LENGTH).optional(),

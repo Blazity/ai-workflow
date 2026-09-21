@@ -91,7 +91,6 @@ import { TEST_BRIDGE_REPOSITORY_ACCESS } from "../../test-support/settings.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
 import {
   createRepositoryDirectory,
-  createRepositoryDirectoryForProviders,
 } from "../../adapters/vcs/repository-directory.js";
 import { createOrFindWorkflowOwnedPullRequest } from "../steps/repository-prs.js";
 import type { WorkspacePublicationResult } from "../steps/workspace-publication.js";
@@ -191,18 +190,6 @@ describe("filterRunRepositories", () => {
 // repository-directory.ts: the complete listing, filtered by nobody
 // ---------------------------------------------------------------------------
 describe("repository directory listings", () => {
-  const mockFetch = vi.fn();
-
-  function gitLabResponse(body: unknown, headers: Record<string, string> = {}) {
-    return {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: new Headers(headers),
-      json: vi.fn().mockResolvedValue(body),
-    };
-  }
-
   const githubConfig = {
     kind: "github" as const,
     auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
@@ -210,14 +197,6 @@ describe("repository directory listings", () => {
     baseBranch: "main",
     host: "https://github.com",
   };
-  const gitlabConfig = {
-    kind: "gitlab" as const,
-    token: "glpat",
-    repoPath: "default/repo",
-    baseBranch: "main",
-    host: "https://gitlab.example.com",
-  };
-
   function octokitReturning(fullNames: string[]) {
     return {
       apps: { listReposAccessibleToInstallation: vi.fn() },
@@ -227,8 +206,6 @@ describe("repository directory listings", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetch.mockReset();
-    vi.stubGlobal("fetch", mockFetch);
     mocks.buildOctokit.mockReturnValue(octokitReturning([]));
   });
 
@@ -248,36 +225,6 @@ describe("repository directory listings", () => {
     expect(result.map((r) => r.repoPath)).toEqual(["Acme/API", "other/repo"]);
   });
 
-  it("returns the complete normalized GitLab catalog, unfiltered", async () => {
-    mockFetch.mockResolvedValueOnce(
-      gitLabResponse([{ path_with_namespace: "acme/api" }, { path_with_namespace: "acme/web" }], {
-        "x-next-page": "",
-      }),
-    );
-
-    const result = await createRepositoryDirectory(gitlabConfig).listRepositories();
-
-    expect(result.map((r) => r.repoPath)).toEqual(["acme/api", "acme/web"]);
-  });
-
-  it("merges complete catalogs from every configured provider", async () => {
-    mocks.buildOctokit.mockReturnValue(octokitReturning(["acme/web"]));
-    mockFetch.mockResolvedValueOnce(
-      gitLabResponse([{ path_with_namespace: "acme/api" }], { "x-next-page": "" }),
-    );
-
-    const directory = createRepositoryDirectoryForProviders([
-      { kind: "github", auth: githubConfig.auth, host: "https://github.com", legacyBaseBranch: "main" },
-      { kind: "gitlab", token: "glpat", host: "https://gitlab.example.com", legacyBaseBranch: "main" },
-    ]);
-
-    const result = await directory.listRepositories();
-
-    expect(result).toEqual([
-      expect.objectContaining({ provider: "github", repoPath: "acme/web" }),
-      expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" }),
-    ]);
-  });
 });
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,15 @@ vi.mock("../../infra/vcs-config.js", () => ({
   getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
 }));
 
+vi.mock("../../services/integrations/runtime.js", () => ({
+  resolveUsableIntegrations: vi.fn(async () => ({
+    readable: true,
+    usable: [],
+    states: new Map(),
+  })),
+  checkIntegrationPin: vi.fn(() => ({ ok: true })),
+}));
+
 vi.mock("../../db/repositories/runs.js", () => ({
   listConnectedWorkflowOwnedBranchesForTicket: (ticketKey: string) =>
     mocks.listWorkflowOwnedBranchesForTicket(ticketKey),

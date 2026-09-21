@@ -239,11 +239,12 @@ startup with a clear error. The full reference lives in `SETUP.md`; the groups a
 - **Issue tracker:** `ISSUE_TRACKER_KIND` (`jira`), `JIRA_BASE_URL`, `JIRA_API_TOKEN`,
   `JIRA_PROJECT_KEY`, the three board column settings, optional
   `JIRA_BACKLOG_TRANSITION_ID` / `JIRA_AI_REVIEW_TRANSITION_ID`, `JIRA_WEBHOOK_SECRET`.
-- **VCS:** `VCS_KIND` (`github` | `gitlab`), GitHub App vars (`GITHUB_APP_ID`,
-  `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`), GitLab vars
-  (`GITLAB_TOKEN`, `GITLAB_HOST`), and per-provider webhook secrets. Repository
-  profiles own the default branch. Legacy single-repo `GITHUB_OWNER`/`GITHUB_REPO`
-  is still honored as a fallback.
+- **VCS:** GitHub App vars (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
+  `GITHUB_INSTALLATION_ID`), GitLab vars (`GITLAB_TOKEN`, `GITLAB_HOST`) which
+  seed the GitLab integration's connection, and per-provider webhook secrets.
+  There is no deployment-wide provider selector: a repository carries its own
+  provider. Repository profiles own the default branch. Legacy single-repo
+  `GITHUB_OWNER`/`GITHUB_REPO` is still honored as a fallback.
 - **Messaging:** `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID`, `SLACK_SIGNING_SECRET`,
   `SLACK_ALLOWED_USER_IDS`. (There is no `CHAT_SDK_API_KEY`. The bot's display name is
   whatever the Slack app is called; `CHAT_SDK_BOT_NAME` was retired in S9.)
@@ -530,7 +531,7 @@ not configured. Swapping platforms means wiring another `@chat-adapter/*`.
 
 ### 11.4 Adapter Registration
 
-Active adapters are chosen via env (`ISSUE_TRACKER_KIND`, `VCS_KIND`, presence of Slack config).
+Active adapters are chosen by `ISSUE_TRACKER_KIND`, by the credentials each version control provider has, and by the presence of Slack config.
 GitHub and GitLab can be active simultaneously; repository selection spans both providers.
 
 ## 12. Context Assembly

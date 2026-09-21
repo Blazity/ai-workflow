@@ -56,13 +56,6 @@ describe("github-auth", () => {
     expect(mockHook).toHaveBeenCalledWith({ type: "installation" });
   });
 
-  it("getVcsToken preserves static GitLab tokens", async () => {
-    await expect(getVcsToken({
-      kind: "gitlab",
-      token: "glpat-test",
-    })).resolves.toBe("glpat-test");
-  });
-
   it("getVcsToken mints GitHub installation tokens", async () => {
     await expect(getVcsToken({
       kind: "github",

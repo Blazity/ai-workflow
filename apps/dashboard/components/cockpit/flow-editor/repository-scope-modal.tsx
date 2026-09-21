@@ -599,8 +599,7 @@ export function RepositoryScopeModal({
                       options={manualProviders.map((provider) => ({
                         value: provider,
                         label: providerLabel(provider),
-                        hint:
-                          provider === "github" ? "github.com" : "gitlab.com",
+                        hint: provider,
                       }))}
                       value={manualProvider}
                       disabled={!canEdit}

@@ -1209,6 +1209,9 @@ export interface IntegrationState {
   readonly environment: IntegrationEnvironmentPresence;
   readonly stored: IntegrationStoredPresence;
   readonly pin: IntegrationConnectionPin;
+  /** Connection field keys that carry a value in the active source. Values are
+   * never exposed; deployment capability checks only need their presence. */
+  readonly configuredFields?: readonly string[];
   /** False when `INTEGRATION_SECRETS_KEY` is absent, which is what disables the
    *  secret fields on the card rather than letting a save fail later. */
   readonly secretsKeyAvailable: boolean;
@@ -1301,6 +1304,8 @@ export interface IntegrationImpactPreviewResponse {
   readonly enabledDefinitions: readonly IntegrationImpactDefinition[] | null;
   /** In-flight runs on those definitions that would stop. */
   readonly inFlightRuns: number | null;
+  /** Catalog repositories whose provider is this integration. */
+  readonly repositories: readonly { provider: string; path: string }[] | null;
 }
 
 /** A save whose `expectedVersion` no longer matches. Carries the current version

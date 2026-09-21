@@ -84,6 +84,7 @@ const connected: IntegrationState = {
 const integrations = deploymentIntegrations({
   manifests: [screen],
   states: new Map([["acmescreen", connected]]),
+  builtinCapabilities: ["vcs"],
 });
 
 function node(id: string, type: string, configuration: Record<string, unknown> = {}) {
@@ -215,6 +216,7 @@ describe("a screen's text comes from the run's subject unless the author binds i
     const plain = deploymentIntegrations({
       manifests: [withoutDefault],
       states: new Map([["acmescreen", connected]]),
+      builtinCapabilities: ["vcs"],
     });
     const parsed = parse({ schemaVersion: 2, ...branching });
     const definition = parsed.definition!;

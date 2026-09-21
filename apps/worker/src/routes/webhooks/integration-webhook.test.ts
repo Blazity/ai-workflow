@@ -23,6 +23,16 @@ const state = vi.hoisted(() => ({
   states: new Map<string, unknown>(),
   execute: undefined as unknown,
   observations: [] as Array<{ integrationId: string; outcome: string; reason: string }>,
+  dispatch: vi.fn(),
+  legacyGate: vi.fn(),
+  boundPipeline: null as unknown,
+  workflowPush: {} as {
+    workflowPublishedHeadSha?: string;
+    workflowOwnedPullRequest?: boolean;
+  },
+  suppressPush: false,
+  pushSuppressionInputs: [] as Record<string, unknown>[],
+  botLogin: vi.fn(async (_provider: string) => "ai-workflow-bot" as string | undefined),
 }));
 
 vi.mock("../../services/integrations/runtime.js", () => ({
@@ -36,6 +46,46 @@ const executeRunControlCommand = vi.fn();
 vi.mock("../../services/run-control/index.js", () => ({
   executeRunControlCommand,
   runControlDeps: async () => ({}),
+}));
+
+vi.mock("../../services/settings/index.js", () => ({
+  getRequestSettingsSnapshot: async () => ({ MAX_CONCURRENT_AGENTS: 3 }),
+  maxConcurrentAgents: () => 3,
+}));
+vi.mock("../../services/repository-catalog/index.js", () => ({
+  getRequestRepositoryCatalogSnapshot: async () => ({ activated: false }),
+}));
+vi.mock("../../db/repositories/active-runs.js", () => ({
+  createConnectedPostgresRunRegistry: () => ({}),
+}));
+vi.mock("../../services/dispatch/index.js", () => ({
+  createConnectedTriggerRunRegistry: () => ({}),
+  dispatchTriggerEvent: state.dispatch,
+  dispatchPostPrGateWebhook: state.legacyGate,
+  isRepositoryDispatchable: () => true,
+}));
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
+  createRepositoryVCS: vi.fn(),
+}));
+// A stand-in, not a copy. What the predicate decides is proved against the real
+// function in `services/publication/workflow-push-suppression.test.ts`; a double
+// that reimplements it here would only prove the double. What the route owes it
+// is the delivery's own head, producer and ownership record, and then obedience
+// to the answer, so this one records what it was asked and returns what the test
+// set.
+vi.mock("../../services/publication/index.js", () => ({
+  connectedWorkflowPushNormalizationOptions: vi.fn(async () => state.workflowPush),
+  isWorkflowGeneratedPush: vi.fn((input: Record<string, unknown>) => {
+    state.pushSuppressionInputs.push(input);
+    return state.suppressPush;
+  }),
+}));
+vi.mock("../../services/vcs/index.js", () => ({
+  getVcsBotLogin: state.botLogin,
+}));
+vi.mock("../../infra/vcs-config.js", () => ({
+  env: {},
+  getConfiguredVcsProviders: vi.fn(() => []),
 }));
 
 const deferred: Promise<unknown>[] = [];
@@ -84,6 +134,23 @@ function connectedSlack(): unknown {
   };
 }
 
+function connectedGitLab(): unknown {
+  return {
+    manifest: { id: "gitlab", name: "GitLab" },
+    runtime: integrationRuntime("gitlab")!,
+    ctx: {
+      connection: {
+        token: "glpat-test",
+        host: "https://gitlab.example.com",
+        webhookSecret: "webhook-secret",
+      },
+      signal: new AbortController().signal,
+      log: { debug() {}, info() {}, warn() {}, error() {} },
+      http: { fetch: globalThis.fetch },
+    },
+  };
+}
+
 function request(id: string, text: string): Request {
   const body = new URLSearchParams({
     user_id: "U2147483697",
@@ -105,6 +172,105 @@ function request(id: string, text: string): Request {
   });
 }
 
+function gitlabRequest(): Request {
+  return new Request("http://localhost/webhooks/gitlab", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-gitlab-token": "webhook-secret",
+      "x-gitlab-event": "Merge Request Hook",
+      "webhook-id": "delivery-17",
+    },
+    body: JSON.stringify({
+      object_kind: "merge_request",
+      user: { username: "alice" },
+      project: {
+        path_with_namespace: "platform/api",
+        web_url: "https://gitlab.example.com/platform/api",
+      },
+      object_attributes: {
+        action: "open",
+        iid: 17,
+        title: "Ready",
+        source_branch: "feature/ready",
+        target_branch: "main",
+        url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+        draft: false,
+        last_commit: { id: "head-sha" },
+      },
+    }),
+  });
+}
+
+function gitlabPipelineRequest(
+  source = "merge_request_event",
+): Request {
+  return new Request("http://localhost/webhooks/gitlab", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-gitlab-token": "webhook-secret",
+      "x-gitlab-event": "Pipeline Hook",
+      "webhook-id": "pipeline-31",
+    },
+    body: JSON.stringify({
+      object_kind: "pipeline",
+      project: {
+        id: 1,
+        path_with_namespace: "gitlab-org/gitlab-test",
+        web_url: "https://gitlab.example.com/gitlab-org/gitlab-test",
+      },
+      object_attributes: {
+        id: 31,
+        status: "failed",
+        source,
+        sha: "bcbb5ec396a2c0f828686f14fac9b80b780504f2",
+      },
+      merge_request: {
+        iid: 1,
+        source_branch: "test",
+        target_branch: "master",
+        title: "Test",
+        url: "https://gitlab.example.com/gitlab-org/gitlab-test/-/merge_requests/1",
+      },
+      builds: [{ id: 378, name: "test-build", status: "failed" }],
+    }),
+  });
+}
+
+function gitlabUpdateRequest(): Request {
+  return new Request("http://localhost/webhooks/gitlab", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-gitlab-token": "webhook-secret",
+      "x-gitlab-event": "Merge Request Hook",
+      "webhook-id": "update-17",
+    },
+    body: JSON.stringify({
+      object_kind: "merge_request",
+      oldrev: "previous-sha",
+      // Deliberately not the configured bot. The integration must emit this
+      // event so the route-level published-head guard is the code under test.
+      user: { username: "alice" },
+      project: {
+        path_with_namespace: "platform/api",
+        web_url: "https://gitlab.example.com/platform/api",
+      },
+      object_attributes: {
+        action: "update",
+        iid: 17,
+        title: "Ready",
+        source_branch: "feature/ready",
+        target_branch: "main",
+        url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+        draft: false,
+        last_commit: { id: "published-sha" },
+      },
+    }),
+  });
+}
+
 function app() {
   // A router, not `use`: the route reads `event.context.params.id`, which is
   // what the file name `[id].post.ts` gives it in the worker.
@@ -122,6 +288,13 @@ beforeEach(() => {
   state.readable = true;
   state.states = new Map([["slack", { enabled: true }]]);
   state.observations = [];
+  state.dispatch.mockReset().mockResolvedValue({ result: "started" });
+  state.legacyGate.mockReset();
+  state.boundPipeline = null;
+  state.workflowPush = {};
+  state.suppressPush = false;
+  state.pushSuppressionInputs = [];
+  state.botLogin.mockReset().mockResolvedValue("ai-workflow-bot");
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     posted.push({ url: String(url), body: JSON.parse(String(init?.body)) });
     return new Response("ok", { status: 200 });
@@ -253,5 +426,195 @@ describe("POST /webhooks/:id", () => {
 
   it("404s an id no integration in this build claims", async () => {
     expect((await app()(request("nosuchprovider", "list"))).status).toBe(404);
+  });
+
+  it("keeps the GitLab webhook URL and dispatches its normalized events", async () => {
+    state.usable = [connectedGitLab()];
+    state.states = new Map([["gitlab", { enabled: true }]]);
+
+    const response = await app()(gitlabRequest());
+    await Promise.all(deferred);
+
+    expect(response.status).toBe(202);
+    expect(state.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_ready",
+        pr: expect.objectContaining({ provider: "gitlab", repoPath: "platform/api" }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("dispatches a failed GitLab pipeline only when its head and provider handle still match", async () => {
+    state.usable = [connectedGitLab()];
+    state.states = new Map([["gitlab", { enabled: true }]]);
+    const { bindCurrentPullRequest } = await import(
+      "../../engine/support/trigger-current-pull-request.js"
+    );
+    const { GitLabAdapter } = await import(
+      "../../../../../integrations/gitlab/vcs.js"
+    );
+    const adapter = new GitLabAdapter(
+      {
+        token: "glpat-test",
+        host: "https://gitlab.example.com",
+        projectId: "gitlab-org/gitlab-test",
+        baseBranch: "master",
+      },
+      {
+        MergeRequests: {
+          show: vi.fn(async () => ({
+            diff_refs: { head_sha: "bcbb5ec396a2c0f828686f14fac9b80b780504f2" },
+            source_branch: "test",
+            target_branch: "master",
+            state: "opened",
+            head_pipeline: { id: 31, status: "failed" },
+          })),
+        },
+        Jobs: {
+          all: vi.fn(async () => [{ id: 378, name: "test-build", status: "failed" }]),
+        },
+      } as never,
+    );
+    const current = await adapter.getPRHead(1);
+    state.dispatch.mockImplementation(async (candidate) => {
+      state.boundPipeline = bindCurrentPullRequest(
+        candidate,
+        current,
+        (left, right) => adapter.sameHandle(left, right),
+      );
+      return state.boundPipeline ? { result: "started" } : { result: "ignored_stale_head" };
+    });
+
+    const response = await app()(gitlabPipelineRequest());
+    await Promise.all(deferred);
+
+    expect(response.status).toBe(202);
+    expect(state.boundPipeline).toMatchObject({
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        headSha: "bcbb5ec396a2c0f828686f14fac9b80b780504f2",
+        failedChecks: [{
+          name: "test-build",
+          conclusion: "failed",
+        }],
+      },
+    });
+    const boundHandle = (state.boundPipeline as {
+      pr?: { failedChecks?: Array<{ handle?: import("@integrations/sdk").VcsOpaqueHandle }> };
+    })?.pr?.failedChecks?.[0]?.handle;
+    const currentHandle = current.checks?.failed.find(
+      (check) => check.name === "test-build",
+    )?.handle;
+    expect(adapter.sameHandle(boundHandle, currentHandle)).toBe(true);
+  });
+
+  it.each([
+    ["merge_request_event", true],
+    ["push", false],
+    ["schedule", false],
+  ] as const)(
+    "keeps GitLab pipeline source %s on the legacy empty allow-list trust boundary",
+    async (source, expectedEligible) => {
+      state.usable = [connectedGitLab()];
+      state.states = new Map([["gitlab", { enabled: true }]]);
+      const { selectEligibleEvent } = await import(
+        "../../services/dispatch/dispatch-trigger.js"
+      );
+      let eligible = false;
+      state.dispatch.mockImplementation(async (candidate) => {
+        eligible = selectEligibleEvent(candidate, { trustedProducers: [] }) !== null;
+        return eligible ? { result: "started" } : { result: "ignored_untrusted_event" };
+      });
+
+      const response = await app()(gitlabPipelineRequest(source));
+      await Promise.all(deferred);
+
+      expect(response.status).toBe(202);
+      expect(eligible).toBe(expectedEligible);
+    },
+  );
+
+  it("does not let the workflow's own GitLab push supersede the run that published it", async () => {
+    state.usable = [connectedGitLab()];
+    state.states = new Map([["gitlab", { enabled: true }]]);
+    state.workflowPush = {
+      workflowPublishedHeadSha: "published-sha",
+      workflowOwnedPullRequest: true,
+    };
+    state.suppressPush = true;
+
+    const response = await app()(gitlabUpdateRequest());
+    await Promise.all(deferred);
+
+    expect(response.status).toBe(202);
+    expect(state.dispatch).not.toHaveBeenCalled();
+    expect(state.legacyGate).not.toHaveBeenCalled();
+  });
+
+  it("asks about the push with the delivery's own head, producer and ownership", async () => {
+    // Everything the predicate can answer with comes from here. A route that
+    // passed its own idea of the head, or forgot the ownership record, would
+    // get a correct answer to the wrong question and this test would not see
+    // it through the dispatch count alone.
+    state.usable = [connectedGitLab()];
+    state.states = new Map([["gitlab", { enabled: true }]]);
+    state.workflowPush = {
+      workflowPublishedHeadSha: "published-sha",
+      workflowOwnedPullRequest: true,
+    };
+
+    await app()(gitlabUpdateRequest());
+    await Promise.all(deferred);
+
+    expect(state.pushSuppressionInputs[0]).toEqual({
+      currentHeadSha: "published-sha",
+      producer: "alice",
+      botIdentity: "ai-workflow-bot",
+      workflowPublishedHeadSha: "published-sha",
+      workflowOwnedPullRequest: true,
+    });
+  });
+
+  it("makes a chat delivery pay nothing for a version control lookup", async () => {
+    // `getVcsBotLogin` reads this deployment's integration settings again. Slack
+    // has no automation account in that sense and gets `undefined` however the
+    // read turns out, so the read is pure latency against a deadline of about
+    // three seconds.
+    executeRunControlCommand.mockResolvedValue({ kind: "status", runs: [] });
+
+    await app()(request("slack", "/ai-workflow status"));
+    await Promise.all(deferred);
+
+    expect(state.botLogin).not.toHaveBeenCalled();
+  });
+
+  it("resolves the automation account once for a whole delivery", async () => {
+    // One GitLab delivery asks for it in the webhook context, again for each
+    // candidate event, and again for the legacy gate: the same answer, bought
+    // three times inside the provider's deadline.
+    state.usable = [connectedGitLab()];
+    state.states = new Map([["gitlab", { enabled: true }]]);
+    state.workflowPush = { workflowOwnedPullRequest: true };
+
+    await app()(gitlabUpdateRequest());
+    await Promise.all(deferred);
+
+    expect(state.botLogin.mock.calls.map(([provider]) => provider)).toEqual(["gitlab"]);
+  });
+
+  it("dispatches the push the predicate calls foreign", async () => {
+    state.usable = [connectedGitLab()];
+    state.states = new Map([["gitlab", { enabled: true }]]);
+    state.workflowPush = {
+      workflowPublishedHeadSha: "an-older-head",
+      workflowOwnedPullRequest: true,
+    };
+
+    const response = await app()(gitlabUpdateRequest());
+    await Promise.all(deferred);
+
+    expect(response.status).toBe(202);
+    expect(state.dispatch).toHaveBeenCalled();
   });
 });

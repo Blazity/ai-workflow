@@ -122,19 +122,8 @@ function availabilityFor(
     return unavailable("Webhook trigger encryption is not configured.");
   }
   const selectedProviders = Array.isArray(params.providers)
-    ? params.providers.filter(
-      (provider): provider is VcsProviderKind => provider === "github" || provider === "gitlab",
-    )
+    ? params.providers.filter((provider): provider is VcsProviderKind => typeof provider === "string")
     : [];
-  if (
-    type === "trigger_pr_review" &&
-    selectedProviders.includes("gitlab") &&
-    !(Array.isArray(params.on) && params.on.includes("commented"))
-  ) {
-    return unavailable(
-      'GitLab review triggers must include "commented"; GitLab does not emit a reliable changes-requested review event.',
-    );
-  }
   if (vcsBlocks.has(type) && context.vcsProviders.length === 0) {
     return unavailable("No version-control provider is configured.");
   }
@@ -150,22 +139,17 @@ function availabilityFor(
   if (type === "trigger_pr_review") {
     const states = Array.isArray(params.on) ? params.on : [];
     if (states.includes("commented")) {
-      const missingBotIdentities = selectedProviders.filter(
+      const effectiveProviders = selectedProviders.length > 0
+        ? selectedProviders
+        : context.vcsProviders;
+      const missingBotIdentities = effectiveProviders.filter(
         (provider) =>
           context.vcsProviders.includes(provider) &&
           !context.vcsBotIdentities.includes(provider),
       );
       if (missingBotIdentities.length > 0) {
-        const variables = missingBotIdentities.map((provider) =>
-          provider === "github" ? "GITHUB_BOT_LOGIN" : "GITLAB_BOT_LOGIN",
-        );
-        const label = missingBotIdentities[0] === "github" ? "GitHub" : "GitLab";
         return unavailable(
-          context.vcsProviders.length === 1
-            ? `Commented ${label} review triggers require ${variables[0]} (or VCS_BOT_LOGIN in a single-provider deployment) to prevent recursive bot reviews.`
-            : missingBotIdentities.length === 1
-              ? `Commented review triggers require a configured ${variables[0]} to prevent recursive bot reviews.`
-              : `Commented review triggers require configured ${variables.join(" and ")} values to prevent recursive bot reviews.`,
+          `Commented review triggers require a bot username for ${missingBotIdentities.join(", ")} to prevent recursive bot reviews. Configure it on the Integrations page.`,
         );
       }
     }
@@ -292,15 +276,8 @@ export function buildWorkflowBlockRegistry(
 function defaultsForContext(
   type: WorkflowBlockType,
   defaults: Record<string, WorkflowParamValue>,
-  context: WorkflowBlockRegistryContext,
+  _context: WorkflowBlockRegistryContext,
 ): Record<string, WorkflowParamValue> {
-  if (
-    type === "trigger_pr_review" &&
-    !context.vcsProviders.includes("github") &&
-    context.vcsProviders.includes("gitlab")
-  ) {
-    return { ...defaults, providers: ["gitlab"], on: ["commented"] };
-  }
   return defaults;
 }
 

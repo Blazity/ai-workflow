@@ -366,7 +366,7 @@ function PRLink({
           {repoLabel}
         </span>
       )}
-      <span className="opacity-60">{pr.provider === "gitlab" ? "MR" : "PR"}</span>
+      <span className="opacity-60">PR</span>
       {pullRequestRef(pr)}
       <span className="text-[9px] opacity-70">↗</span>
     </a>

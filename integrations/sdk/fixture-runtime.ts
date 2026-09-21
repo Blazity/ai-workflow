@@ -103,6 +103,10 @@ class FixtureRepository implements VCSAdapter {
     return `/repos/${this.repository.repoPath}${suffix}`;
   }
 
+  sameHandle(left: import("./vcs").VcsOpaqueHandle | undefined, right: import("./vcs").VcsOpaqueHandle | undefined): boolean {
+    return left === right;
+  }
+
   async createBranchIfMissing(name: string, base: string): Promise<"created" | "existing"> {
     const body = (await readJson(this.ctx, this.path("/branches"), {
       method: "POST",

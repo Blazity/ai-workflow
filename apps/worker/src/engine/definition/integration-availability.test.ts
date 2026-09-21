@@ -87,6 +87,12 @@ const notify = manifest({
   blocks: [{ type: "acmenotify_announce" }],
 });
 
+const versionControl = manifest({
+  id: "acmevcs",
+  name: "Acme VCS",
+  capabilities: ["vcs"],
+});
+
 describe("integrationBlockAvailability", () => {
   it("offers the block of a connected, enabled integration", () => {
     const integrations = deploymentIntegrations({
@@ -312,6 +318,25 @@ describe("integrationsUsedBy", () => {
     expect(
       integrationsUsedBy([{ type: "trigger_ticket_ai" }, { type: "send_message" }], integrations),
     ).toEqual(["acmenotify"]);
+  });
+
+  it("pins the repository provider behind every core version-control block", () => {
+    const integrations = deploymentIntegrations({
+      manifests: [versionControl],
+      states: new Map([["acmevcs", state("acmevcs")]]),
+    });
+
+    expect(
+      integrationsUsedBy(
+        [
+          { type: "trigger_pr_created" },
+          { type: "prepare_workspace" },
+          { type: "open_pr" },
+          { type: "post_pr_comment" },
+        ],
+        integrations,
+      ),
+    ).toEqual(["acmevcs"]);
   });
 
   it("leaves the chat provider out when the investigation opted out of it", () => {

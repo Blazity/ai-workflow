@@ -185,7 +185,7 @@ const NEGATION = /(^|\s)(not|no|nie|without|except|skip|avoid|exclude|bez|pomin|
  *  phrase has been folded to lower case, so the spelling is recovered from the
  *  original answer: a real model copies the name as written. */
 function answerTokensOf(answer: string, phrase: string): string[] {
-  const paths = phrase.match(/(?:(?:github|gitlab):)?[a-z0-9._-]+\/[a-z0-9._/-]+/g) ?? [];
+  const paths = phrase.match(/(?:[a-z0-9._-]+:)?[a-z0-9._-]+\/[a-z0-9._/-]+/g) ?? [];
   const lower = answer.toLowerCase();
   return paths.flatMap((path) => {
     // Only what the person actually wrote, and never the tail of a link: the

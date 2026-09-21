@@ -479,13 +479,7 @@ describe("Workflow Definition v2 schema", () => {
           vcsBotIdentities: ["gitlab"],
         }),
       ),
-    ).toEqual([
-      expect.objectContaining({
-        code: "deployment",
-        nodeId: "ticket",
-        path: "/nodes/0/configuration",
-      }),
-    ]);
+    ).toEqual([]);
   });
 
   it("validates a custom Claude profile with Claude credentials", () => {

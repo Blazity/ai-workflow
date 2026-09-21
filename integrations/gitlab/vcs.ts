@@ -1,38 +1,27 @@
 import { createHash } from "node:crypto";
 import { Gitlab } from "@gitbeaker/rest";
-import { FatalError } from "workflow";
-import type {
-  VCSAdapter,
-  GateStatusUpdate,
-  GateStatusCapableVCS,
-  GateStatusRef,
-  PRFile,
-  PRFilesCapableVCS,
-  PRReviewCapableVCS,
-  PRReviewInlineComment,
-  PRReviewPublication,
-  PRReviewPublicationResult,
-  PullRequest,
-  PullRequestHead,
-  PRComment,
-  CheckRunResult,
-  ManualDispatchPrCapableVCS,
-  ManualDispatchPullRequestSnapshot,
-  ReviewThread,
-  ReviewThreadFeed,
-  ReviewThreadSource,
-  SettleReviewThreadInput,
-  SettleReviewThreadResult,
-  PostRunFailureNoteInput,
-} from "./types.js";
 import {
-  readReviewFindingDigest,
-  reviewFallbackBullet,
+  FatalError,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
-} from "./types.js";
-import { clampBothEnds } from "@shared/workflow-graph";
-import { logger } from "../../infra/logger.js";
+  type CheckRunResult,
+  type GateStatusRef,
+  type GateStatusUpdate,
+  type IntegrationLogger,
+  type PostRunFailureNoteInput,
+  type PRComment,
+  type PullRequest,
+  type PullRequestHead,
+  type ReviewThread,
+  type ReviewThreadFeed,
+  type ReviewThreadSource,
+  type SettleReviewThreadInput,
+  type SettleReviewThreadResult,
+  type VCSAdapter,
+  type VcsRepositoryMetadata,
+  type VcsOpaqueHandle,
+} from "@integrations/sdk";
+import { createGitLabProfileSource } from "./profile-source";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasReviewLedgerFailureMarker,
@@ -44,7 +33,88 @@ import {
   readAnyReviewLedgerMarker,
   readReviewLedgerMarker,
   reviewLedgerFailureMarker,
-} from "./vcs-bot-identity.js";
+  readReviewFindingDigest,
+  reviewFallbackBullet,
+  type PRReviewInlineComment,
+} from "./review-markers";
+
+export interface PRFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  changeType: "added" | "removed" | "modified" | "renamed";
+  patch?: string;
+}
+
+interface PRReviewPublication {
+  idempotencyKey: string;
+  priorIdempotencyKeys?: string[];
+  commentFindingDigests: string[];
+  deferredFindingDigests?: string[];
+  headSha: string;
+  decision: "approve" | "request_changes";
+  summary: string;
+  comments: PRReviewInlineComment[];
+}
+
+interface PRReviewPublicationResult {
+  id: string;
+  commentIds: Array<string | null>;
+}
+
+interface ManualDispatchPullRequestSnapshot {
+  prNumber: number;
+  prUrl: string;
+  headRef: string;
+  headSha: string;
+  baseRef: string;
+  title: string;
+  author: string;
+  isDraft: boolean;
+  state: "open" | "closed" | "merged";
+  mergeSha?: string;
+  mergedAt?: string;
+  failedChecks: Array<{
+    name: string;
+    conclusion: string;
+    handle?: VcsOpaqueHandle;
+    producer: string;
+    source?: string;
+  }>;
+  reviews: Array<{
+    state: "changes_requested" | "commented";
+    author: string;
+    body: string;
+  }>;
+}
+
+interface GateStatusCapableVCS {
+  createGateStatus(name: string, headSha: string, ownershipKey?: string): Promise<GateStatusRef>;
+  updateGateStatus(ref: GateStatusRef, update: GateStatusUpdate): Promise<void>;
+}
+
+interface PRFilesCapableVCS {
+  listPRFiles(prId: number): Promise<PRFile[]>;
+}
+
+interface PRReviewCapableVCS {
+  publishPRReview(
+    prId: number,
+    publication: PRReviewPublication,
+  ): Promise<PRReviewPublicationResult>;
+}
+
+interface ManualDispatchPrCapableVCS {
+  getManualDispatchPullRequest(prId: number): Promise<ManualDispatchPullRequestSnapshot>;
+}
+
+function clampBothEnds(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const marker = " ... ";
+  const remaining = Math.max(0, maxLength - marker.length);
+  const head = Math.ceil(remaining / 2);
+  return `${value.slice(0, head)}${marker}${value.slice(value.length - (remaining - head))}`;
+}
 
 /**
  * Posted into a discussion just before it is resolved. GitLab's only way to collapse
@@ -110,6 +180,22 @@ interface GitLabJob {
   name: string;
   status: string;
 }
+
+type GitLabHandle = {
+  kind?: string;
+  id?: string | number | null;
+  container?: number | null;
+};
+
+type GitLabGateStatusHandle = {
+  kind: "commit_status";
+  name: string;
+  headSha: string;
+};
+
+function gitLabHandle(value: GitLabHandle | GitLabGateStatusHandle): VcsOpaqueHandle {
+  return value as unknown as VcsOpaqueHandle;
+}
 interface GitLabMRDiff {
   new_path?: string;
   old_path?: string;
@@ -137,6 +223,24 @@ export interface GitLabConfig {
   baseBranch: string;
   /** Base URL for GitLab instance. Defaults to "https://gitlab.com". */
   host?: string;
+  log?: IntegrationLogger;
+  botLogin?: string;
+  legacyProjectId?: string;
+}
+
+function mapRepositoryMetadata(project: any): VcsRepositoryMetadata {
+  return {
+    provider: "gitlab",
+    repoPath: project.path_with_namespace,
+    name: project.name,
+    owner: project.namespace?.full_path ?? project.path_with_namespace.split("/")[0],
+    defaultBranch: project.default_branch ?? "",
+    description: project.description ?? "",
+    webUrl: project.web_url,
+    topics: project.topics ?? project.tag_list ?? [],
+    archived: Boolean(project.archived),
+    private: project.visibility !== "public",
+  };
 }
 
 interface OwnedReviewDiscussion {
@@ -170,13 +274,67 @@ export class GitLabAdapter implements
   /** `undefined` until looked up; `null` when GitLab returned no username. */
   private cachedUsername: string | null | undefined;
 
-  constructor(private config: GitLabConfig) {
-    this.gl = new Gitlab({
-      token: config.token,
-      ...(config.host ? { host: config.host } : {}),
-    });
+  constructor(
+    private config: GitLabConfig,
+    client?: InstanceType<typeof Gitlab>,
+  ) {
+    this.gl =
+      client ??
+      new Gitlab({
+        token: config.token,
+        ...(config.host ? { host: config.host } : {}),
+      });
     this.projectId = config.projectId;
     this.baseBranch = config.baseBranch;
+  }
+
+  get botLogin(): string | undefined {
+    return this.config.botLogin;
+  }
+
+  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean {
+    if (!left || !right) return left === right;
+    const a = left as unknown as GitLabHandle;
+    const b = right as unknown as GitLabHandle;
+    return a.kind === b.kind && a.id === b.id && a.container === b.container;
+  }
+
+  async listRepositories(): Promise<VcsRepositoryMetadata[]> {
+    const projects: any[] = [];
+    const baseUrl = (this.config.host ?? "https://gitlab.com").replace(/\/$/u, "");
+    let page = "1";
+    while (page) {
+      const response = await fetch(
+        `${baseUrl}/api/v4/projects?membership=true&per_page=100&page=${page}`,
+        {
+          headers: { "PRIVATE-TOKEN": this.config.token },
+          signal: AbortSignal.timeout(18_000),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`GitLab projects list failed: ${response.status} ${response.statusText}`);
+      }
+      projects.push(...((await response.json()) as any[]));
+      page = response.headers.get("x-next-page") ?? "";
+    }
+    return projects.map(mapRepositoryMetadata);
+  }
+
+  loadRepositoryProfile(repoPath: string) {
+    return createGitLabProfileSource(
+      { token: this.config.token, host: this.config.host ?? "https://gitlab.com" },
+      repoPath,
+    ).loadProfile();
+  }
+
+  async sandboxCredentials() {
+    return {
+      host: this.config.host ?? "https://gitlab.com",
+      authUser: "oauth2",
+      token: this.config.token,
+      commitAuthor: "ai-workflow-blazity",
+      commitEmail: "ai-workflow@blazity.com",
+    };
   }
 
   private get apiBaseUrl(): string {
@@ -359,7 +517,7 @@ export class GitLabAdapter implements
     files: Array<{ path: string; content: string }>,
     options?: { mergeParentSha?: string; message?: string },
   ): Promise<void> {
-    // GitLab's REST commits API creates linear commits only — it has no
+    // GitLab's REST commits API creates linear commits only; it has no
     // equivalent to GitHub's two-parent createCommit for reconciling branch
     // histories. Conflict resolution on GitLab should go through an MR rebase
     // (MergeRequests.rebase) or an explicit merge, which is not part of this
@@ -372,7 +530,7 @@ export class GitLabAdapter implements
       );
     }
 
-    // GitLab's REST commits API has no "upsert" action — each file must be
+    // GitLab's REST commits API has no "upsert" action; each file must be
     // declared as either "create" or "update". Probe each path on the target
     // branch: 404 → create, otherwise update. Done in parallel to avoid a
     // linear-in-file-count latency hit.
@@ -453,16 +611,38 @@ export class GitLabAdapter implements
             pipelineId: headPipelineId,
           })) as unknown as GitLabJob[])
             .filter((job) => job.status === "failed")
-            .map((job) => ({ id: job.id, name: job.name }))
-        : undefined;
+            .map((job) => ({
+              handle: gitLabHandle({ kind: "job", container: headPipelineId, id: job.id }),
+              name: job.name,
+              conclusion: "failed",
+            }))
+        : [];
+    const failed =
+      headPipelineStatus === "failed" && typeof headPipelineId === "number"
+        ? [
+            {
+              handle: gitLabHandle({ kind: "aggregate", id: headPipelineId }),
+              name: "pipeline",
+              conclusion: "failed",
+            },
+            ...headPipelineFailedChecks,
+          ]
+        : [];
+    const checks = {
+      state:
+        headPipelineStatus === "failed"
+          ? "red" as const
+          : headPipelineStatus === "running" || headPipelineStatus === "pending"
+            ? "running" as const
+            : "green" as const,
+      failed,
+    };
     return {
       headSha,
       ...(mr.source_branch ? { headRef: mr.source_branch } : {}),
       baseRef,
       state,
-      ...(typeof headPipelineId === "number" ? { headPipelineId } : {}),
-      ...(typeof headPipelineStatus === "string" ? { headPipelineStatus } : {}),
-      ...(headPipelineFailedChecks ? { headPipelineFailedChecks } : {}),
+      checks,
     };
   }
 
@@ -474,10 +654,11 @@ export class GitLabAdapter implements
       prId,
     )) as unknown as GitLabMRHead;
     const current = await this.getPRHead(prId);
+    const headPipelineId = mr.head_pipeline?.id;
     const [comments, pipeline] = await Promise.all([
       this.getPRComments(prId),
-      typeof current.headPipelineId === "number"
-        ? this.gl.Pipelines.show(this.projectId, current.headPipelineId)
+      typeof headPipelineId === "number"
+        ? this.gl.Pipelines.show(this.projectId, headPipelineId)
         : Promise.resolve(null),
     ]);
     return {
@@ -498,16 +679,17 @@ export class GitLabAdapter implements
       ...(current.state === "merged" && mr.merged_at
         ? { mergedAt: mr.merged_at }
         : {}),
-      ...(typeof current.headPipelineId === "number"
-        ? { pipelineId: current.headPipelineId }
-        : {}),
-      ...(pipeline && typeof (pipeline as { source?: unknown }).source === "string"
-        ? { pipelineSource: (pipeline as { source: string }).source }
-        : {}),
-      failedChecks: (current.headPipelineFailedChecks ?? []).map((check) => ({
-        name: check.name,
-        conclusion: "failed",
-      })),
+      failedChecks: (current.checks?.failed ?? []).map((check) => {
+        const source = (pipeline as { source?: unknown } | null)?.source;
+        const failedCheck: ManualDispatchPullRequestSnapshot["failedChecks"][number] = {
+          name: check.name,
+          conclusion: check.conclusion,
+          producer: "",
+        };
+        if (check.handle) failedCheck.handle = check.handle;
+        if (typeof source === "string") failedCheck.source = source;
+        return failedCheck;
+      }),
       reviews: comments
         .filter((comment) => comment.body.trim().length > 0)
         .map((comment) => ({
@@ -516,6 +698,20 @@ export class GitLabAdapter implements
           body: comment.body,
         })),
     };
+  }
+
+  parsePullRequestUrl(url: URL): { repoPath: string; prNumber: number } | null {
+    const host = new URL(this.config.host ?? "https://gitlab.com").host.toLowerCase();
+    if (url.host.toLowerCase() !== host) return null;
+    const segments = url.pathname.split("/").filter(Boolean);
+    const marker = segments.findIndex(
+      (segment, index) => segment === "-" && segments[index + 1] === "merge_requests",
+    );
+    const prNumber = Number(segments[marker + 2]);
+    if (marker < 1 || marker + 2 >= segments.length || !Number.isSafeInteger(prNumber) || prNumber <= 0) {
+      return null;
+    }
+    return { repoPath: segments.slice(0, marker).join("/"), prNumber };
   }
 
   async findPR(branch: string): Promise<PullRequest | null> {
@@ -993,18 +1189,18 @@ export class GitLabAdapter implements
     headSha: string,
   ): Promise<GateStatusRef> {
     await this.postCommitStatus(headSha, name, { state: "running" });
-    return { provider: "gitlab", name, headSha };
+    return gitLabHandle({ kind: "commit_status", name, headSha });
   }
 
   async updateGateStatus(
     ref: GateStatusRef,
     update: GateStatusUpdate,
   ): Promise<void> {
-    if (ref.provider !== "gitlab") {
-      throw new Error(`GitLabAdapter cannot update ${ref.provider} gate status`);
-    }
-
-    await this.postCommitStatus(ref.headSha, ref.name, {
+    const value = ref as unknown as Partial<GitLabGateStatusHandle>;
+    const headSha = typeof value.headSha === "string" ? value.headSha : null;
+    const name = typeof value.name === "string" ? value.name : null;
+    if (!headSha || !name) throw new Error("GitLab received an invalid gate status handle");
+    await this.postCommitStatus(headSha, name, {
       state: this.mapCommitStatus(update),
       // GitLab caps a commit-status description at 255 characters. A failure
       // summary arrives here as "<generic> (<cause>) Diagnostic ID: <id>", which
@@ -1082,9 +1278,9 @@ export class GitLabAdapter implements
           author: note.author?.username ?? "unknown",
           body: String(note.body ?? ""),
           // GitLab notes have no direct "liked" signal comparable to GitHub
-          // reactions. Intentionally hardcoded — see design spec.
+          // reactions. Intentionally hardcoded; see design spec.
           liked: false,
-          // Comments on deleted lines only have old_path/old_line —
+          // Comments on deleted lines only have old_path/old_line;
           // fall back so the anchor isn't lost.
           filePath: note.position?.new_path ?? note.position?.old_path,
           startLine: note.position?.new_line ?? note.position?.old_line,
@@ -1103,7 +1299,7 @@ export class GitLabAdapter implements
       comments.push({
         author: note.author?.username ?? "unknown",
         body: String(note.body ?? ""),
-        // See note above — liked is intentionally hardcoded for GitLab.
+        // See note above; liked is intentionally hardcoded for GitLab.
         liked: false,
       });
     }
@@ -1288,11 +1484,11 @@ export class GitLabAdapter implements
     });
     for (const thread of threads) {
       if (!reopened.has(thread.threadId)) continue;
-      logger.info({
+      this.config.log?.info({
         event: "review_ledger.reopened",
         threadId: thread.threadId,
         alias: thread.alias,
-      });
+      }, "review_ledger_reopened");
     }
 
     // Counted apart, because they cost different things: a dropped work item is a

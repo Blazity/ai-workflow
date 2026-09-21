@@ -18,7 +18,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../infra/vcs-config.js", () => ({
   env: state.env,
   getConfiguredVcsProviders: () => state.providers,
-  getVcsProviderConfig: () => state.providers[0],
+  getVcsProviderConfig: (kind: string) => {
+    const provider = state.providers.find(
+      (candidate) => (candidate as { kind?: string }).kind === kind,
+    );
+    if (!provider) throw new Error(`no ${kind} provider is configured`);
+    return provider;
+  },
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../infra/llm.js", () => ({

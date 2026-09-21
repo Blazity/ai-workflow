@@ -22,6 +22,7 @@ import { AGENT_CLI_SPEC_CATALOG } from "./agents/protocol.js";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
 import { verifyHarnessSkillArtifact } from "@shared/skills";
 import { sha256Digest } from "../harness-profiles/skill-artifact-digest.js";
+import { integrationManifests } from "@integrations/registry";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/;
@@ -55,8 +56,8 @@ export const HARNESS_CREDENTIAL_REFERENCE_CATALOG = new Set([
   "anthropic",
   "openai",
   "github",
-  "gitlab",
   "jira",
+  ...integrationManifests.map((manifest) => manifest.id),
 ] as const);
 
 const AGENT_BLOCK_TYPES = new Set<WorkflowBlockType>([

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BlockManifest } from "@shared/contracts";
 
-const vcsProviderSelection = z.array(z.enum(["github", "gitlab"])).min(1);
+const vcsProviderSelection = z.array(z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/));
 // The trigger's optional repository policy. Kept in step by hand with
 // `triggerRepositoryPolicySchema` in @shared/contracts, which a manifest may
 // import only as a type. Deliberately no default.
@@ -10,7 +10,7 @@ const repositoryKey = z
   .trim()
   .toLowerCase()
   .max(207)
-  .regex(/^(?:github|gitlab):[^/\s]+(?:\/[^/\s]+)+$/u);
+  .regex(/^[a-z][a-z0-9_-]{2,31}:[^/\s]+(?:\/[^/\s]+)+$/u);
 const repositoryPolicy = z
   .object({
     candidates: z.discriminatedUnion("kind", [
@@ -32,20 +32,14 @@ const repositoryPolicy = z
   .strict();
 const paramsSchema = z
   .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    providers: vcsProviderSelection.default([]),
     scope: z.enum(["workflow_owned", "any"]).default("workflow_owned"),
     checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
     ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
-    githubAppSlugs: z
+    trustedProducers: z
       .array(z.string().trim().min(1).max(100))
-      .min(1)
       .max(20)
-      .default(["github-actions"]),
-    gitlabPipelineSources: z
-      .array(z.string().trim().min(1).max(100))
-      .min(1)
-      .max(20)
-      .default(["merge_request_event"]),
+      .default([]),
     maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
     rateLimitMax: z.number().int().min(1).optional(),
     rateLimitWindow: z.enum(["minute", "hour", "day", "month"]).optional(),
@@ -71,12 +65,11 @@ export const manifest = {
     softColor: "#FBECEC",
   },
   defaults: {
-    providers: ["github", "gitlab"],
+    providers: [],
     scope: "workflow_owned",
     checkNames: [],
     ignoreCheckNames: [],
-    githubAppSlugs: ["github-actions"],
-    gitlabPipelineSources: ["merge_request_event"],
+    trustedProducers: [],
     maxFixAttemptsPerPr: 2,
   },
   inputs: {},

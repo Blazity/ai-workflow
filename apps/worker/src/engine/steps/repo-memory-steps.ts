@@ -645,7 +645,7 @@ export interface DistillRepoMemoryInput {
   subjectKey: string;
   taskId: string;
   repositories: Array<{
-    provider: "github" | "gitlab";
+    provider: string;
     repoPath: string;
     /**
      * Paths tracked on this repository's default branch, captured from the clone
@@ -773,7 +773,7 @@ interface RepoMemoryState {
   repoPath: string;
   /** Kept apart from `key` so org promotion can group on the provider without
    * having to parse it back out of a composed identifier. */
-  provider: "github" | "gitlab";
+  provider: string;
   /** Database subject key the two documents are stored under. */
   subjectKey: string;
   known: Record<RepoMemoryDocKind, RepoMemoryItem[]>;
@@ -1237,6 +1237,7 @@ distillRepoMemoryStep.maxRetries = 0;
 export interface CaptureDefaultBranchFilesInput {
   sandboxId: string;
   runId: string;
+  integrationPins?: readonly import("@shared/contracts").IntegrationConnectionPin[];
   /**
    * The trusted in-memory manifest's view of every checkout, exactly the shape
    * and exactly the reason seedRepoMemoryStep takes it: the ref this lists is
@@ -1246,7 +1247,7 @@ export interface CaptureDefaultBranchFilesInput {
    * branch counts as the repository.
    */
   repositories: Array<{
-    provider: "github" | "gitlab";
+    provider: string;
     repoPath: string;
     localPath: string;
     branchName: string;
@@ -1474,7 +1475,10 @@ export async function captureDefaultBranchFilesStep(
             // API call stalls workspace preparation exactly as a hung command
             // would.
             const resolved = await withinDeadline(() =>
-              buildSandboxProviderConfigs(input.repositories.map((entry) => entry.provider)),
+              buildSandboxProviderConfigs(
+                input.repositories.map((entry) => entry.provider),
+                input.integrationPins,
+              ),
             );
             if (resolved === CAPTURE_DEADLINE) {
               reportDeadline(key, ref);
@@ -1489,8 +1493,8 @@ export async function captureDefaultBranchFilesStep(
             const { buildVcsUrls, gitAuthArgs } = await import("../../infra/vcs-urls.js");
             const { buildProviderRepoSlug } = await import("../../sandbox/repo-workspace.js");
             const urls = buildVcsUrls({
-              kind: provider.kind,
               host: provider.host,
+              authUser: provider.authUser,
               repoPath: repository.repoPath,
             });
             // Minting an installation token is a third API call, and it has no
@@ -1697,7 +1701,7 @@ function defaultBranchRef(repository: {
 }
 
 export interface LoadRepoMemorySourcesInput {
-  repositories: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
+  repositories: Array<{ provider: string; repoPath: string }>;
 }
 
 /**
@@ -1992,7 +1996,7 @@ loadRepoMemorySourcesStep.maxRetries = 0;
  * NUL separates the parts because neither a provider, an owner nor a comparison
  * key can contain one, so no two distinct triples can compose the same string.
  */
-function shadowKey(provider: "github" | "gitlab", owner: string, key: string): string {
+function shadowKey(provider: string, owner: string, key: string): string {
   return `${provider}\0${owner}\0${key}`;
 }
 
@@ -2004,8 +2008,8 @@ function shadowKey(provider: "github" | "gitlab", owner: string, key: string): s
  */
 function distinctOwners(
   repositories: LoadRepoMemorySourcesInput["repositories"],
-): Array<{ provider: "github" | "gitlab"; owner: string }> {
-  const owners: Array<{ provider: "github" | "gitlab"; owner: string }> = [];
+): Array<{ provider: string; owner: string }> {
+  const owners: Array<{ provider: string; owner: string }> = [];
   const seen = new Set<string>();
   for (const repository of repositories) {
     const owner = repoOwner(repository.repoPath);
@@ -2021,7 +2025,7 @@ function distinctOwners(
 interface RepoMemoryOwnerGroup {
   /** Provider-qualified owner, the label the promotion diagnostics carry. */
   key: string;
-  provider: "github" | "gitlab";
+  provider: string;
   owner: string;
   members: RepoMemoryState[];
 }

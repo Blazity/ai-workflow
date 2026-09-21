@@ -1,0 +1,79 @@
+import { defineIntegration } from "@integrations/sdk";
+
+export const manifest = defineIntegration({
+  id: "gitlab",
+  name: "GitLab",
+  description:
+    "Opens merge requests, reads review threads and pipelines, and receives project webhooks.",
+  docsUrl: "https://docs.gitlab.com/user/project/integrations/webhooks/",
+  connection: {
+    fields: [
+      {
+        key: "token",
+        label: "Access token",
+        description: "A project or personal access token with API access to the repositories this deployment uses.",
+        env: "GITLAB_TOKEN",
+        secret: true,
+        identity: true,
+      },
+      {
+        key: "host",
+        label: "GitLab URL",
+        env: "GITLAB_HOST",
+        secret: false,
+        optional: true,
+        default: "https://gitlab.com",
+        format: "url",
+      },
+      {
+        key: "botLogin",
+        label: "Bot username",
+        description: "The username that posts automated comments, used to prevent review loops.",
+        env: "GITLAB_BOT_LOGIN",
+        secret: false,
+        optional: true,
+      },
+      {
+        key: "webhookSecret",
+        label: "Webhook secret",
+        description: "The secret token sent in the X-Gitlab-Token header.",
+        env: "GITLAB_WEBHOOK_SECRET",
+        secret: true,
+        optional: true,
+      },
+      {
+        key: "legacyProjectId",
+        label: "Legacy default project",
+        description: "Keeps deployments that used one default project working while repositories move fully into the catalog.",
+        env: "GITLAB_PROJECT_ID",
+        secret: false,
+        optional: true,
+      },
+      {
+        key: "legacyBotLogin",
+        label: "Legacy bot username",
+        description: "Used only when this is the deployment's sole version-control provider.",
+        env: "VCS_BOT_LOGIN",
+        secret: false,
+        optional: true,
+      },
+    ],
+  },
+  capabilities: ["vcs"],
+  blocks: [],
+  pages: [],
+  health: [
+    {
+      id: "api",
+      label: "API access",
+      description: "GitLab accepts the token and returns the authenticated account.",
+      critical: true,
+    },
+    {
+      id: "projects",
+      label: "Repository access",
+      description: "At least one project is visible to the configured token.",
+      critical: true,
+    },
+  ],
+});

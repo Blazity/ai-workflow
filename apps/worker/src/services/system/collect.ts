@@ -17,10 +17,6 @@ export type SystemHealthConfig = {
   githubAppPrivateKey?: string;
   githubInstallationId?: number;
   githubWebhookSecret?: string;
-  gitlabToken?: string;
-  gitlabHost?: string;
-  gitlabWebhookSecret?: string;
-  gitlabProjectId?: string;
   agentKind: "claude" | "codex";
   anthropicApiKey?: string;
   anthropicModel?: string;
@@ -188,11 +184,6 @@ function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[]
     githubCredentialsMode === "not-configured" && config.githubWebhookSecret
       ? "misconfigured"
       : githubCredentialsMode;
-  const gitlabApiMode: SystemHealthMode = config.gitlabToken
-    ? "configured"
-    : config.gitlabProjectId || config.gitlabWebhookSecret
-      ? "misconfigured"
-      : "not-configured";
   const jiraApiMode = requiredMode([
     config.jiraBaseUrl,
     config.jiraApiToken,
@@ -250,11 +241,6 @@ function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[]
       checked("app-installation", "App installation", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
       checked("repositories", "Repository access", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
       checked("webhook-delivery", "App webhook configuration and deliveries", ["GITHUB_WEBHOOK_SECRET"], dependentOptionalMode(githubAppMode, config.githubWebhookSecret), true, "provider-delivery"),
-    ]),
-    integration("gitlab", "GitLab", "core", true, [
-      checked("api", "API identity", ["GITLAB_TOKEN", "GITLAB_HOST"], gitlabApiMode, true),
-      checked("repositories", "Repository access", ["GITLAB_TOKEN", "GITLAB_HOST", "GITLAB_PROJECT_ID"], gitlabApiMode, true),
-      checked("webhook-delivery", "Project webhook test delivery", ["GITLAB_WEBHOOK_SECRET"], dependentOptionalMode(gitlabApiMode, config.gitlabWebhookSecret), true, "provider-delivery"),
     ]),
     integration("agent", config.agentKind === "claude" ? "Claude agent" : "Codex agent", "core", true, [
       checked("model", "Credentials and built-in profile model", config.agentKind === "claude" ? ["ANTHROPIC_API_KEY"] : ["CODEX_API_KEY", "CODEX_CHATGPT_OAUTH_TOKEN"], agentMode, true),

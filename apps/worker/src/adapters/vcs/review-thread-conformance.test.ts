@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitHubAdapter } from "./github.js";
-import { GitLabAdapter } from "./gitlab.js";
+import { GitLabAdapter } from "../../../../../integrations/gitlab/vcs.js";
 import type { ReviewThreadFeed, ReviewThreadSource, VCSAdapter } from "./types.js";
 import {
   REVIEW_LEDGER_MAX_WORK_ITEMS,
@@ -175,20 +175,36 @@ const providers: Provider[] = [
     threadId: gitlabThreadId,
     load(threads) {
       mockDiscussions.all.mockResolvedValue(renderGitLab(threads));
-      mockFetch.mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers(),
-        json: vi.fn().mockResolvedValue({ username: BOT }),
-        text: vi.fn().mockResolvedValue(JSON.stringify({ username: BOT })),
+      mockFetch.mockImplementation(async (input: string | URL | Request) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        const body = url.includes("/discussions")
+          ? renderGitLab(threads)
+          : { username: BOT };
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: new Headers(),
+          json: vi.fn().mockResolvedValue(body),
+          text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+          blob: vi.fn().mockResolvedValue(
+            new Blob([JSON.stringify(body)], { type: "application/json" }),
+          ),
+        };
       });
       vi.stubGlobal("fetch", mockFetch);
       return new GitLabAdapter({
         token: "glpat-xxxxxxxxxxxx",
         projectId: "blazity/demo-app",
         baseBranch: "main",
-      }) as unknown as VCSAdapter;
+      }, {
+        MergeRequestDiscussions: mockDiscussions,
+      } as any) as unknown as VCSAdapter;
     },
   },
 ];

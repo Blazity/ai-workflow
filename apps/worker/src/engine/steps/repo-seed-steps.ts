@@ -91,7 +91,7 @@ export interface SeedRepoMemoryInput {
    * decision does not have to trust the workspace at all.
    */
   repositories: Array<{
-    provider: "github" | "gitlab";
+    provider: string;
     repoPath: string;
     localPath: string;
     /** The ref the manifest says this workspace checked out. */

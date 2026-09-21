@@ -160,7 +160,7 @@ export async function applyHumanRepositoryExpansion(
   deps: {
     resolve: (
       answer: string,
-      attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      attached: Array<{ provider: string; repoPath: string }>,
       /** The questions this round asked, so the parser can tell our own words
        *  back from the person's. */
       askedQuestions: string[],
@@ -723,6 +723,7 @@ async function attachResearchRepositoriesStep(
   access: RunRepositoryAccess,
   /** The run's job timeout, from the settings it started with. */
   jobTimeoutMs: number,
+  integrationPins?: readonly import("@shared/contracts").IntegrationConnectionPin[],
   /** What the decision that produced this attach wrote down about the subject's
    *  work scope. It rides this step because the step cannot retry, and because
    *  an attach is exactly the outcome that changes an entry. Absent on a run
@@ -785,6 +786,7 @@ async function attachResearchRepositoriesStep(
       repositories,
       providers: await buildSandboxProviderConfigs(
         repositories.map((repository) => repository.provider),
+        integrationPins,
       ),
     });
     const attached = await attachResearchRepositories({
@@ -819,7 +821,7 @@ attachResearchRepositoriesStep.maxRetries = 0;
 // vocabulary has no reason for a repeat.
 async function resolveHumanRepositoryExpansionStep(
   answer: string,
-  attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+  attached: Array<{ provider: string; repoPath: string }>,
   /** The questions this round put, so a quoted question is not read back as the
    *  person's own words. */
   askedQuestions: string[],
@@ -902,7 +904,7 @@ async function resumeFromWorkScope(
   run: {
     catalog: RepositoryCatalogEntry[];
     access: RunRepositoryAccess;
-    attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
+    attached: Array<{ provider: string; repoPath: string }>;
   },
   repositoryScope?: WorkflowRepositoryScope,
 ): Promise<{

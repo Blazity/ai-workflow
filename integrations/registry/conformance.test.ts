@@ -101,6 +101,7 @@ for (const directory of directories) {
 
 test("the reserved environment variables hold no name an integration owns", () => {
   const owned = RESERVED_ENVIRONMENT_VARIABLES.filter((variable) =>
+    variable !== "VCS_BOT_LOGIN" &&
     directories.some((directory) =>
       readFileSync(join(directory, "manifest.ts"), "utf8").includes(`"${variable}"`),
     ),

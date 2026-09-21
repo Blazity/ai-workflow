@@ -53,6 +53,21 @@ vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createManualDispatchPrReader: () => ({
     getManualDispatchPullRequest: mocks.getManualDispatchPullRequest,
   }),
+  resolveConfiguredPullRequestUrl: async (url: URL) => {
+    if (url.host === "github.com") {
+      const match = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(url.pathname);
+      return match
+        ? { provider: "github", repoPath: `${match[1]}/${match[2]}`, prNumber: Number(match[3]) }
+        : null;
+    }
+    if (url.host === "gitlab.example.com") {
+      const match = /^\/(.+)\/-\/merge_requests\/(\d+)$/.exec(url.pathname);
+      return match
+        ? { provider: "gitlab", repoPath: match[1], prNumber: Number(match[2]) }
+        : null;
+    }
+    return null;
+  },
 }));
 // Only the provider-reachability probe is stubbed; the trigger-eligibility
 // helpers this module shares with automatic dispatch stay real.
@@ -120,17 +135,17 @@ function snapshot(
 }
 
 describe("manual pull request input", () => {
-  it("parses only configured GitHub and nested GitLab MR URLs", () => {
-    expect(parsePullRequestUrl("https://github.com/acme/api/pull/42")).toEqual({
+  it("parses only configured GitHub and nested GitLab MR URLs", async () => {
+    await expect(parsePullRequestUrl("https://github.com/acme/api/pull/42")).resolves.toEqual({
       provider: "github",
       repoPath: "acme/api",
       prNumber: 42,
     });
-    expect(
+    await expect(
       parsePullRequestUrl(
         "https://gitlab.example.com/platform/services/api/-/merge_requests/17",
       ),
-    ).toEqual({
+    ).resolves.toEqual({
       provider: "gitlab",
       repoPath: "platform/services/api",
       prNumber: 17,
@@ -141,8 +156,8 @@ describe("manual pull request input", () => {
     "https://example.com/acme/api/pull/42",
     "https://github.com/acme/api/issues/42",
     "https://gitlab.example.com/platform/api/merge_requests/17",
-  ])("rejects unsupported provider input %s", (url) => {
-    expect(() => parsePullRequestUrl(url)).toThrow();
+  ])("rejects unsupported provider input %s", async (url) => {
+    await expect(parsePullRequestUrl(url)).resolves.toBeNull();
   });
 
   it("requires created and merged triggers to match current lifecycle state", () => {
@@ -178,21 +193,21 @@ describe("manual pull request input", () => {
         {
           name: "ci / build",
           conclusion: "failure",
-          checkRunId: 100,
-          appSlug: "github-actions",
+          handle: { id: 100, owner: "github-actions" } as never,
+          producer: "github-actions",
         },
       ],
     });
     expect(
       selectManualTriggerEvent("trigger_pr_checks_failed", pr, failed, {
         checkNames: ["ci / build"],
-        githubAppSlugs: ["github-actions"],
+        trustedProducers: ["github-actions"],
       })?.pr.failedChecks,
     ).toEqual(failed.failedChecks);
     expect(
       selectManualTriggerEvent("trigger_pr_checks_failed", pr, failed, {
         checkNames: ["ci / lint"],
-        githubAppSlugs: ["github-actions"],
+        trustedProducers: ["github-actions"],
       }),
     ).toBeNull();
   });
@@ -215,7 +230,7 @@ describe("manual pull request input", () => {
     expect(
       selectManualTriggerEvent("trigger_pr_review", pr, reviews, {
         on: ["changes_requested"],
-      })?.pr.review,
+      }, "workflow-bot")?.pr.review,
     ).toEqual({
       state: "changes_requested",
       author: "human-reviewer",

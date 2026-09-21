@@ -9,7 +9,7 @@ const repositoryKey = z
   .trim()
   .toLowerCase()
   .max(207)
-  .regex(/^(?:github|gitlab):[^/\s]+(?:\/[^/\s]+)+$/u);
+  .regex(/^[a-z][a-z0-9_-]{2,31}:[^/\s]+(?:\/[^/\s]+)+$/u);
 const repositoryPolicy = z
   .object({
     candidates: z.discriminatedUnion("kind", [
@@ -31,11 +31,11 @@ const repositoryPolicy = z
   .strict();
 const paramsSchema = z
   .object({
-    providers: z.array(z.enum(["github", "gitlab"])).min(1).default(["github"]),
+    providers: z.array(z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/)).default([]),
     on: z
       .array(z.enum(["changes_requested", "commented"]))
       .min(1)
-      .default(["changes_requested"]),
+      .default(["commented"]),
     scope: z.enum(["workflow_owned", "any"]).default("workflow_owned"),
     maxRunsPerPr: z.number().int().min(1).max(30).default(10),
     rateLimitMax: z.number().int().min(1).optional(),
@@ -62,8 +62,8 @@ export const manifest = {
     softColor: "#FBECEC",
   },
   defaults: {
-    providers: ["github"],
-    on: ["changes_requested"],
+    providers: [],
+    on: ["commented"],
     scope: "workflow_owned",
     maxRunsPerPr: 10,
   },

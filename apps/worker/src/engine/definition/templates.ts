@@ -179,11 +179,10 @@ function reviewFixAfterPrDefinition(
       column: 0,
       row: 0,
       configuration: {
-        providers: ["github", "gitlab"],
+        providers: [],
         scope: "workflow_owned",
         checkNames: ["CI"],
-        githubAppSlugs: ["github-actions"],
-        gitlabPipelineSources: ["merge_request_event"],
+        trustedProducers: [],
       },
     },
     {
@@ -1099,7 +1098,7 @@ function reviewedTicketDefinition(
  * The failure check text is FIXED, not bound to the review summary.
  *
  * `complete_pr_check` details reaches GitHub as a check-run TITLE sliced to 200
- * characters, plain text with no markdown, and GitLab as a commit-status
+ * characters, plain text with no markdown, and providers with a status
  * description clamped to 255. The review summary is markdown, is as long as the
  * findings make it, and opens with agent-authored material, so through that clamp
  * a client read a truncated fragment of it as the whole verdict. The review itself
@@ -1125,7 +1124,7 @@ function postPrReviewDefinition(
       name: "PR ready for review",
       column: 0,
       row: -1,
-      configuration: { providers: ["github", "gitlab"], scope: "any" },
+      configuration: { providers: [], scope: "any" },
     },
     {
       id: "trigger-updated",
@@ -1133,7 +1132,7 @@ function postPrReviewDefinition(
       name: "PR updated",
       column: 0,
       row: 1,
-      configuration: { providers: ["github", "gitlab"], scope: "any" },
+      configuration: { providers: [], scope: "any" },
     },
     {
       id: "create-check",
@@ -1289,7 +1288,7 @@ function postPrAutofixDefinition(
       column: 0,
       row: -1,
       configuration: {
-        providers: ["github", "gitlab"],
+        providers: [],
         scope: "workflow_owned",
       },
     },
@@ -1300,7 +1299,7 @@ function postPrAutofixDefinition(
       column: 0,
       row: 1,
       configuration: {
-        providers: ["github", "gitlab"],
+        providers: [],
         scope: "workflow_owned",
       },
     },

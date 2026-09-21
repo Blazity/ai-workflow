@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RepositoryMissingAtProviderError } from "../repository-profile-source.js";
+import { RepositoryMissingAtProviderError } from "@integrations/sdk";
 import { createGitLabProfileSource } from "./profile-source.js";
 
 /**

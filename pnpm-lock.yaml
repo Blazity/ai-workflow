@@ -30,6 +30,9 @@ catalogs:
     typescript:
       specifier: ^5.8
       version: 5.9.3
+    vitest:
+      specifier: ^3.2.6
+      version: 3.2.6
     yaml:
       specifier: ^2.9.0
       version: 2.9.0
@@ -174,9 +177,6 @@ importers:
       '@better-auth/sso':
         specifier: 1.6.30
         version: 1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(happy-dom@20.14.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)))(better-call@1.4.0(zod@3.25.76))
-      '@gitbeaker/rest':
-        specifier: ^43.8.0
-        version: 43.8.0
       '@integrations/registry':
         specifier: workspace:*
         version: link:../../integrations/registry
@@ -293,7 +293,7 @@ importers:
         specifier: 'catalog:'
         version: 5.9.3
       vitest:
-        specifier: ^3.2.6
+        specifier: 'catalog:'
         version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(happy-dom@20.14.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
       zod4:
         specifier: 'catalog:'
@@ -370,6 +370,28 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+      zod4:
+        specifier: 'catalog:'
+        version: zod@4.3.6
+
+  integrations/gitlab:
+    dependencies:
+      '@gitbeaker/rest':
+        specifier: ^43.8.0
+        version: 43.8.0
+      '@integrations/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(happy-dom@20.14.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
       zod4:
         specifier: 'catalog:'
         version: zod@4.3.6
@@ -11591,8 +11613,8 @@ snapshots:
   vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0):
     dependencies:
       esbuild: 0.28.1
-      fdir: 6.5.0(picomatch@4.0.5)
-      picomatch: 4.0.5
+      fdir: 6.5.0(picomatch@4.0.7)
+      picomatch: 4.0.7
       postcss: 8.5.28
       rollup: 4.63.1
       tinyglobby: 0.2.17
@@ -11620,7 +11642,7 @@ snapshots:
       expect-type: 1.3.0
       magic-string: 0.30.21
       pathe: 2.0.3
-      picomatch: 4.0.5
+      picomatch: 4.0.7
       std-env: 3.10.0
       tinybench: 2.9.0
       tinyexec: 0.3.2

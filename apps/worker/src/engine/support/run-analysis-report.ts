@@ -22,7 +22,7 @@ const REPORT_MAX_BYTES = 64 * 1024;
 const COMMENT_MAX_BYTES = 20_000;
 const OMITTED = "… omitted; open the full run report";
 
-type Provider = "github" | "gitlab";
+type Provider = string;
 
 interface ManifestRepository {
   provider: Provider;
@@ -174,7 +174,9 @@ function safeRequestList(values: unknown): RunAnalysisRepositoryRequest[] {
   const requests = values
     .filter((value): value is Record<string, unknown> => !!value && typeof value === "object")
     .map((value): RunAnalysisRepositoryRequest => ({
-      provider: value.provider === "gitlab" ? "gitlab" : "github",
+      provider: typeof value.provider === "string" && value.provider.length > 0
+        ? value.provider
+        : "github",
       repoPath: typeof value.repoPath === "string" ? limitUtf8(safeModelText(value.repoPath), 512) : "unknown",
       rationale: limitUtf8(safeModelText(value.rationale), 1_200),
     }))
@@ -209,7 +211,7 @@ function mapRepositories(input: BuildResearchAnalysisReportInput): RunAnalysisRe
   return repos
     .filter((repo): repo is ManifestRepository => !!repo && typeof repo.repoPath === "string")
     .map((repo) => ({
-      provider: repo.provider === "gitlab" ? "gitlab" : "github",
+      provider: repo.provider,
       repoPath: repo.repoPath,
       defaultBranch: repo.defaultBranch ?? "unknown",
       researchBranch: repo.researchBranch ?? repo.branchName ?? repo.defaultBranch ?? "unknown",

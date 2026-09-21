@@ -1,6 +1,9 @@
 import { start, getRun } from "workflow/api";
 import type { WorkflowBlockType } from "@shared/contracts";
-import { hasGateStatusCapability } from "../../adapters/vcs/types.js";
+import {
+  hasGateStatusCapability,
+  type VcsOpaqueHandle,
+} from "../../adapters/vcs/types.js";
 import { createAdapters } from "../../engine/support/adapters.js";
 import { logger } from "../../infra/logger.js";
 import { isManagedBranch } from "../../engine/support/workflow-naming.js";
@@ -161,7 +164,7 @@ async function cancelPreviousRun(
   if (!hasGateStatusCapability(adapters.vcs)) return;
 
   for (const ref of previous.gateStatusRefs) {
-    await adapters.vcs.updateGateStatus(ref, {
+    await adapters.vcs.updateGateStatus(ref as VcsOpaqueHandle, {
       status: "completed",
       conclusion: "cancelled",
       summary: "Cancelled - newer commit replaces this gate run.",

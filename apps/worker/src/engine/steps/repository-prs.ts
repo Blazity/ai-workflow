@@ -1,5 +1,5 @@
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
-import type { RunRepositoryAccess } from "@shared/contracts";
+import type { IntegrationConnectionPin, RunRepositoryAccess } from "@shared/contracts";
 import type { PullRequest, VCSAdapter } from "../../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../../db/repositories/active-runs.js";
 import { scrubForPublication } from "../support/publication-scrub.js";
@@ -23,6 +23,7 @@ export interface WorkflowPrLink {
 export async function findWorkflowOwnedPullRequestForBranch(input: {
   branchName: string;
   repository: SelectedRepository;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }): Promise<WorkflowPrLink | null> {
   "use step";
   const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
@@ -30,6 +31,7 @@ export async function findWorkflowOwnedPullRequestForBranch(input: {
     provider: input.repository.provider,
     repoPath: input.repository.repoPath,
     baseBranch: input.repository.defaultBranch,
+    integrationPins: input.integrationPins,
   }).findPR(input.branchName);
   return pr
     ? {
@@ -54,6 +56,7 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
   /** Which repositories this run may open a pull request on, frozen at its
    *  start. */
   repositoryAccess: RunRepositoryAccess;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }): Promise<WorkflowPrLink> {
   "use step";
   const { assertConnectedActiveRunOwner } = await import("../../db/repositories/active-runs.js");
@@ -133,11 +136,13 @@ async function resolveWorkflowOwnedPullRequest(
     repository: SelectedRepository;
     title: string;
     body?: string;
+    integrationPins?: readonly IntegrationConnectionPin[];
   },
   createVcs: (input: {
     provider: SelectedRepository["provider"];
     repoPath: string;
     baseBranch: string;
+    integrationPins?: readonly IntegrationConnectionPin[];
   }) => VCSAdapter,
   isAllowed: (repoPath: string) => boolean,
   assertProviderMutation?: () => Promise<void>,
@@ -167,6 +172,7 @@ async function resolveWorkflowOwnedPullRequest(
     provider: repo.provider,
     repoPath: repo.repoPath,
     baseBranch: repo.defaultBranch,
+    integrationPins: input.integrationPins,
   });
   const { pr, isNew } = await createOrFindPullRequest(
     vcs,

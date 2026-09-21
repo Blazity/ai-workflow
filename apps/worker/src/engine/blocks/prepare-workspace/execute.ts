@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  IntegrationConnectionPin,
   RunRepositoryAccess,
   SettingsSnapshot,
   WorkflowDefinitionNode,
@@ -91,6 +92,7 @@ interface PreSandboxTicketContext {
   repositoryScope?: WorkflowRepositoryScope;
   repositoryAccess: RunRepositoryAccess;
   settings: SettingsSnapshot;
+  integrationPins?: readonly IntegrationConnectionPin[];
   /** The record, the policy and the actor this run decides its repositories
    *  with. All three or none: absent puts the whole selection on the path it
    *  took before the record existed. */
@@ -161,7 +163,7 @@ const approvedRepositoryScopeSchema = z.object({
   repositories: z
     .array(
       z.object({
-        provider: z.enum(["github", "gitlab"]),
+        provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
         repoPath: z.string().min(1),
         defaultBranch: z.string().min(1),
         researchBranch: z.string().min(1),
@@ -179,6 +181,7 @@ async function blockApprovedRepositoryScopeStep(
   scope: ApprovedRepositoryScope,
   pinnedScope: WorkflowRepositoryScope | null,
   repositories: RunRepositoryAccess,
+  integrationPins?: readonly IntegrationConnectionPin[],
 ): Promise<SelectedRepository[]> {
   "use step";
   const parsed = approvedRepositoryScopeSchema.safeParse(scope);
@@ -188,21 +191,22 @@ async function blockApprovedRepositoryScopeStep(
     );
   }
   scope = parsed.data;
-  const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
-  const { createRepositoryDirectoryForProviders, isRepositoryWithinPinnedScope } =
-    await import("../../../adapters/vcs/repository-directory.js");
-  const { createRepositoryVCS } = await import("../../support/vcs-runtime.js");
+  const { isRepositoryWithinPinnedScope } = await import(
+    "../../../adapters/vcs/repository-directory.js"
+  );
+  const { createRepositoryVCS, listVcsRepositories } = await import(
+    "../../support/vcs-runtime.js"
+  );
   const { filterRunRepositories, mayRunTouchRepository, repositoryNotEnabledMessage } =
     await import("../../support/repository-access.js");
   const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
     "../../../db/repositories/runs.js"
   );
-  const available = filterRunRepositories(
-    repositories,
-    await createRepositoryDirectoryForProviders(
-      getConfiguredVcsProviders(),
-    ).listRepositories(),
-  );
+  const listing = await listVcsRepositories({
+    neededProviders: new Set(scope.repositories.map((repository) => repository.provider)),
+    integrationPins,
+  });
+  const available = filterRunRepositories(repositories, listing.repositories);
   const byKey = new Map(
     available.map((repository) => [
       `${repository.provider}:${repository.repoPath.toLowerCase()}`,
@@ -258,6 +262,7 @@ async function blockApprovedRepositoryScopeStep(
         provider: current.provider,
         repoPath: current.repoPath,
         baseBranch: current.defaultBranch,
+        integrationPins,
       }).getBranchShaIfExists(approved.researchBranch);
     } catch (error) {
       throw new Error(
@@ -310,6 +315,7 @@ async function blockPrepareWorkspaceProvisionStep(
   /** The run's job timeout, from the settings snapshot it started with. */
   jobTimeoutMs: number,
   checksCeilingMs: number,
+  integrationPins?: readonly import("@shared/contracts").IntegrationConnectionPin[],
 ): Promise<
   | { ok: true; sandboxId: string; workspaceManifest: WorkspaceManifest }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -399,6 +405,7 @@ async function blockPrepareWorkspaceProvisionStep(
   const manager = new SandboxManager({
     providers: await buildSandboxProviderConfigs(
       selectedRepositories.map((repo) => repo.provider),
+      integrationPins,
     ),
     // The run's own budget plus the checks phase's, because the checks run in
     // THIS sandbox and no longer spend the run's duration. Sizing the lifetime
@@ -932,6 +939,7 @@ export async function ensureWorkspace(
         scope,
         ctx.repositoryScope ?? null,
         ctx.repositories,
+        ctx.integrationPins,
       );
       approvedBaselineByKey = new Map(
         scope.repositories.map((repository) => [
@@ -949,6 +957,7 @@ export async function ensureWorkspace(
         // and a retried step must not append to an append-only trail.
         {
           workScope: ctx.workScope ?? null,
+          integrationPins: ctx.integrationPins,
           ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
         },
       );
@@ -1069,6 +1078,7 @@ export async function ensureWorkspace(
         run: { branchName: ctx.branchName },
         repositoryAccess: ctx.repositories,
         settings: ctx.settings,
+        ...(ctx.integrationPins ? { integrationPins: ctx.integrationPins } : {}),
         ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
         // The record, its policy and this run's identity travel together. All
         // three or none: the selection decides nothing without a policy to
@@ -1250,6 +1260,7 @@ export async function ensureWorkspace(
     const repositoryContexts = await blockFetchPrContextsStep(
       selected,
       ctx.repositories,
+      { integrationPins: ctx.integrationPins },
     );
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
       (context) => {
@@ -1396,6 +1407,7 @@ export async function ensureWorkspace(
         ctx.defaultBranchFiles = await captureDefaultBranchFilesStep({
           sandboxId,
           runId: ctx.runId,
+          integrationPins: ctx.integrationPins,
           repositories: memoryRepositories,
         });
       } catch (err) {
@@ -1478,6 +1490,7 @@ export async function promoteWorkspaceWrites(
         runId: ctx.runId,
       },
       repositoryAccess: ctx.repositories,
+      integrationPins: ctx.integrationPins,
     });
     const manifestByKey = new Map(
       ctx.workspaceManifest.repositories.map((repository) => [
@@ -1496,6 +1509,7 @@ export async function promoteWorkspaceWrites(
     ctx.repositoryContexts = await blockFetchPrContextsStep(
       ctx.selectedRepositories,
       ctx.repositories,
+      { integrationPins: ctx.integrationPins },
     );
     await emitRepositoryWorkflowObservation(execution?.observations, {
       event: "scope",

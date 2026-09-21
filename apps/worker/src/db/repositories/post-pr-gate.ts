@@ -36,27 +36,6 @@ export interface CurrentGateRun {
   gateStatusRefs: GateStatusRef[];
 }
 
-function validateCheckRunIds(ids: number[]): void {
-  if (!ids.every((id) => Number.isSafeInteger(id))) {
-    throw new Error(`non-integer check-run ids: ${ids.join(",")}`);
-  }
-}
-
-function legacyCheckRunIdsFromRefs(refs: GateStatusRef[]): number[] {
-  return refs
-    .filter(
-      (ref): ref is Extract<GateStatusRef, { provider: "github" }> =>
-        ref.provider === "github",
-    )
-    .map((ref) => ref.id);
-}
-
-function checkRunIdsForLegacyColumn(gateStatusRefs: GateStatusRef[]): number[] {
-  const checkRunIds = legacyCheckRunIdsFromRefs(gateStatusRefs);
-  validateCheckRunIds(checkRunIds);
-  return checkRunIds;
-}
-
 export class GateStore {
   constructor(private db: Db = getDb()) {}
 
@@ -171,7 +150,6 @@ export class GateStore {
     pr: number,
     value: CurrentGateRun,
   ): Promise<void> {
-    const checkRunIds = checkRunIdsForLegacyColumn(value.gateStatusRefs);
     await this.db
       .insert(gateCurrent)
       .values({
@@ -179,7 +157,7 @@ export class GateStore {
         pr,
         runId: value.runId,
         headSha: value.headSha,
-        checkRunIds,
+        checkRunIds: [],
         gateStatusRefs: value.gateStatusRefs,
         expiresAt: TTL,
       })
@@ -188,7 +166,7 @@ export class GateStore {
         set: {
           runId: value.runId,
           headSha: value.headSha,
-          checkRunIds,
+          checkRunIds: [],
           gateStatusRefs: value.gateStatusRefs,
           expiresAt: TTL,
         },
@@ -209,21 +187,11 @@ export class GateStore {
     refs: GateStatusRef[],
   ): Promise<boolean> {
     if (refs.length === 0) return true;
-    const checkRunIds = checkRunIdsForLegacyColumn(refs);
     const refsJson = JSON.stringify(refs);
-    const checkRunIdsUpdate =
-      checkRunIds.length > 0
-        ? {
-            checkRunIds: sql`${gateCurrent.checkRunIds} || ${sql.raw(
-              `'{${checkRunIds.join(",")}}'::bigint[]`,
-            )}`,
-          }
-        : {};
     const rows = await this.db
       .update(gateCurrent)
       .set({
         gateStatusRefs: sql`${gateCurrent.gateStatusRefs} || cast(${refsJson} as jsonb)`,
-        ...checkRunIdsUpdate,
       })
       .where(
         and(

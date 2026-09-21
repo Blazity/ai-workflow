@@ -96,7 +96,8 @@ export async function hasDurableRunPublication(db: Db, runId: string): Promise<b
       (pr) =>
         Boolean(
           pr &&
-            (pr.provider === "github" || pr.provider === "gitlab") &&
+            typeof pr.provider === "string" &&
+            pr.provider.length > 0 &&
             typeof pr.repoPath === "string" &&
             pr.repoPath.trim().length > 0 &&
             typeof pr.id === "number" &&
@@ -137,7 +138,7 @@ export async function hasDurableRunPublication(db: Db, runId: string): Promise<b
 
   return publications.some(
     (publication) =>
-      (publication.provider === "github" || publication.provider === "gitlab") &&
+      publication.provider.length > 0 &&
       publication.repoPath.trim().length > 0 &&
       publication.branchName.trim().length > 0 &&
       Boolean(publication.publishedHeadSha?.trim()) &&

@@ -4,8 +4,8 @@ import { waitUntil } from "@vercel/functions";
 /**
  * Every integration's webhook, at the URL its provider already calls.
  *
- * `/webhooks/slack` and whatever the next integration registers land here;
- * core's own routes (`/webhooks/github`, `/webhooks/gitlab`, `/webhooks/jira`,
+ * `/webhooks/slack` and every other integration callback land here;
+ * core's own routes (`/webhooks/github`, `/webhooks/jira`,
  * `/webhooks/custom/...`, `/webhooks/resend`) keep their own files and win,
  * because a static route beats a dynamic one.
  *
@@ -73,6 +73,22 @@ export default defineEventHandler(async (event) => {
     });
   }
 
+  const botLoginFor = memoizedVcsBotLogin();
+  const { legacyBotLogin: _legacyBotLogin, ...connectionWithoutLegacyBot } =
+    usable.ctx.connection;
+  const webhookContext = {
+    ...usable.ctx,
+    connection: {
+      ...connectionWithoutLegacyBot,
+      // Resolving it reads this deployment's integration settings a second
+      // time, and only a version control provider has an automation account to
+      // resolve: for anything else the answer is `undefined` whatever the read
+      // returns. Slack allows about three seconds, so it does not pay for it.
+      botLogin: manifest.capabilities.includes("vcs")
+        ? await botLoginFor(id)
+        : undefined,
+    },
+  };
   const reception = await webhook.receive(
     {
       method: event.method,
@@ -80,7 +96,7 @@ export default defineEventHandler(async (event) => {
       headers: lowercased(getRequestHeaders(event)),
       query: stringValues(getQuery(event)),
     } as never,
-    usable.ctx as never,
+    webhookContext as never,
   );
 
   if (reception.kind === "refused") {
@@ -89,6 +105,96 @@ export default defineEventHandler(async (event) => {
   }
   observeWebhook(id, "accepted", "request_accepted");
   if (reception.kind === "answered") {
+    return respond(event, reception.response);
+  }
+  if (reception.kind === "trigger_events") {
+    const { getRequestSettingsSnapshot } = await import(
+      "../../services/settings/index.js"
+    );
+    const { getRequestRepositoryCatalogSnapshot } = await import(
+      "../../services/repository-catalog/index.js"
+    );
+    const {
+      createConnectedTriggerRunRegistry,
+      dispatchPostPrGateWebhook,
+      dispatchTriggerEvent,
+      isRepositoryDispatchable,
+    } = await import("../../services/dispatch/index.js");
+    const { maxConcurrentAgents } = await import("../../services/settings/index.js");
+    const [settings, repositoryCatalog] = await Promise.all([
+      getRequestSettingsSnapshot(event),
+      getRequestRepositoryCatalogSnapshot(event),
+    ]);
+    let claimed = false;
+    let suppressedWorkflowPush = false;
+    for (const candidate of reception.events) {
+      if (candidate.triggerType === "trigger_pr_updated") {
+        const {
+          connectedWorkflowPushNormalizationOptions,
+          isWorkflowGeneratedPush,
+        } = await import("../../services/publication/index.js");
+        const workflowPush = await connectedWorkflowPushNormalizationOptions({
+          provider: candidate.pr.provider,
+          repoPath: candidate.pr.repoPath,
+          prNumber: candidate.pr.prNumber,
+        });
+        if (isWorkflowGeneratedPush({
+          currentHeadSha: candidate.pr.headSha,
+          producer: candidate.delivery.producer,
+          botIdentity: await botLoginFor(candidate.pr.provider),
+          ...workflowPush,
+        })) {
+          suppressedWorkflowPush = true;
+          continue;
+        }
+      }
+      const result = await dispatchTriggerEvent(candidate, {
+        runRegistry: createConnectedTriggerRunRegistry(),
+        maxConcurrentAgents: maxConcurrentAgents(settings),
+        repositoryCatalog,
+      });
+      if (![
+        "no_definition",
+        "ignored_not_workflow_owned",
+        "ignored_provider",
+        "ignored_repository_not_enabled",
+      ].includes(result.result)) {
+        claimed = true;
+        break;
+      }
+    }
+    if (
+      !suppressedWorkflowPush &&
+      reception.legacyGate?.action === "update"
+    ) {
+      const {
+        connectedWorkflowPushNormalizationOptions,
+        isWorkflowGeneratedPush,
+      } = await import("../../services/publication/index.js");
+      const input = reception.legacyGate.workflowInput;
+      const workflowPush = await connectedWorkflowPushNormalizationOptions({
+        provider: input.provider,
+        repoPath: input.ownerRepo,
+        prNumber: input.prNumber,
+      });
+      suppressedWorkflowPush = isWorkflowGeneratedPush({
+        currentHeadSha: input.headSha,
+        producer: input.author,
+        botIdentity: await botLoginFor(input.provider),
+        ...workflowPush,
+      });
+    }
+    if (
+      !claimed &&
+      !suppressedWorkflowPush &&
+      reception.legacyGate &&
+      isRepositoryDispatchable(repositoryCatalog, {
+        provider: reception.legacyGate.workflowInput.provider,
+        path: reception.legacyGate.workflowInput.ownerRepo,
+      })
+    ) {
+      await dispatchPostPrGateWebhook(reception.legacyGate);
+    }
     return respond(event, reception.response);
   }
 
@@ -149,6 +255,31 @@ function respond(
 ): unknown {
   event.node.res.statusCode = response.status;
   return response.body ?? "";
+}
+
+/**
+ * One automation-account lookup per provider, per delivery.
+ *
+ * `getVcsBotLogin` resolves every connected version control integration to
+ * decide whether a legacy single-provider login still applies, so each call is
+ * a settings read. One delivery asks for the same provider once per candidate
+ * event and again for the legacy gate, which was the same answer bought several
+ * times inside a deadline of about three seconds. The promise is cached rather
+ * than the value, so two questions in one tick share the read instead of
+ * starting two.
+ */
+function memoizedVcsBotLogin(): (provider: string) => Promise<string | undefined> {
+  const byProvider = new Map<string, Promise<string | undefined>>();
+  return (provider) => {
+    const pending = byProvider.get(provider);
+    if (pending) return pending;
+    const started = (async () => {
+      const { getVcsBotLogin } = await import("../../services/vcs/index.js");
+      return getVcsBotLogin(provider);
+    })();
+    byProvider.set(provider, started);
+    return started;
+  };
 }
 
 function lowercased(headers: Record<string, string | undefined>): Record<string, string> {

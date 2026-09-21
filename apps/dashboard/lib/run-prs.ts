@@ -1,4 +1,5 @@
 import { pullRequestRef, type RunPullRequest, type VcsProviderKind } from "@shared/contracts";
+import { integrationManifests } from "@integrations/registry";
 
 /** The PR-carrying fields of a Run/RunDetail, so both shapes can be passed in. */
 interface RunPrRefs {
@@ -7,13 +8,21 @@ interface RunPrRefs {
   prNumber: number | null;
 }
 
-/**
- * GitLab MR web URLs always contain the `/-/merge_requests/` segment; every
- * other shape we store is a GitHub pull URL. Only used for legacy rows - runs
- * recorded since the `prs` list exists carry their provider explicitly.
- */
+/** Legacy rows predate the provider field and came from core's original provider. */
 function providerFromUrl(url: string): VcsProviderKind {
-  return url.includes("/-/merge_requests/") ? "gitlab" : "github";
+  if (url.includes("/-/merge_requests/")) {
+    const integration = integrationManifests.find((manifest) =>
+      manifest.capabilities.includes("vcs"),
+    );
+    if (integration) return integration.id;
+  }
+  return "github";
+}
+
+function pullRequestNoun(pr: RunPullRequest): { noun: string; sigil: string } {
+  return pr.url.includes("/-/merge_requests/")
+    ? { noun: "MR", sigil: "!" }
+    : { noun: "PR", sigil: "#" };
 }
 
 /**
@@ -41,5 +50,6 @@ export function runPullRequests(run: RunPrRefs): RunPullRequest[] {
 export function primaryPullRequestLabel(run: RunPrRefs): string | null {
   const primary = runPullRequests(run)[0];
   if (!primary) return null;
-  return `${primary.provider === "gitlab" ? "MR" : "PR"} ${pullRequestRef(primary)}`;
+  const { noun, sigil } = pullRequestNoun(primary);
+  return `${noun} ${pullRequestRef(primary).replace("#", sigil)}`;
 }

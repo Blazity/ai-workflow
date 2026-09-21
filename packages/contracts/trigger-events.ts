@@ -9,7 +9,8 @@ export type PrTriggerType =
   | "trigger_pr_merged";
 
 export interface PrTriggerPayload {
-  provider: "github" | "gitlab";
+  /** Integration id of the version-control provider that owns the repository. */
+  provider: string;
   repoPath: string;
   providerProjectId?: number | string;
   prNumber: number;
@@ -22,13 +23,12 @@ export interface PrTriggerPayload {
   isDraft: boolean;
   mergeSha?: string;
   mergedAt?: string;
-  pipelineId?: number;
   failedChecks?: Array<{
     name: string;
     conclusion: string;
     detailsUrl?: string;
-    checkRunId?: number;
-    appSlug?: string;
+    /** Opaque identity minted by the provider and compared without parsing. */
+    handle?: unknown;
   }>;
   review?: { state: "changes_requested" | "commented"; author: string; body: string };
   reviews?: Array<{ state: "changes_requested" | "commented"; author: string; body: string }>;
@@ -36,9 +36,11 @@ export interface PrTriggerPayload {
 
 export interface TriggerEvent {
   delivery: {
-    provider: "github" | "gitlab";
+    provider: string;
     producer: string;
     source?: string;
+    /** Whether the provider considers this producer trusted by default. */
+    trustedByDefault?: boolean;
     deliveryId: string;
     semanticKey?: string;
   };

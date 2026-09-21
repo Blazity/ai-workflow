@@ -152,6 +152,7 @@ export function resolveIntegrationState(input: ResolveIntegrationInput): Integra
     environment: environmentPresence,
     stored: storedPresence,
     pin,
+    configuredFields: values.config.map(([key]) => key),
     secretsKeyAvailable: secretsKey.present,
   };
 }

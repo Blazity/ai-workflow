@@ -537,6 +537,20 @@ export function integrationImpactLines(
         : `This deployment falls back to the same connection fingerprint, so disconnecting the stored values does not stop a run already in flight.`,
   ];
   const definitions = impact?.enabledDefinitions ?? null;
+  const repositories = impact?.repositories ?? null;
+  if (repositories === null) {
+    lines.push("Affected repositories: unknown. The worker could not read the repository catalog.");
+  } else if (repositories.length === 0) {
+    lines.push(`Repositories using ${integration.name}: none.`);
+  } else {
+    const shown = repositories.slice(0, IMPACT_NAME_LIMIT).map(({ path }) => path);
+    const remainder = repositories.length - shown.length;
+    lines.push(
+      `Repositories using ${integration.name}: ${shown.join(", ")}${
+        remainder > 0 ? `, and ${remainder} more` : ""
+      }.`,
+    );
+  }
   if (definitions === null) {
     lines.push("Enabled workflows: unknown. The worker could not read the deployed definitions.");
   } else if (definitions.length === 0) {

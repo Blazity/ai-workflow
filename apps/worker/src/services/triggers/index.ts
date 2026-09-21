@@ -29,12 +29,6 @@ export type {
   GitHubWebhookRequest,
 } from "./github/handle-github-webhook.js";
 export {
-  handleGitLabWebhook,
-} from "./gitlab/handle-gitlab-webhook.js";
-export type {
-  GitLabWebhookRequest,
-} from "./gitlab/handle-gitlab-webhook.js";
-export {
   handleJiraWebhook,
 } from "./jira/handle-jira-webhook.js";
 export type {

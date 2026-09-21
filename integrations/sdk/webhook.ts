@@ -23,9 +23,17 @@
  *   handler that threw would leave the person reading "Working on ..." for
  *   ever.
  */
-import type { JsonValue, RunControlCommand, RunControlOutcome } from "@shared/contracts";
+import type {
+  JsonValue,
+  PostPrGateWorkflowInput,
+  RunControlCommand,
+  RunControlOutcome,
+  TriggerEvent,
+} from "@shared/contracts";
 import type { IntegrationContext } from "./context";
 import type { IntegrationManifest } from "./manifest";
+
+export type { PrTriggerPayload, TriggerEvent } from "@shared/contracts";
 
 /** One request, as the route captured it. */
 export interface IntegrationWebhookRequest {
@@ -68,6 +76,19 @@ export type IntegrationWebhookReception =
        * callback URL and must hold no secret of the connection.
        */
       readonly deliverTo: JsonValue;
+    }
+  /**
+   * Verified provider events. The integration owns provider vocabulary and
+   * returns only the normalized trigger contract that core dispatches.
+   */
+  | {
+      readonly kind: "trigger_events";
+      readonly events: readonly TriggerEvent[];
+      readonly response: IntegrationWebhookResponse;
+      readonly legacyGate?: {
+        readonly action: string;
+        readonly workflowInput: PostPrGateWorkflowInput;
+      };
     }
   /**
    * Refused. `status` is the provider's language for it: a bad or stale

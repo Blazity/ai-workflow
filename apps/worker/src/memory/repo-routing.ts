@@ -57,7 +57,7 @@ export const MAX_ROUTING_LABEL_CHARS = 100;
  * because a label that matched this pattern would still be on the label side of
  * the last separator.
  */
-const REPOSITORY_PATTERN = /^(github|gitlab):([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)$/;
+const REPOSITORY_PATTERN = /^([a-z][a-z0-9_-]{2,31}):([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)$/;
 
 /**
  * Corroborating ticket identifiers, anchored at the end of the line. Kept to a
@@ -83,7 +83,7 @@ export interface RepoRoutingEntry {
   /** Ticket label, single-lined, trimmed and length-capped. Matched case
    *  insensitively, because trackers are not consistent about label case. */
   label: string;
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   /**
    * Distinct tickets whose human answer produced this exact label-to-repository

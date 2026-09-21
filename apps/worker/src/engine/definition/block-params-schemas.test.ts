@@ -82,25 +82,24 @@ describe("trigger repository policy parameter", () => {
   it("parses a configuration without a policy exactly as before", () => {
     const expected: Record<(typeof POLICY_TRIGGER_TYPES)[number], unknown> = {
       trigger_ticket_ai: {},
-      trigger_pr_created: { providers: ["github", "gitlab"], scope: "workflow_owned" },
-      trigger_pr_ready: { providers: ["github", "gitlab"], scope: "any" },
-      trigger_pr_updated: { providers: ["github", "gitlab"], scope: "any" },
+      trigger_pr_created: { providers: [], scope: "workflow_owned" },
+      trigger_pr_ready: { providers: [], scope: "any" },
+      trigger_pr_updated: { providers: [], scope: "any" },
       trigger_pr_checks_failed: {
-        providers: ["github", "gitlab"],
+        providers: [],
         scope: "workflow_owned",
         checkNames: [],
         ignoreCheckNames: [],
-        githubAppSlugs: ["github-actions"],
-        gitlabPipelineSources: ["merge_request_event"],
+        trustedProducers: [],
         maxFixAttemptsPerPr: 2,
       },
       trigger_pr_review: {
-        providers: ["github"],
+        providers: [],
         on: ["changes_requested"],
         scope: "workflow_owned",
         maxRunsPerPr: 10,
       },
-      trigger_pr_merged: { providers: ["github", "gitlab"], scope: "workflow_owned" },
+      trigger_pr_merged: { providers: [], scope: "workflow_owned" },
       trigger_webhook: {},
       trigger_schedule: {
         cron: "",
@@ -120,6 +119,17 @@ describe("trigger repository policy parameter", () => {
     expect(
       BLOCK_PARAMS_SCHEMAS.trigger_webhook.parse({ subjectPath: "ticket.id", authScheme: "shared_token" }),
     ).toStrictEqual({ subjectPath: "ticket.id", authScheme: "shared_token" });
+  });
+
+  it("upgrades stored provider-specific producer filters without operator edits", () => {
+    expect(
+      BLOCK_PARAMS_SCHEMAS.trigger_pr_checks_failed.parse({
+        githubAppSlugs: ["github-actions"],
+        gitlabPipelineSources: ["merge_request_event"],
+      }),
+    ).toMatchObject({
+      trustedProducers: ["github-actions", "merge_request_event"],
+    });
   });
 
   it("is declared by the nine trigger manifests and refused by the plan approved one", () => {

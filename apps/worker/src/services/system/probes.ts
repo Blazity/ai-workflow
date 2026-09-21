@@ -34,8 +34,6 @@ import {
 } from "./observations.js";
 
 const LOCAL_OBSERVATION_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_GITLAB_HEALTH_PROJECTS = 25;
-const MAX_ACTIVE_GITLAB_WEBHOOK_TESTS = 4;
 const REQUIRED_GITHUB_WEBHOOK_EVENTS = [
   "check_run",
   "issue_comment",
@@ -52,8 +50,7 @@ const REQUIRED_RESEND_WEBHOOK_EVENTS = [
   "email.suppressed",
 ] as const;
 
-/** Runs only when an admin presses Scan. Every probe is active (GitLab gets a
- * real test delivery), and the observation-table housekeeping rides on the
+/** Runs only when an admin presses Scan. The observation-table housekeeping rides on the
  * same request so nothing health-related runs from cron or page rendering. */
 export async function collectDeploymentSystemHealth(
   settings: SettingsSnapshot,
@@ -88,10 +85,6 @@ export function configFromEnvironment(settings: SettingsSnapshot): SystemHealthC
     githubAppPrivateKey: env.GITHUB_APP_PRIVATE_KEY,
     githubInstallationId: env.GITHUB_INSTALLATION_ID,
     githubWebhookSecret: env.GITHUB_WEBHOOK_SECRET,
-    gitlabToken: env.GITLAB_TOKEN,
-    gitlabHost: env.GITLAB_HOST,
-    gitlabWebhookSecret: env.GITLAB_WEBHOOK_SECRET,
-    gitlabProjectId: env.GITLAB_PROJECT_ID,
     agentKind: defaultProfile.harness.provider,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     anthropicModel:
@@ -195,25 +188,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
     };
     probes["github.webhook-delivery"] = (signal) =>
       githubWebhookResult(config, signal);
-  }
-
-  if (config.gitlabToken) {
-    probes["gitlab.api"] = async (signal) => {
-      const response = await gitlabFetch(config, "/user", signal);
-      if (!response.ok) {
-        throw new PublicHealthProbeError("GitLab authentication failed.");
-      }
-    };
-    probes["gitlab.repositories"] = async (signal) => {
-      const projects = await gitlabProjects(config, signal);
-      if (projects.total === 0) {
-        throw new PublicHealthProbeError(
-          "GitLab token has no accessible projects.",
-        );
-      }
-      return { coverage: { checked: projects.projects.length, total: projects.total } };
-    };
-    probes["gitlab.webhook-delivery"] = (signal) => gitlabWebhookResult(config, signal);
   }
 
   if (config.ssoIssuer) {
@@ -417,222 +391,6 @@ async function githubWebhookResult(
   };
 }
 
-type GitLabProject = { id: number; path_with_namespace?: string };
-
-async function gitlabProjects(
-  config: SystemHealthConfig,
-  signal: AbortSignal,
-): Promise<{ projects: GitLabProject[]; total: number }> {
-  if (config.gitlabProjectId) {
-    const response = await gitlabFetch(
-      config,
-      `/projects/${encodeURIComponent(config.gitlabProjectId)}`,
-      signal,
-    );
-    if (!response.ok) throw new PublicHealthProbeError("Configured GitLab project is unavailable.");
-    return { projects: [(await response.json()) as GitLabProject], total: 1 };
-  }
-  const response = await gitlabFetch(
-    config,
-    `/projects?membership=true&simple=true&per_page=${MAX_GITLAB_HEALTH_PROJECTS}&page=1`,
-    signal,
-  );
-  if (!response.ok) throw new PublicHealthProbeError("GitLab repository listing failed.");
-  const projects = (await response.json()) as GitLabProject[];
-  const total = Number(response.headers.get("x-total") ?? projects.length);
-  return { projects, total: Number.isFinite(total) ? total : projects.length };
-}
-
-async function gitlabWebhookResult(
-  config: SystemHealthConfig,
-  signal: AbortSignal,
-): Promise<SystemHealthProbeResult> {
-  const projectResult = await gitlabProjects(config, signal);
-  const expectedUrl = providerWebhookUrl(config, "gitlab");
-  let checked = 0;
-  let newest: { observedAt: Date; status: number } | null = null;
-  let newestFailure: { observedAt: Date; status: number } | null = null;
-  let rateLimited = false;
-  let testedWithoutEvidence = 0;
-  for (let offset = 0; offset < projectResult.projects.length; offset += 4) {
-    const batch = projectResult.projects.slice(offset, offset + 4);
-    const results = await Promise.all(
-      batch.map((project, batchIndex) =>
-        inspectGitLabWebhook(
-          config,
-          project,
-          expectedUrl,
-          signal,
-          offset + batchIndex < MAX_ACTIVE_GITLAB_WEBHOOK_TESTS,
-        ),
-      ),
-    );
-    if (results.some((result) => result.permissionDenied)) {
-      return {
-        mode: "degraded",
-        coverage: { checked, total: projectResult.total },
-        message:
-          "The GitLab token cannot inspect project webhooks; Maintainer access is required to verify them.",
-      };
-    }
-    checked += results.length;
-    for (const result of results) {
-      rateLimited ||= Boolean(result.activeRateLimited);
-      if (result.activeTested && result.activeEvidenceMissing) testedWithoutEvidence += 1;
-      if (result.delivery && (!newest || result.delivery.observedAt > newest.observedAt)) {
-        newest = result.delivery;
-      }
-      if (
-        result.delivery?.status !== undefined &&
-        (result.delivery.status < 200 || result.delivery.status >= 300) &&
-        (!newestFailure || result.delivery.observedAt > newestFailure.observedAt)
-      ) {
-        newestFailure = result.delivery;
-      }
-    }
-  }
-  const coverage = { checked, total: projectResult.total };
-  if (
-    newestFailure &&
-    Date.now() - newestFailure.observedAt.getTime() <= LOCAL_OBSERVATION_FRESH_MS
-  ) {
-    return {
-      mode: "down",
-      observedAt: newestFailure.observedAt.toISOString(),
-      evidenceSource: "provider-delivery",
-      coverage,
-      message:
-        newestFailure.status === 401
-          ? "A GitLab webhook delivery was rejected with HTTP 401: the project's secret token differs from GITLAB_WEBHOOK_SECRET."
-          : `A checked GitLab webhook's latest delivery failed with HTTP ${newestFailure.status}.`,
-    };
-  }
-  if (rateLimited) {
-    return {
-      mode: "degraded",
-      coverage,
-      message: "GitLab rate-limited the test delivery; scan again in a minute.",
-    };
-  }
-  if (newest && Date.now() - newest.observedAt.getTime() <= LOCAL_OBSERVATION_FRESH_MS) {
-    return {
-      mode: "live",
-      observedAt: newest.observedAt.toISOString(),
-      evidenceSource: "provider-delivery",
-      coverage,
-      message: `Webhook verified end to end; the test delivery returned ${newest.status}.`,
-    };
-  }
-  const local = classifyObservations(
-    await localObservations("gitlab", config.gitlabWebhookSecret),
-  );
-  if (local.mode !== "configured") return { ...local, coverage };
-  return {
-    mode: "degraded",
-    coverage,
-    message:
-      testedWithoutEvidence > 0
-        ? "GitLab accepted the test request, but no delivery result was recorded yet; scan again."
-        : "Webhook configuration verified, but no delivery has been recorded in the last 7 days.",
-  };
-}
-
-async function inspectGitLabWebhook(
-  config: SystemHealthConfig,
-  project: GitLabProject,
-  expectedUrl: string,
-  signal: AbortSignal,
-  active: boolean,
-): Promise<{
-  permissionDenied?: true;
-  activeEvidenceMissing?: true;
-  activeRateLimited?: true;
-  activeTested?: true;
-  delivery?: { observedAt: Date; status: number };
-}> {
-  const hooksResponse = await gitlabFetch(config, `/projects/${project.id}/hooks`, signal);
-  if (hooksResponse.status === 401) {
-    throw new PublicHealthProbeError("GitLab webhook credentials were rejected.");
-  }
-  if (hooksResponse.status === 403) return { permissionDenied: true };
-  if (!hooksResponse.ok) {
-    throw new PublicHealthProbeError("GitLab webhook listing failed.");
-  }
-  const hooks = (await hooksResponse.json()) as Array<{
-    id: number;
-    url?: string;
-    enable_ssl_verification?: boolean;
-    merge_requests_events?: boolean;
-    pipeline_events?: boolean;
-    note_events?: boolean;
-    token_present?: boolean;
-  }>;
-  const hook = hooks.find((candidate) => normalizeUrl(candidate.url ?? "") === expectedUrl);
-  if (!hook) {
-    throw new PublicHealthProbeError(
-      `GitLab webhook is missing for ${project.path_with_namespace ?? project.id}.`,
-    );
-  }
-  if (hook.enable_ssl_verification === false) {
-    throw new PublicHealthProbeError("A GitLab webhook disables TLS verification.");
-  }
-  if (!hook.merge_requests_events || !hook.pipeline_events || !hook.note_events) {
-    throw new PublicHealthProbeError("A GitLab webhook is missing required event subscriptions.");
-  }
-  if (hook.token_present === false) {
-    throw new PublicHealthProbeError("A GitLab webhook has no secret token.");
-  }
-  const activeStartedAt = active ? Date.now() : null;
-  if (active) {
-    const testResponse = await gitlabFetch(
-      config,
-      `/projects/${project.id}/hooks/${hook.id}/test/push_events`,
-      signal,
-      { method: "POST" },
-    );
-    if (testResponse.status === 429) {
-      return { activeTested: true, activeRateLimited: true };
-    }
-    if (!testResponse.ok) {
-      throw new PublicHealthProbeError(
-        `GitLab webhook test failed with HTTP ${testResponse.status}.`,
-      );
-    }
-  }
-  const eventsResponse = await gitlabFetch(
-    config,
-    `/projects/${project.id}/hooks/${hook.id}/events?per_page=1&page=1`,
-    signal,
-  );
-  if (!eventsResponse.ok) {
-    return active
-      ? { activeTested: true, activeEvidenceMissing: true }
-      : {};
-  }
-  const events = (await eventsResponse.json()) as Array<{
-    created_at?: string;
-    response_status?: string | number;
-  }>;
-  const event = events[0];
-  const observedAt = event?.created_at ? new Date(event.created_at) : null;
-  const status = Number(event?.response_status);
-  if (!observedAt || !Number.isFinite(status)) {
-    return active
-      ? { activeTested: true, activeEvidenceMissing: true }
-      : {};
-  }
-  if (
-    activeStartedAt !== null &&
-    observedAt.getTime() < activeStartedAt - 5_000
-  ) {
-    return { activeTested: true, activeEvidenceMissing: true };
-  }
-  return {
-    ...(active ? { activeTested: true as const } : {}),
-    delivery: { observedAt, status },
-  };
-}
-
 async function resendSenderResult(
   config: SystemHealthConfig,
   signal: AbortSignal,
@@ -789,20 +547,6 @@ function agentProbes(config: SystemHealthConfig): SystemHealthProbes {
   return {};
 }
 
-function gitlabFetch(
-  config: SystemHealthConfig,
-  path: string,
-  signal: AbortSignal,
-  init: RequestInit = {},
-): Promise<Response> {
-  const host = (config.gitlabHost ?? "https://gitlab.com").replace(/\/+$/, "");
-  return fetch(`${host}/api/v4${path}`, {
-    ...init,
-    headers: { ...init.headers, "PRIVATE-TOKEN": config.gitlabToken! },
-    signal,
-  });
-}
-
 function resendFetch(
   config: SystemHealthConfig,
   path: string,
@@ -816,7 +560,7 @@ function resendFetch(
 
 function providerWebhookUrl(
   config: SystemHealthConfig,
-  provider: "github" | "gitlab" | "resend" | "jira",
+  provider: "github" | "resend" | "jira",
 ): string {
   const base = (config.betterAuthUrl ?? "").replace(/\/+$/, "");
   return normalizeUrl(`${base}/webhooks/${provider}`);

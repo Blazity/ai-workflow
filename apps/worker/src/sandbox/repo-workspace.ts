@@ -6,7 +6,7 @@ export const WORKSPACE_ROOT_DIR = "/vercel/sandbox";
 export const WORKSPACE_REPOS_DIR = "/vercel/sandbox/repos";
 
 const workspaceRepoBaseShape = {
-  provider: z.enum(["github", "gitlab"]),
+  provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
   repoPath: z.string().min(1),
   slug: z.string().min(1),
   localPath: z.string().min(1),

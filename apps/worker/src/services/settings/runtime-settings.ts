@@ -12,6 +12,7 @@
  * module per case, and a module-level snapshot would freeze the first value.
  */
 import type { SettingsSnapshot } from "@shared/contracts";
+import { integrationManifests } from "@integrations/registry";
 import { env } from "../../infra/vcs-config.js";
 
 /**
@@ -116,7 +117,6 @@ export function configuredSecretValues(): string[] {
   return [
     env.JIRA_API_TOKEN,
     env.GITHUB_APP_PRIVATE_KEY,
-    env.GITLAB_TOKEN,
     env.ANTHROPIC_API_KEY,
     env.CODEX_API_KEY,
     env.CODEX_CHATGPT_OAUTH_TOKEN,
@@ -124,12 +124,16 @@ export function configuredSecretValues(): string[] {
     env.CRON_SECRET,
     env.JIRA_WEBHOOK_SECRET,
     env.GITHUB_WEBHOOK_SECRET,
-    env.GITLAB_WEBHOOK_SECRET,
     env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
     env.BETTER_AUTH_SECRET,
     env.SSO_CLIENT_SECRET,
     env.RESEND_API_KEY,
     env.RESEND_WEBHOOK_SECRET,
+    ...integrationManifests.flatMap((manifest) =>
+      manifest.connection.fields
+        .filter((field) => field.secret)
+        .map((field) => process.env[field.env]),
+    ),
   ].filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
 }
 

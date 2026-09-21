@@ -415,8 +415,7 @@ describe("repository expansion validation", () => {
     expect(decision.kind).toBe("clarification_needed");
     if (decision.kind === "clarification_needed") {
       const [question] = decision.questions;
-      expect(question).toContain("github:owner/repo");
-      expect(question).toContain("gitlab:group/repo");
+      expect(question).toContain("provider:owner/repo");
       expect(isExpansionLimitClarification(decision.questions)).toBe(true);
     }
   });
@@ -459,7 +458,7 @@ describe("isRepositoryExpansionClarification", () => {
     relationships: [],
     usable: true,
   };
-  const request = (provider: "github" | "gitlab", repoPath: string) => ({
+  const request = (provider: string, repoPath: string) => ({
     provider,
     repoPath,
     rationale: "needed",
@@ -470,14 +469,14 @@ describe("isRepositoryExpansionClarification", () => {
       name: "a repository that is not on the catalog",
       requests: [request("github", "acme/unknown")],
       catalog: [contracts],
-      attached: [] as Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      attached: [] as Array<{ provider: string; repoPath: string }>,
       completedRounds: 0,
     },
     {
       name: "more than three repositories in one round",
       requests: spare.map((entry) => request(entry.provider, entry.repoPath)),
       catalog: spare,
-      attached: [] as Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      attached: [] as Array<{ provider: string; repoPath: string }>,
       completedRounds: 0,
     },
     {
@@ -487,7 +486,7 @@ describe("isRepositoryExpansionClarification", () => {
         request("gitlab", "acme/shared/contracts"),
       ],
       catalog: [contracts],
-      attached: [] as Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      attached: [] as Array<{ provider: string; repoPath: string }>,
       completedRounds: 0,
     },
     {
@@ -504,7 +503,7 @@ describe("isRepositoryExpansionClarification", () => {
       name: "a genuinely missing repository after two rounds",
       requests: [request("gitlab", "acme/shared/contracts")],
       catalog: [contracts],
-      attached: [] as Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      attached: [] as Array<{ provider: string; repoPath: string }>,
       completedRounds: 2,
     },
   ])(
@@ -527,7 +526,7 @@ describe("isRepositoryExpansionClarification", () => {
       }
       // Whatever the reason for asking, the answer format is stated, so the
       // reply has a shape the parser can read.
-      expect(question).toContain("github:owner/repo");
+      expect(question).toContain("provider:owner/repo");
       expect(question).toContain('Reply "none"');
     },
   );
@@ -1491,8 +1490,8 @@ describe("decideRepositoryExpansion", () => {
      *  the state the closure stores. */
     function modelPass(
       current: RepositoryExpansionState,
-      attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
-      requests: Array<{ provider: "github" | "gitlab"; repoPath: string; rationale: string }> = [
+      attached: Array<{ provider: string; repoPath: string }>,
+      requests: Array<{ provider: string; repoPath: string; rationale: string }> = [
         privateRequest,
       ],
     ) {
@@ -1529,7 +1528,7 @@ describe("decideRepositoryExpansion", () => {
       current: RepositoryExpansionState,
       answer: string,
       round: number,
-      attached: Array<{ provider: "github" | "gitlab"; repoPath: string }> = [service],
+      attached: Array<{ provider: string; repoPath: string }> = [service],
     ) {
       return decideRepositoryExpansion({
         origin: "human",

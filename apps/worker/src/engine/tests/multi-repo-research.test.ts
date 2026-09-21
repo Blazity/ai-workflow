@@ -518,7 +518,7 @@ describe("human repository expansion beyond the model round limit", () => {
     const deps = {
       resolve: async (
         answer: string,
-        attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+        attached: Array<{ provider: string; repoPath: string }>,
       ) => validateHumanRepositoryExpansion({ answer, catalog, attached }),
       attach: vi.fn(),
       fetchContexts: async () => [],
@@ -573,7 +573,7 @@ describe("human repository expansion beyond the model round limit", () => {
     const deps = {
       resolve: async (
         answer: string,
-        attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+        attached: Array<{ provider: string; repoPath: string }>,
       ) => validateHumanRepositoryExpansion({ answer, catalog, attached }),
       attach: vi.fn(async () => ({ manifest: attachedManifest, cloneDurationMs: 5 })),
       fetchContexts: async () => [],
@@ -654,7 +654,7 @@ describe("human repository expansion beyond the model round limit", () => {
     // close it behind the human's back, right after they asked for more.
     const ctx = ctxWithLimitAnswer("gitlab:acme/shared/contracts");
     const deps = {
-      resolve: async (answer: string, attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>) =>
+      resolve: async (answer: string, attached: Array<{ provider: string; repoPath: string }>) =>
         validateHumanRepositoryExpansion({ answer, catalog, attached }),
       attach: async () => ({ manifest: attachedManifest, cloneDurationMs: 5 }),
       fetchContexts: async () => [],
@@ -736,7 +736,7 @@ describe("human repository expansion beyond the model round limit", () => {
       const deps = {
         resolve: async (
           answerText: string,
-          attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+          attached: Array<{ provider: string; repoPath: string }>,
         ) =>
           validateHumanRepositoryExpansion({
             answer: answerText,
@@ -824,7 +824,7 @@ describe("human repository expansion beyond the model round limit", () => {
       const result = await applyHumanRepositoryExpansion(ctx, {
         resolve: async (
           answerText: string,
-          attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+          attached: Array<{ provider: string; repoPath: string }>,
         ) => validateHumanRepositoryExpansion({ answer: answerText, catalog, attached }),
         attach,
         fetchContexts: async () => [],
@@ -1173,11 +1173,11 @@ describe("expansion state survives a clarification round-trip", () => {
   function advanceExpansion(
     ctx: ReturnType<typeof makeCtx>,
     requests: Array<{
-      provider: "github" | "gitlab";
+      provider: string;
       repoPath: string;
       rationale: string;
     }>,
-    attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+    attached: Array<{ provider: string; repoPath: string }>,
   ) {
     const verdict = validateRepositoryExpansionRequests({
       requests,

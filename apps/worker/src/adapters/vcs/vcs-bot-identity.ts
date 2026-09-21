@@ -3,8 +3,7 @@ import type { VcsProviderKind } from "@shared/contracts";
 const BOT_LOGIN_SUFFIX = "[bot]";
 
 export interface VcsBotLoginConfig {
-  github?: string;
-  gitlab?: string;
+  byProvider: Readonly<Record<string, string | undefined>>;
   legacy?: string;
 }
 
@@ -13,9 +12,7 @@ export function resolveVcsBotLogin(
   configuredProviders: readonly VcsProviderKind[],
   logins: VcsBotLoginConfig,
 ): string | undefined {
-  const providerSpecific = normalizeVcsLogin(
-    kind === "github" ? logins.github : logins.gitlab,
-  );
+  const providerSpecific = normalizeVcsLogin(logins.byProvider[kind]);
   if (providerSpecific) return providerSpecific;
   return configuredProviders.length === 1 && configuredProviders[0] === kind
     ? normalizeVcsLogin(logins.legacy)

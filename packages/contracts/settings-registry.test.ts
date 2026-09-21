@@ -37,7 +37,6 @@ test("the retired environment names are a frozen, literal one-way list", () => {
   assert.deepEqual(RETIRED_ENVIRONMENT_VARIABLES, [
     "DASHBOARD_ORG_NAME",
     "GITHUB_BASE_BRANCH",
-    "GITLAB_BASE_BRANCH",
     "MAX_CONCURRENT_AGENTS",
     "JOB_TIMEOUT_MS",
     "V2_MAX_BLOCK_CONCURRENCY",
@@ -69,8 +68,8 @@ test("the retired environment names are a frozen, literal one-way list", () => {
     "TRIGGER_RATE_LIMIT_MAX",
     "TRIGGER_RATE_LIMIT_WINDOW",
   ]);
-  assert.equal(RETIRED_ENVIRONMENT_VARIABLES.length, 33);
-  assert.equal(new Set(RETIRED_ENVIRONMENT_VARIABLES).size, 33);
+  assert.equal(RETIRED_ENVIRONMENT_VARIABLES.length, 32);
+  assert.equal(new Set(RETIRED_ENVIRONMENT_VARIABLES).size, 32);
   assert.ok(!RETIRED_ENVIRONMENT_VARIABLES.includes("AGENT_ALLOWED_REPOS" as never));
 });
 

@@ -87,7 +87,6 @@ export const RETIRED_ENVIRONMENT_VARIABLES = Object.freeze([
   // Deleted registry keys stay retired so an old deployment cannot revive them through env.
   "DASHBOARD_ORG_NAME",
   "GITHUB_BASE_BRANCH",
-  "GITLAB_BASE_BRANCH",
   "MAX_CONCURRENT_AGENTS",
   "JOB_TIMEOUT_MS",
   "V2_MAX_BLOCK_CONCURRENCY",

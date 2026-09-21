@@ -20,7 +20,6 @@ export {
 export {
   configuredVcsProviders,
   githubWebhookSettings,
-  gitlabWebhookSettings,
   issueTrackerBaseUrl,
   jiraWebhookSecret,
   outboundEmailSettings,

@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { GitLabAdapter } from "./gitlab.js";
-import { reviewFindingDigest } from "./types.js";
-import type { ReviewThread } from "./types.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
-import { logger } from "../../infra/logger.js";
+import { GitLabAdapter } from "./vcs.js";
+import { reviewFindingDigest, AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+import type { GateStatusRef, ReviewThread } from "@integrations/sdk";
 
-vi.mock("../../infra/logger.js", () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}));
+function gateHandle(value: object): GateStatusRef {
+  return value as GateStatusRef;
+}
+
+const logger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+};
 
 const mockBranches = {
   create: vi.fn(),
@@ -77,11 +82,13 @@ vi.mock("@gitbeaker/rest", () => ({
   })),
 }));
 
-function glAdapter() {
+function glAdapter(overrides: Partial<ConstructorParameters<typeof GitLabAdapter>[0]> = {}) {
   return new GitLabAdapter({
     token: "glpat-xxxxxxxxxxxx",
     projectId: "blazity/demo-app",
     baseBranch: "main",
+    log: logger,
+    ...overrides,
   });
 }
 
@@ -90,6 +97,45 @@ describe("GitLabAdapter", () => {
     vi.clearAllMocks();
     mockFetch.mockReset();
     vi.stubGlobal("fetch", mockFetch);
+  });
+
+  describe("repository listing", () => {
+    it("does not narrow membership listing when the legacy project value is set", async () => {
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse([
+          {
+            path_with_namespace: "platform/api",
+            name: "api",
+            namespace: { full_path: "platform" },
+            default_branch: "main",
+            web_url: "https://gitlab.example.com/platform/api",
+            visibility: "private",
+          },
+          {
+            path_with_namespace: "platform/web",
+            name: "web",
+            namespace: { full_path: "platform" },
+            default_branch: "main",
+            web_url: "https://gitlab.example.com/platform/web",
+            visibility: "private",
+          },
+        ]),
+      );
+
+      await expect(
+        glAdapter({
+          host: "https://gitlab.example.com",
+          legacyProjectId: "platform/api",
+        }).listRepositories(),
+      ).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ provider: "gitlab", repoPath: "platform/api" }),
+        expect.objectContaining({ provider: "gitlab", repoPath: "platform/web" }),
+      ]));
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://gitlab.example.com/api/v4/projects?membership=true&per_page=100&page=1",
+        expect.any(Object),
+      );
+    });
   });
 
   describe("branch ownership operations", () => {
@@ -366,9 +412,21 @@ describe("GitLabAdapter", () => {
         headSha: "source-head-sha",
         baseRef: "release",
         state: "open",
-        headPipelineId: 901,
-        headPipelineStatus: "failed",
-        headPipelineFailedChecks: [{ id: 12, name: "test" }],
+        checks: {
+          state: "red",
+          failed: [
+            {
+              handle: { kind: "aggregate", id: 901 },
+              name: "pipeline",
+              conclusion: "failed",
+            },
+            {
+              handle: { kind: "job", container: 901, id: 12 },
+              name: "test",
+              conclusion: "failed",
+            },
+          ],
+        },
       });
       expect(mockMergeRequests.show).toHaveBeenCalledWith("blazity/demo-app", 42);
       expect(mockJobs.all).toHaveBeenCalledWith("blazity/demo-app", {
@@ -388,6 +446,7 @@ describe("GitLabAdapter", () => {
         headSha: "source-head-sha",
         baseRef: "main",
         state: "merged",
+        checks: { state: "green", failed: [] },
       });
     });
   });
@@ -437,9 +496,9 @@ describe("GitLabAdapter", () => {
         headSha: "head-sha",
         baseRef: "main",
         state: "open",
-        pipelineId: 901,
-        pipelineSource: "merge_request_event",
-        failedChecks: [{ name: "lint", conclusion: "failed" }],
+        failedChecks: expect.arrayContaining([
+          expect.objectContaining({ name: "lint", conclusion: "failed" }),
+        ]),
         reviews: [
           {
             state: "commented",
@@ -1083,7 +1142,7 @@ describe("GitLabAdapter", () => {
       expect(note.body).toContain(
         "### Findings already open on this merge request",
       );
-      expect(note.body).toContain("- `src/index.ts:40` — **High**: Still broken.");
+      expect(note.body).toContain("- `src/index.ts:40` - **High**: Still broken.");
     });
 
     it("edits the one summary note instead of adding another", async () => {
@@ -1316,7 +1375,7 @@ describe("GitLabAdapter", () => {
         "### Additional findings not placed inline",
       );
       expect(noteBody.body).toContain(
-        "- `src/index.ts:8` — Rejected",
+        "- `src/index.ts:8` - Rejected",
       );
     });
 
@@ -1367,7 +1426,7 @@ describe("GitLabAdapter", () => {
 
       const noteBody = JSON.parse(String(mockFetch.mock.calls[1]?.[1]?.body));
       expect(noteBody.body).toContain(
-        "- `src/index.ts:8` — **High**: Handle this failure.\n\n  Reported by 3 of 3 reviewers.",
+        "- `src/index.ts:8` - **High**: Handle this failure.\n\n  Reported by 3 of 3 reviewers.",
       );
     });
 
@@ -1548,7 +1607,7 @@ describe("GitLabAdapter", () => {
       const ref = await adapter.createGateStatus("blazebot / code-hygiene", "sha1");
 
       expect(ref).toEqual({
-        provider: "gitlab",
+        kind: "commit_status",
         name: "blazebot / code-hygiene",
         headSha: "sha1",
       });
@@ -1573,11 +1632,11 @@ describe("GitLabAdapter", () => {
 
       const adapter = glAdapter();
       await adapter.updateGateStatus(
-        {
-          provider: "gitlab",
+        gateHandle({
+          kind: "commit_status",
           name: "blazebot / code-hygiene",
           headSha: "sha1",
-        },
+        }),
         {
           status: "completed",
           conclusion: "failure",
@@ -1615,7 +1674,7 @@ describe("GitLabAdapter", () => {
 
       const adapter = glAdapter();
       await adapter.updateGateStatus(
-        { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
+        gateHandle({ kind: "commit_status", name: "blazebot / code-hygiene", headSha: "sha1" }),
         { status: "completed", conclusion: "failure", summary },
       );
 
@@ -1638,7 +1697,7 @@ describe("GitLabAdapter", () => {
       for (const conclusion of ["cancelled", "neutral"] as const) {
         mockFetch.mockReset().mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
         await glAdapter().updateGateStatus(
-          { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
+          gateHandle({ kind: "commit_status", name: "blazebot / code-hygiene", headSha: "sha1" }),
           { status: "completed", conclusion, summary: "The review did not run." },
         );
         const lastCall = mockFetch.mock.calls.at(-1);
@@ -1658,10 +1717,10 @@ describe("GitLabAdapter", () => {
 
       await expect(
         adapter.updateGateStatus(
-          { provider: "github", id: 123 },
+          gateHandle({ kind: "foreign", id: 123 }),
           { status: "completed", conclusion: "success" },
         ),
-      ).rejects.toThrow("GitLabAdapter cannot update github gate status");
+      ).rejects.toThrow("GitLab received an invalid gate status handle");
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
@@ -1678,11 +1737,11 @@ describe("GitLabAdapter", () => {
 
       const adapter = glAdapter();
       const update = adapter.updateGateStatus(
-        {
-          provider: "gitlab",
+        gateHandle({
+          kind: "commit_status",
           name: "blazebot / code-hygiene",
           headSha: "sha1",
-        },
+        }),
         { status: "completed", conclusion: "success" },
       );
       await vi.advanceTimersByTimeAsync(500);
@@ -1715,11 +1774,11 @@ describe("GitLabAdapter", () => {
 
       const adapter = glAdapter();
       const update = adapter.updateGateStatus(
-        {
-          provider: "gitlab",
+        gateHandle({
+          kind: "commit_status",
           name: "blazebot / code-hygiene",
           headSha: "sha1",
-        },
+        }),
         { status: "completed", conclusion: "success" },
       );
 
@@ -1752,11 +1811,11 @@ describe("GitLabAdapter", () => {
 
       const adapter = glAdapter();
       const update = adapter.updateGateStatus(
-        {
-          provider: "gitlab",
+        gateHandle({
+          kind: "commit_status",
           name: "blazebot / code-hygiene",
           headSha: "sha1",
-        },
+        }),
         { status: "completed", conclusion: "success" },
       );
       await vi.advanceTimersByTimeAsync(1500);
@@ -1796,11 +1855,11 @@ describe("GitLabAdapter", () => {
 
       const adapter = glAdapter();
       const update = adapter.updateGateStatus(
-        {
-          provider: "gitlab",
+        gateHandle({
+          kind: "commit_status",
           name: "blazebot / code-hygiene",
           headSha: "sha1",
-        },
+        }),
         { status: "completed", conclusion: "success" },
       );
       const expectedError = expect(update).rejects.toThrow(
@@ -2545,11 +2604,14 @@ describe("GitLabAdapter", () => {
       const feed = await glAdapter().listReviewThreads(42);
 
       expect(feed.threads[0]).toMatchObject({ alias: "T1", awaitingHuman: false });
-      expect(logger.info).toHaveBeenCalledWith({
-        event: "review_ledger.reopened",
-        threadId: "d-reopened",
-        alias: "T1",
-      });
+      expect(logger.info).toHaveBeenCalledWith(
+        {
+          event: "review_ledger.reopened",
+          threadId: "d-reopened",
+          alias: "T1",
+        },
+        "review_ledger_reopened",
+      );
     });
 
     it("does not call a parked thread reopened while our reply is the last note", async () => {

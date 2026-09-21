@@ -118,10 +118,6 @@ describe("deployment system-health probes", () => {
       githubAppPrivateKey: environment.GITHUB_APP_PRIVATE_KEY,
       githubInstallationId: environment.GITHUB_INSTALLATION_ID,
       githubWebhookSecret: environment.GITHUB_WEBHOOK_SECRET,
-      gitlabToken: environment.GITLAB_TOKEN,
-      gitlabHost: environment.GITLAB_HOST,
-      gitlabWebhookSecret: environment.GITLAB_WEBHOOK_SECRET,
-      gitlabProjectId: environment.GITLAB_PROJECT_ID,
       agentKind: "codex",
       anthropicApiKey: environment.ANTHROPIC_API_KEY,
       anthropicModel: "claude-opus-4-8",
@@ -228,19 +224,6 @@ describe("deployment system-health probes", () => {
         new AbortController().signal,
       ),
     ).rejects.toThrow(/no accessible repositories/);
-  });
-
-  it("does not mark GitLab repository access live when the token sees no projects", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response("[]", { headers: { "x-total": "0" } }),
-    );
-    const config = { ...configFromEnvironment(settings), gitlabProjectId: undefined };
-
-    await expect(
-      probesForEnvironment(config)["gitlab.repositories"]?.(
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow(/no accessible projects/);
   });
 
   it("reports a GitHub App that omits handled webhook events", async () => {
@@ -464,149 +447,8 @@ describe("deployment system-health probes", () => {
     ).rejects.toThrow(/missing required events/);
   });
 
-  it("bounds active GitLab webhook inspection to four concurrent projects", async () => {
-    let activeHookLists = 0;
-    let maxActiveHookLists = 0;
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (url.includes("/projects?")) {
-        return new Response(
-          JSON.stringify(
-            Array.from({ length: 5 }, (_, index) => ({
-              id: index + 1,
-              path_with_namespace: `group/project-${index + 1}`,
-            })),
-          ),
-          { headers: { "x-total": "5" } },
-        );
-      }
-      if (/\/projects\/\d+\/hooks$/.test(url)) {
-        activeHookLists += 1;
-        maxActiveHookLists = Math.max(maxActiveHookLists, activeHookLists);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        activeHookLists -= 1;
-        return Response.json([
-          {
-            id: 10,
-            url: "https://worker.example/webhooks/gitlab",
-            enable_ssl_verification: true,
-            merge_requests_events: true,
-            pipeline_events: true,
-            note_events: true,
-            token_present: true,
-          },
-        ]);
-      }
-      if (url.includes("/test/push_events")) {
-        expect(init?.method).toBe("POST");
-        return new Response(null, { status: 204 });
-      }
-      if (url.includes("/events?")) {
-        return Response.json([
-          { created_at: new Date().toISOString(), response_status: 200 },
-        ]);
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    });
-    const config = { ...configFromEnvironment(settings), gitlabProjectId: undefined };
-
-    const result = await probesForEnvironment(config)[
-      "gitlab.webhook-delivery"
-    ]?.(new AbortController().signal);
-
-    expect(maxActiveHookLists).toBe(4);
-    expect(
-      fetchMock.mock.calls.filter(([url]) =>
-        String(url).includes("/test/push_events"),
-      ),
-    ).toHaveLength(4);
-    expect(result).toMatchObject({
-      mode: "live",
-      coverage: { checked: 5, total: 5 },
-    });
-  });
-
-  it("treats a rate-limited GitLab test delivery as degraded, not down", async () => {
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (url.includes("/projects/group%2Fproject") && !url.includes("/hooks")) {
-        return Response.json({ id: 1, path_with_namespace: "group/project" });
-      }
-      if (url.endsWith("/projects/1/hooks")) {
-        return Response.json([
-          {
-            id: 10,
-            url: "https://worker.example/webhooks/gitlab",
-            enable_ssl_verification: true,
-            merge_requests_events: true,
-            pipeline_events: true,
-            note_events: true,
-            token_present: true,
-          },
-        ]);
-      }
-      if (url.includes("/test/push_events")) {
-        expect(init?.method).toBe("POST");
-        return new Response(null, { status: 429 });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    });
-
-    const result = await probesForEnvironment(configFromEnvironment(settings))[
-      "gitlab.webhook-delivery"
-    ]?.(new AbortController().signal);
-
-    expect(result).toMatchObject({
-      mode: "degraded",
-      message: expect.stringContaining("rate-limited"),
-    });
-  });
-
-  it("keeps a checked GitLab webhook failure visible with partial coverage", async () => {
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes("/projects?")) {
-        return new Response(
-          JSON.stringify([
-            { id: 1, path_with_namespace: "group/broken" },
-            { id: 2, path_with_namespace: "group/healthy" },
-          ]),
-          { headers: { "x-total": "30" } },
-        );
-      }
-      if (/\/projects\/\d+\/hooks$/.test(url)) {
-        return Response.json([
-          {
-            id: 10,
-            url: "https://worker.example/webhooks/gitlab",
-            enable_ssl_verification: true,
-            merge_requests_events: true,
-            pipeline_events: true,
-            note_events: true,
-            token_present: true,
-          },
-        ]);
-      }
-      if (url.includes("/test/push_events")) return new Response(null, { status: 204 });
-      if (url.includes("/projects/1/") && url.includes("/events?")) {
-        return Response.json([
-          { created_at: new Date().toISOString(), response_status: 302 },
-        ]);
-      }
-      if (url.includes("/events?")) {
-        return Response.json([
-          { created_at: new Date().toISOString(), response_status: 200 },
-        ]);
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    });
-    const config = { ...configFromEnvironment(settings), gitlabProjectId: undefined };
-
-    const result = await probesForEnvironment(config)["gitlab.webhook-delivery"]?.(
-      new AbortController().signal,
-    );
-
-    expect(result).toMatchObject({
-      mode: "down",
-      coverage: { checked: 2, total: 30 },
-      message: expect.stringContaining("HTTP 302"),
-    });
+  it("leaves GitLab health to the integration package", () => {
+    const probes = probesForEnvironment(configFromEnvironment(settings));
+    expect(Object.keys(probes).filter((id) => id.startsWith("gitlab."))).toEqual([]);
   });
 });

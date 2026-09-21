@@ -1,4 +1,5 @@
 import type { TicketContent } from "../../adapters/issue-tracker/types.js";
+import { integrationsProviding } from "@integrations/registry";
 
 // Discovery runs as part of engine preparation and carries no service composition.
 import type { PreSandboxRepositoryDiscovery } from "../pre-sandbox/types.js";
@@ -41,7 +42,7 @@ export const REPOSITORY_DISCOVERY_SCHEMA = JSON.stringify({
           items: {
             type: "object",
             properties: {
-              provider: { type: "string", enum: ["github", "gitlab"] },
+              provider: { type: "string", pattern: "^[a-z][a-z0-9_-]{2,31}$" },
               repoPath: { type: "string" },
               rationale: { type: "string" },
             },
@@ -211,7 +212,7 @@ const CLOSED_EXPANSION_REPEATED_REQUEST =
 // verbatim in every expansion clarification so a human knows the exact shape an
 // actionable answer must take, whatever the question was asked about.
 const EXPANSION_ANSWER_FORMAT =
-  'reply with exact repository paths as "github:owner/repo" or "gitlab:group/repo"' +
+  'reply with exact repository paths as "provider:owner/repo"' +
   ' (a bare "owner/repo" also works and is matched against the accessible catalog,' +
   " case-insensitively). Separate multiple repositories with commas or new lines.";
 
@@ -823,14 +824,14 @@ export function repositoryExpansionPlans(
 }
 
 export interface ParsedRepositoryIdentity {
-  provider?: "github" | "gitlab";
+  provider?: string;
   repoPath: string;
 }
 
 /**
  * Parse a human clarification answer into repository identities. The one rule:
  * split on whitespace, commas, and new lines; a token is an identity when it is
- * "github:owner/repo" / "gitlab:group/repo" (provider-scoped), a repository URL
+ * "provider:owner/repo" (provider-scoped), a repository URL
  * (reduced to its "owner/repo" path), or a bare "owner/repo" path (at least one
  * slash). Surrounding punctuation is trimmed; everything else (prose, unknown
  * prefixes) is ignored.
@@ -1329,7 +1330,7 @@ function recordAskedUnavailable(
  *  about it. The first identity is named in full, whatever it costs, because a
  *  truncated repository path is not something a reader can act on; the rest are
  *  counted. A request names at most 3 repositories, so that keeps it inside 290
- *  characters for an identity of up to 80, a deeply nested GitLab path included.
+ *  characters for an identity of up to 80, including deeply nested paths.
  *  The bound was 200 while the second branch said "attach it", which named no
  *  route a person can take; naming one costs about sixty characters, and a
  *  shorter sentence that tells nobody what to do is not the cheaper option.
@@ -1784,18 +1785,27 @@ const URL_PATH_AFTER_REPOSITORY = new Set([
 ]);
 
 // The public hosts whose name says which provider a link points at. Any other
-// host (a self-hosted GitLab, an enterprise GitHub) could be either, so a link
+// host could belong to any integration, so a link
 // there stays a bare path and the catalog resolves it. Exported because the
 // work scope reader asks the same list which links are repositories at all.
-export const PROVIDER_BY_HOST = new Map<string, "github" | "gitlab">([
+export const PROVIDER_BY_HOST = new Map<string, string>([
   ["github.com", "github"],
-  ["gitlab.com", "gitlab"],
+  ...integrationsProviding("vcs").flatMap((manifest) =>
+    manifest.connection.fields.flatMap((field) => {
+      if (field.format !== "url" || typeof field.default !== "string") return [];
+      try {
+        return [[new URL(field.default).host.toLowerCase(), manifest.id] as const];
+      } catch {
+        return [];
+      }
+    }),
+  ),
 ]);
 
 function parseIdentityToken(token: string): ParsedRepositoryIdentity | null {
   // A pasted repository URL is the other shape a person actually sends, and it
   // is rarely the bare repository page: it is the file they were reading. The
-  // SSH clone address is the third. A github.com or gitlab.com link names its
+  // SSH clone address is the third. A recognized public host names its
   // provider; any other host leaves the provider to the catalog.
   const link =
     /^https?:\/\/([^/]+)\/(.+)$/i.exec(token) ?? /^[^@/]+@([^:/]+):(.+)$/.exec(token);
@@ -1808,7 +1818,7 @@ function parseIdentityToken(token: string): ParsedRepositoryIdentity | null {
   const colon = token.indexOf(":");
   if (colon > 0) {
     const prefix = token.slice(0, colon).toLowerCase();
-    if (prefix === "github" || prefix === "gitlab") {
+    if (/^[a-z0-9][a-z0-9._-]*$/u.test(prefix)) {
       const repoPath = token.slice(colon + 1);
       return repoPath.includes("/") ? { provider: prefix, repoPath } : null;
     }
@@ -1818,13 +1828,12 @@ function parseIdentityToken(token: string): ParsedRepositoryIdentity | null {
 }
 
 /** The repository part of a link's path. On github.com a repository is always
- *  owner/repo, so it is the first two segments whatever follows. On gitlab.com
- *  a repository may sit in nested groups, and GitLab starts everything that is
- *  not the repository with "/-/". Any other host could be either, so it is cut
+ *  owner/repo, so it is the first two segments whatever follows. Any other
+ *  provider may use nested groups, so it is cut
  *  at "/-/" and at the first segment that starts a file, a ref or a discussion.
  *  A trailing ".git" is never part of the path. */
 function repositoryPathOfLink(
-  provider: "github" | "gitlab" | undefined,
+  provider: string | undefined,
   rawPath: string,
 ): string {
   const path = rawPath.split(/[?#]/)[0];
@@ -1834,9 +1843,6 @@ function repositoryPathOfLink(
     return segmentsOf(path).slice(0, 2).join("/").replace(/\.git$/i, "");
   }
   const segments = segmentsOf(path.split(/\/-(?:\/|$)/)[0]);
-  if (provider === "gitlab") {
-    return segments.join("/").replace(/\.git$/i, "");
-  }
   const cut = segments.findIndex((segment) =>
     URL_PATH_AFTER_REPOSITORY.has(segment.toLowerCase()),
   );

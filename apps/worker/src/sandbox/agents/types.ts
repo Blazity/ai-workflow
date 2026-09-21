@@ -257,7 +257,7 @@ type ResearchStatus =
   | "clarification_needed"
   | "failed";
 export interface ResearchRepository {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   rationale: string;
 }
@@ -277,7 +277,7 @@ export interface ResearchResult {
 }
 
 const researchRepositorySchema = z.object({
-  provider: z.enum(["github", "gitlab"]),
+  provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
   repoPath: z.string().min(1),
   rationale: z.string().min(1),
 }).strict();
@@ -338,7 +338,7 @@ export const RESEARCH_SCHEMA = JSON.stringify({
           items: {
             type: "object",
             properties: {
-              provider: { type: "string", enum: ["github", "gitlab"] },
+              provider: { type: "string", minLength: 1 },
               repoPath: { type: "string" },
               rationale: { type: "string" },
             },
@@ -357,7 +357,7 @@ export const RESEARCH_SCHEMA = JSON.stringify({
           items: {
             type: "object",
             properties: {
-              provider: { type: "string", enum: ["github", "gitlab"] },
+              provider: { type: "string", minLength: 1 },
               repoPath: { type: "string" },
               rationale: { type: "string" },
             },

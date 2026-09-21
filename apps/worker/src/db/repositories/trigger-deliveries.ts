@@ -2,7 +2,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { getDb, type Db } from "../client.js";
 import { activeRuns, triggerDeliveries, workflowRuns } from "../schema.js";
 
-type Provider = "github" | "gitlab";
+type Provider = string;
 
 export async function findTriggerDeliveryRow(
   db: Db,

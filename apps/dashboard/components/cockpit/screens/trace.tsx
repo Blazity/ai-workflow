@@ -455,7 +455,7 @@ export function TraceDetail({
                   <span className="truncate max-w-[180px]">{runPrLabels[i]}</span>
                 )}
                 <span className="whitespace-nowrap">
-                  {pr.provider === "gitlab" ? "MR" : "PR"} {pullRequestRef(pr)} ↗
+                  PR {pullRequestRef(pr)} ↗
                 </span>
               </a>
             ))}

@@ -1,5 +1,6 @@
 import type { ReviewLedgerState } from "../../adapters/vcs/types.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
+import type { IntegrationConnectionPin } from "@shared/contracts";
 import {
   buildReviewLedgerDurableState,
   type ReviewLedgerGuardWorkItem,
@@ -13,7 +14,11 @@ const LEDGER_EVIDENCE_MAX_BYTES = 200_000;
 
 /** Answer the review threads on the no-change terminal through one durable step. */
 export async function settleReviewLedgerThreads(
-  ctx: { entry: AgentWorkflowInput; reviewLedger?: ReviewLedgerState },
+  ctx: {
+    entry: AgentWorkflowInput;
+    reviewLedger?: ReviewLedgerState;
+    integrationPins?: readonly IntegrationConnectionPin[];
+  },
   headSha: string | null,
 ): Promise<SettledThread[]> {
   if (ctx.entry.kind !== "pr_trigger" || !ctx.reviewLedger) return [];
@@ -25,6 +30,7 @@ export async function settleReviewLedgerThreads(
     provider: pr.provider,
     repoPath: pr.repoPath,
     baseBranch: pr.baseRef,
+    integrationPins: ctx.integrationPins,
   });
 }
 
@@ -72,7 +78,7 @@ export async function readLedgerEvidenceFileStep(
  * with for weeks, so the note is posted even though the run is already failing.
  */
 export async function postReviewLedgerFailureNoteStep(payload: {
-  pr: { provider: "github" | "gitlab"; repoPath: string; baseRef: string; prNumber: number };
+  pr: { provider: string; repoPath: string; baseRef: string; prNumber: number };
   runId: string;
   reason: string;
   unsettledAliases: string[];
@@ -91,6 +97,7 @@ export async function postReviewLedgerFailureNoteStep(payload: {
    * open instead of run-internal labels. Narrow on purpose: this whole payload
    * is a step input, so it is serialized into the durable event log. */
   workItems: ReviewLedgerGuardWorkItem[];
+  integrationPins?: readonly IntegrationConnectionPin[];
 }): Promise<{ posted: boolean; error?: string }> {
   "use step";
   const { loadVcsRuntimePort } = await import("../internal/ports.js");
@@ -100,6 +107,7 @@ export async function postReviewLedgerFailureNoteStep(payload: {
     provider: pr.provider,
     repoPath: pr.repoPath,
     baseBranch: pr.baseRef,
+    integrationPins: payload.integrationPins,
   });
   if (payload.variant === "pre_feed") {
     // Deliberately silent about threads: this run either never read the feed or

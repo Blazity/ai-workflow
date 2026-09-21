@@ -180,6 +180,19 @@ describe("POST /api/v1/repository-catalog/import-preview", () => {
 });
 
 describe("POST /api/v1/repository-catalog/import", () => {
+  it("refuses an unsupported provider prefix before consulting the directory", async () => {
+    state.directory = undefined;
+    const res = await post(importPost, {
+      repositoryKeys: ["forgejo:acme/api"],
+      enabled: true,
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).statusMessage).toBe(
+      'Cannot import provider "forgejo": this build can import repositories from GitHub and GitLab.',
+    );
+  });
+
   it("creates the selected rows and reports what it skipped", async () => {
     const res = await post(importPost, {
       repositoryKeys: ["github:acme/web", "github:ghost/repo"],

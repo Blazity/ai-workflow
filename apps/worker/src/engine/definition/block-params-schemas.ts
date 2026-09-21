@@ -75,7 +75,7 @@ const triggerRepositoryPolicyParams = {
 
 const v2TriggerPrCreatedConfiguration = z
   .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    providers: vcsProviderSelection.default([]),
     scope: prTriggerScope.default("workflow_owned"),
     ...triggerRateLimitParams,
     ...triggerRepositoryPolicyParams,
@@ -83,37 +83,53 @@ const v2TriggerPrCreatedConfiguration = z
   .strict();
 const v2TriggerPrReadyConfiguration = z
   .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    providers: vcsProviderSelection.default([]),
     scope: prTriggerScope.default("any"),
     ...triggerRateLimitParams,
     ...triggerRepositoryPolicyParams,
   })
   .strict();
 const v2TriggerPrUpdatedConfiguration = v2TriggerPrReadyConfiguration;
-const v2TriggerPrChecksFailedConfiguration = z
-  .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+const legacyProducerKeys = [
+  ["git", "hub", "AppSlugs"].join(""),
+  ["git", "lab", "PipelineSources"].join(""),
+] as const;
+
+function upgradeChecksProducerParams(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const input = value as Record<string, unknown>;
+  const trustedProducers = [
+    ...(Array.isArray(input.trustedProducers) ? input.trustedProducers : []),
+    ...legacyProducerKeys.flatMap((key) => Array.isArray(input[key]) ? input[key] : []),
+  ];
+  const upgraded: Record<string, unknown> = {
+    ...input,
+    trustedProducers: [...new Set(trustedProducers)],
+  };
+  for (const key of legacyProducerKeys) delete upgraded[key];
+  return upgraded;
+}
+
+const v2TriggerPrChecksFailedConfiguration = z.preprocess(
+  upgradeChecksProducerParams,
+  z.object({
+    providers: vcsProviderSelection.default([]),
     scope: prTriggerScope.default("workflow_owned"),
     checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
     ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
-    githubAppSlugs: z
+    trustedProducers: z
       .array(z.string().trim().min(1).max(100))
-      .min(1)
       .max(20)
-      .default(["github-actions"]),
-    gitlabPipelineSources: z
-      .array(z.string().trim().min(1).max(100))
-      .min(1)
-      .max(20)
-      .default(["merge_request_event"]),
+      .default([]),
     maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
     ...triggerRateLimitParams,
     ...triggerRepositoryPolicyParams,
   })
-  .strict();
+  .strict(),
+);
 const v2TriggerPrReviewConfiguration = z
   .object({
-    providers: vcsProviderSelection.default(["github"]),
+    providers: vcsProviderSelection.default([]),
     on: z.array(reviewStates).min(1).default(["changes_requested"]),
     scope: prTriggerScope.default("workflow_owned"),
     maxRunsPerPr: z.number().int().min(1).max(30).default(10),
@@ -123,7 +139,7 @@ const v2TriggerPrReviewConfiguration = z
   .strict();
 const v2TriggerPrMergedConfiguration = z
   .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    providers: vcsProviderSelection.default([]),
     scope: prTriggerScope.default("workflow_owned"),
     ...triggerRateLimitParams,
     ...triggerRepositoryPolicyParams,

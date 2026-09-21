@@ -26,14 +26,19 @@ import { LEGACY_BLOCK_METADATA } from "./legacy-block-metadata.fixture.js";
 import { NO_INTEGRATIONS } from "./integration-availability.js";
 import { MESSAGING_CONNECTED, MESSAGING_DISABLED } from "./messaging-deployment.fixture.js";
 
+const VCS_AVAILABLE = {
+  ...NO_INTEGRATIONS,
+  builtinCapabilities: new Set(["vcs"]),
+};
+
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: false },
   llmProviders: { claude: true, codex: false },
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github"],
-  vcsBotIdentities: [],
+  vcsBotIdentities: ["github"],
   webhookTriggerConfigured: false,
-  integrations: NO_INTEGRATIONS,
+  integrations: VCS_AVAILABLE,
 };
 
 describe("workflow block registry", () => {
@@ -895,33 +900,11 @@ describe("workflow block registry", () => {
     }).trigger_pr_review;
 
     expect(review.defaults).toMatchObject({
-      providers: ["gitlab"],
+      providers: [],
       on: ["commented"],
       scope: "workflow_owned",
     });
     expect(review.availability).toEqual({ available: true, unavailableReason: null });
-  });
-
-  it("rejects GitLab review triggers that omit the only reliable Note Hook state", () => {
-    const gitlab = resolveWorkflowBlockContract(
-      "trigger_pr_review",
-      { providers: ["gitlab"], on: ["changes_requested"] },
-      { ...context, vcsProviders: ["gitlab"], vcsBotIdentities: ["gitlab"] },
-    );
-
-    expect(gitlab.availability).toEqual({
-      available: false,
-      unavailableReason:
-        'GitLab review triggers must include "commented"; GitLab does not emit a reliable changes-requested review event.',
-    });
-
-    expect(
-      resolveWorkflowBlockContract(
-        "trigger_pr_review",
-        { providers: ["github"], on: ["changes_requested"] },
-        context,
-      ).availability,
-    ).toEqual({ available: true, unavailableReason: null });
   });
 
   it("requires bot identities for every configured provider selected by a commented trigger", () => {
@@ -938,7 +921,7 @@ describe("workflow block registry", () => {
     expect(mixed.availability).toEqual({
       available: false,
       unavailableReason:
-        "Commented review triggers require a configured GITLAB_BOT_LOGIN to prevent recursive bot reviews.",
+        "Commented review triggers require a bot username for gitlab to prevent recursive bot reviews. Configure it on the Integrations page.",
     });
   });
 
@@ -950,8 +933,7 @@ describe("workflow block registry", () => {
           providers: ["github"],
           scope: "workflow_owned",
           checkNames: [],
-          githubAppSlugs: ["github-actions"],
-          gitlabPipelineSources: ["merge_request_event"],
+          trustedProducers: ["github-actions"],
         },
         context,
       ).availability,
@@ -964,8 +946,7 @@ describe("workflow block registry", () => {
           providers: ["github"],
           scope: "workflow_owned",
           checkNames: ["ci / build"],
-          githubAppSlugs: ["github-actions"],
-          gitlabPipelineSources: ["merge_request_event"],
+          trustedProducers: ["github-actions"],
         },
         context,
       ).availability,

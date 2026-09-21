@@ -78,9 +78,8 @@ describe("v2 workflow definition storage", () => {
     const repositoryScope = {
       repositories: [
         { provider: "github" as const, repoPath: "Acme/Web" },
-        { provider: "gitlab" as const, repoPath: "acme/group/api" },
       ],
-      providers: ["github" as const, "gitlab" as const],
+      providers: ["github" as const],
     };
     const created = await createWorkflowDefinition(db, {
       name: "V2 pinned",

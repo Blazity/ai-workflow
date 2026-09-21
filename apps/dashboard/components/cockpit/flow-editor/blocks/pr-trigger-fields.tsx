@@ -3,12 +3,11 @@
 import { useState } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
 import type { WorkflowParamValue } from "@shared/contracts";
-import { toggleRequiredArrayValue } from "@/lib/workflow-editor/params";
 import { describeRepositoryScope } from "@/lib/workflow-editor/repository-scope";
 import { Button, Select } from "@/components/ui";
 import { RepositoryScopeModal } from "../repository-scope-modal";
 import { useRepositoryScopeContext } from "../repository-scope-context";
-import { CheckboxRow, ConfigField, ConfigNote, arr } from "./shared";
+import { ArrayTextarea, ConfigField, ConfigNote, arr } from "./shared";
 
 export function PrScopeField({
   node,
@@ -46,33 +45,18 @@ export function PrProvidersField({
   canEdit: boolean;
   onChange: (path: string, value: WorkflowParamValue | undefined) => void;
 }) {
-  const configured = arr(node.params.providers).filter(
-    (provider) => provider === "github" || provider === "gitlab",
-  );
-  const effective = configured.length > 0 ? configured : ["github", "gitlab"];
-  const toggle = (provider: "github" | "gitlab") => (checked: boolean) => {
-    onChange(
-      "params.providers",
-      toggleRequiredArrayValue(effective, provider, checked),
-    );
-  };
+  const configured = arr(node.params.providers);
 
   return (
     <ConfigField label="Providers">
-      <div className="flex flex-col gap-1.5">
-        {(["github", "gitlab"] as const).map((provider) => {
-          const checked = effective.includes(provider);
-          return (
-            <CheckboxRow
-              key={provider}
-              label={provider === "github" ? "GitHub" : "GitLab"}
-              checked={checked}
-              disabled={!canEdit || (checked && effective.length === 1)}
-              onChange={toggle(provider)}
-            />
-          );
-        })}
-      </div>
+      <ArrayTextarea
+        key={`${node.id}:providers`}
+        value={configured}
+        disabled={!canEdit}
+        mono
+        placeholder="Leave empty for every connected provider"
+        onChange={(value) => onChange("params.providers", value ?? [])}
+      />
     </ConfigField>
   );
 }

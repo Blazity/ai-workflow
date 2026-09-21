@@ -59,12 +59,12 @@ export interface RunPullRequest {
   headSha?: string;
 }
 
-/** Provider-native reference: GitHub numbers PRs `#12`, GitLab MRs `!12`. */
+/** Stable provider-neutral pull request reference. */
 export function pullRequestRef(pr: Pick<RunPullRequest, "provider" | "id">): string {
-  return `${pr.provider === "gitlab" ? "!" : "#"}${pr.id}`;
+  return `#${pr.id}`;
 }
 
-/** Last path segment of `owner/repo` (or a nested GitLab group path). */
+/** Last path segment of a potentially nested repository path. */
 function repoLeaf(repoPath: string): string {
   const segments = repoPath.split("/").filter(Boolean);
   return segments.pop() ?? repoPath;
@@ -289,7 +289,8 @@ export interface HourPoint {
 
 // --- Pre-PR checks (dashboard-managed gate config) ---
 
-export type VcsProviderKind = "github" | "gitlab";
+/** Persisted integration id of the provider that owns a repository. */
+export type VcsProviderKind = string;
 
 /** One named group of repository scripts, as it is stored. */
 export interface PrePrCheckGroupConfig {
@@ -780,7 +781,7 @@ export type ApprovalStatus = "pending" | "approved" | "rejected" | "superseded";
 
 export interface ApprovedRepositoryScope {
   repositories: Array<{
-    provider: "github" | "gitlab";
+    provider: string;
     repoPath: string;
     defaultBranch: string;
     /** Exact branch inspected during research (default or a workflow-owned PR branch). */

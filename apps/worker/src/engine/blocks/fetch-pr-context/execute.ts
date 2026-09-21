@@ -1,5 +1,6 @@
 import {
   repositoryCatalogKey,
+  type IntegrationConnectionPin,
   type RunRepositoryAccess,
   type WorkflowRepositoryScope,
 } from "@shared/contracts";
@@ -58,6 +59,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
   options?: {
     workScope?: RunStartWorkScope | null;
     repositoryScope?: WorkflowRepositoryScope;
+    integrationPins?: readonly IntegrationConnectionPin[];
   },
 ): Promise<SelectedRepository[]> {
   "use step";
@@ -66,11 +68,12 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
     .filter((entry) => entry.state === "selected")
     .map((entry) => entry.repositoryKey);
   const { findConnectedRunPrSiblings } = await import("../../../db/repositories/runs.js");
-  const { createRepositoryDirectoryForProviders, filterPinnedRepositories } = await import(
+  const { filterPinnedRepositories } = await import(
     "../../../adapters/vcs/repository-directory.js",
   );
-  const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
-  const { createRepositoryVCS } = await import("../../../engine/support/vcs-runtime.js");
+  const { createRepositoryVCS, listVcsRepositories } = await import(
+    "../../../engine/support/vcs-runtime.js"
+  );
   const { logger } = await import("../../../infra/logger.js");
   const { mayRunTouchRepository } = await import(
     "../../support/repository-access.js"
@@ -89,9 +92,9 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
 
   let catalog;
   try {
-    catalog = await createRepositoryDirectoryForProviders(
-      getConfiguredVcsProviders(),
-    ).listRepositories();
+    catalog = (await listVcsRepositories({
+      integrationPins: options?.integrationPins,
+    })).repositories;
   } catch (error) {
     logger.warn(
       { runId, error: error instanceof Error ? error.message : String(error) },
@@ -126,6 +129,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
         provider: sibling.provider,
         repoPath: sibling.repoPath,
         baseBranch: metadata.defaultBranch,
+        integrationPins: options?.integrationPins,
       });
       const head = await vcs.getPRHead(sibling.id);
       const openBranchSha = head.state === "open" && head.headRef
@@ -228,6 +232,7 @@ export interface FetchPrContextOptions {
    *  would make one run fetch thread feeds on its first pass and not on its
    *  second. Absent reads as off, the registry default. */
   reviewLedgerEnabled?: boolean;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }
 
 /**
@@ -267,6 +272,7 @@ export async function blockFetchPrContextsStep(
         provider: repo.provider,
         repoPath: repo.repoPath,
         baseBranch: repo.defaultBranch,
+        integrationPins: options.integrationPins,
       });
       const wantsReviewThreads =
         options.reviewLedgerEnabled === true &&
@@ -396,8 +402,9 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
               provider: ctx.entry.pr.provider,
               repoPath: ctx.entry.pr.repoPath,
             },
+            integrationPins: ctx.integrationPins,
           }
-        : {},
+        : { integrationPins: ctx.integrationPins },
     );
     ctx.repositoryContexts = contexts;
 

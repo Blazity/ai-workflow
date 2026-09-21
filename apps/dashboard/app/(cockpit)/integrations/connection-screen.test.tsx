@@ -116,6 +116,7 @@ function previewReply(call: Sent): unknown | null {
     changesFingerprint: body.preview === "disconnect",
     enabledDefinitions: [],
     inFlightRuns: 0,
+    repositories: [],
   };
 }
 
@@ -613,19 +614,34 @@ test("turning the integration off asks first, and says what it costs", async (t)
   assert.deepEqual(sent[0]!.body, { enabled: false });
 });
 
-test("disconnecting names what is erased and what happens to this deployment afterwards", async (t) => {
-  const sent = stubFetch(t, () => ({ integration: integration() }));
+test("disconnecting names affected repositories and what is erased", async (t) => {
+  const sent = stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    if (body?.preview === "disconnect") {
+      return {
+        status: 200,
+        body: {
+          changesFingerprint: true,
+          enabledDefinitions: [],
+          inFlightRuns: 0,
+          repositories: [{ provider: "gitlab", path: "acme/api" }],
+        },
+      };
+    }
+    return { status: 200, body: { integration: integration() } };
+  }, false);
   const root = render(t);
   await press(button(root, "Disconnect"));
 
-  assert.equal(sent.length, 0, "the confirmation comes before the request");
+  assert.equal(sent.length, 1, "only the impact preview runs before confirmation");
   const rendered = text(root);
   assert.match(rendered, /every stored secret in every past version, is erased/);
   assert.match(rendered, /becomes Not connected/);
+  assert.match(rendered, /Repositories using Demo: acme\/api/);
 
   await press(button(root, "Erase the stored values"));
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0]!.method, "DELETE");
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1]!.method, "DELETE");
 });
 
 test("saving a fingerprint change names the enabled definition and the runs that would stop", async (t) => {

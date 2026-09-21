@@ -32,8 +32,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
   llmProviders: { claude: true, codex: true },
   defaultAgent: { provider: "claude", model: "claude-model" },
-  vcsProviders: ["github", "gitlab"],
-  vcsBotIdentities: ["github", "gitlab"],
+  vcsProviders: [],
+  vcsBotIdentities: [],
   webhookTriggerConfigured: true,
   integrations: MESSAGING_CONNECTED,
 };

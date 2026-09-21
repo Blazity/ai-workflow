@@ -1,0 +1,4 @@
+Source URL: https://docs.gitlab.com/user/project/integrations/webhook_events/#comment-on-a-merge-request
+GitLab source revision: https://gitlab.com/gitlab-org/gitlab/-/blob/457f8f752b242fad728176d6231fe4910210c956/doc/user/project/integrations/webhook_events.md
+Retrieved: 2026-09-21
+SHA-256: 495e40107d5c1af6ee57b8145533b9c8f8fa523139f066faf91902b5015a469a

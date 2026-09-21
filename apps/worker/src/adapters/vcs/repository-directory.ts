@@ -2,24 +2,19 @@ import type { WorkflowRepositoryScope } from "@shared/contracts";
 import { buildOctokit } from "./github-auth.js";
 
 type RepositoryProviderConfig =
-  (
-    | { kind: "github"; auth: Parameters<typeof buildOctokit>[0]; host?: string }
-    | { kind: "gitlab"; token: string; host: string }
-  ) & {
+  { kind: "github"; auth: Parameters<typeof buildOctokit>[0]; host?: string } & {
     repoPath?: string;
     baseBranch?: string;
     legacyRepoPath?: string;
     legacyBaseBranch?: string;
   };
 
-const GITLAB_PROJECTS_TIMEOUT_MS = 18_000;
-
 // A few bounded retries with jittered exponential backoff. A provider's 5xx or
 // timeout is usually gone within a couple of calls, while the pre-sandbox step
 // that owns this listing runs under a 60s budget: a longer ladder would spend
 // that budget hanging instead of failing with a reason an operator can act on.
 // Worst case is 3 * 18s + <=1.5s of backoff ~= 55.5s, which stays inside that
-// budget while surviving a GitLab hiccup that outlasts a single 18s window.
+// budget while surviving a provider hiccup that outlasts a single call.
 const LISTING_MAX_ATTEMPTS = 3;
 const LISTING_RETRY_BASE_DELAY_MS = 500;
 const LISTING_RETRY_MAX_DELAY_MS = 4_000;
@@ -36,7 +31,7 @@ function listingRetryDelayMs(failedAttempt: number): number {
   return Math.floor(Math.random() * ceiling);
 }
 
-export type VcsProvider = "github" | "gitlab";
+export type VcsProvider = string;
 
 export interface RepositoryMetadata {
   provider: VcsProvider;
@@ -56,8 +51,7 @@ export interface RepositoryDirectory {
 }
 
 export function createRepositoryDirectory(vcs: RepositoryProviderConfig): RepositoryDirectory {
-  if (vcs.kind === "github") return new GitHubRepositoryDirectory(vcs.auth);
-  return new GitLabRepositoryDirectory(vcs.token, vcs.host);
+  return new GitHubRepositoryDirectory(vcs.auth);
 }
 
 export function createRepositoryDirectoryForProviders(
@@ -87,11 +81,7 @@ export interface RepositoryListingFailure {
  * providers that failed instead of a single rejection standing in for all of them.
  * Each provider's listing is retried under a bounded policy first.
  *
- * Latency budget for whoever tunes GITLAB_PROJECTS_TIMEOUT_MS next: the ladder
- * of up to 3 attempts triples the worst case, so a hung provider costs about 55s
- * here rather than 18s, for every caller including the dashboard catalog endpoint.
- * allSettled also means the slowest provider sets the floor: a fast 401 next to a
- * hung provider now surfaces at the hung provider's pace instead of immediately.
+ * The bounded retry ladder is shared by every core provider listing.
  */
 export async function listRepositoriesAcrossProviders(
   providers: RepositoryProviderConfig[],
@@ -150,18 +140,6 @@ function isTransientListingError(err: unknown): boolean {
 
 function listingErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-class RepositoryListingError extends Error {
-  readonly status: number | undefined;
-  readonly timedOut: boolean;
-
-  constructor(message: string, detail: { status?: number; timedOut?: boolean } = {}) {
-    super(message);
-    this.name = "RepositoryListingError";
-    this.status = detail.status;
-    this.timedOut = detail.timedOut ?? false;
-  }
 }
 
 /**
@@ -254,76 +232,6 @@ class GitHubRepositoryDirectory implements RepositoryDirectory {
       topics: repo.topics ?? [],
       archived: Boolean(repo.archived),
       private: Boolean(repo.private),
-    }));
-  }
-}
-
-class GitLabRepositoryDirectory implements RepositoryDirectory {
-  constructor(
-    private token: string,
-    private host: string,
-  ) {}
-
-  async listRepositories(): Promise<RepositoryMetadata[]> {
-    const projects: any[] = [];
-    let page = "1";
-    const baseUrl = this.host.replace(/\/$/, "");
-
-    while (page) {
-      // NOT `simple=true`, AND NOT `archived=false` EITHER.
-      //
-      // `simple=true` returns GitLab's BasicProjectDetails entity, which exposes
-      // default_branch, topics, web_url, visibility, namespace and the identity
-      // fields, and NO `archived`. So `Boolean(project.archived)` was `false`
-      // for every project we have ever listed, every archived GitLab repository
-      // counted as usable, and a run would select one, check it out and fail on
-      // push with something opaque. The full entity (Project < ProjectDetails <
-      // BasicProjectDetails < ProjectIdentity) carries `archived` as well as
-      // every field mapped below.
-      //
-      // Filtering server side with `archived=false` would make the flag honest
-      // by removing the rows it describes, and a repository in no listing is in
-      // none of the sets the selection reports from: a person naming an archived
-      // repository would be told nothing at all, which is the silence the
-      // reporting exists to end. We want them listed AND named as unusable.
-      //
-      // The cost is a larger payload on a listing already paginated at 100 per
-      // page over a repository count in the tens.
-      const url = `${baseUrl}/api/v4/projects?membership=true&per_page=100&page=${page}`;
-      const response = await fetch(url, {
-        headers: { "PRIVATE-TOKEN": this.token },
-        signal: AbortSignal.timeout(GITLAB_PROJECTS_TIMEOUT_MS),
-      }).catch((err) => {
-        if (isAbortError(err)) {
-          throw new RepositoryListingError(
-            `GitLab projects list timed out after ${GITLAB_PROJECTS_TIMEOUT_MS}ms`,
-            { timedOut: true },
-          );
-        }
-        throw err;
-      });
-      if (!response.ok) {
-        throw new RepositoryListingError(
-          `GitLab projects list failed: ${response.status} ${response.statusText}`,
-          { status: response.status },
-        );
-      }
-
-      projects.push(...await response.json());
-      page = response.headers.get("x-next-page") ?? "";
-    }
-
-    return projects.map((project) => ({
-      provider: "gitlab" as const,
-      repoPath: project.path_with_namespace,
-      name: project.name,
-      owner: project.namespace?.full_path ?? project.path_with_namespace.split("/")[0],
-      defaultBranch: project.default_branch ?? "",
-      description: project.description ?? "",
-      webUrl: project.web_url,
-      topics: project.topics ?? project.tag_list ?? [],
-      archived: Boolean(project.archived),
-      private: project.visibility !== "public",
     }));
   }
 }

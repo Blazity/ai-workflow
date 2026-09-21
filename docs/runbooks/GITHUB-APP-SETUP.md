@@ -20,7 +20,7 @@ GITHUB_INSTALLATION_ID=<numeric installation id>
 GITHUB_WEBHOOK_SECRET=<random hex, used to sign pull_request webhook deliveries>
 ```
 
-`GITHUB_OWNER`, `GITHUB_REPO`, and `VCS_KIND=github` are legacy single-repo defaults. They may remain set for older deployments, but multi-repo runs discover repositories from the GitHub App installation permissions instead. The Repositories import records GitHub's default branch in each profile.
+`GITHUB_OWNER` and `GITHUB_REPO` are legacy single-repo defaults. They may remain set for older deployments, but multi-repo runs discover repositories from the GitHub App installation permissions instead. The Repositories import records GitHub's default branch in each profile.
 
 You can configure GitHub and GitLab in the same deployment. Provider credentials are additive.
 
@@ -222,7 +222,6 @@ Optional legacy single-repo defaults:
 ```bash
 GITHUB_OWNER=<target-org>
 GITHUB_REPO=<target-repo>
-VCS_KIND=github
 ```
 
 Set them in **Vercel → project → Settings → Environment Variables** for the appropriate environments (Production / Preview / Development as needed). `GITHUB_WEBHOOK_SECRET` is required in **every** environment — the webhook fires on preview deployments too, and the handler returns 401 without it.

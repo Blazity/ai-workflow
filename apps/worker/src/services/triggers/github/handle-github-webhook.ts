@@ -124,7 +124,7 @@ async function handleVerifiedGitHubWebhook(request: GitHubWebhookRequest) {
   // applies provider/state selectors from the same immutable definition
   // snapshot that it pins, avoiding a load-then-deploy race in this route.
   // Comment events (inline diff + PR conversation) can only ever be "commented".
-  const botLogin = getVcsBotLogin("github");
+  const botLogin = await getVcsBotLogin("github");
   const workflowPushOptions =
     ghEvent === "pull_request" && body.action === "synchronize"
       ? await connectedWorkflowPushNormalizationOptions({

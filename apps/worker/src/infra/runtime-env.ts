@@ -23,13 +23,11 @@ export const env = createEnv({
     JIRA_AI_REVIEW_TRANSITION_ID: z.string().min(1).optional(),
 
     // VCS
-    VCS_KIND: z.enum(["github", "gitlab"]).optional(),
     // Login of the bot's own VCS account. When set, PR reviews authored by it
     // are ignored so the bot does not trigger a run off its own review. The
     // provider-specific values take precedence in mixed-provider deployments.
     VCS_BOT_LOGIN: z.string().trim().min(1).optional(),
     GITHUB_BOT_LOGIN: z.string().trim().min(1).optional(),
-    GITLAB_BOT_LOGIN: z.string().trim().min(1).optional(),
     // GitHub VCS — App auth (no PAT). Private key is base64-encoded PEM so it
     // round-trips cleanly through the Vercel env UI without newline-escaping.
     GITHUB_APP_ID: z.coerce.number().int().positive().optional(),
@@ -38,18 +36,11 @@ export const env = createEnv({
     GITHUB_OWNER: z.string().min(1).optional(),
     GITHUB_REPO: z.string().min(1).optional(),
 
-    // GitLab VCS
-    GITLAB_TOKEN: z.string().min(1).optional(),
-    GITLAB_PROJECT_ID: z.string().min(1).optional(),
-    /** Base URL for self-hosted GitLab. Defaults to https://gitlab.com. */
-    GITLAB_HOST: z.string().url().default("https://gitlab.com"),
-
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
     // Optional overrides for the git identity used inside the sandbox.
     // - GitHub: when both are unset, the identity is derived from the App so
     //   commits render with the App's avatar and the `[bot]` badge in the UI.
-    // - GitLab: defaults to `ai-workflow-blazity` / `ai-workflow@blazity.com`.
     // Both must be set together to take effect; setting only one is an error.
     COMMIT_AUTHOR: z.string().min(1).optional(),
     COMMIT_EMAIL: z.string().min(1).optional(),
@@ -98,9 +89,6 @@ export const env = createEnv({
 
     // GitHub Webhook
     GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
-
-    // GitLab Webhook
-    GITLAB_WEBHOOK_SECRET: z.string().min(1).optional(),
 
     // Webhook trigger blocks: 32-byte AES-256-GCM key (64 hex chars) that
     // encrypts per-endpoint signing secrets at rest. Intentionally optional:
@@ -159,11 +147,11 @@ function isGithubProviderConfigured(): boolean {
 
 // Cross-field validation — fail fast at startup instead of at first workflow
 // step. Provider credentials are intentionally optional at the schema level:
-// a deployment may configure GitHub, GitLab, or both.
+// provider credentials are intentionally optional at the schema level because
+// integration-owned providers validate their own connection settings.
 {
   const hasAnyGithubCredential = hasAnyGithubProviderCredential();
   const hasGithubProvider = isGithubProviderConfigured();
-  const hasGitLabProvider = Boolean(env.GITLAB_TOKEN);
 
   if (hasAnyGithubCredential && !hasGithubProvider) {
     throw new Error(
@@ -177,34 +165,10 @@ function isGithubProviderConfigured(): boolean {
         "  GITHUB_OWNER and GITHUB_REPO must be set together for legacy single-repo config",
     );
   }
-  if (env.VCS_KIND === "github" && !hasGithubProvider) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  VCS_KIND=github requires GitHub provider credentials",
-    );
-  }
-  if (env.VCS_KIND === "gitlab" && !hasGitLabProvider) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  VCS_KIND=gitlab requires GITLAB_TOKEN",
-    );
-  }
-  if (!hasGithubProvider && !hasGitLabProvider) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  At least one VCS provider must be configured",
-    );
-  }
   if (hasGithubProvider && !env.GITHUB_WEBHOOK_SECRET) {
     throw new Error(
       "Invalid environment variables:\n" +
         "  GitHub provider requires GITHUB_WEBHOOK_SECRET",
-    );
-  }
-  if (hasGitLabProvider && !env.GITLAB_WEBHOOK_SECRET) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  GitLab provider requires GITLAB_WEBHOOK_SECRET",
     );
   }
   if (

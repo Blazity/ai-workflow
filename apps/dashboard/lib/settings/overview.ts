@@ -12,6 +12,7 @@ import type {
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
+import { integrationManifests } from "@integrations/registry";
 
 import { activationDetail, activationValue } from "@/lib/repository-catalog/activation";
 
@@ -313,6 +314,9 @@ export function buildSetupOverview(input: {
   const { settings, scan, scanReadable, catalogState } = input;
   const byId = (...ids: string[]): SystemHealthIntegration[] | null =>
     scan ? scan.integrations.filter((entry) => ids.includes(entry.id)) : null;
+  const vcsIntegrationIds = integrationManifests
+    .filter((manifest) => manifest.capabilities.includes("vcs"))
+    .map((manifest) => manifest.id);
 
   const groups = groupSettings(settings);
   const storedRows = groups.map((group) => ({
@@ -326,7 +330,12 @@ export function buildSetupOverview(input: {
   return {
     rows: [
       integrationRow("issue-tracker", "Issue tracker", byId("jira"), scanReadable),
-      integrationRow("vcs", "Version control", byId("github", "gitlab"), scanReadable),
+      integrationRow(
+        "vcs",
+        "Version control",
+        byId("github", ...vcsIntegrationIds),
+        scanReadable,
+      ),
       secretsRow(scan, scanReadable),
       catalogRow(catalogState),
       featureRow(settings),

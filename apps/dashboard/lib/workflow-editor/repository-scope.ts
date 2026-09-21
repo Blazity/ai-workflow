@@ -3,6 +3,7 @@ import type {
   WorkflowDefinition,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
+import { integrationManifests } from "@integrations/registry";
 
 export interface PinnedRepository {
   provider: VcsProviderKind;
@@ -12,7 +13,24 @@ export interface PinnedRepository {
 /** Workspace ceiling on pinned repositories; the worker rejects a larger pin. */
 export const MAX_PINNED_REPOSITORIES = 8;
 
-export const PINNABLE_PROVIDERS: readonly VcsProviderKind[] = ["github", "gitlab"];
+/** Core's remaining provider plus every shipped integration with VCS capability. */
+export const PINNABLE_PROVIDERS: readonly VcsProviderKind[] = [
+  "github",
+  ...integrationManifests
+    .filter((manifest) => manifest.capabilities.includes("vcs"))
+    .map((manifest) => manifest.id),
+];
+
+function compareProviders(a: VcsProviderKind, b: VcsProviderKind): number {
+  const aIndex = PINNABLE_PROVIDERS.indexOf(a);
+  const bIndex = PINNABLE_PROVIDERS.indexOf(b);
+  if (aIndex !== -1 || bIndex !== -1) {
+    if (aIndex === -1) return 1;
+    if (bIndex === -1) return -1;
+    return aIndex - bIndex;
+  }
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 /** `repoPath` is stored in the case the operator picked; matching ignores case. */
 function sameRepository(a: PinnedRepository, b: PinnedRepository): boolean {
@@ -44,9 +62,7 @@ export function normalizeRepositoryScope(
     if (repositories.length >= MAX_PINNED_REPOSITORIES) break;
     repositories.push(repository);
   }
-  const providers = PINNABLE_PROVIDERS.filter((provider) =>
-    (scope.providers ?? []).includes(provider),
-  );
+  const providers = [...new Set(scope.providers ?? [])].sort(compareProviders);
   return {
     ...(repositories.length > 0 ? { repositories } : {}),
     ...(providers.length > 0 ? { providers } : {}),
@@ -103,7 +119,14 @@ export function removePinnedRepository(
 }
 
 export function providerLabel(provider: VcsProviderKind): string {
-  return provider === "github" ? "GitHub" : "GitLab";
+  if (provider === "github") return "GitHub";
+  const integration = integrationManifests.find((manifest) => manifest.id === provider);
+  if (integration) return integration.name;
+  return provider
+    .split(/[-_]/u)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 /**
@@ -131,17 +154,14 @@ export function effectiveScopeProviders(
 ): VcsProviderKind[] {
   const pinned = scope.providers ?? [];
   if (pinned.length > 0) {
-    return PINNABLE_PROVIDERS.filter((provider) => pinned.includes(provider));
+    return [...pinned].sort(compareProviders);
   }
-  return PINNABLE_PROVIDERS.filter((provider) =>
-    pinnedRepositories(scope).some(
-      (repository) => repository.provider === provider,
-    ),
-  );
+  return [...new Set(pinnedRepositories(scope).map((repository) => repository.provider))]
+    .sort(compareProviders);
 }
 
 /**
- * Toolbar summary, for example "2 repos, GitHub + GitLab". Null means no pin.
+ * Toolbar summary, for example "2 repos, two connected providers". Null means no pin.
  * A scope whose providers exclude one of its own repositories reports the
  * mismatch instead of a provider set, so the summary can never contradict the
  * repository chips it sits above.

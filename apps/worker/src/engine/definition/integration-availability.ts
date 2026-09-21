@@ -69,6 +69,8 @@ export interface DeploymentIntegrations {
    * configured through its environment running with nothing to migrate.
    */
   readonly builtinCapabilities: ReadonlySet<string>;
+  readonly botIdentityProviders: ReadonlySet<string>;
+  readonly legacyBotIdentityProviders: ReadonlySet<string>;
 }
 
 /** A build with no integration at all: the shape every default takes. */
@@ -77,6 +79,8 @@ export const NO_INTEGRATIONS: DeploymentIntegrations = {
   blocks: new Map(),
   providers: new Map(),
   builtinCapabilities: new Set(),
+  botIdentityProviders: new Set(),
+  legacyBotIdentityProviders: new Set(),
 };
 
 export interface DeploymentIntegrationsInput {
@@ -92,6 +96,8 @@ export function deploymentIntegrations(
   const byId = new Map<string, IntegrationPresence>();
   const blocks = new Map<string, IntegrationBlockRequirement>();
   const providers = new Map<string, string[]>();
+  const botIdentityProviders = new Set<string>();
+  const legacyBotIdentityProviders = new Set<string>();
 
   for (const manifest of input.manifests) {
     const state = input.states.get(manifest.id);
@@ -119,6 +125,14 @@ export function deploymentIntegrations(
     // has chosen, and asking them to choose again would be the product arguing
     // with an action they just took.
     if (!presence.usable) continue;
+    if (manifest.capabilities.includes("vcs")) {
+      if (state?.configuredFields?.includes("botLogin")) {
+        botIdentityProviders.add(manifest.id);
+      }
+      if (state?.configuredFields?.includes("legacyBotLogin")) {
+        legacyBotIdentityProviders.add(manifest.id);
+      }
+    }
     for (const capability of manifest.capabilities) {
       const holders = providers.get(capability) ?? [];
       holders.push(manifest.id);
@@ -131,6 +145,8 @@ export function deploymentIntegrations(
     blocks,
     providers,
     builtinCapabilities: new Set(input.builtinCapabilities ?? []),
+    botIdentityProviders,
+    legacyBotIdentityProviders,
   };
 }
 
@@ -215,7 +231,7 @@ export function integrationUnusableReason(presence: IntegrationPresence): string
  * execution to resolve it. S9 added `messaging`
  * (`engine/support/messaging.ts`).
  */
-const INTEGRATION_SERVED_CAPABILITIES: ReadonlySet<string> = new Set(["messaging"]);
+const INTEGRATION_SERVED_CAPABILITIES: ReadonlySet<string> = new Set(["messaging", "vcs"]);
 
 /**
  * The same question for a CORE block that needs a capability.
@@ -237,6 +253,17 @@ function capabilityIssue(
 ): string | null {
   const holders = integrations.providers.get(capability) ?? [];
   const label = capabilityLabel(capability);
+  if (capability === "vcs") {
+    if (integrations.builtinCapabilities.has(capability) || holders.length > 0) return null;
+    const idle = [...integrations.byId.values()].filter(
+      (presence) => presence.capabilities.includes(capability) && !presence.usable,
+    );
+    if (idle.length > 0) {
+      const names = idle.map((presence) => presence.name).join(" and ");
+      return `${names} would provide the ${label} capability this block needs, but is not connected. Finish connecting it on the Integrations page.`;
+    }
+    return `Nothing on this deployment provides the ${label} capability, which this block needs. Connect an integration that provides it on the Integrations page.`;
+  }
   if (!integrations.builtinCapabilities.has(capability)) {
     if (holders.length === 0) {
       // A provider that ships and declares the capability but is not usable is
@@ -279,6 +306,26 @@ function capabilityLabel(capability: string): string {
 
 const NO_CAPABILITIES: readonly string[] = [];
 const MESSAGING: readonly string[] = ["messaging"];
+const VCS: readonly string[] = ["vcs"];
+
+const VCS_BLOCKS = new Set([
+  "trigger_pr_created",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
+  "trigger_pr_checks_failed",
+  "trigger_pr_review",
+  "trigger_pr_merged",
+  "prepare_workspace",
+  "finalize_workspace",
+  "run_pre_pr_checks",
+  "run_checks",
+  "fetch_pr_context",
+  "open_pr",
+  "post_pr_comment",
+  "create_pr_check",
+  "complete_pr_check",
+  "post_pr_review",
+]);
 
 /**
  * The capabilities a core block consumes, given its parameters.
@@ -294,6 +341,7 @@ export function coreBlockCapabilities(
   type: string,
   params: Readonly<Record<string, unknown>> | undefined,
 ): readonly string[] {
+  if (VCS_BLOCKS.has(type)) return VCS;
   if (type === "send_message") return MESSAGING;
   if (type === "investigate") {
     // An absent selection means both providers on (the parameter's own

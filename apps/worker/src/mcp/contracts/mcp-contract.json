@@ -1,5 +1,5 @@
 {
-  "contractHash": "cbb84c4b35ebda2e86d7b92c2118dfc0d932d38667b2cca4e657461a95482837",
+  "contractHash": "2eb0cf543b1709562c55b5a1cfb37b70006cd03f42a8e2c1f4c9a41c11ae3254",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -1091,10 +1091,7 @@
           },
           "provider": {
             "type": "string",
-            "enum": [
-              "github",
-              "gitlab"
-            ]
+            "pattern": "^[a-z][a-z0-9_-]{2,31}$"
           },
           "path": {
             "type": "string",

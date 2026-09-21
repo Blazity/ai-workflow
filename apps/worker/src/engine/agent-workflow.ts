@@ -954,6 +954,7 @@ async function agentWorkflowBody(
       // watching at the time; the same question asked a week later needs the
       // answer beside the run, not in a log retention window.
       repositoryAccess: runRepositories,
+      integrationPins: plan.integrationPins,
     }).catch(() => {});
   await writeBlockStatuses();
   let v2RunObservation: V2RunObservationHooks | null = null;
@@ -1389,7 +1390,10 @@ async function agentWorkflowBody(
         : null;
       if (changeSetTarget) {
         ctx.preSandboxAdditions.review.push(
-          await assembleReviewChangeSetAddition(changeSetTarget),
+          await assembleReviewChangeSetAddition({
+            ...changeSetTarget,
+            integrationPins: ctx.integrationPins,
+          }),
         );
       }
 
@@ -1676,6 +1680,7 @@ async function agentWorkflowBody(
               ctx.repositoryContexts = await blockFetchPrContextsStep(
                 ctx.selectedRepositories,
                 ctx.repositories,
+                { integrationPins: plan.integrationPins },
               );
             }
           }
@@ -1778,6 +1783,7 @@ async function agentWorkflowBody(
             baseRef: ctx.entry.pr.baseRef,
             prNumber: ctx.entry.pr.prNumber,
           },
+          integrationPins: ctx.integrationPins,
           runId: workflowRunId,
           reason,
           // Naming threads is only honest when the run had some to owe.
@@ -2468,6 +2474,7 @@ async function agentWorkflowBody(
           },
           ctx.repositories,
           ctx.settings.JOB_TIMEOUT_MS,
+          ctx.integrationPins,
           // An attach is the outcome that changes an entry, and this step
           // cannot retry, so the whole decision rides it.
           takePendingWorkScopeWrite(),
@@ -2484,6 +2491,7 @@ async function agentWorkflowBody(
         ctx.repositoryContexts = await blockFetchPrContextsStep(
           repositories,
           ctx.repositories,
+          { integrationPins: plan.integrationPins },
         );
         ctx.repositoryExpansion = expansionState;
         await emitRepositoryWorkflowObservation(execution?.observations, {
@@ -2510,6 +2518,7 @@ async function agentWorkflowBody(
           },
           ctx.repositories,
           ctx.settings.JOB_TIMEOUT_MS,
+          ctx.integrationPins,
         );
         return attached.manifest;
       };
@@ -2744,13 +2753,16 @@ async function agentWorkflowBody(
                   },
                   ctx.repositories,
                   ctx.settings.JOB_TIMEOUT_MS,
+                  ctx.integrationPins,
                 );
               },
               fetchContexts: async (repositories) => {
                 const { blockFetchPrContextsStep } = await import(
                   "./blocks/fetch-pr-context/execute.js"
                 );
-                return blockFetchPrContextsStep(repositories, ctx.repositories);
+                return blockFetchPrContextsStep(repositories, ctx.repositories, {
+                  integrationPins: plan.integrationPins,
+                });
               },
             });
             if (humanExpansion.kind === "clarification") {
@@ -2831,6 +2843,7 @@ async function agentWorkflowBody(
                 ctx.repositoryContexts = await blockFetchPrContextsStep(
                   ownedRepos,
                   ctx.repositories,
+                  { integrationPins: plan.integrationPins },
                 );
               }
             }
@@ -3906,6 +3919,7 @@ async function agentWorkflowBody(
               title: prTitle,
               body: prBody,
               repositoryAccess: ctx.repositories,
+              integrationPins: ctx.integrationPins,
               sourcePullRequest:
                 ctx.entry.kind === "pr_trigger"
                   ? {
@@ -4835,6 +4849,7 @@ async function agentWorkflowBody(
           : "Workflow failed before the PR check was completed.";
       const cleanup = await closeTerminalPrChecksStep({
         runId: workflowRunId,
+        integrationPins: plan.integrationPins,
         intent: pendingPrCheckIntent({
           category: terminalExecutionError?.category,
           budgetMetric: terminalBudgetFailure?.metric,

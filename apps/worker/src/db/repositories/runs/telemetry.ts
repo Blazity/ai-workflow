@@ -20,6 +20,7 @@ import { runStatusReasonParts } from "@shared/contracts";
 import type {
   BlockRunState,
   HarnessRunManifestRecord,
+  IntegrationConnectionPin,
   ResolvedPromptReference,
   RunRepositoryAccess,
   RunPullRequest,
@@ -348,6 +349,8 @@ export interface RunBlockStatusWrite {
    *  enabled keys it decided from. A manifest, written once, exactly like the
    *  two above. */
   repositoryAccess?: RunRepositoryAccess;
+  /** Integration configuration pins frozen beside repository access. */
+  integrationPins?: readonly IntegrationConnectionPin[];
 }
 
 /**
@@ -378,6 +381,7 @@ export async function recordBlockStatuses(
       promptManifest: write.promptManifest,
       harnessManifests: write.harnessManifests,
       repositoryAccess: write.repositoryAccess,
+      integrationPins: write.integrationPins ? [...write.integrationPins] : undefined,
     })
     .onConflictDoUpdate({
       target: workflowRuns.runId,
@@ -406,6 +410,7 @@ export async function recordBlockStatuses(
           workflowRuns.repositoryAccess,
           workflowRuns.repositoryAccess,
         ),
+        integrationPins: sql`coalesce(${workflowRuns.integrationPins}, excluded.integration_pins)`,
         updatedAt: sql`now()`,
       },
     });

@@ -962,19 +962,11 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR checks failed","description":"Starts when external CI reports one or more failed checks.","glyph":"✗","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "workflow_owned",
       "checkNames": [],
       "ignoreCheckNames": [],
-      "githubAppSlugs": [
-        "github-actions"
-      ],
-      "gitlabPipelineSources": [
-        "merge_request_event"
-      ],
+      "trustedProducers": [],
       "maxFixAttemptsPerPr": 2
     },
     inputs: {},
@@ -985,10 +977,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR created","description":"Starts from an allowed pull or merge request creation event.","glyph":"⎇","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "workflow_owned"
     },
     inputs: {},
@@ -999,10 +988,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR merged","description":"Starts when an allowed pull or merge request is merged.","glyph":"◆","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "workflow_owned"
     },
     inputs: {},
@@ -1013,10 +999,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR ready for review","description":"Starts when a pull or merge request is ready for review.","glyph":"⎇","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "any"
     },
     inputs: {},
@@ -1027,11 +1010,9 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR review","description":"Starts from an allowed human pull or merge request review.","glyph":"✎","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github"
-      ],
+      "providers": [],
       "on": [
-        "changes_requested"
+        "commented"
       ],
       "scope": "workflow_owned",
       "maxRunsPerPr": 10
@@ -1044,10 +1025,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR updated","description":"Starts when the pull or merge request head commit changes.","glyph":"⟳","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "any"
     },
     inputs: {},

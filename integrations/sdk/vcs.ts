@@ -5,10 +5,8 @@
  *
  * Moved from `apps/worker/src/adapters/vcs/types.ts`, which re-exports every
  * name, so no core caller changed. That file keeps what is not the port: the
- * optional provider extensions (gate status, pull request files, reviews,
- * manual dispatch snapshots), whose gate status reference still names GitHub
- * and GitLab, and the review finding digest, which needs `node:crypto`. The
- * GitHub-only and GitLab-only fields below are debt listed in ADR-010.
+ * optional core extensions (pull request files, reviews, and manual dispatch
+ * snapshots) and the review finding digest, which needs `node:crypto`.
  */
 
 export interface PullRequest {
@@ -26,22 +24,23 @@ export interface PullRequestHead {
   baseRef: string;
   /** Provider-neutral current PR/MR lifecycle state. */
   state: "open" | "closed" | "merged";
-  /** GitLab's current MR head pipeline. Absent for providers without this concept. */
-  headPipelineId?: number;
-  /** GitLab's provider-authoritative current status for the MR head pipeline. */
-  headPipelineStatus?: string;
-  /** Jobs that are still failed in GitLab's current MR head pipeline. */
-  headPipelineFailedChecks?: Array<{ id: number; name: string }>;
-  /** GitHub's latest run for each check name on this exact head. */
-  latestCheckRuns?: LatestCheckRun[];
+  /** Provider-authoritative checks for this exact head. */
+  checks?: PullRequestHeadChecks;
 }
 
-export interface LatestCheckRun {
-  id: number;
+/** An identity minted and interpreted only by the provider that produced it. */
+declare const handle: unique symbol;
+export type VcsOpaqueHandle = { readonly [handle]: true };
+
+export interface PullRequestFailedCheck {
+  handle?: VcsOpaqueHandle;
   name: string;
-  appSlug: string;
-  status: string;
-  conclusion: string | null;
+  conclusion: string;
+}
+
+export interface PullRequestHeadChecks {
+  state: "green" | "red" | "running";
+  failed: PullRequestFailedCheck[];
 }
 
 export interface PRComment {
@@ -138,7 +137,47 @@ export interface CheckRunResult {
   logs?: string;
 }
 
+export interface VcsRepositoryMetadata {
+  provider: string;
+  repoPath: string;
+  name: string;
+  owner: string;
+  defaultBranch: string;
+  description: string;
+  webUrl: string;
+  topics: string[];
+  archived: boolean;
+  private: boolean;
+}
+
+export interface VcsSandboxCredentials {
+  host: string;
+  authUser?: string;
+  token: string;
+  commitAuthor: string;
+  commitEmail: string;
+}
+
+export type GateStatusRef = VcsOpaqueHandle;
+
+export type CheckRunConclusion =
+  | "success"
+  | "failure"
+  | "neutral"
+  | "cancelled"
+  | "skipped"
+  | "timed_out"
+  | "action_required";
+
+export interface GateStatusUpdate {
+  status: "in_progress" | "completed";
+  conclusion?: CheckRunConclusion;
+  summary?: string;
+}
+
 export interface VCSAdapter {
+  /** Compare identities minted by this provider without exposing their shape to core. */
+  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean;
   /** Create without mutating a same-named branch owned by somebody else. */
   createBranchIfMissing(
     name: string,
@@ -166,9 +205,16 @@ export interface VCSAdapter {
   /** Return null only when the provider authoritatively reports no such branch. */
   getBranchShaIfExists(branch: string): Promise<string | null>;
   getPRHead(prId: number): Promise<PullRequestHead>;
-  /** Optional because only GitHub exposes Check Run identities. */
-  getLatestCheckRuns?(headSha: string): Promise<LatestCheckRun[]>;
   listReviewThreads(prId: number): Promise<ReviewThreadFeed>;
   settleReviewThread(input: SettleReviewThreadInput): Promise<SettleReviewThreadResult>;
   postRunFailureNote(input: PostRunFailureNoteInput): Promise<void>;
+}
+
+/** Optional operational surfaces an integration may add to its VCS adapter. */
+export interface VcsIntegrationAdapter extends VCSAdapter {
+  listRepositories?(): Promise<VcsRepositoryMetadata[]>;
+  loadRepositoryProfile?(repoPath: string): Promise<import("./repository-profile").RepositoryProfileBundle>;
+  sandboxCredentials?(): Promise<VcsSandboxCredentials>;
+  parsePullRequestUrl?(url: URL): { repoPath: string; prNumber: number } | null;
+  readonly botLogin?: string;
 }

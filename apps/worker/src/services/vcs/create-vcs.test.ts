@@ -4,10 +4,6 @@ vi.mock("../../adapters/vcs/github.js", () => ({
   GitHubAdapter: vi.fn().mockImplementation((config) => ({ kind: "github-test", config })),
 }));
 
-vi.mock("../../adapters/vcs/gitlab.js", () => ({
-  GitLabAdapter: vi.fn().mockImplementation((config) => ({ kind: "gitlab-test", config })),
-}));
-
 import { createVCSForRepository } from "./create-vcs.js";
 
 describe("createVCSForRepository", () => {
@@ -25,24 +21,6 @@ describe("createVCSForRepository", () => {
       owner: "org",
       repo: "api",
       baseBranch: "develop",
-    });
-  });
-
-  it("creates a GitLab adapter for an arbitrary selected repository", () => {
-    const adapter = createVCSForRepository(
-      {
-        kind: "gitlab",
-        token: "glpat",
-        host: "https://gitlab.example.com",
-      },
-      { repoPath: "group/service", baseBranch: "trunk" },
-    ) as any;
-
-    expect(adapter.config).toMatchObject({
-      token: "glpat",
-      projectId: "group/service",
-      baseBranch: "trunk",
-      host: "https://gitlab.example.com",
     });
   });
 

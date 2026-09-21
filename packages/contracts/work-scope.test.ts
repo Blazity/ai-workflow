@@ -252,8 +252,8 @@ describe("repository key", () => {
     expect(repositoryKeySchema.safeParse("blazity/ai-workflow").success).toBe(false);
   });
 
-  it("refuses a provider the catalog does not know and a path with no slash", () => {
-    expect(repositoryKeySchema.safeParse("bitbucket:blazity/ai-workflow").success).toBe(false);
+  it("accepts an open provider value and refuses a path with no slash", () => {
+    expect(repositoryKeySchema.safeParse("bitbucket:blazity/ai-workflow").success).toBe(true);
     expect(repositoryKeySchema.safeParse("github:blazity").success).toBe(false);
   });
 });

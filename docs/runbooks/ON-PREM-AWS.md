@@ -353,7 +353,7 @@ Agent containers are immutable — new tasks always pull the latest image tag.
 | `ECR_IMAGE_URI`                                   | Full ECR image URI for agent container                               |
 | `WORKFLOW_POSTGRES_URL`                           | RDS Postgres connection string                                       |
 | `ISSUE_TRACKER_KIND`, `JIRA_*`                    | Jira connection                                                      |
-| `VCS_KIND`, `GITHUB_*`                            | GitHub connection                                                    |
+| `GITHUB_*`                                        | GitHub connection                                                    |
 | `CHAT_SDK_*`                                      | Slack messaging                                                      |
 | `ANTHROPIC_API_KEY`                               | Claude Code auth (via Secrets Manager `valueFrom`)                   |
 | `CLAUDE_MODEL`                                    | Model selection                                                      |

@@ -30,7 +30,7 @@ const discoveryResultSchema = z
       .array(
         z
           .object({
-            provider: z.enum(["github", "gitlab"]),
+            provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
             repoPath: z.string().min(1),
             rationale: z.string().trim().min(1).max(500),
           })
@@ -134,7 +134,7 @@ interface RepositoryLeftOut {
 }
 
 type ProposedRepository = {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   rationale: string;
 };

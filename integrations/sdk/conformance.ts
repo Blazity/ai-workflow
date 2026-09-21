@@ -72,7 +72,6 @@ export const CORE_HEALTH_SECTION_IDS: readonly string[] = [
   "database",
   "email",
   "github",
-  "gitlab",
   "jira",
   "sso",
 ];
@@ -359,7 +358,14 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
         `${path}.env`,
         `Connection field "${field.key}" needs an environment variable name in UPPER_SNAKE_CASE, not "${field.env}".`,
       );
-    } else if (RESERVED_ENVIRONMENT_VARIABLES.includes(field.env)) {
+    } else if (
+      RESERVED_ENVIRONMENT_VARIABLES.includes(field.env) &&
+      !(
+        field.env === "VCS_BOT_LOGIN" &&
+        field.key === "legacyBotLogin" &&
+        manifest.capabilities.includes("vcs")
+      )
+    ) {
       report(
         "connection_env_reserved",
         `${path}.env`,

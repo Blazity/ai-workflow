@@ -23,6 +23,65 @@
     ]
   },
   {
+    "integration": "gitlab",
+    "fields": [
+      {
+        "key": "botLogin",
+        "env": "GITLAB_BOT_LOGIN",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "host",
+        "env": "GITLAB_HOST",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": "https://gitlab.com",
+        "format": "url"
+      },
+      {
+        "key": "legacyBotLogin",
+        "env": "VCS_BOT_LOGIN",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "legacyProjectId",
+        "env": "GITLAB_PROJECT_ID",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "token",
+        "env": "GITLAB_TOKEN",
+        "secret": true,
+        "identity": true,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "webhookSecret",
+        "env": "GITLAB_WEBHOOK_SECRET",
+        "secret": true,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      }
+    ]
+  },
+  {
     "integration": "slack",
     "fields": [
       {

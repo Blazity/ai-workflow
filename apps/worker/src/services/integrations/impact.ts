@@ -48,6 +48,7 @@ export async function summarizeIntegrationImpact(input: {
   readonly definitions: readonly ImpactDefinitionInput[];
   readonly integrations: DeploymentIntegrations;
   readonly countInFlightRuns: (definitionIds: number[]) => Promise<number>;
+  readonly repositories?: readonly { provider: string; path: string }[];
 }): Promise<IntegrationImpactPreviewResponse> {
   const enabledDefinitions = input.definitions
     .filter((entry) =>
@@ -63,6 +64,7 @@ export async function summarizeIntegrationImpact(input: {
     changesFingerprint: input.changesFingerprint,
     enabledDefinitions,
     inFlightRuns,
+    repositories: input.repositories ?? [],
   };
 }
 
@@ -114,16 +116,21 @@ export async function previewIntegrationImpact(input: {
     definitions = await readEnabledDeployedWorkflowDefinitions();
     integrations = deploymentIntegrations({ manifests: integrationManifests, states });
   } catch {
-    return { changesFingerprint, enabledDefinitions: null, inFlightRuns: null };
+    return { changesFingerprint, enabledDefinitions: null, inFlightRuns: null, repositories: null };
   }
 
   try {
+    const { loadRepositoryCatalogEntries } = await import("../repository-catalog/store.js");
+    const catalog = await loadRepositoryCatalogEntries();
     return await summarizeIntegrationImpact({
       integrationId: manifest.id,
       changesFingerprint,
       definitions,
       integrations,
       countInFlightRuns,
+      repositories: catalog.entries
+        .filter((entry) => entry.provider === manifest.id)
+        .map((entry) => ({ provider: entry.provider, path: entry.path })),
     });
   } catch {
     const enabledDefinitions = definitions
@@ -131,7 +138,12 @@ export async function previewIntegrationImpact(input: {
         integrationsUsedBy(entry.definition.nodes, integrations).includes(manifest.id),
       )
       .map(({ id, name }) => ({ id, name }));
-    return { changesFingerprint, enabledDefinitions, inFlightRuns: null };
+    return {
+      changesFingerprint,
+      enabledDefinitions,
+      inFlightRuns: null,
+      repositories: null,
+    };
   }
 }
 

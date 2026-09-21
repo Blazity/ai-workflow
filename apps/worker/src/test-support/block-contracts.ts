@@ -31,7 +31,19 @@ import { validateWorkflowDefinitionIssuesForDeployment } from "../engine/definit
 export function testBlockContractResolver(
   context: WorkflowBlockRegistryContext,
 ): WorkflowBlockContractResolver {
-  return createWorkflowBlockContractResolver(context);
+  const integrations =
+    context.vcsProviders.length > 0 &&
+    !context.integrations.builtinCapabilities.has("vcs") &&
+    (context.integrations.providers.get("vcs")?.length ?? 0) === 0
+      ? {
+          ...context.integrations,
+          builtinCapabilities: new Set([
+            ...context.integrations.builtinCapabilities,
+            "vcs",
+          ]),
+        }
+      : context.integrations;
+  return createWorkflowBlockContractResolver({ ...context, integrations });
 }
 
 /**

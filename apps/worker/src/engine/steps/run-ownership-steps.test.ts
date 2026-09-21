@@ -18,7 +18,7 @@ const recordWebhookStarted = vi.fn();
 const recordOccurrenceStarted = vi.fn();
 const createRepositoryVcsRuntime = vi.fn();
 const getPRHead = vi.fn();
-const getLatestCheckRuns = vi.fn();
+const sameHandle = vi.fn();
 const setApprovalRun = vi.fn();
 const listSandboxes = vi.fn();
 const stopSandboxes = vi.fn();
@@ -49,11 +49,11 @@ vi.mock("../../db/repositories/active-runs.js", () => ({
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: (...args: any[]) => {
     createRepositoryVcsRuntime(...args);
-    return { getPRHead, getLatestCheckRuns };
+    return { getPRHead, sameHandle };
   },
   createRepositoryVcsRuntime: (...args: any[]) => {
     createRepositoryVcsRuntime(...args);
-    return { vcs: { getPRHead, getLatestCheckRuns } };
+    return { vcs: { getPRHead, sameHandle } };
   },
 }));
 vi.mock("../../db/repositories/clarifications.js", () => ({
@@ -125,16 +125,18 @@ describe("workflow owner steps", () => {
       headSha: "sha",
       baseRef: "main",
       state: "open",
-    });
-    getLatestCheckRuns.mockReset().mockResolvedValue([
-      {
-        id: 101,
-        name: "ci / build",
-        appSlug: "github-actions",
-        status: "completed",
-        conclusion: "failure",
+      checks: {
+        state: "red",
+        failed: [{
+          name: "ci / build",
+          conclusion: "failure",
+          handle: { kind: "job", container: 100, id: 101 },
+        }],
       },
-    ]);
+    });
+    sameHandle.mockReset().mockImplementation(
+      (left, right) => JSON.stringify(left) === JSON.stringify(right),
+    );
     setApprovalRun.mockReset();
     listSandboxes.mockReset().mockResolvedValue([]);
     stopSandboxes.mockReset().mockResolvedValue(0);
@@ -277,6 +279,7 @@ describe("workflow owner steps", () => {
           appSlug: "github-actions",
           checkRunId: 101,
           conclusion: "failure",
+          handle: { kind: "job", container: 100, id: 101 },
         }],
       } as any,
     };
@@ -368,15 +371,12 @@ describe("workflow owner steps", () => {
 
   it("rejects a same-head GitHub checks candidate after its exact Check Run passes", async () => {
     acknowledgeStartedDelivery.mockResolvedValue(true);
-    getLatestCheckRuns.mockResolvedValue([
-      {
-        id: 101,
-        name: "ci / build",
-        appSlug: "github-actions",
-        status: "completed",
-        conclusion: "success",
-      },
-    ]);
+    getPRHead.mockResolvedValue({
+      headSha: "sha",
+      baseRef: "main",
+      state: "open",
+      checks: { state: "green", failed: [] },
+    });
     const { acknowledgePrTriggerDispatchStep } = await import(
       "./run-ownership-steps.js"
     );
@@ -404,6 +404,7 @@ describe("workflow owner steps", () => {
           appSlug: "github-actions",
           checkRunId: 101,
           conclusion: "failure",
+          handle: { kind: "job", container: 100, id: 101 },
         }],
       } as any,
     };
@@ -411,7 +412,7 @@ describe("workflow owner steps", () => {
     await expect(
       acknowledgePrTriggerDispatchStep(entry, "run-stale-check"),
     ).resolves.toBe(false);
-    expect(getLatestCheckRuns).toHaveBeenCalledWith("sha");
+    expect(getPRHead).toHaveBeenCalledWith(7);
     expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
     expect(completeTriggerDelivery).toHaveBeenCalledWith(
       "github",
@@ -426,8 +427,7 @@ describe("workflow owner steps", () => {
       headSha: "sha",
       baseRef: "main",
       state: "open",
-      headPipelineId: 901,
-      headPipelineStatus: "success",
+      checks: { state: "green", failed: [] },
     });
     const { acknowledgePrTriggerDispatchStep } = await import(
       "./run-ownership-steps.js"

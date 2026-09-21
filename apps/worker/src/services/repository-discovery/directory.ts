@@ -12,15 +12,15 @@ import type {
   RepositoryProviderStatus,
   VcsProviderKind,
 } from "@shared/contracts";
-import { listRepositoriesAcrossProviders } from "../../adapters/vcs/repository-directory.js";
-import { configuredVcsProviders } from "../settings/index.js";
-
-const SUPPORTED_PROVIDERS: VcsProviderKind[] = ["github", "gitlab"];
+import { integrationsProviding } from "@integrations/registry";
+import { getConfiguredVcsProviders } from "../../infra/vcs-config.js";
 
 /** Every listable repository, plus one status per supported provider. */
 export async function listRepositoryDirectory(): Promise<RepositoriesResponse> {
-  const configured = configuredVcsProviders();
-  const listing = await listRepositoriesAcrossProviders(configured);
+  const configured = getConfiguredVcsProviders();
+  const listing = await import("../../engine/support/vcs-runtime.js").then(
+    (runtime) => runtime.listVcsRepositories(),
+  );
   const repositories = listing.repositories.map(
     (repo): RepositoryOption => ({
       provider: repo.provider,
@@ -35,8 +35,17 @@ export async function listRepositoryDirectory(): Promise<RepositoriesResponse> {
   const failures = new Map(
     listing.failures.map((failure) => [failure.provider, failure.message]),
   );
-  const configuredKinds = new Set(configured.map((provider) => provider.kind));
-  const providers = SUPPORTED_PROVIDERS.map(
+  const configuredKinds = new Set([
+    ...configured.map((provider) => provider.kind),
+    ...listing.providers,
+  ]);
+  const supportedProviders: VcsProviderKind[] = [
+    ...new Set([
+      ...configured.map((provider) => provider.kind),
+      ...integrationsProviding("vcs").map((manifest) => manifest.id),
+    ]),
+  ];
+  const providers = supportedProviders.map(
     (provider): RepositoryProviderStatus => {
       if (!configuredKinds.has(provider)) {
         return { provider, status: "not_connected" };

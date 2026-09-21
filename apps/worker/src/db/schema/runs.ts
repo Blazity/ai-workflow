@@ -18,6 +18,7 @@ import {
 import type {
   BlockRunState,
   HarnessRunManifestRecord,
+  IntegrationConnectionPin,
   ReplayAttemptOutcome,
   ReplayAttemptState,
   ReplayCaptureStatus,
@@ -34,10 +35,8 @@ import type {
 } from "@shared/contracts";
 import { organization } from "../auth-schema.js";
 import { workflowDefinitionVersions } from "./definitions.js";
-
-export type GateStatusRef =
-  | { provider: "github"; id: number }
-  | { provider: "gitlab"; name: string; headSha: string };
+/** Opaque provider handle, stored verbatim and interpreted only by its provider. */
+export type GateStatusRef = unknown;
 
 type BlockRunStateSummary = Omit<BlockRunState, "output">;
 
@@ -123,6 +122,10 @@ export const workflowRuns = pgTable("workflow_runs", {
    * started before this column existed, which is not an empty list.
    */
   repositoryAccess: jsonb("repository_access").$type<RunRepositoryAccess>(),
+  /** The integration configurations this run froze at start. Reconciliation
+   * reads the same pins as in-run provider calls instead of silently moving a
+   * durable check to a reconfigured provider endpoint. */
+  integrationPins: jsonb("integration_pins").$type<IntegrationConnectionPin[]>(),
   /** Durable markers distinguish a captured replay that expired from a
    * historical run for which replay was never captured. */
   replayOrganizationId: text("replay_organization_id").references(
@@ -438,7 +441,6 @@ export const workflowOwnedBranches = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.ticketKey, t.provider, t.repoPath] }),
-    check("workflow_owned_branches_provider_check", sql`${t.provider} in ('github', 'gitlab')`),
   ],
 );
 

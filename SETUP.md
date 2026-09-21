@@ -127,7 +127,7 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 8. Import the repository on the Repositories page. The catalog records the
    provider's default branch; an explicit profile value overrides it.
 
-> The legacy `GITHUB_TOKEN` PAT path was removed: `VCS_KIND=github` now requires the App vars above. `apps/worker/src/infra/runtime-env.ts` enforces this at boot, including `GITHUB_WEBHOOK_SECRET`.
+> The legacy `GITHUB_TOKEN` PAT path was removed: GitHub needs the App vars above. `apps/worker/src/infra/runtime-env.ts` enforces this at boot, including `GITHUB_WEBHOOK_SECRET`.
 
 **GitLab:**
 
@@ -281,10 +281,9 @@ vercel env add JIRA_API_TOKEN production
 | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`                                              | Jira credentials (scoped service-account Bearer token) |
 | `JIRA_BACKLOG_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID`                                       | Optional stable transition IDs for Jira moves; recommended when Jira localizes transition names |
-| `VCS_KIND`                                                                                         | Optional. Provider credentials are additive: configure GitHub, GitLab, or both in one deployment (a run can then mix repositories from both providers). Set `VCS_KIND` only to pin the legacy single-repo helpers to one provider; leave it unset in dual-provider deployments. |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If GitHub is configured (GitHub App auth)              |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If GitHub is configured (GitHub App auth). Provider credentials are additive: configure GitHub, GitLab, or both in one deployment, and a run can then mix repositories from both providers. |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If GitHub is configured: signs the GitHub webhook deliveries that drive the PR workflow triggers. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
-| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                        | If GitLab is configured: GitLab.com token with `api` + `write_repository`, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
+| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                        | If GitLab is configured: GitLab.com token with `api` + `write_repository`, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. GitLab is an integration, so these seed its connection; an admin can instead enter them in the dashboard (Integrations → GitLab → Connection). |
 | `ANTHROPIC_API_KEY`                                                                                | Claude execution and Harness Profile capability discovery; accepts a standard API key or Claude Code OAuth token |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | Codex execution or Harness Profile capability discovery |
 | `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
@@ -315,7 +314,7 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`        | unset (commented-review triggers for that provider are unavailable)                                                                                         | Provider-specific login of the bot's own VCS account. Required for every selected, configured provider when `trigger_pr_review.on` includes `commented`, so the bot cannot recursively trigger a run from its own review. For a GitHub App this is usually `<app-slug>[bot]`. |
 | `VCS_BOT_LOGIN`                               | unset                                                                                                                                                        | Legacy fallback for a commented-review bot identity, accepted only when exactly one VCS provider is configured. Mixed GitHub/GitLab deployments require provider-specific logins. |
 
-`apps/worker/src/infra/runtime-env.ts` cross-validates at startup: missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
+`apps/worker/src/infra/runtime-env.ts` cross-validates at startup: missing required vars or wrong combinations (e.g. `GITHUB_OWNER` without `GITHUB_REPO`) crash the process with a precise error.
 
 #### Repository access and the retired `AGENT_ALLOWED_REPOS`
 
@@ -866,7 +865,7 @@ The tracer travels with the integration as `integrations/arthur/tracer.generated
 
 ### GitLab alongside (or instead of) GitHub
 
-Provider credentials are additive. To run GitLab only, provide `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, and `GITLAB_WEBHOOK_SECRET` (optionally `VCS_KIND=gitlab` to pin the legacy single-repo helpers); `GITHUB_*` vars may be removed. To run BOTH providers in one deployment, keep the GitHub App vars and add the GitLab vars side by side, leave `VCS_KIND` unset, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. For GitLab.com setup, see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
+GitLab is an integration. An admin connects it in the dashboard (Integrations → GitLab → Connection), or leaves the environment as the source by setting `GITLAB_TOKEN`, `GITLAB_WEBHOOK_SECRET` and optionally `GITLAB_PROJECT_ID`. There is no deployment-wide choice of provider to make: a repository carries its own provider, so provider credentials are additive and `GITHUB_*` vars may be removed if you want GitLab alone. To run BOTH providers in one deployment, keep the GitHub App vars and connect GitLab beside them, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`, which is accepted only when one provider is configured. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. For GitLab.com setup, see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
 
 ### Webhook trigger
 
@@ -1045,7 +1044,7 @@ candidate with any retired name from being promoted. Remove every named
 variable from each deployment environment, then redeploy:
 
 ```text
-DASHBOARD_ORG_NAME, GITHUB_BASE_BRANCH, GITLAB_BASE_BRANCH,
+DASHBOARD_ORG_NAME, GITHUB_BASE_BRANCH,
 MAX_CONCURRENT_AGENTS, JOB_TIMEOUT_MS, V2_MAX_BLOCK_CONCURRENCY,
 POLL_INTERVAL_MS, ATTACHMENT_MAX_FILE_SIZE_MB,
 ATTACHMENT_MAX_TOTAL_SIZE_MB, ATTACHMENT_MAX_COUNT,

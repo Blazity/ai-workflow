@@ -201,6 +201,7 @@ async function closeTerminalPrChecksStep(payload: {
   runId: string;
   intent: "timed_out" | "cancelled";
   details: string;
+  integrationPins?: readonly import("@shared/contracts").IntegrationConnectionPin[];
 }): Promise<{ closed: number; pending: number }> {
   "use step";
   const { closeConnectedRunPrChecks } = await import("../runtime/pr-external-resources.js");
@@ -223,6 +224,9 @@ async function recordBlockStatusesStep(payload: {
    *  OPTIONAL parameter, so a run suspended before this field existed replays
    *  this step's stored result unchanged. */
   repositoryAccess?: RunRepositoryAccess;
+  /** Optional for replay compatibility with runs started before pins were
+   * persisted on the run row. */
+  integrationPins?: readonly import("@shared/contracts").IntegrationConnectionPin[];
 }) {
   "use step";
   const { loadRunTelemetryPort } = await import("../internal/ports.js");

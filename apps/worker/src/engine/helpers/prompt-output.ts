@@ -278,7 +278,7 @@ export function blockTypesMissingExecutor(): WorkflowBlockType[] {
 export function buildImplementationAgentSuccessOutput(input: {
   workspaceId: string;
   workspaceManifest: WorkspaceManifest;
-  commits: Array<{ provider: "github" | "gitlab"; repoPath: string; sha: string }>;
+  commits: Array<{ provider: string; repoPath: string; sha: string }>;
   summary?: string | null;
   verification?: BlockOutput["verification"];
 }): BlockOutput {

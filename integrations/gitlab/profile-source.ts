@@ -30,7 +30,7 @@ import {
   type RepositoryProfileBundle,
   type RepositoryProfileFile,
   type RepositoryProfileSource,
-} from "../repository-profile-source.js";
+} from "@integrations/sdk";
 
 /** One page of the root listing. Kept at one page deliberately: paging a
  *  repository root is unbounded work for a diminishing signal, and a root with

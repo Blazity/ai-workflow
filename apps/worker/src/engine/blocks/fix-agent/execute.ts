@@ -1,5 +1,6 @@
 import { agentTracingRun } from "../../support/integration-run-state.js";
 import type {
+  IntegrationConnectionPin,
   RunRepositoryAccess,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
@@ -128,6 +129,7 @@ type PrFixPublicationInput = {
   runId: string;
   /** Which repositories this run may publish to, frozen at its start. */
   repositoryAccess: RunRepositoryAccess;
+  integrationPins?: readonly IntegrationConnectionPin[];
   /** The run's job timeout, from the settings it started with. */
   jobTimeoutMs: number;
   pr: PrTriggerPayload;
@@ -166,6 +168,7 @@ function buildPrFixPublicationInput(
     ownerToken: ctx.entry.ownerToken,
     runId: ctx.runId,
     repositoryAccess: ctx.repositories,
+    integrationPins: ctx.integrationPins,
     jobTimeoutMs: ctx.settings.JOB_TIMEOUT_MS,
     pr,
     ...(intendedHead ? { intendedHead } : {}),
@@ -201,6 +204,7 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
     ownerToken: input.ownerToken,
     runId: input.runId,
     repositoryAccess: input.repositoryAccess,
+    integrationPins: input.integrationPins,
     jobTimeoutMs: input.jobTimeoutMs,
     ...(input.reviewLedger ? { reviewLedger: input.reviewLedger } : {}),
   });

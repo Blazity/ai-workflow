@@ -32,7 +32,6 @@ function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAg
   if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID) {
     vcsProviders.push("github");
   }
-  if (env.GITLAB_TOKEN) vcsProviders.push("gitlab");
   return {
     agentProviders: {
       claude: Boolean(env.ANTHROPIC_API_KEY),
@@ -48,8 +47,7 @@ function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAg
     vcsBotIdentities: vcsProviders.filter((provider) =>
       Boolean(
         resolveVcsBotLogin(provider, vcsProviders, {
-          github: env.GITHUB_BOT_LOGIN,
-          gitlab: env.GITLAB_BOT_LOGIN,
+          byProvider: { github: env.GITHUB_BOT_LOGIN },
           legacy: env.VCS_BOT_LOGIN,
         }),
       ),
@@ -107,8 +105,30 @@ export function workflowBlockRegistryContext(
     defaultBuiltinHarnessProfile(),
   integrations: DeploymentIntegrations = NO_INTEGRATIONS,
 ): WorkflowBlockRegistryContext {
+  const deployment = deploymentCapabilities();
+  const integrationVcsProviders = integrations.providers.get("vcs") ?? [];
+  const vcsProviders = [...new Set([...deployment.vcsProviders, ...integrationVcsProviders])];
+  const soleProvider = vcsProviders.length === 1 ? vcsProviders[0] : undefined;
+  const byProvider = Object.fromEntries(vcsProviders.map((provider) => [
+    provider,
+    provider === "github" && env.GITHUB_BOT_LOGIN?.trim()
+      ? env.GITHUB_BOT_LOGIN
+      : integrations.botIdentityProviders.has(provider)
+        ? "configured"
+        : undefined,
+  ]));
+  const legacy = soleProvider && (
+    env.VCS_BOT_LOGIN?.trim() || integrations.legacyBotIdentityProviders.has(soleProvider)
+  )
+    ? "configured"
+    : undefined;
+  const vcsBotIdentities = vcsProviders.filter((provider) => Boolean(
+    resolveVcsBotLogin(provider, vcsProviders, { byProvider, legacy }),
+  ));
   return {
-    ...deploymentCapabilities(),
+    ...deployment,
+    vcsProviders,
+    vcsBotIdentities,
     integrations,
     defaultAgent: {
       provider: profile.harness.provider,

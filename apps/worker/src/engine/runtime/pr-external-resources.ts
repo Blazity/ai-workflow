@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  IntegrationConnectionPin,
   ReviewResult,
   WorkflowPrCheckReference,
 } from "@shared/contracts";
@@ -17,6 +18,7 @@ import {
   type GateStatusUpdate,
   type PRFile,
   type PRReviewInlineComment,
+  type VcsOpaqueHandle,
 } from "../../adapters/vcs/types.js";
 import {
   assertActiveRunOwner,
@@ -51,7 +53,7 @@ export type CheckTerminalIntent =
 
 export interface PrRunTarget {
   subjectKey: string;
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   prNumber: number;
   headSha: string;
@@ -131,6 +133,7 @@ export async function createRunOwnedPrCheck(args: {
   attempt: number;
   activationScope: string;
   name: string;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }): Promise<WorkflowPrCheckReference> {
   const { db, ...input } = args;
   return createRunOwnedPrCheckWithPersistence(
@@ -160,6 +163,7 @@ async function createRunOwnedPrCheckWithPersistence(
     provider: args.target.provider,
     repoPath: args.target.repoPath,
     baseBranch: args.target.baseRef,
+    integrationPins: args.integrationPins,
   });
   if (!hasGateStatusCapability(vcs)) {
     throw new Error(`${args.target.provider} does not support workflow PR checks.`);
@@ -216,6 +220,7 @@ export async function completeRunOwnedPrCheck(args: {
   conclusion: CheckBusinessConclusion;
   details: string;
   refreshHead?: boolean;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }): Promise<void> {
   const { db, ...input } = args;
   return completeRunOwnedPrCheckWithPersistence(
@@ -242,6 +247,7 @@ async function completeRunOwnedPrCheckWithPersistence(
     provider: args.target.provider,
     repoPath: args.target.repoPath,
     baseBranch: args.target.baseRef,
+    integrationPins: args.integrationPins,
   });
   if (args.refreshHead) {
     await persistence.assertOwner(args.owner);
@@ -292,7 +298,7 @@ async function completeRunOwnedPrCheckWithPersistence(
     current.state !== "open"
   ) {
     await vcs.updateGateStatus(
-      check.providerReference,
+      check.providerReference as VcsOpaqueHandle,
       checkProviderUpdate(
         "superseded",
         "Superseded by a newer pull request commit.",
@@ -304,7 +310,7 @@ async function completeRunOwnedPrCheckWithPersistence(
     throw new Error("The PR check was superseded by a newer commit.");
   }
   await vcs.updateGateStatus(
-    check.providerReference,
+    check.providerReference as VcsOpaqueHandle,
     checkProviderUpdate(args.conclusion, args.details),
   );
   await persistence.completePrCheck({ id: check.id, conclusion: args.conclusion });
@@ -325,6 +331,7 @@ export async function closeRunPrChecks(args: {
   intent: CheckTerminalIntent;
   details: string;
   checkIds?: string[];
+  integrationPins?: readonly IntegrationConnectionPin[];
 }): Promise<{ closed: number; pending: number }> {
   const { db, ...input } = args;
   return closeRunPrChecksWithPersistence(
@@ -366,13 +373,14 @@ async function closeRunPrChecksWithPersistence(
     try {
       const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
       const vcs = createRepositoryVCS({
-        provider: check.provider as "github" | "gitlab",
+        provider: check.provider,
         repoPath: check.repository,
         baseBranch: "main",
+        integrationPins: args.integrationPins,
       });
       if (!hasGateStatusCapability(vcs)) throw new Error("PR checks are unsupported.");
       await vcs.updateGateStatus(
-        check.providerReference,
+        check.providerReference as VcsOpaqueHandle,
         checkProviderUpdate(intent, args.details),
       );
       await persistence.completePrCheck({ id: check.id, conclusion: intent });
@@ -418,18 +426,16 @@ function defaultReviewCounts(): { reportedCount: number; distinctCount: number }
  * look abandoned while the second is still in flight, and we would overwrite a
  * real verdict with "cancelled".
  */
-async function abandonedPendingCheckIds(
-  persistence: PrExternalResourcesPersistence,
+function abandonedPendingCheckIds(
   rows: Array<{ id: string; runId: string; state: string; updatedAt: Date | null }>,
-): Promise<Set<string>> {
+  runs: Array<{ runId: string; status: string | null }>,
+): Set<string> {
   const candidates = rows.filter(
     (row) =>
       row.state === "pending" &&
       Date.now() - (row.updatedAt?.getTime() ?? 0) >= ABANDONED_CHECK_GRACE_MS,
   );
   if (candidates.length === 0) return new Set();
-  const runIds = [...new Set(candidates.map((row) => row.runId))];
-  const runs = await persistence.listRunStatuses(runIds);
   const ended = new Set(
     runs
       .filter((run) => run.status && ENDED_RUN_STATUSES.has(run.status))
@@ -455,7 +461,14 @@ async function reconcilePendingPrChecksWithPersistence(
   limit = 25,
 ): Promise<{ attempted: number; closed: number; pending: number }> {
   const rows = await persistence.listReconcilePrChecks(limit);
-  const abandoned = await abandonedPendingCheckIds(persistence, rows);
+  const runs = await persistence.listRunStatuses([
+    ...new Set(rows.map((row) => row.runId)),
+  ]);
+  const abandoned = abandonedPendingCheckIds(rows, runs);
+  const integrationPinsByRun = new Map(
+    runs.map((run) => [run.runId, run.integrationPins ?? undefined]),
+  );
+  warnAboutRunsWithoutIntegrationPins(runs);
   const retries: Array<{
     checkId: string;
     runId: string;
@@ -483,9 +496,10 @@ async function reconcilePendingPrChecksWithPersistence(
       try {
         const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
         const vcs = createRepositoryVCS({
-          provider: row.provider as "github" | "gitlab",
+          provider: row.provider,
           repoPath: row.repository,
           baseBranch: "main",
+          integrationPins: integrationPinsByRun.get(row.runId),
         });
         if (!hasGateStatusCapability(vcs)) {
           throw new Error("PR checks are unsupported.");
@@ -525,11 +539,39 @@ async function reconcilePendingPrChecksWithPersistence(
       intent: retry.intent,
       details: retry.details,
       checkIds: [retry.checkId],
+      integrationPins: integrationPinsByRun.get(retry.runId),
     }, persistence);
     closed += result.closed;
     pending += result.pending;
   }
   return { attempted: retries.length, closed, pending };
+}
+
+/**
+ * Say out loud that a check is being reconciled against whatever the provider
+ * is configured as now.
+ *
+ * Every other caller is handed its pins by the step that loaded the plan. This
+ * one reads the run row, so it is the only place where a run written before
+ * migration `0073_run_integration_pins` can turn up: its pins are NULL and
+ * cannot be recovered, so the provider it publishes this verdict to is
+ * whichever one is connected at reconcile time, not the one the run started
+ * with. The S10 drain is what makes that safe (no such run should still be
+ * alive), and this line is how anyone finds out the drain did not hold instead
+ * of reading it off a silent success. `RunIntegrationPins` in
+ * `engine/support/vcs-runtime.ts` carries the full reasoning.
+ */
+function warnAboutRunsWithoutIntegrationPins(
+  runs: readonly { runId: string; integrationPins: unknown }[],
+): void {
+  const unpinned = runs
+    .filter((run) => run.integrationPins === null || run.integrationPins === undefined)
+    .map((run) => run.runId);
+  if (unpinned.length === 0) return;
+  logger.warn(
+    { runIds: unpinned, migration: "0073_run_integration_pins" },
+    "pr_check_reconcile_without_integration_pins",
+  );
 }
 
 export function reconcileConnectedPendingPrChecks(
@@ -1013,6 +1055,7 @@ export async function publishRunOwnedPrReview(args: {
   attempt: number;
   activationScope: string;
   reviewResults: ReviewResult[];
+  integrationPins?: readonly IntegrationConnectionPin[];
 }): Promise<{
   decision: "approve" | "request_changes";
   summary: string;
@@ -1036,6 +1079,7 @@ async function publishRunOwnedPrReviewWithPersistence(
     provider: args.target.provider,
     repoPath: args.target.repoPath,
     baseBranch: args.target.baseRef,
+    integrationPins: args.integrationPins,
   });
   if (!hasPRFilesCapability(vcs) || !hasPRReviewCapability(vcs)) {
     throw new Error(`${args.target.provider} does not support workflow PR reviews.`);

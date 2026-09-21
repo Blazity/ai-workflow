@@ -28,6 +28,7 @@ import type {
   SettleReviewThreadInput,
   SettleReviewThreadResult,
   PostRunFailureNoteInput,
+  VcsOpaqueHandle,
 } from "./types.js";
 import {
   readReviewFindingDigest,
@@ -54,6 +55,16 @@ export interface GitHubConfig {
   owner: string;
   repo: string;
   baseBranch: string;
+}
+
+type GitHubHandle = {
+  provider?: "github";
+  id?: number;
+  owner?: string;
+};
+
+function githubHandle(value: GitHubHandle): VcsOpaqueHandle {
+  return value as unknown as VcsOpaqueHandle;
 }
 
 function isSelfAuthoredReviewError(error: unknown): boolean {
@@ -412,6 +423,13 @@ export class GitHubAdapter
     return { owner: this.config.owner, repo: this.config.repo };
   }
 
+  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean {
+    if (!left || !right) return left === right;
+    const a = left as unknown as Partial<GitHubHandle>;
+    const b = right as unknown as Partial<GitHubHandle>;
+    return a.provider === b.provider && a.id === b.id && a.owner === b.owner;
+  }
+
   async createBranchIfMissing(
     name: string,
     base: string,
@@ -598,7 +616,33 @@ export class GitHubAdapter
     if (state !== "open" && state !== "closed" && state !== "merged") {
       throw new Error(`GitHub PR #${prId} has unsupported lifecycle state ${String(state)}`);
     }
-    return { headSha: data.head.sha, headRef: data.head.ref, baseRef, state };
+    const latest = await this.getLatestCheckRuns(data.head.sha);
+    const failed = latest
+      .filter(
+        (check) =>
+          check.status === "completed" &&
+          (check.conclusion === "failure" || check.conclusion === "timed_out"),
+      )
+      .map((check) => ({
+        handle: githubHandle({ id: check.id, owner: check.appSlug }),
+        name: check.name,
+        conclusion: check.conclusion!,
+      }));
+    const checks = {
+      state: latest.some((check) => check.status !== "completed")
+        ? "running" as const
+        : failed.length > 0
+          ? "red" as const
+          : "green" as const,
+      failed,
+    };
+    return {
+      headSha: data.head.sha,
+      ...(data.head.ref ? { headRef: data.head.ref } : {}),
+      baseRef,
+      state,
+      checks,
+    };
   }
 
   async getManualDispatchPullRequest(
@@ -631,8 +675,8 @@ export class GitHubAdapter
       .map((check) => ({
         name: check.name,
         conclusion: check.conclusion!,
-        checkRunId: check.id,
-        appSlug: check.appSlug,
+        handle: githubHandle({ id: check.id, owner: check.appSlug }),
+        producer: check.appSlug,
       }));
     return {
       prNumber: prId,
@@ -667,6 +711,19 @@ export class GitHubAdapter
           : [];
       }),
     };
+  }
+
+  parsePullRequestUrl(url: URL): { repoPath: string; prNumber: number } | null {
+    if (url.host.toLowerCase() !== "github.com") return null;
+    const segments = url.pathname.split("/").filter(Boolean);
+    const prNumber = Number(segments[3]);
+    if (
+      segments.length !== 4 ||
+      segments[2] !== "pull" ||
+      !Number.isSafeInteger(prNumber) ||
+      prNumber <= 0
+    ) return null;
+    return { repoPath: `${segments[0]}/${segments[1]}`, prNumber };
   }
 
   async getLatestCheckRuns(headSha: string) {
@@ -1248,7 +1305,7 @@ export class GitHubAdapter
         (ownershipKey === undefined || check.external_id === ownershipKey) &&
         (check.status === "queued" || check.status === "in_progress"),
     );
-    if (pending) return { provider: "github", id: pending.id };
+    if (pending) return githubHandle({ provider: "github", id: pending.id });
     const { data } = await this.octokit.checks.create({
       ...this.ownerRepo,
       name,
@@ -1257,7 +1314,7 @@ export class GitHubAdapter
       started_at: new Date().toISOString(),
       ...(ownershipKey ? { external_id: ownershipKey } : {}),
     });
-    return { provider: "github", id: data.id };
+    return githubHandle({ provider: "github", id: data.id });
   }
 
   async updateGateStatus(
@@ -1278,13 +1335,15 @@ export class GitHubAdapter
     ref: GateStatusRef,
     update: RichGateStatusUpdate,
   ): Promise<void> {
-    if (ref.provider !== "github") {
-      throw new Error(`GitHubAdapter cannot update ${ref.provider} gate status`);
+    const value = ref as unknown as Partial<GitHubHandle>;
+    if (value.provider !== "github" || typeof value.id !== "number") {
+      throw new Error("GitHubAdapter received a gate status handle it did not mint");
     }
+    const checkRunId = value.id;
 
     const baseParams = {
       ...this.ownerRepo,
-      check_run_id: ref.id,
+      check_run_id: checkRunId,
       status: update.status,
       ...(update.conclusion ? { conclusion: update.conclusion } : {}),
       ...(update.status === "completed"
@@ -1327,7 +1386,7 @@ export class GitHubAdapter
         // Only the first batch flips status / conclusion / completed_at.
         ...(isFirst
           ? baseParams
-          : { check_run_id: ref.id, status: update.status }),
+          : { check_run_id: checkRunId, status: update.status }),
         output: {
           ...outputBase,
           annotations: batch.map(mapAnnotation),

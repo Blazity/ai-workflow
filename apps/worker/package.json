@@ -45,7 +45,6 @@
     "@ai-sdk/openai": "^3.0.84",
     "@better-auth/oauth-provider": "1.6.30",
     "@better-auth/sso": "1.6.30",
-    "@gitbeaker/rest": "^43.8.0",
     "@integrations/registry": "workspace:*",
     "@integrations/sdk": "workspace:*",
     "@modelcontextprotocol/sdk": "1.30.0",
@@ -86,7 +85,7 @@
     "drizzle-kit": "^0.31.10",
     "tsx": "catalog:",
     "typescript": "catalog:",
-    "vitest": "^3.2.6",
+    "vitest": "catalog:",
     "zod4": "catalog:"
   }
 }

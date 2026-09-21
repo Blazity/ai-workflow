@@ -34,7 +34,10 @@ export const REPOSITORY_CATALOG_SOURCES = [
 export const repositoryCatalogSourceSchema = z.enum(REPOSITORY_CATALOG_SOURCES);
 export type RepositoryCatalogSource = z.infer<typeof repositoryCatalogSourceSchema>;
 
-export const repositoryCatalogProviderSchema = z.enum(["github", "gitlab"]);
+export const repositoryCatalogProviderSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z][a-z0-9_-]{2,31}$/);
 export type RepositoryCatalogProvider = z.infer<typeof repositoryCatalogProviderSchema>;
 
 /** Longest text a markdown field may carry. Description and rules are pasted by
@@ -43,8 +46,7 @@ export type RepositoryCatalogProvider = z.infer<typeof repositoryCatalogProvider
 export const REPOSITORY_CATALOG_MARKDOWN_MAX_LENGTH = 20_000;
 export const REPOSITORY_CATALOG_LABEL_MAX_LENGTH = 200;
 export const REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH = 200;
-/** GitHub uses `owner/repo`; GitLab may nest groups, so at least one slash and
- *  no empty segment is the whole rule, exactly as the allowlist reads it. */
+/** At least one slash and no empty segment is the whole path rule. */
 export const REPOSITORY_CATALOG_PATH_PATTERN = /^[^/\s]+(?:\/[^/\s]+)+$/;
 
 /** The closed vocabulary makes a relationship useful to prompts and discovery,

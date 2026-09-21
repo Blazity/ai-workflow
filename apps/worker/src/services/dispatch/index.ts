@@ -9,6 +9,9 @@ export {
   readDispatchCapacity,
 } from "./capacity-snapshot.js";
 export {
+  createConnectedPostgresRunRegistry as createConnectedTriggerRunRegistry,
+} from "../../db/repositories/active-runs.js";
+export {
   dispatchTriggerEvent,
   drainOldestPendingTrigger,
   isConfiguredTriggerRepository,
@@ -43,7 +46,6 @@ export {
 export {
   isGateCheckName,
   normalizeGitHubEvents,
-  normalizeGitLabEvents,
 } from "./trigger-events.js";
 export type {
   TriggerEvent,

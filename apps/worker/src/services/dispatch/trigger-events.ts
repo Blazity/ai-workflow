@@ -1,4 +1,5 @@
 import type { PrTriggerPayload, TriggerEvent } from "@shared/contracts";
+import type { VcsOpaqueHandle } from "@integrations/sdk";
 import { hasAiWorkflowCommentMarker, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
 import { isManagedGateCheckName } from "../../engine/support/workflow-naming.js";
 
@@ -27,6 +28,16 @@ const GITHUB_FAILED_CONCLUSIONS: ReadonlySet<string> = new Set([
   "failure",
   "timed_out",
 ]);
+
+/** Preserve trust for delivery envelopes recorded before the explicit bit existed. */
+export function isLegacyTrustedCheckDelivery(
+  delivery: Pick<TriggerEvent["delivery"], "producer" | "source">,
+): boolean {
+  return (
+    delivery.producer === "github-actions" ||
+    delivery.source === "merge_request_event"
+  );
+}
 
 export function normalizeGitHubEvent(
   eventName: string,
@@ -113,6 +124,7 @@ export function normalizeGitHubEvent(
     return {
       delivery: {
         ...githubDelivery(options.deliveryId, appSlug),
+        trustedByDefault: appSlug === "github-actions",
         // GitHub sends one check_run webhook per failing job, so a commit with
         // five failing jobs fans out into five deliveries. Key on the commit's
         // CI verdict, not the job, so that fan-out coalesces into one run. The
@@ -142,8 +154,7 @@ export function normalizeGitHubEvent(
             name: check.name,
             conclusion: check.conclusion,
             ...(check.details_url ? { detailsUrl: check.details_url } : {}),
-            checkRunId: check.id,
-            appSlug,
+            handle: githubHandle({ id: check.id, owner: appSlug }),
           },
         ],
       },
@@ -259,6 +270,10 @@ export function normalizeGitHubEvent(
   return null;
 }
 
+function githubHandle(value: { id: number; owner: string }): VcsOpaqueHandle {
+  return value as unknown as VcsOpaqueHandle;
+}
+
 /** One provider delivery may satisfy more than one trigger contract (a newly
  * opened non-draft PR is both created and ready). The coordinator consumes
  * these in priority order and lets exactly one eligible definition claim it. */
@@ -286,233 +301,8 @@ export function normalizeGitHubEvents(
   return [primary];
 }
 
-export function normalizeGitLabEvent(
-  eventName: string,
-  body: any,
-  options: {
-    deliveryId?: string;
-    botUsername?: string;
-    reviewStates?: readonly string[];
-    gateCheckNames?: readonly string[];
-    workflowPublishedHeadSha?: string;
-    workflowOwnedPullRequest?: boolean;
-  } = {},
-): TriggerEvent | null {
-  const producer = body?.user?.username ?? body?.user?.name ?? "unknown";
-  if (eventName === "Merge Request Hook") {
-    if (body?.object_kind !== "merge_request") return null;
-    const attrs = body?.object_attributes;
-    const project = body?.project;
-    if (!attrs || !project) return null;
-    const action = attrs.action;
-    if (attrs.system === true) return null;
-    if (action === "merge") {
-      return {
-        delivery: gitLabDelivery(options.deliveryId, producer),
-        triggerType: "trigger_pr_merged",
-        pr: {
-          ...mapGitLabMergeRequest(attrs, project),
-          ...(typeof attrs.merge_commit_sha === "string"
-            ? { mergeSha: attrs.merge_commit_sha }
-            : {}),
-          ...(typeof attrs.merged_at === "string"
-            ? { mergedAt: attrs.merged_at }
-            : typeof attrs.actioned_at === "string"
-              ? { mergedAt: attrs.actioned_at }
-              : typeof attrs.updated_at === "string"
-                ? { mergedAt: attrs.updated_at }
-                : {}),
-        },
-      };
-    }
-    if (action === "update") {
-      const oldHead =
-        typeof body?.oldrev === "string"
-          ? body.oldrev
-          : typeof body?.changes?.last_commit?.previous?.id === "string"
-            ? body.changes.last_commit.previous.id
-            : undefined;
-      const nextHead = attrs.last_commit?.id ?? attrs.sha;
-      if (oldHead && nextHead && oldHead !== nextHead) {
-        const mapped = mapGitLabMergeRequest(attrs, project, body?.user);
-        const workflowPublishedPush =
-          typeof options.workflowPublishedHeadSha === "string" &&
-          options.workflowPublishedHeadSha.length > 0 &&
-          mapped.headSha === options.workflowPublishedHeadSha;
-        // Same backstop as the GitHub path: identity supplements the sha match
-        // instead of being disabled by a stale recorded sha.
-        const botIdentityPush =
-          options.workflowOwnedPullRequest === true &&
-          !workflowPublishedPush &&
-          vcsLoginsMatch(producer, options.botUsername);
-        if (workflowPublishedPush || botIdentityPush) return null;
-        return {
-          delivery: gitLabDelivery(options.deliveryId, producer),
-          triggerType: "trigger_pr_updated",
-          pr: mapped,
-        };
-      }
-      const previousDraft =
-        body?.changes?.draft?.previous ??
-        body?.changes?.work_in_progress?.previous;
-      const currentDraft = Boolean(attrs.draft ?? attrs.work_in_progress);
-      if (previousDraft === true && !currentDraft) {
-        return {
-          delivery: gitLabDelivery(options.deliveryId, producer),
-          triggerType: "trigger_pr_ready",
-          pr: mapGitLabMergeRequest(attrs, project, body?.user),
-        };
-      }
-      return null;
-    }
-    if (action === "reopen" && !(attrs.draft ?? attrs.work_in_progress)) {
-      return {
-        delivery: gitLabDelivery(options.deliveryId, producer),
-        triggerType: "trigger_pr_ready",
-        pr: mapGitLabMergeRequest(attrs, project, body?.user),
-      };
-    }
-    if (action !== "open") return null;
-    return {
-      delivery: gitLabDelivery(options.deliveryId, producer),
-      triggerType: "trigger_pr_created",
-      pr: mapGitLabMergeRequest(attrs, project, body?.user),
-    };
-  }
-
-  if (eventName === "Note Hook") {
-    if (body?.object_kind !== "note") return null;
-    const attrs = body?.object_attributes;
-    const mr = body?.merge_request;
-    const project = body?.project;
-    if (!attrs || !mr || !project) return null;
-    if (
-      vcsLoginsMatch(producer, options.botUsername) ||
-      attrs.action !== "create" ||
-      attrs.noteable_type !== "MergeRequest" ||
-      attrs.system === true ||
-      attrs.internal === true ||
-      attrs.confidential === true ||
-      hasAiWorkflowCommentMarker(attrs.note)
-    ) {
-      return null;
-    }
-    const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
-    if (!allowedStates.includes("commented")) return null;
-    return {
-      delivery: {
-        ...gitLabDelivery(options.deliveryId, producer),
-        ...(typeof attrs.id === "number" ? { semanticKey: `note:${attrs.id}` } : {}),
-      },
-      triggerType: "trigger_pr_review",
-      pr: {
-        ...mapGitLabMergeRequest(mr, project),
-        review: {
-          state: "commented",
-          author: producer,
-          body: typeof attrs.note === "string" ? attrs.note : "",
-        },
-      },
-    };
-  }
-
-  if (eventName === "Pipeline Hook") {
-    if (body?.object_kind !== "pipeline") return null;
-    const attrs = body?.object_attributes;
-    const mr = body?.merge_request;
-    const project = body?.project;
-    if (!attrs || !mr || !project) return null;
-    if (attrs.status !== "failed") return null;
-    const failedBuilds = Array.isArray(body?.builds)
-      ? body.builds.filter(
-          (build: any) =>
-            build?.status === "failed" &&
-            !isGateCheckName(build?.name, options.gateCheckNames ?? []),
-        )
-      : [];
-    if (
-      Array.isArray(body?.builds) &&
-      body.builds.some((build: any) => build?.status === "failed") &&
-      failedBuilds.length === 0
-    ) {
-      return null;
-    }
-    const failedChecks =
-      failedBuilds.length > 0
-        ? failedBuilds.map((build: any) => ({
-            name: build.name,
-            conclusion: build.status,
-          }))
-        : [{ name: "pipeline", conclusion: "failed" }];
-    return {
-      // The authenticated Pipeline Hook is the GitLab CI producer. body.user
-      // is merely the human/bot that initiated it and must not define trust.
-      delivery: {
-        ...gitLabDelivery(options.deliveryId, "gitlab-ci"),
-        ...(typeof attrs.source === "string" ? { source: attrs.source } : {}),
-      },
-      triggerType: "trigger_pr_checks_failed",
-      pr: {
-        provider: "gitlab",
-        repoPath: project.path_with_namespace ?? "",
-        ...(project.id !== undefined ? { providerProjectId: project.id } : {}),
-        prNumber: mr.iid,
-        prUrl: mr.url ?? "",
-        headRef: mr.source_branch ?? "",
-        // Pipeline Hook merge_request objects do not carry a source-head SHA.
-        // Dispatch binds it from the authoritative MR read before acceptance.
-        headSha: "",
-        baseRef: mr.target_branch ?? "",
-        title: mr.title ?? "",
-        author: body?.user?.username ?? body?.user?.name ?? "unknown",
-        isDraft: false,
-        ...(typeof attrs.id === "number" ? { pipelineId: attrs.id } : {}),
-        failedChecks,
-      },
-    };
-  }
-
-  return null;
-}
-
-export function normalizeGitLabEvents(
-  eventName: string,
-  body: any,
-  options: Parameters<typeof normalizeGitLabEvent>[2] = {},
-): TriggerEvent[] {
-  const primary = normalizeGitLabEvent(eventName, body, options);
-  if (!primary) return [];
-  const attrs = body?.object_attributes;
-  if (
-    eventName === "Merge Request Hook" &&
-    attrs?.action === "open" &&
-    !(attrs?.draft ?? attrs?.work_in_progress) &&
-    primary.triggerType === "trigger_pr_created"
-  ) {
-    return [{ ...primary, triggerType: "trigger_pr_ready" }, primary];
-  }
-  if (
-    eventName === "Merge Request Hook" &&
-    attrs?.action === "update" &&
-    primary.triggerType === "trigger_pr_updated"
-  ) {
-    const previousDraft =
-      body?.changes?.draft?.previous ??
-      body?.changes?.work_in_progress?.previous;
-    const currentDraft = Boolean(attrs?.draft ?? attrs?.work_in_progress);
-    if (previousDraft === true && !currentDraft) {
-      return [{ ...primary, triggerType: "trigger_pr_ready" }, primary];
-    }
-  }
-  return [primary];
-}
-
 function githubDelivery(deliveryId: string | undefined, producer: string | undefined) {
   return { provider: "github" as const, producer: producer ?? "unknown", deliveryId: deliveryId ?? "" };
-}
-
-function gitLabDelivery(deliveryId: string | undefined, producer: string) {
-  return { provider: "gitlab" as const, producer, deliveryId: deliveryId ?? "" };
 }
 
 function mapGitHubPullRequest(pr: any, repo: any): PrTriggerPayload {
@@ -530,42 +320,6 @@ function mapGitHubPullRequest(pr: any, repo: any): PrTriggerPayload {
   };
 }
 
-function mapGitLabMergeRequest(attrs: any, project: any, fallbackAuthor?: any): PrTriggerPayload {
-  return {
-    provider: "gitlab",
-    repoPath: project.path_with_namespace ?? "",
-    ...(project.id !== undefined ? { providerProjectId: project.id } : {}),
-    prNumber: attrs.iid,
-    prUrl: gitLabMergeRequestUrl(attrs, project),
-    headRef: attrs.source_branch ?? "",
-    headSha: attrs.last_commit?.id ?? attrs.diff_head_sha ?? "",
-    baseRef: attrs.target_branch ?? "",
-    title: attrs.title ?? "",
-    author: gitLabMergeRequestAuthor(attrs, fallbackAuthor),
-    isDraft: isGitLabDraft(attrs),
-  };
-}
-
-function gitLabMergeRequestUrl(attrs: any, project: any): string {
-  const direct = attrs.url ?? attrs.web_url;
-  if (typeof direct === "string" && direct.trim()) return direct;
-  const projectUrl = typeof project.web_url === "string" ? project.web_url.replace(/\/+$/, "") : "";
-  return projectUrl && attrs.iid != null
-    ? `${projectUrl}/-/merge_requests/${attrs.iid}`
-    : "";
-}
-
-function gitLabMergeRequestAuthor(attrs: any, fallback?: any): string {
-  const author = attrs.author;
-  if (typeof author?.username === "string" && author.username) return author.username;
-  if (typeof author?.name === "string" && author.name) return author.name;
-  if (typeof attrs.author_username === "string" && attrs.author_username) {
-    return attrs.author_username;
-  }
-  if (attrs.author_id != null) return String(attrs.author_id);
-  return fallback?.username ?? fallback?.name ?? "unknown";
-}
-
 export function isGateCheckName(
   name: string,
   gateCheckNames: readonly string[],
@@ -573,12 +327,4 @@ export function isGateCheckName(
   if (typeof name !== "string") return false;
   if (gateCheckNames.includes(name)) return true;
   return isManagedGateCheckName(name);
-}
-
-function isGitLabDraft(attrs: any): boolean {
-  return (
-    attrs.draft === true ||
-    attrs.work_in_progress === true ||
-    /^(draft|wip):/i.test(attrs.title ?? "")
-  );
 }

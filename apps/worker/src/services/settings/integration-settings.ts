@@ -18,7 +18,7 @@ import {
 } from "../../infra/vcs-config.js";
 
 /** Provider ids that carry a signed webhook, as system health observes them. */
-export type WebhookProviderId = "github" | "gitlab" | "jira" | "email";
+export type WebhookProviderId = "github" | "jira" | "email";
 
 /** The issue-tracker columns and project the ticket triggers are scoped to.
  *  The project key and the transition id are tracker wiring, not settings.
@@ -74,14 +74,6 @@ export function configuredVcsProviders(): VcsProviderConfig[] {
   return getConfiguredVcsProviders();
 }
 
-/** GitLab webhook token plus the single project legacy deliveries name. */
-export function gitlabWebhookSettings(): { secret?: string; projectId?: string } {
-  return {
-    secret: env.GITLAB_WEBHOOK_SECRET,
-    projectId: env.GITLAB_PROJECT_ID,
-  };
-}
-
 /** Svix signing secret for Resend delivery events. */
 export function resendWebhookSecret(): string | undefined {
   return env.RESEND_WEBHOOK_SECRET;
@@ -104,8 +96,6 @@ export function providerWebhookSecret(
   switch (integrationId) {
     case "github":
       return env.GITHUB_WEBHOOK_SECRET;
-    case "gitlab":
-      return env.GITLAB_WEBHOOK_SECRET;
     case "jira":
       return env.JIRA_WEBHOOK_SECRET;
     case "email":

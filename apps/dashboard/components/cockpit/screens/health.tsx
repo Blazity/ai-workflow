@@ -87,7 +87,6 @@ const DESCRIPTIONS: Record<string, string> = {
   database: "Stores workflow state, ownership, traces, and dashboard data.",
   jira: "Authenticates the account, checks the project, and verifies the webhook registration.",
   github: "Checks App auth, repository access, webhook configuration, and the latest delivery separately.",
-  gitlab: "Checks API access, projects, and sends a real test delivery through the project webhook.",
   agent: "Authenticates the active provider and checks the configured model when possible.",
   "dashboard-auth": "Presence-checks auth settings; this request already proves session enforcement.",
   sso: "Checks OIDC discovery; client credentials are presence-checked.",
@@ -162,7 +161,7 @@ const STALE_SCAN_AFTER_HOURS = 24;
 /**
  * Nothing is fetched on mount and nothing polls: the only request this screen
  * ever makes is the POST behind the Scan button, and the worker runs every
- * probe (including the GitLab test delivery) inside that one request.
+ * probe inside that one request.
  */
 export function HealthScreen({
   initialData = null,

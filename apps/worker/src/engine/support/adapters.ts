@@ -44,6 +44,7 @@ function refuseWithoutRepository(): never {
 }
 
 const vcsWithoutRepository: VCSAdapter = {
+  sameHandle: (left, right) => left === right,
   createBranchIfMissing: refuseWithoutRepository,
   resetOwnedBranch: refuseWithoutRepository,
   createPR: refuseWithoutRepository,
@@ -60,7 +61,6 @@ const vcsWithoutRepository: VCSAdapter = {
   // Present and refusing rather than absent: a caller that checks for this
   // optional method would otherwise quietly take its "provider cannot do it"
   // path and never learn that it forgot to name a repository.
-  getLatestCheckRuns: refuseWithoutRepository,
   listReviewThreads: refuseWithoutRepository,
   settleReviewThread: refuseWithoutRepository,
   postRunFailureNote: refuseWithoutRepository,
@@ -91,7 +91,7 @@ export function createAdapters(
    * the run; omitted, it follows the deployment as it is now, which is what a
    * notification wants.
    */
-  messagingPins?: readonly IntegrationConnectionPin[],
+  integrationPins?: readonly IntegrationConnectionPin[],
 ): Adapters {
   const runRegistry = createConnectedPostgresRunRegistry();
   let vcs: VCSAdapter | undefined;
@@ -99,7 +99,7 @@ export function createAdapters(
   // call rather than here: disabling an integration is the kill switch an admin
   // reaches for, and an adapter built once would keep posting for as long as
   // this process lived.
-  const messaging = messagingSender(messagingPins);
+  const messaging = messagingSender(integrationPins);
   const adapters = {
     issueTracker: new JiraAdapter({
       baseUrl: env.JIRA_BASE_URL,
@@ -121,6 +121,7 @@ export function createAdapters(
         provider: target.provider,
         repoPath: target.repoPath,
         baseBranch: target.baseBranch,
+        integrationPins,
       });
       return vcs;
     },

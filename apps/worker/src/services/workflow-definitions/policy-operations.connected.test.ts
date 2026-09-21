@@ -49,7 +49,7 @@ vi.mock("./connected-policy-dependencies.js", () => ({
   // a dependency, so this file says "no integration here" as a value instead of
   // needing a DATABASE_URL to find out.
   connectedDefinitionBlockContracts: async () =>
-    blockContractsFor(undefined, testDeploymentIntegrations()),
+    blockContractsFor(undefined, testDeploymentIntegrations([], ["vcs"])),
   dispatchConnectedDefinitionManual: vi.fn(),
   preflightConnectedDefinitionManual: vi.fn(),
   previewConnectedDefinitionPrompt: vi.fn(),

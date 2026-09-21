@@ -29,6 +29,7 @@ import {
 import { listCachedRepositoryDirectory } from "../repository-discovery/index.js";
 import { requireCatalogManager, type RepositoryCatalogActor } from "./authoring.js";
 import { loadRepositoryCatalogEntries } from "./store.js";
+import { assertVcsProviderAvailable } from "./provider-validation.js";
 
 /**
  * What the installation exposes, marked with what the catalog already holds.
@@ -99,14 +100,6 @@ export async function commitRepositoryImport(input: {
   request: RepositoryCatalogImportRequest;
 }): Promise<RepositoryCatalogImportResponse> {
   requireCatalogManager(input.actor);
-  const [directory, before] = await Promise.all([
-    listCachedRepositoryDirectory(),
-    // Presence again, and here it decides `alreadyPresent`: a disabled row must
-    // report as already present rather than be re-imported, which is what keeps
-    // the insert from re-enabling a repository somebody switched off.
-    loadRepositoryCatalogEntries(),
-  ]);
-
   const requested: string[] = [];
   const seen = new Set<string>();
   for (const key of input.request.repositoryKeys) {
@@ -115,6 +108,17 @@ export async function commitRepositoryImport(input: {
     seen.add(normalized);
     requested.push(normalized);
   }
+  for (const provider of new Set(requested.map((key) => key.split(":", 1)[0]!))) {
+    assertVcsProviderAvailable(provider, "import");
+  }
+
+  const [directory, before] = await Promise.all([
+    listCachedRepositoryDirectory(),
+    // Presence again, and here it decides `alreadyPresent`: a disabled row must
+    // report as already present rather than be re-imported, which is what keeps
+    // the insert from re-enabling a repository somebody switched off.
+    loadRepositoryCatalogEntries(),
+  ]);
 
   // Refused before anything is written, and for the whole call rather than per
   // key: a partial import against a provider nobody could list would leave the

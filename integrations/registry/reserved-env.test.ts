@@ -34,7 +34,6 @@ const NAME = "apps/worker/src/infra/runtime-env.ts";
 // CHAT_SDK_ and SLACK_ left this table in S9: the worker no longer declares
 // them, and `integrations/slack/manifest.ts` does.
 const PROVIDER_PREFIXES: ReadonlyArray<readonly [string, string]> = [
-  ["GITLAB_", "S10, GitLab"],
   ["GITHUB_", "S11, GitHub"],
   ["JIRA_", "S12, Jira"],
 ];

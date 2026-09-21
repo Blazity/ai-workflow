@@ -1,24 +1,29 @@
 import { createHash } from "node:crypto";
-import type { ReviewThreadFeed, ReviewThreadSource, VCSAdapter } from "@integrations/sdk";
+import type {
+  ReviewThreadFeed,
+  ReviewThreadSource,
+  VCSAdapter,
+  VcsOpaqueHandle,
+} from "@integrations/sdk";
 
 // The VCS port (VCSAdapter and every type it names, plus the two review ledger
 // limits an adapter applies) lives in @integrations/sdk (ADR-010), where an
 // integration can implement it. Every name core imported from here is still
 // exported from here, with the same kind, so no caller changed.
 //
-// What stays is not the port: the optional provider extensions below, whose
-// GateStatusRef still names GitHub and GitLab, the review ledger's engine
-// types, and the finding digest, which needs node:crypto and so cannot live in
-// the SDK's browser-safe entry.
+// What stays is not the port: optional core extensions below, review ledger
+// engine types, and the finding digest, which needs node:crypto and so cannot
+// live in the SDK's browser-safe entry.
 export {
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
-  type LatestCheckRun,
   type PostRunFailureNoteInput,
   type PRComment,
   type PullRequest,
   type PullRequestHead,
+  type PullRequestHeadChecks,
+  type PullRequestFailedCheck,
   type ReviewThread,
   type ReviewThreadFeed,
   type ReviewThreadNote,
@@ -28,6 +33,7 @@ export {
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
   type VCSAdapter,
+  type VcsOpaqueHandle,
 } from "@integrations/sdk";
 
 export interface ManualDispatchPullRequestSnapshot {
@@ -42,14 +48,13 @@ export interface ManualDispatchPullRequestSnapshot {
   state: "open" | "closed" | "merged";
   mergeSha?: string;
   mergedAt?: string;
-  pipelineId?: number;
-  pipelineSource?: string;
   failedChecks: Array<{
     name: string;
     conclusion: string;
     detailsUrl?: string;
-    checkRunId?: number;
-    appSlug?: string;
+    handle?: VcsOpaqueHandle;
+    producer: string;
+    source?: string;
   }>;
   reviews: Array<{
     state: "changes_requested" | "commented";
@@ -201,9 +206,8 @@ export interface RichGateStatusUpdate extends GateStatusUpdate {
   annotations?: CheckRunAnnotation[];
 }
 
-export type GateStatusRef =
-  | { provider: "github"; id: number }
-  | { provider: "gitlab"; name: string; headSha: string };
+/** Opaque provider handle. Core stores it and hands it back without parsing. */
+export type GateStatusRef = VcsOpaqueHandle;
 
 /**
  * Capability interface, *not* extended onto VCSAdapter, because GitLab

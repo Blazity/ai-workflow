@@ -1,5 +1,5 @@
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
-import type { RunRepositoryAccess } from "@shared/contracts";
+import type { IntegrationConnectionPin, RunRepositoryAccess } from "@shared/contracts";
 import type { PullRequestHead } from "../../adapters/vcs/types.js";
 import type { HumanDecision } from "../support/human-decisions-memory.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
@@ -79,6 +79,7 @@ export async function finalizeWorkspacePublication(input: {
   workspaceManifest: WorkspaceManifest;
   /** Which repositories this run may publish to, frozen at its start. */
   repositoryAccess: RunRepositoryAccess;
+  integrationPins?: readonly IntegrationConnectionPin[];
   /** The run's job timeout, from the settings it started with. */
   jobTimeoutMs: number;
   prePrGate?: WorkspaceGate | null;
@@ -120,7 +121,10 @@ export async function finalizeWorkspacePublication(input: {
     try {
       assertPublishableSourcePullRequest(
         input.sourcePullRequest,
-        await verifySourcePullRequestStep(input.sourcePullRequest),
+        await verifySourcePullRequestStep({
+          ...input.sourcePullRequest,
+          integrationPins: input.integrationPins,
+        }),
       );
     } catch (error) {
       if (isRunControlError(error)) throw error;
@@ -137,6 +141,7 @@ export async function finalizeWorkspacePublication(input: {
       ownerToken: input.ownerToken,
       runId: input.runId,
       repositoryAccess: input.repositoryAccess,
+      integrationPins: input.integrationPins,
       jobTimeoutMs: input.jobTimeoutMs,
       ...(input.sourcePullRequest ? { sourcePullRequest: input.sourcePullRequest } : {}),
       ...(input.reviewLedger ? { reviewLedger: input.reviewLedger } : {}),
@@ -173,6 +178,7 @@ export async function openPullRequestsForPublication(input: {
   body: string;
   /** Which repositories this run may publish to, frozen at its start. */
   repositoryAccess: RunRepositoryAccess;
+  integrationPins?: readonly IntegrationConnectionPin[];
   sourcePullRequest?: SourcePullRequestIdentity;
 }): Promise<WorkspacePublicationResult> {
   if (input.repositories.length === 0) {
@@ -186,7 +192,10 @@ export async function openPullRequestsForPublication(input: {
     try {
       assertOpenSourcePullRequest(
         expectedSource,
-        await verifySourcePullRequestStep(expectedSource),
+        await verifySourcePullRequestStep({
+          ...expectedSource,
+          integrationPins: input.integrationPins,
+        }),
       );
     } catch (error) {
       if (isRunControlError(error)) throw error;
@@ -205,6 +214,7 @@ export async function openPullRequestsForPublication(input: {
       let pr = await findWorkflowOwnedPullRequestForBranch({
         branchName: repository.branchName,
         repository: selected,
+        integrationPins: input.integrationPins,
       });
 
       if (isSourceRepository && (!pr || pr.id !== expectedSource!.prId)) {
@@ -216,7 +226,10 @@ export async function openPullRequestsForPublication(input: {
 
       assertFinalizedBranchHead(
         repository,
-        await verifyFinalizedBranchHeadStep(repository),
+        await verifyFinalizedBranchHeadStep({
+          repository,
+          integrationPins: input.integrationPins,
+        }),
       );
 
       if (!pr) {
@@ -242,16 +255,21 @@ export async function openPullRequestsForPublication(input: {
             runId: input.runId,
           },
           repositoryAccess: input.repositoryAccess,
+          integrationPins: input.integrationPins,
         });
       }
 
       const currentPr = isSourceRepository
-        ? await verifySourcePullRequestStep(expectedSource!)
+        ? await verifySourcePullRequestStep({
+            ...expectedSource!,
+            integrationPins: input.integrationPins,
+          })
         : await verifyPullRequestStep({
             provider: repository.provider,
             repoPath: repository.repoPath,
             prId: pr.id,
             targetBranch: repository.defaultBranch,
+            integrationPins: input.integrationPins,
           });
       assertOpenPublicationPullRequest(
         {
@@ -298,7 +316,9 @@ export async function openPullRequestsForPublication(input: {
 }
 
 async function verifySourcePullRequestStep(
-  input: SourcePullRequestIdentity,
+  input: SourcePullRequestIdentity & {
+    integrationPins?: readonly IntegrationConnectionPin[];
+  },
 ): Promise<PullRequestHead> {
   "use step";
   const { createRepositoryVcsRuntime } = await import("../support/vcs-runtime.js");
@@ -306,6 +326,7 @@ async function verifySourcePullRequestStep(
     provider: input.provider,
     repoPath: input.repoPath,
     baseBranch: input.baseRef,
+    integrationPins: input.integrationPins,
   }).vcs.getPRHead(input.prId);
 }
 verifySourcePullRequestStep.maxRetries = 3;
@@ -315,6 +336,7 @@ async function verifyPullRequestStep(input: {
   repoPath: string;
   prId: number;
   targetBranch: string;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }): Promise<PullRequestHead> {
   "use step";
   const { createRepositoryVcsRuntime } = await import("../support/vcs-runtime.js");
@@ -322,22 +344,27 @@ async function verifyPullRequestStep(input: {
     provider: input.provider,
     repoPath: input.repoPath,
     baseBranch: input.targetBranch,
+    integrationPins: input.integrationPins,
   }).vcs.getPRHead(input.prId);
 }
 verifyPullRequestStep.maxRetries = 3;
 
-async function verifyFinalizedBranchHeadStep(repository: FinalizedBranch): Promise<string> {
+async function verifyFinalizedBranchHeadStep(input: {
+  repository: FinalizedBranch;
+  integrationPins?: readonly IntegrationConnectionPin[];
+}): Promise<string> {
   "use step";
   const { createRepositoryVcsRuntime } = await import("../support/vcs-runtime.js");
   // Publication pushed this branch moments ago, so tolerate a provider ref API
   // that has not caught up with its own write instead of spending a step retry.
   return readBranchShaAfterWrite(
     createRepositoryVcsRuntime({
-      provider: repository.provider,
-      repoPath: repository.repoPath,
-      baseBranch: repository.defaultBranch,
+      provider: input.repository.provider,
+      repoPath: input.repository.repoPath,
+      baseBranch: input.repository.defaultBranch,
+      integrationPins: input.integrationPins,
     }).vcs,
-    repository.branchName,
+    input.repository.branchName,
   );
 }
 verifyFinalizedBranchHeadStep.maxRetries = 3;

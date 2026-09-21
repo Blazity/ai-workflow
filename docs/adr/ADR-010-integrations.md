@@ -291,11 +291,9 @@ integration package depends on it.
   `GITHUB_APP_ID` (`apps/worker/src/infra/runtime-env.ts:34`); `default`
   keeps `GITLAB_HOST` defaulting to `https://gitlab.com` (`:44`) and the Slack
   bot name (`:50`). There are no environment aliases:
-  `VCS_BOT_LOGIN` is read by both VCS providers and applies only when one
-  provider is configured
-  (`apps/worker/src/adapters/vcs/vcs-bot-identity.ts:11-23`), which is a rule
-  across integrations, not a property of one field. S10 keeps it in core or
-  retires it.
+  `VCS_BOT_LOGIN` is exposed to each VCS connection but applies only when one
+  provider is configured. S10 resolves that count at capability use and strips
+  the fallback in a mixed-provider deployment.
 - **Identity rules.** An id is 3 to 32 lowercase letters and digits, starting
   with a letter, and not a word core already uses (`RESERVED_INTEGRATION_IDS`:
   capability ids, the core routes `/webhooks/custom` and `/webhooks/resend`,
@@ -456,11 +454,8 @@ does not have to call them additive.
 | `searchTicketSummaries(jql, ...)` takes a JQL string; `searchTickets(query)` is JQL in practice | `issue-tracker.ts` | S12 |
 | `IssueTrackerTransitionTarget.transitionId` is a Jira transition | `issue-tracker.ts` | S12 |
 | `downloadAttachment` returns a Node `Buffer`, a Node type in a browser-safe package | `issue-tracker.ts` | S12 |
-| `PullRequestHead.headPipeline*` are GitLab's, `latestCheckRuns` and `LatestCheckRun.appSlug` GitHub's; `getLatestCheckRuns` is GitHub only | `vcs.ts` | S10, S11 |
-| Comments describe GitHub and GitLab ids (`PRRT_` node ids, discussions) | `vcs.ts` | S10, S11 |
-| `TicketEvent.pr_ready` carries `RunPullRequest`, whose `provider` is `github | gitlab` in `@shared/contracts`, so a third VCS cannot be reported yet | `messaging.ts` | S10 (decision 19) |
+| Comments still give examples from the two current providers (`PRRT_` node ids and discussions) | `vcs.ts` | S11 |
 | `MessagingSender.notifyForTicket` takes a ticket key and `TicketEvent` has a `note` kind: both are shaped by a run having one subject. A future caller that is not a run would need a subject of its own. Nothing asks for it yet | `messaging.ts` | when something asks |
-| `GateStatusRef` names GitHub and GitLab, which is why the gate status extensions have not moved | worker `vcs/types.ts` | S10, S11 |
 | `GITHUB_APP_PRIVATE_KEY` is base64 in the environment (`adapters/vcs/github-auth.ts:20-21`) while `multiline` invites a raw PEM in the dashboard, and the integration cannot tell the two apart. Proposal: a `pem` format core normalises, so both forms reach the integration the same way | `manifest.ts` | S11 |
 | `IntegrationRunIdentity` gained two required fields in S8 (`subjectKey`, `state`). Additive for an integration, which only reads it; anything that builds one (core, a test double, a host other than ours) stops compiling until it supplies both. Proposal: the next field on it is optional, or this record says why not | `context.ts` | recorded in S8 |
 | `IntegrationRuntimeDefinition` and `IntegrationRuntime` went from interfaces to type aliases over a conditional type in S8, so that `beginRun` is required exactly when `runState` is declared. An interface can no longer `extends` either for a generic manifest, and a class cannot `implements` one; nothing in this repository did, a provider package outside it that did would stop compiling. Proposal: keep the aliases (the drift they prevent is the costlier mistake) and revisit if a provider needs to extend one | `runtime.ts` | recorded in S8 |
@@ -553,8 +548,8 @@ integration package declares the dependency itself; an integration's
 | `clampBothEnds` from `@shared/workflow-graph` | `gitlab.ts:34` | not importable by an integration (decision 16); S10 copies it or moves it to `@shared/contracts` |
 | Logger | `gitlab.ts:35` | `ctx.log` |
 | `GITLAB_TOKEN`, `GITLAB_HOST` (default `https://gitlab.com`) | `runtime-env.ts:41-44`, `vcs-config.ts:55-60` | connection fields (`secret`; `url` with `default`) |
-| `GITLAB_PROJECT_ID` (legacy default repository) | `vcs-config.ts:60` | S10 decides, as for GitHub |
-| `GITLAB_BOT_LOGIN` with the `VCS_BOT_LOGIN` fallback | `vcs-config.ts:75` | as for GitHub |
+| `GITLAB_PROJECT_ID` (legacy default repository) | `integrations/gitlab/manifest.ts` | Kept as `legacyProjectId`; retire after R1 confirms catalog activation on every deployment and a separate compatibility removal is approved |
+| `GITLAB_BOT_LOGIN` with the `VCS_BOT_LOGIN` fallback | `integrations/gitlab/manifest.ts` | Provider field plus single-provider fallback; retire `VCS_BOT_LOGIN` in S11 after both VCS integrations own bot identity |
 | `GITLAB_WEBHOOK_SECRET` | `integration-settings.ts:78-81` | secret connection field |
 | Profile source | `adapters/vcs/gitlab/profile-source.ts:21-33` | S10, additively |
 
@@ -775,7 +770,8 @@ id, a site URL) and mark the secret only when the provider offers nothing else.
 
 **Where the pin lives is S4's call.** It is a value, not a row, so the cheapest
 home is the run's own workflow state, where replay restores it without a read.
-S2 adds no column to any run table.
+S2 adds no column to any run table. (S10 added one; see "The pin became a column
+too, and why S2's reasoning was incomplete".)
 
 A second fingerprint, over every value including secrets, decides whether the
 last test verdict still applies. The two questions differ: a rotated token is
@@ -972,7 +968,9 @@ on `LoadedWorkflowPlan`, so the Workflow DevKit restores it from that step's
 recorded result on replay without reading the database again. A run suspended
 across a deploy comes back holding the connection it started with and learns at
 its next use that the connection moved. A column would have said the same and
-cost a migration; S2 left the choice here for that reason.
+cost a migration; S2 left the choice here for that reason. S10 reversed that
+half of it and added the column as well, for a reader that is not the run: see
+"The pin became a column too, and why S2's reasoning was incomplete".
 
 The comparison only means anything because the pin is recorded: recomputing it
 from live state on both sides would always agree and `reconfigured` could never
@@ -2330,6 +2328,37 @@ every run in flight, which is a real cost for a much smaller guarantee. If a
 later stage gives that step a reason to change anyway, this is the moment to
 reconsider.
 
+### S10 makes version control a per-repository capability
+
+S10 keeps provider ids as permanent stored values and opens the type to every
+id the generated registry supplies. A repository selects its provider; there
+is no deployment-wide active VCS choice. Core resolves that repository through
+the `vcs` capability inside the step making the call, where the run's S9
+connection pin can be compared with current deployment settings.
+
+The shared head contract now carries only a green, red or running check state
+and generic failed checks. Each integration maps its native CI model onto it.
+Gate status references are opaque records minted and interpreted by the same
+provider. Core stores and returns them without parsing. Stored check-trigger
+definitions are upgraded on read from the two former producer filters into
+`trustedProducers`; their rows are not rewritten.
+
+The GitLab package owns its adapter, repository listing and profile read,
+health checks, webhook verification and normalization. The generic route keeps
+`/webhooks/gitlab` stable and core dispatches only normalized events. Existing
+environment variables remain connection fields. `GITLAB_PROJECT_ID` continues
+to select one legacy project. It may be removed only after R1 confirms every
+deployment has activated the repository catalog and a separate compatibility
+change is approved. `VCS_BOT_LOGIN` applies only when exactly one VCS provider
+is configured and retires in S11, after the second provider moves into its
+integration and both provider-specific bot fields are available.
+
+Decision 19 is implemented as a constraint-only migration. The repository and
+workflow-owned-branch provider checks are dropped without rewriting rows.
+Import, save, enable and catalog activation validate provider ids against the
+registry first, so an unsupported id produces an actionable sentence instead
+of a database error.
+
 ### What the research path does when nobody can search
 
 `searchMessages` is optional on the port and total on the sender: a provider
@@ -2416,6 +2445,55 @@ shape, and its inner reads changed.
 That is a smaller drain than S8's, which is total for this branch anyway. The
 branch's drain is run once, before it merges, under the protocol in
 [the integrations plan](../plans/2026-09-18-integrations.md).
+
+### The pin became a column too, and why S2's reasoning was incomplete
+
+S2 decided the pin lives in the run's own workflow state and that no run table
+gets a column, because replay restores it without a read and a column would say
+the same thing for the price of a migration. S10 reverses the second half of
+that: migration `0073_run_integration_pins` adds a nullable jsonb
+`integration_pins` to `workflow_runs`.
+
+The hole in the original reasoning was an assumption nobody stated: that every
+reader of a pin is the run. Reconciliation is not. It is a cron pass over rows
+that closes the PR checks a dead run left open
+(`engine/runtime/pr-external-resources.ts`). There is no workflow state to
+replay, because the run it acts for is over, and it still has to talk to a
+provider, because closing a check means writing a verdict onto somebody's
+merge request. Without the column it wrote that verdict through whichever
+provider was connected at reconcile time. Once GitLab is a connection an admin
+can edit rather than an environment variable a deploy sets, "whichever provider
+is connected now" is a thing that changes while checks are still open, which is
+what made the cost real enough to pay the migration for.
+
+What did not change: workflow state is still where a live run reads its pin, so
+no step's recorded input or result moved. The column is a second copy for
+readers outside the run, written once (`coalesce(existing, excluded)` in
+`db/repositories/runs/telemetry.ts`) so a replay cannot rewrite what the run
+started with.
+
+Nothing is backfilled, so every run row written before this deploy carries NULL
+and its pins cannot be recovered. That is safe here only because this branch
+merges after a total drain, and the code says so rather than leaving it to be
+reconstructed: `RunIntegrationPins` in `engine/support/vcs-runtime.ts` names the
+absence and the reconciler logs
+`pr_check_reconcile_without_integration_pins` before proceeding for such a run.
+That log line is the check on the drain: if it appears in production after the
+drain, the drain did not hold.
+
+The cheaper alternative, refusing to reconcile a check for a run with no pins,
+was rejected: it leaves a pull request with a check stuck pending forever, which
+is a worse outcome for the person waiting on it than closing it through the
+provider they are almost certainly still using.
+
+### One GitLab host per deployment
+
+The connection model stores one active connection per integration, so this
+stage supports one GitLab host per deployment. Repository identity remains the
+pair `(provider, path)` and does not include a host. Changing the GitLab host
+therefore retargets existing catalog rows with the same paths instead of
+creating a second namespace. Multiple GitLab hosts require a new connection
+identity in repository keys and are outside this decision.
 
 ## Change log
 

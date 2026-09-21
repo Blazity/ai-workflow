@@ -47,6 +47,13 @@ export {
 
 export { buildIntegrationContext } from "./context.js";
 
+export async function getVcsBotLogin(
+  kind: import("@shared/contracts").VcsProviderKind,
+): Promise<string | undefined> {
+  const resolver = await import("./vcs-bot-login.js");
+  return resolver.getVcsBotLogin(kind);
+}
+
 export {
   databaseEnvironment,
   decideIntegrationWriteAccess,

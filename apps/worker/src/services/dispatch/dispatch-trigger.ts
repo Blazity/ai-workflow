@@ -11,10 +11,7 @@ import {
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
-import type {
-  LatestCheckRun,
-  PullRequestHead,
-} from "../../adapters/vcs/types.js";
+import type { PullRequestHead, VcsOpaqueHandle } from "../../adapters/vcs/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
 import { agentWorkflow } from "../../engine/index.js";
 import {
@@ -45,6 +42,7 @@ import {
 } from "./pr-autofix-cap.js";
 import { announcePrAutofixExhaustion } from "./pr-autofix-exhaustion.js";
 import { isRepositoryDispatchable } from "./repo-allowlist.js";
+import { isLegacyTrustedCheckDelivery } from "./trigger-events.js";
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey } from "../../engine/support/subject-key.js";
 import { cancelSubjectRun } from "../run-lifecycle/index.js";
@@ -78,7 +76,7 @@ import {
   bindCurrentPullRequest,
   readProviderCurrentPullRequest,
 } from "../../engine/support/trigger-current-pull-request.js";
-import { normalizeVcsLogin, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
+import { vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
 import {
   readConnectedWorkflowDefinitionVersion,
   readWorkflowDefinitionVersion,
@@ -109,7 +107,10 @@ export interface DispatchTriggerDeps {
   issueTracker?: IssueTrackerAdapter;
   getCurrentHead?: (pr: PrTriggerPayload) => Promise<string>;
   getCurrentPullRequest?: (pr: PrTriggerPayload) => Promise<PullRequestHead>;
-  getLatestCheckRuns?: (pr: PrTriggerPayload) => Promise<LatestCheckRun[]>;
+  sameHandle?: (
+    left: VcsOpaqueHandle | undefined,
+    right: VcsOpaqueHandle | undefined,
+  ) => boolean;
   isRepositoryConfigured?: (pr: PrTriggerPayload) => Promise<boolean>;
   /** Failure-injection seam; production uses deletePendingTrigger. */
   deletePending?: typeof deletePendingTrigger;
@@ -130,7 +131,7 @@ function readDefinitionVersion(db: Db | undefined, definitionId: number, version
 
 function readTriggerDelivery(
   db: Db | undefined,
-  provider: "github" | "gitlab",
+  provider: string,
   deliveryId: string,
 ) {
   return db
@@ -205,14 +206,16 @@ export async function resolveEnabledReviewStates(
   botLogin: string | undefined,
 ): Promise<string[]> {
   const enabled = await readEnabledDefinition(db, "trigger_pr_review");
-  if (!enabled?.current) return provider === "github" ? ["changes_requested"] : [];
+  if (!enabled?.current) return ["changes_requested"];
   const params = triggerNodeParams(
     runnableDefinitionOf(enabled.current),
     "trigger_pr_review",
   );
-  const providers = Array.isArray(params.providers) ? params.providers : ["github"];
-  if (!providers.includes(provider)) return [];
-  return selectedReviewStates(params, provider, botLogin);
+  const providers = Array.isArray(params.providers) ? params.providers : [];
+  if (providers.length > 0 && !providers.includes(provider)) return [];
+  return selectedReviewStates(params).filter(
+    (state) => state !== "commented" || Boolean(botLogin),
+  );
 }
 
 export async function dispatchTriggerEvent(
@@ -312,7 +315,13 @@ export async function dispatchTriggerEvent(
       }
     }
 
-    const eligibleEvent = selectEligibleEvent(event, params);
+    const eligibleEvent = selectEligibleEvent(
+      event,
+      params,
+      event.triggerType === "trigger_pr_review"
+        ? await getVcsBotLogin(event.pr.provider)
+        : undefined,
+    );
     if (!eligibleEvent) return { result: "ignored_untrusted_event" };
 
     const repositoryScope = await readRepositoryScope(eligibleEvent.pr, deps);
@@ -325,7 +334,11 @@ export async function dispatchTriggerEvent(
     if (currentResult.status === "unreachable") {
       return { result: "error", diagnosticId: currentResult.diagnosticId };
     }
-    const currentEvent = bindCurrentPullRequest(eligibleEvent, currentResult.current);
+    const currentEvent = bindCurrentPullRequest(
+      eligibleEvent,
+      currentResult.current,
+      currentResult.sameHandle,
+    );
     if (!currentEvent) return { result: "ignored_stale_head" };
 
     const identity = await resolveSubjectIdentity(currentEvent, scope, deps);
@@ -435,41 +448,20 @@ async function readRepositoryScope(
 }
 
 export async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<boolean> {
-  if (pr.provider !== "gitlab") return true;
-  const { env, getConfiguredVcsProviders } = await import("../../infra/vcs-config.js");
-  if (env.GITLAB_PROJECT_ID) {
-    return (
-      pr.repoPath === env.GITLAB_PROJECT_ID ||
-      String(pr.providerProjectId ?? "") === env.GITLAB_PROJECT_ID
-    );
-  }
-  const { createRepositoryDirectoryForProviders } = await import(
-    "../../adapters/vcs/repository-directory.js"
-  );
-  const providers = getConfiguredVcsProviders().filter(
-    (provider) => provider.kind === "gitlab",
-  );
-  if (providers.length === 0) return false;
-  const repositories = await createRepositoryDirectoryForProviders(
-    providers,
-  ).listRepositories();
-  return repositories.some(
-    (repository) =>
-      repository.provider === "gitlab" && repository.repoPath === pr.repoPath,
-  );
+  return Boolean(pr.provider && pr.repoPath);
 }
 
 
 export function selectEligibleEvent(
   event: TriggerEvent,
   params: Record<string, unknown>,
+  botLogin?: string,
 ): TriggerEvent | null {
   if (event.triggerType === "trigger_pr_review") {
     const review = event.pr.review;
     if (!review) return null;
-    const botLogin = getVcsBotLogin(event.pr.provider);
     if (
-      !selectedReviewStates(params, event.pr.provider, botLogin).includes(review.state) ||
+      !selectedReviewStates(params).includes(review.state) ||
       vcsLoginsMatch(review.author, botLogin) ||
       vcsLoginsMatch(event.delivery.producer, botLogin)
     ) {
@@ -480,13 +472,15 @@ export function selectEligibleEvent(
 
   if (event.triggerType !== "trigger_pr_checks_failed") return event;
 
-  if (event.pr.provider === "github") {
-    const trustedApps = stringArray(params.githubAppSlugs, ["github-actions"]);
-    if (!trustedApps.includes(event.delivery.producer)) return null;
-  } else {
-    const trustedSources = stringArray(params.gitlabPipelineSources, ["merge_request_event"]);
-    if (!event.delivery.source || !trustedSources.includes(event.delivery.source)) return null;
-  }
+  const trustedProducers = stringArray(params.trustedProducers);
+  if (
+    trustedProducers.length > 0 &&
+    !trustedProducers.includes(event.delivery.producer) &&
+    !(event.delivery.source && trustedProducers.includes(event.delivery.source))
+  ) return null;
+  const legacyTrustedDefault = isLegacyTrustedCheckDelivery(event.delivery);
+  const trustedByDefault = event.delivery.trustedByDefault ?? legacyTrustedDefault;
+  if (trustedProducers.length === 0 && !trustedByDefault) return null;
 
   // An empty allow-list means every check this trusted producer reported as
   // failed. It used to drop the event instead, which is what the registry
@@ -512,15 +506,12 @@ export function selectEligibleEvent(
 
 function selectedReviewStates(
   params: Record<string, unknown>,
-  provider: VcsProviderKind,
-  botLogin: string | undefined,
 ): string[] {
   const configuredStates =
     Array.isArray(params.on) && params.on.length > 0 ? params.on : ["changes_requested"];
   return configuredStates.filter(
     (state): state is string =>
-      (state === "changes_requested" && provider === "github") ||
-      (state === "commented" && Boolean(normalizeVcsLogin(botLogin))),
+      state === "changes_requested" || state === "commented",
   );
 }
 
@@ -756,7 +747,11 @@ async function dispatchAcceptedTrigger(
       await persistAcceptedRetryableFailure(deps.db, acceptedInput, result);
       return result;
     }
-    const accepted = bindCurrentPullRequest(acceptedInput, currentResult.current);
+    const accepted = bindCurrentPullRequest(
+      acceptedInput,
+      currentResult.current,
+      currentResult.sameHandle,
+    );
     if (!accepted) {
       await completeDelivery(deps.db, acceptedInput, { result: "ignored_stale_head" });
       return { result: "ignored_stale_head" };
@@ -951,7 +946,11 @@ export async function drainOldestPendingTrigger(
       await persistAcceptedRetryableFailure(deps.db, pending, result);
       return result;
     }
-    const currentPending = bindCurrentPullRequest(pending, currentResult.current);
+    const currentPending = bindCurrentPullRequest(
+      pending,
+      currentResult.current,
+      currentResult.sameHandle,
+    );
     if (!currentPending) {
       await deleteDurablePendingTrigger(deps.db, pending);
       await completeDelivery(deps.db, pending, { result: "ignored_stale_head" });
@@ -1134,12 +1133,20 @@ async function readCurrentPullRequest(
   deps: DispatchTriggerDeps,
   existingDiagnosticId?: string,
 ): Promise<
-  | { status: "ok"; current: PullRequestHead }
+  | {
+      status: "ok";
+      current: PullRequestHead;
+      sameHandle: (
+        left: VcsOpaqueHandle | undefined,
+        right: VcsOpaqueHandle | undefined,
+      ) => boolean;
+    }
   | { status: "unreachable"; diagnosticId: string }
 > {
   const { pr } = event;
   try {
     let current: PullRequestHead;
+    let sameHandle = deps.sameHandle ?? ((left, right) => left === right);
     if (deps.getCurrentPullRequest) {
       current = await deps.getCurrentPullRequest(pr);
     } else if (deps.getCurrentHead) {
@@ -1149,20 +1156,14 @@ async function readCurrentPullRequest(
         headSha: await deps.getCurrentHead(pr),
         baseRef: pr.baseRef,
         state: event.triggerType === "trigger_pr_merged" ? "merged" : "open",
+        checks: { state: "green", failed: [] },
       };
     } else {
-      current = await readProviderCurrentPullRequest(event);
+      const providerRead = await readProviderCurrentPullRequest(event);
+      current = providerRead.current;
+      sameHandle = providerRead.sameHandle;
     }
-    if (pr.provider === "github" && (pr.failedChecks?.length ?? 0) > 0) {
-      const latestCheckRuns =
-        current.latestCheckRuns ??
-        (deps.getLatestCheckRuns
-          ? await deps.getLatestCheckRuns(pr)
-          : null);
-      if (!latestCheckRuns) throw new Error("GitHub latest Check Runs are unavailable");
-      current = { ...current, latestCheckRuns };
-    }
-    return { status: "ok", current };
+    return { status: "ok", current, sameHandle };
   } catch (error) {
     const diagnosticId = recordIngestionFailure(
       "trigger_current_head_lookup_failed_closed",

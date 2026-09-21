@@ -7,13 +7,26 @@
  * because the pin is a value the run carries: recomputing it from live state on
  * both sides would always agree, and `reconfigured` could never fire.
  *
- * The pin lives in the run's own workflow state rather than in a column on the
- * run row. It is read once, inside a step, so the Workflow DevKit restores it
- * on replay from the step's recorded result instead of reading the database
- * again; a run suspended across a deploy therefore comes back holding the
- * connection it started with, and finds out at its next use that the
- * connection moved. A column would have said the same thing and cost a
- * migration, and S2 left the choice here for exactly that reason.
+ * The pin's home is the run's own workflow state. It is read once, inside a
+ * step, so the Workflow DevKit restores it on replay from the step's recorded
+ * result instead of reading the database again; a run suspended across a deploy
+ * therefore comes back holding the connection it started with, and finds out at
+ * its next use that the connection moved.
+ *
+ * S2 chose workflow state *instead of* a column, on the grounds that a column
+ * would say the same thing and cost a migration. S10 reversed that and added
+ * the column anyway (`workflow_runs.integration_pins`, migration
+ * `0073_run_integration_pins`), because the reasoning had a hole: it assumed
+ * every reader of a pin is the run itself. The reconciler is not. It is a cron
+ * pass over rows that closes PR checks a dead run left open
+ * (`engine/runtime/pr-external-resources.ts`), it has no workflow state to
+ * replay, and without the column it published those verdicts through whichever
+ * provider happened to be connected at reconcile time. Workflow state is still
+ * where a live run reads its pin; the column is how a reader outside the run
+ * gets the same answer. It is written once (`coalesce` on conflict in
+ * `db/repositories/runs/telemetry.ts`) so a replay cannot rewrite history, and
+ * nothing is backfilled: see `RunIntegrationPins` in
+ * `engine/support/vcs-runtime.ts` for what a row without it means.
  *
  * Pure, like the availability decision next to it: everything it reads is an
  * argument.

@@ -31,3 +31,10 @@ export { checkIntegrationPin, environmentReaderFrom } from "./resolve.js";
 export { resolveUsableIntegrations, usableIntegrations } from "./usable.js";
 
 export { integrationSecretValues } from "./secret-values.js";
+
+export async function getVcsBotLogin(
+  kind: import("@shared/contracts").VcsProviderKind,
+): Promise<string | undefined> {
+  const resolver = await import("./vcs-bot-login.js");
+  return resolver.getVcsBotLogin(kind);
+}

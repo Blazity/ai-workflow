@@ -505,6 +505,20 @@
       "when": 1789778378906,
       "tag": "0071_run_status_reason_code",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1789985795279,
+      "tag": "0072_open_vcs_providers",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1790018682538,
+      "tag": "0073_run_integration_pins",
+      "breakpoints": true
     }
   ]
 }

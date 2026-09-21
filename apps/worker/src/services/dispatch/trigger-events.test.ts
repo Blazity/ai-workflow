@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeGitHubEvent,
   normalizeGitHubEvents,
+} from "./trigger-events.js";
+import {
   normalizeGitLabEvent,
   normalizeGitLabEvents,
-} from "./trigger-events.js";
+} from "../../../../../integrations/gitlab/webhook.js";
 import { AI_WORKFLOW_COMMENT_MARKER, reviewLedgerMarker } from "../vcs/vcs-bot-identity.js";
 
 /** A reply exactly as the ledger settler posts it into a review thread. */
@@ -213,6 +215,7 @@ describe("normalizeGitHubEvent", () => {
         provider: "github",
         producer: "github-actions",
         deliveryId: "github-delivery-1",
+        trustedByDefault: true,
         semanticKey: "checks:acme/app:7:abc123",
       },
       triggerType: "trigger_pr_checks_failed",
@@ -232,8 +235,7 @@ describe("normalizeGitHubEvent", () => {
             name: "ci / build",
             conclusion: "failure",
             detailsUrl: "https://ci/run/1",
-            checkRunId: 101,
-            appSlug: "github-actions",
+            handle: { id: 101, owner: "github-actions" },
           },
         ],
       },
@@ -1028,19 +1030,11 @@ describe("normalizeGitLabEvent", () => {
     ).toEqual(["trigger_pr_ready", "trigger_pr_updated"]);
   });
 
-  it("suppresses a GitLab update for the workflow-published SHA", () => {
-    const payload = mrPayload("update");
-    payload.oldrev = "old-head";
-    payload.object_attributes.last_commit = { id: "sha1" };
-    expect(
-      normalizeGitLabEvent("Merge Request Hook", payload, {
-        botUsername: "blazebot",
-        workflowPublishedHeadSha: "sha1",
-      }),
-    ).toBeNull();
-  });
-
-  it("keeps a human GitLab update when the published SHA differs", () => {
+  // The normalizer no longer takes the SHA a run published: which pushes are
+  // ours is core's call, on the ownership record the integration cannot see.
+  // The route makes it, and `integration-webhook.test.ts` holds that wiring;
+  // the decision itself is held by `workflow-push-suppression.test.ts`.
+  it("reports a GitLab update by a person, whatever head it carries", () => {
     const payload = mrPayload("update");
     payload.oldrev = "old-head";
     payload.object_attributes.last_commit = { id: "human-sha" };
@@ -1048,7 +1042,6 @@ describe("normalizeGitLabEvent", () => {
     expect(
       normalizeGitLabEvent("Merge Request Hook", payload, {
         botUsername: "blazebot",
-        workflowPublishedHeadSha: "sha1",
       })?.triggerType,
     ).toBe("trigger_pr_updated");
   });
@@ -1236,10 +1229,20 @@ describe("normalizeGitLabEvent", () => {
     expect(evt?.triggerType).toBe("trigger_pr_checks_failed");
     expect(evt?.delivery.producer).toBe("gitlab-ci");
     expect(evt?.pr.headRef).toBe("blazebot/aiw-3");
-    expect(evt?.pr.headSha).toBe("");
-    expect(evt?.pr.pipelineId).toBe(901);
+    expect(evt?.pr.headSha).toBe("temporary-merged-results-sha");
+    expect(evt?.pr.failedChecks?.[0]?.handle).toEqual({
+      kind: "job",
+      container: 901,
+      id: null,
+    });
     expect(evt?.delivery.source).toBe("merge_request_event");
-    expect(evt?.pr.failedChecks).toEqual([{ name: "lint", conclusion: "failed" }]);
+    expect(evt?.pr.failedChecks).toEqual([
+      {
+        handle: { kind: "job", container: 901, id: null },
+        name: "lint",
+        conclusion: "failed",
+      },
+    ]);
   });
 
   it.each([
@@ -1286,7 +1289,11 @@ describe("normalizeGitLabEvent", () => {
     });
 
     expect(evt?.pr.failedChecks).toEqual([
-      { name: "ci / build", conclusion: "failed" },
+      {
+        handle: { kind: "job", container: 903, id: null },
+        name: "ci / build",
+        conclusion: "failed",
+      },
     ]);
   });
 

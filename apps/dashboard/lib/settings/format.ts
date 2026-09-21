@@ -23,7 +23,6 @@ const WORD_CASING: Record<string, string> = {
   API: "API",
   DCR: "DCR",
   GITHUB: "GitHub",
-  GITLAB: "GitLab",
   MB: "MB",
   MCP: "MCP",
   MS: "ms",
