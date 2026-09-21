@@ -11,6 +11,7 @@ import {
   LIVE_POLL_MS,
   useLivePoll,
 } from "@/lib/use-live-poll";
+import { autoLayoutPositions, positionsCarryNoLayout } from "@/lib/workflow-editor/auto-layout";
 import { edgeBezierPath } from "@/lib/workflow-editor/layout-geometry";
 import type {
   JsonValue,
@@ -27,6 +28,9 @@ import type {
 const NODE_WIDTH = 184;
 const NODE_HEIGHT = 72;
 const CANVAS_PADDING = 56;
+/** One column and one row apart, with a gap wide enough for the arrow between
+ *  two blocks to be visible rather than tucked under their edges. */
+const AUTO_LAYOUT_STEP = { x: NODE_WIDTH + 96, y: NODE_HEIGHT + 48 };
 const REPLAY_GRAPH_HISTORY_MAX_PAGES = 10;
 
 const REPLAY_TABS = ["input", "briefing", "output", "logs", "metadata", "attempts"] as const;
@@ -429,10 +433,17 @@ function ReplayCanvas({
     };
   });
   const edges: ReplayEdge[] = snapshot.graph.edges;
-  const minX = Math.min(0, ...nodes.map((node) => node.x));
-  const minY = Math.min(0, ...nodes.map((node) => node.y));
+  // A definition written through the API or MCP carries no positions: every
+  // node arrives at 0,0 and the whole workflow draws as one pile in the corner,
+  // where the node painted last takes every click. Lay it out ourselves rather
+  // than show that. Nothing is saved: the stored definition is untouched, and a
+  // definition somebody placed in the editor keeps exactly what they placed.
+  const laidOut = positionsCarryNoLayout(nodes) ? autoLayoutPositions(nodes, edges, AUTO_LAYOUT_STEP) : null;
+  const placed = laidOut === null ? nodes : nodes.map((node) => ({ ...node, ...laidOut.get(node.id)! }));
+  const minX = Math.min(0, ...placed.map((node) => node.x));
+  const minY = Math.min(0, ...placed.map((node) => node.y));
   const positions = new Map(
-    nodes.map((node) => [
+    placed.map((node) => [
       node.id,
       {
         x: node.x - minX + CANVAS_PADDING,
