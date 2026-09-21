@@ -103,16 +103,20 @@ All paths below are relative to `apps/worker/src/` unless stated otherwise.
    - Transitions can be pinned with `JIRA_BACKLOG_TRANSITION_ID` / `JIRA_AI_REVIEW_TRANSITION_ID`
      (recommended when Jira localizes transition names).
 
-4. **Messaging Adapter** (`adapters/messaging/chatsdk.ts`)
-   - Built on the [`vercel/chat`](https://github.com/vercel/chat) abstraction (`chat` +
-     `@chat-adapter/slack`). Slack is the only wired adapter; Teams is not supported.
+4. **Messaging** (a capability, served by an integration: `integrations/slack/**`)
+   - Core calls `MessagingSender` (`engine/support/messaging.ts`), which resolves the connected
+     provider on every call and never throws; which conversation a ticket owns stays core's row.
+     Slack is the provider this build ships; another one needs no change here.
    - Maintains a live-status parent message per ticket with a threaded audit log, and attaches a
      token/cost usage report to `pr_ready` notifications.
-   - Optional — when `CHAT_SDK_SLACK_TOKEN` / `CHAT_SDK_CHANNEL_ID` are unset a no-op adapter is
-     used.
-   - A separate Slack slash command `/ai-workflow` (`routes/webhooks/slack.post.ts`, signature
-     verified via `SLACK_SIGNING_SECRET`, allow-listed via `SLACK_ALLOWED_USER_IDS`) supports
-     `help`, `list`, `status <KEY>`, `cancel <KEY>`, and registry-inspection subcommands.
+   - Optional — with no provider connected, the messaging blocks refuse in the editor and run
+     notifications are dropped with a logged reason. Slack is configured from the Integrations
+     page or from `CHAT_SDK_SLACK_TOKEN` / `CHAT_SDK_CHANNEL_ID`, which are required together.
+   - The Slack slash command `/ai-workflow` answers at the same URL through the generic webhook
+     route (`routes/webhooks/[id].post.ts`); the integration verifies the signature
+     (`SLACK_SIGNING_SECRET`, allow-listed via `SLACK_ALLOWED_USER_IDS`) and core runs the
+     command. It supports `help`, `list`, `status <KEY>`, `cancel <KEY>`, and registry-inspection
+     subcommands.
 
 5. **VCS Adapters** (`adapters/vcs/github.ts`, `adapters/vcs/gitlab.ts`)
    - GitHub via Octokit with **GitHub App auth** (installation tokens, bot commit identity);

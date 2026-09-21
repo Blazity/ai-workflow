@@ -21,5 +21,55 @@
         "format": "url"
       }
     ]
+  },
+  {
+    "integration": "slack",
+    "fields": [
+      {
+        "key": "allowedUserIds",
+        "env": "SLACK_ALLOWED_USER_IDS",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "botName",
+        "env": "CHAT_SDK_BOT_NAME",
+        "secret": false,
+        "identity": false,
+        "optional": false,
+        "default": "ai-workflow",
+        "format": "text"
+      },
+      {
+        "key": "botToken",
+        "env": "CHAT_SDK_SLACK_TOKEN",
+        "secret": true,
+        "identity": true,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "channelId",
+        "env": "CHAT_SDK_CHANNEL_ID",
+        "secret": false,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "signingSecret",
+        "env": "SLACK_SIGNING_SECRET",
+        "secret": true,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      }
+    ]
   }
 ]

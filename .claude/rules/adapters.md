@@ -9,17 +9,25 @@ paths:
 
 # Issue tracker, VCS and messaging adapters
 
+Messaging is a capability an integration serves since S9 (ADR-010). Core holds
+only the port re-export (`adapters/messaging/types.ts`), the sender that
+resolves the active provider per call (`engine/support/messaging.ts`) and the
+`thread_parents` row that says which conversation a ticket owns
+(`engine/support/messaging-conversation.ts`). The provider code lives in
+`integrations/slack/**` and has its own tests.
+
 - Build Jira REST v3 comments as ADF through `toAdfParagraphs`. It splits LF or
   CRLF input into paragraph nodes and never places a newline inside an ADF text
   node. Guard: `apps/worker/src/adapters/issue-tracker/jira.test.ts`.
-- Preserve the outbound chat construction in
-  `apps/worker/src/adapters/messaging/chatsdk.ts`: `new Chat` receives
-  `userName` and `state: noopState`, while `createSlackAdapter` receives
-  `botToken`.
+- A notification never changes a run. `MessagingSender` answers
+  `MessagingDelivery` and does not throw, whatever the provider does; the
+  `send_message` block reads that answer and reports `skipped` with the reason,
+  and every other caller ignores it and lets the warning in the log be the
+  record.
 - Clarification questions have one Jira posting step:
   `postClarificationQuestionsCommentStep`. It returns null after a non-control
-  posting failure, and the workflow still sends the Slack
-  `needs_clarification` event without `commentUrl`. Awaiting state is stored in
+  posting failure, and the workflow still sends the
+  `needs_clarification` notification without `commentUrl`. Awaiting state is stored in
   the database; `parkForClarificationStep` only applies the ticket label and
   move.
 - Closing a question is the second path and only that: cancelling a run that

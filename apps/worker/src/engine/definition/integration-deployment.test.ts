@@ -9,6 +9,7 @@ import { blockParamsSchemasFor } from "./block-params-schemas.js";
 import { validateWorkflowDefinitionIssuesForDeployment } from "./deployment-validation.js";
 import { deploymentIntegrations, NO_INTEGRATIONS } from "./integration-availability.js";
 import { JSON_SCHEMA_SUPPORT } from "./json-schema-support.js";
+import { MESSAGING_CONNECTED } from "./messaging-deployment.fixture.js";
 
 /**
  * Publishing a workflow that uses an integration.
@@ -108,7 +109,6 @@ function deploymentIssues(
     defaultAgent: { provider: "claude", model: "claude-sonnet-4-5" },
     vcsProviders: ["github"],
     vcsBotIdentities: ["github"],
-    slackConfigured: true,
     webhookTriggerConfigured: true,
     integrations,
   });
@@ -188,9 +188,8 @@ describe("a block type nobody can run", () => {
       defaultAgent: { provider: "claude", model: "claude-sonnet-4-5" },
       vcsProviders: ["github"],
       vcsBotIdentities: ["github"],
-      slackConfigured: true,
       webhookTriggerConfigured: true,
-      integrations: NO_INTEGRATIONS,
+      integrations: MESSAGING_CONNECTED,
     });
     const result = validateWorkflowDefinitionCandidate(
       definition.definition ?? {},

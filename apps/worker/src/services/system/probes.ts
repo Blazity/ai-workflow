@@ -114,10 +114,6 @@ export function configFromEnvironment(settings: SettingsSnapshot): SystemHealthC
     resendApiKey: env.RESEND_API_KEY,
     resendFromEmail: env.RESEND_FROM_EMAIL,
     resendWebhookSecret: env.RESEND_WEBHOOK_SECRET,
-    slackToken: env.CHAT_SDK_SLACK_TOKEN,
-    slackChannelId: env.CHAT_SDK_CHANNEL_ID,
-    slackSigningSecret: env.SLACK_SIGNING_SECRET,
-    slackAllowedUserIds: env.SLACK_ALLOWED_USER_IDS,
     mcpEnabled: mcpSettings(settings).enabled,
     webhookTriggerEncryptionKey: env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
   };
@@ -160,8 +156,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
     "jira.webhook-delivery": (signal) => jiraWebhookResult(config, signal),
     "email.webhook-delivery": async (signal) =>
       resendWebhookResult(config, signal),
-    "slack.webhook-delivery": async () =>
-      classifyObservations(await localObservations("slack", config.slackSigningSecret)),
     "custom-webhooks.aggregate": () => customWebhookAggregate(),
   };
 
@@ -246,16 +240,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
 
   if (config.resendApiKey) {
     probes["email.sender"] = (signal) => resendSenderResult(config, signal);
-  }
-
-  if (config.slackToken) {
-    probes["slack.bot-auth"] = async (signal) => {
-      const result = await slackApi(config, "auth.test", {}, signal);
-      if (result?.ok !== true) {
-        throw new PublicHealthProbeError("Slack authentication failed.");
-      }
-    };
-    probes["slack.channel"] = (signal) => slackChannelDeliveryResult(config, signal);
   }
 
 
@@ -734,77 +718,6 @@ async function resendWebhookResult(
     };
   }
   throw new PublicHealthProbeError("Resend webhook configuration check failed.");
-}
-
-/** One Slack Web API call; null when Slack is unreachable or answers junk. */
-async function slackApi(
-  config: SystemHealthConfig,
-  method: string,
-  body: Record<string, string>,
-  signal: AbortSignal,
-): Promise<Record<string, unknown> | null> {
-  const response = await fetch(`https://slack.com/api/${method}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.slackToken}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams(body),
-    signal,
-  }).catch(() => null);
-  if (!response?.ok) return null;
-  return (await response.json().catch(() => null)) as Record<string, unknown> | null;
-}
-
-/** Sixty days: far enough that a leaked probe is obvious in the scheduled
- * queue, well inside Slack's 120-day scheduling ceiling. */
-const SLACK_PROBE_DELAY_SECONDS = 60 * 24 * 60 * 60;
-
-/** Proves the bot can deliver to the configured channel the same way real
- * notifications do: schedule a message far in the future, then delete it
- * before it can ever post. `conversations.info` asked the wrong question,
- * needing read scopes and channel visibility that posting never requires, so
- * a Slack Connect channel showed "unavailable" while messages flowed fine. */
-async function slackChannelDeliveryResult(
-  config: SystemHealthConfig,
-  signal: AbortSignal,
-): Promise<SystemHealthProbeResult> {
-  const channel = config.slackChannelId ?? "";
-  const postAt = Math.floor(Date.now() / 1000) + SLACK_PROBE_DELAY_SECONDS;
-  const scheduled = await slackApi(
-    config,
-    "chat.scheduleMessage",
-    {
-      channel,
-      post_at: String(postAt),
-      text: "System health delivery probe. Deleting this scheduled message failed; it is safe to ignore.",
-    },
-    signal,
-  );
-  if (scheduled?.ok !== true) {
-    const reason =
-      typeof scheduled?.error === "string" ? scheduled.error : "no response";
-    throw new PublicHealthProbeError(
-      `Slack bot cannot deliver to the configured channel (${reason}).`,
-    );
-  }
-  const scheduledMessageId =
-    typeof scheduled.scheduled_message_id === "string"
-      ? scheduled.scheduled_message_id
-      : null;
-  if (scheduledMessageId) {
-    await slackApi(
-      config,
-      "chat.deleteScheduledMessage",
-      { channel, scheduled_message_id: scheduledMessageId },
-      signal,
-    );
-  }
-  return {
-    mode: "live",
-    message:
-      "Delivery verified: a probe message was scheduled in the channel and deleted before sending.",
-  };
 }
 
 async function customWebhookAggregate(): Promise<SystemHealthProbeResult> {

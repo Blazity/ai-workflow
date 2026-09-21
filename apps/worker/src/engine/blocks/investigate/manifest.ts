@@ -2,6 +2,17 @@ import { z } from "zod";
 import type { BlockManifest } from "@shared/contracts";
 
 const MAX_RESULTS_CEILING = 10;
+
+/**
+ * The value a stored graph carries in `providers` for the chat half of this
+ * block. It is this block's parameter vocabulary, written into definitions
+ * people already published, not a provider core talks to: messaging reaches
+ * whichever integration serves the capability. It lives here so the one place
+ * outside this block that reads it (the availability resolver) names the
+ * block's vocabulary rather than a provider. S12 splits this block and takes
+ * the word with it (ADR-010).
+ */
+export const INVESTIGATE_CHAT_PROVIDER = "slack";
 function hasBalancedJqlStructure(clause: string): boolean {
   let depth = 0;
   let quoted = false;
@@ -23,7 +34,10 @@ function hasBalancedJqlStructure(clause: string): boolean {
 }
 const paramsSchema = z
   .object({
-    providers: z.array(z.enum(["jira", "slack"])).min(1).default(["jira", "slack"]),
+    providers: z
+      .array(z.enum(["jira", INVESTIGATE_CHAT_PROVIDER]))
+      .min(1)
+      .default(["jira", INVESTIGATE_CHAT_PROVIDER]),
     slackChannels: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
     slackLookbackDays: z.number().int().min(1).max(365).optional(),
     jiraJqlTemplate: z
@@ -56,7 +70,7 @@ export const manifest = {
     softColor: "#E9EFFD",
   },
   defaults: {
-    providers: ["jira", "slack"],
+    providers: ["jira", INVESTIGATE_CHAT_PROVIDER],
     slackLookbackDays: 30,
     maxResults: 10,
   },

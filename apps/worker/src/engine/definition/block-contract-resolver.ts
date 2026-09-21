@@ -23,6 +23,7 @@ import {
   type WorkflowParamValue,
 } from "@shared/contracts";
 import { resolveLlmProvider, type LlmProvider } from "../../infra/llm-provider.js";
+import { INVESTIGATE_CHAT_PROVIDER } from "../blocks/investigate/manifest.js";
 import {
   blockContractDefinitions,
   catalogPresentation,
@@ -31,6 +32,7 @@ import {
   workflowBlockDefinitionIssue,
 } from "./block-registry.js";
 import {
+  coreCapabilityIssue,
   integrationBlockAvailability,
   type DeploymentIntegrations,
 } from "./integration-availability.js";
@@ -45,7 +47,6 @@ export interface WorkflowBlockRegistryContext {
   defaultAgent: { provider: "claude" | "codex"; model: string };
   vcsProviders: VcsProviderKind[];
   vcsBotIdentities: VcsProviderKind[];
-  slackConfigured: boolean;
   webhookTriggerConfigured: boolean;
   /**
    * What this deployment's integrations let a workflow do.
@@ -105,20 +106,26 @@ function availabilityFor(
   if (fromIntegration) return fromIntegration;
   const definitionIssue = workflowBlockDefinitionIssue(type, params);
   if (definitionIssue) return unavailable(definitionIssue);
-  if (type === "send_slack_message" && !context.slackConfigured) {
-    return unavailable("Slack messaging is not configured.");
+  if (type === "send_message") {
+    const issue = coreCapabilityIssue("messaging", context.integrations);
+    if (issue) return unavailable(issue);
   }
-  if (type === "investigate" && !context.slackConfigured) {
+  if (type === "investigate") {
     // An absent selection means both providers on (the param's own default), so
-    // only a list that omits Slack opts out.
+    // only a list that omits the chat provider opts out. The value is the
+    // block's own parameter vocabulary, which is why it arrives from the block
+    // rather than being written here.
     const providers: unknown = params.providers;
-    const slackEnabled = Array.isArray(providers)
-      ? providers.includes("slack")
+    const chatEnabled = Array.isArray(providers)
+      ? providers.includes(INVESTIGATE_CHAT_PROVIDER)
       : true;
-    if (slackEnabled) {
-      return unavailable(
-        "Slack messaging is not configured; turn off the Slack provider for a Jira-only investigation.",
-      );
+    if (chatEnabled) {
+      const issue = coreCapabilityIssue("messaging", context.integrations);
+      if (issue) {
+        return unavailable(
+          `${issue} Turn off that provider on this block for an issue-tracker-only investigation.`,
+        );
+      }
     }
   }
   if (type === "trigger_webhook" && !context.webhookTriggerConfigured) {

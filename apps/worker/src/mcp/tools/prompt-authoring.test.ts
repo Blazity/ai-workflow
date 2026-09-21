@@ -16,7 +16,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 
-import type { MessagingAdapter, TicketEvent } from "../../adapters/messaging/types.js";
+import type { MessagingSender, TicketEvent } from "../../adapters/messaging/types.js";
 import type { Adapters } from "../../engine/support/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
@@ -55,7 +55,7 @@ const WRITE_ONLY: ReadonlySet<McpScope> = new Set(["prompts:write"]);
 // Substituted for the real Slack adapter. Typed off the adapter's own interface, so
 // a signature change here is a compile error rather than a test that keeps asserting
 // against a call nobody makes any more.
-const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>();
+const notifyForTicket = vi.fn<MessagingSender["notifyForTicket"]>();
 
 const headReadBarrier = vi.hoisted(() => ({
   enabled: false,
@@ -94,7 +94,7 @@ beforeEach(async () => {
   promptId = await seedPrompt("team-review-guide", "Team review guide", SEEDED_BODY);
   builtInPromptId = await builtInPrompt();
   notifyForTicket.mockReset();
-  notifyForTicket.mockResolvedValue(undefined);
+  notifyForTicket.mockResolvedValue({ delivered: true });
 });
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -321,7 +321,7 @@ describe("prompts.update", () => {
   // failure that reads as "nothing was written" and must not buy a second version
   // out of the retry such an answer would provoke.
   it("keeps the stored version and the answer when the announcement fails", async () => {
-    notifyForTicket.mockRejectedValue(new Error("slack is down"));
+    notifyForTicket.mockRejectedValue(new Error("the chat provider is down"));
     const client = await connectedClient();
 
     const result = await update(client);

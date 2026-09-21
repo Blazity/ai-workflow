@@ -11,6 +11,8 @@ Configures the Slack bot AI Workflow uses to post status updates (run started, P
 >
 > If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles Slack.
 
+Slack is an integration (ADR-010). The variables below still configure it, and a deployment that already sets them needs nothing done. The alternative, which needs no redeploy, is the **Integrations** page in the dashboard: open the Slack card, paste the same values, press **Test**. Either way the card is where an admin sees whether it is connected, switches it off, and reads its two health checks.
+
 ## Precondition
 
 `.vercel/project.json` must exist. If missing:
@@ -65,7 +67,7 @@ If restricting slash commands to specific users:
 SLACK_ALLOWED_USER_IDS=U0123,U4567
 ```
 
-Tell the user to paste into Vercel → Project Settings → Environment Variables (all three environments), save, and reply when done.
+Tell the user to paste into Vercel → Project Settings → Environment Variables (all three environments), save, and reply when done. A variable takes effect on the next deployment; values saved on the Integrations page take effect at once.
 
 ## Step 4 — Register the slash command
 
@@ -82,3 +84,4 @@ Full walkthrough in `references/slash-commands.md`.
 - **Don't accept a `xoxp-` user token.** AI Workflow needs a bot token (`xoxb-`). User tokens have different permission semantics and will silently fail in some adapter paths.
 - **Don't accept a channel name (`#whatever`) as the channel ID.** The Slack API requires the ID. Save the user the silent-failure debug session.
 - **Don't print the token after collecting it.** Reference by name only.
+- **Don't leave the channel unset.** The token and the channel are required together: without the channel the integration reports what is missing and stays disconnected rather than accepting messages and dropping them.

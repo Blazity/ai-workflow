@@ -253,7 +253,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
       "run_pre_pr_checks",
       "finalize_workspace",
       "open_pr",
-      "send_slack_message",
+      "send_message",
       "update_ticket_status",
     ]);
     expect(mockGetEnabled).toHaveBeenCalledWith("trigger_ticket_ai");

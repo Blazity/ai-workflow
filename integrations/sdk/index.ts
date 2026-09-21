@@ -100,6 +100,30 @@ export {
 
 export { FatalError } from "./errors";
 
+/**
+ * What core answers a run control command with, and the pull requests a
+ * `pr_ready` event carries, re-exported so an integration reaches them the way
+ * it reaches everything else: through this package. An integration may not
+ * depend on `@shared/contracts` directly (the boundaries gate and the
+ * conformance dependency check both say so), and a messaging provider has to
+ * render both.
+ */
+export {
+  pullRequestRef,
+  pullRequestRepoLabels,
+  type RunControlAnswer,
+  type RunControlCancelOutcome,
+  type RunControlCommand,
+  type RunControlEntry,
+  type RunControlFailedRun,
+  type RunControlOutcome,
+  type RunControlResetOutcome,
+  type RunControlResetTarget,
+  type RunControlRun,
+  type RunPullRequest,
+  type JsonValue,
+} from "@shared/contracts";
+
 export {
   CORE_HEALTH_SECTION_IDS,
   RESERVED_ENVIRONMENT_VARIABLES,
@@ -141,4 +165,23 @@ export {
   type VCSAdapter,
 } from "./vcs";
 
-export type { MessagingAdapter, TicketEvent } from "./messaging";
+export type {
+  MessageRetrievalFailure,
+  MessageSearchMatch,
+  MessageSearchOutcome,
+  MessageSearchQuery,
+  MessageSearchSkip,
+  MessagingAdapter,
+  MessagingConversation,
+  MessagingDelivery,
+  MessagingSender,
+  MessagingTicket,
+  TicketEvent,
+} from "./messaging";
+
+export type {
+  IntegrationWebhook,
+  IntegrationWebhookReception,
+  IntegrationWebhookRequest,
+  IntegrationWebhookResponse,
+} from "./webhook";

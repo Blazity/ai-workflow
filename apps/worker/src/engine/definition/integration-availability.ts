@@ -204,6 +204,32 @@ export function integrationUnusableReason(presence: IntegrationPresence): string
  * palette and use another in the run. Stages S8 to S13 replace each built-in
  * with the integration that declared it, and this refusal goes with them.
  */
+/**
+ * Capabilities core can hand a block from an integration's own adapter.
+ *
+ * It exists because availability and execution have to agree about which
+ * provider serves a block. A capability core cannot yet reach through an
+ * integration is refused by name, however many integrations declare it; each
+ * of stages S9 to S13 adds its capability here in the same change that teaches
+ * execution to resolve it. S9 added `messaging`
+ * (`engine/support/messaging.ts`).
+ */
+const INTEGRATION_SERVED_CAPABILITIES: ReadonlySet<string> = new Set(["messaging"]);
+
+/**
+ * The same question for a CORE block that needs a capability.
+ *
+ * A core block has no manifest to declare a requirement in, so its rule stays
+ * in the resolver; the answer has to be the one an integration block would
+ * get, or the palette says two things about one deployment.
+ */
+export function coreCapabilityIssue(
+  capability: string,
+  integrations: DeploymentIntegrations,
+): string | null {
+  return capabilityIssue(capability, integrations);
+}
+
 function capabilityIssue(
   capability: string,
   integrations: DeploymentIntegrations,
@@ -212,10 +238,28 @@ function capabilityIssue(
   const label = capabilityLabel(capability);
   if (!integrations.builtinCapabilities.has(capability)) {
     if (holders.length === 0) {
-      return `Nothing on this deployment provides the ${label} capability, which this block needs.`;
+      // A provider that ships and declares the capability but is not usable is
+      // named, with the state it is in. "Nothing provides messaging" in front
+      // of an admin who can see Slack on the Integrations page is a sentence
+      // that sends them looking for a second provider they do not need.
+      const idle = [...integrations.byId.values()].filter(
+        (presence) => presence.capabilities.includes(capability) && !presence.usable,
+      );
+      if (idle.length > 0) {
+        const names = idle.map((presence) => presence.name).join(" and ");
+        return idle.every((presence) => presence.status === "disabled")
+          ? `${names} would provide the ${label} capability this block needs, but is switched off. Enable it on the Integrations page.`
+          : `${names} would provide the ${label} capability this block needs, but is not connected. Finish connecting it on the Integrations page.`;
+      }
+      return `Nothing on this deployment provides the ${label} capability, which this block needs. Connect an integration that provides it on the Integrations page.`;
     }
+    if (!INTEGRATION_SERVED_CAPABILITIES.has(capability)) {
+      const names = holders.map((id) => integrations.byId.get(id)?.name ?? id);
+      return `This build cannot yet run a block on the ${label} capability served by an integration (${names.join(", ")}); core still owns that capability. It becomes available when that integration takes the capability over.`;
+    }
+    if (holders.length === 1) return null;
     const names = holders.map((id) => integrations.byId.get(id)?.name ?? id);
-    return `This build cannot yet run a block on the ${label} capability served by an integration (${names.join(", ")}); core still owns that capability. It becomes available when that integration takes the capability over.`;
+    return `${names.join(" and ")} both provide the ${label} capability. Disable the ones you do not want until the Integrations page can select an active provider.`;
   }
   if (holders.length === 0) return null;
   const names = holders.map((id) => integrations.byId.get(id)?.name ?? id);

@@ -18,14 +18,6 @@ vi.mock("../../adapters/issue-tracker/jira.js", () => ({
   JiraAdapter: vi.fn().mockImplementation((config) => ({ kind: "jira", config })),
 }));
 
-vi.mock("../../adapters/messaging/chatsdk.js", () => ({
-  ChatSDKAdapter: vi.fn(),
-}));
-
-vi.mock("../../adapters/messaging/noop.js", () => ({
-  NoopMessagingAdapter: vi.fn().mockImplementation(() => ({ kind: "noop" })),
-}));
-
 vi.mock("../../db/repositories/active-runs.js", () => ({
   createConnectedPostgresRunRegistry: vi.fn(() => ({ kind: "registry", db: "db" })),
 }));

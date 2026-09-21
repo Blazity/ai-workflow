@@ -47,7 +47,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 
-import type { MessagingAdapter, TicketEvent } from "../../adapters/messaging/types.js";
+import type { MessagingSender, TicketEvent } from "../../adapters/messaging/types.js";
 import type { Adapters } from "../../engine/support/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
@@ -109,7 +109,7 @@ const NOT_ENABLED_REPO = "acme/private-infrastructure";
 // Substituted for the real Slack adapter. Typed off the adapter's own interface, so
 // a signature change here is a compile error rather than a test that keeps asserting
 // against a call nobody makes any more.
-const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>();
+const notifyForTicket = vi.fn<MessagingSender["notifyForTicket"]>();
 
 // A name an agent could pick after reading a ticket it does not trust: a Slack link
 // whose label claims something the platform never said, a mention, a second line
@@ -189,7 +189,7 @@ beforeEach(async () => {
   now = new Date("2026-08-12T12:00:00.000Z");
   definitionId = await seedDefinition("Seeded workflow");
   notifyForTicket.mockReset();
-  notifyForTicket.mockResolvedValue(undefined);
+  notifyForTicket.mockResolvedValue({ delivered: true });
   probe.scheduleReadFails = false;
 });
 
@@ -967,7 +967,7 @@ describe("workflows.publish", () => {
   // second deployment out of the retry that answer would provoke.
   it("keeps a published deployment and its answer when the announcement fails", async () => {
     await seedDraft(definitionId, 1, graph());
-    notifyForTicket.mockRejectedValue(new Error("slack is down"));
+    notifyForTicket.mockRejectedValue(new Error("the chat provider is down"));
     const client = await connectedClient();
 
     const result = await publish(client);
@@ -1173,7 +1173,7 @@ describe("workflows.publish", () => {
   // a completed deployment past the wrapper's deadline and answer TIMEOUT about it.
   it("answers a publish whose announcement never settles, and not as a timeout", async () => {
     await seedDraft(definitionId, 1, graph());
-    notifyForTicket.mockReturnValue(new Promise<void>(() => {}));
+    notifyForTicket.mockReturnValue(new Promise(() => {}));
     const client = await connectedClient();
 
     const result = await publish(client);

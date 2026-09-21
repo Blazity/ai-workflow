@@ -25,7 +25,7 @@ import {
 import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 import { validateWorkflowPromptAuthoringIssuesWithLoader } from "../services/workflow-definitions/prompt-authoring.js";
 import { validateWorkflowDefinitionCandidate } from "../engine/definition/validation.js";
-import { NO_INTEGRATIONS } from "../engine/definition/integration-availability.js";
+import { MESSAGING_CONNECTED } from "../engine/definition/messaging-deployment.fixture.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -33,9 +33,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github"],
   vcsBotIdentities: ["github"],
-  slackConfigured: true,
   webhookTriggerConfigured: true,
-  integrations: NO_INTEGRATIONS,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const resolveContract = testBlockContractResolver(registryContext);

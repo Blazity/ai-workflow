@@ -228,48 +228,35 @@ describe("collectSystemHealth", () => {
     });
   });
 
-  it("does not let an inbound-only webhook make Email or Slack look live", async () => {
+  it("does not let an inbound-only webhook make Email look live", async () => {
     const result = await collectSystemHealth({
       config: {
         ...baseConfig,
         resendWebhookSecret: "orphaned-resend-secret",
-        slackSigningSecret: "orphaned-slack-secret",
       },
       probes: {
         "email.webhook-delivery": async () => ({ mode: "live" }),
-        "slack.webhook-delivery": async () => ({ mode: "live" }),
       },
     });
 
-    for (const integrationId of ["email", "slack"]) {
-      expect(
-        result.integrations.find((entry) => entry.id === integrationId),
-      ).toMatchObject({ mode: "misconfigured" });
-    }
+    expect(result.integrations.find((entry) => entry.id === "email")).toMatchObject({
+      mode: "misconfigured",
+    });
   });
 
-  it("still probes independent Slack auth and SSO discovery with partial setup", async () => {
-    const slackAuth = vi.fn(async () => {});
+  it("still probes SSO discovery with partial setup", async () => {
     const ssoDiscovery = vi.fn(async () => {});
     const result = await collectSystemHealth({
       config: {
         ...baseConfig,
-        slackToken: "slack-token",
         ssoIssuer: "https://sso.example",
       },
       probes: {
-        "slack.bot-auth": slackAuth,
         "sso.discovery": ssoDiscovery,
       },
     });
 
-    expect(slackAuth).toHaveBeenCalledOnce();
     expect(ssoDiscovery).toHaveBeenCalledOnce();
-    expect(
-      result.integrations
-        .find((entry) => entry.id === "slack")
-        ?.checks.find((check) => check.id === "bot-auth"),
-    ).toMatchObject({ mode: "live" });
     expect(
       result.integrations
         .find((entry) => entry.id === "sso")
@@ -285,12 +272,9 @@ describe("collectSystemHealth", () => {
       "JIRA_PROJECT_KEY",
       "JIRA_WEBHOOK_SECRET",
     ]);
-    expect(result.integrations.find((entry) => entry.id === "slack")?.envVars).toEqual([
-      "CHAT_SDK_SLACK_TOKEN",
-      "CHAT_SDK_CHANNEL_ID",
-      "SLACK_SIGNING_SECRET",
-      "SLACK_ALLOWED_USER_IDS",
-    ]);
+    // Slack's variables are named by its own card and its own health section
+    // now (`integrations/slack/manifest.ts`), not by core's environment list.
+    expect(result.integrations.map((entry) => entry.id)).not.toContain("slack");
     expect(JSON.stringify(result)).not.toContain("jira-secret");
   });
 

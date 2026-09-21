@@ -108,7 +108,6 @@ function issuesFor(
     defaultAgent: { provider: "claude", model: "claude-sonnet-4-5" },
     vcsProviders: ["github"],
     vcsBotIdentities: ["github"],
-    slackConfigured: true,
     webhookTriggerConfigured: true,
     integrations,
   });
@@ -225,7 +224,6 @@ describe("a screen's text comes from the run's subject unless the author binds i
       defaultAgent: { provider: "claude", model: "claude-sonnet-4-5" },
       vcsProviders: ["github"],
       vcsBotIdentities: ["github"],
-      slackConfigured: true,
       webhookTriggerConfigured: true,
       integrations: plain,
     });

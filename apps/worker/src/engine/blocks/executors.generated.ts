@@ -46,6 +46,6 @@ export const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
   "prepare_workspace",
   "review_agent",
   "run_pre_pr_checks",
-  "send_slack_message",
+  "send_message",
   "update_ticket_status",
 ];

@@ -55,7 +55,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
         // send goes nowhere and the audit row is the whole record. Published because
         // a client is entitled to know it is unobserved, and an operator running the
         // smoke client is entitled to find that out before an incident does.
-        authoringAnnouncements: authoringAnnouncementDelivery(deps.adapters?.messaging),
+        authoringAnnouncements: await authoringAnnouncementDelivery(deps.loadDeploymentIntegrations),
         // Which integrations this build ships, what state each is in, and which
         // blocks that lets an agent use. Read-only, and read afresh on every
         // call: ADR-010 decision 15 keeps connecting, testing, enabling and

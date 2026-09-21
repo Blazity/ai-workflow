@@ -9,6 +9,7 @@ export type {
   WebhookTriggerEntry,
   WebhookVerifiedWith,
 } from "./trigger-events";
+export * from "./run-control";
 export * from "./block-catalog.generated";
 export * from "./block-contract-resolver";
 export * from "./api";

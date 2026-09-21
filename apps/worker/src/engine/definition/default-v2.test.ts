@@ -18,7 +18,7 @@ import {
 import { workflowDefinitionV2Schema } from "@shared/workflow-graph";
 import { validateHarnessProfileReferencesWithLoader } from "./harness-profile-runtime.js";
 import { hashHarnessProfileManifest } from "../../harness-profiles/manifest.js";
-import { NO_INTEGRATIONS } from "./integration-availability.js";
+import { MESSAGING_CONNECTED } from "./messaging-deployment.fixture.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -26,9 +26,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-opus-4-6" },
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
   webhookTriggerConfigured: true,
-  integrations: NO_INTEGRATIONS,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const blockData = testBlockData(registryContext);
@@ -83,7 +82,7 @@ describe("v2 built-in authoring definitions", () => {
       "checks",
       "finalize",
       "open-pr",
-      "slack",
+      "notify",
       "status",
     ]);
     expect(
@@ -131,7 +130,7 @@ describe("v2 built-in authoring definitions", () => {
       "leak-review",
       "finalize",
       "open-pr",
-      "slack",
+      "notify",
       "status",
     ]);
     expect(

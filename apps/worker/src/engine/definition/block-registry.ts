@@ -941,8 +941,13 @@ export const blockContractDefinitions: Record<WorkflowBlockType, ContractDefinit
     ],
     statusVariants: ["ok"],
   },
-  send_slack_message: {
-    output: statusOutput(),
+  send_message: {
+    // `reason` says why a message did not go out, for the author who branches
+    // on `skipped` and for the person reading the trace. Optional, so a graph
+    // published before it existed binds exactly what it always did, and the
+    // status variants are untouched: widening that set would silently change
+    // which stored branches match.
+    output: statusOutput({ reason: stringType() }),
     statusVariants: ["ok", "skipped"],
   },
   send_plan_approval: {

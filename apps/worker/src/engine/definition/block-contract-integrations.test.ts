@@ -6,7 +6,8 @@ import {
   resolveWorkflowBlockContract,
   type WorkflowBlockRegistryContext,
 } from "./block-contract-resolver.js";
-import { deploymentIntegrations, NO_INTEGRATIONS } from "./integration-availability.js";
+import { deploymentIntegrations } from "./integration-availability.js";
+import { MESSAGING_CONNECTED, MESSAGING_PROVIDER } from "./messaging-deployment.fixture.js";
 
 /**
  * The palette and the contract chain, over a deployment declared as data.
@@ -78,17 +79,22 @@ function context(overrides: Partial<WorkflowBlockRegistryContext> = {}): Workflo
     defaultAgent: { provider: "claude", model: "claude-sonnet-4-5" },
     vcsProviders: ["github"],
     vcsBotIdentities: ["github"],
-    slackConfigured: true,
     webhookTriggerConfigured: true,
-    integrations: NO_INTEGRATIONS,
+    integrations: MESSAGING_CONNECTED,
     ...overrides,
   };
 }
 
+// Acme Notify ON TOP of the same messaging provider every other context here
+// has: the tests below ask what this integration changes, and a deployment
+// that also lost messaging would answer a different question.
 const connected = context({
   integrations: deploymentIntegrations({
-    manifests: [notify],
-    states: new Map([["acmenotify", state()]]),
+    manifests: [MESSAGING_PROVIDER.manifest, notify],
+    states: new Map([
+      [MESSAGING_PROVIDER.manifest.id, MESSAGING_PROVIDER.state],
+      ["acmenotify", state()],
+    ]),
   }),
 });
 

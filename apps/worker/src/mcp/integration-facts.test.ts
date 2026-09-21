@@ -187,7 +187,8 @@ describe("what system.capabilities tells an agent about integrations", () => {
         type: "demo_lookup",
         available: false,
         unavailableReason:
-          "Nothing on this deployment provides the messaging capability, which this block needs.",
+          "Nothing on this deployment provides the messaging capability, which this block needs. " +
+        "Connect an integration that provides it on the Integrations page.",
       },
     ]);
   });

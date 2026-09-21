@@ -10,8 +10,8 @@ vi.mock("../../infra/vcs-config.js", () => ({
 }));
 
 import {
+  issueTrackerBaseUrl,
   providerWebhookSecret,
-  slackAllowedUserIds,
   ticketBoardSettings,
 } from "./integration-settings.js";
 
@@ -24,22 +24,11 @@ describe("integration settings", () => {
     // The worker's tests replace the environment per case. A module-level
     // snapshot would freeze whatever the first test happened to set, and the
     // failure would look like a test ordering problem rather than a settings bug.
-    state.env.SLACK_ALLOWED_USER_IDS = "U1";
-    expect(slackAllowedUserIds()).toEqual(["U1"]);
+    state.env.JIRA_BASE_URL = "https://one.example";
+    expect(issueTrackerBaseUrl()).toBe("https://one.example");
 
-    state.env.SLACK_ALLOWED_USER_IDS = "U2";
-    expect(slackAllowedUserIds()).toEqual(["U2"]);
-  });
-
-  it("treats a Slack allowlist of only separators as no allowlist", () => {
-    // An empty list means the allowlist is not in force. A value of " , , "
-    // is somebody clearing the variable badly, and reading it as "nobody is
-    // allowed" would lock the whole workspace out of the slash command.
-    state.env.SLACK_ALLOWED_USER_IDS = " , , ";
-    expect(slackAllowedUserIds()).toEqual([]);
-
-    state.env.SLACK_ALLOWED_USER_IDS = " U1 ,U2, ";
-    expect(slackAllowedUserIds()).toEqual(["U1", "U2"]);
+    state.env.JIRA_BASE_URL = "https://two.example";
+    expect(issueTrackerBaseUrl()).toBe("https://two.example");
   });
 
   it("carries the backlog transition only where one is configured", async () => {
@@ -53,10 +42,10 @@ describe("integration settings", () => {
 
   it("answers with the secret belonging to the provider asked about", () => {
     state.env.GITHUB_WEBHOOK_SECRET = "gh";
-    state.env.SLACK_SIGNING_SECRET = "sl";
+    state.env.GITLAB_WEBHOOK_SECRET = "gl";
 
     expect(providerWebhookSecret("github")).toBe("gh");
-    expect(providerWebhookSecret("slack")).toBe("sl");
+    expect(providerWebhookSecret("gitlab")).toBe("gl");
     // Unset is undefined and never the empty string: a health observation scoped
     // to "" would match every deployment that configured nothing.
     expect(providerWebhookSecret("jira")).toBeUndefined();

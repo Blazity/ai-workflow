@@ -234,9 +234,9 @@
       {
         "code": "deployment",
         "severity": "error",
-        "nodeId": "slack",
+        "nodeId": "notify",
         "path": "/nodes/8/configuration",
-        "message": "Block \"slack\" (send_slack_message) is unavailable: Slack messaging is not configured."
+        "message": "Block \"notify\" (send_message) is unavailable: Nothing on this deployment provides the messaging capability, which this block needs. Connect an integration that provides it on the Integrations page."
       }
     ]
   },
@@ -713,7 +713,7 @@
         "severity": "error",
         "nodeId": "slack",
         "path": "/nodes/3/configuration/channel",
-        "message": "Block \"slack\" (send_slack_message) has invalid configuration: property \"channel\" is not supported."
+        "message": "Block \"slack\" (send_message) has invalid configuration: property \"channel\" is not supported."
       },
       {
         "code": "deployment",
@@ -734,7 +734,7 @@
         "severity": "error",
         "nodeId": "slack",
         "path": "/nodes/3/configuration",
-        "message": "Block \"slack\" (send_slack_message) is unavailable: Slack messaging is not configured."
+        "message": "Block \"slack\" (send_message) is unavailable: Nothing on this deployment provides the messaging capability, which this block needs. Connect an integration that provides it on the Integrations page."
       }
     ]
   },

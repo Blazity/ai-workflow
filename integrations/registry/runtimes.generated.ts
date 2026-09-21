@@ -9,7 +9,9 @@
  */
 import type { ErasedIntegrationRuntime } from "@integrations/sdk";
 import { runtime as arthur } from "../arthur/worker";
+import { runtime as slack } from "../slack/worker";
 
 export const generatedIntegrationRuntimes: readonly ErasedIntegrationRuntime[] = [
   arthur,
+  slack,
 ];

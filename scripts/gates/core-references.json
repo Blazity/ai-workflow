@@ -17,10 +17,6 @@
   ],
   "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support, workflow-graph-suites, mcp-dogfood and fixtures trees are test material by another name.",
   "plannedIntegrations": {
-    "slack": {
-      "stage": "S9",
-      "reason": "Slack becomes integrations/slack, and messaging becomes a capability core reaches through a port"
-    },
     "gitlab": {
       "stage": "S10",
       "reason": "GitLab becomes integrations/gitlab, and the repository provider is validated against the registry rather than a CHECK constraint"
@@ -475,6 +471,7 @@
       "stage": "S12",
       "reason": "other worker call sites that still name the provider; S12 removes them",
       "paths": [
+        "apps/worker/src/engine/support/messaging.ts",
         "apps/worker/src/harness-profiles/manifest.ts",
         "apps/worker/src/mcp/tools/run-stats.ts",
         "apps/worker/src/mcp/tools/ticket-write.ts",
@@ -488,9 +485,7 @@
       "stage": "S12",
       "reason": "the provider adapters behind the capability ports; S12 removes them",
       "paths": [
-        "apps/worker/src/adapters/issue-tracker/jira.ts",
-        "apps/worker/src/adapters/messaging/chatsdk.ts",
-        "apps/worker/src/adapters/messaging/format.ts"
+        "apps/worker/src/adapters/issue-tracker/jira.ts"
       ]
     },
     {
@@ -515,7 +510,6 @@
         "apps/worker/src/engine/blocks/investigate/execute.ts",
         "apps/worker/src/engine/blocks/investigate/manifest.ts",
         "apps/worker/src/engine/blocks/support/test-support.ts",
-        "apps/worker/src/engine/definition/block-contract-resolver.ts",
         "apps/worker/src/engine/definition/legacy-block-metadata.fixture.ts",
         "apps/worker/src/engine/definition/templates.ts",
         "apps/worker/src/engine/steps/ticket-analysis.ts",
@@ -572,6 +566,7 @@
         "apps/worker/src/services/mcp/tool-services.ts",
         "apps/worker/src/services/overview/collect-awaiting-store.ts",
         "apps/worker/src/services/overview/collect-live-runs.ts",
+        "apps/worker/src/services/run-control/execute.ts",
         "apps/worker/src/services/run-lifecycle/cancel-run.ts",
         "apps/worker/src/services/run-lifecycle/dashboard-run-data.ts",
         "apps/worker/src/services/run-lifecycle/durable-run-detail.ts",
@@ -582,8 +577,6 @@
         "apps/worker/src/services/settings/index.ts",
         "apps/worker/src/services/settings/integration-settings.ts",
         "apps/worker/src/services/settings/runtime-settings.ts",
-        "apps/worker/src/services/slack/format.ts",
-        "apps/worker/src/services/slack/handlers.ts",
         "apps/worker/src/services/system/collect.ts",
         "apps/worker/src/services/system/probes.ts",
         "apps/worker/src/services/system/provider-webhook-observation.ts",
@@ -611,125 +604,26 @@
       "ids": [
         "slack"
       ],
-      "stage": "S9",
-      "reason": "dashboard screens and helpers that still name the provider; S9 removes them",
+      "stage": "S12",
+      "reason": "the investigate block names the provider as DATA, not as something core talks to: a stored parameter value (providers: [\"jira\", \"slack\"]), the parameter keys slackChannels and slackLookbackDays, the editor fields that write them, the resolver rule that reads them, and the built-in templates and historical metadata that carry them. Filip kept investigate in core until S12 (2026-09-20, amending plan decision 17) so two enabled production definitions keep working. S12 splits the block and its parameters become capability-shaped; these rows go with it. Core reaches the messages themselves through the messaging capability and imports nothing of the provider.",
       "paths": [
         "apps/dashboard/components/cockpit/flow-editor/block-palette.ts",
-        "apps/dashboard/components/cockpit/flow-editor/blocks/index.ts",
-        "apps/dashboard/components/cockpit/flow-editor/blocks/send_slack_message.tsx",
         "apps/dashboard/components/cockpit/flow-editor/blocks/shared.tsx",
-        "apps/dashboard/components/cockpit/screens/health.tsx"
-      ]
-    },
-    {
-      "ids": [
-        "slack"
-      ],
-      "stage": "S9",
-      "reason": "other worker call sites that still name the provider; S9 removes them",
-      "paths": [
-        "apps/worker/src/harness-profiles/manifest.ts"
-      ]
-    },
-    {
-      "ids": [
-        "slack"
-      ],
-      "stage": "S9",
-      "reason": "the provider adapters behind the capability ports; S9 removes them",
-      "paths": [
-        "apps/worker/src/adapters/messaging/chatsdk.ts",
-        "apps/worker/src/adapters/messaging/format.ts",
-        "apps/worker/src/adapters/messaging/slack-search.ts"
-      ]
-    },
-    {
-      "ids": [
-        "slack"
-      ],
-      "stage": "S9",
-      "reason": "engine call sites that still name the provider; S9 removes them",
-      "paths": [
-        "apps/worker/src/engine/agent-workflow.ts",
         "apps/worker/src/engine/blocks/investigate/execute.ts",
         "apps/worker/src/engine/blocks/investigate/manifest.ts",
-        "apps/worker/src/engine/blocks/leak-review/execute.ts",
-        "apps/worker/src/engine/blocks/send-slack-message/manifest.ts",
-        "apps/worker/src/engine/blocks/support/test-support.ts",
-        "apps/worker/src/engine/definition/block-contract-environment.ts",
-        "apps/worker/src/engine/definition/block-contract-resolver.ts",
-        "apps/worker/src/engine/definition/block-params-schemas.ts",
-        "apps/worker/src/engine/definition/block-registry.ts",
-        "apps/worker/src/engine/definition/default.ts",
         "apps/worker/src/engine/definition/legacy-block-metadata.fixture.ts",
         "apps/worker/src/engine/definition/templates.ts",
-        "apps/worker/src/engine/helpers/prompt-output.ts",
-        "apps/worker/src/engine/support/adapters.ts"
+        "packages/contracts/workflow-graph.ts"
       ]
     },
     {
       "ids": [
         "slack"
       ],
-      "stage": "S9",
-      "reason": "provider configuration and credentials read from the environment; S9 removes them",
+      "stage": "never",
+      "reason": "the leak review scans an unpushed diff for the SHAPES of credentials, and it names each shape so the finding a person reads says which kind of token leaked. The pattern would be worth keeping if this product never talked to the provider at all, so it is not a dependency and no stage removes it.",
       "paths": [
-        "apps/worker/src/infra/runtime-env.ts"
-      ]
-    },
-    {
-      "ids": [
-        "slack"
-      ],
-      "stage": "S9",
-      "reason": "the provider webhook and API routes, which keep their URLs; the code moves, and the URL a provider already calls survives it: rows here going away is not the measure of the stage being done",
-      "paths": [
-        "apps/worker/src/routes/webhooks/slack.post.ts"
-      ]
-    },
-    {
-      "ids": [
-        "slack"
-      ],
-      "stage": "S9",
-      "reason": "what a sandbox agent is handed about the provider; S9 removes them",
-      "paths": [
-        "apps/worker/src/sandbox/harness-runtime.ts"
-      ]
-    },
-    {
-      "ids": [
-        "slack"
-      ],
-      "stage": "S9",
-      "reason": "service call sites that still name the provider; S9 removes them",
-      "paths": [
-        "apps/worker/src/services/dispatch/pr-autofix-exhaustion.ts",
-        "apps/worker/src/services/settings/index.ts",
-        "apps/worker/src/services/settings/integration-settings.ts",
-        "apps/worker/src/services/settings/runtime-settings.ts",
-        "apps/worker/src/services/slack/commands.ts",
-        "apps/worker/src/services/slack/format.ts",
-        "apps/worker/src/services/slack/handle-slash-command.ts",
-        "apps/worker/src/services/slack/handlers.ts",
-        "apps/worker/src/services/slack/index.ts",
-        "apps/worker/src/services/slack/respond.ts",
-        "apps/worker/src/services/slack/slack-search.ts",
-        "apps/worker/src/services/slack/verify.ts",
-        "apps/worker/src/services/system/collect.ts",
-        "apps/worker/src/services/system/probes.ts",
-        "apps/worker/src/services/system/provider-webhook-observation.ts"
-      ]
-    },
-    {
-      "ids": [
-        "slack"
-      ],
-      "stage": "S9",
-      "reason": "shared contracts, prompts and skills that still name the provider; S9 removes them",
-      "paths": [
-        "packages/contracts/workflow-graph.ts",
-        "packages/workflow-graph/graph-issues.ts"
+        "apps/worker/src/engine/blocks/leak-review/execute.ts"
       ]
     }
   ]

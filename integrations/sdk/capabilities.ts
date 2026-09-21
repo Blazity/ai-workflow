@@ -1,6 +1,6 @@
 import type { AgentTracingAdapter } from "./agent-tracing";
 import type { IssueTrackerAdapter } from "./issue-tracker";
-import type { MessagingAdapter } from "./messaging";
+import type { MessagingAdapter, MessagingSender } from "./messaging";
 import type { VCSAdapter } from "./vcs";
 
 /**
@@ -73,5 +73,10 @@ export interface VcsRepositoryRef extends VcsRepositoryTarget {
 export interface IntegrationCapabilityAccess {
   issue_tracker: IssueTrackerAdapter;
   vcs: (repository: VcsRepositoryRef) => VCSAdapter;
-  messaging: MessagingAdapter;
+  /**
+   * Not the port. A block says what happened and searches; which conversation
+   * a ticket owns is core's row and core resolves it, so a block never holds
+   * a handle it could hand to the wrong ticket.
+   */
+  messaging: MessagingSender;
 }

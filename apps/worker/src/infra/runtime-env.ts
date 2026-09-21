@@ -44,18 +44,6 @@ export const env = createEnv({
     /** Base URL for self-hosted GitLab. Defaults to https://gitlab.com. */
     GITLAB_HOST: z.string().url().default("https://gitlab.com"),
 
-    // Messaging — Slack is optional. When token+channel are unset, a no-op
-    // messaging adapter is used and workflow runs proceed silently.
-    CHAT_SDK_SLACK_TOKEN: z.string().min(1).optional(),
-    CHAT_SDK_CHANNEL_ID: z.string().min(1).optional(),
-    CHAT_SDK_BOT_NAME: z.string().default("ai-workflow"),
-
-    // Slack slash commands — required only if you register the /ai-workflow
-    // slash command. When unset, /webhooks/slack rejects all requests.
-    SLACK_SIGNING_SECRET: z.string().min(1).optional(),
-    /** Comma-separated list of Slack user IDs allowed to invoke slash commands. Empty = anyone. */
-    SLACK_ALLOWED_USER_IDS: z.string().optional(),
-
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
     // Optional overrides for the git identity used inside the sandbox.

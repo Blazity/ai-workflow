@@ -28,6 +28,60 @@ const INTEGRATION_BLOCK_TYPE = /^[a-z][a-z0-9]{2,31}_[a-z0-9]+(?:_[a-z0-9]+)*$/;
  * is missing. Whether the block can actually RUN is a different question, and
  * the engine's block contract answers it by name.
  */
+/**
+ * Block types this build renamed, and what they are called now.
+ *
+ * A stored graph is rewritten when it is read, so nothing downstream ever sees
+ * the old word. The map exists because two things still hand us one: a
+ * definition sitting in the database that the one-off rewrite has not reached,
+ * and a run suspended before the rename whose recorded plan replays with the
+ * word it started with. Both have to keep working, which is the whole reason
+ * the rename is a rewrite rather than a deletion (ADR-010).
+ *
+ * Each entry is removed once every stored graph carries the new type and no
+ * run can still be replaying the old one.
+ */
+export const RENAMED_WORKFLOW_BLOCK_TYPES: Readonly<Record<string, WorkflowBlockType>> = {
+  /** Until S9 of the integrations plan, when messaging became a capability. */
+  send_slack_message: "send_message" as WorkflowBlockType,
+};
+
+/** The name this build knows a block type by. Unchanged for every other type. */
+export function canonicalWorkflowBlockType<T>(type: T): T {
+  return typeof type === "string"
+    ? ((RENAMED_WORKFLOW_BLOCK_TYPES[type] ?? type) as T)
+    : type;
+}
+
+/**
+ * The same graph with every renamed node type replaced, or the value
+ * untouched when there is nothing to replace.
+ *
+ * Applied where a definition enters this build: reading a stored row and
+ * accepting a candidate. Doing it at the edge means the registry, the
+ * parameter schemas, the resolver, the editor and the run all see one name,
+ * and a publish writes it, which is how the old type leaves the database
+ * without a migration that a preview deployment could fire at production.
+ */
+export function canonicalizeWorkflowBlockTypes(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const nodes = (raw as { nodes?: unknown }).nodes;
+  if (!Array.isArray(nodes)) return raw;
+  let changed = false;
+  const rewritten: unknown[] = [];
+  for (const node of nodes) {
+    const type = node && typeof node === "object" ? (node as { type?: unknown }).type : undefined;
+    const canonical = typeof type === "string" ? RENAMED_WORKFLOW_BLOCK_TYPES[type] : undefined;
+    if (!canonical) {
+      rewritten.push(node);
+      continue;
+    }
+    changed = true;
+    rewritten.push(Object.assign({}, node, { type: canonical }));
+  }
+  return changed ? { ...(raw as object), nodes: rewritten } : raw;
+}
+
 export function isStorableWorkflowBlockType(type: unknown): type is WorkflowBlockType {
   if (typeof type !== "string") return false;
   if (Object.prototype.hasOwnProperty.call(BLOCK_TYPE_SPECS, type)) return true;
@@ -293,7 +347,7 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   create_pr_check: ["checkName"],
   complete_pr_check: ["conclusion", "details", "refreshHead"],
   post_pr_review: [],
-  send_slack_message: ["message", "sendOn"],
+  send_message: ["message", "sendOn"],
   send_plan_approval: ["mirrorComment"],
   human_question: ["questions", "suggestedAnswers"],
   leak_review: ["model", "llmScan", "maxDiffBytes"],
@@ -320,7 +374,7 @@ export const WORKFLOW_PROMPT_PARAM_KEYS: Partial<
   post_pr_comment: ["body"],
   complete_pr_check: ["details"],
   open_pr: ["title", "body"],
-  send_slack_message: ["message"],
+  send_message: ["message"],
   human_question: ["questions"],
   terminate: ["postComment"],
 };

@@ -197,9 +197,9 @@ export function defaultWorkflowDefinitionV2({
       },
     },
     {
-      id: "slack",
-      type: "send_slack_message",
-      name: "Send Slack message",
+      id: "notify",
+      type: "send_message",
+      name: "Send message",
     },
     {
       id: "status",

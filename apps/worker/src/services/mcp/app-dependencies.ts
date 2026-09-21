@@ -1,5 +1,3 @@
-export { NoopMessagingAdapter } from "../../adapters/messaging/noop.js";
-export type { MessagingAdapter } from "../../adapters/messaging/types.js";
 export {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,

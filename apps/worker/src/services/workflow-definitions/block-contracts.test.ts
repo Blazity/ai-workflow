@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 
 import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
+import { MESSAGING_CONNECTED } from "../../engine/definition/messaging-deployment.fixture.js";
 
 const mocks = vi.hoisted(() => ({
   contextFromEnv: vi.fn((_profile?: unknown, integrations?: unknown) => ({
@@ -10,9 +11,8 @@ const mocks = vi.hoisted(() => ({
     defaultAgent: { provider: "claude" as const, model: "claude-test" },
     vcsProviders: ["github" as const],
     vcsBotIdentities: ["github" as const],
-    slackConfigured: true,
     webhookTriggerConfigured: true,
-    integrations: integrations ?? NO_INTEGRATIONS,
+    integrations: integrations ?? MESSAGING_CONNECTED,
   })),
 }));
 

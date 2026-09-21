@@ -117,8 +117,6 @@ export function configuredSecretValues(): string[] {
     env.JIRA_API_TOKEN,
     env.GITHUB_APP_PRIVATE_KEY,
     env.GITLAB_TOKEN,
-    env.CHAT_SDK_SLACK_TOKEN,
-    env.SLACK_SIGNING_SECRET,
     env.ANTHROPIC_API_KEY,
     env.CODEX_API_KEY,
     env.CODEX_CHATGPT_OAUTH_TOKEN,

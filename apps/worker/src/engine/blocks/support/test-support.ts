@@ -26,7 +26,7 @@ import {
 } from "../../../sandbox/harness-runtime.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import type { BlockInvocationContext, EngineCtx } from "./types.js";
-import { NO_INTEGRATIONS } from "../../definition/integration-availability.js";
+import { MESSAGING_CONNECTED } from "../../definition/messaging-deployment.fixture.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -34,9 +34,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-model" },
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
   webhookTriggerConfigured: true,
-  integrations: NO_INTEGRATIONS,
+  integrations: MESSAGING_CONNECTED,
 };
 
 /** Keep an executor assertion coupled to the editor-visible registry contract. */

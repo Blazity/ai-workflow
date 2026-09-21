@@ -66,8 +66,8 @@ export type WorkflowBlockType =
   | "run_checks"
   | "run_pre_pr_checks"
   | "run_scripts"
+  | "send_message"
   | "send_plan_approval"
-  | "send_slack_message"
   | "terminate"
   | "transform"
   | "trigger_plan_approved"
@@ -881,6 +881,24 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     additionalInputs: [],
     execution: "map",
   },
+  send_message: {
+    contract: {"category":"action","ports":["out"],"allowsFailurePort":true},
+    ui: {"group":"utility","label":"Send message","description":"Tells the connected messaging integration about a milestone of this run: the pull requests it published, or a message you write.","glyph":"✉","color":"#64748B","softColor":"#EEF1F5"},
+    defaults: {
+      "message": "",
+      "sendOn": "pr_ready"
+    },
+    inputs: {
+      "message": {
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    additionalInputs: [],
+    execution: "inline",
+  },
   send_plan_approval: {
     contract: {"category":"action","ports":[],"allowsFailurePort":false},
     ui: {"group":"human","label":"Send plan for approval","description":"Creates a durable approval item and ends this path.","glyph":"☑","color":"#b06a14","softColor":"#F7F0E7"},
@@ -906,24 +924,6 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     },
     additionalInputs: [],
     execution: "map",
-  },
-  send_slack_message: {
-    contract: {"category":"action","ports":["out"],"allowsFailurePort":true},
-    ui: {"group":"utility","label":"Send Slack message","description":"Notifies the configured Slack channel about a workflow milestone.","glyph":"✉","color":"#64748B","softColor":"#EEF1F5"},
-    defaults: {
-      "message": "",
-      "sendOn": "pr_ready"
-    },
-    inputs: {
-      "message": {
-        "required": false,
-        "schema": {
-          "type": "string"
-        }
-      }
-    },
-    additionalInputs: [],
-    execution: "inline",
   },
   terminate: {
     contract: {"category":"control","ports":[],"allowsFailurePort":false},
@@ -1136,8 +1136,8 @@ export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
   run_checks: BLOCK_CATALOG.run_checks.contract,
   run_pre_pr_checks: BLOCK_CATALOG.run_pre_pr_checks.contract,
   run_scripts: BLOCK_CATALOG.run_scripts.contract,
+  send_message: BLOCK_CATALOG.send_message.contract,
   send_plan_approval: BLOCK_CATALOG.send_plan_approval.contract,
-  send_slack_message: BLOCK_CATALOG.send_slack_message.contract,
   terminate: BLOCK_CATALOG.terminate.contract,
   transform: BLOCK_CATALOG.transform.contract,
   trigger_plan_approved: BLOCK_CATALOG.trigger_plan_approved.contract,

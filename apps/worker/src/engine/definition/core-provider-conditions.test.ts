@@ -23,7 +23,6 @@ const RESOLVER = fileURLToPath(new URL("./block-contract-resolver.ts", import.me
 
 /** Provider name to the stage that removes its condition (ADR-010). */
 const SURVIVING_CONDITIONS: Record<string, string> = {
-  slack: "S9",
   gitlab: "S10",
   github: "S11",
   jira: "S12",

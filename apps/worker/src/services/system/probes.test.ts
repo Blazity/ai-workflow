@@ -138,10 +138,6 @@ describe("deployment system-health probes", () => {
       resendApiKey: environment.RESEND_API_KEY,
       resendFromEmail: environment.RESEND_FROM_EMAIL,
       resendWebhookSecret: environment.RESEND_WEBHOOK_SECRET,
-      slackToken: environment.CHAT_SDK_SLACK_TOKEN,
-      slackChannelId: environment.CHAT_SDK_CHANNEL_ID,
-      slackSigningSecret: environment.SLACK_SIGNING_SECRET,
-      slackAllowedUserIds: environment.SLACK_ALLOWED_USER_IDS,
       mcpEnabled: environment.MCP_ENABLED,
       webhookTriggerEncryptionKey: environment.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
     });
@@ -160,9 +156,6 @@ describe("deployment system-health probes", () => {
           data: [{ name: "example.com", status: "verified" }],
         }));
       }
-      if (url.includes("slack.com")) {
-        return new Response(JSON.stringify({ ok: true, scheduled_message_id: "Q0123" }));
-      }
       if (url.includes("/v6/deployments")) {
         return new Response(JSON.stringify({ deployments: [{ readyState: "READY" }] }));
       }
@@ -176,8 +169,6 @@ describe("deployment system-health probes", () => {
       "github.repositories",
       "sso.discovery",
       "email.sender",
-      "slack.bot-auth",
-      "slack.channel",
       "mcp.contract",
       "agent.model",
     ]) {
@@ -190,39 +181,10 @@ describe("deployment system-health probes", () => {
       expect.arrayContaining([
         "https://sso.example/.well-known/openid-configuration",
         "https://api.resend.com/domains",
-        "https://slack.com/api/auth.test",
-        "https://slack.com/api/chat.scheduleMessage",
-        "https://slack.com/api/chat.deleteScheduledMessage",
       ]),
     );
   });
 
-  it("verifies Slack delivery end to end and deletes the scheduled probe", async () => {
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.endsWith("chat.scheduleMessage")) {
-        return Response.json({ ok: true, scheduled_message_id: "Q0123" });
-      }
-      if (url.endsWith("chat.deleteScheduledMessage")) return Response.json({ ok: true });
-      throw new Error(`Unexpected request: ${url}`);
-    });
-    const probes = probesForEnvironment(configFromEnvironment(settings));
-    const result = await probes["slack.channel"]!(new AbortController().signal);
-    expect(result).toMatchObject({ mode: "live" });
-    const deletion = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith("chat.deleteScheduledMessage"),
-    );
-    expect(String(deletion?.[1]?.body)).toContain("scheduled_message_id=Q0123");
-  });
-
-  it("reports the Slack error when the bot cannot deliver to the channel", async () => {
-    fetchMock.mockImplementation(async () =>
-      Response.json({ ok: false, error: "channel_not_found" }),
-    );
-    const probes = probesForEnvironment(configFromEnvironment(settings));
-    await expect(probes["slack.channel"]!(new AbortController().signal)).rejects.toThrow(
-      "Slack bot cannot deliver to the configured channel (channel_not_found).",
-    );
-  });
 
   it("names the Jira call that failed instead of one blended error", async () => {
     const signal = new AbortController().signal;

@@ -3,12 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   generateStructured: vi.fn(),
   searchTicketSummaries: vi.fn(),
-  searchSlackChannels: vi.fn(),
-  /** The tenant configuration the block reads: the Jira project it may search
-   *  and the Slack bot token. Mutable so a test can take either away. */
+  searchMessages: vi.fn(),
+  /** The tenant configuration the block reads: the Jira project it may search. Mutable so a test can take it away. */
   env: {
     JIRA_PROJECT_KEY: "AWT" as string | undefined,
-    CHAT_SDK_SLACK_TOKEN: "test-slack-token" as string | undefined,
   },
   /** Configured secrets the retrieval step redacts with. Fixed here so the test
    *  does not depend on the machine's environment. */
@@ -22,14 +20,9 @@ vi.mock("../../llm.js", () => ({
 vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: { searchTicketSummaries: mocks.searchTicketSummaries },
+    messaging: { searchMessages: mocks.searchMessages },
   }),
 }));
-vi.mock("../../../adapters/messaging/slack-search.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../adapters/messaging/slack-search.js")>();
-  // Only the network call is mocked; the failure classifier is the real one, so
-  // the block's degradation reasons are the ones production would produce.
-  return { ...actual, searchSlackChannels: mocks.searchSlackChannels };
-});
 vi.mock("../../../infra/vcs-config.js", () => ({ env: mocks.env }));
 vi.mock("../../../run-observability/configured-secrets.js", () => ({
   configuredReplaySecrets: () => mocks.secrets,
@@ -78,10 +71,11 @@ const JIRA_HITS = [
 const SLACK_HITS = [
   {
     channel: "C1",
-    ts: "1754000000.000100",
+    id: "1754000000.000100",
     text: "login is broken again",
-    permalink: "https://slack.example/p/1",
+    url: "https://slack.example/p/1",
     author: "U42",
+    postedAt: "2025-07-31T22:13:20.000Z",
   },
 ];
 
@@ -112,7 +106,8 @@ function mockHappyPath() {
     .mockResolvedValueOnce(KEYWORDS_RESULT)
     .mockResolvedValueOnce(THEORY_RESULT);
   mocks.searchTicketSummaries.mockResolvedValue(JIRA_HITS);
-  mocks.searchSlackChannels.mockResolvedValue({
+  mocks.searchMessages.mockResolvedValue({
+    ok: true,
     matches: SLACK_HITS,
     skipped: [],
   });
@@ -199,7 +194,7 @@ describe("describeRetrievalGaps", () => {
         { provider: "slack", reason: "timeout", scope: "" },
       ]),
     ).toBe(
-      "Not searched: Jira (unavailable); Slack channel C_PRIV (no access); Slack (timed out).",
+      "Not searched: Jira (unavailable); chat channel C_PRIV (no access); chat (timed out).",
     );
   });
 });
@@ -262,8 +257,7 @@ describe("investigate execute", () => {
     // answer to the next test's keyword call.
     mocks.generateStructured.mockReset();
     mocks.searchTicketSummaries.mockReset();
-    mocks.searchSlackChannels.mockReset();
-    mocks.env.CHAT_SDK_SLACK_TOKEN = "test-slack-token";
+    mocks.searchMessages.mockReset();
     mocks.env.JIRA_PROJECT_KEY = "AWT";
     mocks.secrets = [];
   });
@@ -299,7 +293,7 @@ describe("investigate execute", () => {
     });
     expect(mocks.generateStructured).not.toHaveBeenCalled();
     expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
+    expect(mocks.searchMessages).not.toHaveBeenCalled();
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
@@ -328,13 +322,11 @@ describe("investigate execute", () => {
       '(project = "AWT") AND (text ~ "login failure" OR text ~ "błąd logowania")',
       10,
     );
-    expect(mocks.searchSlackChannels).toHaveBeenCalledWith({
-      token: "test-slack-token",
+    expect(mocks.searchMessages).toHaveBeenCalledWith({
       channels: ["C1"],
       keywords: ["login failure", "błąd logowania"],
       lookbackDays: 30,
       maxResults: 10,
-      now: expect.any(Date),
     });
 
     const theoryCall = mocks.generateStructured.mock.calls[1][0];
@@ -365,7 +357,7 @@ describe("investigate execute", () => {
     mocks.generateStructured
       .mockResolvedValueOnce({ object: { keywords }, text: "", usage: null })
       .mockResolvedValueOnce(THEORY_RESULT);
-    mocks.searchSlackChannels.mockResolvedValue({ matches: [], skipped: [] });
+    mocks.searchMessages.mockResolvedValue({ ok: true, matches: [], skipped: [] });
 
     await execute(
       makeNode("investigate", { providers: ["slack"], slackChannels: ["C1"] }),
@@ -379,7 +371,7 @@ describe("investigate execute", () => {
       items: { type: "string" },
     });
     expect(keywordSchema.properties.keywords).not.toHaveProperty("maxItems");
-    expect(mocks.searchSlackChannels).toHaveBeenCalledWith(
+    expect(mocks.searchMessages).toHaveBeenCalledWith(
       expect.objectContaining({
         keywords: Array.from({ length: 10 }, (_, index) => `keyword-${index + 1}`),
       }),
@@ -419,7 +411,7 @@ describe("investigate execute", () => {
     mocks.searchTicketSummaries.mockResolvedValue([
       { ...JIRA_HITS[0]!, excerpt: "curl -H 'Authorization: s3cr3t-token' failed" },
     ]);
-    mocks.searchSlackChannels.mockResolvedValue({ matches: [], skipped: [] });
+    mocks.searchMessages.mockResolvedValue({ ok: true, matches: [], skipped: [] });
 
     const result = await execute(makeNode("investigate"), {}, makeCtx());
 
@@ -439,7 +431,7 @@ describe("investigate execute", () => {
     mocks.searchTicketSummaries.mockResolvedValue([
       { ...JIRA_HITS[0]!, status: "", excerpt: "y".repeat(900) },
     ]);
-    mocks.searchSlackChannels.mockResolvedValue({ matches: [], skipped: [] });
+    mocks.searchMessages.mockResolvedValue({ ok: true, matches: [], skipped: [] });
 
     const result = await execute(makeNode("investigate"), {}, makeCtx());
 
@@ -478,7 +470,7 @@ describe("investigate execute", () => {
     );
 
     expect(mocks.searchTicketSummaries).toHaveBeenCalledTimes(1);
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
+    expect(mocks.searchMessages).not.toHaveBeenCalled();
     // A provider that was never asked is not a gap.
     expect(result.output!.partial).toEqual([]);
     expect(result.output!.partialReasons).toEqual([]);
@@ -496,7 +488,7 @@ describe("investigate execute", () => {
     );
 
     expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
-    expect(mocks.searchSlackChannels).toHaveBeenCalledTimes(1);
+    expect(mocks.searchMessages).toHaveBeenCalledTimes(1);
     expect(result.output!.partial).toEqual([]);
     expect(result.output!.evidence).toEqual([SLACK_EVIDENCE]);
     expectOutputConformsToRegistry("investigate", result.output!);
@@ -515,7 +507,7 @@ describe("investigate execute", () => {
         usage: null,
       });
     mocks.searchTicketSummaries.mockResolvedValue([]);
-    mocks.searchSlackChannels.mockResolvedValue({ matches: [], skipped: [] });
+    mocks.searchMessages.mockResolvedValue({ ok: true, matches: [], skipped: [] });
 
     const result = await execute(
       makeNode("investigate", { slackChannels: ["C1"] }),
@@ -540,13 +532,13 @@ describe("investigate execute", () => {
 
     const result = await execute(makeNode("investigate"), {}, makeCtx());
 
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
+    expect(mocks.searchMessages).not.toHaveBeenCalled();
     expect(result.output!.partial).toEqual(["slack"]);
     expect(result.output!.partialReasons).toEqual([
       { provider: "slack", reason: "permission", scope: "" },
     ]);
     expect(result.output!.theory).toBe(
-      "Matches AWT-9.\n\nNot searched: Slack (no access).",
+      "Matches AWT-9.\n\nNot searched: chat (no access).",
     );
   });
 
@@ -611,8 +603,8 @@ describe("investigate execute", () => {
 
   it("degrades to partial slack evidence when the Slack search throws", async () => {
     mockHappyPath();
-    mocks.searchSlackChannels.mockReset();
-    mocks.searchSlackChannels.mockRejectedValue(new Error("slack down"));
+    mocks.searchMessages.mockReset();
+    mocks.searchMessages.mockRejectedValue(new Error("slack down"));
 
     const result = await execute(
       makeNode("investigate", { slackChannels: ["C1"] }),
@@ -681,9 +673,13 @@ describe("investigate execute", () => {
     );
   });
 
-  it("marks Slack a permission gap when no bot token is configured", async () => {
+  it("says no provider is connected rather than blaming the channel's permissions", async () => {
+    // A deployment with no messaging provider is not a deployment whose bot was
+    // refused a channel. Reporting "no access" here sent an admin to check
+    // Slack scopes for a workspace nobody had connected.
     mockHappyPath();
-    mocks.env.CHAT_SDK_SLACK_TOKEN = undefined;
+    mocks.searchMessages.mockReset();
+    mocks.searchMessages.mockResolvedValue({ ok: false, reason: "not_connected" });
 
     const result = await execute(
       makeNode("investigate", { slackChannels: ["C1"] }),
@@ -691,17 +687,22 @@ describe("investigate execute", () => {
       makeCtx(),
     );
 
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
+    expect(mocks.searchMessages).toHaveBeenCalled();
     expect(result.output!.partial).toEqual(["slack"]);
     expect(result.output!.partialReasons).toEqual([
-      { provider: "slack", reason: "permission", scope: "" },
+      { provider: "slack", reason: "not_connected", scope: "" },
     ]);
+    // What the person approving the theory actually reads.
+    expect(result.output!.theory).toContain(
+      "Not searched: chat (no messaging provider is connected).",
+    );
   });
 
   it("reports a channel the bot cannot read as a per-channel gap, in the theory too", async () => {
     mockHappyPath();
-    mocks.searchSlackChannels.mockReset();
-    mocks.searchSlackChannels.mockResolvedValue({
+    mocks.searchMessages.mockReset();
+    mocks.searchMessages.mockResolvedValue({
+      ok: true,
       matches: SLACK_HITS,
       skipped: [{ channel: "C_PRIV", reason: "permission" }],
     });
@@ -713,9 +714,9 @@ describe("investigate execute", () => {
     );
 
     expect(result.output!.theory).toBe(
-      "Matches AWT-9.\n\nNot searched: Slack channel C_PRIV (no access).",
+      "Matches AWT-9.\n\nNot searched: chat channel C_PRIV (no access).",
     );
-    // The channel that did answer still contributed, but Slack is incomplete.
+    // The channel that did answer still contributed, but chat is incomplete.
     expect(result.output!.evidence).toEqual([JIRA_EVIDENCE, SLACK_EVIDENCE]);
     expect(result.output!.partial).toEqual(["slack"]);
     expect(result.output!.partialReasons).toEqual([
@@ -726,8 +727,9 @@ describe("investigate execute", () => {
 
   it("propagates a Slack permalink failure as a partial channel gap", async () => {
     mockHappyPath();
-    mocks.searchSlackChannels.mockReset();
-    mocks.searchSlackChannels.mockResolvedValue({
+    mocks.searchMessages.mockReset();
+    mocks.searchMessages.mockResolvedValue({
+      ok: true,
       matches: [],
       skipped: [{ channel: "C1", reason: "unavailable" }],
     });
@@ -744,7 +746,7 @@ describe("investigate execute", () => {
       { provider: "slack", reason: "unavailable", scope: "C1" },
     ]);
     expect(result.output!.theory).toBe(
-      "Matches AWT-9.\n\nNot searched: Slack channel C1 (unavailable).",
+      "Matches AWT-9.\n\nNot searched: chat channel C1 (unavailable).",
     );
     expectOutputConformsToRegistry("investigate", result.output!);
   });
@@ -759,7 +761,7 @@ describe("investigate execute", () => {
       expect(result.error.detail).toBe("llm down");
     }
     expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
+    expect(mocks.searchMessages).not.toHaveBeenCalled();
   });
 
   it("fails the block when the theory call fails", async () => {

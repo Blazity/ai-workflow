@@ -24,6 +24,7 @@ import {
 } from "./block-contract-resolver.js";
 import { LEGACY_BLOCK_METADATA } from "./legacy-block-metadata.fixture.js";
 import { NO_INTEGRATIONS } from "./integration-availability.js";
+import { MESSAGING_CONNECTED, MESSAGING_DISABLED } from "./messaging-deployment.fixture.js";
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: false },
@@ -31,7 +32,6 @@ const context: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github"],
   vcsBotIdentities: [],
-  slackConfigured: false,
   webhookTriggerConfigured: false,
   integrations: NO_INTEGRATIONS,
 };
@@ -224,7 +224,7 @@ describe("workflow block registry", () => {
     expect(Object.keys(registry.update_ticket_status.inputs)).toEqual(["target"]);
     expect(Object.keys(registry.post_ticket_comment.inputs)).toEqual(["body"]);
     expect(Object.keys(registry.post_pr_comment.inputs)).toEqual(["body"]);
-    expect(Object.keys(registry.send_slack_message.inputs)).toEqual(["message"]);
+    expect(Object.keys(registry.send_message.inputs)).toEqual(["message"]);
     expect(Object.keys(registry.human_question.inputs)).toEqual([
       "questions",
       "suggestedAnswers",
@@ -546,9 +546,10 @@ describe("workflow block registry", () => {
 
   it("always explains why an environmentally unavailable block is disabled", () => {
     const registry = buildWorkflowBlockRegistry(context);
-    expect(registry.send_slack_message.availability).toEqual({
+    expect(registry.send_message.availability).toEqual({
       available: false,
-      unavailableReason: "Slack messaging is not configured.",
+      unavailableReason:
+        "Nothing on this deployment provides the messaging capability, which this block needs. Connect an integration that provides it on the Integrations page.",
     });
 
     for (const contract of Object.values(registry)) {
@@ -556,6 +557,35 @@ describe("workflow block registry", () => {
         expect(contract.availability.unavailableReason.trim(), contract.type).not.toBe("");
       }
     }
+  });
+
+  it("names the provider an admin switched off instead of claiming there is none", () => {
+    // The admin is looking at that provider on the Integrations page while the
+    // editor says nothing provides messaging. One of the two has to name it,
+    // and the one holding the disabled block is this one.
+    const registry = buildWorkflowBlockRegistry({
+      ...context,
+      integrations: MESSAGING_DISABLED,
+    });
+    expect(registry.send_message.availability).toEqual({
+      available: false,
+      unavailableReason:
+        "Test Chat would provide the messaging capability this block needs, but is switched off. " +
+        "Enable it on the Integrations page.",
+    });
+  });
+
+  it("offers the messaging blocks as soon as one provider serves the capability", () => {
+    const registry = buildWorkflowBlockRegistry({
+      ...context,
+      integrations: MESSAGING_CONNECTED,
+    });
+    expect(registry.send_message.availability).toEqual({
+      available: true,
+      unavailableReason: null,
+    });
+    // The investigate block reads chat by default, so it rides the same answer.
+    expect(registry.investigate.availability.available).toBe(true);
   });
 
   it("derives Generic Agent's top-level fields and compatibility data alias from outputSchema", () => {

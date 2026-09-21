@@ -135,7 +135,7 @@ const DOWNSTREAM_OF_PLANNING = [
   "checks",
   "finalize",
   "open-pr",
-  "slack",
+  "notify",
   "status",
 ];
 
@@ -158,7 +158,7 @@ function scriptHappyPath(s: Scenario): void {
   s.script({ nodeId: "checks" }, CHECKS_PASSED_OUTPUT);
   s.script({ nodeId: "finalize" }, FINALIZE_OUTPUT);
   s.script({ nodeId: "open-pr" }, OPEN_PR_OUTPUT);
-  s.script({ nodeId: "slack" }, { kind: "next", output: { status: "ok" } });
+  s.script({ nodeId: "notify" }, { kind: "next", output: { status: "ok" } });
   s.script({ nodeId: "status" }, {
     kind: "next",
     output: { status: "ok", target: "ai_review" },

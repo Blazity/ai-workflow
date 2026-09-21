@@ -76,7 +76,6 @@ vi.mock("../../engine/definition/block-contract-environment.js", () => ({
     defaultAgent: { provider: "codex", model: "codex-test" },
     vcsProviders: ["github"],
     vcsBotIdentities: ["github"],
-    slackConfigured: true,
     webhookTriggerConfigured: true,
     integrations: integrations ?? {
       byId: new Map(),

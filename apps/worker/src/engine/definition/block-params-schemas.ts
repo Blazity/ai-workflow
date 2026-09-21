@@ -254,7 +254,7 @@ const v2OpenPrConfiguration = z
 const v2UpdateTicketStatusConfiguration = z
   .object({ target: z.string().trim().min(1).max(200) })
   .strict();
-const v2SendSlackMessageConfiguration = z
+const v2SendMessageConfiguration = z
   .object({
     message: z.string().trim().max(2000).optional(),
     sendOn: z.enum(["pr_ready", "always"]).optional(),
@@ -345,7 +345,7 @@ export const BLOCK_PARAMS_SCHEMAS = {
   create_pr_check: v2CreatePrCheckConfiguration,
   complete_pr_check: v2CompletePrCheckConfiguration,
   post_pr_review: emptyParams,
-  send_slack_message: v2SendSlackMessageConfiguration,
+  send_message: v2SendMessageConfiguration,
   send_plan_approval: sendPlanApprovalParams,
   human_question: humanQuestionParams,
   leak_review: leakReviewParams,

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NoopMessagingAdapter } from "../../adapters/messaging/noop.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../vcs/vcs-bot-identity.js";
 
 const mocks = vi.hoisted(() => ({
@@ -127,7 +126,9 @@ describe("announcePrAutofixExhaustion", () => {
     );
   });
 
-  it("swallows and logs a Slack failure", async () => {
+  it("swallows and logs a notification that could not be sent", async () => {
+    // The port promises not to throw and core's sender keeps that promise, so
+    // this is the belt: a run must not end differently because a message did.
     mocks.notifyForTicket.mockRejectedValue(new Error("channel_not_found"));
 
     await expect(
@@ -137,7 +138,7 @@ describe("announcePrAutofixExhaustion", () => {
     expect(mocks.postPRComment).toHaveBeenCalledTimes(1);
     expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
       expect.objectContaining({ repoPath: "acme/api", prNumber: 42 }),
-      "pr_autofix_exhausted_slack_failed",
+      "pr_autofix_exhausted_notice_failed",
     );
   });
 
@@ -161,7 +162,12 @@ describe("announcePrAutofixExhaustion", () => {
   it("posts the comment and stays quiet when Slack is not configured", async () => {
     mocks.createAdapters.mockReturnValue({
       vcs: { postPRComment: mocks.postPRComment },
-      messaging: new NoopMessagingAdapter(),
+      // A deployment with no messaging provider: the sender reports rather
+      // than throwing, and the notice's other half still runs.
+      messaging: {
+        notifyForTicket: async () => ({ delivered: false, reason: "no messaging provider is connected" }),
+        searchMessages: async () => ({ ok: false, reason: "not_connected" }),
+      },
     });
 
     await expect(

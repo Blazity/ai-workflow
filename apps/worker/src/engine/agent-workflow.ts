@@ -82,8 +82,9 @@ import {
   executeIntegrationBlock,
   isIntegrationBlockType,
 } from "./blocks/integration-block.js";
-import { createWorkflowExecutionErrorState, integrationUnavailableFailureCode, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE, runStatusReasonParts } from "@shared/contracts";
+import { canonicalWorkflowBlockType, createWorkflowExecutionErrorState, integrationUnavailableFailureCode, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE, runStatusReasonParts } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
+import type { MessagingDelivery } from "../adapters/messaging/types.js";
 import type { BlockOutput, BlockRunState, RunPullRequest, RunStatusReason, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
 import type { RunWorkScopeWrite } from "./work-scope/apply-plans.js";
 import type { RepositoryCatalogEntry } from "./repository-discovery/catalog.js";
@@ -95,7 +96,7 @@ import { loadClarificationHistoryStep, logClarificationHistoryFailure, parkForCl
 import { prePrChecksFailureMessage } from "./steps/repository-failure.js";
 import { type SanitizedReplayObservation, captureV2RunObservationStartStep, closeTerminalPrChecksStep, finishV2RunObservationAttemptStep, flushV2RunObservationsStep, markV2RunObservationUnavailableStep, persistRunTelemetryBestEffort, recordBlockStatusesStep, resolveClarificationDecisionObservation, startV2RunObservationAttemptStep, updateV2RunObservationWaitingStep } from "./steps/telemetry.js";
 import { resolveAgentTicketInput, resolveImplementationPlanInput, selectEntryTriggerNode, triggerOutputWithTicketContext, triggerTypeFor } from "./helpers/trigger-input.js";
-import { appendClarificationRound, blockRunStateSummary, buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, buildPromptVariables, implementationChangeSummary, optionalPricedModelsForRun, promptOverride, publicationPrForTelemetry, repoMemoryDistillTarget, resolveOpenPrBody, resolveOpenPrTitle, resolveRunPriceLookup, resolveSlackMessageInput, resolveTicketStatusInput, resolveV2PromptConfiguration, reviewAgentExecutionResult, shouldPromoteResearchWriteScope, soleActiveBlockId, v2OpenPrRepositoriesProvenanceIssue, v2TerminalBlockResult } from "./helpers/prompt-output.js";
+import { appendClarificationRound, blockRunStateSummary, buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, buildPromptVariables, implementationChangeSummary, optionalPricedModelsForRun, promptOverride, publicationPrForTelemetry, repoMemoryDistillTarget, resolveOpenPrBody, resolveOpenPrTitle, resolveRunPriceLookup, resolveMessageInput, resolveTicketStatusInput, resolveV2PromptConfiguration, reviewAgentExecutionResult, shouldPromoteResearchWriteScope, soleActiveBlockId, v2OpenPrRepositoriesProvenanceIssue, v2TerminalBlockResult } from "./helpers/prompt-output.js";
 import { checksBudgetObserver, definitionRequestsRepairCycles, errorMessage, failureExitPhase, isRepositoryScriptsFailurePhase, nodeCanRecordGate, recoverLatestRepositoryScriptsFailureFromSteps, repositoryScriptsFailureComment, truncateError } from "./helpers/repository-failure.js";
 import { postReviewLedgerFailureNoteStep, readLedgerEvidenceFileStep, settleReviewLedgerThreads } from "./steps/review-ledger.js";
 import { applyReviewLedgerGate, buildResolutionEvidenceComment, pendingPrCheckIntent, resolveNoChangeAction, reviewLedgerOutputFields, reviewLedgerRepoLocalPath, runLedgerEvidenceSecondPass, settledAnswerCount, toLedgerGuardWorkItems, toReviewThreadDispositions, unsettledWorkItemAliases } from "./helpers/review-ledger.js";
@@ -354,7 +355,9 @@ export interface RetiredWorkflowFailureDeps {
   logFailure(reason: string): Promise<void>;
   commentFailure(reason: string): Promise<void>;
   moveTicket(): Promise<void>;
-  notifyTicket(reason: string): Promise<void>;
+  /** Whether it was delivered is deliberately ignored: a notification must
+   *  never change what a run reports. */
+  notifyTicket(reason: string): Promise<unknown>;
 }
 
 /** The concrete standard failure exit for a run that stops before it can do its
@@ -1782,8 +1785,8 @@ async function agentWorkflowBody(
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
         await postReviewLedgerFailureNoteOnFailureExit(reason);
         // The ticket comment, and only the ticket comment, carries the script
-        // evidence beside the reason. The run header, the run list and Slack
-        // keep the reason alone: they read one bounded string each and AIW-254
+        // evidence beside the reason. The run header, the run list and the
+        // messaging notification keep the reason alone: they read one bounded string each and AIW-254
         // pins them to the same one.
         const comment = repositoryScriptsFailureComment(
           reason,
@@ -2591,7 +2594,14 @@ async function agentWorkflowBody(
         // Substitute {{variables}} into prompt-bearing params per execution: the
         // run context (research plan, publication, selected repos) mutates
         // mid-run, so each block sees the values current at its turn.
-        const node = rawNode;
+        // A run suspended before S9 replays a recorded plan whose node still
+        // carries the type this build renamed. It has to finish, so the name is
+        // canonicalised here, before the executor table, the integration-block
+        // test and the switch below all ask what this node is.
+        const node =
+          rawNode.type === canonicalWorkflowBlockType(rawNode.type)
+            ? rawNode
+            : { ...rawNode, type: canonicalWorkflowBlockType(rawNode.type) };
         await materializeHumanDecisions();
         if (
           node.type === "implementation_agent" ||
@@ -3973,22 +3983,41 @@ async function agentWorkflowBody(
             return { kind: "next", output: buildOpenPrSuccessOutput(publication.prs) };
           }
 
-          case "send_slack_message": {
+          case "send_message": {
             // node.params.message carries its {{data:...}} tokens resolved by
             // resolveV2PromptConfiguration in executeV2Block.
-            const message = resolveSlackMessageInput(node.params, resolvedInputs);
+            const message = resolveMessageInput(node.params, resolvedInputs);
             const sendOn = node.params.sendOn === "always" ? "always" : "pr_ready";
+            // `ok` means the message arrived. Anything else is `skipped` with
+            // the reason, which is what an author branching off `skipped` acts
+            // on: a block that reported a clean send for a message nobody ever
+            // saw is worse than no block at all.
+            // `undefined` is what a run suspended before this deploy replays:
+            // `notifyTicket` recorded nothing back when a notification was
+            // fire and forget. Such a run reported `ok` then, and reporting it
+            // now is the only answer that keeps its remaining branches on the
+            // path they were already taking.
+            const sent = (delivery: MessagingDelivery | undefined): BlockExecutionResult =>
+              !delivery || delivery.delivered
+                ? { kind: "next", output: { status: "ok" } }
+                : { kind: "next", output: { status: "skipped", reason: delivery.reason } };
 
             if (sendOn === "always") {
-              // Standalone message: post it as a thread note whenever this block
-              // runs, independent of any PR. Empty message is a no-op.
-              if (!message) return { kind: "next", output: { status: "skipped" } };
-              await notifyTicket(ticket.identifier, { kind: "note", text: message }, transitionOwner);
-              return { kind: "next", output: { status: "ok" } };
+              // A message of its own, posted whenever this block runs and
+              // independent of any pull request. Nothing to say is nothing sent.
+              if (!message) {
+                return {
+                  kind: "next",
+                  output: { status: "skipped", reason: "the message is empty, so there was nothing to send" },
+                };
+              }
+              return sent(
+                await notifyTicket(ticket.identifier, { kind: "note", text: message }, transitionOwner),
+              );
             }
 
-            // Default "pr_ready": ride along with the PR-ready card, only once a PR
-            // has been published.
+            // Default "pr_ready": ride along with the published pull requests,
+            // and only once there are some.
             const publication = ctx.publication;
             const publishedPrs = publicationPrsForTelemetry(publication);
             if (publication?.status === "published" && publishedPrs) {
@@ -3999,15 +4028,22 @@ async function agentWorkflowBody(
                 activeModel,
                 phaseModels,
               );
-              await notifyTicket(ticket.identifier, {
-                kind: "pr_ready",
-                prs: publishedPrs,
-                usageReport,
-                ...(message ? { extraText: message } : {}),
-              }, transitionOwner);
-              return { kind: "next", output: { status: "ok" } };
+              return sent(
+                await notifyTicket(ticket.identifier, {
+                  kind: "pr_ready",
+                  prs: publishedPrs,
+                  usageReport,
+                  ...(message ? { extraText: message } : {}),
+                }, transitionOwner),
+              );
             }
-            return { kind: "next", output: { status: "skipped" } };
+            return {
+              kind: "next",
+              output: {
+                status: "skipped",
+                reason: "no pull request has been published in this run yet",
+              },
+            };
           }
 
           case "update_ticket_status": {

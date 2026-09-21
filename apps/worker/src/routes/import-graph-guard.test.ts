@@ -138,7 +138,7 @@ const ENTRIES = [
   "routes/mcp-auth/login.get.ts",
   "routes/mcp-auth/login.post.ts",
   "routes/webhooks/resend.post.ts",
-  "routes/webhooks/slack.post.ts",
+  "routes/webhooks/[id].post.ts",
 ];
 
 const STEP_DIRECTIVE = /^\s*["']use step["']/mu;
@@ -232,7 +232,7 @@ const STEP_GRAPH_LIMITS = {
   "routes/webhooks/gitlab.post.ts": 34,
   "routes/webhooks/jira.post.ts": 35,
   "routes/webhooks/resend.post.ts": 0,
-  "routes/webhooks/slack.post.ts": 0,
+  "routes/webhooks/[id].post.ts": 0,
 } as const;
 
 describe("app tier import graph", () => {

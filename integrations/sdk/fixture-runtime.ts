@@ -25,6 +25,9 @@ import {
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
   type MessagingAdapter,
+  type MessagingConversation,
+  type MessagingDelivery,
+  type MessagingTicket,
   type PullRequestHead,
   type ReviewThreadFeed,
   type TicketContent,
@@ -186,12 +189,31 @@ class FixtureRepository implements VCSAdapter {
 
 function fixtureMessaging(ctx: FixtureContext): MessagingAdapter {
   return {
-    async notifyForTicket(ticketKey: string, event: TicketEvent): Promise<void> {
+    async notifyForTicket(
+      ticket: MessagingTicket,
+      event: TicketEvent,
+      conversation: MessagingConversation,
+    ): Promise<MessagingDelivery> {
       try {
-        await readJson(ctx, "/messages", { method: "POST", body: JSON.stringify({ ticketKey, kind: event.kind }) });
+        const sent = (await readJson(ctx, "/messages", {
+          method: "POST",
+          body: JSON.stringify({
+            ticketKey: ticket.key,
+            kind: event.kind,
+            thread: conversation.handle,
+          }),
+        })) as { id?: string };
+        // A provider that anchored a conversation hands the handle back; core
+        // owns the row it lives in.
+        if (conversation.handle === null && typeof sent.id === "string") {
+          await conversation.remember(sent.id);
+        }
+        return { delivered: true };
       } catch (err) {
-        // The port promises never to throw.
-        ctx.log.warn({ err: err instanceof Error ? err.message : String(err), ticketKey }, "fixture_notify_failed");
+        // The port promises never to throw; it answers instead.
+        const reason = err instanceof Error ? err.message : String(err);
+        ctx.log.warn({ err: reason, ticketKey: ticket.key }, "fixture_notify_failed");
+        return { delivered: false, reason };
       }
     },
   };

@@ -30,9 +30,17 @@ const sentMessages: RecordedMessage[] = [];
 
 function demoMessaging(ctx: IntegrationContext<DemoManifest>): MessagingAdapter {
   return {
-    async notifyForTicket(ticketKey, event) {
-      // The port promises never to throw.
-      sentMessages.push({ ticketKey, event, channel: ctx.connection.channel, at: new Date().toISOString() });
+    async notifyForTicket(ticket, event, conversation) {
+      // The port promises never to throw, and answers whether it delivered.
+      sentMessages.push({
+        ticketKey: ticket.key,
+        event,
+        channel: ctx.connection.channel,
+        at: new Date().toISOString(),
+      });
+      // One thread per ticket, the same way a real provider anchors one.
+      if (conversation.handle === null) await conversation.remember(ticket.key);
+      return { delivered: true };
     },
   };
 }

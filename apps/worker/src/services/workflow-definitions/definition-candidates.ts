@@ -36,6 +36,10 @@ export type WorkflowDefinitionCandidateParse =
 export function parseWorkflowDefinitionCandidate(
   candidate: unknown,
 ): WorkflowDefinitionCandidateParse {
+  // A block this build renamed is accepted under its old name and stored under
+  // the new one. The sender is an editor tab somebody opened before the deploy,
+  // or a client written against the old catalog; refusing them would break
+  // authoring for the length of a browser session (ADR-010).
   const parsed = parse(candidate);
   if (parsed.definition !== null) return { ok: true, definition: parsed.definition };
   return {

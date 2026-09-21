@@ -1,6 +1,6 @@
 /* eslint-disable max-lines, max-lines-per-function */
 import { ticketRunUrl } from "../support/dashboard-links.js";
-import type { TicketEvent } from "../../adapters/messaging/types.js";
+import type { MessagingDelivery, TicketEvent } from "../../adapters/messaging/types.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { type WorkflowExecutionLogEvent } from "../../run-observability/safe-execution-log.js";
 import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
@@ -218,11 +218,18 @@ export async function postTicketComment(
   return issueTracker.postComment(ticketId, comment);
 }
 
+/**
+ * Tell this deployment's people what happened for a ticket.
+ *
+ * Answers whether it went out. A caller that is a block reports that; a caller
+ * that merely notifies ignores it, because a notification must never change a
+ * run's outcome. It still never throws for a delivery failure.
+ */
 export async function notifyTicket(
   ticketKey: string,
   event: TicketEvent,
   owner: ActiveRunOwner,
-) {
+): Promise<MessagingDelivery> {
   "use step";
   const { loadActiveRunOwnerPort, loadAdaptersPort } = await import(
     "../internal/ports.js"
@@ -231,7 +238,7 @@ export async function notifyTicket(
   const { createAdapters } = await loadAdaptersPort();
   const { messaging } = createAdapters();
   await assertConnectedActiveRunOwner(owner);
-  await messaging.notifyForTicket(ticketKey, event);
+  return messaging.notifyForTicket(ticketKey, event);
 }
 
 export async function notifyTicketBestEffort(

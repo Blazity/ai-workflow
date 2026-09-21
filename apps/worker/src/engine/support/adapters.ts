@@ -1,13 +1,12 @@
 import type { VcsProviderKind } from "@shared/contracts";
 import { env } from "../../infra/vcs-config.js";
 import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
-import { ChatSDKAdapter } from "../../adapters/messaging/chatsdk.js";
-import { NoopMessagingAdapter } from "../../adapters/messaging/noop.js";
 import { createConnectedPostgresRunRegistry } from "../../db/repositories/active-runs.js";
 import { createRepositoryVCS } from "./vcs-runtime.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../../adapters/vcs/types.js";
-import type { MessagingAdapter } from "../../adapters/messaging/types.js";
+import type { MessagingSender } from "../../adapters/messaging/types.js";
+import { messagingSender } from "./messaging.js";
 import type {
   RunRegistryAdapter,
   ThreadStore,
@@ -16,7 +15,7 @@ import type {
 export interface Adapters {
   issueTracker: IssueTrackerAdapter;
   vcs: VCSAdapter;
-  messaging: MessagingAdapter;
+  messaging: MessagingSender;
   runRegistry: RunRegistryAdapter & ThreadStore;
 }
 
@@ -86,16 +85,11 @@ export function coreServesIssueTracker(): boolean {
 export function createAdapters(vcsTarget?: VcsAdapterTarget): Adapters {
   const runRegistry = createConnectedPostgresRunRegistry();
   let vcs: VCSAdapter | undefined;
-  const messaging: MessagingAdapter =
-    env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID
-      ? new ChatSDKAdapter({
-          slackToken: env.CHAT_SDK_SLACK_TOKEN,
-          channelId: env.CHAT_SDK_CHANNEL_ID,
-          botName: env.CHAT_SDK_BOT_NAME,
-          jiraBaseUrl: env.JIRA_BASE_URL,
-          threadStore: runRegistry,
-        })
-      : new NoopMessagingAdapter();
+  // Which provider carries a message is the deployment's answer, read at each
+  // call rather than here: disabling an integration is the kill switch an admin
+  // reaches for, and an adapter built once would keep posting for as long as
+  // this process lived.
+  const messaging = messagingSender();
   const adapters = {
     issueTracker: new JiraAdapter({
       baseUrl: env.JIRA_BASE_URL,

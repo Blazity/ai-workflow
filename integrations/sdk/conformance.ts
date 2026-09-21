@@ -41,6 +41,7 @@ export type ConformanceCode =
   | "run_state_missing"
   | "run_state_undeclared"
   | "implementation_undeclared"
+  | "webhook_receive_missing"
   | "reserved_slot_used";
 
 export interface ConformanceIssue {
@@ -73,7 +74,6 @@ export const CORE_HEALTH_SECTION_IDS: readonly string[] = [
   "github",
   "gitlab",
   "jira",
-  "slack",
   "sso",
 ];
 
@@ -153,9 +153,10 @@ export const RESERVED_INTEGRATION_IDS: readonly string[] = [
  * own configuration and hand its value back through the dashboard, and a name
  * such as DATABASE_URL carries no credential word to catch it.
  *
- * The provider variables core reads today (JIRA_*, GITHUB_*, GITLAB_*,
- * CHAT_SDK_*, SLACK_*, GENAI_ENGINE_*) are deliberately absent: they belong to
- * the integrations that take them over in S8 to S12. S1 asserts this list
+ * The provider variables core reads today (JIRA_*, GITHUB_*, GITLAB_*) are
+ * deliberately absent: they belong to the integrations that take them over in
+ * S10 to S12. GENAI_ENGINE_* left with Arthur in S8, CHAT_SDK_* and SLACK_*
+ * with Slack in S9. S1 asserts this list
  * stays equal to the core-owned names in
  * `apps/worker/src/infra/runtime-env.ts`.
  */
@@ -210,9 +211,13 @@ const ENV = /^[A-Z][A-Z0-9_]*$/;
 const SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const SNAKE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 const RESERVED_PAGE_IDS = new Set(["connection"]);
-const RESERVED_RUNTIME_SLOTS: Record<string, string> = {
-  webhook: "S9, which designs webhook translation",
-};
+/**
+ * Slots the contract names and no stage has designed yet. Empty today: S9
+ * released `webhook`, the last one. Kept because the next reserved slot is one
+ * line here and a message that names its stage, rather than a silent `never`
+ * whose refusal reads as a type error nobody can place.
+ */
+const RESERVED_RUNTIME_SLOTS: Record<string, string> = {};
 const CREDENTIAL_WORDS = new Set([
   "TOKEN",
   "SECRET",
@@ -624,6 +629,17 @@ function checkRuntimeSlots(runtime: Runtime, report: Report) {
   for (const [slot, owner] of Object.entries(RESERVED_RUNTIME_SLOTS)) {
     if (runtime[slot] !== undefined) {
       report("reserved_slot_used", `runtime.${slot}`, `runtime.${slot} is reserved for ${owner}.`);
+    }
+  }
+  const webhook = runtime.webhook;
+  if (webhook !== undefined) {
+    const receive = (webhook as { receive?: unknown } | null)?.receive;
+    if (typeof receive !== "function") {
+      report(
+        "webhook_receive_missing",
+        "runtime.webhook.receive",
+        "The runtime declares a webhook with nothing to receive a request. Give it receive(request, ctx), or delete the slot: core answers 404 for an integration that declares none.",
+      );
     }
   }
 }

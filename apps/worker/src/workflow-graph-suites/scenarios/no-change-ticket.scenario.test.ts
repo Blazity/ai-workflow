@@ -83,7 +83,7 @@ describe("already resolved ticket: ticket-workflow", () => {
     "checks",
     "finalize",
     "open-pr",
-    "slack",
+    "notify",
     "status",
   ];
 
@@ -185,7 +185,7 @@ describe("already resolved ticket: ticket-workflow", () => {
         prNumber: 1,
       },
     });
-    s.script({ nodeId: "slack" }, { kind: "next", output: { status: "ok" } });
+    s.script({ nodeId: "notify" }, { kind: "next", output: { status: "ok" } });
     s.script({ nodeId: "status" }, {
       kind: "next",
       output: { status: "ok", target: "ai_review" },

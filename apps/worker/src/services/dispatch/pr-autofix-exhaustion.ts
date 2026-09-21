@@ -12,9 +12,9 @@ export interface PrAutofixExhaustionNotice {
   baseRef: string;
   prNumber: number;
   prUrl: string;
-  /** Ticket owning this pull request's Slack thread, when the run had one. */
+  /** Ticket owning this pull request's chat conversation, when the run had one. */
   ticketKey: string | null;
-  /** Pull request identity, used as the Slack anchor when there is no ticket. */
+  /** Pull request identity, used as the conversation anchor when there is no ticket. */
   subjectKey: string;
   /** Which trigger's cap crossed, since the two caps read very differently to
    * a human: trigger_pr_checks_failed is an autofix loop that keeps failing
@@ -60,7 +60,7 @@ export async function announcePrAutofixExhaustion(
     max: decision.max,
   };
   // A plain factory, safe outside workflow scope, and it hands back a messaging
-  // adapter that no-ops when Slack is not configured.
+  // capability, which reports rather than throws when nothing is connected.
   const adapters = createAdapters({
     provider: notice.provider,
     repoPath: notice.repoPath,
@@ -70,7 +70,7 @@ export async function announcePrAutofixExhaustion(
   try {
     // The vcs property is read inside the try on purpose: the repository adapter
     // is built lazily, so a provider that is no longer configured throws here
-    // rather than from the call, and that must not skip the Slack half. The
+    // rather than from the call, and that must not skip the notification. The
     // marker is unconditional for both variants: it is what stops the fix
     // summary (or this notice itself) from being read back as a new review.
     await adapters.vcs.postPRComment(
@@ -85,18 +85,18 @@ export async function announcePrAutofixExhaustion(
   }
 
   try {
-    // A note posts under the ticket's existing Slack thread without touching its
+    // A note posts under the ticket's existing conversation without touching its
     // status line, and falls back to a top level message when there is no thread.
     // Without a ticket the pull request key anchors nothing, which is why the
     // text below names the pull request itself.
     await adapters.messaging.notifyForTicket(notice.ticketKey ?? notice.subjectKey, {
       kind: "note",
-      text: exhaustionSlackText(notice),
+      text: exhaustionNoticeText(notice),
     });
   } catch (error) {
     logger.warn(
       { ...context, error: errorMessage(error) },
-      "pr_autofix_exhausted_slack_failed",
+      "pr_autofix_exhausted_notice_failed",
     );
   }
 }
@@ -145,9 +145,9 @@ function exhaustionComment(triggerType: PrTriggerType, max: number): string {
   ].join("\n");
 }
 
-/** Slack copy. Its audience is internal, so it names the repository and links
+/** The notice itself. Its audience is internal, so it names the repository and links
  * out. Branches on trigger type for the same reason exhaustionComment does. */
-function exhaustionSlackText(notice: PrAutofixExhaustionNotice): string {
+function exhaustionNoticeText(notice: PrAutofixExhaustionNotice): string {
   const label = `${notice.repoPath}#${notice.prNumber}`;
   if (notice.triggerType === "trigger_pr_review") {
     return (

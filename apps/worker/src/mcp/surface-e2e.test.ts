@@ -605,6 +605,12 @@ beforeEach(async () => {
     }
     return resolved;
   });
+  // Messaging comes from a connected integration now, and this deployment
+  // connects Slack the way an upgraded one does: through the variables it
+  // already had. Without it the announcement a successful authoring write
+  // sends would reach nobody, which is what `authoringAnnouncements` reports.
+  vi.stubEnv("CHAT_SDK_SLACK_TOKEN", "xoxb-test");
+  vi.stubEnv("CHAT_SDK_CHANNEL_ID", "C1");
   state.fetchTicket.mockResolvedValue(BENIGN_TICKET);
   state.notifyForTicket.mockResolvedValue(undefined);
   state.createAdapters.mockImplementation(() => ({
@@ -907,10 +913,10 @@ describe("A. the client cycle and the published surface", () => {
       contractHash: SNAPSHOT.contractHash,
       deploymentClass: "dedicated-worker",
       enabledDomains: DOMAINS,
-      // A messaging adapter is configured for this deployment, so the announcement a
-      // successful authoring write sends can actually reach somebody. The honest
-      // "none" is what a deployment with no chat credentials reports, where
-      // engine/support/adapters.ts:81 hands every tool the no-op adapter.
+      // One connected integration serves messaging here, so the announcement a
+      // successful authoring write sends can actually reach somebody. The
+      // honest "none" is what a deployment with none connected reports, and
+      // also what two connected providers with none selected report.
       authoringAnnouncements: "chat",
     });
     // The envelope's own hash and the one inside the payload are produced by two

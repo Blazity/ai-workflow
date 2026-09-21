@@ -131,8 +131,9 @@ test("an id a core health section still holds is refused until that section move
   // The health page keeps one section per id, and an integration's checks are
   // keyed under its id: two sections called `github` could disagree about the
   // same deployment. Each of these rows leaves this list in the stage that
-  // moves the provider out of core.
-  for (const id of ["github", "jira", "slack", "database"]) {
+  // moves the provider out of core, which is why `slack` is not among them
+  // any more: S9 deleted core's section and the package took the name.
+  for (const id of ["github", "jira", "database"]) {
     const { manifest, runtime } = validIntegration();
     manifest.id = id;
     manifest.blocks[0].type = `${id}_lookup`;
@@ -360,12 +361,13 @@ test("a page id is a lowercase slug and never the core connection tab", () => {
   hasIssue(twice.manifest, twice.runtime, "duplicate", "pages[1].id");
 });
 
-test("a reserved runtime slot cannot be filled before its stage designs it", () => {
-  for (const slot of ["webhook"]) {
-    const { manifest, runtime } = validIntegration();
-    runtime[slot] = async () => ({});
-    hasIssue(manifest, runtime, "reserved_slot_used", `runtime.${slot}`);
-  }
+test("a webhook slot with nothing to receive a request is refused", () => {
+  // The slot was reserved until S9 designed it. Declaring it now means core
+  // routes `/webhooks/<id>` here, so a slot that cannot receive anything is an
+  // integration whose provider gets a 500 rather than an answer.
+  const { manifest, runtime } = validIntegration();
+  runtime.webhook = { deliver: async () => {} };
+  hasIssue(manifest, runtime, "webhook_receive_missing", "runtime.webhook.receive");
 });
 
 test("a page reader belongs to a page the manifest declares", () => {

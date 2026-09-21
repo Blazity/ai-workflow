@@ -64,7 +64,7 @@ const LEGACY_VARIABLE_CASES: Array<[
   ["post_ticket_comment", { body: "{{ticket_title}}" }, "post_ticket_comment body contains an unresolved placeholder."],
   ["post_pr_comment", { body: "{{pr_url}}" }, "post_pr_comment body contains an unresolved placeholder."],
   ["complete_pr_check", { details: "{{run_id}}" }, "complete_pr_check details contains an unresolved placeholder."],
-  ["send_slack_message", { message: "{{pr_url}}" }, "send_slack_message message contains an unresolved placeholder."],
+  ["send_message", { message: "{{pr_url}}" }, "send_message message contains an unresolved placeholder."],
   ["human_question", { questions: ["Fine?", "Review {{plan_markdown}}?"] }, "human_question questions contains an unresolved placeholder."],
   ["call_llm", { prompt: "Use {{plan}}" }, "call_llm prompt contains an unresolved placeholder."],
   ["call_llm", { prompt: "Summarize.", system: "You work on {{unknown}}." }, "call_llm system contains an unresolved placeholder."],

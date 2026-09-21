@@ -1,4 +1,12 @@
 // The messaging port lives in @integrations/sdk (ADR-010), where an
-// integration can implement it. Every name core imported from here is still
-// exported from here, with the same kind, so no caller changed.
-export type { MessagingAdapter, TicketEvent } from "@integrations/sdk";
+// integration implements it. Core itself talks to `MessagingSender`, which is
+// the same two operations with the ticket's conversation already resolved:
+// remembering which conversation a ticket owns is core's row, not a provider's.
+export type {
+  MessageRetrievalFailure,
+  MessageSearchMatch,
+  MessageSearchOutcome,
+  MessagingDelivery,
+  MessagingSender,
+  TicketEvent,
+} from "@integrations/sdk";

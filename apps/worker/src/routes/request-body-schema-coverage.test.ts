@@ -134,8 +134,8 @@ const NO_JSON_BODY: Record<string, string> = {
     "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
   "webhooks/resend.post.ts":
     "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
-  "webhooks/slack.post.ts":
-    "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
+  "webhooks/[id].post.ts":
+    "reads another format: raw bytes, because the integration verifies a signature computed over exactly what arrived, and only it knows how.",
 };
 
 const routesRoot = import.meta.dirname;

@@ -37,10 +37,6 @@ export type SystemHealthConfig = {
   resendApiKey?: string;
   resendFromEmail?: string;
   resendWebhookSecret?: string;
-  slackToken?: string;
-  slackChannelId?: string;
-  slackSigningSecret?: string;
-  slackAllowedUserIds?: string;
   mcpEnabled: boolean;
   webhookTriggerEncryptionKey?: string;
 };
@@ -233,20 +229,6 @@ function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[]
     config.resendWebhookSecret && emailCredentialsMode === "not-configured"
       ? "misconfigured"
       : emailCredentialsMode;
-  const slackHasAnyConfig = Boolean(
-    config.slackToken || config.slackChannelId || config.slackSigningSecret,
-  );
-  const slackBotMode: SystemHealthMode = config.slackToken
-    ? "configured"
-    : slackHasAnyConfig
-      ? "misconfigured"
-      : "mock";
-  const slackChannelMode: SystemHealthMode =
-    config.slackToken && config.slackChannelId
-      ? "configured"
-      : slackHasAnyConfig
-        ? "misconfigured"
-        : "mock";
   const agentMode: SystemHealthMode =
     config.agentKind === "claude"
       ? requiredMode([config.anthropicApiKey, config.anthropicModel])
@@ -288,11 +270,6 @@ function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[]
     integration("email", "Email delivery", "auth-email", false, [
       checked("sender", "API and sender domain", ["RESEND_API_KEY", "RESEND_FROM_EMAIL"], emailMode, true),
       checked("webhook-delivery", "Delivery-status webhook", ["RESEND_WEBHOOK_SECRET"], optionalValueMode(config.resendWebhookSecret), false, "provider-delivery"),
-    ]),
-    integration("slack", "Slack", "platform", false, [
-      checked("bot-auth", "Bot authentication", ["CHAT_SDK_SLACK_TOKEN"], slackBotMode, true),
-      checked("channel", "Configured channel delivery", ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"], slackChannelMode, true),
-      checked("webhook-delivery", "Slash command signature", ["SLACK_SIGNING_SECRET", "SLACK_ALLOWED_USER_IDS"], optionalValueMode(config.slackSigningSecret), false, "local-observation"),
     ]),
     integration("mcp", "Remote MCP", "platform", false, [
       checked("contract", "Published tool contract", ["MCP_ENABLED"], config.mcpEnabled ? "configured" : "not-configured", true),

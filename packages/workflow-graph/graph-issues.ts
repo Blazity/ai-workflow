@@ -1254,7 +1254,7 @@ const ANY_SCOPE_BLOCK_POLICY = {
   update_ticket_status: "deny",
   post_ticket_comment: "deny",
   post_pr_comment: "safe",
-  send_slack_message: "deny",
+  send_message: "deny",
   send_plan_approval: "deny",
   human_question: "deny",
   // Nothing to guard on an any-scope path: Finalize, Open PR/MR, and the check

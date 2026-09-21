@@ -458,8 +458,8 @@ does not have to call them additive.
 | `downloadAttachment` returns a Node `Buffer`, a Node type in a browser-safe package | `issue-tracker.ts` | S12 |
 | `PullRequestHead.headPipeline*` are GitLab's, `latestCheckRuns` and `LatestCheckRun.appSlug` GitHub's; `getLatestCheckRuns` is GitHub only | `vcs.ts` | S10, S11 |
 | Comments describe GitHub and GitLab ids (`PRRT_` node ids, discussions) | `vcs.ts` | S10, S11 |
-| `TicketEvent` comments describe Slack and Jira; the `note` kind names the `send_slack_message` block | `messaging.ts` | S9 |
 | `TicketEvent.pr_ready` carries `RunPullRequest`, whose `provider` is `github | gitlab` in `@shared/contracts`, so a third VCS cannot be reported yet | `messaging.ts` | S10 (decision 19) |
+| `MessagingSender.notifyForTicket` takes a ticket key and `TicketEvent` has a `note` kind: both are shaped by a run having one subject. A future caller that is not a run would need a subject of its own. Nothing asks for it yet | `messaging.ts` | when something asks |
 | `GateStatusRef` names GitHub and GitLab, which is why the gate status extensions have not moved | worker `vcs/types.ts` | S10, S11 |
 | `GITHUB_APP_PRIVATE_KEY` is base64 in the environment (`adapters/vcs/github-auth.ts:20-21`) while `multiline` invites a raw PEM in the dashboard, and the integration cannot tell the two apart. Proposal: a `pem` format core normalises, so both forms reach the integration the same way | `manifest.ts` | S11 |
 | `IntegrationRunIdentity` gained two required fields in S8 (`subjectKey`, `state`). Additive for an integration, which only reads it; anything that builds one (core, a test double, a host other than ours) stops compiling until it supplies both. Proposal: the next field on it is optional, or this record says why not | `context.ts` | recorded in S8 |
@@ -2126,6 +2126,236 @@ and it is written as steps because the two ways to get it wrong are both quiet:
 definitions closes the triggers while leaving manual dispatch and
 `workflows.dispatch` open.
 
+## Slack, and messaging as a capability, decided in S9
+
+Slack is `integrations/slack`, and messaging is something core asks for rather
+than a product it names. The port grew two answers it did not have; the
+conversation a ticket owns stayed core's; run control stayed core's; and one
+block was renamed rather than deleted, which is the one place this stage
+overrides the plan.
+
+### The block was renamed, and the rename is expand, migrate, contract
+
+Plan decision 17 deletes a removed block and re-authors the definitions that
+used it. Filip overruled that for Slack on 2026-09-20, because two enabled
+production definitions use `send_slack_message` and deploy day must not break
+them. The rename is lossless by construction: there is no channel parameter
+(the destination is the connection's), so `send_message` carries the same
+`{ message?, sendOn? }`, the same single `out` port, the same
+`allowsFailurePort`, and the same `statusVariants` `["ok", "skipped"]`.
+Widening that set would silently change which stored branches match, which is
+this repository's own trap.
+
+The mechanism matters more than the rename:
+
+- **The new build accepts the old type.** `canonicalizeWorkflowBlockTypes`
+  (`@shared/contracts`) rewrites a node's type inside `parse`
+  (`@shared/workflow-graph`), the one reader every graph goes through: a stored
+  row, a candidate being published, a committed scenario snapshot, the run
+  loader and the dashboard editor. It is settled there rather than at each call
+  site because a call site that forgot would turn a working stored workflow
+  into "this build has no such block", and two of them had already been missed
+  when the rename was written per-reader. So the palette, the parameter
+  schemas, the resolver, the editor and the run all see one name, an editor tab
+  somebody opened before the deploy still publishes, and a publish writes the
+  new type. The executor canonicalises the node it is about to run as well,
+  because a run suspended before the rename replays a recorded plan that never
+  went through `parse` and has to finish.
+- **The stored rewrite is a separate, explicitly invoked one-off**
+  (`apps/worker/scripts/rewrite-renamed-block-types.ts`), run after the new
+  code is live, never from the build path. The reason is in this repository's
+  own AGENTS.md: the worker's `build` runs `db:migrate` and a preview
+  deployment reads production's database, so a rewrite carried by a build
+  migration would rewrite production's definitions from a preview deploy of an
+  unmerged branch while production still ran code that had never heard of the
+  new type. It rewrites every version, not only the deployed one, so opening
+  history, comparing and rolling back keep working; it is idempotent; and it
+  writes one data-modifying statement, because neon-http has no interactive
+  transaction
+  and a loop could leave one definition half rewritten.
+- **Until the rewrite runs, a revert to the previous build is safe.** That
+  window is the point of doing it this way, and it belongs in the release
+  notes.
+- **The alias is removed in R1**, after the rewrite is verified on production
+  and on the Arthur tenant. `RENAMED_WORKFLOW_BLOCK_TYPES` is the one place to
+  empty; it carries that condition in its own comment so it cannot quietly
+  become permanent.
+
+### `ok` means delivered
+
+`MessagingAdapter.notifyForTicket` still never throws, which is what lets a
+notification be best effort. It now answers `MessagingDelivery` instead of
+nothing, and that is the whole of decision 12's line between a block and a
+notification: the block reports `skipped` with the reason (nothing to say, no
+pull request yet, or the provider refused and why) where it used to report
+`ok` for a message nobody received, and an author who wants the run to stop
+branches on `skipped` exactly as before. The notifications that are not a
+block (started, failed, clarification, plan approval, cancel) read the same
+answer and ignore it, because a notification must never change a run's
+outcome. `reason` is an optional output property, so a graph published before
+it existed binds what it always did.
+
+### The conversation is core's row, and the handle is opaque
+
+`thread_parents` is keyed by ticket, not by run, and it outlives the run that
+started it. It stays in core and the provider receives a `MessagingConversation`:
+the handle core remembers, `remember` and `forget`. Three things follow.
+
+A second messaging provider needs no table and no migration. The rows written
+before this stage hold a Slack message timestamp, which is exactly what the
+Slack provider expects, so nothing was migrated and a thread started yesterday
+is the thread today. And a handle a provider no longer recognises is not an
+error: it forgets it and anchors a new one, so a deployment that switched
+providers heals itself at the first event rather than at a migration.
+
+The slash command's `reset` reads and clears the same row, and it does so
+through core (`services/run-control`), never through an integration reaching
+into our database.
+
+### Run control is core's; the integration verifies, parses, renders, delivers
+
+The slash command used to decide things (which runs are active, cancel this
+one) and speak Slack (ephemeral replies, `response_url`, the allowlist) in one
+place. Split on that line, the surface is `RunControlCommand` and
+`RunControlAnswer` in `@shared/contracts`: closed sets of values, never
+sentences, because a provider handed prose could only paste it and the second
+provider's copy would be ours. `list`, `status`, `cancel`, `redis summary`,
+`redis inspect` and `redis reset` all come out the other side; the help text
+and the unknown-command reply never reach core at all, because the syntax is
+the provider's own.
+
+The webhook slot is two calls rather than one, and that is the three-second
+acknowledgement in the type: `receive` verifies the signature over the **raw
+body** and returns what the provider gets back now; core then runs the command
+and hands the outcome to `deliver`. The route therefore holds the bytes and
+parses nothing, because a route that parsed JSON first would kill every
+form-encoded slash command. A stale or bad signature is 401 and a missing
+signing secret is 503, which is the difference between a request that is wrong
+and a deployment that was never given what it needs to read one.
+
+`deliver` is told about a failure as well as an answer. Without that, a
+handler that threw left the person reading "Working on ..." for ever, which is
+the first of the three defects this stage fixed on the way. `deliver` is
+optional on the contract: an integration whose webhook never produces a run
+control command should not have to write an empty function. When one is
+missing, core still runs the command, because that is what the person asked
+for, and logs `integration_webhook_reply_undeliverable` rather than swallowing
+it.
+
+### Availability, and what a capability an integration serves means
+
+`slackConfigured` is gone from the resolver. `send_message` and the chat half
+of `investigate` ask `coreCapabilityIssue("messaging", integrations)`, which is
+the same function an integration's own block goes through, so the palette
+cannot say one thing and a run another.
+
+One rule changed shape. S4 refused a capability that only an integration
+declared, because execution handed a block whichever adapter core built from
+its own variables. That refusal now applies only to capabilities core cannot
+yet reach through an integration (`INTEGRATION_SERVED_CAPABILITIES` in
+`integration-availability.ts`); S9 added `messaging` to that set in the same
+change that taught execution to resolve it
+(`engine/support/messaging.ts`), and S10 to S13 each add theirs the same way.
+`builtinCapabilitiesOfDeployment()` lost `messaging`, which is the shrink
+decision 10 describes.
+
+Resolution happens per call, not once per process: disabling an integration is
+the kill switch an admin reaches for, and a sender built at start-up would
+keep posting for as long as the process lived. Two usable providers with none
+selected is a named refusal, never a silent pick of the first.
+
+A capability nothing usable serves is refused by name where a name exists. An
+integration that ships and declares the capability but sits disabled or
+unconnected is said out loud with its state ("Test Chat would provide the
+messaging capability this block needs, but is switched off"), and the flat
+"nothing provides it" is kept for a build that ships no such integration at
+all. The sentence is shared by every capability, so S10 to S13 inherit it: an
+author reading "nothing provides messaging" while the Integrations page shows
+Slack sitting there is the one reading that sends somebody looking for a second
+provider they do not need.
+
+### What the research path does when nobody can search
+
+`searchMessages` is optional on the port and total on the sender: a provider
+without it answers `unsupported`, a deployment with no provider answers
+`not_connected`, and settings this deployment could not read answer
+`unavailable`. That third one is not pedantry: "nothing is connected" sent in
+front of an admin whose Slack is connected is an instruction to go and connect
+it again, so the sender keeps the two apart in both vocabularies, the sentence
+a person reads and the reason the search port carries. Neither is an error.
+`investigate` reports what it could not read in the same "Not searched" line it
+already had, and reasons from the evidence it has.
+
+Its parameters still spell the provider as data (`providers: ["jira", "slack"]`,
+`slackChannels`, `slackLookbackDays`): those are values inside graphs people
+already published, and they leave with the block in S12. The one place outside
+the block that reads that value takes it from the block
+(`INVESTIGATE_CHAT_PROVIDER` in `engine/blocks/investigate/manifest.ts`), so the
+availability resolver names no provider at all and the core-reference gate can
+stay absolute rather than learning an exception.
+
+### Two named exceptions in the gate, and one loss
+
+`plannedIntegrations.slack` is gone, so the gate fails if core writes the name
+again. Nine rows stay:
+
+- Eight are `investigate`'s parameter vocabulary, listed above, removed by S12.
+  The block's own manifest is one of them, and the availability resolver is no
+  longer among them.
+- One is `engine/blocks/leak-review/execute.ts`, whose secret scanner names the
+  SHAPES of credentials it looks for so the finding a person reads says which
+  kind of token leaked. It would be worth keeping if this product never talked
+  to the provider, so no stage removes it.
+
+The loss is the health check "Slash command signature", which reported whether
+a signed command had arrived recently. It was answered from observations core
+recorded under a scope derived from the signing secret, and the secret is the
+integration's now; keeping it would have meant core reading an integration's
+credential to key a health row. The two live probes the package declares (the
+bot token, and delivery to the configured channel, proved the way a real
+notification is) are better evidence, and the connection row core adds to every
+integration says whether the secret is set at all.
+
+### The other two defects this stage had to fix
+
+**A token with no channel was a silent no-op.** `createAdapters` fell through
+to an adapter that logged and dropped everything. Both fields are required on
+the manifest now, so S2's resolver reports Failing and names the missing
+variable, which is what an admin can act on. Because the channel is a
+non-secret connection value it enters the configuration fingerprint by
+construction, so changing it stops runs in flight with `reconfigured`: correct,
+and the impact preview before saving says so.
+
+**The channel delivery probe could leave rubbish in somebody's channel.** It
+schedules a message sixty days out and deletes it. The delete is retried, an
+already-deleted message counts as cleaned up (two overlapping scans race
+there), and a cleanup that still could not be done reports `degraded` with the
+date the message would arrive and where to delete it, rather than reporting
+"delivery verified" over a message left in the queue.
+
+### The drain for this stage
+
+`notifyTicket` (`engine/steps/ticket-analysis.ts`) keeps its module path and
+its function name and changes its recorded result from nothing to a
+`MessagingDelivery`. A run that completed that step before the deploy replays
+the recorded nothing, so the block reads `undefined` where it now expects an
+answer. The executor takes that as delivered
+(`engine/agent-workflow.ts`, `case "send_message"`): the block reported `ok`
+unconditionally before, so `ok` is the only answer that leaves such a run on
+the branch it was already taking, and the alternative is a run that dies on the
+way back from a deploy nobody told it about. Guard:
+`engine/tests/send-message-run.test.ts`, "keeps a run suspended before this
+deploy on the path it was already taking". The drain below is still the
+intended route; this is what happens to a run the drain missed.
+
+No step identity is added, removed, moved or renamed.
+`blockInvestigateRetrievalStep` keeps its identity and its recorded input
+shape, and its inner reads changed.
+
+That is a smaller drain than S8's, which is total for this branch anyway. The
+branch's drain is run once, before it merges, under the protocol in
+[the integrations plan](../plans/2026-09-18-integrations.md).
+
 ## Change log
 
 Additive changes to `@integrations/sdk` after S0, newest first. Each entry
@@ -2133,6 +2363,10 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-20 | S9 | `webhook`, the reserved slot released: `IntegrationWebhook` with `receive` and an optional `deliver`, `IntegrationWebhookRequest`, `IntegrationWebhookReception`, `IntegrationWebhookResponse`, and conformance code `webhook_receive_missing` | S0 reserved it for the stage that had a provider to design it against. `receive` and `deliver` are two calls because a slash command has about three seconds to be acknowledged and the work happens after; `deliver` is told about a failure as well as an answer, because a handler that threw used to leave the person reading "Working on ...". The request carries the raw body, since that is what a provider signs. Additive: the slot was `never` and no manifest field changed. |
+| 2026-09-20 | S9 | `MessagingDelivery` as the return of `notifyForTicket`, `MessagingConversation` as its third argument, `MessagingTicket` in place of a bare key, `MessagingSender` as what core calls, and the optional `searchMessages` with `MessageSearchQuery`, `MessageSearchMatch`, `MessageSearchSkip`, `MessageSearchOutcome` and `MessageRetrievalFailure` | The port never threw and therefore never said whether anything arrived, so a block reported `ok` for a message nobody received. It answers now. The conversation a ticket owns is core's row and is passed in as an opaque handle, so a second provider needs no table and the old Slack timestamps keep working. The ticket arrives with the link core built, because which tracker this deployment talks to is not a chat provider's business. Search became an operation of the capability so the research path stops importing a provider. Not additive for a provider: every messaging adapter changes signature, which is why it landed with the only one. |
+| 2026-09-20 | S9 | `RunControlCommand`, `RunControlAnswer`, `RunControlOutcome` and their values re-exported from the SDK, alongside `RunPullRequest`, `pullRequestRef`, `pullRequestRepoLabels` and `JsonValue` | An integration may not depend on `@shared/contracts` directly (the boundaries gate and the conformance dependency check both say so), and a messaging provider has to render a run control answer and a pull request list. The SDK is where an integration reaches everything. |
+| 2026-09-20 | S9 | `CORE_HEALTH_SECTION_IDS` lost `slack` | Core's own Slack health section is gone, so the id is the integration's to take. The shrink that entry describes. |
 | 2026-09-19 | S8 | `@integrations/sdk/fixtures`, a second entry point exporting the OpenTelemetry-shaped tracing foil (`otelFixtureManifest`, `otelFixtureRuntime`) | Core's own test runs the foil through the real plan and install path, and a test in `apps/worker` may not reach into the package's source files. Test support only; nothing in production imports it. |
 | 2026-09-19 | S8 | `IntegrationPageData` (in `@integrations/host-ui`): the unavailable answer carries `cause` (`worker`, `not_connected`, `provider`) | A page has to tell "the worker did not answer" from "this provider could not be read", and a message string is not something a page may branch on. Additive for a page that ignores it; required on the host, which is core alone. |
 | 2026-09-19 | S8 | `IntegrationBlockOutput.mustRead` and, in `@shared/contracts`, `WorkflowBlockContract.output.mustRead`; conformance code `block_must_read_undeclared` | A security screen whose verdict no node acts on is a screen the run walks past. The manifest names the fields; publishing refuses a graph unless the first node on every path out of the block is a Branch on that field whose two answers reach different nodes (`output.unread`). Optional and absent by default. |

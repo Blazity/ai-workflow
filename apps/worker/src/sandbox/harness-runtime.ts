@@ -57,7 +57,6 @@ export const HARNESS_CREDENTIAL_REFERENCE_CATALOG = new Set([
   "github",
   "gitlab",
   "jira",
-  "slack",
 ] as const);
 
 const AGENT_BLOCK_TYPES = new Set<WorkflowBlockType>([

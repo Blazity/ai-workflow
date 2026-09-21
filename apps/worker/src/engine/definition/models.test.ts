@@ -215,9 +215,10 @@ describe("buildWorkflowEditorOptions", () => {
       available: true,
       unavailableReason: null,
     });
-    expect(options.blockRegistry.send_slack_message.availability).toEqual({
+    expect(options.blockRegistry.send_message.availability).toEqual({
       available: false,
-      unavailableReason: "Slack messaging is not configured.",
+      unavailableReason:
+        "Nothing on this deployment provides the messaging capability, which this block needs. Connect an integration that provides it on the Integrations page.",
     });
     expect(Object.keys(options.blockRegistry)).toHaveLength(38);
     expect(options.runBindingSchema).toMatchObject({

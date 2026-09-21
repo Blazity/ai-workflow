@@ -25,7 +25,7 @@ import { RunChecksFields } from "./run_checks";
 import { RunPrePrChecksFields } from "./run_pre_pr_checks";
 import { RunScriptsFields } from "./run_scripts";
 import { SendPlanApprovalFields } from "./send_plan_approval";
-import { SendSlackMessageFields } from "./send_slack_message";
+import { SendMessageFields } from "./send_message";
 import { TerminateFields } from "./terminate";
 import { TransformConfigFields } from "./transform";
 import { TriggerPlanApprovedFields } from "./trigger_plan_approved";
@@ -65,7 +65,7 @@ const BLOCK_RENDERERS = {
   run_pre_pr_checks: RunPrePrChecksFields,
   run_scripts: RunScriptsFields,
   send_plan_approval: SendPlanApprovalFields,
-  send_slack_message: SendSlackMessageFields,
+  send_message: SendMessageFields,
   terminate: TerminateFields,
   transform: TransformConfigFields,
   trigger_plan_approved: TriggerPlanApprovedFields,

@@ -7,7 +7,8 @@ export interface WorkflowFailureExitDeps {
    *  attempted after it races the ownership CAS the webhook trips. */
   commentFailure(): Promise<void>;
   moveTicket(): Promise<void>;
-  notifyTicket(): Promise<void>;
+  /** Best effort: whether it arrived never changes the run's outcome. */
+  notifyTicket(): Promise<unknown>;
 }
 
 export interface UnhandledWorkflowErrorDeps {
@@ -23,7 +24,7 @@ export async function handleWorkflowFailureExit(
   ticketKey: string | undefined,
   deps: WorkflowFailureExitDeps,
 ): Promise<void> {
-  const runOnce = async (label: string, task: () => Promise<void>) => {
+  const runOnce = async (label: string, task: () => Promise<unknown>) => {
     try {
       await task();
     } catch (error) {

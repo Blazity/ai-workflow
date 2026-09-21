@@ -13,6 +13,7 @@ import type { IssueTrackerAdapter } from "./issue-tracker";
 import type { IntegrationBlockManifest, IntegrationManifest } from "./manifest";
 import type { MessagingAdapter } from "./messaging";
 import type { VCSAdapter } from "./vcs";
+import type { IntegrationWebhook, IntegrationWebhookReception } from "./webhook";
 
 /**
  * The worker entry of an integration: the code behind its manifest. Core
@@ -81,13 +82,14 @@ interface IntegrationRuntimeBase<M extends IntegrationManifest> {
     ) => Promise<IntegrationHealthResult>;
   };
   /**
-   * Reserved for S9, which designs webhook translation: a handler verifies a
-   * provider request and returns normalized core events, and core dispatches
-   * them. Pull request events already have a normalized shape
-   * (`TriggerEvent` in `@shared/contracts`) that S9 starts from; ticket and
-   * slash command events have none yet.
+   * What this integration does with a request sent to `/webhooks/<id>`: verify
+   * it, say what it is, and deliver whatever core answered. See `webhook.ts`
+   * for why it is two calls rather than one.
+   *
+   * Optional: an integration nobody calls back declares none, and the route
+   * answers 404 for it.
    */
-  readonly webhook?: never;
+  readonly webhook?: IntegrationWebhook<M>;
   /**
    * What each of this integration's pages reads, keyed by the page id its
    * manifest declares. A page is a component in the dashboard's process with
@@ -136,6 +138,11 @@ export interface ErasedIntegrationRuntime {
   readonly beginRun?: ErasedIntegrationCall<IntegrationRunState | null>;
   /** One reader per page that has data behind it, keyed by page id. */
   readonly api?: Readonly<Record<string, ErasedIntegrationCall<JsonValue>>>;
+  /** Present exactly when the manifest's integration answers a webhook. */
+  readonly webhook?: {
+    readonly receive: ErasedIntegrationCall<IntegrationWebhookReception>;
+    readonly deliver?: ErasedIntegrationCall<void>;
+  };
 }
 
 /** A call whose arguments core builds from the manifest rather than the type. */

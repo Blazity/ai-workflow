@@ -2,7 +2,6 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { formatTicketEvent } from "../adapters/messaging/format.js";
 import { scrubForPublication } from "./support/publication-scrub.js";
 import { sanitizeRunError } from "../services/overview/sanitize-run-detail.js";
 import {
@@ -269,18 +268,14 @@ describe("execution error invariant: every surface shows the same message", () =
     });
   });
 
-  it("shows the same message in the Slack notification", () => {
-    const slack = formatTicketEvent(
-      { kind: "failed", phase: "research", reason },
-      "AWT-42",
-      "https://blazity.atlassian.net",
-    );
-    expect(slack).toContain(reason);
-  });
+  // The chat surface left core in S9: the reason travels as
+  // `TicketEvent.failed.reason` and the connected messaging provider renders
+  // it. `integrations/slack/format.test.ts` holds that the renderer carries it
+  // whole, including a reason that still contains a credentialed URL.
 
   it("agrees across surfaces even when the cause carried a credentialed URL", () => {
     // The run header runs a SECOND redaction pass (the replay sanitizer) that
-    // Slack and the ticket comment do not. It rewrites any `scheme://userinfo@host`
+    // the chat notification and the ticket comment do not. It rewrites any `scheme://userinfo@host`
     // whole, host included, so a message still carrying "[redacted]@host" read
     // three different ways on three surfaces.
     const withCredentialedUrl = formatExecutionErrorForUser(
@@ -305,13 +300,6 @@ describe("execution error invariant: every surface shows the same message", () =
     expect(
       sanitizeRunError(withCredentialedUrl, "Workflow execution failed.")?.message,
     ).toBe(withCredentialedUrl);
-    expect(
-      formatTicketEvent(
-        { kind: "failed", reason: withCredentialedUrl },
-        "AWT-42",
-        "https://blazity.atlassian.net",
-      ),
-    ).toContain(withCredentialedUrl);
   });
 
   it("shows the same message in the ticket comment", () => {

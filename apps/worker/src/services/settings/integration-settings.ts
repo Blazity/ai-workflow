@@ -18,7 +18,7 @@ import {
 } from "../../infra/vcs-config.js";
 
 /** Provider ids that carry a signed webhook, as system health observes them. */
-export type WebhookProviderId = "github" | "gitlab" | "jira" | "slack" | "email";
+export type WebhookProviderId = "github" | "gitlab" | "jira" | "email";
 
 /** The issue-tracker columns and project the ticket triggers are scoped to.
  *  The project key and the transition id are tracker wiring, not settings.
@@ -82,23 +82,6 @@ export function gitlabWebhookSettings(): { secret?: string; projectId?: string }
   };
 }
 
-/** Slack request signing secret, absent when the integration is unconfigured. */
-export function slackSigningSecret(): string | undefined {
-  return env.SLACK_SIGNING_SECRET;
-}
-
-/**
- * The Slack user ids allowed to drive the slash command, already split and
- * trimmed. An empty list means the allowlist is not in force, which is what an
- * unset variable and a variable holding only separators both mean.
- */
-export function slackAllowedUserIds(): string[] {
-  if (!env.SLACK_ALLOWED_USER_IDS) return [];
-  return env.SLACK_ALLOWED_USER_IDS.split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
 /** Svix signing secret for Resend delivery events. */
 export function resendWebhookSecret(): string | undefined {
   return env.RESEND_WEBHOOK_SECRET;
@@ -125,8 +108,6 @@ export function providerWebhookSecret(
       return env.GITLAB_WEBHOOK_SECRET;
     case "jira":
       return env.JIRA_WEBHOOK_SECRET;
-    case "slack":
-      return env.SLACK_SIGNING_SECRET;
     case "email":
       return env.RESEND_WEBHOOK_SECRET;
   }

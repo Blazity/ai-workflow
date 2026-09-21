@@ -54,7 +54,6 @@ function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAg
         }),
       ),
     ),
-    slackConfigured: Boolean(env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID),
     webhookTriggerConfigured: Boolean(env.WEBHOOK_TRIGGER_ENCRYPTION_KEY),
     // Filled by the async reader below, which is the only caller that can ask
     // the database what is connected. A caller that cannot wait gets an empty
@@ -84,7 +83,8 @@ export function builtinCapabilitiesOfDeployment(): string[] {
   // answers for it, so this file names no provider.
   if (coreServesIssueTracker()) served.push("issue_tracker");
   if (deployment.vcsProviders.length > 0) served.push("vcs");
-  if (deployment.slackConfigured) served.push("messaging");
+  // `messaging` left with S9: an integration serves it now, and core reads no
+  // variable of its own for it.
   return served;
 }
 

@@ -26,8 +26,6 @@ export {
   outboundEmailSettings,
   providerWebhookSecret,
   resendWebhookSecret,
-  slackAllowedUserIds,
-  slackSigningSecret,
   ticketBoardSettings,
   vcsProviderConfig,
   webhookTriggerEncryptionKey,

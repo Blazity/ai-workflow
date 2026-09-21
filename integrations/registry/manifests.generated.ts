@@ -11,9 +11,11 @@
  */
 import type { IntegrationManifest } from "@integrations/sdk";
 import { manifest as arthur } from "../arthur/manifest";
+import { manifest as slack } from "../slack/manifest";
 
 export const generatedIntegrationManifests: readonly IntegrationManifest[] = [
   arthur,
+  slack,
 ];
 
 /**

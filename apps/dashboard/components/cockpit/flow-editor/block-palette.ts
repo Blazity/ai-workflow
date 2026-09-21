@@ -213,7 +213,7 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       const custom = str(target);
       return custom !== "" ? custom : null;
     }
-    case "send_slack_message": {
+    case "send_message": {
       const message = str(node.params.message);
       return message !== "" ? message : null;
     }

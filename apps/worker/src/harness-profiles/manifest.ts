@@ -27,7 +27,6 @@ const HARNESS_CREDENTIAL_IDS = [
   "github",
   "gitlab",
   "jira",
-  "slack",
 ] as const;
 
 export const HARNESS_PROVIDER_CONTRACTS = {

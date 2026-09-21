@@ -11,7 +11,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
     GITHUB_WEBHOOK_SECRET: "github-secret",
     GITLAB_WEBHOOK_SECRET: "gitlab-secret",
     JIRA_WEBHOOK_SECRET: "jira-secret",
-    SLACK_SIGNING_SECRET: "slack-secret",
     RESEND_WEBHOOK_SECRET: "resend-secret",
   },
 }));
@@ -55,7 +54,7 @@ describe("provider webhook health observations", () => {
     });
 
     expect(() =>
-      observeProviderWebhook("slack", "rejected", "failure-test"),
+      observeProviderWebhook("gitlab", "rejected", "failure-test"),
     ).not.toThrow();
     expect(state.waitUntil).not.toHaveBeenCalled();
   });

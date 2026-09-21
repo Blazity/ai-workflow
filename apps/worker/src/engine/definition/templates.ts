@@ -536,7 +536,7 @@ function webhookTicketTriageDefinition(
     },
     {
       id: "notify",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Notify team",
       column: 5,
       row: 1,
@@ -547,7 +547,7 @@ function webhookTicketTriageDefinition(
     },
     {
       id: "notify-no-code",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Notify team (no code change)",
       column: 4,
       row: 0,
@@ -754,7 +754,7 @@ function supportInvestigationDefinition(
     },
     {
       id: "notify-code",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Notify approved fix",
       column: 12,
       row: -1,
@@ -774,7 +774,7 @@ function supportInvestigationDefinition(
     },
     {
       id: "notify-non-code",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Share non-code summary",
       column: 5,
       row: 1,
@@ -1034,7 +1034,7 @@ function reviewedTicketDefinition(
     },
     {
       id: "exhausted-message",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Report unresolved review findings",
       column: 8,
       row: 2,
@@ -1421,7 +1421,7 @@ function postPrAutofixDefinition(
     ),
     {
       id: "exhausted-message",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Report unresolved review findings",
       column: 8,
       row: 1,

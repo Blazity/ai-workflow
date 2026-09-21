@@ -13,7 +13,7 @@ vi.mock("../../prompt-library/prompt-reference-loader.js", () => ({
 }));
 
 import { previewWorkflowPromptCandidate } from "./prompt-preview.js";
-import { NO_INTEGRATIONS } from "../../engine/definition/integration-availability.js";
+import { MESSAGING_CONNECTED } from "../../engine/definition/messaging-deployment.fixture.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -21,9 +21,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "codex", model: "gpt-5-codex" },
   vcsProviders: ["github"],
   vcsBotIdentities: ["github"],
-  slackConfigured: true,
   webhookTriggerConfigured: true,
-  integrations: NO_INTEGRATIONS,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const candidate: WorkflowDefinitionV2 = {

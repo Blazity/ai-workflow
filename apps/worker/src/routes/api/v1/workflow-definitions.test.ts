@@ -208,6 +208,11 @@ async function saveAndDeploy(
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // The builtin templates carry the messaging block, and messaging comes from
+  // an integration now. This deployment connects Slack the way an upgraded one
+  // does: through the variables it already had.
+  vi.stubEnv("CHAT_SDK_SLACK_TOKEN", "xoxb-test");
+  vi.stubEnv("CHAT_SDK_CHANNEL_ID", "C1");
   state.sessionUserId = "user_admin";
   state.failValidation = false;
   db = await createTestDb();

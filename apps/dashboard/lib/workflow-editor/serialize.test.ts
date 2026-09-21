@@ -494,7 +494,7 @@ test("omits empty model and message params and undefined name", () => {
   const nodes = flowNodes([
     { id: "planning", type: "planning_agent", x: 0, y: 0, params: { model: "" } },
     { id: "review", type: "review_agent", x: 0, y: 0, params: { model: "claude-opus-4" } },
-    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: { message: "" } },
+    { id: "slack", type: "send_message", x: 0, y: 0, params: { message: "" } },
     { id: "checks", type: "run_pre_pr_checks", x: 0, y: 0, params: { maxFixCycles: 0 } },
   ]);
 
@@ -502,7 +502,7 @@ test("omits empty model and message params and undefined name", () => {
   assertSerializedNodes(out.nodes, [
     { id: "planning", type: "planning_agent", x: 0, y: 0, params: {} },
     { id: "review", type: "review_agent", x: 0, y: 0, params: { model: "claude-opus-4" } },
-    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: {} },
+    { id: "slack", type: "send_message", x: 0, y: 0, params: {} },
     { id: "checks", type: "run_pre_pr_checks", x: 0, y: 0, params: { maxFixCycles: 0 } },
   ]);
   assert.equal("name" in out.nodes[0], false);
@@ -659,13 +659,13 @@ test("never emits provider for non-agent node types", () => {
       y: 0,
       params: { target: "ai_review", provider: "codex" },
     },
-    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: { message: "hi", provider: "claude" } },
+    { id: "slack", type: "send_message", x: 0, y: 0, params: { message: "hi", provider: "claude" } },
   ]);
 
   const out = serializeWorkflowDefinition(nodes, []);
   assertSerializedNodes(out.nodes, [
     { id: "status", type: "update_ticket_status", x: 0, y: 0, params: { target: "ai_review" } },
-    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: { message: "hi" } },
+    { id: "slack", type: "send_message", x: 0, y: 0, params: { message: "hi" } },
   ]);
 });
 

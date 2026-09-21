@@ -1,14 +1,16 @@
 import { z } from "zod";
 import type { TicketSummary } from "../../../adapters/issue-tracker/types.js";
 import type {
-  RetrievalFailureReason,
-  SlackSearchResult,
-} from "../../../adapters/messaging/slack-search.js";
+  MessageRetrievalFailure,
+  MessageSearchMatch,
+  MessageSearchOutcome,
+} from "../../../adapters/messaging/types.js";
+import type { Adapters } from "../../support/adapters.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { resolveCallLlmTarget } from "../call-llm/execute.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 
-const DEFAULT_SLACK_LOOKBACK_DAYS = 30;
+const DEFAULT_CHAT_LOOKBACK_DAYS = 30;
 const DEFAULT_MAX_RESULTS = 10;
 const MAX_KEYWORDS = 10;
 
@@ -112,15 +114,16 @@ type InvestigateEvidence = {
 };
 
 /**
- * Why some evidence is missing, per provider and (for Slack) per channel. The
- * companion to `partial`: `partial` says WHICH provider is incomplete, this says
- * why, so "the bot was never invited to #support" is distinguishable from "Slack
- * timed out" and from "searched, found nothing" (both lists empty).
+ * Why some evidence is missing, per provider and, for chat, per channel. The
+ * companion to `partial`: `partial` says WHICH provider is incomplete, this
+ * says why, so "the bot was never invited to #support" is distinguishable from
+ * "the provider timed out" and from "searched, found nothing" (both lists
+ * empty).
  */
 type RetrievalGap = {
   provider: "jira" | "slack";
-  reason: RetrievalFailureReason;
-  /** The Slack channel the gap is about, empty when the whole provider failed. */
+  reason: MessageRetrievalFailure;
+  /** The channel the gap is about, empty when the whole provider failed. */
   scope: string;
 };
 
@@ -148,14 +151,10 @@ function jiraEvidence(ticket: TicketSummary): InvestigateEvidence {
   };
 }
 
-function slackEvidence(
-  match: SlackSearchResult["matches"][number],
-): InvestigateEvidence {
+function slackEvidence(match: MessageSearchMatch): InvestigateEvidence {
   const text = truncateExcerpt(match.text);
-  // oxlint-disable-next-line unicorn/prefer-number-coercion -- Preserve numeric-prefix parsing for Slack timestamps.
-  const seconds = Number.parseFloat(match.ts);
   return {
-    ref: `slack:${match.channel}/${match.ts}`,
+    ref: `slack:${match.channel}/${match.id}`,
     source: "slack",
     // Slack messages have no title; the opening of the message is the closest
     // honest thing, and the excerpt carries the rest.
@@ -163,10 +162,8 @@ function slackEvidence(
     excerpt: text,
     author: match.author,
     origin: match.channel,
-    timestamp: Number.isFinite(seconds)
-      ? new Date(seconds * 1000).toISOString()
-      : "",
-    link: match.permalink,
+    timestamp: match.postedAt,
+    link: match.url,
   };
 }
 
@@ -219,10 +216,15 @@ export function buildInvestigateJql(
   return clauses.map((clause) => `(${clause})`).join(" AND ");
 }
 
-const GAP_REASON_PROSE: Record<RetrievalFailureReason, string> = {
+const GAP_REASON_PROSE: Record<MessageRetrievalFailure, string> = {
   permission: "no access",
   timeout: "timed out",
   unavailable: "unavailable",
+  // The deployment has a messaging provider that cannot search, or none at
+  // all. Neither is an error: the investigation says what it could not read
+  // and reasons from what it has.
+  unsupported: "this deployment's messaging provider cannot search messages",
+  not_connected: "no messaging provider is connected",
 };
 
 /**
@@ -237,8 +239,8 @@ export function describeRetrievalGaps(gaps: readonly RetrievalGap[]): string {
       gap.scope === ""
         ? gap.provider === "jira"
           ? "Jira"
-          : "Slack"
-        : `Slack channel ${gap.scope}`;
+          : "chat"
+        : `chat channel ${gap.scope}`;
     return `${where} (${GAP_REASON_PROSE[gap.reason]})`;
   });
   return `Not searched: ${parts.join("; ")}.`;
@@ -311,7 +313,7 @@ blockInvestigateKeywordsStep.maxRetries = 0;
 type ProviderOutcome<T> =
   | { status: "disabled" }
   | { status: "ok"; value: T }
-  | { status: "failed"; reason: RetrievalFailureReason };
+  | { status: "failed"; reason: MessageRetrievalFailure };
 
 /**
  * Coarse class for a tracker error, from what the adapter actually throws: a
@@ -320,7 +322,7 @@ type ProviderOutcome<T> =
  * adapter's message because that is where it puts it; misreading it costs a
  * wrong label on a gap, never a wrong classification of the ticket.
  */
-export function classifyJiraFailure(error: unknown): RetrievalFailureReason {
+export function classifyJiraFailure(error: unknown): MessageRetrievalFailure {
   const name = error instanceof Error ? error.name : "";
   if (name === "TimeoutError" || name === "AbortError") return "timeout";
   const status = /Jira API error: (\d{3})/.exec(
@@ -329,7 +331,7 @@ export function classifyJiraFailure(error: unknown): RetrievalFailureReason {
   return status === "401" || status === "403" ? "permission" : "unavailable";
 }
 
-async function searchJiraProvider(input: {
+async function searchJiraProvider(adapters: Adapters, input: {
   /** The one project this deployment may search. Resolved by the caller from the
    *  tenant configuration, never from block params. */
   projectKey: string;
@@ -342,8 +344,7 @@ async function searchJiraProvider(input: {
     // within, and searching every project the credential can reach is exactly
     // what must not happen.
     if (input.projectKey === "") return { status: "failed", reason: "permission" };
-    const { createAdapters } = await import("../../support/adapters.js");
-    const { issueTracker } = createAdapters();
+    const { issueTracker } = adapters;
     if (typeof issueTracker.searchTicketSummaries !== "function") {
       // The configured tracker cannot serve summary search at all, which is a
       // capability gap rather than an outage, but reads the same to the caller:
@@ -361,37 +362,32 @@ async function searchJiraProvider(input: {
   }
 }
 
-async function searchSlackProvider(input: {
-  /** Bot token from the tenant configuration, resolved by the caller. */
-  token: string | undefined;
+/**
+ * What people said, through the `messaging` capability.
+ *
+ * The capability answers rather than throws, and a provider that cannot search
+ * at all is one of its answers, so this block never has to know which chat
+ * product a deployment uses or whether it has one.
+ */
+async function searchChatProvider(adapters: Adapters, input: {
   channels: string[];
   keywords: string[];
   lookbackDays: number;
   maxResults: number;
-}): Promise<ProviderOutcome<SlackSearchResult>> {
-  // Missing credentials or scope are configuration gaps, not clean searches:
-  // nothing will change until somebody configures the token and channels.
-  if (!input.token || input.channels.length === 0) {
-    return { status: "failed", reason: "permission" };
-  }
+}): Promise<ProviderOutcome<Extract<MessageSearchOutcome, { ok: true }>>> {
+  // No channels named is a configuration gap, not a clean search: nothing will
+  // change until somebody names one.
+  if (input.channels.length === 0) return { status: "failed", reason: "permission" };
   try {
-    const { searchSlackChannels, classifySlackFailure } = await import(
-      "../../../adapters/messaging/slack-search.js"
-    );
-    try {
-      const value = await searchSlackChannels({
-        token: input.token,
-        channels: input.channels,
-        keywords: input.keywords,
-        lookbackDays: input.lookbackDays,
-        maxResults: input.maxResults,
-        now: new Date(),
-      });
-      return { status: "ok", value };
-    } catch (err) {
-      if (isRunControlError(err)) throw err;
-      return { status: "failed", reason: classifySlackFailure(err) };
-    }
+    const outcome = await adapters.messaging.searchMessages({
+      channels: input.channels,
+      keywords: input.keywords,
+      lookbackDays: input.lookbackDays,
+      maxResults: input.maxResults,
+    });
+    return outcome.ok
+      ? { status: "ok", value: outcome }
+      : { status: "failed", reason: outcome.reason };
   } catch (err) {
     if (isRunControlError(err)) throw err;
     return { status: "failed", reason: "unavailable" };
@@ -417,20 +413,28 @@ async function blockInvestigateRetrievalStep(input: {
   } | null;
 }): Promise<{ evidence: InvestigateEvidence[]; gaps: RetrievalGap[] }> {
   "use step";
-  // Both providers' credentials and the Jira project scope come from here, one
-  // read, so no block param can influence what either provider is allowed to
-  // reach.
+  // The issue tracker's project scope comes from here, one read, so no block
+  // param can widen what it is allowed to reach. The chat side has no
+  // credential to fetch: it goes through the messaging capability, which
+  // resolves whichever provider this deployment connected.
   const { env } = await import("../../../infra/vcs-config.js");
+  // One bundle for both providers. Each `createAdapters()` opens a run registry
+  // connection, and two searches in one step asking twice is a connection
+  // nobody needed.
+  const { createAdapters } = await import("../../support/adapters.js");
+  const adapters = createAdapters();
   const [jira, slack] = await Promise.all([
     input.jira === null
       ? Promise.resolve<ProviderOutcome<TicketSummary[]>>({ status: "disabled" })
-      : searchJiraProvider({
+      : searchJiraProvider(adapters, {
           ...input.jira,
           projectKey: env.JIRA_PROJECT_KEY?.trim() ?? "",
         }),
     input.slack === null
-      ? Promise.resolve<ProviderOutcome<SlackSearchResult>>({ status: "disabled" })
-      : searchSlackProvider({ ...input.slack, token: env.CHAT_SDK_SLACK_TOKEN }),
+      ? Promise.resolve<ProviderOutcome<Extract<MessageSearchOutcome, { ok: true }>>>({
+          status: "disabled",
+        })
+      : searchChatProvider(adapters, input.slack),
   ]);
 
   const evidence: InvestigateEvidence[] = [];
@@ -523,7 +527,7 @@ export const execute: BlockExecuteFn = async (
   const slackLookbackDays =
     typeof block.params.slackLookbackDays === "number"
       ? block.params.slackLookbackDays
-      : DEFAULT_SLACK_LOOKBACK_DAYS;
+      : DEFAULT_CHAT_LOOKBACK_DAYS;
   const jiraJqlTemplate =
     typeof block.params.jiraJqlTemplate === "string" &&
     block.params.jiraJqlTemplate.trim() !== ""

@@ -523,7 +523,7 @@ export function soleActiveBlockId(
   return onlyActive ?? null;
 }
 
-export function resolveSlackMessageInput(
+export function resolveMessageInput(
   params: Record<string, unknown>,
   resolvedInputs: Record<string, unknown>,
 ): string {
