@@ -19,7 +19,9 @@ const telemetry = vi.hoisted(() => ({
   recordRunUsage: vi.fn(async () => undefined),
   finalizeRunAnalysisUsage: vi.fn(async () => undefined),
   sanitizeRunStepsForDiagnosticError: vi.fn(
-    (_steps: unknown, executionError: unknown) => ({ executionError }),
+    (_steps: unknown, executionError: unknown) => {
+      throw executionError;
+    },
   ),
 }));
 const jira = vi.hoisted(() => ({
@@ -49,6 +51,47 @@ const messaging = vi.hoisted(() => ({
       delivered: true,
     }),
   ),
+}));
+const publication = vi.hoisted(() => ({
+  open: vi.fn(async () => ({
+    status: "published" as const,
+    repositories: [
+      {
+        provider: "github" as const,
+        repoPath: "acme/api",
+        branchName: "ai/aiw-902-api",
+        defaultBranch: "main",
+        expectedHead: "before-api",
+        pushedHead: "after-api",
+      },
+      {
+        provider: "gitlab" as const,
+        repoPath: "acme/web",
+        branchName: "ai/aiw-902-web",
+        defaultBranch: "main",
+        expectedHead: "before-web",
+        pushedHead: "after-web",
+      },
+    ],
+    prs: [
+      {
+        provider: "github" as const,
+        repoPath: "acme/api",
+        id: 128,
+        url: "https://github.com/acme/api/pull/128",
+        branch: "ai/aiw-902-api",
+        isNew: true,
+      },
+      {
+        provider: "gitlab" as const,
+        repoPath: "acme/web",
+        id: 44,
+        url: "https://gitlab.com/acme/web/-/merge_requests/44",
+        branch: "ai/aiw-902-web",
+        isNew: true,
+      },
+    ],
+  })),
 }));
 
 /** The graph this run's trigger resolves to, swapped per test. */
@@ -141,7 +184,10 @@ vi.mock("../../db/repositories/repository-catalog.js", () => ({
     activatedById: "user_admin",
     activatedByLabel: "Ada",
   }),
-  listConnectedRepositoryCatalogKeys: async () => ["github:acme/app"],
+  listConnectedRepositoryCatalogKeys: async () => [
+    { provider: "github", path: "acme/api", enabled: true },
+    { provider: "gitlab", path: "acme/web", enabled: true },
+  ],
 }));
 vi.mock("../steps/workflow-ticket.js", () => ({
   resolveWorkflowTicketStep: vi.fn(async (input: AgentWorkflowInput) => ({
@@ -166,6 +212,22 @@ vi.mock("../../engine/support/adapters.js", () => ({
     },
     messaging: { notifyForTicket: messaging.notifyForTicket },
   }),
+}));
+vi.mock("../steps/workspace-publication.js", () => ({
+  openPullRequestsForPublication: publication.open,
+}));
+vi.mock("../blocks/executors.generated.js", () => ({
+  BLOCK_EXECUTORS: {
+    finalize_workspace: async (
+      _node: unknown,
+      _steps: unknown,
+      ctx: { publication: unknown },
+    ) => {
+      const repositories = (await publication.open()).repositories;
+      ctx.publication = { status: "finalized", repositories, prs: [] };
+      return { kind: "next", output: { status: "finalized", repositories } };
+    },
+  },
 }));
 vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: vi.fn(async () => {}),
@@ -243,7 +305,7 @@ function graphWith(configuration: Record<string, unknown>, type = "send_message"
       terminalStatus: "done",
       postComment: "Not sent: {{data:steps.notify.output.reason}}",
     }),
-    node("sent", "terminate", { terminalStatus: "done" }),
+    node("sent", "terminate", { terminalStatus: "done", postComment: "Sent" }),
   ];
 }
 
@@ -259,6 +321,7 @@ beforeEach(() => {
   plan.blocker = null;
   edges.value = EDGES;
   messaging.notifyForTicket.mockResolvedValue({ delivered: true });
+  publication.open.mockClear();
 });
 
 /** The events the block sent, without the run's own lifecycle notifications. */
@@ -272,12 +335,13 @@ describe("Send message, through a run", () => {
   it("reports ok only for a message that arrived, and the run takes the sent path", async () => {
     graph.nodes = graphWith({ sendOn: "always", message: "deploying now" });
 
-    await agentWorkflow(entry).catch(() => undefined);
+    await expect(agentWorkflow(entry)).resolves.not.toThrow();
 
     assertSent("deploying now");
     // Nothing on the skipped path ran, so nothing told the ticket it was not
     // sent.
     expect(notSentComments()).toEqual([]);
+    expect(sentComments()).toEqual(["Sent"]);
   });
 
   it("keeps a run suspended before this deploy on the path it was already taking", async () => {
@@ -308,7 +372,7 @@ describe("Send message, through a run", () => {
     });
     graph.nodes = graphWith({ sendOn: "always", message: "deploying now" });
 
-    await agentWorkflow(entry).catch(() => undefined);
+    await expect(agentWorkflow(entry)).resolves.not.toThrow();
 
     // It was sent, it did not arrive, and the run went on to the branch the
     // author built for exactly this, which told the ticket why.
@@ -322,7 +386,7 @@ describe("Send message, through a run", () => {
     // The default mode of every parameterless stored node.
     graph.nodes = graphWith({});
 
-    await agentWorkflow(entry).catch(() => undefined);
+    await expect(agentWorkflow(entry)).resolves.not.toThrow();
 
     expect(blockMessages()).toEqual([]);
     expect(notSentComments()).toEqual([
@@ -333,7 +397,7 @@ describe("Send message, through a run", () => {
   it("skips an empty message rather than posting nothing", async () => {
     graph.nodes = graphWith({ sendOn: "always", message: "   " });
 
-    await agentWorkflow(entry).catch(() => undefined);
+    await expect(agentWorkflow(entry)).resolves.not.toThrow();
 
     expect(blockMessages()).toEqual([]);
     expect(notSentComments()).toEqual([
@@ -341,12 +405,66 @@ describe("Send message, through a run", () => {
     ]);
   });
 
+  it("publishes every pull request, the usage report and extra text, then takes the ok edge", async () => {
+    graph.nodes = [
+      node("trigger", "trigger_ticket_ai", {}),
+      node("finalize", "finalize_workspace", {}),
+      {
+        ...node("publish", "open_pr", {}),
+        inputs: {
+          repositories: {
+            kind: "reference",
+            reference: "steps.finalize.output.repositories",
+          },
+        },
+      },
+      ...graphWith({ sendOn: "pr_ready", message: "Release notes are ready." }).slice(1),
+    ];
+    edges.value = [
+      { id: "e1", from: "trigger", to: "finalize" },
+      { id: "e2", from: "finalize", to: "publish" },
+      { id: "e3", from: "publish", to: "notify" },
+      { id: "e4", from: "notify", to: "gate" },
+      { id: "e5", from: "gate", to: "not-sent", fromPort: "true" },
+      { id: "e6", from: "gate", to: "sent", fromPort: "false" },
+    ];
+
+    await expect(agentWorkflow(entry)).resolves.not.toThrow();
+
+    expect(publication.open).toHaveBeenCalledTimes(2);
+    expect(blockMessages()).toEqual([
+      {
+        kind: "pr_ready",
+        prs: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            id: 128,
+            headSha: "after-api",
+            url: "https://github.com/acme/api/pull/128",
+          },
+          {
+            provider: "gitlab",
+            repoPath: "acme/web",
+            id: 44,
+            headSha: "after-web",
+            url: "https://gitlab.com/acme/web/-/merge_requests/44",
+          },
+        ],
+        usageReport: "Usage: $0.00 total | ",
+        extraText: "Release notes are ready.",
+      },
+    ]);
+    expect(notSentComments()).toEqual([]);
+    expect(sentComments()).toEqual(["Sent"]);
+  });
+
   it("runs a plan recorded before the block was renamed", async () => {
     // A run suspended before S9 replays a plan that still names
     // send_slack_message. It has to finish, not die on a type nothing answers.
     graph.nodes = graphWith({ sendOn: "always", message: "deploying now" }, "send_slack_message");
 
-    await agentWorkflow(entry).catch(() => undefined);
+    await expect(agentWorkflow(entry)).resolves.not.toThrow();
 
     assertSent("deploying now");
     expect(notSentComments()).toEqual([]);
@@ -362,4 +480,10 @@ function notSentComments(): string[] {
   return jira.postComment.mock.calls
     .map((call) => String(call[1]))
     .filter((comment) => comment.startsWith("Not sent:"));
+}
+
+function sentComments(): string[] {
+  return jira.postComment.mock.calls
+    .map((call) => String(call[1]))
+    .filter((comment) => comment === "Sent");
 }

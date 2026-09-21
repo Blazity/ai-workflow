@@ -2,7 +2,7 @@
  * Slack: where a run says what it is doing, where a person answers back, and
  * what a research block can read.
  *
- * Plain data, imported only from @integrations/sdk. The five variables are the
+ * Plain data, imported only from @integrations/sdk. The four variables are the
  * ones this product has always read, with the meaning they have always had, so
  * a deployment configured before this package existed keeps working with
  * nothing to do.
@@ -42,14 +42,6 @@ export const manifest = defineIntegration({
           "Where run notifications go, as an id such as C0123456789. A token with no channel has nowhere to post, so both are required.",
         env: "CHAT_SDK_CHANNEL_ID",
         secret: false,
-      },
-      {
-        key: "botName",
-        label: "Bot display name",
-        description: "The name messages are posted under.",
-        env: "CHAT_SDK_BOT_NAME",
-        secret: false,
-        default: "ai-workflow",
       },
       {
         key: "signingSecret",

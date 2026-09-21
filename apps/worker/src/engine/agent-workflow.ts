@@ -82,11 +82,12 @@ import {
   executeIntegrationBlock,
   isIntegrationBlockType,
 } from "./blocks/integration-block.js";
-import { canonicalWorkflowBlockType, createWorkflowExecutionErrorState, integrationUnavailableFailureCode, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE, runStatusReasonParts } from "@shared/contracts";
+import { canonicalizeWorkflowBlockTypes, canonicalWorkflowBlockType, createWorkflowExecutionErrorState, integrationUnavailableFailureCode, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE, runStatusReasonParts } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
 import type { MessagingDelivery } from "../adapters/messaging/types.js";
 import type { BlockOutput, BlockRunState, RunPullRequest, RunStatusReason, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
 import type { RunWorkScopeWrite } from "./work-scope/apply-plans.js";
+import type { LoadedWorkflowPlan } from "./steps/definition-step.js";
 import type { RepositoryCatalogEntry } from "./repository-discovery/catalog.js";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
@@ -426,6 +427,31 @@ function phaseKey(base: string, attempt: number): string {
   return attempt <= 1 ? base : `${base} #${attempt}`;
 }
 
+/**
+ * The loaded plan with every renamed block type replaced by the name this
+ * build knows, in the graph the scheduler walks and in the node list the
+ * engine reads from.
+ *
+ * The plan arrives from a step, so a run that suspended before the rename
+ * replays the recorded shape rather than re-reading the database. That path
+ * bypasses both places a definition is normally canonicalised, and every
+ * consumer that indexes by type (the scheduler, the output validator, the
+ * parameter schemas) would then be handed a name with no contract behind it.
+ */
+function canonicalPlanBlockTypes<T extends LoadedWorkflowPlan | null | undefined>(plan: T): T {
+  if (!plan) return plan;
+  const definition = canonicalizeWorkflowBlockTypes(plan.definition) as typeof plan.definition;
+  const nodes = plan.nodes.map((node) =>
+    node.type === canonicalWorkflowBlockType(node.type)
+      ? node
+      : { ...node, type: canonicalWorkflowBlockType(node.type) },
+  );
+  if (definition === plan.definition && nodes.every((node, index) => node === plan.nodes[index])) {
+    return plan;
+  }
+  return { ...plan, definition, nodes } as T;
+}
+
 export async function reconcileRunBudgetErrorAtBoundary(
   caught: unknown,
   observeBudget: (requireRemainingDuration: boolean) => Promise<RunBudgetObservation>,
@@ -745,7 +771,14 @@ async function agentWorkflowBody(
     retire: failRetiredDefinition,
   });
   if (loadedPlan === "failed") return loadedPlan;
-  const plan = loadedPlan;
+  // A run suspended before this build replays this step's recorded result, and
+  // that plan's nodes still carry the type this build renamed. Stored rows and
+  // submitted candidates are canonicalised where they enter the build, but a
+  // replayed step result enters through neither, so the scheduler and the
+  // output validator would be handed a type the block registry has no contract
+  // for and the run would die after its block had already run. One
+  // canonicalisation here covers the fresh run and the replay alike.
+  const plan = canonicalPlanBlockTypes(loadedPlan);
   if (!plan) {
     console.warn(
       `No runnable workflow definition for trigger ${entryTriggerType}; skipping run for ${ticket.identifier}`,
@@ -2594,14 +2627,10 @@ async function agentWorkflowBody(
         // Substitute {{variables}} into prompt-bearing params per execution: the
         // run context (research plan, publication, selected repos) mutates
         // mid-run, so each block sees the values current at its turn.
-        // A run suspended before S9 replays a recorded plan whose node still
-        // carries the type this build renamed. It has to finish, so the name is
-        // canonicalised here, before the executor table, the integration-block
-        // test and the switch below all ask what this node is.
-        const node =
-          rawNode.type === canonicalWorkflowBlockType(rawNode.type)
-            ? rawNode
-            : { ...rawNode, type: canonicalWorkflowBlockType(rawNode.type) };
+        // The plan reaching the scheduler is already canonical, including a
+        // replayed one (canonicalPlanBlockTypes), so this node's type is the
+        // name this build knows.
+        const node = rawNode;
         await materializeHumanDecisions();
         if (
           node.type === "implementation_agent" ||

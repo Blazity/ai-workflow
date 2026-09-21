@@ -10,6 +10,7 @@
  * only the HTTP status gets wrong.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { MessagingConversation, MessagingTicket } from "@integrations/sdk";
 import { slackApi } from "./api";
@@ -18,6 +19,13 @@ import { slackMessaging } from "./messaging";
 const TICKET: MessagingTicket = {
   key: "AWT-42",
   url: "https://acme.atlassian.net/browse/AWT-42",
+};
+
+const RECORDED_WEB_API = JSON.parse(
+  readFileSync(new URL("./fixtures/web-api-responses.json", import.meta.url), "utf8"),
+) as {
+  chatPostMessageSuccess: Record<string, unknown>;
+  chatUpdateSuccess: Record<string, unknown>;
 };
 
 interface Call {
@@ -66,11 +74,11 @@ function conversation(handle: string | null) {
 
 const silent = { info: () => {}, warn: () => {} };
 
-test("the first event of a ticket anchors a thread and hands core the handle", async () => {
+test("recorded Web API responses anchor a thread and hand core the handle", async () => {
   const slack = fakeSlack({
     "chat.postMessage": [
-      { ok: true, ts: "1758300000.000100" },
-      { ok: true, ts: "1758300000.000200" },
+      structuredClone(RECORDED_WEB_API.chatPostMessageSuccess),
+      structuredClone(RECORDED_WEB_API.chatPostMessageSuccess),
     ],
   });
   const conv = conversation(null);
@@ -79,18 +87,18 @@ test("the first event of a ticket anchors a thread and hands core the handle", a
   const delivery = await messaging.notifyForTicket(TICKET, { kind: "started" }, conv.value);
 
   assert.deepEqual(delivery, { delivered: true });
-  assert.equal(conv.record.remembered, "1758300000.000100");
+  assert.equal(conv.record.remembered, "1503435956.000247");
   // A status line at the top of the channel, and the detail under it.
   assert.equal(slack.calls.length, 2);
   assert.equal(slack.calls[0]!.body.thread_ts, undefined);
   assert.match(slack.calls[0]!.body.text!, /STATUS: in progress/);
-  assert.equal(slack.calls[1]!.body.thread_ts, "1758300000.000100");
+  assert.equal(slack.calls[1]!.body.thread_ts, "1503435956.000247");
   assert.match(slack.calls[1]!.body.text!, /Task <.*AWT-42.*> started/);
 });
 
 test("a later event edits the status line in place and replies under it", async () => {
   const slack = fakeSlack({
-    "chat.update": [{ ok: true, ts: "1758300000.000100" }],
+    "chat.update": [structuredClone(RECORDED_WEB_API.chatUpdateSuccess)],
     "chat.postMessage": [{ ok: true, ts: "1758300000.000300" }],
   });
   const conv = conversation("1758300000.000100");

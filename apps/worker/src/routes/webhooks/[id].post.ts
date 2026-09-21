@@ -49,20 +49,27 @@ export default defineEventHandler(async (event) => {
     // Not a refusal of the request: this deployment could not read its own
     // settings, so it cannot tell an allowed sender from anyone else. Saying
     // so is the difference between failing closed and failing silently.
+    observeWebhook(id, "rejected", "integration_configuration_unreadable");
     throw createError({
       statusCode: 503,
       statusMessage: `${manifest.name} could not be read on this deployment, so the request was not acted on.`,
     });
   }
+  const state = resolved.states.get(id);
+  if (state?.enabled === false) {
+    // A disabled integration deliberately does not verify or dispatch the
+    // request because its connection is inactive. It still answers 2xx so the
+    // provider does not retry or switch off the webhook, and records exactly
+    // why the otherwise valid delivery was ignored.
+    observeWebhook(id, "accepted", "integration_disabled_ignored");
+    return respond(event, { status: 202 });
+  }
   const usable = resolved.usable.find((candidate) => candidate.manifest.id === id);
   if (!usable) {
-    const state = resolved.states.get(id);
+    observeWebhook(id, "rejected", "integration_disconnected");
     throw createError({
       statusCode: 503,
-      statusMessage:
-        state?.enabled === false
-          ? `${manifest.name} is disabled on this deployment.`
-          : `${manifest.name} is not connected on this deployment.`,
+      statusMessage: `${manifest.name} is not connected on this deployment.`,
     });
   }
 
@@ -77,8 +84,10 @@ export default defineEventHandler(async (event) => {
   );
 
   if (reception.kind === "refused") {
+    observeWebhook(id, "rejected", `request_refused_${reception.status}`);
     throw createError({ statusCode: reception.status, statusMessage: reception.reason });
   }
+  observeWebhook(id, "accepted", "request_accepted");
   if (reception.kind === "answered") {
     return respond(event, reception.response);
   }
@@ -156,4 +165,41 @@ function stringValues(query: Record<string, unknown>): Record<string, string> {
     if (typeof value === "string") out[name] = value;
   }
   return out;
+}
+
+/**
+ * Record ingress without making a provider wait on the database.
+ *
+ * The scope is deliberately the deployment default. Core neither reads nor
+ * hashes the integration's signing secret, so every integration webhook can
+ * use the same observation check without widening its secret boundary.
+ */
+function observeWebhook(
+  integrationId: string,
+  outcome: "accepted" | "rejected",
+  reason: string,
+): void {
+  const write = (async () => {
+    const { recordSystemHealthObservation } = await import(
+      "../../services/system/observations.js"
+    );
+    await recordSystemHealthObservation({
+      integrationId,
+      checkId: "webhook-delivery",
+      outcome,
+      reason,
+    });
+  })().catch(async (error: unknown) => {
+    const { logger } = await import("../../services/system/logger.js");
+    logger.warn(
+      {
+        integration: integrationId,
+        outcome,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "integration_webhook_observation_failed",
+    );
+  });
+  waitUntil(write);
 }

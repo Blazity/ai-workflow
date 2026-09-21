@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   readable: true,
   states: new Map<string, unknown>(),
   execute: undefined as unknown,
+  observations: [] as Array<{ integrationId: string; outcome: string; reason: string }>,
 }));
 
 vi.mock("../../services/integrations/runtime.js", () => ({
@@ -46,6 +47,16 @@ vi.mock("@vercel/functions", () => ({
 
 vi.mock("../../services/system/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("../../services/system/observations.js", () => ({
+  recordSystemHealthObservation: async (observation: {
+    integrationId: string;
+    outcome: string;
+    reason: string;
+  }) => {
+    state.observations.push(observation);
+  },
 }));
 
 const handler = (await import("./[id].post.js")).default;
@@ -110,6 +121,7 @@ beforeEach(() => {
   state.usable = [connectedSlack()];
   state.readable = true;
   state.states = new Map([["slack", { enabled: true }]]);
+  state.observations = [];
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     posted.push({ url: String(url), body: JSON.parse(String(init?.body)) });
     return new Response("ok", { status: 200 });
@@ -157,11 +169,12 @@ describe("POST /webhooks/:id", () => {
     });
   });
 
-  it("answers help itself, without running anything or deferring work", async () => {
+  it("answers help itself without deferring run-control work", async () => {
     const response = await app()(request("slack", "help"));
+    await Promise.all(deferred);
 
     expect(response.status).toBe(200);
-    expect(deferred).toHaveLength(0);
+    expect(deferred).toHaveLength(1);
     expect(executeRunControlCommand).not.toHaveBeenCalled();
   });
 
@@ -180,16 +193,23 @@ describe("POST /webhooks/:id", () => {
     expect(executeRunControlCommand).not.toHaveBeenCalled();
   });
 
-  it("says a disabled integration is disabled, and runs nothing", async () => {
-    // An admin switched it off. Answering 401 or 500 would send whoever
-    // registered the command to Slack's own settings.
+  it("accepts and records a disabled integration's webhook without running it", async () => {
+    // An admin switched it off. Any non-2xx response makes the provider retry
+    // and can eventually make it disable the webhook itself.
     state.usable = [];
     state.states = new Map([["slack", { enabled: false }]]);
 
     const response = await app()(request("slack", "list"));
+    await Promise.all(deferred);
 
-    expect(response.status).toBe(503);
-    expect(await response.text()).toContain("disabled");
+    expect(response.status).toBe(202);
+    expect(state.observations).toEqual([
+      expect.objectContaining({
+        integrationId: "slack",
+        outcome: "accepted",
+        reason: "integration_disabled_ignored",
+      }),
+    ]);
     expect(executeRunControlCommand).not.toHaveBeenCalled();
   });
 
@@ -199,8 +219,35 @@ describe("POST /webhooks/:id", () => {
     state.readable = false;
 
     const response = await app()(request("slack", "cancel AWT-42"));
+    await Promise.all(deferred);
 
     expect(response.status).toBe(503);
+    expect(state.observations).toEqual([
+      expect.objectContaining({
+        integrationId: "slack",
+        outcome: "rejected",
+        reason: "integration_configuration_unreadable",
+      }),
+    ]);
+    expect(executeRunControlCommand).not.toHaveBeenCalled();
+  });
+
+  it("refuses a disconnected integration because it has no connection that can verify the sender", async () => {
+    state.usable = [];
+    state.states = new Map([["slack", { enabled: true, connection: "not_connected" }]]);
+
+    const response = await app()(request("slack", "list"));
+    await Promise.all(deferred);
+
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("not connected");
+    expect(state.observations).toEqual([
+      expect.objectContaining({
+        integrationId: "slack",
+        outcome: "rejected",
+        reason: "integration_disconnected",
+      }),
+    ]);
     expect(executeRunControlCommand).not.toHaveBeenCalled();
   });
 

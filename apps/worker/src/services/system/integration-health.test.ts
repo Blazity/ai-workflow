@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { IntegrationManifest } from "@integrations/sdk";
 import type { IntegrationState } from "@shared/contracts";
 
@@ -8,6 +8,19 @@ import {
   resolveIntegrationState,
 } from "../integrations/index.js";
 import { integrationHealthContributions } from "./integration-health.js";
+
+const observations = vi.hoisted(() => ({
+  latest: [] as Array<{
+    outcome: "accepted" | "rejected";
+    reason: string;
+    count: number;
+    observedAt: Date;
+  }>,
+}));
+
+vi.mock("./observations.js", () => ({
+  getLatestSystemHealthObservations: async () => observations.latest,
+}));
 
 /**
  * A manifest shaped like a real one: two connection variables, one optional
@@ -62,6 +75,46 @@ function stateOf(
 }
 
 describe("integrationHealthContributions", () => {
+  it("adds a delivery observation check to every integration with a webhook handler", async () => {
+    observations.latest = [
+      {
+        outcome: "accepted",
+        reason: "request_accepted",
+        count: 3,
+        observedAt: new Date(),
+      },
+    ];
+    const contributions = integrationHealthContributions(
+      [
+        {
+          manifest: manifest(),
+          state: stateOf({
+            DEMO_BASE_URL: "https://demo.example",
+            DEMO_API_TOKEN: "demo-token",
+          }),
+          probe: async () => ({ status: "live" }),
+        },
+      ],
+      () => true,
+    );
+
+    expect(contributions.definitions[0]?.checks.map((check) => check.id)).toEqual([
+      "connection",
+      "auth",
+      "delivery",
+      "webhook-delivery",
+    ]);
+    expect(
+      await contributions.probes["integration:demo.webhook-delivery"]?.(
+        new AbortController().signal,
+      ),
+    ).toMatchObject({
+      mode: "live",
+      evidenceSource: "local-observation",
+      message: "A recent webhook request reached this worker and was accepted.",
+    });
+  });
+
   it("says an integration nobody connected is not connected, and calls nothing", async () => {
     let probeCalls = 0;
     const contributions = integrationHealthContributions([

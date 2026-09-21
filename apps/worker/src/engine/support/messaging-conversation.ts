@@ -44,7 +44,15 @@ export async function conversationFor(ticketKey: string): Promise<MessagingConve
       );
     },
     async forget() {
-      await store.clearParent(ticketKey).catch(() => {});
+      await store.clearParent(ticketKey).catch((error: unknown) =>
+        logger.warn(
+          {
+            ticketKey,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "messaging_conversation_clear_failed",
+        ),
+      );
     },
   };
 }

@@ -1,0 +1,38 @@
+{
+  "provenance": "Slack Developer Docs response examples for chat.postMessage and chat.update, https://docs.slack.dev/reference/methods/chat.postMessage/ and https://docs.slack.dev/reference/methods/chat.update/, retrieved 2026-09-21",
+  "redactions": "None performed in this repository. Slack publishes these identifiers and message contents as public example data.",
+  "chatPostMessageSuccess": {
+    "ok": true,
+    "channel": "C123ABC456",
+    "ts": "1503435956.000247",
+    "message": {
+      "text": "Here's a message for you",
+      "username": "ecto1",
+      "bot_id": "B123ABC456",
+      "attachments": [
+        {
+          "text": "This is an attachment",
+          "id": 1,
+          "fallback": "This is an attachment's fallback"
+        }
+      ],
+      "type": "message",
+      "subtype": "bot_message",
+      "ts": "1503435956.000247"
+    }
+  },
+  "chatUpdateSuccess": {
+    "ok": true,
+    "channel": "C123ABC456",
+    "ts": "1401383885.000061",
+    "text": "Updated text you carefully authored",
+    "message": {
+      "text": "Updated text you carefully authored",
+      "user": "U34567890"
+    }
+  },
+  "chatUpdateFailure": {
+    "ok": false,
+    "error": "cant_update_message"
+  }
+}

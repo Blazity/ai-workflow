@@ -612,7 +612,26 @@
         "apps/worker/src/engine/blocks/investigate/execute.ts",
         "apps/worker/src/engine/blocks/investigate/manifest.ts",
         "apps/worker/src/engine/definition/legacy-block-metadata.fixture.ts",
-        "apps/worker/src/engine/definition/templates.ts",
+        "apps/worker/src/engine/definition/templates.ts"
+      ]
+    },
+    {
+      "ids": [
+        "slack"
+      ],
+      "stage": "S12",
+      "reason": "the investigate block's stored parameter vocabulary in the shared workflow contract still includes slackChannels and slackLookbackDays. S12 splits investigate and replaces those parameters with capability-shaped values; this exception leaves with them.",
+      "paths": [
+        "packages/contracts/workflow-graph.ts"
+      ]
+    },
+    {
+      "ids": [
+        "slack"
+      ],
+      "stage": "R1",
+      "reason": "the send_slack_message compatibility alias keeps stored definitions and suspended runs working until the explicit rewrite has run and been verified. R1 removes the alias after that verification.",
+      "paths": [
         "packages/contracts/workflow-graph.ts"
       ]
     },

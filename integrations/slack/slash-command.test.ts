@@ -1,19 +1,12 @@
 /**
  * The slash command, from the bytes Slack sends to the answer a person reads.
  *
- * The payload below is a Slack slash command body with Slack's documented
- * field set, url-encoded exactly as Slack sends it, and the signature over it
- * was computed OUTSIDE this repository, with:
- *
- *   printf 'v0:%s:%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -r
- *
- * That matters: a "recorded payload" whose signature came from the same
- * function that verifies it proves only that the function agrees with itself.
- * This one proves we implement the algorithm Slack documents. What it does not
- * prove is that Slack's own signer agrees, which only a request from Slack can
- * show; that is what the on-production check of this stage is for.
+ * `fixtures/signed-slash-command.json` is Slack's own public signed request
+ * example. Its provenance and redaction status live beside the bytes. The
+ * tests below never regenerate that signature.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { IntegrationWebhookRequest, RunControlOutcome } from "@integrations/sdk";
 import { deliverSlashCommandOutcome, receiveSlashCommand } from "./slash-command";
@@ -27,6 +20,15 @@ const BODY =
   "&command=%2Fai-workflow&text=cancel+AWT-42&api_app_id=A0MDYCDME&is_enterprise_install=false" +
   "&response_url=https%3A%2F%2Fhooks.slack.com%2Fcommands%2FT0001%2F1234567890%2FabcdefghijklmnopqrstuvwX" +
   "&trigger_id=13345224609.738474920.8088930838d88f008e0";
+
+const RECORDED = JSON.parse(
+  readFileSync(new URL("./fixtures/signed-slash-command.json", import.meta.url), "utf8"),
+) as {
+  signingSecret: string;
+  timestamp: string;
+  signature: string;
+  rawBody: string;
+};
 
 /** Slack's five-minute replay window is measured against the clock. */
 function atSigningTime<T>(run: () => T): T {
@@ -53,7 +55,32 @@ function request(overrides: Partial<IntegrationWebhookRequest> = {}): Integratio
   };
 }
 
+function recordedRequest(): IntegrationWebhookRequest {
+  return {
+    method: "POST",
+    rawBody: RECORDED.rawBody,
+    headers: {
+      "x-slack-signature": RECORDED.signature,
+      "x-slack-request-timestamp": RECORDED.timestamp,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    query: {},
+  };
+}
+
 const config = { signingSecret: SIGNING_SECRET, allowedUserIds: undefined };
+
+test("Slack's recorded signature verifies without being regenerated in the test", async () => {
+  const reception = await atTimestamp(RECORDED.timestamp, 0, () =>
+    receiveSlashCommand(recordedRequest(), {
+      signingSecret: RECORDED.signingSecret,
+      allowedUserIds: undefined,
+    }),
+  );
+  assert.equal(reception.kind, "answered");
+  if (reception.kind !== "answered") return;
+  assert.equal(reception.response.status, 200);
+});
 
 test("a signed slash command becomes the run control command it asked for", async () => {
   const reception = await atSigningTime(() => receiveSlashCommand(request(), config));
@@ -85,10 +112,23 @@ test("one changed byte of the body is refused, because the signature covers it",
   assert.equal(reception.status, 401);
 });
 
-test("a signature from five minutes ago is refused rather than replayed", async () => {
-  // The signature itself is valid; only the clock has moved. Verified against
-  // the real clock, which is six minutes past the signed timestamp and more.
-  const reception = await receiveSlashCommand(request(), config);
+test("the externally signed request is accepted at exactly 300 seconds", async () => {
+  const reception = await atTimestamp(RECORDED.timestamp, 300, () =>
+    receiveSlashCommand(recordedRequest(), {
+      signingSecret: RECORDED.signingSecret,
+      allowedUserIds: undefined,
+    }),
+  );
+  assert.equal(reception.kind, "answered");
+});
+
+test("the externally signed request is refused at 301 seconds", async () => {
+  const reception = await atTimestamp(RECORDED.timestamp, 301, () =>
+    receiveSlashCommand(recordedRequest(), {
+      signingSecret: RECORDED.signingSecret,
+      allowedUserIds: undefined,
+    }),
+  );
   assert.equal(reception.kind, "refused");
   if (reception.kind !== "refused") return;
   assert.equal(reception.status, 401);
@@ -213,4 +253,14 @@ async function signed_request(body: string): Promise<IntegrationWebhookRequest> 
     "x-slack-request-timestamp": TIMESTAMP,
     "content-type": "application/x-www-form-urlencoded",
   } });
+}
+
+function atTimestamp<T>(timestamp: string, secondsAfter: number, run: () => T): T {
+  const realNow = Date.now;
+  Date.now = () => (Number(timestamp) + secondsAfter) * 1000;
+  try {
+    return run();
+  } finally {
+    Date.now = realNow;
+  }
 }

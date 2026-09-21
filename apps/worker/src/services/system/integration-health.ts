@@ -6,11 +6,14 @@
  * state the resolver decided (whether it is connected at all) and a way to run
  * that integration's own probes. Everything below is decided from those three.
  *
- * Pure: no registry, no database, no clock. The wiring that reads them is in
- * probes.ts, which is also the only place that holds a connection value.
+ * Provider probes still arrive through entries. Core additionally contributes
+ * one local observation check for every runtime that declares a webhook. That
+ * check reads only the delivery record written by the generic route, never the
+ * provider connection or its signing secret.
  */
 import type { IntegrationManifest } from "@integrations/sdk";
 import type { IntegrationHealthResult } from "@integrations/sdk";
+import { integrationRuntime } from "@integrations/registry/worker";
 import type {
   IntegrationFailureReason,
   IntegrationState,
@@ -18,6 +21,7 @@ import type {
 } from "@shared/contracts";
 
 import { PublicHealthProbeError } from "./collect.js";
+import { getLatestSystemHealthObservations } from "./observations.js";
 import { redactIntegrationText } from "../integrations/index.js";
 
 import type {
@@ -50,6 +54,8 @@ export interface IntegrationHealthContributions {
 
 /** The id of the check core adds to every integration, before its own. */
 const CONNECTION_CHECK_ID = "connection";
+const WEBHOOK_DELIVERY_CHECK_ID = "webhook-delivery";
+const WEBHOOK_OBSERVATION_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * What separates a contributed probe key from a core one.
@@ -65,12 +71,14 @@ const INTEGRATION_PROBE_NAMESPACE = "integration:";
 
 export function integrationHealthContributions(
   entries: readonly IntegrationHealthEntry[],
+  hasWebhook: (integrationId: string) => boolean = integrationHasWebhook,
 ): IntegrationHealthContributions {
   const definitions: SystemHealthDefinition[] = [];
   const probes: SystemHealthProbes = {};
 
   for (const entry of entries) {
     const { manifest, state, probe } = entry;
+    const contributesWebhook = hasWebhook(manifest.id);
     definitions.push({
       id: manifest.id,
       label: manifest.name,
@@ -81,7 +89,11 @@ export function integrationHealthContributions(
       critical: false,
       description: manifest.description,
       probeNamespace: INTEGRATION_PROBE_NAMESPACE,
-      checks: [connectionCheck(entry), ...declaredChecks(entry)],
+      checks: [
+        connectionCheck(entry),
+        ...declaredChecks(entry),
+        ...(contributesWebhook ? [webhookDeliveryCheck(entry)] : []),
+      ],
     });
     // Only a usable integration is called. Nothing is probed on a deployment
     // that connected nothing, which is what keeps a first scan free of provider
@@ -91,9 +103,70 @@ export function integrationHealthContributions(
       probes[`${INTEGRATION_PROBE_NAMESPACE}${manifest.id}.${check.id}`] = (signal) =>
         runIntegrationProbe(entry, probe, check.id, signal);
     }
+    if (contributesWebhook) {
+      probes[`${INTEGRATION_PROBE_NAMESPACE}${manifest.id}.${WEBHOOK_DELIVERY_CHECK_ID}`] =
+        () => webhookDeliveryResult(manifest.id);
+    }
   }
 
   return { definitions, probes };
+}
+
+function integrationHasWebhook(integrationId: string): boolean {
+  return integrationRuntime(integrationId)?.webhook !== undefined;
+}
+
+function webhookDeliveryCheck(entry: IntegrationHealthEntry): CheckBase {
+  const mode: SystemHealthMode = entry.state.usable
+    ? "configured"
+    : entry.state.enabled
+      ? "not-configured"
+      : "disabled";
+  const message = entry.state.usable
+    ? undefined
+    : `Not checked: ${notCheckedReason(entry)}`;
+  return {
+    id: WEBHOOK_DELIVERY_CHECK_ID,
+    label: "Webhook delivery",
+    description: "Whether a provider webhook request reached this worker recently.",
+    critical: false,
+    mode,
+    envVars: [],
+    evidenceSource: "local-observation",
+    ...(message ? { message } : {}),
+  };
+}
+
+async function webhookDeliveryResult(integrationId: string): Promise<SystemHealthProbeResult> {
+  const observations = await getLatestSystemHealthObservations(
+    integrationId,
+    WEBHOOK_DELIVERY_CHECK_ID,
+  );
+  const latest = observations[0];
+  if (
+    !latest ||
+    Date.now() - latest.observedAt.getTime() > WEBHOOK_OBSERVATION_FRESH_MS
+  ) {
+    return {
+      mode: "degraded",
+      evidenceSource: "local-observation",
+      message: "No webhook request has reached this worker in the last 7 days.",
+    };
+  }
+  if (latest.outcome === "accepted") {
+    return {
+      mode: "live",
+      evidenceSource: "local-observation",
+      observedAt: latest.observedAt.toISOString(),
+      message: "A recent webhook request reached this worker and was accepted.",
+    };
+  }
+  return {
+    mode: "degraded",
+    evidenceSource: "local-observation",
+    observedAt: latest.observedAt.toISOString(),
+    message: `A recent webhook request reached this worker but was rejected (${latest.reason}).`,
+  };
 }
 
 /**

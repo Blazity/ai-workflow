@@ -22,12 +22,12 @@ merely report stay quiet.
 |---|---|---|
 | Bot token | `CHAT_SDK_SLACK_TOKEN` | yes |
 | Channel id | `CHAT_SDK_CHANNEL_ID` | yes |
-| Bot display name | `CHAT_SDK_BOT_NAME` | no, defaults to `ai-workflow` |
 | Signing secret | `SLACK_SIGNING_SECRET` | only for the slash command |
 | Allowed user ids | `SLACK_ALLOWED_USER_IDS` | no, empty means everyone |
 
 The token needs `chat:write` in that channel. Add `channels:history` only if a
 workflow searches messages, and invite the bot to every channel it should read.
+Slack shows the bot name configured on the app itself as the message author.
 
 The token and the channel are required together: a token with no channel has
 nowhere to post, and the card says which value is missing rather than
@@ -36,6 +36,9 @@ connecting and dropping every message.
 The test button proves both halves. It calls `auth.test`, then schedules a
 message sixty days out in the configured channel and deletes it, which is the
 only way to tell a channel the bot may post in from one it can merely see.
+
+System health also reports whether a webhook request reached this worker in
+the last seven days, independently of the signing secret.
 
 ## The slash command
 

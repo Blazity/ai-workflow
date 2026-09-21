@@ -26,29 +26,60 @@ beforeEach(async () => {
 });
 
 /**
- * A stored graph in the shape the editor writes, with the type left open.
+ * A redacted copy of the stored definition shape the rewrite is for.
  *
- * `message` is what tells two versions of one workflow apart. Without it, a
- * rewrite that matched on the definition and forgot the version would overwrite
- * every version with one of them and no assertion could see it.
+ * The production identifiers and authored text were replaced with fixture
+ * values. Empty configuration and the `skipped` edge are deliberately kept:
+ * both occur in the rows this one-off has to rewrite, including definitions
+ * saved before the current graph validator vocabulary.
  */
-function graph(type: string, message = "Ready for review") {
-  return {
-    schemaVersion: 2,
-    nodes: [
-      { id: "ticket", type: "trigger_ticket_ai", x: 0, y: 0, configuration: {}, inputs: {} },
-      {
-        id: "notify",
-        type,
-        x: 120,
-        y: 0,
-        configuration: { message },
-        inputs: { message: { kind: "binding", value: "steps.open-pr.output.url" } },
-        additionalInputs: [],
-      },
-    ],
-    edges: [{ id: "ticket-notify", from: "ticket", to: "notify" }],
-  };
+const STORED_DEFINITION_FIXTURE = {
+  schemaVersion: 2,
+  nodes: [
+    {
+      id: "ticket",
+      type: "trigger_ticket_ai",
+      name: "Ticket enters AI",
+      x: 40,
+      y: 120,
+      configuration: {},
+      inputs: {},
+      additionalInputs: [],
+    },
+    {
+      id: "notify",
+      type: "send_slack_message",
+      name: "Tell the team",
+      x: 300,
+      y: 120,
+      configuration: {},
+      inputs: {},
+      additionalInputs: [],
+    },
+    {
+      id: "not-sent",
+      type: "terminate",
+      name: "Continue without chat",
+      x: 560,
+      y: 280,
+      configuration: { terminalStatus: "done" },
+      inputs: {},
+      additionalInputs: [],
+    },
+  ],
+  edges: [
+    { id: "ticket-notify", from: "ticket", to: "notify", fromPort: "out" },
+    { id: "notify-skipped", from: "notify", to: "not-sent", fromPort: "skipped" },
+  ],
+  budgets: { maxDurationMs: 7200000 },
+  repositoryScope: [{ provider: "github", repoPath: "acme/api" }],
+};
+
+function graph(type: string, name = "Tell the team") {
+  const fixture = structuredClone(STORED_DEFINITION_FIXTURE);
+  fixture.nodes[1]!.type = type;
+  fixture.nodes[1]!.name = name;
+  return fixture;
 }
 
 /** Ids of our own, clear of the "Ticket workflow" row the migrations seed. */
@@ -114,11 +145,15 @@ describe("the renamed block type rewrite", () => {
     // History is read: opening version 1, comparing it with 2 and rolling back
     // to it all have to keep working, so the row may not lose its parameters,
     // its bindings, its edges or its ids.
+    const before = await stored(ONE, 1);
+    const expected = structuredClone(before) as typeof STORED_DEFINITION_FIXTURE;
+    expected.nodes[1]!.type = "send_message";
+
     const result = await runRewrite(db, APPLY);
 
     expect(result.rewritten).toBe(1);
     expect(result.remaining).toBe(0);
-    expect(await stored(ONE, 1)).toEqual(graph("send_message"));
+    expect(await stored(ONE, 1)).toEqual(expected);
   });
 
   it("does not touch a version that never named the old type", async () => {

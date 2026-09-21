@@ -35,15 +35,6 @@
         "format": "text"
       },
       {
-        "key": "botName",
-        "env": "CHAT_SDK_BOT_NAME",
-        "secret": false,
-        "identity": false,
-        "optional": false,
-        "default": "ai-workflow",
-        "format": "text"
-      },
-      {
         "key": "botToken",
         "env": "CHAT_SDK_SLACK_TOKEN",
         "secret": true,
