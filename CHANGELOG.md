@@ -4,6 +4,10 @@ This file lists what changed for people using AI Workflow, newest first.
 Entries are written in the pull request that ships the change and collected
 automatically from `changelog/unreleased/` once a day; see `changelog/README.md`.
 
+## 2026-09-21
+
+- A workflow written through the API or MCP carries no block positions, and the run replay drew every block on top of the others in the top left corner, where only the last one could be clicked. The replay now lays such a graph out itself, left to right, so each block has its own place and opens its own attempt. A workflow arranged in the editor keeps exactly the arrangement somebody gave it.
+
 ## 2026-09-20
 
 - A run's Block Attempt has a Briefing tab: read the exact prompt each agent was sent, section by section, with where every part came from, what was held back before sending, and the repositories it was given.
