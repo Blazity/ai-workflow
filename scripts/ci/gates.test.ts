@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -650,6 +650,27 @@ test("the boundary gate reads a fixture the same way at any path depth", () => {
   assert.equal(runDeep.status, gateFailure, runDeep.stderr || runDeep.stdout);
   assert.match(runNear.stdout, /app->db\s+1/u);
   assert.equal(runNear.stdout, runDeep.stdout);
+});
+
+test("the boundary gate scans a workspace package no application imports", async () => {
+  const plantedPackage = await mkdtemp(join(repoRoot, "packages/boundary-gate-unimported-"));
+  const plantedFile = join(plantedPackage, "forbidden.ts");
+  try {
+    await writeFile(
+      join(plantedPackage, "package.json"),
+      '{"name":"@test/boundary-gate-unimported","private":true}\n',
+    );
+    await writeFile(
+      plantedFile,
+      'import { verifyHarnessSkillArtifact } from "../skills/index.js";\nvoid verifyHarnessSkillArtifact;\n',
+    );
+
+    const result = gate("boundaries.mjs");
+    assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+    assert.match(result.stdout, /packages\/boundary-gate-unimported-[^/]+\/forbidden\.ts/u);
+  } finally {
+    await rm(plantedPackage, { recursive: true, force: true });
+  }
 });
 
 /**

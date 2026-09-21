@@ -364,15 +364,15 @@ function resolvedDependencyPath(root, source, fromPath, dependency, packageDirec
 }
 
 function sourceInputs(root) {
-  // integrations/ is scanned directly, not only where an app reaches it, so the
-  // rule that integrations never import each other holds before core imports
-  // the registry at all.
   const candidates = [
     "apps/worker/src",
     "apps/dashboard/app",
     "apps/dashboard/components",
     "apps/dashboard/lib",
-    "integrations",
+    // Scanned directly, not only as reached from an app: a package edge that no
+    // app import happens to follow (a new package, a test-only path) is still a
+    // package edge.
+    ...tierMap.packageRoots,
   ];
   const dashboard = join(root, "apps/dashboard");
   if (existsSync(dashboard)) {

@@ -43,8 +43,9 @@
       ]
     },
     "engine": {
+      "_comment": "repository-map arrives with the agent-visibility work already on main. It is shared by engine and sandbox, so it belongs to neither; until that directory lands here, this regex alternative matches no path and is inert.",
       "patterns": [
-        "^apps/worker/src/(?:engine|harness-profiles|memory|post-pr-gate|pre-pr-checks|pre-sandbox|prompt-library|run-analysis|run-observability|sandbox|workflows)(?:/|$)"
+        "^apps/worker/src/(?:engine|harness-profiles|memory|post-pr-gate|pre-pr-checks|pre-sandbox|prompt-library|repository-map|run-analysis|run-observability|sandbox|workflows)(?:/|$)"
       ]
     },
     "adapters": {
