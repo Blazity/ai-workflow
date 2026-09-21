@@ -25,12 +25,33 @@ export function buildIntegrationContext(input: {
   readonly signal: AbortSignal;
 }): IntegrationContext<IntegrationManifest> {
   const redact = (text: string) => redactIntegrationText(text, input.secrets);
+  const webhookUrl = integrationWebhookUrl(input.manifest.id);
   return {
     connection: input.values as never,
     http: { fetch: (target, init) => fetchWithPolicy(target, init, input.signal) },
     log: redactingLogger(input.manifest.id, redact),
     signal: input.signal,
+    ...(webhookUrl ? { webhookUrl } : {}),
   };
+}
+
+/**
+ * The address this deployment receives an integration's deliveries at.
+ *
+ * One route, `/webhooks/<id>`, and one base, so an integration comparing what
+ * the provider holds against where deliveries would arrive is comparing
+ * against core's answer rather than its own guess. Nothing when the deployment
+ * has no public URL configured: an empty expectation would read as a mismatch
+ * on every provider.
+ */
+function integrationWebhookUrl(id: string): string | undefined {
+  // Read off `process.env` rather than the validated environment module, which
+  // this file may not import: it is reached from the integrations barrel, and
+  // pulling environment validation in there makes importing the barrel fail
+  // wherever the variables are not set. The value is a URL a person typed, and
+  // nothing here depends on its shape beyond being non-empty.
+  const base = process.env.BETTER_AUTH_URL?.trim().replace(/\/+$/u, "");
+  return base ? `${base}/webhooks/${id}` : undefined;
 }
 
 function redactingLogger(

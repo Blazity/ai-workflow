@@ -1,0 +1,8 @@
+Source URL: https://github.com/octokit/webhooks/blob/7dd7fa56498a827a08b71919fae89428f5e8e283/payload-examples/api.github.com/pull_request/opened.payload.json
+Raw bytes: https://raw.githubusercontent.com/octokit/webhooks/7dd7fa56498a827a08b71919fae89428f5e8e283/payload-examples/api.github.com/pull_request/opened.payload.json
+What it is: one of the recorded GitHub webhook deliveries published as
+  @octokit/webhooks-examples, which is the set GitHub's own webhook
+  documentation renders at
+  https://docs.github.com/en/webhooks/webhook-events-and-payloads
+Retrieved: 2026-09-21
+SHA-256: d34772e6b4b912586626b71101fd7e9f529943866c895dcb3381ec476003e834

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  createVCS: vi.fn(() => ({ kind: "default-vcs" })),
   createRepositoryVCS: vi.fn(() => ({ kind: "repo-vcs" })),
 }));
 
@@ -19,10 +18,6 @@ vi.mock("../../adapters/issue-tracker/jira.js", () => ({
 
 vi.mock("../../db/repositories/active-runs.js", () => ({
   createConnectedPostgresRunRegistry: vi.fn(() => ({ kind: "registry", db: "db" })),
-}));
-
-vi.mock("../../adapters/vcs/create-vcs.js", () => ({
-  createVCS: mocks.createVCS,
 }));
 
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
@@ -49,7 +44,9 @@ describe("createAdapters", () => {
     expect(() => adapters.vcs.getBranchSha("main")).toThrow(
       "adapters.vcs needs a repository",
     );
-    expect(mocks.createVCS).not.toHaveBeenCalled();
+    // And no adapter was built for it: the refusal comes before a provider is
+    // ever resolved.
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
 
   it("memoizes the selected repository VCS adapter per adapters instance", () => {

@@ -293,8 +293,14 @@ describe("integrationHealthContributions", () => {
       },
     ]);
 
-    expect(Object.keys(contributions.probes)).toEqual(["integration:github.repositories"]);
+    // Two keys, because an integration that receives deliveries also gets
+    // core's webhook check, and that one is namespaced by the same rule.
+    expect(Object.keys(contributions.probes)).toEqual([
+      "integration:github.repositories",
+      "integration:github.webhook-delivery",
+    ]);
     expect(contributions.probes["github.repositories"]).toBeUndefined();
+    expect(contributions.probes["github.webhook-delivery"]).toBeUndefined();
     expect(contributions.definitions[0]?.probeNamespace).toBe("integration:");
   });
 

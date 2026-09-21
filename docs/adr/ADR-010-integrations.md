@@ -2495,6 +2495,161 @@ therefore retargets existing catalog rows with the same paths instead of
 creating a second namespace. Multiple GitLab hosts require a new connection
 identity in repository keys and are outside this decision.
 
+## GitHub becomes an integration, decided in S11
+
+S11 is the smaller half of the version control move. S10 made `vcs` a
+capability, opened the provider id to the registry and shipped GitLab as a
+package; what was left was GitHub itself, which is every deployment's actual
+provider, plus the proof that nothing provider-shaped survives in core.
+
+### What moved, and what core deleted
+
+`integrations/github` owns App authentication, the REST and GraphQL adapter,
+repository profiles, repository listing, the skill source client, the webhook
+translator and three health probes. Core deleted `adapters/vcs/github.ts`,
+`github-auth.ts`, `github/profile-source.ts`, `create-vcs.ts`,
+`infra/github-webhook-sig.ts`, `routes/webhooks/github.post.ts`,
+`services/triggers/github/` and the GitHub half of
+`services/dispatch/trigger-events.ts`, `services/system/probes.ts`,
+`services/system/collect.ts`, `services/settings/*` and `infra/runtime-env.ts`.
+`infra/vcs-config.ts` keeps its name and exports the process environment, which
+is what several hundred modules import it for, and describes no provider at all.
+
+`createVCSForRepository` is gone rather than generalised. There is no `if` on a
+kind left to generalise: `resolveIntegrationAdapter`
+(`engine/support/vcs-runtime.ts`) asks the registry for the manifest of the
+repository's provider and refuses a provider no integration in this build
+serves. That refusal is the whole of the former core half.
+
+### The private key is read, not decoded
+
+`GITHUB_APP_PRIVATE_KEY` has always been base64, decoded with
+`Buffer.from(value, "base64")`. That call does not throw on input that is not
+base64: it drops every character outside the alphabet and returns whatever
+bytes it can salvage. An admin pasting the `.pem` file GitHub downloads into a
+dashboard field would therefore have saved a few hundred bytes of rubbish, seen
+the connection accepted, and found out hours later from a message about a bad
+key rather than about what they pasted.
+
+Both forms are accepted and normalised at the edge (`integrations/github/auth.ts`),
+and a value that is neither is refused with a sentence naming both. Accepting
+rather than refusing one of them is deliberate: the admin holding the file has
+no reason to know we ever wanted base64, and the two cannot be confused, since a
+PEM says so on its first line and `-` is not in the base64 alphabet. A value
+that arrives with its newlines written as backslash-n, which is what survives a
+shell or a deployment variable editor, is read as the same key.
+
+The refusal lands before anything is stored as the active connection: saving
+runs the connection test first and activates only on a pass
+(`services/integrations/authoring.ts`), and the test reads the key before it
+sends a single request. A silent mangle is not an outcome of either path.
+
+### No App install redirect yet
+
+Connecting through the dashboard means supplying the App ID, the installation ID
+and the private key, the same three values the environment supplies. The proper
+product answer is GitHub's own install redirect, which needs an App registered
+against a public callback URL: a different piece of work, and a bad one to start
+in the middle of a refactor. Until then an admin creates the App by hand,
+following `docs/runbooks/GITHUB-APP-SETUP.md`, and pastes the three values.
+
+### The legacy environment keeps working, and when it dies
+
+Every variable core read is a connection field on the manifest, so a deployment
+configured entirely by its environment is Connected with nothing to touch:
+`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`,
+`GITHUB_WEBHOOK_SECRET`, `GITHUB_BOT_LOGIN`, the `GITHUB_OWNER`/`GITHUB_REPO`
+pair and `VCS_BOT_LOGIN` under the meaning S10 gave it. The three legacy fields
+are named legacy on the form so nobody configures a new deployment with them,
+and they die in R1, with the tenant's re-authoring, once no deployment reads
+them.
+
+Two startup checks left with them, and this is the trade. The worker used to
+throw at boot on a half-configured App and on a missing webhook secret. It no
+longer reads those variables, so the Integrations page reports the same two
+facts instead: the connection row names the missing variable, and the App
+webhook check says a secret is not set. Loud at boot became visible on a page,
+which is the same trade S10 made for GitLab.
+
+### The App webhook check moved, and one assertion narrowed
+
+Core's `github.webhook-delivery` probe asked GitHub's own App API which events
+the App subscribes to, whether TLS verification is on, whether the hook URL is
+this worker's, and what status the last delivery got. Events, TLS and the last
+delivery are the integration's `webhook` probe now, the 401 sentence included,
+since a status code GitHub recorded is the one this worker answered with.
+
+The URL assertion narrowed. The integration cannot know this deployment's
+public address, so instead of asserting the hook points here it prints the URL
+GitHub holds. The failure it caught is still caught: core's own
+`webhook-delivery` check reads the deliveries that actually arrived and turns
+degraded within the week when none does, and the two rows read together say
+which deployment the App is talking to.
+
+### `repositories` on the manifest, and the three branches it removed
+
+Core branched on the name `github` in three places that had nothing to do with
+credentials: which provider a pasted link belongs to, where a repository path
+ends inside that link, and whether an operator's `owner/name` is well formed. A
+fourth provider would have had to be added to each.
+
+A `vcs` manifest may now declare `repositories`: the public `host` whose links
+name it, and whether its paths may nest. GitHub declares `github.com` and no
+nesting; GitLab declares nesting and no host, because a self-hosted instance is
+the normal case and its host is the connection field an admin fills, whose
+default core already read. A provider that declares neither gets the general
+case, which is the safe one: cutting a nested path short would point at a
+different repository, while a segment too many is only ever refused.
+
+### Who decides that a push is ours, and the divergence this closes
+
+S10 gave GitLab's normalizer a rule GitHub never had: drop a push whose author
+is the automation account. Core's own rule, which both providers used before
+S10, is `isWorkflowGeneratedPush`: the head a run published, with identity as a
+backstop for a recorded head that lags. It needs the ownership record, which no
+integration can see.
+
+Both normalizers now emit the push and core decides, which is one rule in one
+place for every provider. The identity-only drop was also stricter than the
+rule it replaced, silencing a push by that account to a pull request no run of
+ours owns. Nothing in the suite went red when it was removed, which says the
+S10 change was never covered.
+
+The other half of that seam was core reading GitLab's word for a push
+(`legacyGate.action === "update"`) to decide whether to ask about the legacy
+gate. The reception carries `headMoved` instead, which both integrations set,
+because matching one provider's spelling leaves every other provider's push
+unasked about.
+
+### The defect the S10 gate predicted, found and fixed
+
+The S10 skeptic noted that core minted a GitHub-shaped check handle in
+`services/dispatch/trigger-events.ts` beside the adapter's own, with no test
+binding a real event through the real comparator. Writing that test found the
+two disagreeing: the webhook fell back to the sender's login for the handle's
+owner while the adapter fell back to the empty string, so a check run whose
+`app` carries no slug, which is exactly what GitHub's published `completed`
+example is, minted two handles that never compared equal. Every such failed
+check would have bound to nothing and been recorded as a stale head, with the
+autofix path silent and no error anywhere. Both handles are minted in the same
+package now and the test
+(`engine/support/trigger-handle-binding.test.ts`) builds each side from real
+bytes through real code.
+
+`resolveIntegrationAdapter` also took `resolved.usable[0]` where the filter
+happened to leave one entry. It finds by id now: the day a caller widens that
+filter, position would send a repository's work to another company's server.
+
+### What the stage is proved by
+
+`engine/support/third-vcs-provider.test.ts` registers a provider core contains
+nowhere and drives the real catalog validation, the real path rules, the real
+link parser, the real per-repository selection and the real automation account
+lookup against it, with a second unknown provider connected at the same time so
+that "the repository's provider" and "the only provider" are different
+sentences. A registry holding exactly the two we ship proves nothing here,
+because a surviving branch on a known name passes that.
+
 ## Change log
 
 Additive changes to `@integrations/sdk` after S0, newest first. Each entry
@@ -2502,6 +2657,10 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-21 | S11 | `IntegrationManifest.repositories`, with `host` and `nestedPaths`, and the type `IntegrationRepositoryShape` | Core branched on the name `github` in three places that decide nothing about credentials: which provider a pasted link belongs to, where a repository path ends inside that link, and whether `owner/name` is well formed. A fourth provider would have had to be added to each. Optional and absent by default, and a provider that declares nothing gets the general case (any host, paths may nest), so every manifest written before this is unchanged. |
+| 2026-09-21 | S11 | `RepositorySkillSource` and `RepositorySkillTreeEntry`, and the optional `skillSource()` on `VcsIntegrationAdapter` | The harness skill importer held a second GitHub API client inside core, with the four provider calls it needs already behind an interface. Those four are the port now; everything a skill import decides (which paths are containers, what a valid `SKILL.md` is, how an artifact is hashed, what is persisted) stays core's. `getFiles` answers `Uint8Array` rather than Node's `Buffer` because this entry is bundled for a browser. Optional: an adapter without it simply cannot serve a skill import, and core says so naming the provider. |
+| 2026-09-21 | S11 | `headMoved` on the webhook reception's `legacyGate` | Core read `action === "update"`, which is GitLab's word for a push, to decide whether to ask its ownership record about a delivery before starting the legacy gate. Every other provider's push went unasked about. The flag says the fact rather than the spelling. Optional, so an integration that never reaches the legacy gate is unchanged. |
+| 2026-09-21 | S11 | `CORE_HEALTH_SECTION_IDS` lost `github` | Core's own GitHub health section is gone, so the id is the integration's to take. The shrink that entry describes. |
 | 2026-09-21 | S9 | `CoreMessagingDelivery`, core's own widening of the port's answer, and `pins` on `notifyTicket` | The port says whether a message arrived. Only core can say whether the run may still use this provider at all, so that fact is core's to add rather than the port's to carry. It travels on the step's answer because the comparison reads deployment settings and therefore cannot happen in workflow scope, which the bundle guard proved by refusing the first attempt. A block stops the run on it; a notification ignores it. |
 | 2026-09-20 | S9 | `webhook`, the reserved slot released: `IntegrationWebhook` with `receive` and an optional `deliver`, `IntegrationWebhookRequest`, `IntegrationWebhookReception`, `IntegrationWebhookResponse`, and conformance code `webhook_receive_missing` | S0 reserved it for the stage that had a provider to design it against. `receive` and `deliver` are two calls because a slash command has about three seconds to be acknowledged and the work happens after; `deliver` is told about a failure as well as an answer, because a handler that threw used to leave the person reading "Working on ...". The request carries the raw body, since that is what a provider signs. Additive: the slot was `never` and no manifest field changed. |
 | 2026-09-20 | S9 | `MessagingDelivery` as the return of `notifyForTicket`, `MessagingConversation` as its third argument, `MessagingTicket` in place of a bare key, `MessagingSender` as what core calls, and the optional `searchMessages` with `MessageSearchQuery`, `MessageSearchMatch`, `MessageSearchSkip`, `MessageSearchOutcome` and `MessageRetrievalFailure` | The port never threw and therefore never said whether anything arrived, so a block reported `ok` for a message nobody received. It answers now. The conversation a ticket owns is core's row and is passed in as an opaque handle, so a second provider needs no table and the old Slack timestamps keep working. The ticket arrives with the link core built, because which tracker this deployment talks to is not a chat provider's business. Search became an operation of the capability so the research path stops importing a provider. Not additive for a provider: every messaging adapter changes signature, which is why it landed with the only one. |

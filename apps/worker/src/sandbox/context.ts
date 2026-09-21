@@ -14,6 +14,7 @@ import {
   type WorkspaceManifest,
 } from "./repo-workspace.js";
 import { selectReviewLedgerWorkItems as selectWorkItems } from "../adapters/vcs/vcs-bot-identity.js";
+import { exampleRepositoryPath } from "../engine/support/repository-path-example.js";
 
 interface TicketData {
   identifier: string;
@@ -153,7 +154,10 @@ This protocol extends and overrides any older Output Format instructions above.
   attached repositories the implementation must modify, and include concise
   \`repositoryEvidence\`. Every evidence item must name the exact
   \`provider:repoPath\`, the file, symbol, commit, PR, or ticket fact checked,
-  and the relevant finding (for example: \`github:acme/api src/auth.ts:42 —
+  and the relevant finding (for example: \`${exampleRepositoryPath(
+    "acme/api",
+    (selectedRepositories ?? []).map((repository) => repository.provider),
+  )} src/auth.ts:42,
   token refresh is delegated to SessionStore\`). A code-changing plan must
   declare at least one write repository.
 - Set fields that do not apply to \`null\`, as required by the structured schema.

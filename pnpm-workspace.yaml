@@ -9,6 +9,7 @@ packages:
 # missing from this catalog or is pinned to two different specifiers.
 catalog:
   "@octokit/auth-app": ^8.2.0
+  "@octokit/rest": ^22.0.1
   "@types/node": ^22.0.0
   "@types/react": ^19.0.0
   happy-dom: 20.14.5

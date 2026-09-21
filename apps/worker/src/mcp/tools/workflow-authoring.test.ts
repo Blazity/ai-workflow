@@ -40,12 +40,19 @@ vi.mock("../../infra/vcs-config.js", () => ({
     MCP_AUDIT_RETENTION_DAYS: 365,
     ANTHROPIC_API_KEY: "sk-ant-test",
     CODEX_API_KEY: "sk-codex-test",
-    GITHUB_APP_ID: 1,
-    GITHUB_APP_PRIVATE_KEY: "private-key",
-    GITHUB_INSTALLATION_ID: 2,
-    GITLAB_TOKEN: "gitlab-token",
   },
 }));
+
+// GitHub configured the way a deployment configures it: the connection resolves
+// from these variables, and that is what makes `vcs` a capability this build
+// serves. Without it a graph pinning a repository is refused at publish, which
+// is correct and is not what the pinning cases below are about.
+Object.assign(process.env, {
+  GITHUB_APP_ID: "1",
+  GITHUB_APP_PRIVATE_KEY: "private-key",
+  GITHUB_INSTALLATION_ID: "2",
+  GITHUB_WEBHOOK_SECRET: "webhook-secret",
+});
 
 import type { MessagingSender, TicketEvent } from "../../adapters/messaging/types.js";
 import type { Adapters } from "../../engine/support/adapters.js";

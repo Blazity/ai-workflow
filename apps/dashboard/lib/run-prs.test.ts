@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { primaryPullRequestLabel, runPullRequests } from "./run-prs";
+import { primaryPullRequestLabel, runPullRequests, soleVcsProvider } from "./run-prs";
 
 test("a multi-repo run returns every PR/MR in stored order", () => {
   assert.deepEqual(
@@ -39,7 +39,10 @@ test("a multi-repo run returns every PR/MR in stored order", () => {
   );
 });
 
-test("a legacy run without the list keeps its GitHub PR link", () => {
+// A legacy row stored no provider, and this build ships more than one, so the
+// entry carries none. It used to carry whichever provider core was written
+// around, which put a provider's name on a run that may never have touched it.
+test("a legacy run without the list keeps its PR link and claims no provider", () => {
   assert.deepEqual(
     runPullRequests({
       prs: null,
@@ -48,7 +51,7 @@ test("a legacy run without the list keeps its GitHub PR link", () => {
     }),
     [
       {
-        provider: "github",
+        provider: "",
         repoPath: "",
         id: 91,
         url: "https://github.com/acme/storefront/pull/91",
@@ -57,7 +60,7 @@ test("a legacy run without the list keeps its GitHub PR link", () => {
   );
 });
 
-test("a legacy GitLab URL is recognised as a merge request", () => {
+test("a legacy merge request URL keeps its link and is still read as an MR", () => {
   assert.deepEqual(
     runPullRequests({
       prs: null,
@@ -66,13 +69,31 @@ test("a legacy GitLab URL is recognised as a merge request", () => {
     }),
     [
       {
-        provider: "gitlab",
+        provider: "",
         repoPath: "",
         id: 18,
         url: "https://gitlab.com/acme/api/-/merge_requests/18",
       },
     ],
   );
+  // The noun a person reads comes from the URL the row did store, so losing the
+  // guessed provider did not turn this link into a pull request.
+  assert.equal(
+    primaryPullRequestLabel({
+      prs: null,
+      prUrl: "https://gitlab.com/acme/api/-/merge_requests/18",
+      prNumber: 18,
+    }),
+    "MR !18",
+  );
+});
+
+test("a deployment with one version control provider attributes a legacy row to it", () => {
+  // The only deployment where the answer is knowable: one provider connected
+  // means every row that predates the field came from it.
+  assert.equal(soleVcsProvider(["forgejo"]), "forgejo");
+  assert.equal(soleVcsProvider(["github", "gitlab"]), "");
+  assert.equal(soleVcsProvider([]), "");
 });
 
 test("a run that opened nothing renders no links", () => {

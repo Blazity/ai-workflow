@@ -41,13 +41,14 @@ describe("integration settings", () => {
   });
 
   it("answers with the secret belonging to the provider asked about", () => {
-    state.env.GITHUB_WEBHOOK_SECRET = "gh";
+    state.env.JIRA_WEBHOOK_SECRET = "board";
     state.env.RESEND_WEBHOOK_SECRET = "mail";
 
-    expect(providerWebhookSecret("github")).toBe("gh");
+    expect(providerWebhookSecret("jira")).toBe("board");
     expect(providerWebhookSecret("email")).toBe("mail");
     // Unset is undefined and never the empty string: a health observation scoped
     // to "" would match every deployment that configured nothing.
-    expect(providerWebhookSecret("jira")).toBeUndefined();
+    state.env.RESEND_WEBHOOK_SECRET = undefined;
+    expect(providerWebhookSecret("email")).toBeUndefined();
   });
 });

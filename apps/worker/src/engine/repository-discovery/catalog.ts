@@ -3,6 +3,7 @@ import {
   type RepositoryRelationshipKind,
 } from "@shared/contracts";
 import type { RepositoryMetadata } from "../../adapters/vcs/repository-directory.js";
+import { providerNestsRepositoryPaths } from "./provider-shape.js";
 
 /** Repository candidates resolved before sandbox execution begins. */
 
@@ -240,5 +241,10 @@ function isValidProviderPath(
   ) {
     return false;
   }
-  return provider === "github" ? segments.length === 2 : segments.length >= 2;
+  // A provider whose paths never nest has exactly owner and name; one whose
+  // paths may nest has at least that. The manifest answers which, so a third
+  // provider needs no edit here.
+  return providerNestsRepositoryPaths(provider)
+    ? segments.length >= 2
+    : segments.length === 2;
 }

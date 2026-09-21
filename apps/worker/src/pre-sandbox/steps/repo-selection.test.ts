@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => {
     listRepositories,
     // Every provider answers unless a test says otherwise, so listRepositories
     // stays the one knob for the catalog.
-    listRepositoriesAcrossProviders: vi.fn(
+    listVcsRepositories: vi.fn(
       async (): Promise<{
         repositories: RepositoryMetadata[];
         failures: RepositoryListingFailure[];
@@ -19,7 +19,6 @@ const mocks = vi.hoisted(() => {
         failures: [],
       }),
     ),
-    getConfiguredVcsProviders: vi.fn(),
     getDb: vi.fn(),
     listWorkflowOwnedBranchesForTicket: vi.fn(),
     listRepositoryRules: vi.fn().mockResolvedValue([]),
@@ -29,14 +28,22 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-// The pin filter is a pure helper in the same module and stays real: mocking it
-// would hide the intersection this suite is asserting.
-vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../adapters/vcs/repository-directory.js")
-  >()),
-  listRepositoriesAcrossProviders: mocks.listRepositoriesAcrossProviders,
+// What the connected providers offered, which is this suite's one knob for the
+// catalog. It is the only thing replaced in the module: the pin filter and the
+// scope helpers next to it are pure and stay real, because mocking them would
+// hide the intersection this suite is asserting.
+vi.mock("../../engine/support/vcs-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../engine/support/vcs-runtime.js")>()),
+  listVcsRepositories: mocks.listVcsRepositories,
 }));
+
+/** The providers the last listing was narrowed to, or undefined where it asked
+ *  for every connected one. */
+function listedProviders(): ReadonlySet<string> | undefined {
+  const call = mocks.listVcsRepositories.mock.calls.at(-1) as unknown[] | undefined;
+  return (call?.[0] as { neededProviders?: ReadonlySet<string> } | undefined)
+    ?.neededProviders;
+}
 
 vi.mock("../../infra/vcs-config.js", () => ({
   // The two routing kill switches used to be read here. They ride on the run's
@@ -44,7 +51,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
   // below carries: off by registry default in every pre-existing test, which is
   // what makes those tests the flag-off regression proof.
   env: {},
-  getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
 }));
 
 vi.mock("../../services/integrations/runtime.js", () => ({
@@ -1008,20 +1014,6 @@ describe("repoSelectionStep", () => {
     mocks.listRepositoryRules.mockResolvedValue([]);
     // Pinned off, so no describe order can leak a flag into this block.
     mocks.getDb.mockReturnValue({ db: true });
-    mocks.getConfiguredVcsProviders.mockReturnValue([
-      {
-        kind: "github",
-        auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-        host: "https://github.com",
-        legacyBaseBranch: "main",
-      },
-      {
-        kind: "gitlab",
-        token: "glpat",
-        host: "https://gitlab.example.com",
-        legacyBaseBranch: "main",
-      },
-    ]);
   });
 
   it("loads discovery relationships for the frozen enabled list and marks inaccessible context", async () => {
@@ -1193,9 +1185,9 @@ describe("repoSelectionStep", () => {
       step: { uses: "repo-selection", onFailure: "fail" },
     });
 
-    expect(mocks.listRepositoriesAcrossProviders).toHaveBeenCalledWith([
-      expect.objectContaining({ kind: "gitlab" }),
-    ]);
+    // Asked of the connected providers by name. Listing the others would spend
+    // a request each on repositories the pin has already excluded.
+    expect(listedProviders()).toEqual(new Set(["gitlab"]));
     expect(result.selectedRepositories).toEqual([
       expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" }),
     ]);
@@ -1229,10 +1221,7 @@ describe("repoSelectionStep", () => {
       step: { uses: "repo-selection", onFailure: "fail" },
     });
 
-    expect(mocks.listRepositoriesAcrossProviders).toHaveBeenCalledWith([
-      expect.objectContaining({ kind: "github" }),
-      expect.objectContaining({ kind: "gitlab" }),
-    ]);
+    expect(listedProviders()).toEqual(new Set(["gitlab", "github"]));
   });
 
   it("reports no narrowing and queries every provider without a pin", async () => {
@@ -1250,10 +1239,10 @@ describe("repoSelectionStep", () => {
       step: { uses: "repo-selection", onFailure: "fail" },
     });
 
-    expect(mocks.listRepositoriesAcrossProviders).toHaveBeenCalledWith([
-      expect.objectContaining({ kind: "github" }),
-      expect.objectContaining({ kind: "gitlab" }),
-    ]);
+    // No set at all rather than a set of everything: a run with no pin takes
+    // whatever the deployment has connected, including one connected after the
+    // list in this file was written.
+    expect(listedProviders()).toBeUndefined();
     expect(result.repositoryScopeNarrowing).toBeUndefined();
     expect(result.selectedRepositories).toEqual([
       expect.objectContaining({
@@ -1554,24 +1543,10 @@ describe("repoSelectionStep with a provider that never answered", () => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([]);
-    mocks.getConfiguredVcsProviders.mockReturnValue([
-      {
-        kind: "github",
-        auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-        host: "https://github.com",
-        legacyBaseBranch: "main",
-      },
-      {
-        kind: "gitlab",
-        token: "glpat",
-        host: "https://gitlab.example.com",
-        legacyBaseBranch: "main",
-      },
-    ]);
   });
 
   it("continues on a deterministic ticket mention and records the degradation", async () => {
-    mocks.listRepositoriesAcrossProviders.mockResolvedValueOnce({
+    mocks.listVcsRepositories.mockResolvedValueOnce({
       repositories: repos,
       failures: [timedOutGitLab],
     });
@@ -1605,7 +1580,7 @@ describe("repoSelectionStep with a provider that never answered", () => {
   });
 
   it("fails closed and names the provider when no deterministic signal survives", async () => {
-    mocks.listRepositoriesAcrossProviders.mockResolvedValueOnce({
+    mocks.listVcsRepositories.mockResolvedValueOnce({
       repositories: repos,
       failures: [timedOutGitLab],
     });
@@ -1642,7 +1617,7 @@ describe("repoSelectionStep with a provider that never answered", () => {
   });
 
   it("continues normally when the pin already excluded the failed provider", async () => {
-    mocks.listRepositoriesAcrossProviders.mockResolvedValueOnce({
+    mocks.listVcsRepositories.mockResolvedValueOnce({
       repositories: repos,
       failures: [timedOutGitLab],
     });
@@ -1680,7 +1655,7 @@ describe("repoSelectionStep with a provider that never answered", () => {
   // The provider is queried past the pin precisely so an in-flight pull request is
   // not stranded, so its silence is never harmless.
   it("fails closed when the failed provider carries this ticket's workflow-owned branch", async () => {
-    mocks.listRepositoriesAcrossProviders.mockResolvedValueOnce({
+    mocks.listVcsRepositories.mockResolvedValueOnce({
       repositories: repos,
       failures: [timedOutGitLab],
     });
@@ -1830,14 +1805,6 @@ describe("repoSelectionStep remembered repository routing", () => {
     mocks.listRepositories.mockResolvedValue(catalog);
     mocks.getMemoryDocument.mockResolvedValue(null);
     mocks.upsertMemoryDocument.mockResolvedValue({ applied: true, version: 1 });
-    mocks.getConfiguredVcsProviders.mockReturnValue([
-      {
-        kind: "github",
-        auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-        host: "https://github.com",
-        legacyBaseBranch: "main",
-      },
-    ]);
   });
 
   describe("reading", () => {
@@ -1974,7 +1941,7 @@ describe("repoSelectionStep remembered repository routing", () => {
     });
 
     it("does not rescue a run that failed closed on an incomplete catalog", async () => {
-      mocks.listRepositoriesAcrossProviders.mockResolvedValueOnce({
+      mocks.listVcsRepositories.mockResolvedValueOnce({
         repositories: catalog,
         failures: [
           {
@@ -1984,15 +1951,6 @@ describe("repoSelectionStep remembered repository routing", () => {
           },
         ],
       });
-      mocks.getConfiguredVcsProviders.mockReturnValue([
-        {
-          kind: "github",
-          auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-          host: "https://github.com",
-          legacyBaseBranch: "main",
-        },
-        { kind: "gitlab", token: "glpat", host: "https://gitlab.example.com", legacyBaseBranch: "main" },
-      ]);
       mocks.getMemoryDocument.mockResolvedValue(routingDocument(ROUTING_DOC));
 
       const result = await run({
@@ -2037,9 +1995,6 @@ describe("repoSelectionStep remembered repository routing", () => {
     it("ignores a remembered repository the pin excludes", async () => {
       // A provider-only pin leaves selection falling through to discovery, so the
       // read does run, and the pinned catalog is what the entry is checked against.
-      mocks.getConfiguredVcsProviders.mockReturnValue([
-        { kind: "gitlab", token: "glpat", host: "https://gitlab.example.com", legacyBaseBranch: "main" },
-      ]);
       // Two GitLab repositories, so the pinned catalog does not collapse into the
       // only-accessible-repository shortcut and the run really does reach discovery.
       mocks.listRepositories.mockResolvedValue([
@@ -2228,9 +2183,6 @@ describe("repoSelectionStep remembered repository routing", () => {
       // than the first path segment. On a self-hosted GitLab one top-level group
       // routinely holds a subgroup per customer, and grouping on the first segment
       // would put both of these in one document with no per-tenant inspection.
-      mocks.getConfiguredVcsProviders.mockReturnValue([
-        { kind: "gitlab", token: "glpat", host: "https://gitlab.example.com", legacyBaseBranch: "main" },
-      ]);
       // Nested namespaces are a GitLab shape; the catalog requires exactly two
       // segments on GitHub.
       mocks.listRepositories.mockResolvedValue([
@@ -2262,15 +2214,6 @@ describe("repoSelectionStep remembered repository routing", () => {
       // The provider half of containment: one owner name on two forges is two
       // owners, so a GitHub document may not route to the GitLab repository of the
       // same path.
-      mocks.getConfiguredVcsProviders.mockReturnValue([
-        {
-          kind: "github",
-          auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-          host: "https://github.com",
-          legacyBaseBranch: "main",
-        },
-        { kind: "gitlab", token: "glpat", host: "https://gitlab.example.com", legacyBaseBranch: "main" },
-      ]);
       mocks.listRepositories.mockResolvedValue([
         ...catalog,
         { ...catalog[1]!, provider: "gitlab", repoPath: "acme/api" },

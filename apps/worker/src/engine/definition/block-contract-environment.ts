@@ -28,10 +28,9 @@ import { NO_INTEGRATIONS, type DeploymentIntegrations } from "./integration-avai
  * added by `workflowBlockRegistryContext` below.
  */
 function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAgent"> {
+  // Empty since S11: every version control provider is an integration, and the
+  // async reader below merges in what the database says is connected.
   const vcsProviders: WorkflowBlockRegistryContext["vcsProviders"] = [];
-  if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID) {
-    vcsProviders.push("github");
-  }
   return {
     agentProviders: {
       claude: Boolean(env.ANTHROPIC_API_KEY),
@@ -44,14 +43,7 @@ function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAg
       codex: Boolean(env.CODEX_API_KEY),
     },
     vcsProviders,
-    vcsBotIdentities: vcsProviders.filter((provider) =>
-      Boolean(
-        resolveVcsBotLogin(provider, vcsProviders, {
-          byProvider: { github: env.GITHUB_BOT_LOGIN },
-          legacy: env.VCS_BOT_LOGIN,
-        }),
-      ),
-    ),
+    vcsBotIdentities: [],
     webhookTriggerConfigured: Boolean(env.WEBHOOK_TRIGGER_ENCRYPTION_KEY),
     // Filled by the async reader below, which is the only caller that can ask
     // the database what is connected. A caller that cannot wait gets an empty
@@ -109,17 +101,15 @@ export function workflowBlockRegistryContext(
   const integrationVcsProviders = integrations.providers.get("vcs") ?? [];
   const vcsProviders = [...new Set([...deployment.vcsProviders, ...integrationVcsProviders])];
   const soleProvider = vcsProviders.length === 1 ? vcsProviders[0] : undefined;
+  // Whether a provider has an automation account is the integration resolver's
+  // answer and only its answer. Reading the environment a second time here
+  // would disagree with it the moment a connection moved to stored values, and
+  // the editor would offer a trigger the run then refuses.
   const byProvider = Object.fromEntries(vcsProviders.map((provider) => [
     provider,
-    provider === "github" && env.GITHUB_BOT_LOGIN?.trim()
-      ? env.GITHUB_BOT_LOGIN
-      : integrations.botIdentityProviders.has(provider)
-        ? "configured"
-        : undefined,
+    integrations.botIdentityProviders.has(provider) ? "configured" : undefined,
   ]));
-  const legacy = soleProvider && (
-    env.VCS_BOT_LOGIN?.trim() || integrations.legacyBotIdentityProviders.has(soleProvider)
-  )
+  const legacy = soleProvider && integrations.legacyBotIdentityProviders.has(soleProvider)
     ? "configured"
     : undefined;
   const vcsBotIdentities = vcsProviders.filter((provider) => Boolean(

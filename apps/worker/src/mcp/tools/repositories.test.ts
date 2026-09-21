@@ -40,9 +40,11 @@ vi.mock("../../infra/llm.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/llm.js")>()),
   generateProviderText: suggestion.generateProviderText,
 }));
-vi.mock("../../adapters/vcs/create-vcs.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../adapters/vcs/create-vcs.js")>()),
-  createRepositoryProfileSource: () => ({ loadProfile: suggestion.loadProfile }),
+// The profile read reaches a provider, so it is mocked at the capability the
+// suggestion path calls rather than at any one provider's client.
+vi.mock("../../engine/support/vcs-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../engine/support/vcs-runtime.js")>()),
+  loadRepositoryVcsProfile: () => suggestion.loadProfile(),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 // The provider listing is the one thing the import half cannot do from a test
@@ -1460,9 +1462,17 @@ describe("repositories.suggest", () => {
     const id = await seedRepository({ path: "acme/api", enabled: true });
     const client = await connectedClient();
 
-    // Nothing is configured to read a repository from, so the profile source
+    // Nothing is connected that can read this repository, so the profile source
     // half of the call fails: a 502 from the service carrying a symbolic
-    // constant, never a provider's own prose.
+    // constant, never a provider's own prose. The sentence is the resolver's
+    // own, copied from `resolveIntegrationAdapter`.
+    suggestion.loadProfile.mockRejectedValue(
+      new Error(
+        "No integration in this build serves version control for github." +
+          " The repository's provider has to be one this deployment ships.",
+      ),
+    );
+
     const result = await client.callTool({
       name: "repositories.suggest",
       arguments: { repositoryId: id, idempotencyKey: KEY_ONE },
@@ -1473,7 +1483,8 @@ describe("repositories.suggest", () => {
       message: "profile_source_failed",
       retryable: true,
       failureReason:
-        "profile source: no github provider is configured on this deployment",
+        "profile source: No integration in this build serves version control for github." +
+        " The repository's provider has to be one this deployment ships.",
     });
     // The failed attempt is still recorded, because it is what the hourly
     // budget counts and what the cost page reads.

@@ -1,32 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * Resolving the version control provider a repository is on, now that every
+ * provider is an integration and core has no adapter of its own left.
+ *
+ * The two cases that used to be different, "a provider core ships" and "a
+ * provider an integration ships", are one case, which is the point of the
+ * stage. What is still worth pinning here is the behaviour around that: which
+ * credentials a sandbox gets, what happens when one provider is unreachable,
+ * and that a run pinned to a connection it started with refuses to carry on
+ * through a different one.
+ */
 const mocks = vi.hoisted(() => ({
-  getConfiguredVcsProviders: vi.fn(),
-  getVcsProviderConfig: vi.fn(),
-  getVcsToken: vi.fn(),
-  getBotIdentity: vi.fn(),
-  createVCSForRepository: vi.fn(),
   resolveUsableIntegrations: vi.fn(),
-  usableIntegrations: vi.fn(async (): Promise<any[]> => []),
+  usableIntegrations: vi.fn(async (): Promise<unknown[]> => []),
   checkIntegrationPin: vi.fn(),
   getVcsBotLogin: vi.fn(),
   loggerWarn: vi.fn(),
 }));
 
-vi.mock("../../infra/vcs-config.js", () => ({
-  env: {},
-  getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
-  getVcsProviderConfig: mocks.getVcsProviderConfig,
-}));
-
-vi.mock("../../adapters/vcs/github-auth.js", () => ({
-  getBotIdentity: mocks.getBotIdentity,
-  getVcsToken: mocks.getVcsToken,
-}));
-
-vi.mock("../../adapters/vcs/create-vcs.js", () => ({
-  createVCSForRepository: mocks.createVCSForRepository,
-}));
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
 vi.mock("../integrations/runtime.js", () => ({
   resolveUsableIntegrations: mocks.resolveUsableIntegrations,
@@ -36,133 +29,170 @@ vi.mock("../integrations/runtime.js", () => ({
 }));
 
 vi.mock("../../infra/logger.js", () => ({
-  logger: {
-    warn: mocks.loggerWarn,
-  },
+  logger: { warn: mocks.loggerWarn },
 }));
 
 import { buildSandboxProviderConfigs, createRepositoryVcsRuntime } from "./vcs-runtime.js";
 
-function usableGitLab() {
+function connected(
+  id: string,
+  adapter: Record<string, unknown>,
+): Record<string, unknown> {
   return {
-    manifest: { id: "gitlab", name: "GitLab", capabilities: ["vcs"] },
-    runtime: {
-      capabilities: {
-        vcs: () => ({
-          sandboxCredentials: async () => ({
-            host: "https://gitlab.example.com",
-            authUser: "oauth2",
-            token: "glpat",
-            commitAuthor: "ai-workflow-blazity",
-            commitEmail: "ai-workflow@blazity.com",
-          }),
-        }),
-      },
-    },
+    manifest: { id, name: id, capabilities: ["vcs"] },
+    runtime: { capabilities: { vcs: () => adapter } },
     ctx: { connection: {} },
+  };
+}
+
+function resolvesTo(...entries: Array<Record<string, unknown>>): void {
+  mocks.resolveUsableIntegrations.mockImplementation(
+    async ({ filter }: { filter?: (manifest: { id: string }) => boolean } = {}) => {
+      const usable = entries.filter(
+        (entry) => !filter || filter(entry.manifest as { id: string }),
+      );
+      return {
+        readable: true,
+        usable,
+        states: new Map(
+          usable.map((entry) => [(entry.manifest as { id: string }).id, { usable: true }]),
+        ),
+      };
+    },
+  );
+  mocks.usableIntegrations.mockResolvedValue(entries);
+}
+
+function githubLike(): Record<string, unknown> {
+  return {
+    sandboxCredentials: async () => ({
+      host: "https://github.com",
+      authUser: "x-access-token",
+      token: "ghs-token",
+      commitAuthor: "ai-workflow[bot]",
+      commitEmail: "7+ai-workflow[bot]@users.noreply.github.com",
+    }),
   };
 }
 
 describe("buildSandboxProviderConfigs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.usableIntegrations.mockResolvedValue([]);
-    mocks.createVCSForRepository.mockReturnValue({});
+    mocks.getVcsBotLogin.mockResolvedValue(undefined);
   });
 
-  it("resolves commit identity only for provider kinds needed by the run", async () => {
-    mocks.getConfiguredVcsProviders.mockReturnValue([
-      {
-        kind: "github",
-        auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-        host: "https://github.com",
-        legacyBaseBranch: "main",
-      },
-    ]);
-    const gitlab = usableGitLab();
-    mocks.usableIntegrations.mockResolvedValue([gitlab]);
-    mocks.resolveUsableIntegrations.mockResolvedValue({
-      readable: true,
-      usable: [gitlab],
-      states: new Map([["gitlab", { usable: true }]]),
-    });
-    mocks.getBotIdentity.mockRejectedValue(new Error("github identity should not be resolved"));
+  it("hands a sandbox the credentials of a provider it knows nothing else about", async () => {
+    // The repository path is empty here, because the caller wants the
+    // connection rather than a repository. An adapter that refused an empty
+    // path would leave the run with no credentials to push with and nothing
+    // but a warning in a log to say why.
+    resolvesTo(connected("github", githubLike()));
 
-    const configs = await buildSandboxProviderConfigs(new Set(["gitlab"]));
+    const configs = await buildSandboxProviderConfigs(new Set(["github"]));
 
     expect(configs).toEqual([
       expect.objectContaining({
-        kind: "gitlab",
-        host: "https://gitlab.example.com",
-        commitAuthor: "ai-workflow-blazity",
-        commitEmail: "ai-workflow@blazity.com",
+        kind: "github",
+        host: "https://github.com",
+        authUser: "x-access-token",
+        commitAuthor: "ai-workflow[bot]",
       }),
     ]);
-    expect(mocks.getBotIdentity).not.toHaveBeenCalled();
   });
 
-  it("keeps other provider configs when one provider identity lookup fails", async () => {
-    const github = {
-      kind: "github",
-      auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-      host: "https://github.com",
-      legacyBaseBranch: "main",
-    };
-    mocks.getConfiguredVcsProviders.mockReturnValue([github]);
-    mocks.getVcsProviderConfig.mockReturnValue(github);
-    const gitlab = usableGitLab();
-    mocks.usableIntegrations.mockResolvedValue([gitlab]);
-    mocks.resolveUsableIntegrations.mockResolvedValue({
-      readable: true,
-      usable: [gitlab],
-      states: new Map([["gitlab", { usable: true }]]),
-    });
-    mocks.getBotIdentity.mockRejectedValue(new Error("github unavailable"));
+  it("resolves only the providers the run needs", async () => {
+    const unwanted = vi.fn();
+    resolvesTo(
+      connected("github", githubLike()),
+      connected("gitlab", { sandboxCredentials: unwanted }),
+    );
+
+    const configs = await buildSandboxProviderConfigs(new Set(["github"]));
+
+    expect(configs.map((config) => config.kind)).toEqual(["github"]);
+    expect(unwanted).not.toHaveBeenCalled();
+  });
+
+  it("keeps the other providers when one cannot answer", async () => {
+    resolvesTo(
+      connected("github", githubLike()),
+      connected("gitlab", {
+        sandboxCredentials: async () => {
+          throw new Error("gitlab unavailable");
+        },
+      }),
+    );
 
     const configs = await buildSandboxProviderConfigs();
 
-    expect(configs).toEqual([
-      expect.objectContaining({
-        kind: "gitlab",
-        host: "https://gitlab.example.com",
-      }),
-    ]);
+    expect(configs.map((config) => config.kind)).toEqual(["github"]);
     expect(mocks.loggerWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "github", err: "github unavailable" }),
+      expect.objectContaining({ provider: "gitlab", err: "gitlab unavailable" }),
       "sandbox_provider_identity_resolution_failed",
     );
   });
 
-  it("memoizes the repository VCS adapter per runtime", async () => {
-    const provider = {
-      kind: "github",
-      auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-      host: "https://github.com",
-      legacyBaseBranch: "main",
-    };
-    mocks.getVcsProviderConfig.mockReturnValue(provider);
+  it("says so when a provider ships no way to push", async () => {
+    resolvesTo(connected("github", {}));
+
+    await expect(buildSandboxProviderConfigs()).resolves.toEqual([]);
+    expect(mocks.loggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "github" }),
+      "sandbox_provider_identity_resolution_failed",
+    );
+  });
+});
+
+describe("createRepositoryVcsRuntime", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getVcsBotLogin.mockResolvedValue(undefined);
+  });
+
+  it("builds the adapter once per runtime, however often it is called", async () => {
     const getPRHead = vi.fn().mockResolvedValue({ headSha: "sha" });
-    mocks.createVCSForRepository.mockReturnValue({ getPRHead });
+    const vcs = vi.fn(() => ({ getPRHead }));
+    mocks.resolveUsableIntegrations.mockResolvedValue({
+      readable: true,
+      usable: [{
+        manifest: { id: "github", name: "GitHub", capabilities: ["vcs"] },
+        runtime: { capabilities: { vcs } },
+        ctx: { connection: {} },
+      }],
+      states: new Map([["github", { usable: true }]]),
+    });
 
     const runtime = createRepositoryVcsRuntime({
       provider: "github",
       repoPath: "acme/api",
       baseBranch: "main",
     });
+    await runtime.vcs.getPRHead(7);
+    await runtime.vcs.getPRHead(7);
 
-    await runtime.vcs.getPRHead(7);
-    await runtime.vcs.getPRHead(7);
-    expect(mocks.createVCSForRepository).toHaveBeenCalledTimes(1);
+    expect(vcs).toHaveBeenCalledTimes(1);
     expect(getPRHead).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses a later provider call when the run's connection pin was reconfigured", async () => {
-    const createAdapter = vi.fn();
+  it("refuses a provider no integration in this build serves", async () => {
+    resolvesTo();
+
+    const runtime = createRepositoryVcsRuntime({
+      provider: "subversion",
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
+
+    await expect(runtime.vcs.findPR("ai/AIW-1")).rejects.toThrow(/subversion/u);
+  });
+
+  it("refuses a later call when the connection the run pinned was reconfigured", async () => {
+    const vcs = vi.fn();
     mocks.resolveUsableIntegrations.mockResolvedValue({
       readable: true,
       usable: [{
         manifest: { id: "gitlab", name: "GitLab", capabilities: ["vcs"] },
-        runtime: { capabilities: { vcs: createAdapter } },
+        runtime: { capabilities: { vcs } },
         ctx: { connection: {} },
       }],
       states: new Map([["gitlab", { usable: true }]]),
@@ -179,6 +209,6 @@ describe("buildSandboxProviderConfigs", () => {
     await expect(runtime.vcs.findPR("ai/AIW-100")).rejects.toThrow(
       "Version control provider GitLab moved after this run started (reconfigured). Start a new run.",
     );
-    expect(createAdapter).not.toHaveBeenCalled();
+    expect(vcs).not.toHaveBeenCalled();
   });
 });

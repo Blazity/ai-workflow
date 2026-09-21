@@ -8,6 +8,8 @@ import {
   repositoryCatalogKey,
   type RepositoryCatalogEntry,
 } from "./catalog.js";
+import { providerNestsRepositoryPaths } from "./provider-shape.js";
+import { repositoryPathExamples } from "../support/repository-path-example.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 // The transformation the ticket comment applies to a question on its way out,
 // so the drop below compares against what a person was actually shown.
@@ -210,11 +212,17 @@ const CLOSED_EXPANSION_REPEATED_REQUEST =
 
 // The single documented parsing rule for a human clarification answer. Repeated
 // verbatim in every expansion clarification so a human knows the exact shape an
-// actionable answer must take, whatever the question was asked about.
-const EXPANSION_ANSWER_FORMAT =
-  'reply with exact repository paths as "provider:owner/repo"' +
-  ' (a bare "owner/repo" also works and is matched against the accessible catalog,' +
-  " case-insensitively). Separate multiple repositories with commas or new lines.";
+// actionable answer must take, whatever the question was asked about. The
+// examples are the providers this deployment connected, asked for each time
+// rather than frozen at import, so a test that changes the registry changes the
+// sentence with it.
+function expansionAnswerFormat(offered: readonly string[] | undefined): string {
+  return (
+    `reply with exact repository paths as ${repositoryPathExamples(offered)}` +
+    ' (a bare "owner/repo" also works and is matched against the accessible catalog,' +
+    " case-insensitively). Separate multiple repositories with commas or new lines."
+  );
+}
 
 // Stable leading words of EVERY clarification this path raises, whatever the
 // reason for asking. The resume path matches on it to recognize that the human
@@ -249,9 +257,12 @@ const REPEATED_UNATTACHABLE_ANSWER =
  *  rather than per reason, so no question can go out without it. The closing
  *  "none" sentence is the one part a question may replace, so a question that
  *  has to say what "none" means for it does not say "none" twice. */
-function expansionAnswerGuidance(refusal = DEFAULT_REFUSAL_SENTENCE): string {
+function expansionAnswerGuidance(
+  refusal = DEFAULT_REFUSAL_SENTENCE,
+  offered?: readonly string[],
+): string {
   return (
-    `To attach a repository, ${EXPANSION_ANSWER_FORMAT}` +
+    `To attach a repository, ${expansionAnswerFormat(offered)}` +
     ` Only repositories on the accessible catalog can be attached, and the` +
     ` ${MAX_WORKSPACE_REPOSITORIES}-repository workspace limit still applies.` +
     ` ${refusal}`
@@ -266,6 +277,7 @@ function expansionAnswerGuidance(refusal = DEFAULT_REFUSAL_SENTENCE): string {
  *  repository, and the run stops if the agent still cannot plan. */
 function unavailableRepositoryClarification(
   request: Pick<ResearchRepository, "provider" | "repoPath">,
+  offered?: readonly string[],
 ): Extract<RepositoryExpansionDecision, { kind: "clarification_needed" }> {
   const identity = `${request.provider}:${request.repoPath}`;
   return {
@@ -275,6 +287,7 @@ function unavailableRepositoryClarification(
         ` This run can only add another repository alongside the ones already attached.`,
       `Reply "none" to continue without ${identity}; the run stops if the agent` +
         ` cannot plan without it.`,
+      offered,
     ),
     unavailable: [{ provider: request.provider, repoPath: request.repoPath }],
   };
@@ -403,14 +416,18 @@ function quotedQuestionPattern(form: string): string {
 
 /** The one shape of an expansion question: the marker, the reason it is being
  *  asked, and how to answer it. */
-function expansionQuestion(reason: string, refusal?: string): string {
-  return `${EXPANSION_CLARIFICATION_MARKER} ${reason} ${expansionAnswerGuidance(refusal)}`;
+function expansionQuestion(
+  reason: string,
+  refusal?: string,
+  offered?: readonly string[],
+): string {
+  return `${EXPANSION_CLARIFICATION_MARKER} ${reason} ${expansionAnswerGuidance(refusal, offered)}`;
 }
 
 /** The one expansion-limit question, so the validator and the caller that has
  *  to raise it after expansion closed cannot drift apart. */
-function expansionLimitQuestion(): string {
-  return expansionQuestion(EXPANSION_LIMIT_REASON);
+function expansionLimitQuestion(offered?: readonly string[]): string {
+  return expansionQuestion(EXPANSION_LIMIT_REASON, undefined, offered);
 }
 
 /** True when a clarification's questions include the expansion-limit prompt
@@ -466,6 +483,7 @@ export function validateRepositoryExpansionRequests(input: {
     };
   };
 }): RepositoryExpansionDecision {
+  const offered = offeredProviders(input.catalog);
   const attachedKeys = new Set(input.attached.map(repositoryCatalogKey));
   // A repository a person was already asked about has had its answer, so it is
   // dropped before anything else is judged: an enabled repository requested
@@ -484,7 +502,7 @@ export function validateRepositoryExpansionRequests(input: {
     const repeated = input.requests.find((request) =>
       asked.has(repositoryCatalogKey(request)),
     )!;
-    return unavailableRepositoryClarification(repeated);
+    return unavailableRepositoryClarification(repeated, offered);
   }
   // AIW-377: the already-attached filter runs BEFORE the round limit. A request
   // naming only repositories the workspace already holds has no answer a human
@@ -524,7 +542,7 @@ export function validateRepositoryExpansionRequests(input: {
     // one the resume path recognises. Every repository in the request that the
     // run cannot use is carried on it all the same, so the decision records
     // them and a later request for any of them is not a second question.
-    const limit = expansionClarification(EXPANSION_LIMIT_REASON);
+    const limit = expansionClarification(EXPANSION_LIMIT_REASON, undefined, offered);
     const unusable = requests.filter((request) => {
       const key = repositoryCatalogKey(request);
       return !attachedKeys.has(key) && !catalog.get(key)?.usable;
@@ -548,6 +566,8 @@ export function validateRepositoryExpansionRequests(input: {
   if (requests.length > 3) {
     return expansionClarification(
       "Research requested more than 3 repositories in one round. Which 3 are essential?",
+      undefined,
+      offered,
     );
   }
   const requested = new Set<string>();
@@ -557,6 +577,8 @@ export function validateRepositoryExpansionRequests(input: {
     if (requested.has(key)) {
       return expansionClarification(
         `Research requested ${request.provider}:${request.repoPath} more than once.`,
+        undefined,
+        offered,
       );
     }
     requested.add(key);
@@ -568,7 +590,7 @@ export function validateRepositoryExpansionRequests(input: {
     }
     const repository = catalog.get(key);
     if (!repository?.usable) {
-      return unavailableRepositoryClarification(request);
+      return unavailableRepositoryClarification(request, offered);
     }
     repositories.push({
       provider: repository.provider,
@@ -582,6 +604,8 @@ export function validateRepositoryExpansionRequests(input: {
   if (input.attached.length + repositories.length > MAX_WORKSPACE_REPOSITORIES) {
     return expansionClarification(
       `Attaching those repositories would exceed the ${MAX_WORKSPACE_REPOSITORIES}-repository workspace limit. Which repositories are essential?`,
+      undefined,
+      offered,
     );
   }
   return { kind: "attach", repositories };
@@ -921,6 +945,7 @@ export function validateHumanRepositoryExpansion(input: {
       ],
     };
   }
+  const offered = offeredProviders(input.catalog);
   const byKey = new Map(
     input.catalog.map((repository) => [
       repositoryCatalogKey(repository),
@@ -952,6 +977,8 @@ export function validateHumanRepositoryExpansion(input: {
           ` provider-scoped path such as ${resolved.providers
             .map((provider) => `${provider}:${identity.repoPath}`)
             .join(" or ")}.`,
+        undefined,
+        offered,
       );
     }
     if (resolved.kind === "unknown") {
@@ -986,7 +1013,11 @@ export function validateHumanRepositoryExpansion(input: {
     // "enable it" answers with. It is asked about once more, saying why, and
     // counts toward the same bound as an unreadable answer.
     return {
-      ...expansionClarification(`${whyNotAttachable} ${REPEATED_UNATTACHABLE_ANSWER}`),
+      ...expansionClarification(
+        `${whyNotAttachable} ${REPEATED_UNATTACHABLE_ANSWER}`,
+        undefined,
+        offered,
+      ),
       unattachableAnswer: true,
       ...skipped,
     };
@@ -995,6 +1026,8 @@ export function validateHumanRepositoryExpansion(input: {
     return expansionClarification(
       `Attaching those repositories would exceed the ${MAX_WORKSPACE_REPOSITORIES}-repository` +
         ` workspace limit. Reply with a smaller set of essential repositories.`,
+      undefined,
+      offered,
     );
   }
   if (repositories.length === 0) {
@@ -1272,7 +1305,9 @@ export function decideRepositoryExpansion(input: {
         questions:
           verdict.kind === "clarification_needed"
             ? verdict.questions
-            : [expansionLimitQuestion()],
+            : // The providers the model asked about, which it could only have
+              // read off the catalog it was shown.
+              [expansionLimitQuestion(offeredProviders(input.requests ?? []))],
       },
       state: asking,
     };
@@ -1784,23 +1819,27 @@ const URL_PATH_AFTER_REPOSITORY = new Set([
   "issues",
 ]);
 
-// The public hosts whose name says which provider a link points at. Any other
-// host could belong to any integration, so a link
-// there stays a bare path and the catalog resolves it. Exported because the
-// work scope reader asks the same list which links are repositories at all.
-export const PROVIDER_BY_HOST = new Map<string, string>([
-  ["github.com", "github"],
-  ...integrationsProviding("vcs").flatMap((manifest) =>
-    manifest.connection.fields.flatMap((field) => {
+// The public hosts whose name says which provider a link points at, asked of
+// the integrations rather than listed here: a provider hosted at one address
+// declares it (`repositories.host`), and a self-hosted one names it in the URL
+// field an admin fills, whose default is the public instance. Any other host
+// could belong to any integration, so a link there stays a bare path and the
+// catalog resolves it. Exported because the work scope reader asks the same
+// list which links are repositories at all.
+export const PROVIDER_BY_HOST = new Map<string, string>(
+  integrationsProviding("vcs").flatMap((manifest) => {
+    const declared = manifest.repositories?.host?.trim().toLowerCase();
+    if (declared) return [[declared, manifest.id] as const];
+    return manifest.connection.fields.flatMap((field) => {
       if (field.format !== "url" || typeof field.default !== "string") return [];
       try {
         return [[new URL(field.default).host.toLowerCase(), manifest.id] as const];
       } catch {
         return [];
       }
-    }),
-  ),
-]);
+    });
+  }),
+);
 
 function parseIdentityToken(token: string): ParsedRepositoryIdentity | null {
   // A pasted repository URL is the other shape a person actually sends, and it
@@ -1827,10 +1866,11 @@ function parseIdentityToken(token: string): ParsedRepositoryIdentity | null {
   return token.includes("/") ? { repoPath: token } : null;
 }
 
-/** The repository part of a link's path. On github.com a repository is always
- *  owner/repo, so it is the first two segments whatever follows. Any other
- *  provider may use nested groups, so it is cut
- *  at "/-/" and at the first segment that starts a file, a ref or a discussion.
+/** The repository part of a link's path. A provider whose paths never nest has
+ *  a repository at exactly the first two segments, whatever follows them. One
+ *  whose paths may nest is cut at "/-/" and at the first segment that starts a
+ *  file, a ref or a discussion, because there is no fixed depth to slice at.
+ *  Which it is comes from the manifest, never from the provider's name.
  *  A trailing ".git" is never part of the path. */
 function repositoryPathOfLink(
   provider: string | undefined,
@@ -1839,7 +1879,7 @@ function repositoryPathOfLink(
   const path = rawPath.split(/[?#]/)[0];
   const segmentsOf = (value: string) =>
     value.split("/").filter((segment) => segment.length > 0);
-  if (provider === "github") {
+  if (!providerNestsRepositoryPaths(provider)) {
     return segmentsOf(path).slice(0, 2).join("/").replace(/\.git$/i, "");
   }
   const segments = segmentsOf(path.split(/\/-(?:\/|$)/)[0]);
@@ -1873,6 +1913,21 @@ function describeIdentity(identity: ParsedRepositoryIdentity): string {
 function expansionClarification(
   reason: string,
   refusal?: string,
+  /** The providers this caller can actually offer, so the example in the
+   *  question is a path the person could send back. */
+  offered?: readonly string[],
 ): Extract<RepositoryExpansionDecision, { kind: "clarification_needed" }> {
-  return { kind: "clarification_needed", questions: [expansionQuestion(reason, refusal)] };
+  return {
+    kind: "clarification_needed",
+    questions: [expansionQuestion(reason, refusal, offered)],
+  };
+}
+
+/** The providers a catalog holds, in its own order, which is the set a person
+ *  answering can name: every entry came from a provider this deployment
+ *  connected, whatever the build could serve. */
+function offeredProviders(
+  catalog: ReadonlyArray<{ provider: string }>,
+): readonly string[] {
+  return [...new Set(catalog.map((entry) => entry.provider))];
 }

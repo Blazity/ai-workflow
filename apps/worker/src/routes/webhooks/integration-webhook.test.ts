@@ -12,6 +12,7 @@
  * here: the static route was deleted, so this dynamic one takes it.
  */
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createApp, createRouter, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -33,6 +34,7 @@ const state = vi.hoisted(() => ({
   suppressPush: false,
   pushSuppressionInputs: [] as Record<string, unknown>[],
   botLogin: vi.fn(async (_provider: string) => "ai-workflow-bot" as string | undefined),
+  botLoginReadable: true,
 }));
 
 vi.mock("../../services/integrations/runtime.js", () => ({
@@ -82,6 +84,13 @@ vi.mock("../../services/publication/index.js", () => ({
 }));
 vi.mock("../../services/vcs/index.js", () => ({
   getVcsBotLogin: state.botLogin,
+  // The route reads the automation account through the half that says whether
+  // the settings could be read at all, because acting on a delivery without
+  // knowing that account is how the workflow answers itself.
+  readVcsBotLogin: async (provider: string) =>
+    state.botLoginReadable
+      ? { readable: true, login: await state.botLogin(provider) }
+      : { readable: false, reason: "the settings read timed out" },
 }));
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {},
@@ -149,6 +158,81 @@ function connectedGitLab(): unknown {
       http: { fetch: globalThis.fetch },
     },
   };
+}
+
+function connectedGitHub(): unknown {
+  return {
+    manifest: { id: "github", name: "GitHub" },
+    runtime: integrationRuntime("github")!,
+    ctx: {
+      connection: {
+        appId: 1,
+        installationId: 2,
+        privateKey: "key",
+        webhookSecret: "webhook-secret",
+      },
+      signal: new AbortController().signal,
+      log: { debug() {}, info() {}, warn() {}, error() {} },
+      http: { fetch: globalThis.fetch },
+    },
+  };
+}
+
+/**
+ * A real GitHub push to an open pull request: the published `synchronize`
+ * delivery, byte for byte, signed the way GitHub signs one.
+ */
+function githubSyncRequest(sender?: string, author?: string): Request {
+  const payload = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../../../../integrations/github/test-fixtures/pull-request-synchronize.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  if (sender) payload.sender.login = sender;
+  // The pull request's author, which on one this product opened is our own
+  // account whoever pushes to it.
+  if (author) payload.pull_request.user.login = author;
+  const body = JSON.stringify(payload);
+  return new Request("http://localhost/webhooks/github", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-github-event": "pull_request",
+      "x-github-delivery": "4c5f2a80-9b1e-11ee-8c90-0242ac120002",
+      "x-hub-signature-256": `sha256=${createHmac("sha256", "webhook-secret")
+        .update(body, "utf8")
+        .digest("hex")}`,
+    },
+    body,
+  });
+}
+
+/** A failed check run: an event with no legacy gate behind it, so what comes
+ *  back says what the trigger did and nothing else. */
+function githubCheckRunRequest(): Request {
+  const body = readFileSync(
+    new URL(
+      "../../../../../integrations/github/test-fixtures/check-run-completed-failure.json",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  return new Request("http://localhost/webhooks/github", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-github-event": "check_run",
+      "x-github-delivery": "5d6e3b91-ac2f-11ee-8c90-0242ac120002",
+      "x-hub-signature-256": `sha256=${createHmac("sha256", "webhook-secret")
+        .update(body, "utf8")
+        .digest("hex")}`,
+    },
+    body,
+  });
 }
 
 function request(id: string, text: string): Request {
@@ -271,6 +355,43 @@ function gitlabUpdateRequest(): Request {
   });
 }
 
+/**
+ * A merge request edit that moved nothing: same head before and after, only the
+ * title changed. The integration emits no trigger for it, which is the one
+ * shape that reaches the route's legacy gate without a candidate event to
+ * suppress first.
+ */
+function gitlabTitleEditRequest(): Request {
+  return new Request("http://localhost/webhooks/gitlab", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-gitlab-token": "webhook-secret",
+      "x-gitlab-event": "Merge Request Hook",
+      "webhook-id": "title-edit-17",
+    },
+    body: JSON.stringify({
+      object_kind: "merge_request",
+      oldrev: "published-sha",
+      user: { username: "alice" },
+      project: {
+        path_with_namespace: "platform/api",
+        web_url: "https://gitlab.example.com/platform/api",
+      },
+      object_attributes: {
+        action: "update",
+        iid: 17,
+        title: "Ready, renamed",
+        source_branch: "feature/ready",
+        target_branch: "main",
+        url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+        draft: false,
+        last_commit: { id: "published-sha" },
+      },
+    }),
+  });
+}
+
 function app() {
   // A router, not `use`: the route reads `event.context.params.id`, which is
   // what the file name `[id].post.ts` gives it in the worker.
@@ -295,6 +416,7 @@ beforeEach(() => {
   state.suppressPush = false;
   state.pushSuppressionInputs = [];
   state.botLogin.mockReset().mockResolvedValue("ai-workflow-bot");
+  state.botLoginReadable = true;
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     posted.push({ url: String(url), body: JSON.parse(String(init?.body)) });
     return new Response("ok", { status: 200 });
@@ -616,5 +738,182 @@ describe("POST /webhooks/:id", () => {
 
     expect(response.status).toBe(202);
     expect(state.dispatch).toHaveBeenCalled();
+  });
+
+  /**
+   * The GitHub half of the same question, and the reason it is here rather
+   * than in the integration's own suite: until S11 the GitHub normalizer
+   * decided this itself, from an ownership record it should never have had.
+   * Moving that decision to the route is what made the two providers answer it
+   * the same way, so these four cases are the ones the move has to keep.
+   */
+  describe("a push to a GitHub pull request", () => {
+    beforeEach(() => {
+      state.usable = [connectedGitHub()];
+      state.states = new Map([["github", { enabled: true }]]);
+    });
+
+    it("does not let the workflow's own push supersede the run that published it", async () => {
+      state.workflowPush = {
+        workflowPublishedHeadSha: "ec26c3e57ca3a959ca5aad62de7213c562f8c821",
+        workflowOwnedPullRequest: true,
+      };
+      state.suppressPush = true;
+
+      const response = await app()(githubSyncRequest());
+      await Promise.all(deferred);
+
+      expect(response.status).toBe(202);
+      expect(state.dispatch).not.toHaveBeenCalled();
+      // And the legacy gate does not run on it either, which is the half a
+      // comparison on GitLab's word for a push used to leave unchecked here.
+      expect(state.legacyGate).not.toHaveBeenCalled();
+    });
+
+    it("asks about the push with the delivery's own head, producer and ownership", async () => {
+      state.workflowPush = {
+        workflowPublishedHeadSha: "ec26c3e57ca3a959ca5aad62de7213c562f8c821",
+        workflowOwnedPullRequest: true,
+      };
+
+      await app()(githubSyncRequest("ai-workflow[bot]"));
+      await Promise.all(deferred);
+
+      expect(state.pushSuppressionInputs[0]).toEqual({
+        currentHeadSha: "ec26c3e57ca3a959ca5aad62de7213c562f8c821",
+        producer: "ai-workflow[bot]",
+        botIdentity: "ai-workflow-bot",
+        workflowPublishedHeadSha: "ec26c3e57ca3a959ca5aad62de7213c562f8c821",
+        workflowOwnedPullRequest: true,
+      });
+    });
+
+    it("dispatches a push the predicate calls foreign", async () => {
+      state.workflowPush = {
+        workflowPublishedHeadSha: "an-older-head",
+        workflowOwnedPullRequest: true,
+      };
+
+      const response = await app()(githubSyncRequest());
+      await Promise.all(deferred);
+
+      expect(response.status).toBe(202);
+      expect(state.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ triggerType: "trigger_pr_updated" }),
+        expect.anything(),
+      );
+    });
+
+    it("asks the gate about a human push to a pull request our own account opened", async () => {
+      // THE INVERSE OF THE SUPPRESSION DEFECT. Every pull request this product
+      // opens is authored by the automation account, so deciding "was this push
+      // ours" from the pull request's author answers yes to every human push
+      // and the post-PR gate never runs on the one kind of change it exists to
+      // check. The question is who pushed, and the delivery says so.
+      state.workflowPush = {
+        workflowPublishedHeadSha: "a-head-this-run-published",
+        workflowOwnedPullRequest: true,
+      };
+
+      await app()(githubSyncRequest("filip", "ai-workflow-bot"));
+      await Promise.all(deferred);
+
+      expect(state.pushSuppressionInputs.at(-1)).toMatchObject({
+        producer: "filip",
+        botIdentity: "ai-workflow-bot",
+      });
+      expect(state.pushSuppressionInputs.at(-1)).not.toMatchObject({
+        producer: "ai-workflow-bot",
+      });
+    });
+
+    it("tells the provider's delivery log what core did with the delivery", async () => {
+      // The integration answers before dispatch, so its own body can only say
+      // whether there was anything to dispatch. An event for a repository
+      // nobody enabled logged at GitHub as "accepted" leaves an operator with
+      // nowhere to see that no run started.
+      state.dispatch.mockResolvedValue({ result: "ignored_repository_not_enabled" });
+
+      const ignored = await app()(githubCheckRunRequest());
+      await Promise.all(deferred);
+
+      expect(ignored.status).toBe(202);
+      expect(await ignored.json()).toEqual({
+        status: "ignored",
+        reason: "ignored_repository_not_enabled",
+      });
+
+      state.dispatch.mockResolvedValue({ result: "dispatched", runId: "run-77" });
+
+      const started = await app()(githubCheckRunRequest());
+      await Promise.all(deferred);
+
+      expect(await started.json()).toEqual({ status: "dispatched", runId: "run-77" });
+    });
+
+    it("refuses the delivery when the automation account could not be read", async () => {
+      // The first settings read fails closed one screen up; this is a second
+      // read and it can fail on its own. Acting on the delivery without the
+      // account means every comment and push we made reads as somebody else's,
+      // so the workflow answers its own review and starts a run off its own
+      // push.
+      state.botLoginReadable = false;
+
+      const response = await app()(githubSyncRequest());
+      await Promise.all(deferred);
+
+      expect(response.status).toBe(503);
+      expect(state.dispatch).not.toHaveBeenCalled();
+      expect(state.legacyGate).not.toHaveBeenCalled();
+    });
+
+    it("says the deployment was at capacity without failing the delivery", async () => {
+      // Nothing is wrong with what the provider sent, and GitLab switches a
+      // webhook off after a few consecutive failures: a 5xx here would trade
+      // this one missed event for every later one. The delivery log carries
+      // the reason instead, which is what an operator reads either way.
+      state.dispatch.mockResolvedValue({ result: "at_capacity" });
+
+      const response = await app()(githubSyncRequest());
+      await Promise.all(deferred);
+
+      expect(response.status).toBe(202);
+      // The lost trigger is what the answer says, ahead of the post-PR gate
+      // that did start: it is the half somebody has to act on.
+      expect(await response.json()).toEqual({ status: "ignored", reason: "at_capacity" });
+    });
+
+    it("still answers 5xx when the dispatch itself failed", async () => {
+      // A fault of this deployment, not a busy one: red in the provider's log,
+      // and redeliverable by hand.
+      state.dispatch.mockResolvedValue({ result: "error", diagnosticId: "diag-9" });
+
+      const response = await app()(githubSyncRequest());
+      await Promise.all(deferred);
+
+      expect(response.status).toBe(503);
+    });
+  });
+
+  it("asks about a delivery that moved a head even when it produced no trigger", async () => {
+    // The one path where the legacy gate is reached without a candidate event
+    // to suppress first. The route knows to ask because the integration said
+    // the head moved; reading a provider's own word for it instead would leave
+    // every other provider's push unasked about.
+    state.usable = [connectedGitLab()];
+    state.states = new Map([["gitlab", { enabled: true }]]);
+    state.workflowPush = {
+      workflowPublishedHeadSha: "published-sha",
+      workflowOwnedPullRequest: true,
+    };
+    state.suppressPush = true;
+
+    const response = await app()(gitlabTitleEditRequest());
+    await Promise.all(deferred);
+
+    expect(response.status).toBe(202);
+    expect(state.dispatch).not.toHaveBeenCalled();
+    expect(state.pushSuppressionInputs).toHaveLength(1);
+    expect(state.legacyGate).not.toHaveBeenCalled();
   });
 });

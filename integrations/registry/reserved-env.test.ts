@@ -31,10 +31,10 @@ const RUNTIME_ENV = resolve(import.meta.dirname, "../../apps/worker/src/infra/ru
  */
 const NAME = "apps/worker/src/infra/runtime-env.ts";
 
-// CHAT_SDK_ and SLACK_ left this table in S9: the worker no longer declares
-// them, and `integrations/slack/manifest.ts` does.
+// CHAT_SDK_ and SLACK_ left this table in S9, GITLAB_ in S10 and GITHUB_ in
+// S11: the worker no longer declares any of them, and each provider package's
+// manifest does.
 const PROVIDER_PREFIXES: ReadonlyArray<readonly [string, string]> = [
-  ["GITHUB_", "S11, GitHub"],
   ["JIRA_", "S12, Jira"],
 ];
 

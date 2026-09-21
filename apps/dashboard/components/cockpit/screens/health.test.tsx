@@ -3,6 +3,7 @@ import test, { mock } from "node:test";
 import React from "react";
 import { act, create } from "react-test-renderer";
 import type { SystemHealthIntegration, SystemHealthResponse } from "@shared/contracts";
+import { integrationsProviding } from "@integrations/registry";
 import { HealthScreen } from "./health";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -371,6 +372,28 @@ test("nothing connected leaves the integrations section off the page entirely", 
   });
   // A deployment that ships no integration reads exactly as it did before.
   assert.doesNotMatch(textOf(renderer.toJSON()), /Integrations/);
+  act(() => renderer.unmount());
+});
+
+// A scan stored while the provider was still core carries no description: core
+// wrote none about itself. The provider ships as an integration now, so the
+// manifest in this build answers, and the section keeps reading as itself
+// instead of falling back to the line for an integration nobody knows.
+test("a stored scan older than the manifest still reads that integration's own line", () => {
+  const shipped = integrationsProviding("vcs")[0];
+  assert.ok(shipped, "this build ships no version control integration to check");
+  const stored = integrationSection({
+    id: shipped.id,
+    label: shipped.name,
+    description: undefined,
+  });
+  let renderer!: ReturnType<typeof create>;
+  act(() => {
+    renderer = create(<HealthScreen initialData={withIntegrations(stored)} />);
+  });
+  const text = textOf(renderer.toJSON());
+  assert.ok(text.includes(shipped.description), text);
+  assert.doesNotMatch(text, /Deployment integration\./);
   act(() => renderer.unmount());
 });
 

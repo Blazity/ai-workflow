@@ -210,11 +210,53 @@ export interface VCSAdapter {
   postRunFailureNote(input: PostRunFailureNoteInput): Promise<void>;
 }
 
+/** One entry of a repository tree, as the provider reports it. */
+export interface RepositorySkillTreeEntry {
+  path: string;
+  mode: string;
+  type: "blob" | "tree" | "commit";
+  sha: string;
+  size?: number;
+}
+
+/**
+ * Reading a repository's files at an exact commit, which is how agent skills
+ * are imported from one.
+ *
+ * Core owns everything a skill import decides: which paths are containers,
+ * what a valid `SKILL.md` is, how an artifact is hashed and what is persisted.
+ * What it cannot own is the four provider calls below, so those are the port.
+ *
+ * `getFiles` answers `Uint8Array` rather than Node's `Buffer` because this
+ * entry is bundled for a browser; every Node `Buffer` already is one.
+ */
+export interface RepositorySkillSource {
+  getDefaultBranch(input: { owner: string; repository: string }): Promise<string>;
+  resolveCommit(input: {
+    owner: string;
+    repository: string;
+    ref: string;
+  }): Promise<{ commitSha: string; treeSha: string }>;
+  getTree(input: {
+    owner: string;
+    repository: string;
+    treeSha: string;
+  }): Promise<{ entries: RepositorySkillTreeEntry[]; truncated: boolean }>;
+  getFiles(input: {
+    owner: string;
+    repository: string;
+    commitSha: string;
+    paths: string[];
+  }): Promise<Map<string, Uint8Array>>;
+}
+
 /** Optional operational surfaces an integration may add to its VCS adapter. */
 export interface VcsIntegrationAdapter extends VCSAdapter {
   listRepositories?(): Promise<VcsRepositoryMetadata[]>;
   loadRepositoryProfile?(repoPath: string): Promise<import("./repository-profile").RepositoryProfileBundle>;
   sandboxCredentials?(): Promise<VcsSandboxCredentials>;
   parsePullRequestUrl?(url: URL): { repoPath: string; prNumber: number } | null;
+  /** Present when this provider can serve a skill import; see the port above. */
+  skillSource?(): RepositorySkillSource;
   readonly botLogin?: string;
 }

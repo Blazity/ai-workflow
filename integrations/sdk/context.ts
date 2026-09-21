@@ -28,6 +28,20 @@ export interface IntegrationContext<M extends IntegrationManifest> {
   readonly http: IntegrationHttp;
   readonly log: IntegrationLogger;
   /**
+   * Where this deployment receives this integration's webhooks, absolute, with
+   * no trailing slash. Core owns the address and the route, so it says it
+   * rather than letting an integration guess or read a core variable.
+   *
+   * It is what a health check compares against the URL the provider holds: an
+   * App or a project pointed at another deployment goes on answering every
+   * other check perfectly while nothing it sends ever arrives here.
+   *
+   * Absent when the deployment does not know its own public URL, which is a
+   * misconfiguration core reports on its own rows; a check that needs it says
+   * it could not be verified rather than inventing an expectation.
+   */
+  readonly webhookUrl?: string;
+  /**
    * Aborts when core gives up on this work: the run was cancelled or ran out
    * of budget, the invocation is near its time ceiling, or a connection test
    * or a webhook request took too long. Every request through `http` and every

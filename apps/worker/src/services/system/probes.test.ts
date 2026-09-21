@@ -51,18 +51,6 @@ vi.mock("../../mcp/contract-artifact.js", () => ({
     tools: [{ name: "system.capabilities" }],
   },
 }));
-const getInstallation = vi.hoisted(() => vi.fn().mockResolvedValue({ data: {} }));
-const listReposAccessibleToInstallation = vi.hoisted(() =>
-  vi.fn().mockResolvedValue({ data: { total_count: 3, repositories: [{}] } }),
-);
-vi.mock("../../adapters/vcs/github-auth.js", () => ({
-  buildOctokit: () => ({
-    apps: { getInstallation, listReposAccessibleToInstallation },
-  }),
-}));
-vi.mock("@octokit/auth-app", () => ({
-  createAppAuth: () => async () => ({ token: "app-jwt" }),
-}));
 
 const { configFromEnvironment, probesForEnvironment } = await import("./probes.js");
 const { settingsSnapshotFromEnvironment } = await import("../settings/snapshot.js");
@@ -74,14 +62,6 @@ const settings = {
 };
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
-
-const GITHUB_EVENTS = [
-  "check_run",
-  "issue_comment",
-  "pull_request",
-  "pull_request_review",
-  "pull_request_review_comment",
-];
 
 function mockJira(
   registrations:
@@ -102,8 +82,6 @@ function mockJira(
 describe("deployment system-health probes", () => {
   beforeEach(() => {
     fetchMock.mockReset();
-    getInstallation.mockClear();
-    listReposAccessibleToInstallation.mockClear();
     getLatestSystemHealthObservations.mockReset().mockResolvedValue([]);
   });
 
@@ -114,10 +92,6 @@ describe("deployment system-health probes", () => {
       jiraApiToken: environment.JIRA_API_TOKEN,
       jiraProjectKey: environment.JIRA_PROJECT_KEY,
       jiraWebhookSecret: environment.JIRA_WEBHOOK_SECRET,
-      githubAppId: environment.GITHUB_APP_ID,
-      githubAppPrivateKey: environment.GITHUB_APP_PRIVATE_KEY,
-      githubInstallationId: environment.GITHUB_INSTALLATION_ID,
-      githubWebhookSecret: environment.GITHUB_WEBHOOK_SECRET,
       agentKind: "codex",
       anthropicApiKey: environment.ANTHROPIC_API_KEY,
       anthropicModel: "claude-opus-4-8",
@@ -161,8 +135,6 @@ describe("deployment system-health probes", () => {
     const probes = probesForEnvironment(configFromEnvironment(settings));
     const signal = new AbortController().signal;
     for (const id of [
-      "github.app-installation",
-      "github.repositories",
       "sso.discovery",
       "email.sender",
       "mcp.contract",
@@ -171,8 +143,6 @@ describe("deployment system-health probes", () => {
       expect(probes[id], id).toBeTypeOf("function");
       await expect(probes[id]!(signal), id).resolves.not.toBeInstanceOf(Error);
     }
-    expect(getInstallation).toHaveBeenCalledOnce();
-    expect(listReposAccessibleToInstallation).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(
       expect.arrayContaining([
         "https://sso.example/.well-known/openid-configuration",
@@ -212,120 +182,6 @@ describe("deployment system-health probes", () => {
       mcpEnabled: false,
     };
     expect(probesForEnvironment(config)["agent.model"]).toBeUndefined();
-  });
-
-  it("does not mark GitHub repository access live when the installation is empty", async () => {
-    listReposAccessibleToInstallation.mockResolvedValueOnce({
-      data: { total_count: 0, repositories: [] },
-    });
-
-    await expect(
-      probesForEnvironment(configFromEnvironment(settings))["github.repositories"]?.(
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow(/no accessible repositories/);
-  });
-
-  it("reports a GitHub App that omits handled webhook events", async () => {
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.endsWith("/app")) {
-        return Response.json({ events: ["pull_request"] });
-      }
-      if (url.includes("/hook/config")) {
-        return Response.json({
-          url: "https://worker.example/webhooks/github",
-          insecure_ssl: "0",
-        });
-      }
-      if (url.includes("/hook/deliveries")) return Response.json([]);
-      throw new Error(`Unexpected request: ${url}`);
-    });
-
-    await expect(
-      probesForEnvironment(configFromEnvironment(settings))["github.webhook-delivery"]?.(
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow(/missing required webhook events/);
-  });
-
-  it("reports a GitHub delivery rejected with 401 as a webhook secret mismatch", async () => {
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.endsWith("/app")) return Response.json({ events: GITHUB_EVENTS });
-      if (url.includes("/hook/config")) {
-        return Response.json({
-          url: "https://worker.example/webhooks/github",
-          insecure_ssl: "0",
-        });
-      }
-      if (url.includes("/hook/deliveries")) {
-        return Response.json([
-          { delivered_at: new Date().toISOString(), status_code: 401 },
-        ]);
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    });
-
-    const result = await probesForEnvironment(configFromEnvironment(settings))[
-      "github.webhook-delivery"
-    ]?.(new AbortController().signal);
-
-    expect(result).toMatchObject({
-      mode: "down",
-      message: expect.stringContaining("GITHUB_WEBHOOK_SECRET"),
-    });
-  });
-
-  it("verifies GitHub webhook configuration as live before any delivery exists", async () => {
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.endsWith("/app")) return Response.json({ events: GITHUB_EVENTS });
-      if (url.includes("/hook/config")) {
-        return Response.json({
-          url: "https://worker.example/webhooks/github",
-          insecure_ssl: "0",
-        });
-      }
-      if (url.includes("/hook/deliveries")) return Response.json([]);
-      throw new Error(`Unexpected request: ${url}`);
-    });
-
-    const result = await probesForEnvironment(configFromEnvironment(settings))[
-      "github.webhook-delivery"
-    ]?.(new AbortController().signal);
-
-    expect(result).toMatchObject({
-      mode: "live",
-      evidenceSource: "provider-config",
-      message: expect.stringContaining("not delivered anything yet"),
-    });
-    expect(getLatestSystemHealthObservations).toHaveBeenCalledWith(
-      "github",
-      "webhook-delivery",
-      expect.stringMatching(/^deployment:[a-f0-9]{64}$/),
-    );
-  });
-
-  it("accepts a successful latest GitHub delivery as live", async () => {
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.endsWith("/app")) return Response.json({ events: GITHUB_EVENTS });
-      if (url.includes("/hook/config")) {
-        return Response.json({
-          url: "https://worker.example/webhooks/github",
-          insecure_ssl: "0",
-        });
-      }
-      if (url.includes("/hook/deliveries")) {
-        return Response.json([
-          { delivered_at: new Date().toISOString(), status_code: 200 },
-        ]);
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    });
-
-    const result = await probesForEnvironment(configFromEnvironment(settings))[
-      "github.webhook-delivery"
-    ]?.(new AbortController().signal);
-
-    expect(result).toMatchObject({ mode: "live" });
   });
 
   it("verifies the Jira webhook registration through the Jira API", async () => {

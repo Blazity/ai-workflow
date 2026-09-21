@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GitHubAdapter } from "./github.js";
+import { GitHubAdapter } from "../../../../../integrations/github/vcs.js";
 import { GitLabAdapter } from "../../../../../integrations/gitlab/vcs.js";
 import * as vcs from "./types.js";
 import type { VCSAdapter } from "./types.js";

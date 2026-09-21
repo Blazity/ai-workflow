@@ -48,7 +48,16 @@ export async function receiveGitLabWebhook(
   });
   const legacyGateInputValue = eventName === "Merge Request Hook" ? legacyGateInput(body) : undefined;
   const legacyGate = legacyGateInputValue
-    ? { action: legacyGateAction(body), workflowInput: legacyGateInputValue }
+    ? {
+        action: legacyGateAction(body),
+        // GitLab spells a push to an open merge request `update`.
+        headMoved: body?.object_attributes?.action === "update",
+        // The account whose action produced this delivery, which is who pushed.
+        // The merge request's author is somebody else on every human push to a
+        // merge request this product opened.
+        pusher: body?.user?.username ?? legacyGateInputValue.author,
+        workflowInput: legacyGateInputValue,
+      }
     : undefined;
   return {
     kind: "trigger_events",
@@ -141,7 +150,13 @@ export function normalizeGitLabEvent(
       const oldHead = body?.oldrev ?? body?.changes?.last_commit?.previous?.id;
       const nextHead = attrs.last_commit?.id ?? attrs.sha;
       if (oldHead && nextHead && oldHead !== nextHead) {
-        if (sameLogin(producer, options.botLogin ?? options.botUsername)) return null;
+        // Deliberately not dropped on the pusher's name alone, which is what
+        // S10 did here and what the GitHub half never did. Whether a push is
+        // one of ours is `isWorkflowGeneratedPush`
+        // (`services/publication/workflow-push-suppression.ts`), which reads
+        // the ownership record this package cannot see and treats identity as
+        // a backstop to the published head rather than as a rule of its own.
+        // One rule for both providers, and the one both had before S10.
         return event(options.deliveryId, producer, "trigger_pr_updated", pr);
       }
       if (

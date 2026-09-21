@@ -7,6 +7,7 @@ import {
   type RepositoryCatalogEntry,
 } from "./catalog.js";
 import { exclusionRecoveryNotes, unnamedRecoveryNotes } from "../work-scope/context.js";
+import { exampleRepositoryPath } from "../support/repository-path-example.js";
 import { isGuessEntry, isUnnamedInAnswer } from "../work-scope/decide.js";
 import {
   workScopeUnnamedSentence,
@@ -672,7 +673,7 @@ function nothingLeftToStartFrom(
     "Not naming a repository is not choosing it,",
     "so this run has no repository to work on.",
     commentPathIsTaken
-      ? `Write the full path of each repository this ticket should work on in a comment on this ticket, as ${repositoryKeys[0] ?? "github:owner/repo"}, and start a new run.`
+      ? `Write the full path of each repository this ticket should work on in a comment on this ticket, as ${repositoryKeys[0] ?? exampleRepositoryPath("owner/repo")}, and start a new run.`
       : "Select the repositories this ticket should work on in this work's repository list, through the work scope API or the work_scope.edit tool, and start a new run.",
   ].join(" ");
 }
@@ -1031,7 +1032,12 @@ function candidateClarificationQuestion(asks: RepositoryDiscoveryAsk[]): string 
   return [
     "Repository discovery was not confident enough to select automatically.",
     "Which repository or repositories should this ticket inspect or modify?",
-    "Reply with full provider-scoped paths (for example github:acme/app).",
+    // The example is scoped to a provider this question is already naming
+    // candidates from, never to whichever one the build happens to ship first.
+    `Reply with full provider-scoped paths (for example ${exampleRepositoryPath(
+      "acme/app",
+      asks.map((ask) => ask.repositoryKey),
+    )}).`,
     `Proposed candidates: ${candidates}.`,
     // WHAT THE ANSWER BINDS, as the which-of-these question says it (A11g):
     // a candidate listed here and left out of the answer is refused to every

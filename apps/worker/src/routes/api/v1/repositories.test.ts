@@ -7,15 +7,11 @@ import { createTestDb } from "../../../db/test-db.js";
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
   sessionUserId: "user_member",
-  providers: [{ kind: "github" }] as Array<{ kind: "github" | "gitlab" }>,
   listing: vi.fn(),
   env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
 }));
 
-vi.mock("../../../infra/vcs-config.js", () => ({
-  env: state.env,
-  getConfiguredVcsProviders: () => state.providers,
-}));
+vi.mock("../../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../../services/auth/auth-instance.js", () => ({
   auth: {
@@ -27,8 +23,10 @@ vi.mock("../../../services/auth/auth-instance.js", () => ({
     },
   },
 }));
-vi.mock("../../../adapters/vcs/repository-directory.js", () => ({
-  listRepositoriesAcrossProviders: state.listing,
+// What the connected providers offered, which is the one thing this route does
+// not compute itself.
+vi.mock("../../../engine/support/vcs-runtime.js", () => ({
+  listVcsRepositories: state.listing,
 }));
 
 const repositoriesGet = (await import("./repositories.get.js")).default;
@@ -58,8 +56,13 @@ let db: Db;
 beforeEach(async () => {
   vi.clearAllMocks();
   resetRepositoriesCacheForTests();
-  state.providers = [{ kind: "github" }];
-  state.listing.mockResolvedValue({ repositories: [REPO], failures: [] });
+  // The listing says which providers answered at all, which is what turns into
+  // "not connected" for the rest.
+  state.listing.mockResolvedValue({
+    repositories: [REPO],
+    providers: ["github"],
+    failures: [],
+  });
   db = await createTestDb();
   state.db = db;
   await db.insert(organization).values({ id: "org_aiw", name: "AI Workflow", slug: "ai-workflow" });
@@ -102,9 +105,9 @@ describe("GET /api/v1/repositories", () => {
   });
 
   it("keeps a surviving catalog and reports a configured provider failure", async () => {
-    state.providers = [{ kind: "github" }, { kind: "gitlab" }];
     state.listing.mockResolvedValue({
       repositories: [REPO],
+      providers: ["github", "gitlab"],
       failures: [
         {
           provider: "gitlab",

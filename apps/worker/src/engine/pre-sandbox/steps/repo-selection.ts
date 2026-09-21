@@ -63,6 +63,9 @@ import {
   NO_ENABLED_REPOSITORIES_MESSAGE,
   repositoryNotEnabledMessage,
 } from "../../support/repository-access.js";
+// Static for the same reason: the example path is read off the manifests, which
+// are plain data, so this import drags in no adapter and no client.
+import { exampleRepositoryPath } from "../../support/repository-path-example.js";
 // Type only, so importing this file never pulls the routing module in with it.
 //
 // This file is NOT in the workflow isolate: the bundles were built and checked, and
@@ -1998,7 +2001,12 @@ export function selectRepositoriesFromMetadata(input: {
         status: "clarification_needed",
         questions: [
           `These repositories named in the previous answer are not available to this workflow: ${unresolved.join(", ")}. ` +
-            `Name a repository from the accessible catalog as "owner/repo", or as "github:owner/repo" to pin the provider.`,
+            // Scoped to a provider whose repositories this run can actually
+            // reach, which is what the listing in hand holds.
+            `Name a repository from the accessible catalog as "owner/repo", or as "${exampleRepositoryPath(
+              "owner/repo",
+              input.repositories.map((repository) => repository.provider),
+            )}" to pin the provider.`,
         ],
       });
     }

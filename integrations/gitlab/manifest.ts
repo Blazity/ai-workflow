@@ -60,6 +60,10 @@ export const manifest = defineIntegration({
     ],
   },
   capabilities: ["vcs"],
+  // No host: a self-hosted GitLab is the normal case and the admin names it in
+  // the GitLab URL field above, whose default core reads for gitlab.com. Groups
+  // nest, so a project path is two segments or more.
+  repositories: { nestedPaths: true },
   blocks: [],
   pages: [],
   health: [

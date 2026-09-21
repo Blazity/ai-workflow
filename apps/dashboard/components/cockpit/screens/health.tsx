@@ -10,6 +10,7 @@ import type {
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
+import { integrationManifest } from "@integrations/registry";
 import { apiClient } from "@/lib/api/client";
 import { SetupOverview } from "@/app/(cockpit)/settings/setup-overview";
 import { SettingsCadenceNotice } from "@/app/(cockpit)/settings/settings-cadence-notice";
@@ -83,10 +84,16 @@ function titleCase(value: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/**
+ * What a CORE section is, in core's own words.
+ *
+ * An integration is not in here and cannot be: it describes itself in its
+ * manifest, and a line written here would be core's opinion of a package it
+ * knows nothing about, kept up to date by nobody.
+ */
 const DESCRIPTIONS: Record<string, string> = {
   database: "Stores workflow state, ownership, traces, and dashboard data.",
   jira: "Authenticates the account, checks the project, and verifies the webhook registration.",
-  github: "Checks App auth, repository access, webhook configuration, and the latest delivery separately.",
   agent: "Authenticates the active provider and checks the configured model when possible.",
   "dashboard-auth": "Presence-checks auth settings; this request already proves session enforcement.",
   sso: "Checks OIDC discovery; client credentials are presence-checked.",
@@ -385,8 +392,15 @@ function HealthRow({
           </div>
           <p className="mt-0.5 font-body text-[11px] leading-4 text-neutral-600">
             {/* An integration describes itself in its manifest, and the scan
-                carries that line: core knows nothing about it to write here. */}
-            {integration.description ?? DESCRIPTIONS[integration.id] ?? "Deployment integration."}
+                carries that line: core knows nothing about it to write here.
+                The registry answers for a scan that predates the manifest, so
+                a section stored by an older build reads as itself rather than
+                as "Deployment integration." the day its provider moved out of
+                core. Only then a core section's own line. */}
+            {integration.description ??
+              integrationManifest(integration.id)?.description ??
+              DESCRIPTIONS[integration.id] ??
+              "Deployment integration."}
           </p>
           {reasonOf(integration) && (
             <p className="mt-1 font-body text-[11px] leading-4 text-neutral-800">

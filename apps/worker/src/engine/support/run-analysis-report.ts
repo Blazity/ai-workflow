@@ -174,9 +174,9 @@ function safeRequestList(values: unknown): RunAnalysisRepositoryRequest[] {
   const requests = values
     .filter((value): value is Record<string, unknown> => !!value && typeof value === "object")
     .map((value): RunAnalysisRepositoryRequest => ({
-      provider: typeof value.provider === "string" && value.provider.length > 0
-        ? value.provider
-        : "github",
+      // What the model wrote, or nothing. Filling in a provider it did not name
+      // would put a repository under one this deployment may not even ship.
+      provider: typeof value.provider === "string" ? value.provider : "",
       repoPath: typeof value.repoPath === "string" ? limitUtf8(safeModelText(value.repoPath), 512) : "unknown",
       rationale: limitUtf8(safeModelText(value.rationale), 1_200),
     }))

@@ -7,10 +7,6 @@ const baseConfig: SystemHealthConfig = {
   jiraApiToken: "jira-secret",
   jiraProjectKey: "TEST",
   jiraWebhookSecret: "jira-webhook",
-  githubAppId: 1,
-  githubAppPrivateKey: "private-key",
-  githubInstallationId: 2,
-  githubWebhookSecret: "webhook-secret",
   agentKind: "claude",
   anthropicApiKey: "anthropic-secret",
   anthropicModel: "claude-test",
@@ -31,35 +27,11 @@ describe("collectSystemHealth", () => {
           mode: "configured",
           message: "No recent delivery.",
         }),
-        "github.app-installation": async () => {},
-        "github.repositories": async () => ({ coverage: { checked: 1, total: 2 } }),
-        "github.webhook-delivery": async () => ({
-          mode: "live",
-          observedAt: "2026-08-20T11:59:00.000Z",
-          evidenceSource: "provider-delivery",
-        }),
         "agent.model": async () => {},
       },
       now: () => new Date("2026-08-20T12:00:00.000Z"),
     });
 
-    const github = result.integrations.find((entry) => entry.id === "github");
-    expect(github).toMatchObject({ mode: "live" });
-    expect(github?.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "app-installation", mode: "live" }),
-        expect.objectContaining({
-          id: "repositories",
-          mode: "live",
-          coverage: { checked: 1, total: 2 },
-        }),
-        expect.objectContaining({
-          id: "webhook-delivery",
-          mode: "live",
-          evidenceSource: "provider-delivery",
-        }),
-      ]),
-    );
     expect(result.integrations.find((entry) => entry.id === "jira")).toMatchObject({
       mode: "live",
       checks: expect.arrayContaining([
@@ -68,31 +40,32 @@ describe("collectSystemHealth", () => {
     });
   });
 
-  it("makes a broken required webhook visible on the provider", async () => {
+  it("takes a provider down when one of its required checks fails, and counts it once", async () => {
+    // The webhook check beside it is optional and healthy. A provider whose
+    // required check is down is down whatever else passes, because everything
+    // that provider does goes through the credential that just failed.
     const result = await collectSystemHealth({
       config: baseConfig,
       probes: {
         "database.connectivity": async () => {},
-        "jira.api": async () => {},
-        "jira.webhook-delivery": async () => ({ mode: "live" }),
-        "github.app-installation": async () => {},
-        "github.repositories": async () => {},
-        "github.webhook-delivery": async () => ({
+        "jira.api": async () => ({
           mode: "down",
-          message: "Latest delivery failed with HTTP 401.",
+          message: "Jira answered HTTP 401.",
         }),
+        "jira.webhook-delivery": async () => ({ mode: "live" }),
         "agent.model": async () => {},
       },
     });
 
-    expect(result.integrations.find((entry) => entry.id === "github")).toMatchObject({
+    expect(result.integrations.find((entry) => entry.id === "jira")).toMatchObject({
       mode: "down",
       checks: expect.arrayContaining([
         expect.objectContaining({
-          id: "webhook-delivery",
+          id: "api",
           mode: "down",
           message: expect.stringContaining("HTTP 401"),
         }),
+        expect.objectContaining({ id: "webhook-delivery", mode: "live" }),
       ]),
     });
     expect(result.summary.criticalDown).toBe(1);
@@ -174,9 +147,6 @@ describe("collectSystemHealth", () => {
         "database.connectivity": async () => {},
         "jira.api": async () => {},
         "jira.webhook-delivery": async () => ({ mode: "configured" }),
-        "github.app-installation": async () => {},
-        "github.repositories": async () => {},
-        "github.webhook-delivery": async () => ({ mode: "live" }),
         "agent.model": async () => {},
         "sso.discovery": async () => {},
         "arthur.api": async () => {},
@@ -197,22 +167,6 @@ describe("collectSystemHealth", () => {
     );
     expect(checks).toContainEqual({ id: "sso.client", mode: "configured" });
     expect(JSON.stringify(result)).not.toContain("unverified");
-  });
-
-  it("reports orphaned webhook secrets without provider credentials", async () => {
-    const result = await collectSystemHealth({
-      config: {
-        ...baseConfig,
-        githubAppId: undefined,
-        githubAppPrivateKey: undefined,
-        githubInstallationId: undefined,
-        githubWebhookSecret: "orphaned-secret",
-      },
-      probes: {},
-    });
-    expect(result.integrations.find((entry) => entry.id === "github")).toMatchObject({
-      mode: "misconfigured",
-    });
   });
 
   it("does not let an inbound-only webhook make Email look live", async () => {

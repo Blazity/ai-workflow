@@ -4,9 +4,6 @@ export async function loadEnvironmentPort() {
     get env() {
       return environment.env;
     },
-    get getConfiguredVcsProviders() {
-      return environment.getConfiguredVcsProviders;
-    },
   };
 }
 

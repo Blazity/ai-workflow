@@ -10,17 +10,14 @@
   "exclude": [
     "\\.(?:test|spec)\\.[cm]?[jt]sx?$",
     "\\.generated\\.[cm]?[jt]sx?$",
+    "(?:^|/)test-support\\.[cm]?[jt]sx?$",
     "^apps/worker/src/test-support/",
     "^apps/worker/src/workflow-graph-suites/",
     "^apps/worker/src/mcp-dogfood/",
     "(?:^|/)(?:fixtures/|[^/]+\\.fixture\\.)"
   ],
-  "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support, workflow-graph-suites, mcp-dogfood, fixture files and fixtures trees are test material by another name.",
+  "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support modules and directory, workflow-graph-suites, mcp-dogfood, fixture files and fixtures trees are test material by another name: nothing outside a test imports them, and a fixture naming a provider is the subject of the test rather than a coupling in the product.",
   "plannedIntegrations": {
-    "github": {
-      "stage": "S11",
-      "reason": "GitHub becomes integrations/github"
-    },
     "jira": {
       "stage": "S12",
       "reason": "Jira becomes integrations/jira, and the ticket lifecycle runs on the issue_tracker capability"
@@ -43,156 +40,63 @@
       "ids": [
         "github"
       ],
-      "stage": "S11",
-      "reason": "dashboard screens and helpers that still name the provider; S11 removes them",
-      "paths": [
-        "apps/dashboard/components/cockpit/activity-drawer.tsx",
-        "apps/dashboard/components/cockpit/flow-editor/repository-scope-modal.tsx",
-        "apps/dashboard/components/cockpit/harness-profiles/profile-editor.tsx",
-        "apps/dashboard/components/cockpit/harness-profiles/skill-import.tsx",
-        "apps/dashboard/components/cockpit/screens/health.tsx",
-        "apps/dashboard/lib/run-prs.ts",
-        "apps/dashboard/lib/settings/format.ts",
-        "apps/dashboard/lib/settings/overview.ts",
-        "apps/dashboard/lib/workflow-editor/repository-scope.ts"
-      ]
-    },
-    {
-      "ids": [
-        "github"
-      ],
-      "stage": "S11",
-      "reason": "other worker call sites that still name the provider; S11 removes them",
-      "paths": [
-        "apps/worker/src/harness-profiles/configured-github-skills.ts",
-        "apps/worker/src/harness-profiles/github-skills.ts",
-        "apps/worker/src/harness-profiles/local-skills.ts",
-        "apps/worker/src/harness-profiles/resolved-version.ts",
-        "apps/worker/src/harness-profiles/skill-refresh.ts",
-        "apps/worker/src/mcp/sanitize-result.ts"
-      ]
-    },
-    {
-      "ids": [
-        "github"
-      ],
-      "stage": "S11",
-      "reason": "the provider adapters behind the capability ports; S11 removes them",
-      "paths": [
-        "apps/worker/src/adapters/vcs/create-vcs.ts",
-        "apps/worker/src/adapters/vcs/github-auth.ts",
-        "apps/worker/src/adapters/vcs/github.ts",
-        "apps/worker/src/adapters/vcs/github/profile-source.ts",
-        "apps/worker/src/adapters/vcs/repository-directory.ts"
-      ]
-    },
-    {
-      "ids": [
-        "github"
-      ],
-      "stage": "S11",
-      "reason": "stored identifiers, schema defaults and the provider CHECK constraints; the code moves, and the stored identifiers themselves survive it: rows here going away is not the measure of the stage being done",
-      "paths": [
-        "apps/worker/src/db/repositories/harness-profiles.ts",
-        "apps/worker/src/db/schema/harness.ts"
-      ]
-    },
-    {
-      "ids": [
-        "github"
-      ],
-      "stage": "S11",
-      "reason": "engine call sites that still name the provider; S11 removes them",
+      "stage": "never",
+      "reason": "the SHAPES of GitHub credentials (`ghp_`, `gho_`, `github_pat_`), named so a token is redacted or reported wherever it turns up: in an unpushed diff, in a sandbox transcript, in an MCP result, in a repository URL somebody pasted. A deployment that ships no GitHub integration at all still has to redact a GitHub token a person hands it, so this is not a dependency on the provider and no stage removes it.",
       "paths": [
         "apps/worker/src/engine/blocks/leak-review/execute.ts",
-        "apps/worker/src/engine/blocks/pre-pr-checks.ts",
-        "apps/worker/src/engine/blocks/support/test-support.ts",
-        "apps/worker/src/engine/definition/block-contract-environment.ts",
-        "apps/worker/src/engine/definition/templates.ts",
-        "apps/worker/src/engine/pre-sandbox/steps/repo-selection.ts",
-        "apps/worker/src/engine/repository-discovery/catalog.ts",
-        "apps/worker/src/engine/repository-discovery/protocol.ts",
-        "apps/worker/src/engine/repository-discovery/runner.ts",
-        "apps/worker/src/engine/support/clarification-comment-format.ts",
-        "apps/worker/src/engine/support/run-analysis-report.ts",
-        "apps/worker/src/engine/support/vcs-runtime.ts"
-      ]
-    },
-    {
-      "ids": [
-        "github"
-      ],
-      "stage": "S11",
-      "reason": "provider configuration and credentials read from the environment; S11 removes them",
-      "paths": [
-        "apps/worker/src/infra/github-webhook-sig.ts",
-        "apps/worker/src/infra/runtime-env.ts",
-        "apps/worker/src/infra/vcs-config.ts"
-      ]
-    },
-    {
-      "ids": [
-        "github"
-      ],
-      "stage": "S11",
-      "reason": "the provider webhook and API routes, which keep their URLs; the code moves, and the URL a provider already calls survives it: rows here going away is not the measure of the stage being done",
-      "paths": [
-        "apps/worker/src/routes/api/v1/harness-skills/discover.post.ts",
-        "apps/worker/src/routes/api/v1/harness-skills/import.post.ts",
-        "apps/worker/src/routes/webhooks/github.post.ts"
-      ]
-    },
-    {
-      "ids": [
-        "github"
-      ],
-      "stage": "S11",
-      "reason": "what a sandbox agent is handed about the provider; S11 removes them",
-      "paths": [
+        "apps/worker/src/mcp/sanitize-result.ts",
         "apps/worker/src/sandbox/agents/redact.ts",
-        "apps/worker/src/sandbox/context.ts",
-        "apps/worker/src/sandbox/harness-runtime.ts"
+        "apps/worker/src/services/repository-catalog/suggest.ts"
       ]
     },
     {
       "ids": [
         "github"
       ],
-      "stage": "S11",
-      "reason": "service call sites that still name the provider; S11 removes them",
+      "stage": "kept",
+      "reason": "the harness skill importer, whose source kind `github` is a value written into `harness_skill_artifacts.source_kind` on every skill imported from a repository, pinned by a CHECK constraint and by the four columns that variant carries, and whose locator is the stored `https://github.com/owner/repo` URL an artifact keeps. Every provider CALL this feature makes now goes through the `RepositorySkillSource` port an integration implements, so the name that is left is the stored identifier and the sentences a person reads about it. Rewriting either would orphan the artifacts already imported, which is a data migration and a product decision, not a refactor.",
       "paths": [
-        "apps/worker/src/services/dispatch/index.ts",
-        "apps/worker/src/services/dispatch/trigger-events.ts",
-        "apps/worker/src/services/harness/harness-errors.ts",
-        "apps/worker/src/services/harness/index.ts",
-        "apps/worker/src/services/harness/profile-authoring.ts",
-        "apps/worker/src/services/harness/skill-sources.ts",
-        "apps/worker/src/services/repository-catalog/suggest.ts",
-        "apps/worker/src/services/repository-catalog/provider-validation.ts",
-        "apps/worker/src/services/settings/index.ts",
-        "apps/worker/src/services/settings/integration-settings.ts",
-        "apps/worker/src/services/settings/runtime-settings.ts",
-        "apps/worker/src/services/system/collect.ts",
-        "apps/worker/src/services/system/probes.ts",
-        "apps/worker/src/services/system/provider-webhook-observation.ts",
-        "apps/worker/src/services/triggers/github/handle-github-webhook.ts",
-        "apps/worker/src/services/triggers/index.ts",
-        "apps/worker/src/services/vcs/github-auth.ts"
-      ]
-    },
-    {
-      "ids": [
-        "github"
-      ],
-      "stage": "S11",
-      "reason": "shared contracts, prompts and skills that still name the provider; S11 removes them",
-      "paths": [
+        "apps/dashboard/components/cockpit/harness-profiles/profile-editor.tsx",
+        "apps/dashboard/components/cockpit/harness-profiles/skill-import.tsx",
+        "apps/worker/src/db/repositories/harness-profiles.ts",
+        "apps/worker/src/db/schema/harness.ts",
+        "apps/worker/src/harness-profiles/local-skills.ts",
+        "apps/worker/src/harness-profiles/repository-skills.ts",
+        "apps/worker/src/harness-profiles/resolved-version.ts",
         "packages/contracts/harness-profiles.ts",
         "packages/contracts/requests-harness.ts",
-        "packages/contracts/settings-registry.ts",
-        "packages/contracts/work-scope.ts",
         "packages/skills/index.ts",
         "packages/skills/source.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "never",
+      "reason": "`GITHUB_BASE_BRANCH` in the frozen list of environment names the worker permanently refuses. The list is deliberately a literal rather than anything derived, so that a later registry edit cannot make a retired name legal again; a retired name has to stay spelled out somewhere, and this is that somewhere.",
+      "paths": [
+        "packages/contracts/settings-registry.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "kept",
+      "reason": "the producer name `github-actions` on delivery envelopes recorded before `trustedByDefault` was part of the trigger contract. It is read off rows already in the database and never written: a stored envelope carries no bit, and re-deciding trust from nothing would either start runs that could not start before or stop runs that could. New envelopes carry the bit their integration set, so this set answers only for the old rows and can never grow.",
+      "paths": [
+        "apps/worker/src/services/dispatch/trigger-events.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "kept",
+      "reason": "the cockpit activity drawer, whose rows are hardcoded sample events (invented pull request numbers, invented tickets) with an invented source label beside each. Nothing here asks which providers are connected, because nothing here reads anything real. The drawer showing fabricated activity to a person is worth fixing on its own, and the provider name is the smallest thing wrong with it.",
+      "paths": [
+        "apps/dashboard/components/cockpit/activity-drawer.tsx"
       ]
     },
     {
@@ -254,7 +158,6 @@
         "apps/worker/src/engine/agent-workflow.ts",
         "apps/worker/src/engine/blocks/investigate/execute.ts",
         "apps/worker/src/engine/blocks/investigate/manifest.ts",
-        "apps/worker/src/engine/blocks/support/test-support.ts",
         "apps/worker/src/engine/definition/templates.ts",
         "apps/worker/src/engine/steps/ticket-analysis.ts",
         "apps/worker/src/engine/support/adapters.ts",

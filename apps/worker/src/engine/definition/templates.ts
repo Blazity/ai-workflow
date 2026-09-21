@@ -192,7 +192,10 @@ function reviewFixAfterPrDefinition(
       column: 0,
       row: 1,
       configuration: {
-        providers: ["github"],
+        // Every provider, like the other triggers in this template: pinning one
+        // made the template useless on a deployment that ships another, and the
+        // scope below is what actually narrows this trigger.
+        providers: [],
         on: ["changes_requested"],
         scope: "workflow_owned",
       },

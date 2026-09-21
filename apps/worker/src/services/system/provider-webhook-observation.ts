@@ -11,7 +11,7 @@ const OBSERVATION_WRITE_INTERVAL_MS = 60_000;
 const lastScheduledAt = new Map<string, number>();
 
 export function observeProviderWebhook(
-  integrationId: "github" | "jira" | "email",
+  integrationId: "jira" | "email",
   outcome: SystemHealthObservationOutcome,
   reason: string,
 ): void {

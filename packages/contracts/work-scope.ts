@@ -182,15 +182,20 @@ function hasUniqueValues(values: readonly string[]): boolean {
 }
 
 /** The normalised catalog key a run's frozen enabled list already carries:
- *  lower case "provider:path", e.g. "github:blazity/ai-workflow-demo". The
- *  path follows the catalog's own rule, so a GitLab project in nested groups
- *  is a key and a bare "owner/name" is not. */
+ *  lower case "provider:path", where the provider is a registry id. The path
+ *  follows the catalog's own rule, so a project in nested groups is a key on a
+ *  provider whose paths nest, and a bare "owner/name" is never one. */
 export const repositoryKeySchema = z
   .string()
   .trim()
   .toLowerCase()
   .refine(isRepositoryKey, {
-    message: 'repository key must look like "github:owner/name"',
+    // NO EXAMPLE KEY HERE. This package may not read the registry, so any
+    // example it wrote would name a provider by guess, and a reader copying
+    // `provider:owner/name` sends a key naming a provider called `provider`.
+    // The rule is stated instead, with the place real keys are printed.
+    message:
+      "repository key must be lower case: the repository's provider id, a colon, then its path, exactly as the repositories list and every run report print it",
   });
 export type RepositoryKey = z.infer<typeof repositoryKeySchema>;
 

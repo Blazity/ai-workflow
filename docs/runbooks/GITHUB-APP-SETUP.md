@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-21
 
 # GitHub App setup
 
@@ -23,6 +23,8 @@ GITHUB_WEBHOOK_SECRET=<random hex, used to sign pull_request webhook deliveries>
 `GITHUB_OWNER` and `GITHUB_REPO` are legacy single-repo defaults. They may remain set for older deployments, but multi-repo runs discover repositories from the GitHub App installation permissions instead. The Repositories import records GitHub's default branch in each profile.
 
 You can configure GitHub and GitLab in the same deployment. Provider credentials are additive.
+
+These four variables are what the GitHub integration reads when the environment is its source. An admin can instead store the same values on the Integrations page, and the page then says whether GitHub accepts them, whether the installation still exists and what GitHub's own delivery log says about the last webhook delivery. There is no App install redirect yet: connecting on the page means supplying the App ID, the installation ID and the private key, which is what the steps below produce.
 
 ---
 
@@ -198,7 +200,7 @@ install; pick the one whose `account.login` matches `GITHUB_OWNER`.
 
 ## 11. Base64-encode the private key
 
-The deployment expects the PEM as a single-line base64 string (multi-line PEM does not round-trip cleanly through Vercel's env UI):
+For an environment variable, encode the PEM as a single-line base64 string. A multi-line PEM does not round-trip cleanly through Vercel's env UI, which is why this step exists:
 
 ```bash
 base64 -i blazity-ai-workflow.2026-05-07.private-key.pem | tr -d '\n' | pbcopy
@@ -207,6 +209,8 @@ base64 -i blazity-ai-workflow.2026-05-07.private-key.pem | tr -d '\n' | pbcopy
 The clipboard now holds your `GITHUB_APP_PRIVATE_KEY`.
 
 > **macOS note:** `base64 -i` works on macOS. On Linux use `base64 -w 0 < <file>`.
+
+> **Connecting on the Integrations page instead?** Skip this step and paste the `.pem` file exactly as GitHub downloaded it, `-----BEGIN` line and all. The form accepts the file and its base64 form, and refuses anything that is neither before the connection is activated, so a wrong paste is refused there and then rather than at the first API call.
 
 ## 12. Set the env vars on Vercel
 

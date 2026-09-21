@@ -1,10 +1,10 @@
 /**
  * Trigger ingress: every way work enters this system from outside.
  *
- * Provider webhooks (Jira, GitHub, GitLab, Slack, email delivery events), the
- * public custom webhook endpoints, and the scheduled poll all decide the same
- * question, so they share one ownership boundary: the routes above hold only
- * raw-byte capture, signature timing and the HTTP answer.
+ * What is left here is the ingress core still owns: the issue tracker webhook,
+ * the public custom webhook endpoints and the scheduled poll. Every provider
+ * whose package has landed answers at the generic `/webhooks/<id>` route and
+ * translates its own deliveries, so its handler is not in this cluster.
  *
  * The declared interface of this cluster. Cross-cluster imports must target
  * this file; the deep imports that predate the rule are listed in
@@ -22,12 +22,6 @@ export type {
 export {
   createWebhookDispatchDeps,
 } from "./custom-webhooks/dispatch-deps.js";
-export {
-  handleGitHubWebhook,
-} from "./github/handle-github-webhook.js";
-export type {
-  GitHubWebhookRequest,
-} from "./github/handle-github-webhook.js";
 export {
   handleJiraWebhook,
 } from "./jira/handle-jira-webhook.js";

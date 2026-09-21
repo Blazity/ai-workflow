@@ -1,42 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
-
-const paginate = vi.fn();
-vi.mock("./github-auth.js", () => ({
-  buildOctokit: () => ({
-    apps: { listReposAccessibleToInstallation: vi.fn() },
-    paginate,
-  }),
-}));
-
+import { describe, expect, it } from "vitest";
 import {
-  createRepositoryDirectory,
   filterPinnedRepositories,
   isRepositoryWithinPinnedScope,
 } from "./repository-directory.js";
 
-describe("repository directory", () => {
-  it("normalizes repositories from the remaining core provider", async () => {
-    paginate.mockResolvedValueOnce([{
-      full_name: "acme/api",
-      name: "api",
-      owner: { login: "acme" },
-      default_branch: "main",
-      description: "Billing API",
-      html_url: "https://github.com/acme/api",
-      topics: ["backend"],
-      archived: false,
-      private: true,
-    }]);
-    const directory = createRepositoryDirectory({
-      kind: "github",
-      auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-      host: "https://github.com",
-    });
-    await expect(directory.listRepositories()).resolves.toEqual([
-      expect.objectContaining({ provider: "github", repoPath: "acme/api" }),
-    ]);
-  });
-
+/**
+ * Fetching a listing left with the providers in S10 and S11, so what is left to
+ * test here is the one thing core still decides about one: whether a repository
+ * survives the scope a workflow pinned. The provider id is an open registry
+ * value, so the case that matters is one this build has never heard of.
+ */
+describe("pinned repository scope", () => {
   it("filters an open provider id through the stored scope", () => {
     const repositories = [
       { provider: "forgejo", repoPath: "acme/api" },
@@ -45,5 +19,6 @@ describe("repository directory", () => {
     const scope = { providers: ["forgejo"] };
     expect(filterPinnedRepositories(repositories, scope)).toEqual([repositories[0]]);
     expect(isRepositoryWithinPinnedScope(scope, repositories[0]!)).toBe(true);
+    expect(isRepositoryWithinPinnedScope(scope, repositories[1]!)).toBe(false);
   });
 });

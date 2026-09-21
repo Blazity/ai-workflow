@@ -415,7 +415,10 @@ describe("repository expansion validation", () => {
     expect(decision.kind).toBe("clarification_needed");
     if (decision.kind === "clarification_needed") {
       const [question] = decision.questions;
-      expect(question).toContain("provider:owner/repo");
+      // The examples themselves are pinned against a registry this build does
+      // not contain, in repository-path-example.test.ts. Here the question is
+      // only whether the sentence is said at all.
+      expect(question).toContain("reply with exact repository paths as");
       expect(isExpansionLimitClarification(decision.questions)).toBe(true);
     }
   });
@@ -526,7 +529,7 @@ describe("isRepositoryExpansionClarification", () => {
       }
       // Whatever the reason for asking, the answer format is stated, so the
       // reply has a shape the parser can read.
-      expect(question).toContain("provider:owner/repo");
+      expect(question).toContain("reply with exact repository paths as");
       expect(question).toContain('Reply "none"');
     },
   );

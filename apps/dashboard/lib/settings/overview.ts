@@ -12,7 +12,7 @@ import type {
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
-import { integrationManifests } from "@integrations/registry";
+import { integrationsProviding } from "@integrations/registry";
 
 import { activationDetail, activationValue } from "@/lib/repository-catalog/activation";
 
@@ -314,9 +314,9 @@ export function buildSetupOverview(input: {
   const { settings, scan, scanReadable, catalogState } = input;
   const byId = (...ids: string[]): SystemHealthIntegration[] | null =>
     scan ? scan.integrations.filter((entry) => ids.includes(entry.id)) : null;
-  const vcsIntegrationIds = integrationManifests
-    .filter((manifest) => manifest.capabilities.includes("vcs"))
-    .map((manifest) => manifest.id);
+  // Every version control provider this build ships, which since S11 is all of
+  // them: the row is the health of whichever ones the scan reported.
+  const vcsIntegrationIds = integrationsProviding("vcs").map((manifest) => manifest.id);
 
   const groups = groupSettings(settings);
   const storedRows = groups.map((group) => ({
@@ -333,7 +333,7 @@ export function buildSetupOverview(input: {
       integrationRow(
         "vcs",
         "Version control",
-        byId("github", ...vcsIntegrationIds),
+        byId(...vcsIntegrationIds),
         scanReadable,
       ),
       secretsRow(scan, scanReadable),

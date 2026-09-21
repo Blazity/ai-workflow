@@ -9,8 +9,14 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+// Both provider-backed calls this block makes: an adapter for one repository,
+// and the listing that turns a recorded key back into a checkout.
 vi.mock("../../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
+  listVcsRepositories: async () => ({
+    repositories: await mocks.listRepositories(),
+    failures: [],
+  }),
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: mocks.getDb }));
@@ -23,21 +29,10 @@ vi.mock("../../../db/repositories/runs.js", () => ({
   findConnectedRunPrSiblings: mocks.findRunPrSiblings,
 }));
 
+// The pin filter beside the listing is pure and is exactly what the step
+// applies to the work scope record, so that module stays entirely real.
 
-// Partial: the pin filter in the same module is pure and is exactly what the
-// step applies to the work scope record, so it stays real. Only the
-// network-backed directory is stubbed.
-vi.mock("../../../adapters/vcs/repository-directory.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../adapters/vcs/repository-directory.js")>()),
-  createRepositoryDirectoryForProviders: () => ({
-    listRepositories: mocks.listRepositories,
-  }),
-}));
-
-vi.mock("../../../infra/vcs-config.js", () => ({
-  getConfiguredVcsProviders: () => [{ kind: "github" }, { kind: "gitlab" }],
-  env: {},
-}));
+vi.mock("../../../infra/vcs-config.js", () => ({ env: {} }));
 
 vi.mock("../../../infra/logger.js", () => ({
   logger: { warn: mocks.warn },

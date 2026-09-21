@@ -45,7 +45,6 @@ export {
 } from "./trigger-delivery-store.js";
 export {
   isGateCheckName,
-  normalizeGitHubEvents,
 } from "./trigger-events.js";
 export type {
   TriggerEvent,

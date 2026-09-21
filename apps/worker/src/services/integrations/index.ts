@@ -54,6 +54,16 @@ export async function getVcsBotLogin(
   return resolver.getVcsBotLogin(kind);
 }
 
+/** The same read, saying whether it could be made at all. */
+export async function readVcsBotLogin(
+  kind: import("@shared/contracts").VcsProviderKind,
+): Promise<
+  { readable: true; login: string | undefined } | { readable: false; reason: string }
+> {
+  const resolver = await import("./vcs-bot-login.js");
+  return resolver.readVcsBotLogin(kind);
+}
+
 export {
   databaseEnvironment,
   decideIntegrationWriteAccess,

@@ -4,10 +4,11 @@ import { waitUntil } from "@vercel/functions";
 /**
  * Every integration's webhook, at the URL its provider already calls.
  *
- * `/webhooks/slack` and every other integration callback land here;
- * core's own routes (`/webhooks/github`, `/webhooks/jira`,
- * `/webhooks/custom/...`, `/webhooks/resend`) keep their own files and win,
- * because a static route beats a dynamic one.
+ * `/webhooks/slack`, `/webhooks/github` and every other integration callback
+ * land here; core's own routes (`/webhooks/jira`, `/webhooks/custom/...`,
+ * `/webhooks/resend`) keep their own files and win, because a static route
+ * beats a dynamic one. Each provider keeps the URL it already calls whichever
+ * side of that line it is on.
  *
  * What this route does and does not do is the whole of ADR-010's webhook
  * decision. It holds the raw bytes, because that is what a provider signs and
@@ -127,6 +128,15 @@ export default defineEventHandler(async (event) => {
     ]);
     let claimed = false;
     let suppressedWorkflowPush = false;
+    let retryable: { reason: string; diagnosticId?: string } | undefined;
+    // What core did with the delivery, for the answer the provider records in
+    // its own delivery log. The integration's `response` was decided before
+    // dispatch and can only say whether there was anything to dispatch, so an
+    // event for a repository nobody enabled would be logged as accepted at the
+    // provider and leave an operator with nowhere to see that nothing ran.
+    let dispatched: { runId?: string } | undefined;
+    let ignoredReason: string | undefined;
+    let gateDispatched = false;
     for (const candidate of reception.events) {
       if (candidate.triggerType === "trigger_pr_updated") {
         const {
@@ -153,6 +163,26 @@ export default defineEventHandler(async (event) => {
         maxConcurrentAgents: maxConcurrentAgents(settings),
         repositoryCatalog,
       });
+      // AT CAPACITY IS NOT A FAILED DELIVERY. Nothing is wrong with what the
+      // provider sent: this deployment is busy, which can last minutes. GitLab
+      // switches a webhook off after a few consecutive failures, and a
+      // disabled webhook loses EVERY later trigger rather than this one, so a
+      // 5xx here trades one missed event for all of them. The answer is 2xx
+      // and says exactly what happened, which both providers record in their
+      // delivery log beside the event.
+      if (result.result === "at_capacity") {
+        ignoredReason = "at_capacity";
+        break;
+      }
+      // An error is a fault of this deployment, and rare. It answers 5xx so it
+      // is red in the provider's log and can be redelivered by hand.
+      if (result.result === "error") {
+        retryable = {
+          reason: "trigger_error",
+          ...(result.diagnosticId ? { diagnosticId: result.diagnosticId } : {}),
+        };
+        break;
+      }
       if (![
         "no_definition",
         "ignored_not_workflow_owned",
@@ -160,12 +190,17 @@ export default defineEventHandler(async (event) => {
         "ignored_repository_not_enabled",
       ].includes(result.result)) {
         claimed = true;
+        const runId = "runId" in result ? result.runId : undefined;
+        dispatched = runId ? { runId } : {};
         break;
       }
+      // The last reason, because the loop stops at the first event that
+      // claimed: what is left when none did is why the last one did not.
+      ignoredReason = result.result;
     }
     if (
       !suppressedWorkflowPush &&
-      reception.legacyGate?.action === "update"
+      reception.legacyGate?.headMoved === true
     ) {
       const {
         connectedWorkflowPushNormalizationOptions,
@@ -177,11 +212,36 @@ export default defineEventHandler(async (event) => {
         repoPath: input.ownerRepo,
         prNumber: input.prNumber,
       });
-      suppressedWorkflowPush = isWorkflowGeneratedPush({
-        currentHeadSha: input.headSha,
-        producer: input.author,
-        botIdentity: await botLoginFor(input.provider),
-        ...workflowPush,
+      // Who PUSHED, never the pull request's author: on a pull request this
+      // product opened the author is our own account, so asking the author
+      // would suppress every human push and skip the gate on it. An
+      // integration that did not say who pushed suppresses nothing, which
+      // runs the gate: checking a change twice costs a run, skipping the check
+      // on somebody's change costs the review it exists for.
+      const pusher = reception.legacyGate.pusher;
+      suppressedWorkflowPush = pusher
+        ? isWorkflowGeneratedPush({
+            currentHeadSha: input.headSha,
+            producer: pusher,
+            botIdentity: await botLoginFor(input.provider),
+            ...workflowPush,
+          })
+        : false;
+      if (!pusher) {
+        const { logger } = await import("../../services/system/logger.js");
+        logger.warn(
+          { integration: id, provider: input.provider, prNumber: input.prNumber },
+          "webhook_push_author_unknown",
+        );
+      }
+    }
+    if (retryable) {
+      const { logger } = await import("../../services/system/logger.js");
+      logger.info({ integration: id, ...retryable }, "trigger_webhook_retryable_failure");
+      throw createError({
+        statusCode: 503,
+        statusMessage: retryable.reason,
+        ...(retryable.diagnosticId ? { data: { diagnosticId: retryable.diagnosticId } } : {}),
       });
     }
     if (
@@ -194,8 +254,24 @@ export default defineEventHandler(async (event) => {
       })
     ) {
       await dispatchPostPrGateWebhook(reception.legacyGate);
+      gateDispatched = true;
     }
-    return respond(event, reception.response);
+    // What the delivery log says, in the order that matters to whoever reads
+    // it: an event core could not act on first, because that is the one an
+    // operator has to do something about, then what did start.
+    const verdict = ignoredReason
+      ? { status: "ignored", reason: ignoredReason }
+      : dispatched
+        ? { status: "dispatched", ...dispatched }
+        : suppressedWorkflowPush
+          ? { status: "ignored", reason: "workflow_generated_push" }
+          : gateDispatched
+            ? { status: "dispatched", reason: "post_pr_gate" }
+            : undefined;
+    return respond(event, {
+      ...reception.response,
+      ...(verdict ? { body: verdict } : {}),
+    });
   }
 
   const { logger } = await import("../../services/system/logger.js");
@@ -274,8 +350,20 @@ function memoizedVcsBotLogin(): (provider: string) => Promise<string | undefined
     const pending = byProvider.get(provider);
     if (pending) return pending;
     const started = (async () => {
-      const { getVcsBotLogin } = await import("../../services/vcs/index.js");
-      return getVcsBotLogin(provider);
+      const { readVcsBotLogin } = await import("../../services/vcs/index.js");
+      const reading = await readVcsBotLogin(provider);
+      // FAILS CLOSED, like the first settings read one screen up. This is a
+      // SECOND read and it can fail on its own, and a delivery acted on with
+      // an unknown automation account is how the workflow answers its own
+      // review and starts a run off its own push: every comment it made reads
+      // as somebody else's.
+      if (!reading.readable) {
+        throw createError({
+          statusCode: 503,
+          statusMessage: `The automation account for ${provider} could not be read on this deployment (${reading.reason}), so the delivery was not acted on.`,
+        });
+      }
+      return reading.login;
     })();
     byProvider.set(provider, started);
     return started;

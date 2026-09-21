@@ -17,12 +17,16 @@ import { formatDateTime } from "../date-time";
  * A registry key is SCREAMING_SNAKE, so a label built from it would otherwise
  * read "Mcp allow public dcr". Only the words a reader would spell differently
  * are listed; everything else is lowercased after the first word.
+ *
+ * Only words that appear in a SETTINGS key. A provider's own variables are
+ * connection fields now, and those are labelled by the manifest that declares
+ * them and never reach this table; a row for one would be spelling kept for a
+ * key this function is never handed.
  */
 const WORD_CASING: Record<string, string> = {
   AI: "AI",
   API: "API",
   DCR: "DCR",
-  GITHUB: "GitHub",
   MB: "MB",
   MCP: "MCP",
   MS: "ms",

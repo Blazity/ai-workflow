@@ -67,6 +67,7 @@ export {
   type IntegrationHealthCheck,
   type IntegrationManifest,
   type IntegrationPage,
+  type IntegrationRepositoryShape,
 } from "./manifest";
 
 export {
@@ -174,6 +175,8 @@ export {
   type PullRequestHead,
   type PullRequestHeadChecks,
   type PullRequestFailedCheck,
+  type RepositorySkillSource,
+  type RepositorySkillTreeEntry,
   type ReviewThread,
   type ReviewThreadFeed,
   type ReviewThreadNote,

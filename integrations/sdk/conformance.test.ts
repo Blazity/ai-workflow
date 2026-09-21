@@ -129,11 +129,12 @@ test("an id core already uses is refused: webhook routes, capabilities, core wor
 
 test("an id a core health section still holds is refused until that section moves out", () => {
   // The health page keeps one section per id, and an integration's checks are
-  // keyed under its id: two sections called `github` could disagree about the
+  // keyed under its id: two sections called `jira` could disagree about the
   // same deployment. Each of these rows leaves this list in the stage that
-  // moves the provider out of core, which is why `slack` is not among them
-  // any more: S9 deleted core's section and the package took the name.
-  for (const id of ["github", "jira", "database"]) {
+  // moves the provider out of core, which is why neither `slack` nor `github`
+  // is among them any more: S9 and S11 deleted core's section and each package
+  // took the name.
+  for (const id of ["jira", "database", "email"]) {
     const { manifest, runtime } = validIntegration();
     manifest.id = id;
     manifest.blocks[0].type = `${id}_lookup`;

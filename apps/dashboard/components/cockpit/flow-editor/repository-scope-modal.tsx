@@ -90,8 +90,15 @@ export function RepositoryScopeModal({
     structuredClone(scope),
   );
   const [filter, setFilter] = useState("");
-  const [manualProvider, setManualProvider] =
-    useState<VcsProviderKind>("github");
+  // Which provider a hand-typed path is scoped to, before the catalog has said
+  // what this deployment connected. The first version control integration this
+  // build ships is the only seed available that early; the effect below moves
+  // it to a connected provider as soon as the catalog answers. Empty when the
+  // build ships none, which leaves the Add button disabled rather than
+  // offering to pin a path under a provider that does not exist here.
+  const [manualProvider, setManualProvider] = useState<VcsProviderKind>(
+    () => PINNABLE_PROVIDERS[0] ?? "",
+  );
   const [manualPath, setManualPath] = useState("");
 
   useEffect(() => {

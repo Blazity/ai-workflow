@@ -1,4 +1,3 @@
-import { createAppAuth } from "@octokit/auth-app";
 import type { SettingsSnapshot, SystemHealthResponse } from "@shared/contracts";
 import { FIRST_SLICE_TOOLS } from "@shared/contracts";
 import {
@@ -15,7 +14,6 @@ import {
   listConnectedActiveCustomWebhookRejections,
   listConnectedCustomWebhookEndpointStates,
 } from "../../db/repositories/system-health.js";
-import { buildOctokit } from "../../adapters/vcs/github-auth.js";
 import {
   collectSystemHealth,
   PublicHealthProbeError,
@@ -34,13 +32,6 @@ import {
 } from "./observations.js";
 
 const LOCAL_OBSERVATION_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
-const REQUIRED_GITHUB_WEBHOOK_EVENTS = [
-  "check_run",
-  "issue_comment",
-  "pull_request",
-  "pull_request_review",
-  "pull_request_review_comment",
-] as const;
 const REQUIRED_RESEND_WEBHOOK_EVENTS = [
   "email.sent",
   "email.delivered",
@@ -81,10 +72,6 @@ export function configFromEnvironment(settings: SettingsSnapshot): SystemHealthC
     jiraApiToken: env.JIRA_API_TOKEN,
     jiraProjectKey: env.JIRA_PROJECT_KEY,
     jiraWebhookSecret: env.JIRA_WEBHOOK_SECRET,
-    githubAppId: env.GITHUB_APP_ID,
-    githubAppPrivateKey: env.GITHUB_APP_PRIVATE_KEY,
-    githubInstallationId: env.GITHUB_INSTALLATION_ID,
-    githubWebhookSecret: env.GITHUB_WEBHOOK_SECRET,
     agentKind: defaultProfile.harness.provider,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     anthropicModel:
@@ -151,44 +138,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
       resendWebhookResult(config, signal),
     "custom-webhooks.aggregate": () => customWebhookAggregate(),
   };
-
-  if (config.githubAppId && config.githubAppPrivateKey && config.githubInstallationId) {
-    const auth = {
-      appId: config.githubAppId,
-      privateKeyBase64: config.githubAppPrivateKey,
-      installationId: config.githubInstallationId,
-    };
-    probes["github.app-installation"] = async (signal) => {
-      try {
-        await buildOctokit(auth).apps.getInstallation({
-          installation_id: config.githubInstallationId!,
-          request: { signal },
-        });
-      } catch {
-        throw new PublicHealthProbeError("GitHub App installation check failed.");
-      }
-    };
-    probes["github.repositories"] = async (signal) => {
-      const response = await buildOctokit(auth).apps
-        .listReposAccessibleToInstallation({
-          per_page: 1,
-          request: { signal },
-        })
-        .catch(() => {
-          throw new PublicHealthProbeError("GitHub repository access failed.");
-        });
-      if (response.data.total_count === 0) {
-        throw new PublicHealthProbeError(
-          "GitHub App installation has no accessible repositories.",
-        );
-      }
-      return {
-        coverage: { checked: response.data.repositories.length, total: response.data.total_count },
-      };
-    };
-    probes["github.webhook-delivery"] = (signal) =>
-      githubWebhookResult(config, signal);
-  }
 
   if (config.ssoIssuer) {
     probes["sso.discovery"] = async (signal) => {
@@ -314,80 +263,6 @@ async function jiraWebhookResult(
       local.mode === "live"
         ? "Jira webhook is registered and a recent signed delivery was accepted."
         : "Jira webhook is registered and enabled; no delivery has arrived in the last 7 days.",
-  };
-}
-
-async function githubWebhookResult(
-  config: SystemHealthConfig,
-  signal: AbortSignal,
-): Promise<SystemHealthProbeResult> {
-  const appId = config.githubAppId!;
-  const privateKey = Buffer.from(config.githubAppPrivateKey!, "base64").toString("utf8");
-  const appAuth = createAppAuth({ appId, privateKey });
-  const authentication = await appAuth({ type: "app" });
-  const headers = {
-    Accept: "application/vnd.github+json",
-    Authorization: `Bearer ${authentication.token}`,
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  const [appResponse, configResponse, deliveriesResponse] = await Promise.all([
-    fetch("https://api.github.com/app", { headers, signal }),
-    fetch("https://api.github.com/app/hook/config", { headers, signal }),
-    fetch("https://api.github.com/app/hook/deliveries?per_page=1", { headers, signal }),
-  ]);
-  if (!appResponse.ok || !configResponse.ok || !deliveriesResponse.ok) {
-    throw new PublicHealthProbeError("GitHub App webhook API check failed.");
-  }
-  const app = (await appResponse.json()) as { events?: string[] };
-  const appEvents = new Set(app.events ?? []);
-  const missingEvents = REQUIRED_GITHUB_WEBHOOK_EVENTS.filter(
-    (event) => !appEvents.has(event),
-  );
-  if (missingEvents.length > 0) {
-    throw new PublicHealthProbeError(
-      `The GitHub App is missing required webhook events: ${missingEvents.join(", ")}.`,
-    );
-  }
-  const hook = (await configResponse.json()) as { url?: unknown; insecure_ssl?: unknown };
-  const expectedUrl = providerWebhookUrl(config, "github");
-  if (typeof hook.url !== "string" || normalizeUrl(hook.url) !== expectedUrl) {
-    throw new PublicHealthProbeError("GitHub App webhook URL does not match this worker.");
-  }
-  if (String(hook.insecure_ssl) === "1") {
-    throw new PublicHealthProbeError("GitHub App webhook disables TLS verification.");
-  }
-  const deliveries = (await deliveriesResponse.json()) as Array<{
-    delivered_at?: string;
-    status_code?: number;
-  }>;
-  const latest = deliveries[0];
-  // GitHub's own delivery log is authoritative: the status code it recorded is
-  // what this worker answered, so a 401 there is a secret mismatch by definition.
-  if (latest?.delivered_at) {
-    const observedAt = new Date(latest.delivered_at);
-    const ok =
-      typeof latest.status_code === "number" &&
-      latest.status_code >= 200 &&
-      latest.status_code < 300;
-    return {
-      mode: ok ? "live" : "down",
-      observedAt: observedAt.toISOString(),
-      evidenceSource: "provider-delivery",
-      message: ok
-        ? `Events, URL and TLS verified; latest GitHub delivery returned ${latest.status_code}.`
-        : latest.status_code === 401
-          ? "Latest GitHub delivery was rejected with HTTP 401: the App's webhook secret differs from GITHUB_WEBHOOK_SECRET."
-          : `Latest GitHub delivery failed with HTTP ${latest.status_code ?? "unknown"}.`,
-    };
-  }
-  const local = classifyObservations(
-    await localObservations("github", config.githubWebhookSecret),
-  );
-  if (local.mode !== "configured") return local;
-  return {
-    mode: "live",
-    evidenceSource: "provider-config",
-    message: "Events, URL and TLS verified; GitHub has not delivered anything yet.",
   };
 }
 
@@ -560,7 +435,7 @@ function resendFetch(
 
 function providerWebhookUrl(
   config: SystemHealthConfig,
-  provider: "github" | "resend" | "jira",
+  provider: "resend" | "jira",
 ): string {
   const base = (config.betterAuthUrl ?? "").replace(/\/+$/, "");
   return normalizeUrl(`${base}/webhooks/${provider}`);

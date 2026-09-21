@@ -8,7 +8,6 @@ const state = vi.hoisted(() => ({
   db: undefined as unknown,
   sessionUserId: "user_admin",
   env: { DASHBOARD_ORG_SLUG: "ai-workflow", ANTHROPIC_API_KEY: "anthropic-key" },
-  providers: [] as unknown[],
   directory: undefined as unknown,
 }));
 
@@ -19,8 +18,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../../infra/vcs-config.js", () => ({
   env: state.env,
-  getConfiguredVcsProviders: () => state.providers,
-  getVcsProviderConfig: () => state.providers[0],
 }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../../services/auth/auth-instance.js", () => ({
@@ -39,10 +36,11 @@ vi.mock("../../../services/repository-discovery/index.js", () => ({
 vi.mock("../../../infra/llm.js", () => ({
   generateProviderText: mocks.generateProviderText,
 }));
-vi.mock("../../../adapters/vcs/create-vcs.js", () => ({
-  createVCS: vi.fn(),
-  createVCSForRepository: vi.fn(),
-  createRepositoryProfileSource: vi.fn(() => ({ loadProfile: mocks.loadProfile })),
+// The one provider call this path makes: reading what a repository says
+// about itself. Which integration answers is resolved inside, and the
+// suggestion is the same whichever one it was.
+vi.mock("../../../engine/support/vcs-runtime.js", () => ({
+  loadRepositoryVcsProfile: mocks.loadProfile,
 }));
 
 const importPreviewPost = (await import("./repository-catalog/import-preview.post.js")).default;
@@ -104,9 +102,6 @@ beforeEach(async () => {
   vi.clearAllMocks();
   resetRepositorySuggestionsInFlightForTests();
   state.sessionUserId = "user_admin";
-  state.providers = [
-    { kind: "github", auth: { appId: 1, privateKeyBase64: "cGVt", installationId: 2 } },
-  ];
   state.directory = {
     repositories: [
       {

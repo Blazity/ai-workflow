@@ -107,10 +107,17 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
     const { getSandboxCredentials } = await import(
       "../../src/sandbox/credentials.js"
     );
-    const { mintInstallationToken } = await import("../../src/services/vcs/github-auth.js");
+    // The integration owns GitHub App authentication since S11. The key is read
+    // the same way the product reads it, so a PEM pasted whole and a base64 one
+    // both work here exactly as they do on a connection.
+    const { mintInstallationToken } = await import(
+      "../../../../integrations/github/auth.js"
+    );
     const installationToken = await mintInstallationToken({
       appId: e2eEnv.E2E_GITHUB_APP_ID,
-      privateKeyBase64: e2eEnv.E2E_GITHUB_APP_PRIVATE_KEY,
+      // Whatever shape the environment holds: the reader inside accepts a PEM
+      // block or its base64 encoding, and refuses anything else by name.
+      privateKey: e2eEnv.E2E_GITHUB_APP_PRIVATE_KEY,
       installationId: e2eEnv.E2E_GITHUB_INSTALLATION_ID,
     });
     const sbx = await Sandbox.create({

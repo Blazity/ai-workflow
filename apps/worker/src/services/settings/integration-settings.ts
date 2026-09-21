@@ -9,16 +9,10 @@
  * module per case.
  */
 import type { SettingsSnapshot } from "@shared/contracts";
-import {
-  env,
-  getConfiguredVcsProviders,
-  getVcsProviderConfig,
-  type VcsProviderConfig,
-  type VcsProviderKind,
-} from "../../infra/vcs-config.js";
+import { env } from "../../infra/vcs-config.js";
 
 /** Provider ids that carry a signed webhook, as system health observes them. */
-export type WebhookProviderId = "github" | "jira" | "email";
+export type WebhookProviderId = "jira" | "email";
 
 /** The issue-tracker columns and project the ticket triggers are scoped to.
  *  The project key and the transition id are tracker wiring, not settings.
@@ -52,28 +46,6 @@ export function jiraWebhookSecret(): string | undefined {
   return env.JIRA_WEBHOOK_SECRET;
 }
 
-/** GitHub webhook secret plus the single repository legacy deliveries name. */
-export function githubWebhookSettings(): {
-  secret?: string;
-  owner?: string;
-  repo?: string;
-} {
-  return {
-    secret: env.GITHUB_WEBHOOK_SECRET,
-    owner: env.GITHUB_OWNER,
-    repo: env.GITHUB_REPO,
-  };
-}
-
-/**
- * Every VCS provider this deployment has credentials for. Re-exposed rather than
- * re-derived: which fields make a provider "configured" is the environment
- * schema's own question, and a second answer to it would drift.
- */
-export function configuredVcsProviders(): VcsProviderConfig[] {
-  return getConfiguredVcsProviders();
-}
-
 /** Svix signing secret for Resend delivery events. */
 export function resendWebhookSecret(): string | undefined {
   return env.RESEND_WEBHOOK_SECRET;
@@ -94,22 +66,11 @@ export function providerWebhookSecret(
   integrationId: WebhookProviderId,
 ): string | undefined {
   switch (integrationId) {
-    case "github":
-      return env.GITHUB_WEBHOOK_SECRET;
     case "jira":
       return env.JIRA_WEBHOOK_SECRET;
     case "email":
       return env.RESEND_WEBHOOK_SECRET;
   }
-}
-
-/**
- * The one provider of this kind this deployment is configured for. Throws when
- * there is none, which is the existing contract: a caller that names a provider
- * has already decided it must exist.
- */
-export function vcsProviderConfig(kind: VcsProviderKind): VcsProviderConfig {
-  return getVcsProviderConfig(kind);
 }
 
 /** The issue tracker's base URL, for the ticket links run reads publish. */

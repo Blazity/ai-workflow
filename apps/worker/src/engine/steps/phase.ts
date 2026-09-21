@@ -680,11 +680,6 @@ async function listFreshRepositoryCatalogStep(
   repositoryScope?: WorkflowRepositoryScope,
 ) {
   "use step";
-  const { loadEnvironmentPort } = await import("../internal/ports.js");
-  const { getConfiguredVcsProviders } = await loadEnvironmentPort();
-  const { createRepositoryDirectoryForProviders } = await import(
-    "../../adapters/vcs/repository-directory.js"
-  );
   const { buildRepositoryCatalog } = await import(
     "../repository-discovery/catalog.js"
   );
@@ -692,27 +687,37 @@ async function listFreshRepositoryCatalogStep(
     "../support/repository-access.js"
   );
   return buildRepositoryCatalog(
-    filterRunRepositories(
-      access,
-      await createRepositoryDirectoryForProviders(
-        pinnedProviderConfigs(
-          getConfiguredVcsProviders(),
-          repositoryScope?.providers,
-        ),
-      ).listRepositories(),
-    ),
+    filterRunRepositories(access, await listPinnedRepositories(repositoryScope?.providers)),
   );
 }
 listFreshRepositoryCatalogStep.maxRetries = 0;
 
-/** Provider-config intersection used by both expansion catalogs. Empty or absent
- *  pinned providers leave the configured set untouched. */
-function pinnedProviderConfigs<T extends { kind: VcsProviderKind }>(
-  configured: T[],
+/**
+ * The catalog both expansion steps read, narrowed to the providers a workflow
+ * pinned. No pin leaves every connected provider in, which is what keeps a
+ * workflow without one on exactly its pre-pin behaviour.
+ *
+ * TERMINAL ON A PROVIDER THAT DID NOT ANSWER, which is what the directory these
+ * two steps used to read did (`createRepositoryDirectoryForProviders`, deleted
+ * in S11). Neither caller carries a partial catalog anywhere: both hand it
+ * straight to a validator that answers "not on the accessible repository
+ * catalog", so a GitHub 401 beside a healthy GitLab would tell a person their
+ * repository does not exist when we simply could not see it, and the run would
+ * carry on with half a workspace. The provider's own error is raised rather
+ * than a wrapper, so the failure names what failed.
+ */
+async function listPinnedRepositories(
   pinnedProviders: VcsProviderKind[] | undefined,
-): T[] {
-  if (!pinnedProviders || pinnedProviders.length === 0) return configured;
-  return configured.filter((provider) => pinnedProviders.includes(provider.kind));
+) {
+  const { listVcsRepositories } = await import("../support/vcs-runtime.js");
+  const listing = await listVcsRepositories(
+    pinnedProviders && pinnedProviders.length > 0
+      ? { neededProviders: pinnedProviders }
+      : {},
+  );
+  const failure = listing.failures[0];
+  if (failure) throw failure.error;
+  return listing.repositories;
 }
 
 async function attachResearchRepositoriesStep(
@@ -831,14 +836,7 @@ async function resolveHumanRepositoryExpansionStep(
   workScope?: RunWorkScopeResume,
 ): Promise<ResolvedHumanRepositoryExpansion> {
   "use step";
-  const {
-    loadEnvironmentPort,
-    loadRepositoryDiscoveryPort,
-  } = await import("../internal/ports.js");
-  const { getConfiguredVcsProviders } = await loadEnvironmentPort();
-  const { createRepositoryDirectoryForProviders } = await import(
-    "../../adapters/vcs/repository-directory.js"
-  );
+  const { loadRepositoryDiscoveryPort } = await import("../internal/ports.js");
   const { buildRepositoryCatalog } = await import(
     "../repository-discovery/catalog.js"
   );
@@ -848,15 +846,7 @@ async function resolveHumanRepositoryExpansionStep(
   const { validateHumanRepositoryExpansion } =
     await loadRepositoryDiscoveryPort();
   const catalog = buildRepositoryCatalog(
-    filterRunRepositories(
-      access,
-      await createRepositoryDirectoryForProviders(
-        pinnedProviderConfigs(
-          getConfiguredVcsProviders(),
-          repositoryScope?.providers,
-        ),
-      ).listRepositories(),
-    ),
+    filterRunRepositories(access, await listPinnedRepositories(repositoryScope?.providers)),
   );
   const decision = validateHumanRepositoryExpansion({
     answer,

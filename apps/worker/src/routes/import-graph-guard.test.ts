@@ -228,7 +228,6 @@ function reachableStepFiles(entry: string): Set<string> {
 const STEP_GRAPH_LIMITS = {
   "routes/health.get.ts": 0,
   "routes/webhooks/custom/[endpointId].post.ts": 34,
-  "routes/webhooks/github.post.ts": 34,
   "routes/webhooks/jira.post.ts": 35,
   "routes/webhooks/resend.post.ts": 0,
   "routes/webhooks/[id].post.ts": 0,

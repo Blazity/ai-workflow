@@ -23,24 +23,18 @@ export const env = createEnv({
     JIRA_AI_REVIEW_TRANSITION_ID: z.string().min(1).optional(),
 
     // VCS
-    // Login of the bot's own VCS account. When set, PR reviews authored by it
-    // are ignored so the bot does not trigger a run off its own review. The
-    // provider-specific values take precedence in mixed-provider deployments.
+    // Login of the bot's own automation account, for a deployment with exactly
+    // one version control provider. Every provider's own variables belong to
+    // its integration; this one is declared here because it spans them, and it
+    // is read through whichever integration claims it as `legacyBotLogin`,
+    // never directly. See RESERVED_ENVIRONMENT_VARIABLES in the SDK.
     VCS_BOT_LOGIN: z.string().trim().min(1).optional(),
-    GITHUB_BOT_LOGIN: z.string().trim().min(1).optional(),
-    // GitHub VCS — App auth (no PAT). Private key is base64-encoded PEM so it
-    // round-trips cleanly through the Vercel env UI without newline-escaping.
-    GITHUB_APP_ID: z.coerce.number().int().positive().optional(),
-    GITHUB_APP_PRIVATE_KEY: z.string().min(1).optional(),
-    GITHUB_INSTALLATION_ID: z.coerce.number().int().positive().optional(),
-    GITHUB_OWNER: z.string().min(1).optional(),
-    GITHUB_REPO: z.string().min(1).optional(),
 
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
     // Optional overrides for the git identity used inside the sandbox.
-    // - GitHub: when both are unset, the identity is derived from the App so
-    //   commits render with the App's avatar and the `[bot]` badge in the UI.
+    // When both are unset the identity comes from the version control
+    //   provider's own automation account, so commits render as that account.
     // Both must be set together to take effect; setting only one is an error.
     COMMIT_AUTHOR: z.string().min(1).optional(),
     COMMIT_EMAIL: z.string().min(1).optional(),
@@ -86,9 +80,6 @@ export const env = createEnv({
 
     // Jira Webhook
     JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
-
-    // GitHub Webhook
-    GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
 
     // Webhook trigger blocks: 32-byte AES-256-GCM key (64 hex chars) that
     // encrypts per-endpoint signing secrets at rest. Intentionally optional:
@@ -137,47 +128,18 @@ export const env = createEnv({
   emptyStringAsUndefined: true,
 });
 
-function hasAnyGithubProviderCredential(): boolean {
-  return Boolean(env.GITHUB_APP_ID || env.GITHUB_APP_PRIVATE_KEY || env.GITHUB_INSTALLATION_ID);
-}
-
-function isGithubProviderConfigured(): boolean {
-  return Boolean(env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID);
-}
-
 // Cross-field validation — fail fast at startup instead of at first workflow
 // step. Provider credentials are intentionally optional at the schema level:
 // provider credentials are intentionally optional at the schema level because
 // integration-owned providers validate their own connection settings.
 {
-  const hasAnyGithubCredential = hasAnyGithubProviderCredential();
-  const hasGithubProvider = isGithubProviderConfigured();
-
-  if (hasAnyGithubCredential && !hasGithubProvider) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  GitHub provider requires GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_INSTALLATION_ID",
-    );
-  }
-  if ((env.GITHUB_OWNER && !env.GITHUB_REPO) || (!env.GITHUB_OWNER && env.GITHUB_REPO)) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  GITHUB_OWNER and GITHUB_REPO must be set together for legacy single-repo config",
-    );
-  }
-  if (hasGithubProvider && !env.GITHUB_WEBHOOK_SECRET) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  GitHub provider requires GITHUB_WEBHOOK_SECRET",
-    );
-  }
   if (
     (env.COMMIT_AUTHOR && !env.COMMIT_EMAIL) ||
     (!env.COMMIT_AUTHOR && env.COMMIT_EMAIL)
   ) {
     throw new Error(
       "Invalid environment variables:\n" +
-        "  COMMIT_AUTHOR and COMMIT_EMAIL must be set together (or both omitted to auto-derive on GitHub)",
+        "  COMMIT_AUTHOR and COMMIT_EMAIL must be set together (or both omitted, to take the automation account of the version control provider)",
     );
   }
   const ssoKeys = [

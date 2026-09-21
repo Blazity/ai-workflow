@@ -50,7 +50,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@neondatabase/serverless": "^1.1.0",
     "@octokit/auth-app": "catalog:",
-    "@octokit/rest": "^22.0.1",
+    "@octokit/rest": "catalog:",
     "@shared/conditions": "workspace:*",
     "@shared/contracts": "workspace:*",
     "@shared/costs": "workspace:*",
@@ -72,14 +72,12 @@
     "re2-wasm": "^1.0.2",
     "resend": "^6.16.0",
     "svix": "^1.96.1",
-    "tar-stream": "^3.1.8",
     "workflow": "4.8.0",
     "yaml": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.1",
-    "@types/tar-stream": "^3.1.4",
     "@workflow/vitest": "4.0.16",
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",

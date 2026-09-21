@@ -86,7 +86,35 @@ export type IntegrationWebhookReception =
       readonly events: readonly TriggerEvent[];
       readonly response: IntegrationWebhookResponse;
       readonly legacyGate?: {
+        /**
+         * The provider's own word for what happened, which the gate compares
+         * against `"reopened"` and otherwise only records. Core must not read
+         * anything else out of it: see `headMoved`.
+         */
         readonly action: string;
+        /**
+         * Whether this delivery moved the head of a pull request that already
+         * existed. Core asks its ownership record whether that head is one of
+         * ours before it starts the gate, and only a push can be. It is a flag
+         * rather than a comparison on `action` because that word is the
+         * provider's: matching one provider's spelling of a push silently
+         * leaves every other provider's push unchecked.
+         */
+        readonly headMoved?: boolean;
+        /**
+         * Who pushed, when `headMoved` is true. NOT the pull request's author:
+         * on a pull request this product opened, the author is always our own
+         * automation account, so core deciding "was this push ours" from
+         * `workflowInput.author` answers yes to every human push and skips the
+         * gate on exactly the changes it exists to check.
+         *
+         * REQUIRED, because a default here is a wrong answer that nothing
+         * notices. An integration that genuinely cannot say who pushed sends
+         * an empty string, and core then runs the gate rather than suppressing
+         * a push it cannot attribute: the safe direction is checking a change
+         * twice, never skipping the check on a human's change.
+         */
+        readonly pusher: string;
         readonly workflowInput: PostPrGateWorkflowInput;
       };
     }

@@ -31,6 +31,8 @@ export interface IntegrationManifest {
   readonly connection: IntegrationConnection;
   /** The capabilities this integration can serve. Each needs an adapter in the runtime. */
   readonly capabilities: readonly ProvidedCapabilityId[];
+  /** How this provider's repository paths and links are shaped, for a `vcs` integration. */
+  readonly repositories?: IntegrationRepositoryShape;
   readonly blocks: readonly IntegrationBlockManifest[];
   /** Screens of its own, shown as tabs next to the core Connection tab. */
   readonly pages: readonly IntegrationPage[];
@@ -48,6 +50,36 @@ export interface IntegrationManifest {
 
 export interface IntegrationConnection {
   readonly fields: readonly ConnectionField[];
+}
+
+/**
+ * The two facts about a provider's repositories that core cannot work out and
+ * cannot do without.
+ *
+ * Both exist because core used to branch on the name `github` for them, in
+ * three places: whether a pasted link belongs to this provider, where a
+ * repository path ends inside that link, and whether an operator's
+ * `owner/name` is well formed. A fourth provider would have had to be added to
+ * each branch, which is exactly the shape this contract exists to remove.
+ *
+ * A provider that declares neither is treated as the general case: any host,
+ * and a path that may nest.
+ */
+export interface IntegrationRepositoryShape {
+  /**
+   * The public host whose links name this provider, lowercase and without a
+   * scheme (`github.com`). Omitted by a provider that is self-hosted, whose
+   * host an admin configures as a connection field instead: core reads that
+   * field's default the same way.
+   */
+  readonly host?: string;
+  /**
+   * Whether a repository path may be deeper than `owner/name`. GitLab groups
+   * nest, so a path there is two segments or more and a link has to be cut at
+   * the first segment that starts a file or a ref. GitHub's never nest, so the
+   * path is exactly the first two segments whatever follows them.
+   */
+  readonly nestedPaths?: boolean;
 }
 
 /**

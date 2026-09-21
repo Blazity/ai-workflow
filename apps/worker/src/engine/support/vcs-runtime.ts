@@ -7,19 +7,12 @@ import type {
   VcsSandboxCredentials,
 } from "@integrations/sdk";
 import type { IntegrationConnectionPin } from "@shared/contracts";
-import {
-  env,
-  getConfiguredVcsProviders,
-  getVcsProviderConfig,
-  type VcsProviderKind,
-} from "../../infra/vcs-config.js";
+import { env, type VcsProviderKind } from "../../infra/vcs-config.js";
 import {
   hasManualDispatchPrCapability,
   type ManualDispatchPrCapableVCS,
 } from "../../adapters/vcs/types.js";
 import type { SandboxProviderConfig } from "../../sandbox/manager.js";
-import { createVCSForRepository } from "../../adapters/vcs/create-vcs.js";
-import { getBotIdentity, getVcsToken } from "../../adapters/vcs/github-auth.js";
 
 /**
  * The connections a run started with, as far as this caller knows them.
@@ -83,8 +76,9 @@ const VCS_TIMEOUT_MS = 30_000;
 async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<VCSAdapter> {
   const manifest = integrationManifest(target.provider);
   if (!manifest?.capabilities.includes("vcs")) {
-    const config = getVcsProviderConfig(target.provider);
-    return createVCSForRepository(config, target);
+    throw new Error(
+      `No integration in this build serves version control for ${target.provider}. The repository's provider has to be one this deployment ships.`,
+    );
   }
 
   const { resolveUsableIntegrations, checkIntegrationPin } = await import(
@@ -99,7 +93,12 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
       `Version control provider ${target.provider} could not read its integration settings: ${resolved.reason}`,
     );
   }
-  const usable = resolved.usable[0];
+  // By id, not by position. The filter above already narrows to one, and that
+  // is exactly why reading the first entry is dangerous: the day a caller
+  // widens the filter, a repository would be worked on through whichever
+  // provider happened to answer first, against another company's server, with
+  // nothing to show for it in a log.
+  const usable = resolved.usable.find((candidate) => candidate.manifest.id === target.provider);
   const state = resolved.states.get(target.provider);
   if (!usable || !state) {
     throw new Error(
@@ -173,16 +172,17 @@ export function createRepositoryVcsRuntime(target: RepositoryVcsTarget): Reposit
     vcs: lazyAdapter(resolve),
     credentials: async () => {
       const adapter = await resolve() as VcsIntegrationAdapter;
-      if (adapter.sandboxCredentials) return adapter.sandboxCredentials();
-      const config = getVcsProviderConfig(target.provider);
-      const identity = await resolveCommitIdentity(config);
-      return {
-        host: config.host,
-        authUser: "x-access-token",
-        token: await getVcsToken(config),
-        commitAuthor: identity.name,
-        commitEmail: identity.email,
-      };
+      if (!adapter.sandboxCredentials) {
+        throw new Error(
+          `Version control provider ${target.provider} cannot hand a sandbox credentials to push with.`,
+        );
+      }
+      const credentials = await adapter.sandboxCredentials();
+      // An operator who pinned a commit identity means it for every provider,
+      // so it overrides what the provider says its automation account is.
+      return env.COMMIT_AUTHOR && env.COMMIT_EMAIL
+        ? { ...credentials, commitAuthor: env.COMMIT_AUTHOR, commitEmail: env.COMMIT_EMAIL }
+        : credentials;
     },
   };
 }
@@ -192,16 +192,6 @@ export function createRepositoryVCS(target: RepositoryVcsTarget): VCSAdapter {
 }
 
 export async function loadRepositoryVcsProfile(target: RepositoryVcsTarget) {
-  const manifest = integrationManifest(target.provider);
-  if (!manifest?.capabilities.includes("vcs")) {
-    const { createRepositoryProfileSource } = await import(
-      "../../adapters/vcs/create-vcs.js"
-    );
-    return createRepositoryProfileSource(
-      getVcsProviderConfig(target.provider),
-      target.repoPath,
-    ).loadProfile();
-  }
   const adapter = await resolveIntegrationAdapter(target) as VcsIntegrationAdapter;
   if (!adapter.loadRepositoryProfile) {
     throw new Error(
@@ -225,9 +215,7 @@ export function createManualDispatchPrReader(target: {
 export async function resolveConfiguredPullRequestUrl(
   url: URL,
 ): Promise<{ provider: string; repoPath: string; prNumber: number } | null> {
-  const providerIds = new Set<string>(
-    getConfiguredVcsProviders().map((provider) => provider.kind),
-  );
+  const providerIds = new Set<string>();
   const { usableIntegrations } = await import("../../services/integrations/runtime.js");
   for (const entry of await usableIntegrations({
     signal: AbortSignal.timeout(VCS_TIMEOUT_MS),
@@ -251,7 +239,6 @@ export async function buildSandboxProviderConfigs(
   const { logger } = await import("../../infra/logger.js");
   const needed = neededProviders ? new Set(neededProviders) : null;
   const providerIds = new Set<string>();
-  for (const provider of getConfiguredVcsProviders()) providerIds.add(provider.kind);
   const { usableIntegrations } = await import("../../services/integrations/runtime.js");
   for (const entry of await usableIntegrations({
     signal: AbortSignal.timeout(VCS_TIMEOUT_MS),
@@ -291,7 +278,63 @@ export async function buildSandboxProviderConfigs(
   return configs;
 }
 
-export async function listIntegrationVcsRepositories(options: {
+// A few bounded retries with jittered exponential backoff, for the one call
+// where a provider hiccup costs a whole run: the pre-sandbox step that selects
+// repositories owns this listing under a 60 second budget, so a longer ladder
+// would spend that budget hanging instead of failing with a reason. Worst case
+// is three attempts plus at most 1.5 seconds of backoff. The ladder lived in
+// `adapters/vcs/repository-directory.ts` until S11 and moved here with the
+// listing, rather than being dropped with the code around it.
+const LISTING_MAX_ATTEMPTS = 3;
+const LISTING_RETRY_BASE_DELAY_MS = 500;
+const LISTING_RETRY_MAX_DELAY_MS = 4_000;
+
+function listingRetryDelayMs(failedAttempt: number): number {
+  const ceiling = Math.min(
+    LISTING_RETRY_MAX_DELAY_MS,
+    LISTING_RETRY_BASE_DELAY_MS * 2 ** (failedAttempt - 1),
+  );
+  // Full jitter, so retries a shared upstream blip fired at once do not
+  // re-converge on the same instant.
+  return Math.floor(Math.random() * ceiling);
+}
+
+/** Retry only what the provider can recover from without us changing anything:
+ *  a timeout or a 5xx. A 401 or 403 is a credential the retry would replay
+ *  unchanged, and every other 4xx is a request this code will keep sending. */
+function isTransientListingError(error: unknown): boolean {
+  if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) {
+    return true;
+  }
+  if (typeof error !== "object" || error === null) return false;
+  if ((error as { timedOut?: unknown }).timedOut === true) return true;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" && status >= 500 && status < 600;
+}
+
+export async function listWithRetry<T>(list: () => Promise<T[]>): Promise<T[]> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= LISTING_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await list();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= LISTING_MAX_ATTEMPTS || !isTransientListingError(error)) break;
+      await new Promise((resolve) => {
+        setTimeout(resolve, listingRetryDelayMs(attempt));
+      });
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Every repository this deployment can see, from every connected version
+ * control provider. Until S11 a second listing sat beside this one, fetched by
+ * core itself for the provider core shipped, and the two were merged; there is
+ * nothing left to merge, so this is the listing.
+ */
+export async function listVcsRepositories(options: {
   neededProviders?: Iterable<string>;
   integrationPins?: readonly IntegrationConnectionPin[];
 } = {}): Promise<{
@@ -343,7 +386,7 @@ export async function listIntegrationVcsRepositories(options: {
       if (!adapter.listRepositories) {
         throw new Error(`${entry.manifest.name} does not support repository listing.`);
       }
-      repositories.push(...await adapter.listRepositories());
+      repositories.push(...await listWithRetry(adapter.listRepositories.bind(adapter)));
     } catch (error) {
       failures.push({
         provider: entry.manifest.id,
@@ -355,37 +398,88 @@ export async function listIntegrationVcsRepositories(options: {
   return { repositories, providers: usable.map((entry) => entry.manifest.id), failures };
 }
 
-export async function listVcsRepositories(options: {
-  neededProviders?: Iterable<string>;
-  integrationPins?: readonly IntegrationConnectionPin[];
-} = {}): Promise<{
-  repositories: import("@integrations/sdk").VcsRepositoryMetadata[];
-  providers: string[];
-  failures: Array<{ provider: string; message: string; error: unknown }>;
+/**
+ * The connected version-control provider that can read a repository's skills,
+ * and the reader it offers.
+ *
+ * Picking one is a real decision, because a skill source is stored as a URL and
+ * nothing in it tells us which connected integration owns it. Two rules, in
+ * order:
+ *
+ * - **A caller that already knows names it.** Refreshing an existing artifact
+ *   does: the provider is on the row (`harness_skill_artifacts.source_kind`).
+ *   If that provider cannot import skills, this fails naming it rather than
+ *   quietly refreshing the artifact from somebody else's repository.
+ * - **A caller that does not know gets the only candidate.** A first import
+ *   arrives as a URL, so it takes the single connected provider offering a
+ *   skill source. When more than one offers, this refuses and names them: with
+ *   no ownership signal, picking would be a guess that could read a private
+ *   repository through the wrong installation.
+ *
+ * An unreadable settings row is kept apart from "nothing can do this", because
+ * a database that did not answer for a moment is not a provider that is off.
+ */
+export async function resolveRepositorySkillSource(
+  preferProvider?: string,
+): Promise<{
+  provider: string;
+  source: import("@integrations/sdk").RepositorySkillSource;
 }> {
-  const needed = options.neededProviders ? new Set(options.neededProviders) : null;
-  const coreProviders = getConfiguredVcsProviders().filter(
-    (provider) => !needed || needed.has(provider.kind),
+  const { resolveUsableIntegrations } = await import(
+    "../../services/integrations/runtime.js"
   );
-  const { listRepositoriesAcrossProviders } = await import(
-    "../../adapters/vcs/repository-directory.js"
-  );
-  const [core, integrations] = await Promise.all([
-    listRepositoriesAcrossProviders(coreProviders),
-    listIntegrationVcsRepositories(options),
-  ]);
-  return {
-    repositories: [...core.repositories, ...integrations.repositories],
-    providers: [...coreProviders.map((provider) => provider.kind), ...integrations.providers],
-    failures: [...core.failures, ...integrations.failures],
-  };
-}
-
-async function resolveCommitIdentity(
-  provider: ReturnType<typeof getConfiguredVcsProviders>[number],
-): Promise<{ name: string; email: string }> {
-  if (env.COMMIT_AUTHOR && env.COMMIT_EMAIL) {
-    return { name: env.COMMIT_AUTHOR, email: env.COMMIT_EMAIL };
+  const resolved = await resolveUsableIntegrations({
+    signal: AbortSignal.timeout(VCS_TIMEOUT_MS),
+    filter: (manifest) => manifest.capabilities.includes("vcs"),
+  });
+  if (!resolved.readable) {
+    throw new Error(
+      `Version control integration settings could not be read (${resolved.reason}), so no provider can import skills.`,
+    );
   }
-  return getBotIdentity(provider.auth);
+
+  const offering = new Map<string, VcsIntegrationAdapter>();
+  const unreachable: string[] = [];
+  for (const entry of resolved.usable) {
+    let adapter: VcsIntegrationAdapter;
+    try {
+      adapter = (await resolveIntegrationAdapter({
+        provider: entry.manifest.id,
+        repoPath: "",
+        baseBranch: "",
+      })) as VcsIntegrationAdapter;
+    } catch (error) {
+      // One broken provider must not decide for the others.
+      unreachable.push(
+        `${entry.manifest.id} (${error instanceof Error ? error.message : String(error)})`,
+      );
+      continue;
+    }
+    if (adapter.skillSource) offering.set(entry.manifest.id, adapter);
+  }
+
+  const offered = [...offering.keys()];
+  const detail = unreachable.length > 0 ? ` Unreachable: ${unreachable.join("; ")}.` : "";
+
+  if (preferProvider !== undefined) {
+    const adapter = offering.get(preferProvider);
+    if (!adapter) {
+      throw new Error(
+        `Version control provider ${preferProvider} cannot import skills. Connected providers that can: ${offered.join(", ") || "none"}.${detail}`,
+      );
+    }
+    return { provider: preferProvider, source: adapter.skillSource!() };
+  }
+  if (offered.length === 0) {
+    throw new Error(
+      `No connected version control provider can import skills.${detail}`,
+    );
+  }
+  if (offered.length > 1) {
+    throw new Error(
+      `More than one connected version control provider can import skills (${offered.join(", ")}), and a skill source URL does not say which one owns it. Import through one provider at a time.`,
+    );
+  }
+  const provider = offered[0]!;
+  return { provider, source: offering.get(provider)!.skillSource!() };
 }

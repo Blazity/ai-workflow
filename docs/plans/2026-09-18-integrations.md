@@ -815,6 +815,93 @@ instead of the retired pipeline and check-run fields. Replaying any earlier
 record across this boundary is unsupported, so the branch requires a total
 drain before merge.
 
+S11 implementation audit, 2026-09-21: GitHub ships from `integrations/github`
+and core resolves every version control call through the capability.
+`createVCSForRepository` is deleted rather than generalised: core holds no
+provider adapter, no provider credential and no branch on a provider name, and
+a repository whose provider no integration serves is refused by name. The App
+private key is accepted both as the downloaded `.pem` and as its base64 form
+and refused with a sentence when it is neither, before the connection is
+activated. `/webhooks/github` keeps its URL and its signature scheme, served by
+the generic route. Published GitHub payload examples cover pull request opened,
+synchronize and closed, check run completed and failed, review submitted,
+review comment created, issue comment created and repository renamed, each with
+its source URL, pinned revision and digest beside the bytes. The legacy
+environment, the `GITHUB_OWNER`/`GITHUB_REPO` pair and the single-provider
+`VCS_BOT_LOGIN` remain compatible. Two boot-time checks became Integrations
+page rows, which is the same trade S10 made. Local gates do not stand in for
+the stage's production run or the drain; those remain release evidence.
+
+S11 drain, 2026-09-21: no step identity is added, removed, moved or renamed,
+and no step's recorded input or result changes shape. Two recorded VALUES
+change, and a run replaying across either boundary is unsupported:
+
+- The opaque handle on a failed check. A `check_run` delivery whose `app`
+  carries no slug used to mint `owner: <sender login>` while the adapter
+  reading the same check back minted `owner: ""`, so the two never compared
+  equal and the check bound to nothing. Both are `check.app?.slug ?? ""` now.
+  Every step whose recorded input carries a `trigger_pr_checks_failed` payload
+  holds handles in the old shape: `acknowledgePrTriggerDispatchStep`,
+  `blockPrTriggerRepositoriesWithSiblingsStep` and `blockFetchPrContextsStep`.
+- `PrePrCheckFailure.provider` on the checks-budget record
+  (`engine/blocks/pre-pr-checks.ts`), which was `"github"` when no repository
+  was skipped and is the empty string now.
+
+This branch requires a total drain before it merges in any case, under the
+protocol above, so neither is a new drain event; both are listed because the
+list has to stay honest about what a replay would read.
+
+S11 connection shape, 2026-09-21: the pinned connection shape now carries
+GitHub's eight fields (`services/integrations/connection-shape.test.ts`
+snapshot). No existing pin moves, because core's GitHub was not an integration
+and nothing pinned it; a run started before this branch carries no GitHub pin
+at all and proceeds against current settings, which is the documented behaviour
+for a row written before pins existed. No GitHub secret is marked `identity`:
+the App and installation ids already pin the account by value, so rotating the
+private key is a rotation rather than a different connection.
+
+S11 late decisions, 2026-09-21:
+
+- A verified App webhook that has never delivered reads LIVE, not degraded,
+  which is what core's own check said before the move. Whether anything
+  actually arrived here is the separate `webhook-delivery` row, so a freshly
+  connected App no longer shows an amber row nobody can act on.
+- The core-reference gate now excludes `test-support.ts` modules wherever they
+  sit, alongside the `src/test-support/` tree it already excluded. A shared
+  test fixture naming a provider is the subject of a test, not a coupling in
+  the product; the alternative was a fixture provider id that silently detached
+  six executor suites from the records they compare against.
+- `@octokit/rest` joined the workspace catalog, because two packages now
+  depend on it and the deps gate refuses a shared dependency with a specifier
+  of its own.
+
+S11 review round, 2026-09-22 (six defects, all in what the stage deleted):
+
+- The two expansion steps are terminal again on a provider that did not answer
+  (`engine/steps/phase.ts`). The directory they read before S11 threw; dropping
+  `listing.failures` told a person their repository was not on the catalog when
+  a GitHub 401 simply hid it.
+- The SDK's `legacyGate` gained `pusher`, and the route reads it instead of
+  `workflowInput.author`. The author of a pull request this product opened is
+  always our own account, so the gate was skipped on every human push.
+- A delivery's answer now carries what core did with it (`dispatched`,
+  `ignored` with the dispatch's own reason), which is what the deleted GitHub
+  route recorded in the provider's delivery log.
+- `IntegrationContext.webhookUrl` tells an integration where core receives its
+  deliveries, and GitHub's webhook check compares it with the URL the App
+  holds. An App pointed at another deployment was invisible for a week.
+- Every example path is scoped to what the caller holds (a catalog, a listing,
+  the keys an answer named) rather than to the first provider the build ships.
+- `repositoryKeySchema` states its rule instead of showing
+  `"provider:owner/name"`; that package may not read the registry, so it may
+  not invent a provider either.
+- At capacity a delivery is answered 2xx with `at_capacity` rather than 503:
+  GitLab switches a webhook off after a few consecutive failures, which would
+  trade one missed event for every later one. A dispatch error still answers
+  503.
+- The webhook route fails closed when the automation account cannot be read,
+  the way the first settings read already does.
+
 ## Backlog mapping
 
 | Existing issue | Fate |

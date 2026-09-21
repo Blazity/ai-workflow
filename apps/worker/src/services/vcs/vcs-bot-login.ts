@@ -1,1 +1,1 @@
-export { getVcsBotLogin } from "../integrations/index.js";
+export { getVcsBotLogin, readVcsBotLogin } from "../integrations/index.js";

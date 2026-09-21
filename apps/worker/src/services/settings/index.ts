@@ -18,15 +18,12 @@ export {
   ssoSettings,
 } from "./runtime-settings.js";
 export {
-  configuredVcsProviders,
-  githubWebhookSettings,
   issueTrackerBaseUrl,
   jiraWebhookSecret,
   outboundEmailSettings,
   providerWebhookSecret,
   resendWebhookSecret,
   ticketBoardSettings,
-  vcsProviderConfig,
   webhookTriggerEncryptionKey,
 } from "./integration-settings.js";
 export type {

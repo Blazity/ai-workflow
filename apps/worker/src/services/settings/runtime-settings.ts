@@ -116,14 +116,12 @@ export function deploymentSettings(): {
 export function configuredSecretValues(): string[] {
   return [
     env.JIRA_API_TOKEN,
-    env.GITHUB_APP_PRIVATE_KEY,
     env.ANTHROPIC_API_KEY,
     env.CODEX_API_KEY,
     env.CODEX_CHATGPT_OAUTH_TOKEN,
     env.VERCEL_TOKEN,
     env.CRON_SECRET,
     env.JIRA_WEBHOOK_SECRET,
-    env.GITHUB_WEBHOOK_SECRET,
     env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
     env.BETTER_AUTH_SECRET,
     env.SSO_CLIENT_SECRET,

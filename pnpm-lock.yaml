@@ -9,6 +9,9 @@ catalogs:
     '@octokit/auth-app':
       specifier: ^8.2.0
       version: 8.2.0
+    '@octokit/rest':
+      specifier: ^22.0.1
+      version: 22.0.1
     '@types/node':
       specifier: ^22.0.0
       version: 22.19.15
@@ -193,7 +196,7 @@ importers:
         specifier: 'catalog:'
         version: 8.2.0
       '@octokit/rest':
-        specifier: ^22.0.1
+        specifier: 'catalog:'
         version: 22.0.1
       '@shared/conditions':
         specifier: workspace:*
@@ -258,9 +261,6 @@ importers:
       svix:
         specifier: ^1.96.1
         version: 1.96.1
-      tar-stream:
-        specifier: ^3.1.8
-        version: 3.1.8
       workflow:
         specifier: 4.8.0
         version: 4.8.0(@nestjs/common@11.1.18(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.18(@nestjs/common@11.1.18(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@opentelemetry/api@1.9.0)(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(magicast@0.5.2)(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)
@@ -274,9 +274,6 @@ importers:
       '@electric-sql/pglite':
         specifier: ^0.5.1
         version: 0.5.1
-      '@types/tar-stream':
-        specifier: ^3.1.4
-        version: 3.1.4
       '@workflow/vitest':
         specifier: 4.0.16
         version: 4.0.16(@opentelemetry/api@1.9.0)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(happy-dom@20.14.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))
@@ -370,6 +367,37 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+      zod4:
+        specifier: 'catalog:'
+        version: zod@4.3.6
+
+  integrations/github:
+    dependencies:
+      '@integrations/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@octokit/auth-app':
+        specifier: 'catalog:'
+        version: 8.2.0
+      '@octokit/rest':
+        specifier: 'catalog:'
+        version: 22.0.1
+      tar-stream:
+        specifier: ^3.1.8
+        version: 3.1.8
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
+      '@types/tar-stream':
+        specifier: ^3.1.4
+        version: 3.1.4
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(happy-dom@20.14.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
       zod4:
         specifier: 'catalog:'
         version: zod@4.3.6

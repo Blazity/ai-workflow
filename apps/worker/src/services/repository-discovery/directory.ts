@@ -13,11 +13,9 @@ import type {
   VcsProviderKind,
 } from "@shared/contracts";
 import { integrationsProviding } from "@integrations/registry";
-import { getConfiguredVcsProviders } from "../../infra/vcs-config.js";
 
 /** Every listable repository, plus one status per supported provider. */
 export async function listRepositoryDirectory(): Promise<RepositoriesResponse> {
-  const configured = getConfiguredVcsProviders();
   const listing = await import("../../engine/support/vcs-runtime.js").then(
     (runtime) => runtime.listVcsRepositories(),
   );
@@ -35,16 +33,10 @@ export async function listRepositoryDirectory(): Promise<RepositoriesResponse> {
   const failures = new Map(
     listing.failures.map((failure) => [failure.provider, failure.message]),
   );
-  const configuredKinds = new Set([
-    ...configured.map((provider) => provider.kind),
-    ...listing.providers,
-  ]);
-  const supportedProviders: VcsProviderKind[] = [
-    ...new Set([
-      ...configured.map((provider) => provider.kind),
-      ...integrationsProviding("vcs").map((manifest) => manifest.id),
-    ]),
-  ];
+  const configuredKinds = new Set(listing.providers);
+  const supportedProviders: VcsProviderKind[] = integrationsProviding("vcs").map(
+    (manifest) => manifest.id,
+  );
   const providers = supportedProviders.map(
     (provider): RepositoryProviderStatus => {
       if (!configuredKinds.has(provider)) {

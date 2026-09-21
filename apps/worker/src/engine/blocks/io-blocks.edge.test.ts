@@ -20,7 +20,6 @@ const mocks = vi.hoisted(() => ({
   collectRepoCheckBatchStep: vi.fn(),
   pollPhaseUntilDone: vi.fn(),
   loggerWarn: vi.fn(),
-  buildOctokit: vi.fn(),
   assertActiveRunOwner: vi.fn(),
 }));
 
@@ -71,7 +70,6 @@ vi.mock("../../infra/logger.js", () => ({
 // env module validates every Jira/VCS variable on import, which this suite does
 // not set.
 vi.mock("../../infra/vcs-config.js", () => ({ env: { REVIEW_LEDGER_ENABLED: false } }));
-vi.mock("../../adapters/vcs/github-auth.js", () => ({ buildOctokit: mocks.buildOctokit }));
 vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
   assertConnectedActiveRunOwner: (...args: any[]) =>
@@ -89,9 +87,6 @@ import {
 } from "../../engine/support/repository-access.js";
 import { TEST_BRIDGE_REPOSITORY_ACCESS } from "../../test-support/settings.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
-import {
-  createRepositoryDirectory,
-} from "../../adapters/vcs/repository-directory.js";
 import { createOrFindWorkflowOwnedPullRequest } from "../steps/repository-prs.js";
 import type { WorkspacePublicationResult } from "../steps/workspace-publication.js";
 import { execute as executeFetchPrContext } from "./fetch-pr-context/execute.js";
@@ -184,47 +179,6 @@ describe("filterRunRepositories", () => {
       filterRunRepositories(enabled("github:acme/none"), [github("acme/api"), github("acme/web")]),
     ).toEqual([]);
   });
-});
-
-// ---------------------------------------------------------------------------
-// repository-directory.ts: the complete listing, filtered by nobody
-// ---------------------------------------------------------------------------
-describe("repository directory listings", () => {
-  const githubConfig = {
-    kind: "github" as const,
-    auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-    repoPath: "default/repo",
-    baseBranch: "main",
-    host: "https://github.com",
-  };
-  function octokitReturning(fullNames: string[]) {
-    return {
-      apps: { listReposAccessibleToInstallation: vi.fn() },
-      paginate: vi.fn().mockResolvedValue(fullNames.map((full_name) => ({ full_name }))),
-    };
-  }
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.buildOctokit.mockReturnValue(octokitReturning([]));
-  });
-
-  it("returns the complete normalized GitHub catalog, unfiltered", async () => {
-    mocks.buildOctokit.mockReturnValue(octokitReturning(["acme/api", "acme/web"]));
-
-    const result = await createRepositoryDirectory(githubConfig).listRepositories();
-
-    expect(result.map((r) => r.repoPath)).toEqual(["acme/api", "acme/web"]);
-  });
-
-  it("preserves GitHub path casing in the complete catalog", async () => {
-    mocks.buildOctokit.mockReturnValue(octokitReturning(["Acme/API", "other/repo"]));
-
-    const result = await createRepositoryDirectory(githubConfig).listRepositories();
-
-    expect(result.map((r) => r.repoPath)).toEqual(["Acme/API", "other/repo"]);
-  });
-
 });
 
 // ---------------------------------------------------------------------------

@@ -23,6 +23,83 @@
     ]
   },
   {
+    "integration": "github",
+    "fields": [
+      {
+        "key": "appId",
+        "env": "GITHUB_APP_ID",
+        "secret": false,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "integer"
+      },
+      {
+        "key": "botLogin",
+        "env": "GITHUB_BOT_LOGIN",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "installationId",
+        "env": "GITHUB_INSTALLATION_ID",
+        "secret": false,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "integer"
+      },
+      {
+        "key": "legacyBotLogin",
+        "env": "VCS_BOT_LOGIN",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "legacyOwner",
+        "env": "GITHUB_OWNER",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "legacyRepo",
+        "env": "GITHUB_REPO",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "privateKey",
+        "env": "GITHUB_APP_PRIVATE_KEY",
+        "secret": true,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "multiline"
+      },
+      {
+        "key": "webhookSecret",
+        "env": "GITHUB_WEBHOOK_SECRET",
+        "secret": true,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      }
+    ]
+  },
+  {
     "integration": "gitlab",
     "fields": [
       {

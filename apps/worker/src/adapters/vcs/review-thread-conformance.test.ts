@@ -1,5 +1,6 @@
+import { generateKeyPairSync } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { GitHubAdapter } from "./github.js";
+import { GitHubAdapter } from "../../../../../integrations/github/vcs.js";
 import { GitLabAdapter } from "../../../../../integrations/gitlab/vcs.js";
 import type { ReviewThreadFeed, ReviewThreadSource, VCSAdapter } from "./types.js";
 import {
@@ -30,6 +31,13 @@ vi.mock("../../infra/logger.js", () => ({
  * resolve line-anchored threads. Asserting equality there would pin a bug into
  * place rather than catch one.
  */
+
+/** The App credential reader refuses anything that is not a key, so this is one. */
+const TEST_PRIVATE_KEY = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs1", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+}).privateKey as unknown as string;
 
 const BOT = "aiw-bot";
 const PR = 7;
@@ -130,7 +138,9 @@ const mockOctokit = {
   pulls: { listReviews: vi.fn(), listCommentsForReview: vi.fn() },
 };
 
-vi.mock("../../adapters/vcs/github-auth.js", () => ({
+// The GitHub adapter lives in its own package now, so the module to replace is
+// that package's own auth, not core's.
+vi.mock("../../../../../integrations/github/auth.js", () => ({
   buildOctokit: vi.fn(() => mockOctokit),
 }));
 
@@ -163,7 +173,7 @@ const providers: Provider[] = [
       // nothing, so the scenario observes the line-anchored threads alone.
       mockOctokit.paginate.mockResolvedValue([]);
       return new GitHubAdapter({
-        auth: { appId: 1, privateKeyBase64: "a2V5", installationId: 2 },
+        credential: { appId: 1, privateKey: TEST_PRIVATE_KEY, installationId: 2 },
         owner: "test-org",
         repo: "test-repo",
         baseBranch: "main",

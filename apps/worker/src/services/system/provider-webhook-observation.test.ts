@@ -30,11 +30,11 @@ describe("provider webhook health observations", () => {
 
   it("defers the database write outside the webhook response path", () => {
     expect(
-      observeProviderWebhook("github", "accepted", "deferred-test"),
+      observeProviderWebhook("jira", "accepted", "deferred-test"),
     ).toBeUndefined();
     expect(state.record).toHaveBeenCalledOnce();
     expect(state.record).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "scope:github-secret" }),
+      expect.objectContaining({ scope: "scope:jira-secret" }),
     );
     expect(state.waitUntil).toHaveBeenCalledOnce();
   });

@@ -13,10 +13,6 @@ export type SystemHealthConfig = {
   jiraApiToken?: string;
   jiraProjectKey?: string;
   jiraWebhookSecret?: string;
-  githubAppId?: number;
-  githubAppPrivateKey?: string;
-  githubInstallationId?: number;
-  githubWebhookSecret?: string;
   agentKind: "claude" | "codex";
   anthropicApiKey?: string;
   anthropicModel?: string;
@@ -175,15 +171,6 @@ export async function collectSystemHealth(input: {
 }
 
 function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[] {
-  const githubCredentialsMode = groupedMode([
-    config.githubAppId,
-    config.githubAppPrivateKey,
-    config.githubInstallationId,
-  ]);
-  const githubAppMode =
-    githubCredentialsMode === "not-configured" && config.githubWebhookSecret
-      ? "misconfigured"
-      : githubCredentialsMode;
   const jiraApiMode = requiredMode([
     config.jiraBaseUrl,
     config.jiraApiToken,
@@ -236,11 +223,6 @@ function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[]
     integration("jira", "Jira", "core", true, [
       checked("api", "Account, project and statuses", ["JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY"], jiraApiMode, true),
       checked("webhook-delivery", "Webhook registration and delivery", ["JIRA_WEBHOOK_SECRET"], optionalValueMode(config.jiraWebhookSecret), false, "provider-config"),
-    ]),
-    integration("github", "GitHub", "core", true, [
-      checked("app-installation", "App installation", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
-      checked("repositories", "Repository access", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
-      checked("webhook-delivery", "App webhook configuration and deliveries", ["GITHUB_WEBHOOK_SECRET"], dependentOptionalMode(githubAppMode, config.githubWebhookSecret), true, "provider-delivery"),
     ]),
     integration("agent", config.agentKind === "claude" ? "Claude agent" : "Codex agent", "core", true, [
       checked("model", "Credentials and built-in profile model", config.agentKind === "claude" ? ["ANTHROPIC_API_KEY"] : ["CODEX_API_KEY", "CODEX_CHATGPT_OAUTH_TOKEN"], agentMode, true),
@@ -441,15 +423,6 @@ function requiredMode(values: unknown[]): SystemHealthMode {
 
 function optionalValueMode(value: unknown): SystemHealthMode {
   return value ? "configured" : "not-configured";
-}
-
-function dependentOptionalMode(
-  parentMode: SystemHealthMode,
-  value: unknown,
-): SystemHealthMode {
-  if (parentMode === "not-configured") return "not-configured";
-  if (parentMode === "misconfigured") return "misconfigured";
-  return value ? "configured" : "misconfigured";
 }
 
 export class PublicHealthProbeError extends Error {}

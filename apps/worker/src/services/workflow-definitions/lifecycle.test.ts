@@ -67,6 +67,16 @@ beforeEach(async () => {
   db = await createTestDb();
 });
 
+// GitHub configured the way a deployment configures it. Version control is an
+// integration since S11, so without a connection every block that needs the
+// capability is correctly unavailable, and these cases are not about that.
+Object.assign(process.env, {
+  GITHUB_APP_ID: "1",
+  GITHUB_APP_PRIVATE_KEY: "private-key",
+  GITHUB_INSTALLATION_ID: "2",
+  GITHUB_WEBHOOK_SECRET: "webhook-secret",
+});
+
 describe("workflow definition lifecycle", () => {
   it("saves semantic drafts and layout through independent CAS revisions", async () => {
     const created = await createWorkflowDefinition(db, { name: "Draft", seed: null, actor: ADMIN });
