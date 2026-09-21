@@ -1,6 +1,8 @@
 /* eslint-disable max-lines, max-lines-per-function */
 import { ticketRunUrl } from "../support/dashboard-links.js";
-import type { MessagingDelivery, TicketEvent } from "../../adapters/messaging/types.js";
+import type { TicketEvent } from "../../adapters/messaging/types.js";
+import type { IntegrationConnectionPin } from "@shared/contracts";
+import type { CoreMessagingDelivery } from "../support/messaging.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { type WorkflowExecutionLogEvent } from "../../run-observability/safe-execution-log.js";
 import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
@@ -229,14 +231,23 @@ export async function notifyTicket(
   ticketKey: string,
   event: TicketEvent,
   owner: ActiveRunOwner,
-): Promise<MessagingDelivery> {
+  /**
+   * What the run recorded about its integrations when it started. A block
+   * passes them, so a provider that moved under the run stops it instead of
+   * posting where nobody is watching. A notification passes none: a
+   * notification must never change a run's outcome, and that difference is the
+   * whole line between the two kinds of caller.
+   *
+   * Resolving the provider, and comparing the pin, happen inside this step.
+   * They read the deployment's settings, which no workflow-scope code may do.
+   */
+  pins?: readonly IntegrationConnectionPin[],
+): Promise<CoreMessagingDelivery> {
   "use step";
-  const { loadActiveRunOwnerPort, loadAdaptersPort } = await import(
-    "../internal/ports.js"
-  );
+  const { loadActiveRunOwnerPort, loadAdaptersPort } = await import("../internal/ports.js");
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
-  const { messaging } = createAdapters();
+  const { messaging } = createAdapters(undefined, pins);
   await assertConnectedActiveRunOwner(owner);
   return messaging.notifyForTicket(ticketKey, event);
 }

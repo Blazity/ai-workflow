@@ -16,6 +16,7 @@
  * and that nobody ever tested is usable, which is every deployment alive on
  * the day this lands; reading the test verdict here would empty their palettes.
  */
+import { INVESTIGATE_CHAT_PROVIDER } from "../blocks/investigate/manifest.js";
 import type { IntegrationBlockManifest, IntegrationManifest } from "@integrations/sdk";
 import type {
   IntegrationConnectionPin,
@@ -276,16 +277,65 @@ function capabilityLabel(capability: string): string {
   return capability.replace(/_/g, " ");
 }
 
-/** Every integration a definition's nodes reach, in first-use order. */
+const NO_CAPABILITIES: readonly string[] = [];
+const MESSAGING: readonly string[] = ["messaging"];
+
+/**
+ * The capabilities a core block consumes, given its parameters.
+ *
+ * An integration's block declares this in its manifest. A core block has no
+ * manifest, so it is declared here, once, and read by everything that needs
+ * the answer: whether the block can be offered at all, which provider the run
+ * pins, and whether that provider is still the one the run started with. Three
+ * answers from one statement, because three statements is how a palette and a
+ * run come to disagree about the same deployment.
+ */
+export function coreBlockCapabilities(
+  type: string,
+  params: Readonly<Record<string, unknown>> | undefined,
+): readonly string[] {
+  if (type === "send_message") return MESSAGING;
+  if (type === "investigate") {
+    // An absent selection means both providers on (the parameter's own
+    // default), so only a list that omits the chat provider opts out. The
+    // value is the block's own parameter vocabulary, which is why it comes
+    // from the block rather than being written here.
+    const providers: unknown = params?.providers;
+    const chat = Array.isArray(providers) ? providers.includes(INVESTIGATE_CHAT_PROVIDER) : true;
+    return chat ? MESSAGING : NO_CAPABILITIES;
+  }
+  return NO_CAPABILITIES;
+}
+
+/**
+ * Every integration a definition's nodes reach, in first-use order.
+ *
+ * A node reaches one in two ways: it is an integration's own block, or it is a
+ * core block that consumes a capability an integration serves. Both count. A
+ * run that pinned only the first kind would follow a live configuration change
+ * for the second, so changing where a workflow posts, mid-run, would go
+ * unnoticed by the very mechanism built to notice it.
+ */
 export function integrationsUsedBy(
-  nodes: readonly { readonly type: string }[],
+  nodes: readonly {
+    readonly type: string;
+    readonly params?: Readonly<Record<string, unknown>>;
+  }[],
   integrations: DeploymentIntegrations,
 ): readonly string[] {
   const used: string[] = [];
+  const add = (id: string): void => {
+    if (!used.includes(id)) used.push(id);
+  };
   for (const node of nodes) {
     const requirement = integrations.blocks.get(node.type);
-    if (!requirement || used.includes(requirement.integrationId)) continue;
-    used.push(requirement.integrationId);
+    if (requirement) {
+      add(requirement.integrationId);
+      continue;
+    }
+    for (const capability of coreBlockCapabilities(node.type, node.params)) {
+      for (const id of integrations.providers.get(capability) ?? []) add(id);
+    }
   }
   return used;
 }

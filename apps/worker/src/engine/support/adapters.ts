@@ -6,6 +6,7 @@ import { createRepositoryVCS } from "./vcs-runtime.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../../adapters/vcs/types.js";
 import type { MessagingSender } from "../../adapters/messaging/types.js";
+import type { IntegrationConnectionPin } from "@shared/contracts";
 import { messagingSender } from "./messaging.js";
 import type {
   RunRegistryAdapter,
@@ -82,14 +83,23 @@ export function coreServesIssueTracker(): boolean {
   return Boolean(env.JIRA_BASE_URL && env.JIRA_API_TOKEN && env.JIRA_PROJECT_KEY);
 }
 
-export function createAdapters(vcsTarget?: VcsAdapterTarget): Adapters {
+export function createAdapters(
+  vcsTarget?: VcsAdapterTarget,
+  /**
+   * What the run recorded about its integrations when it started. Given, the
+   * messaging adapter refuses to deliver through a provider that moved under
+   * the run; omitted, it follows the deployment as it is now, which is what a
+   * notification wants.
+   */
+  messagingPins?: readonly IntegrationConnectionPin[],
+): Adapters {
   const runRegistry = createConnectedPostgresRunRegistry();
   let vcs: VCSAdapter | undefined;
   // Which provider carries a message is the deployment's answer, read at each
   // call rather than here: disabling an integration is the kill switch an admin
   // reaches for, and an adapter built once would keep posting for as long as
   // this process lived.
-  const messaging = messagingSender();
+  const messaging = messagingSender(messagingPins);
   const adapters = {
     issueTracker: new JiraAdapter({
       baseUrl: env.JIRA_BASE_URL,

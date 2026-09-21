@@ -23,7 +23,6 @@ import {
   type WorkflowParamValue,
 } from "@shared/contracts";
 import { resolveLlmProvider, type LlmProvider } from "../../infra/llm-provider.js";
-import { INVESTIGATE_CHAT_PROVIDER } from "../blocks/investigate/manifest.js";
 import {
   blockContractDefinitions,
   catalogPresentation,
@@ -32,6 +31,7 @@ import {
   workflowBlockDefinitionIssue,
 } from "./block-registry.js";
 import {
+  coreBlockCapabilities,
   coreCapabilityIssue,
   integrationBlockAvailability,
   type DeploymentIntegrations,
@@ -106,27 +106,17 @@ function availabilityFor(
   if (fromIntegration) return fromIntegration;
   const definitionIssue = workflowBlockDefinitionIssue(type, params);
   if (definitionIssue) return unavailable(definitionIssue);
-  if (type === "send_message") {
-    const issue = coreCapabilityIssue("messaging", context.integrations);
-    if (issue) return unavailable(issue);
-  }
-  if (type === "investigate") {
-    // An absent selection means both providers on (the param's own default), so
-    // only a list that omits the chat provider opts out. The value is the
-    // block's own parameter vocabulary, which is why it arrives from the block
-    // rather than being written here.
-    const providers: unknown = params.providers;
-    const chatEnabled = Array.isArray(providers)
-      ? providers.includes(INVESTIGATE_CHAT_PROVIDER)
-      : true;
-    if (chatEnabled) {
-      const issue = coreCapabilityIssue("messaging", context.integrations);
-      if (issue) {
-        return unavailable(
-          `${issue} Turn off that provider on this block for an issue-tracker-only investigation.`,
-        );
-      }
-    }
+  // What this core block needs is stated once, in integration-availability, and
+  // read here, by the run's pin and by the dispatch blocker alike. A second
+  // statement is how a palette and a run come to disagree.
+  for (const capability of coreBlockCapabilities(type, params)) {
+    const issue = coreCapabilityIssue(capability, context.integrations);
+    if (!issue) continue;
+    return unavailable(
+      type === "investigate"
+        ? `${issue} Turn off that provider on this block for an issue-tracker-only investigation.`
+        : issue,
+    );
   }
   if (type === "trigger_webhook" && !context.webhookTriggerConfigured) {
     return unavailable("Webhook trigger encryption is not configured.");

@@ -299,4 +299,34 @@ describe("integrationsUsedBy", () => {
       ),
     ).toEqual(["acmenotify"]);
   });
+
+  it("names the provider behind a core block that consumes a capability", () => {
+    // Send message is core's own block type, so nothing in the block map points
+    // at an integration. Without this the run pins nothing for it and a channel
+    // changed mid-run moves where the workflow posts with nobody told.
+    const integrations = deploymentIntegrations({
+      manifests: [notify],
+      states: new Map([["acmenotify", state("acmenotify")]]),
+    });
+
+    expect(
+      integrationsUsedBy([{ type: "trigger_ticket_ai" }, { type: "send_message" }], integrations),
+    ).toEqual(["acmenotify"]);
+  });
+
+  it("leaves the chat provider out when the investigation opted out of it", () => {
+    const integrations = deploymentIntegrations({
+      manifests: [notify],
+      states: new Map([["acmenotify", state("acmenotify")]]),
+    });
+
+    expect(
+      integrationsUsedBy(
+        [{ type: "investigate", params: { providers: ["jira"] } }],
+        integrations,
+      ),
+    ).toEqual([]);
+    // No selection is the parameter's own default, which is both providers on.
+    expect(integrationsUsedBy([{ type: "investigate" }], integrations)).toEqual(["acmenotify"]);
+  });
 });

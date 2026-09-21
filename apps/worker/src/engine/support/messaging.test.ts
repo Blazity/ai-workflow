@@ -11,8 +11,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagingAdapter } from "@integrations/sdk";
 
 const resolveUsableIntegrations = vi.fn();
-vi.mock("../../services/integrations/runtime.js", () => ({
+vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
   resolveUsableIntegrations,
+  // The comparison itself is the real one: a mocked pin check would prove that
+  // this module calls something, not that a moved provider is refused.
+  checkIntegrationPin: (
+    await importOriginal<typeof import("../../services/integrations/runtime.js")>()
+  ).checkIntegrationPin,
 }));
 
 const conversationFor = vi.fn(async () => ({
@@ -47,6 +52,29 @@ function readable(...usable: unknown[]): void {
   resolveUsableIntegrations.mockResolvedValue({ readable: true, usable, states: new Map() });
 }
 
+/** The same, plus what the deployment currently says about that connection. */
+function readableWithState(name: string, fingerprint: string, adapter: unknown): void {
+  const id = name.toLowerCase();
+  resolveUsableIntegrations.mockResolvedValue({
+    readable: true,
+    usable: [provider(name, adapter as never)],
+    states: new Map([
+      [
+        id,
+        {
+          integrationId: id,
+          status: "connected",
+          connection: "connected",
+          enabled: true,
+          usable: true,
+          failure: null,
+          pin: { integrationId: id, configFingerprint: fingerprint },
+        },
+      ],
+    ]),
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -69,6 +97,41 @@ describe("messagingSender", () => {
     expect(notifyForTicket.mock.calls[0]![2]).toMatchObject({
       handle: "1758300000.000100",
     });
+  });
+
+  it("refuses to deliver through a provider that was reconfigured mid-run", async () => {
+    // An admin edits the channel while a run is in flight. Following the edit
+    // would move where that run posts with nobody told, so a caller holding a
+    // pin is refused and given the reason an admin acts on.
+    const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>(async () => ({
+      delivered: true,
+    }));
+    readableWithState("Test Chat", "fp-2", { notifyForTicket });
+
+    const delivery = await messagingSender([
+      { integrationId: "test chat", configFingerprint: "fp-1" },
+    ]).notifyForTicket("AWT-42", { kind: "started" });
+
+    expect(delivery).toEqual({
+      delivered: false,
+      reason: "Test Chat's configuration changed after this run started",
+      moved: "reconfigured",
+    });
+    expect(notifyForTicket).not.toHaveBeenCalled();
+  });
+
+  it("delivers when the provider is the one the run pinned", async () => {
+    const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>(async () => ({
+      delivered: true,
+    }));
+    readableWithState("Test Chat", "fp-1", { notifyForTicket });
+
+    const delivery = await messagingSender([
+      { integrationId: "test chat", configFingerprint: "fp-1" },
+    ]).notifyForTicket("AWT-42", { kind: "started" });
+
+    expect(delivery).toEqual({ delivered: true });
+    expect(notifyForTicket).toHaveBeenCalledTimes(1);
   });
 
   it("says nothing is connected, and says it without naming a provider", async () => {

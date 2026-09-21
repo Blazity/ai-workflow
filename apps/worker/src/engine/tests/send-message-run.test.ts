@@ -95,6 +95,10 @@ const publication = vi.hoisted(() => ({
 }));
 
 /** The graph this run's trigger resolves to, swapped per test. */
+/** What the deployment's messaging connection looks like right now. */
+const live = vi.hoisted(() => ({ fingerprint: "fp-1" }));
+/** What the engine handed the adapter factory, call by call. */
+const adapterPins = vi.hoisted(() => ({ seen: [] as unknown[] }));
 const graph = vi.hoisted(() => ({
   nodes: [] as Array<Record<string, unknown>>,
 }));
@@ -104,6 +108,8 @@ const plan = vi.hoisted(() => ({
   blocker: null as
     | { integrationId: string; reason: "disconnected" | "disabled"; message: string }
     | null,
+  /** What the run recorded about the messaging provider when it started. */
+  pins: [] as { integrationId: string; configFingerprint: string }[],
 }));
 
 vi.mock("workflow", async (importOriginal) => ({
@@ -146,11 +152,44 @@ vi.mock("../steps/definition-step.js", () => ({
     })),
     edges: edges.value,
     reviewEnabled: false,
-    integrationPins: [],
+    integrationPins: plan.pins,
     ...(plan.blocker ? { integrationBlocker: plan.blocker } : {}),
   })),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+// The deployment's messaging provider as the run finds it at send time. The
+// pin check compares this against what the plan recorded at the run's start.
+vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
+  // The pin comparison itself is the real one: a test that mocked it would
+  // prove the engine calls something, not that a moved provider stops a run.
+  checkIntegrationPin: (await importOriginal<
+    typeof import("../../services/integrations/runtime.js")
+  >()).checkIntegrationPin,
+  resolveUsableIntegrations: vi.fn(async () => ({
+    readable: true,
+    usable: [
+      {
+        manifest: { id: "acmechat", name: "Acme Chat", capabilities: ["messaging"] },
+        runtime: { capabilities: { messaging: () => ({ notifyForTicket: async () => ({ delivered: true }) }) } },
+        ctx: {},
+      },
+    ],
+    states: new Map([
+      [
+        "acmechat",
+        {
+          integrationId: "acmechat",
+          status: "connected",
+          connection: "connected",
+          enabled: true,
+          usable: true,
+          failure: null,
+          pin: { integrationId: "acmechat", configFingerprint: live.fingerprint },
+        },
+      ],
+    ]),
+  })),
+}));
 // Which agent harness a node would run under. It reads the organization and the
 // stored profile selection, and no node here runs an agent.
 vi.mock("../definition/harness-profile-runtime.js", () => ({
@@ -203,7 +242,11 @@ vi.mock("../steps/workflow-ticket.js", () => ({
   })),
 }));
 vi.mock("../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({
+  createAdapters: (_vcsTarget?: unknown, pins?: unknown) => ({
+    ...(((): Record<string, never> => {
+      adapterPins.seen.push(pins);
+      return {};
+    })()),
     issueTracker: {
       postComment: jira.postComment,
       fetchTicket: jira.fetchTicket,
@@ -319,6 +362,9 @@ const EDGES = [
 beforeEach(() => {
   vi.clearAllMocks();
   plan.blocker = null;
+  plan.pins = [];
+  live.fingerprint = "fp-1";
+  adapterPins.seen = [];
   edges.value = EDGES;
   messaging.notifyForTicket.mockResolvedValue({ delivered: true });
   publication.open.mockClear();
@@ -457,6 +503,46 @@ describe("Send message, through a run", () => {
     ]);
     expect(notSentComments()).toEqual([]);
     expect(sentComments()).toEqual(["Sent"]);
+  });
+
+  it("stops the run when the provider it pinned moved under it", async () => {
+    // Which deliveries are refused is messaging.test.ts's subject. This is the
+    // block's half: a refusal that says the provider moved is not a message
+    // that failed to send, so the run stops with what an admin acts on rather
+    // than branching off `skipped` as if nothing were wrong.
+    messaging.notifyForTicket.mockResolvedValue({
+      delivered: false,
+      reason: "Acme Chat's configuration changed after this run started",
+      moved: "reconfigured",
+    });
+    graph.nodes = graphWith({ sendOn: "always", message: "deploying now" });
+
+    await expect(agentWorkflow(entry)).rejects.toThrow(
+      /Acme Chat's configuration changed after this run started/,
+    );
+
+    // The run's own lifecycle notifications still went out, which is the line:
+    // a block reports and can stop a run, a notification does neither.
+    expect(
+      messaging.notifyForTicket.mock.calls.map((call) => (call[1] as { kind: string }).kind),
+    ).toEqual(["started", "note", "failed"]);
+  });
+
+  it("hands the step the pins the run recorded", async () => {
+    plan.pins = [{ integrationId: "acmechat", configFingerprint: "fp-1" }];
+    graph.nodes = graphWith({ sendOn: "always", message: "deploying now" });
+
+    await expect(agentWorkflow(entry)).resolves.not.toThrow();
+
+    assertSent("deploying now");
+    // Without this the pin never reaches the resolution that compares it, and
+    // every check downstream is decoration.
+    expect(adapterPins.seen).toContainEqual([
+      { integrationId: "acmechat", configFingerprint: "fp-1" },
+    ]);
+    // And the lifecycle notifications went out unpinned, which is what keeps a
+    // moved provider from turning a notification into a run failure.
+    expect(adapterPins.seen).toContainEqual(undefined);
   });
 
   it("runs a plan recorded before the block was renamed", async () => {

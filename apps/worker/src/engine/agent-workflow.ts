@@ -84,7 +84,7 @@ import {
 } from "./blocks/integration-block.js";
 import { canonicalizeWorkflowBlockTypes, canonicalWorkflowBlockType, createWorkflowExecutionErrorState, integrationUnavailableFailureCode, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE, runStatusReasonParts } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
-import type { MessagingDelivery } from "../adapters/messaging/types.js";
+import type { CoreMessagingDelivery } from "./support/messaging.js";
 import type { BlockOutput, BlockRunState, RunPullRequest, RunStatusReason, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
 import type { RunWorkScopeWrite } from "./work-scope/apply-plans.js";
 import type { LoadedWorkflowPlan } from "./steps/definition-step.js";
@@ -4026,10 +4026,24 @@ async function agentWorkflowBody(
             // fire and forget. Such a run reported `ok` then, and reporting it
             // now is the only answer that keeps its remaining branches on the
             // path they were already taking.
-            const sent = (delivery: MessagingDelivery | undefined): BlockExecutionResult =>
-              !delivery || delivery.delivered
-                ? { kind: "next", output: { status: "ok" } }
-                : { kind: "next", output: { status: "skipped", reason: delivery.reason } };
+            // A block is not a notification. When the provider this run pinned
+            // moved under it, the honest answer is to stop with what an admin
+            // can act on, not to report a message that went somewhere nobody
+            // expects. Every other failure is `skipped` with its reason.
+            const sent = (delivery: CoreMessagingDelivery | undefined): BlockExecutionResult => {
+              if (!delivery || delivery.delivered) {
+                return { kind: "next", output: { status: "ok" } };
+              }
+              if (delivery.moved) {
+                const text = `Send message could not run: ${delivery.reason}.`;
+                return executionError(text, {
+                  category: "configuration",
+                  message: text,
+                  failureCode: integrationUnavailableFailureCode(delivery.moved),
+                });
+              }
+              return { kind: "next", output: { status: "skipped", reason: delivery.reason } };
+            };
 
             if (sendOn === "always") {
               // A message of its own, posted whenever this block runs and
@@ -4041,7 +4055,12 @@ async function agentWorkflowBody(
                 };
               }
               return sent(
-                await notifyTicket(ticket.identifier, { kind: "note", text: message }, transitionOwner),
+                await notifyTicket(
+                  ticket.identifier,
+                  { kind: "note", text: message },
+                  transitionOwner,
+                  plan.integrationPins,
+                ),
               );
             }
 
@@ -4063,7 +4082,7 @@ async function agentWorkflowBody(
                   prs: publishedPrs,
                   usageReport,
                   ...(message ? { extraText: message } : {}),
-                }, transitionOwner),
+                }, transitionOwner, plan.integrationPins),
               );
             }
             return {

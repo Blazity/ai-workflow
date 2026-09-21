@@ -2274,6 +2274,49 @@ author reading "nothing provides messaging" while the Integrations page shows
 Slack sitting there is the one reading that sends somebody looking for a second
 provider they do not need.
 
+### A run is pinned to the provider it started with, core blocks included
+
+S4 pinned the connection of every integration a definition's nodes reach, and
+read that reach from block types alone. A core block that consumes a capability
+has no such type, so `send_message` and `investigate` reached a provider that
+the pin knew nothing about: an admin who changed the channel while runs were in
+flight moved where those runs posted, and nothing said so. The mechanism built
+to notice exactly that change did not cover the blocks most likely to feel it.
+
+The reach now has two halves, and `integrationsUsedBy` reads both: an
+integration's own block type, and the active provider of every capability a
+core block consumes. What a core block consumes is stated once, in
+`coreBlockCapabilities` (`engine/definition/integration-availability.ts`), and
+read by three callers that used to derive it separately: the palette's
+availability, the run's pins, and the dispatch blocker. Deriving it three times
+is how a palette and a run come to disagree about one deployment, which is the
+failure this whole file keeps returning to.
+
+Worth stating plainly for S10 to S12, because the cost of getting it wrong
+grows with every stage: after those stages almost everything a run does is a
+core block over a capability. Had the pin stayed blind to them, by S12 it would
+have covered nearly nothing while still looking like a guarantee.
+
+Where the comparison happens is not a detail. It reads this deployment's
+integration settings, so it cannot happen in workflow scope, where the Workflow
+DevKit allows no Node module; the first attempt put it there and the bundle
+guard refused the build with four modules named. It happens inside the step
+that sends (`notifyTicket`), which takes the run's pins and answers with a
+delivery that can say the provider moved. A block stops the run on that answer,
+with `integration_unavailable.<reason>` and the sentence an admin acts on; a
+notification ignores it exactly as it ignores any other delivery failure. That
+is the line decision 12 asks for, and it now lives in one type
+(`CoreMessagingDelivery`) rather than in two code paths.
+
+One boundary is deliberate: the pin guards sending, not the research block's
+search. Sending writes into somebody's channel, and a run that writes to the
+wrong one cannot be undone by reading the trace; searching is a read that
+already reports what it could not search, in the theory a person reads. Pushing
+the pin into the retrieval step would change that step's recorded input for
+every run in flight, which is a real cost for a much smaller guarantee. If a
+later stage gives that step a reason to change anyway, this is the moment to
+reconsider.
+
 ### What the research path does when nobody can search
 
 `searchMessages` is optional on the port and total on the sender: a provider
@@ -2363,6 +2406,7 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-21 | S9 | `CoreMessagingDelivery`, core's own widening of the port's answer, and `pins` on `notifyTicket` | The port says whether a message arrived. Only core can say whether the run may still use this provider at all, so that fact is core's to add rather than the port's to carry. It travels on the step's answer because the comparison reads deployment settings and therefore cannot happen in workflow scope, which the bundle guard proved by refusing the first attempt. A block stops the run on it; a notification ignores it. |
 | 2026-09-20 | S9 | `webhook`, the reserved slot released: `IntegrationWebhook` with `receive` and an optional `deliver`, `IntegrationWebhookRequest`, `IntegrationWebhookReception`, `IntegrationWebhookResponse`, and conformance code `webhook_receive_missing` | S0 reserved it for the stage that had a provider to design it against. `receive` and `deliver` are two calls because a slash command has about three seconds to be acknowledged and the work happens after; `deliver` is told about a failure as well as an answer, because a handler that threw used to leave the person reading "Working on ...". The request carries the raw body, since that is what a provider signs. Additive: the slot was `never` and no manifest field changed. |
 | 2026-09-20 | S9 | `MessagingDelivery` as the return of `notifyForTicket`, `MessagingConversation` as its third argument, `MessagingTicket` in place of a bare key, `MessagingSender` as what core calls, and the optional `searchMessages` with `MessageSearchQuery`, `MessageSearchMatch`, `MessageSearchSkip`, `MessageSearchOutcome` and `MessageRetrievalFailure` | The port never threw and therefore never said whether anything arrived, so a block reported `ok` for a message nobody received. It answers now. The conversation a ticket owns is core's row and is passed in as an opaque handle, so a second provider needs no table and the old Slack timestamps keep working. The ticket arrives with the link core built, because which tracker this deployment talks to is not a chat provider's business. Search became an operation of the capability so the research path stops importing a provider. Not additive for a provider: every messaging adapter changes signature, which is why it landed with the only one. |
 | 2026-09-20 | S9 | `RunControlCommand`, `RunControlAnswer`, `RunControlOutcome` and their values re-exported from the SDK, alongside `RunPullRequest`, `pullRequestRef`, `pullRequestRepoLabels` and `JsonValue` | An integration may not depend on `@shared/contracts` directly (the boundaries gate and the conformance dependency check both say so), and a messaging provider has to render a run control answer and a pull request list. The SDK is where an integration reaches everything. |

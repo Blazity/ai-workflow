@@ -20,6 +20,7 @@
  * notification is a handful of calls per run, so the read is cheap where it
  * happens.
  */
+import type { IntegrationConnectionPin, IntegrationUnavailableReason } from "@shared/contracts";
 import type {
   MessageRetrievalFailure,
   MessageSearchOutcome,
@@ -49,17 +50,21 @@ const NO_PROVIDER =
  * Callers that are a block read the answer; callers that merely report ignore
  * it, and the warning in the log is the record either way.
  */
-export function messagingSender(): MessagingSender {
+export function messagingSender(pins?: readonly IntegrationConnectionPin[]): CoreMessagingSender {
   return {
     async notifyForTicket(ticketKey: string, event: TicketEvent): Promise<MessagingDelivery> {
-      const resolved = await activeMessaging();
+      const resolved = await activeMessaging(pins);
       if (!resolved.ok) {
         const { logger } = await import("../../infra/logger.js");
         logger.warn(
           { ticketKey, kind: event.kind, reason: resolved.reason },
           "messaging_notification_dropped",
         );
-        return { delivered: false, reason: resolved.reason };
+        return {
+          delivered: false,
+          reason: resolved.reason,
+          ...(resolved.moved ? { moved: resolved.moved } : {}),
+        };
       }
       const { conversationFor } = await import("./messaging-conversation.js");
       try {
@@ -79,7 +84,7 @@ export function messagingSender(): MessagingSender {
     },
 
     async searchMessages(query: MessageSearchQuery): Promise<MessageSearchOutcome> {
-      const resolved = await activeMessaging();
+      const resolved = await activeMessaging(pins);
       if (!resolved.ok) return { ok: false, reason: resolved.retrieval };
       if (!resolved.adapter.searchMessages) return { ok: false, reason: "unsupported" };
       try {
@@ -89,6 +94,26 @@ export function messagingSender(): MessagingSender {
       }
     },
   };
+}
+
+/**
+ * What a delivery says when the provider this run pinned moved under it.
+ *
+ * Core's own widening of the port's answer: the port promises `delivered` and
+ * a reason, and core adds the one fact only core can know, which is whether
+ * the run may still use this provider at all. A block stops the run on it; a
+ * notification ignores it like any other failure.
+ */
+export type CoreMessagingDelivery =
+  | { readonly delivered: true }
+  | {
+      readonly delivered: false;
+      readonly reason: string;
+      readonly moved?: IntegrationUnavailableReason;
+    };
+
+export interface CoreMessagingSender extends MessagingSender {
+  notifyForTicket(ticketKey: string, event: TicketEvent): Promise<CoreMessagingDelivery>;
 }
 
 type ResolvedMessaging =
@@ -101,6 +126,12 @@ type ResolvedMessaging =
       readonly ok: false;
       /** The sentence a person reads in a block's output and in the log. */
       readonly reason: string;
+      /**
+       * Set only when the provider this run pinned moved under it. A caller
+       * that is a block stops the run with this; a caller that merely notifies
+       * ignores it, exactly as it ignores every other delivery failure.
+       */
+      readonly moved?: IntegrationUnavailableReason;
       /**
        * The same fact in the search port's vocabulary. A reader that only ever
        * heard "not connected" would tell somebody to connect a provider that is
@@ -119,7 +150,9 @@ type ResolvedMessaging =
  * admin cannot explain afterwards. The editor refuses the same case with the
  * same shape (`integration-availability.ts`), so the palette and the run agree.
  */
-async function activeMessaging(): Promise<ResolvedMessaging> {
+async function activeMessaging(
+  pins?: readonly IntegrationConnectionPin[],
+): Promise<ResolvedMessaging> {
   const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
   const resolved = await resolveUsableIntegrations({
     signal: AbortSignal.timeout(MESSAGING_TIMEOUT_MS),
@@ -149,6 +182,28 @@ async function activeMessaging(): Promise<ResolvedMessaging> {
   }
   const [only] = usable;
   if (!only) return { ok: false, reason: NO_PROVIDER, retrieval: "not_connected" };
+  // A run pinned the provider it started with. Following a live change instead
+  // would move where a workflow posts, mid-run, with nobody told. A run started
+  // before pins existed carries none and behaves as it always did.
+  if (pins && pins.length > 0) {
+    const { checkIntegrationPin } = await import("../../services/integrations/runtime.js");
+    const pin = pins.find((candidate) => candidate.integrationId === only.manifest.id);
+    const state = resolved.states.get(only.manifest.id);
+    const check =
+      pin && state
+        ? checkIntegrationPin(pin, state)
+        : // The run pinned a messaging provider and this is not it. Serving the
+          // new one would be the silent switch the pin exists to prevent.
+          ({ ok: false, reason: "disconnected" } as const);
+    if (!check.ok) {
+      return {
+        ok: false,
+        reason: pinnedProviderMovedReason(check.reason, only.manifest.name),
+        retrieval: "unavailable",
+        moved: check.reason,
+      };
+    }
+  }
   const factory = only.runtime.capabilities.messaging;
   if (typeof factory !== "function") {
     return {
@@ -184,4 +239,14 @@ export function ticketUrlFor(ticketKey: string, baseUrl: string): string | null 
   if (!TICKET_KEY_PATTERN.test(ticketKey)) return null;
   const base = baseUrl.replace(/\/$/, "");
   return base === "" ? null : `${base}/browse/${ticketKey}`;
+}
+
+/** Why the provider this run pinned is not the one it may use now. */
+function pinnedProviderMovedReason(
+  reason: IntegrationUnavailableReason,
+  name: string,
+): string {
+  if (reason === "disabled") return `${name} was disabled after this run started`;
+  if (reason === "disconnected") return `${name} was disconnected after this run started`;
+  return `${name}'s configuration changed after this run started`;
 }

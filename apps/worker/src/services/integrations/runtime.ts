@@ -23,7 +23,10 @@ export {
 
 export { readIntegrationStates, secretsKeyMaterial } from "./authoring.js";
 
-export { environmentReaderFrom } from "./resolve.js";
+// Pure, and a read in the sense this facade means: it compares what a run
+// recorded against what the deployment says now and answers whether the run
+// may still use it. No connection is touched, and nothing is written.
+export { checkIntegrationPin, environmentReaderFrom } from "./resolve.js";
 
 export { resolveUsableIntegrations, usableIntegrations } from "./usable.js";
 
