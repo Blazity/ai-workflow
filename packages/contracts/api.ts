@@ -1281,6 +1281,28 @@ export interface IntegrationMutationResponse {
   readonly test?: IntegrationTestOutcome;
 }
 
+/** One enabled definition whose deployed graph reaches an integration. */
+export interface IntegrationImpactDefinition {
+  readonly id: number;
+  readonly name: string;
+}
+
+/**
+ * What an integration change would interrupt if it succeeds.
+ *
+ * A null collection or count means the worker could not answer that read. It
+ * is deliberately not an empty collection or zero: the confirmation must not
+ * turn a database failure into "nothing will stop".
+ */
+export interface IntegrationImpactPreviewResponse {
+  /** Whether this action changes the pin a run compares at its next use. */
+  readonly changesFingerprint: boolean;
+  /** Enabled definitions only, from each definition's deployed graph. */
+  readonly enabledDefinitions: readonly IntegrationImpactDefinition[] | null;
+  /** In-flight runs on those definitions that would stop. */
+  readonly inFlightRuns: number | null;
+}
+
 /** A save whose `expectedVersion` no longer matches. Carries the current version
  *  so a second tab can reload rather than guess. */
 export interface IntegrationVersionConflict {

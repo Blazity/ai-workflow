@@ -53,3 +53,8 @@ export {
   deploymentEnvironment,
   integrationWriteAccess,
 } from "./deployment-writes.js";
+
+// `impact.ts` is deliberately not re-exported here. It is the one read in this
+// folder that joins integrations with workflow definitions, and the definitions
+// cluster already reads this barrel, so carrying it would close an import
+// cycle the boundaries gate refuses. Its caller imports the module.

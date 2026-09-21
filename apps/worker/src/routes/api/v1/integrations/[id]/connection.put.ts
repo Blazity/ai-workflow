@@ -2,6 +2,7 @@ import { createError, defineEventHandler, readBody, setResponseStatus } from "h3
 import {
   integrationConnectionSaveRequestSchema,
   parseRequestBody,
+  type IntegrationImpactPreviewResponse,
   type IntegrationMutationResponse,
   type IntegrationVersionConflict,
 } from "@shared/contracts";
@@ -14,11 +15,13 @@ import {
   IntegrationVersionConflictError,
   saveIntegrationConnection,
 } from "../../../../../services/integrations/index.js";
+import { previewIntegrationImpact } from "../../../../../services/integrations/impact.js";
 import { integrationIdFrom } from "../route-id.js";
 
 /**
- * Store values for one integration: tested first, in use only if the test
- * passed.
+ * Preview the impact of a connection change, or store values for one
+ * integration: tested first, in use only if the test passed. A preview reads
+ * definitions and live runs but never contacts the provider or writes.
  *
  * A stale `expectedVersion` is answered with 409 and a BODY naming the current
  * version, the way a stale repository profile save is: a bare status would leave
@@ -31,16 +34,26 @@ import { integrationIdFrom } from "../route-id.js";
 export default defineEventHandler(
   async (
     event,
-  ): Promise<IntegrationMutationResponse | IntegrationVersionConflict | undefined> => {
+  ): Promise<
+    | IntegrationImpactPreviewResponse
+    | IntegrationMutationResponse
+    | IntegrationVersionConflict
+    | undefined
+  > => {
     try {
       const actor = await requireDashboardActor(event);
       const integrationId = integrationIdFrom(event);
-      const parsed = parseRequestBody(
-        integrationConnectionSaveRequestSchema,
-        (await readBody(event).catch(() => null)) ?? {},
-      );
+      const body = (await readBody(event).catch(() => null)) ?? {};
+      const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, body);
       if (!parsed.ok) {
         throw createError({ statusCode: 400, statusMessage: parsed.message });
+      }
+      if (parsed.value.preview === "save" || parsed.value.preview === "disconnect") {
+        return await previewIntegrationImpact({
+          actor: { role: actor.role, id: actor.userId },
+          integrationId,
+          preview: parsed.value,
+        });
       }
       return await saveIntegrationConnection({
         actor: { role: actor.role, id: actor.userId },

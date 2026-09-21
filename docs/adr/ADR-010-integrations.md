@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-20
+Last-verified: 2026-09-21
 
 # ADR-010: Integrations
 
@@ -517,7 +517,7 @@ integration package declares the dependency itself; an integration's
 | Logger | `chatsdk.ts:4` | `ctx.log` |
 | `ThreadStore`, the per-ticket parent message id in the database | `chatsdk.ts:7`, `engine/support/adapters.ts:79` | stays in core for now; an integration gets no database. S9 adds it additively, either as core-owned storage handed to the `messaging` factory or as a per-integration key-value store in the context |
 | `JIRA_BASE_URL`, to link a ticket from a Slack message | `engine/support/adapters.ts:78` | stays in core; a cross-integration value. S9 passes a ticket link resolved through `issue_tracker` or adds one to `TicketEvent` (a port change S9 owns) |
-| `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_BOT_NAME` (default `ai-workflow`) | `adapters.ts:73-77`, `infra/runtime-env.ts:48-50` | connection fields (`secret`; `default`) |
+| `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_BOT_NAME` (default `ai-workflow`) | `adapters.ts:73-77`, `infra/runtime-env.ts:48-50` | the token became a connection field (`secret`, `identity`). The name did not: S9 retired it, because Slack only lets an app post under another name with a permission ordinary installs do not grant, and sending it without that permission can stop the message arriving. The app's own name is the author now |
 | `CHAT_SDK_CHANNEL_ID` | `adapters.ts:76` | a connection field until S9; decision 9 classes a channel choice as operator behaviour, so S9 moves it to stored settings, which then needs a settings read in the context (additive) or a channel parameter on the port |
 | Global `fetch` for search | `adapters/messaging/slack-search.ts:220` | `ctx.http.fetch` |
 | `SLACK_SIGNING_SECRET`; HMAC check with `node:crypto` | `integration-settings.ts:87`, `services/slack/verify.ts:1,31-39` | secret connection field; own webhook handler (S9 slot) |
@@ -823,11 +823,24 @@ Every write is one statement. Production runs neon-http, which cannot open an
 interactive transaction, while the pglite driver used by tests can, so a
 `db.transaction` would pass every test in this repository and 500 in production.
 
-### What S2 does not decide
+### Impact preview, completed in S9
 
-The impact preview before a disable or a reconfigure (decision 9) needs to count
-published workflows and runs in flight, which is the engine's knowledge: S4 and
-S6. The active provider selection for a single-provider capability was assigned
+The connection PUT accepts a read-only preview command before a disconnect or
+a save. It reports enabled definitions by name from their deployed versions,
+never drafts, and reaches an integration through `integrationsUsedBy`: both the
+integration's own blocks and the active provider behind a capability used by a
+core block. The run count comes from live run claims joined to those definition
+ids. The candidate fingerprint is calculated in the worker, including identity
+secret digests, so the browser receives neither a secret nor a second version
+of the pin rule.
+
+Definitions and run counts are nullable independently. Null means the read
+failed and the confirmation says unknown; an empty list and zero are reserved
+for reads that completed. The screen lists five names before "and N more" and
+labels an action with unknown impact explicitly. A save whose candidate does
+not move the fingerprint continues without another confirmation.
+
+The active provider selection for a single-provider capability was assigned
 here to S4 and moved to S6 during it: choosing between two providers is a
 control on the Integrations page, and a stored selection with nothing to write
 it is a refusal that sends an admin to a screen that does not exist. S4 refuses
@@ -2340,11 +2353,16 @@ stay absolute rather than learning an exception.
 ### Two named exceptions in the gate, and one loss
 
 `plannedIntegrations.slack` is gone, so the gate fails if core writes the name
-again. Nine rows stay:
+again. Four entries stay, covering nine paths:
 
-- Eight are `investigate`'s parameter vocabulary, listed above, removed by S12.
-  The block's own manifest is one of them, and the availability resolver is no
-  longer among them.
+- Seven paths are `investigate`'s parameter vocabulary, listed above, removed
+  by S12. The block's own manifest is one of them, and the availability
+  resolver is no longer among them.
+- One is the `send_slack_message` compatibility alias in the shared workflow
+  contract. It has its own removal point, R1, once the rewrite of stored graphs
+  has run and been verified: sharing a removal point with the `investigate`
+  rows would have retired the alias three stages too early or kept the
+  vocabulary three stages too long.
 - One is `engine/blocks/leak-review/execute.ts`, whose secret scanner names the
   SHAPES of credentials it looks for so the finding a person reads says which
   kind of token leaked. It would be worth keeping if this product never talked

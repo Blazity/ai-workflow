@@ -10,6 +10,7 @@ import type {
   IntegrationConnectionFieldDto,
   IntegrationDto,
   IntegrationFailure,
+  IntegrationImpactPreviewResponse,
   IntegrationState,
   IntegrationVerification,
 } from "@shared/contracts";
@@ -511,6 +512,75 @@ export function disconnectConsequence(integration: IntegrationDto): string[] {
     );
   }
   return lines;
+}
+
+const IMPACT_NAME_LIMIT = 5;
+
+/**
+ * The measured cost shown before a connection change. Null is an unread fact,
+ * never an empty fact, so every unknown has its own sentence.
+ */
+export function integrationImpactLines(
+  integration: IntegrationDto,
+  impact: IntegrationImpactPreviewResponse | null,
+  action: "save" | "disconnect",
+): string[] {
+  const lines = [
+    impact === null
+      ? action === "save"
+        ? `The worker could not determine whether these values move ${integration.name}'s connection fingerprint. A moved fingerprint stops runs already in flight at their next use instead of letting them follow the edit.`
+        : `The worker could not determine whether disconnecting changes the connection a run has pinned. A changed pin stops runs already in flight at their next use.`
+      : action === "save"
+      ? `If ${integration.name} accepts these values, its connection fingerprint changes. Runs already in flight keep the fingerprint they started with and stop at their next use instead of following this edit.`
+      : impact.changesFingerprint
+        ? `Disconnecting changes the connection a run has pinned. Runs already in flight stop at their next use instead of following the new connection.`
+        : `This deployment falls back to the same connection fingerprint, so disconnecting the stored values does not stop a run already in flight.`,
+  ];
+  const definitions = impact?.enabledDefinitions ?? null;
+  if (definitions === null) {
+    lines.push("Enabled workflows: unknown. The worker could not read the deployed definitions.");
+  } else if (definitions.length === 0) {
+    lines.push(
+      `Enabled workflows using ${integration.name}: none. Drafts and disabled workflows are not included.`,
+    );
+  } else {
+    const shown = definitions.slice(0, IMPACT_NAME_LIMIT).map(({ name }) => name);
+    const remainder = definitions.length - shown.length;
+    lines.push(
+      `Enabled workflows using ${integration.name}: ${shown.join(", ")}${
+        remainder > 0 ? `, and ${remainder} more` : ""
+      }.`,
+    );
+  }
+  const runs = impact?.inFlightRuns ?? null;
+  lines.push(
+    runs === null
+      ? "Runs in flight that would stop: unknown. The worker could not measure them, so this confirmation does not claim zero."
+      : runs === 1
+        ? "1 run in flight will stop."
+        : `${runs} runs in flight will stop.`,
+  );
+  return lines;
+}
+
+export function integrationImpactConfirmLabel(
+  impact: IntegrationImpactPreviewResponse | null,
+  action: "save" | "disconnect",
+): string {
+  const runs = impact?.inFlightRuns ?? null;
+  if (runs === null) {
+    return action === "save"
+      ? "Save with unknown impact"
+      : "Erase values with unknown impact";
+  }
+  if (action === "save") {
+    return runs === 0
+      ? "Save the configuration"
+      : `Save and stop ${runs} ${runs === 1 ? "run" : "runs"}`;
+  }
+  return runs === 0
+    ? "Erase the stored values"
+    : `Erase values and stop ${runs} ${runs === 1 ? "run" : "runs"}`;
 }
 
 /**

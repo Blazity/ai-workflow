@@ -242,7 +242,15 @@ test("a command whose work failed is answered, not left at \"Working on ...\"", 
   });
 });
 
-/** The same independent signature, for a body this test varied. */
+/**
+ * A signature this file computes, for a body it varied.
+ *
+ * NOT the compatibility evidence: that rests on Slack's own published signed
+ * request in `fixtures/`, which our verifier accepts without ever computing it.
+ * This helper only lets the behaviour tests below vary a body while staying
+ * past the signature check, so what they assert is the routing, the allowlist
+ * and the answer, never the algorithm.
+ */
 async function signed_request(body: string): Promise<IntegrationWebhookRequest> {
   const { createHmac } = await import("node:crypto");
   const digest = createHmac("sha256", SIGNING_SECRET)

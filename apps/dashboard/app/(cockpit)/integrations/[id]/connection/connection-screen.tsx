@@ -5,7 +5,10 @@ import { useEffect, useRef, useState } from "react";
 
 import type {
   IntegrationConnectionFieldDto,
+  IntegrationConnectionSaveRequest,
   IntegrationDto,
+  IntegrationImpactPreviewRequest,
+  IntegrationImpactPreviewResponse,
   IntegrationMutationResponse,
   IntegrationSource,
   IntegrationVersionConflict,
@@ -27,6 +30,8 @@ import {
   disconnectConsequence,
   enableConsequence,
   fieldHint,
+  integrationImpactConfirmLabel,
+  integrationImpactLines,
   missingRequiredFields,
   readableProviderText,
   sourceSwitchRefusal,
@@ -204,12 +209,16 @@ export function ConnectionScreen({
   const [integration, setIntegration] = useState(initialIntegration);
   const [values, setValues] = useState(() => seedValues(initialIntegration.fields));
   const [clearedSecrets, setClearedSecrets] = useState<string[]>([]);
-  const [busy, setBusy] = useState<null | "save" | "test" | "enabled" | "source" | "disconnect">(
-    null,
-  );
+  const [busy, setBusy] = useState<
+    null | "impact" | "save" | "test" | "enabled" | "source" | "disconnect"
+  >(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
-  const [confirming, setConfirming] = useState<null | "disable" | "disconnect">(null);
+  const [confirming, setConfirming] = useState<
+    null | "disable" | "disconnect" | "save"
+  >(null);
+  const [impact, setImpact] = useState<IntegrationImpactPreviewResponse | null>(null);
+  const [pendingSave, setPendingSave] = useState<IntegrationConnectionSaveRequest | null>(null);
   // Set when this page stopped following the server because somebody was
   // typing. State rather than a ref: it is on screen.
   const [dirty, setDirty] = useState(false);
@@ -341,20 +350,10 @@ export function ConnectionScreen({
     router.refresh();
   }
 
-  function save() {
-    const form = { fields: integration.fields, values, clearedSecrets, state };
-    const empty = missingRequiredFields(form);
-    setMissing(empty);
-    if (empty.length > 0) {
-      setNotice({
-        tone: "bad",
-        lines: [`Fill ${andList(empty)} in before saving. Nothing was sent.`],
-      });
-      return;
-    }
+  function performSave(request: IntegrationConnectionSaveRequest) {
     void run(
       "save",
-      () => apiClient.integrations.save(integration.id, buildSaveRequest(form)),
+      () => apiClient.integrations.save(integration.id, request),
       async (result) => {
         if (!result.ok) {
           setNotice({ tone: "bad", lines: [readableProviderText(result.errorMessage)] });
@@ -393,7 +392,64 @@ export function ConnectionScreen({
         publishIntegrationChange();
         router.refresh();
       },
+      closeConfirmation,
     );
+  }
+
+  async function previewChange(
+    preview: IntegrationImpactPreviewRequest,
+    action: "save" | "disconnect",
+    saveRequest?: IntegrationConnectionSaveRequest,
+  ) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy("impact");
+    setImpact(null);
+    setConfirming(action);
+    let saveWithoutConfirmation: IntegrationConnectionSaveRequest | null = null;
+    try {
+      const result = await apiClient.integrations.previewImpact(integration.id, preview);
+      if (result.ok) {
+        setImpact(result.data);
+        if (action === "save" && !result.data.changesFingerprint && saveRequest) {
+          saveWithoutConfirmation = saveRequest;
+          setConfirming(null);
+          setImpact(null);
+          setPendingSave(null);
+        }
+      }
+      // A failed read deliberately leaves impact null. The dialog renders that
+      // as unknown and still requires an explicit, accurately labelled choice.
+    } catch {
+      // requestJson normally returns a failure result; a thrown network error
+      // is the same unknown state, never a measured zero.
+    } finally {
+      inFlight.current = false;
+      setBusy(null);
+    }
+    if (saveWithoutConfirmation) performSave(saveWithoutConfirmation);
+  }
+
+  function save() {
+    const form = { fields: integration.fields, values, clearedSecrets, state };
+    const empty = missingRequiredFields(form);
+    setMissing(empty);
+    if (empty.length > 0) {
+      setNotice({
+        tone: "bad",
+        lines: [`Fill ${andList(empty)} in before saving. Nothing was sent.`],
+      });
+      return;
+    }
+    const request = buildSaveRequest(form);
+    setPendingSave(request);
+    void previewChange({ preview: "save", ...request }, "save", request);
+  }
+
+  function closeConfirmation() {
+    setConfirming(null);
+    setImpact(null);
+    setPendingSave(null);
   }
 
   function test() {
@@ -484,7 +540,7 @@ export function ConnectionScreen({
         forgetTypedWork();
         setNotice({ tone: "plain", lines: statusDetailLines(next) });
       },
-      () => setConfirming(null),
+      closeConfirmation,
     );
   }
 
@@ -752,7 +808,7 @@ export function ConnectionScreen({
                 variant="danger"
                 className="self-start"
                 disabled={busy !== null}
-                onClick={() => setConfirming("disconnect")}
+                onClick={() => void previewChange({ preview: "disconnect" }, "disconnect")}
               >
                 Disconnect
               </Button>
@@ -777,18 +833,48 @@ export function ConnectionScreen({
           confirmLabel="Turn it off"
           busy={busy === "enabled"}
           onConfirm={() => setEnabled(false)}
-          onClose={() => setConfirming(null)}
+          onClose={closeConfirmation}
+        />
+      )}
+
+      {confirming === "save" && (
+        <ConfirmDialog
+          title={`Save ${integration.name}'s new connection?`}
+          lines={
+            busy === "impact"
+              ? ["Reading enabled workflows and runs in flight before anything changes."]
+              : integrationImpactLines(integration, impact, "save")
+          }
+          confirmLabel={
+            busy === "impact"
+              ? "Reading impact"
+              : integrationImpactConfirmLabel(impact, "save")
+          }
+          busy={busy === "impact" || busy === "save"}
+          onConfirm={() => pendingSave && performSave(pendingSave)}
+          onClose={closeConfirmation}
         />
       )}
 
       {confirming === "disconnect" && (
         <ConfirmDialog
           title={`Disconnect ${integration.name}?`}
-          lines={disconnectConsequence(integration)}
-          confirmLabel="Erase the stored values"
-          busy={busy === "disconnect"}
+          lines={
+            busy === "impact"
+              ? ["Reading enabled workflows and runs in flight before anything changes."]
+              : [
+                  ...integrationImpactLines(integration, impact, "disconnect"),
+                  ...disconnectConsequence(integration),
+                ]
+          }
+          confirmLabel={
+            busy === "impact"
+              ? "Reading impact"
+              : integrationImpactConfirmLabel(impact, "disconnect")
+          }
+          busy={busy === "impact" || busy === "disconnect"}
           onConfirm={disconnect}
-          onClose={() => setConfirming(null)}
+          onClose={closeConfirmation}
         />
       )}
     </div>

@@ -29,7 +29,6 @@ describe("env", () => {
     GITHUB_REPO: "test-repo",
     CHAT_SDK_SLACK_TOKEN: "xoxb-test",
     CHAT_SDK_CHANNEL_ID: "C123",
-    CHAT_SDK_BOT_NAME: "blazebot",
     SLACK_SIGNING_SECRET: "fake-signing-secret",
     ANTHROPIC_API_KEY: "sk-ant-test",
     DATABASE_URL: "postgresql://user:pass@ep-fake.neon.tech/neondb",

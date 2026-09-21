@@ -18,7 +18,7 @@ const connectionValues = z.record(
   z.string().max(8192, { message: "a connection value must be 8192 characters or fewer" }),
 );
 
-export const integrationConnectionSaveRequestSchema = z.object({
+const integrationConnectionSaveFieldsSchema = z.object({
   /** The `latestVersion` the screen last read. 0 means "nothing was ever saved
    *  here", which is what a first connect carries. */
   expectedVersion: z
@@ -34,8 +34,42 @@ export const integrationConnectionSaveRequestSchema = z.object({
 });
 
 export type IntegrationConnectionSaveRequest = z.infer<
-  typeof integrationConnectionSaveRequestSchema
+  typeof integrationConnectionSaveFieldsSchema
 >;
+
+/**
+ * A read-only consequence preview carried over the connection PUT transport.
+ * The dashboard already proxies that path and body; the combined command
+ * schema below discriminates on `preview`, so it can never be ignored and
+ * fall through into a write.
+ */
+export const integrationImpactPreviewRequestSchema = z.discriminatedUnion("preview", [
+  integrationConnectionSaveFieldsSchema.extend({ preview: z.literal("save") }),
+  z.object({ preview: z.literal("disconnect") }),
+]);
+
+export type IntegrationImpactPreviewRequest = z.infer<
+  typeof integrationImpactPreviewRequestSchema
+>;
+
+const integrationConnectionCommandSchema = z.discriminatedUnion("preview", [
+  integrationConnectionSaveFieldsSchema.extend({ preview: z.literal("write") }),
+  integrationConnectionSaveFieldsSchema.extend({ preview: z.literal("save") }),
+  z.object({ preview: z.literal("disconnect") }),
+]);
+
+/**
+ * The one schema parsed by the connection PUT route.
+ *
+ * The command is required and is never inferred. An earlier shape defaulted a
+ * body with no command to a write, which reads as harmless until you say it
+ * out loud: a request meant to ask "what would this break" turns into the
+ * change itself if one field goes missing between the browser and here. That
+ * is the one outcome this whole preview exists to prevent, so the safety sits
+ * in the shape of the request rather than in a default. A missing or
+ * misspelled command is a 400 that names the three it could have been.
+ */
+export const integrationConnectionSaveRequestSchema = integrationConnectionCommandSchema;
 
 export const integrationSourceRequestSchema = z.object({
   source: z.enum(["environment", "stored"], {

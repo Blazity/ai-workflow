@@ -9,8 +9,21 @@ import {
 } from "./requests-integrations";
 
 describe("integrationConnectionSaveRequestSchema", () => {
+  it("refuses a body that does not say which of the three it is", () => {
+    // The command used to be inferred, and a write was what an absent one
+    // meant. A preview that lost this field between the browser and the route
+    // would then have carried out the very change it was asking about.
+    const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, {
+      expectedVersion: 3,
+      values: { channelId: "C1" },
+    });
+
+    assert.equal(parsed.ok, false);
+  });
+
   it("accepts a first connect, which carries no stored version", () => {
     const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, {
+      preview: "write",
       expectedVersion: 0,
       values: { baseUrl: "https://fixture.example", apiToken: "token" },
     });
@@ -20,6 +33,7 @@ describe("integrationConnectionSaveRequestSchema", () => {
 
   it("accepts a save that corrects one field and leaves the secret alone", () => {
     const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, {
+      preview: "write",
       expectedVersion: 3,
       values: { baseUrl: "https://fixture.example/fixed" },
     });
@@ -30,13 +44,14 @@ describe("integrationConnectionSaveRequestSchema", () => {
   });
 
   it("refuses a body with no version, because a save without one cannot detect a second tab", () => {
-    const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, { values: {} });
+    const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, { preview: "write", values: {} });
     assert.equal(parsed.ok, false);
     assert.equal(parsed.ok === false && parsed.message, "expectedVersion must be a number");
   });
 
   it("refuses a negative version", () => {
     const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, {
+      preview: "write",
       expectedVersion: -1,
     });
     assert.equal(parsed.ok, false);
@@ -45,6 +60,7 @@ describe("integrationConnectionSaveRequestSchema", () => {
 
   it("refuses a value no credential could be, so a body cannot carry a file", () => {
     const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, {
+      preview: "write",
       expectedVersion: 0,
       values: { privateKey: "x".repeat(8193) },
     });
@@ -57,6 +73,7 @@ describe("integrationConnectionSaveRequestSchema", () => {
 
   it("accepts a PEM-sized value, because a private key is a connection field", () => {
     const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, {
+      preview: "write",
       expectedVersion: 0,
       values: { privateKey: "x".repeat(8192) },
     });

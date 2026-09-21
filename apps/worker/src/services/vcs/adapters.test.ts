@@ -10,7 +10,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
     JIRA_BASE_URL: "https://jira.example.com",
     JIRA_API_TOKEN: "jira-token",
     JIRA_PROJECT_KEY: "AIW",
-    CHAT_SDK_BOT_NAME: "ai-workflow",
   },
 }));
 

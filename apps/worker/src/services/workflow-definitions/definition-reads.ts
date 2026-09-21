@@ -8,7 +8,11 @@
  * archived definition as absent.
  */
 import { defaultWorkflowDefinitionV2 } from "../../engine/definition/default.js";
-import { RETIRED_SCHEMA_MESSAGE, type SettingsSnapshot } from "@shared/contracts";
+import {
+  RETIRED_SCHEMA_MESSAGE,
+  type SettingsSnapshot,
+  type WorkflowDefinition,
+} from "@shared/contracts";
 import {
   buildWorkflowEditorOptions,
   fetchAvailableModels,
@@ -45,6 +49,34 @@ export interface WorkflowDefinitionDetail {
   draft: Awaited<ReturnType<typeof readConnectedWorkflowDefinitionDraft>>;
   deployedRow: WorkflowDefinitionVersionRow | null;
   versionRows: WorkflowDefinitionVersionRow[];
+}
+
+export interface EnabledDeployedWorkflowDefinition {
+  id: number;
+  name: string;
+  definition: WorkflowDefinition;
+}
+
+/**
+ * Enabled definitions and the exact immutable graph selected for new runs.
+ * Drafts, archived rows, disabled definitions and retired deployments do not
+ * belong in a change-impact warning about work this deployment can start.
+ */
+export async function readEnabledDeployedWorkflowDefinitions(): Promise<
+  EnabledDeployedWorkflowDefinition[]
+> {
+  const rows = (await listConnectedWorkflowDefinitions()).filter(
+    (row) => row.enabled && row.deployedVersion !== null && row.deployedSchema === "v2",
+  );
+  const deployed = await Promise.all(
+    rows.map((row) => readConnectedDeployedWorkflowDefinitionVersion(row.id)),
+  );
+  return rows.flatMap((row, index) => {
+    const version = deployed[index];
+    return version?.schema === "v2"
+      ? [{ id: row.id, name: row.name, definition: version.definition }]
+      : [];
+  });
 }
 
 /**

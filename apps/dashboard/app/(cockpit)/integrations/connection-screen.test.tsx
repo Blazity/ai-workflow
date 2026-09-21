@@ -109,7 +109,22 @@ interface Sent {
   body: unknown;
 }
 
-function stubFetch(t: TestContext, reply: (sent: Sent) => unknown, status = 200) {
+function previewReply(call: Sent): unknown | null {
+  const body = call.body as { preview?: string } | null;
+  if (body?.preview !== "save" && body?.preview !== "disconnect") return null;
+  return {
+    changesFingerprint: body.preview === "disconnect",
+    enabledDefinitions: [],
+    inFlightRuns: 0,
+  };
+}
+
+function stubFetch(
+  t: TestContext,
+  reply: (sent: Sent) => unknown,
+  status = 200,
+  autoPreview = true,
+) {
   const sent: Sent[] = [];
   const original = globalThis.fetch;
   globalThis.fetch = ((url: string, init?: RequestInit) => {
@@ -118,10 +133,11 @@ function stubFetch(t: TestContext, reply: (sent: Sent) => unknown, status = 200)
       method: init?.method,
       body: init?.body === undefined ? null : JSON.parse(String(init.body) || "null"),
     };
-    sent.push(call);
+    const automatic = autoPreview ? previewReply(call) : null;
+    if (automatic === null) sent.push(call);
     return Promise.resolve(
-      new Response(JSON.stringify(reply(call)), {
-        status,
+      new Response(JSON.stringify(automatic ?? reply(call)), {
+        status: automatic === null ? status : 200,
         headers: { "content-type": "application/json" },
       }),
     );
@@ -137,6 +153,7 @@ function stubFetch(t: TestContext, reply: (sent: Sent) => unknown, status = 200)
 function stubReplies(
   t: TestContext,
   reply: (sent: Sent) => { status: number; body: unknown },
+  autoPreview = true,
 ) {
   const sent: Sent[] = [];
   const original = globalThis.fetch;
@@ -146,8 +163,11 @@ function stubReplies(
       method: init?.method,
       body: init?.body === undefined ? null : JSON.parse(String(init.body) || "null"),
     };
-    sent.push(call);
-    const answer = reply(call);
+    const automatic = autoPreview ? previewReply(call) : null;
+    if (automatic === null) sent.push(call);
+    const answer = automatic === null
+      ? reply(call)
+      : { status: 200, body: automatic };
     return Promise.resolve(
       new Response(JSON.stringify(answer.body), {
         status: answer.status,
@@ -234,6 +254,9 @@ test("correcting the URL and leaving the token alone sends the URL and no token"
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.method, "PUT");
   assert.deepEqual(sent[0]!.body, {
+    // The command is named rather than inferred, so a request that lost it is
+    // refused instead of being carried out as a write.
+    preview: "write",
     expectedVersion: 3,
     values: { baseUrl: "https://new.example" },
     clearSecrets: [],
@@ -365,6 +388,7 @@ test("a second tab is told somebody else saved, and keeps what was typed", async
   assert.deepEqual(
     sent[2]!.body,
     {
+      preview: "write",
       expectedVersion: 7,
       values: { baseUrl: "https://new.example", projectKey: "NEW-9" },
       clearSecrets: [],
@@ -521,14 +545,28 @@ test("the wait says how long the provider has, out loud", async (t) => {
     resolve = done;
   });
   const original = globalThis.fetch;
-  globalThis.fetch = (() =>
-    blocked.then(
+  globalThis.fetch = ((_url: string, init?: RequestInit) => {
+    const body = init?.body === undefined ? null : JSON.parse(String(init.body) || "null");
+    if ((body as { preview?: string } | null)?.preview === "save") {
+      return Promise.resolve(
+        new Response(JSON.stringify({
+          changesFingerprint: false,
+          enabledDefinitions: [],
+          inFlightRuns: 0,
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }
+    return blocked.then(
       () =>
         new Response(JSON.stringify({ integration: integration(), test: { ok: true } }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
-    )) as typeof globalThis.fetch;
+    );
+  }) as typeof globalThis.fetch;
   t.after(() => {
     globalThis.fetch = original;
   });
@@ -588,6 +626,51 @@ test("disconnecting names what is erased and what happens to this deployment aft
   await press(button(root, "Erase the stored values"));
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.method, "DELETE");
+});
+
+test("saving a fingerprint change names the enabled definition and the runs that would stop", async (t) => {
+  const sent = stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    if (body?.preview === "save") {
+      return {
+        status: 200,
+        body: {
+          changesFingerprint: true,
+          enabledDefinitions: [{ id: 7, name: "Deploy announcements" }],
+          inFlightRuns: 11,
+        },
+      };
+    }
+    return { status: 200, body: { integration: integration(), test: { ok: true } } };
+  }, false);
+  const root = render(t);
+  const url = inputs(root).find((node) => node.props.type === "url");
+  assert.ok(url);
+  type(url, "https://new.example");
+  await press(button(root, "Save and test"));
+
+  assert.equal(sent.length, 1, "the impact is read before the configuration is saved");
+  assert.match(text(root), /Deploy announcements/);
+  assert.match(text(root), /11 runs in flight will stop/);
+  assert.ok(button(root, "Save and stop 11 runs"));
+});
+
+test("a failed impact read says unknown and the destructive save button says so", async (t) => {
+  const sent = stubReplies(t, () => ({
+    status: 503,
+    body: { error: "database unavailable" },
+  }), false);
+  const root = render(t);
+  const url = inputs(root).find((node) => node.props.type === "url");
+  assert.ok(url);
+  type(url, "https://new.example");
+  await press(button(root, "Save and test"));
+
+  assert.equal(sent.length, 1, "a failed read never falls through to the save");
+  assert.match(text(root), /Enabled workflows: unknown/);
+  assert.match(text(root), /Runs in flight that would stop: unknown/);
+  assert.ok(button(root, "Save with unknown impact"));
+  assert.doesNotMatch(text(root), /0 runs in flight/);
 });
 
 test("an integration whose values live in the environment is not offered Disconnect", (t) => {

@@ -244,8 +244,9 @@ startup with a clear error. The full reference lives in `SETUP.md`; the groups a
   (`GITLAB_TOKEN`, `GITLAB_HOST`), and per-provider webhook secrets. Repository
   profiles own the default branch. Legacy single-repo `GITHUB_OWNER`/`GITHUB_REPO`
   is still honored as a fallback.
-- **Messaging:** `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID`, `CHAT_SDK_BOT_NAME` (default
-  `ai-workflow`), `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_USER_IDS`. (There is no `CHAT_SDK_API_KEY`.)
+- **Messaging:** `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID`, `SLACK_SIGNING_SECRET`,
+  `SLACK_ALLOWED_USER_IDS`. (There is no `CHAT_SDK_API_KEY`. The bot's display name is
+  whatever the Slack app is called; `CHAT_SDK_BOT_NAME` was retired in S9.)
 - **Agent:** Harness profiles own provider and model. The credentials required are those of the
   providers your harness profiles use: `ANTHROPIC_API_KEY` for Claude profiles and
   `CODEX_API_KEY` or `CODEX_CHATGPT_OAUTH_TOKEN` for Codex profiles. The Codex pricing feed

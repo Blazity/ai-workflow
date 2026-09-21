@@ -1,0 +1,1 @@
+- The Integrations connection page now names enabled workflows and counts runs in flight before disconnecting or applying a connection change that would stop them; if the impact cannot be read, the confirmation says it is unknown instead of showing zero.
