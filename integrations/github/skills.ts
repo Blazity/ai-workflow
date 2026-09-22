@@ -75,7 +75,7 @@ async function gitHubCall<T>(operation: () => Promise<T>): Promise<T> {
         422,
       );
     }
-    throw new Error("GitHub could not be reached to read this repository");
+    throw new Error("GitHub could not be reached to read this repository", { cause: error });
   }
 }
 

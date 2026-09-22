@@ -714,12 +714,13 @@ export class GitLabAdapter implements
       // the producer it reports it as: a check without a producer is one core
       // cannot trust, so manual dispatch of a failed pipeline found nothing.
       failedChecks: failedPipeline
-        ? failedPipelineChecks(failedPipeline.id, failedPipeline.failedJobs).map((check) => ({
-            ...check,
-            producer: GITLAB_CI_PRODUCER,
-            ...(typeof source === "string" ? { source } : {}),
-            trustedByDefault: isTrustedByDefaultPipeline(source),
-          }))
+        ? failedPipelineChecks(failedPipeline.id, failedPipeline.failedJobs).map((check) =>
+            Object.assign(check, {
+              producer: GITLAB_CI_PRODUCER,
+              ...(typeof source === "string" ? { source } : {}),
+              trustedByDefault: isTrustedByDefaultPipeline(source),
+            }),
+          )
         : [],
       reviews: comments
         .filter((comment) => comment.body.trim().length > 0)
