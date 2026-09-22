@@ -1049,4 +1049,3 @@ describe("the verdict on a pull request delivery", () => {
     expect(state.botLogin).not.toHaveBeenCalled();
   });
 });
-
