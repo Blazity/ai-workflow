@@ -1052,6 +1052,10 @@ async function rememberRoutingAnswer(input: {
     // Neither the label nor the repository path may address a document: the
     // subject key comes from orgSubjectKey and the doc path is a constant.
     const subjectKey = orgSubjectKey(chosen.provider, owner);
+    // Every secret the deployment knows, for the redaction below. A set that
+    // cannot be read lands in the catch at the bottom and nothing is written.
+    const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
+    const secrets = await knownSecretValues();
     const stored = await getConnectedMemoryDocument(subjectKey, REPO_ROUTING_DOC_PATH);
     let existing = stored ? parseRepoRoutingDocument(stored.content) : [];
     // `stored?.version ?? 0` is the required idiom: the key may never be present
@@ -1071,6 +1075,7 @@ async function rememberRoutingAnswer(input: {
         renderRepoRoutingDocument({ owner, entries: merged.entries }),
         MAX_ROUTING_DOC_BYTES,
         false,
+        secrets,
       );
       // Fail closed. Text that could not be scrubbed never reaches the store, and
       // a truncated routing document is worse than a missing one: the cut can land

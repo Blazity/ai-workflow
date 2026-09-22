@@ -12,6 +12,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ db: null as unknown }));
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
+// A deployment with nothing connected: what it knows is its environment's
+// secrets. These cases break the store on purpose, and the known set is read
+// from the same database, so it is stated here rather than read from a fake
+// that only answers the calls the store makes.
+vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/integrations/runtime.js")>();
+  const { environmentSecretValues } = await import("../../run-observability/configured-secrets.js");
+  return { ...actual, knownSecretValues: async () => environmentSecretValues() };
+});
 vi.mock("../../infra/logger.js", () => ({
   logger: { child: () => ({ warn: vi.fn(), info: vi.fn() }), warn: vi.fn(), info: vi.fn() },
 }));

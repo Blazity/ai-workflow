@@ -145,6 +145,8 @@ export interface McpToolServices extends McpGateServices {
   fetchRunDetail(
     runId: string,
     ticketOrigin: string,
+    /** The set the calling tool resolved; persisted step errors are redacted with it. */
+    secrets: readonly string[],
   ): Promise<{
     run: RunDetail;
     steps: RunStep[];
@@ -282,11 +284,12 @@ export function createMcpToolServices(
       return savePromptVersionWithPolicy(db, { ...input, body: validatePromptBody(input.body) });
     },
 
-    fetchRunDetail: (runId, ticketOrigin) =>
+    fetchRunDetail: (runId, ticketOrigin, secrets) =>
       fetchRunDetailFromDb({
         db,
         runId,
         ticketOrigin,
+        secrets,
       }),
     getRunReplay: (input) => getRunReplay({ db, ...input }),
     getRunReplayAvailability: (input) => getRunReplayAvailability({ db, ...input }),

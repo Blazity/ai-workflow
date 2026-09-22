@@ -52,9 +52,12 @@ const step: RunStep = {
   },
 };
 
+/** No configured secret in play: these cases are about stacks, IDs and bounds. */
+const NO_SECRETS: readonly string[] = [];
+
 describe("sanitizeRunDetailForResponse", () => {
   it("drops raw stacks and redacts legacy run and step errors", () => {
-    const sanitized = sanitizeRunDetailForResponse({
+    const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run,
       steps: [step],
     });
@@ -70,13 +73,13 @@ describe("sanitizeRunDetailForResponse", () => {
   });
 
   it("does not mutate the collector result", () => {
-    sanitizeRunDetailForResponse({ run, steps: [step] });
+    sanitizeRunDetailForResponse({ secrets: NO_SECRETS, run, steps: [step] });
     expect(run.error?.stack).toBe("RAW_STACK");
     expect(step.error?.stack).toBe("STEP_STACK");
   });
 
   it("synthesizes a cause for a failed run that recorded none", () => {
-    const sanitized = sanitizeRunDetailForResponse({
+    const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: { ...run, error: null },
       steps: [],
     });
@@ -86,7 +89,7 @@ describe("sanitizeRunDetailForResponse", () => {
   });
 
   it("synthesizes a cause for a blocked run that recorded none", () => {
-    const sanitized = sanitizeRunDetailForResponse({
+    const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: { ...run, status: "blocked", error: null },
       steps: [],
     });
@@ -96,7 +99,7 @@ describe("sanitizeRunDetailForResponse", () => {
   });
 
   it("leaves a non-terminal run without a synthesized error", () => {
-    const sanitized = sanitizeRunDetailForResponse({
+    const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: { ...run, status: "running", error: null },
       steps: [],
     });
@@ -104,7 +107,7 @@ describe("sanitizeRunDetailForResponse", () => {
   });
 
   it("keeps a recorded reason instead of the fallback", () => {
-    const sanitized = sanitizeRunDetailForResponse({
+    const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: { ...run, error: { message: "Run stopped on budget: cost 5 exceeds limit 3" } },
       steps: [],
     });
@@ -122,7 +125,7 @@ describe("sanitizeRunDetailForResponse", () => {
       "(github:Blazity/ai-workflow-prod: canonical clone failed: Clon [...] " +
       "s://github.com/Blazity/ai-workflow-prod.git/': The requested URL returned error: 403) " +
       "Diagnostic ID: AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1";
-    const sanitized = sanitizeRunDetailForResponse({
+    const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: { ...run, error: { message } },
       steps: [],
     });
@@ -139,7 +142,7 @@ describe("sanitizeRunDetailForResponse", () => {
   });
 
   it("takes the run's own trailing diagnostic ID when the tail quotes an inner one", () => {
-    const sanitized = sanitizeRunDetailForResponse({
+    const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: {
         ...run,
         error: {
@@ -168,7 +171,7 @@ describe("sanitizeRunDetailForResponse", () => {
       `AIW-DIAG-${secret}-notanattempt`,
       `AIW-DIAG-${secret}.9`,
     ]) {
-      const sanitized = sanitizeRunDetailForResponse({
+      const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
         run: {
           ...run,
           error: { message: `Publish failed. Diagnostic ID: ${smuggled}` },
@@ -194,7 +197,7 @@ describe("sanitizeRunDetailForResponse", () => {
     // the next person to move the bound moves this with it.
     const pad = "pad ".repeat(Math.ceil(MESSAGE_MAX_LENGTH / 4));
     const buried = `Publish failed. ${pad}Diagnostic ID: ${id} ${pad}`;
-    const sanitized = sanitizeRunDetailForResponse({
+    const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: { ...run, error: { message: buried } },
       steps: [],
     });
@@ -214,27 +217,21 @@ describe("sanitizeRunDetailForResponse", () => {
     // their shape, and it runs only on the path that produces `message`.
     // Extracting from normalized.message skips that layer entirely, so a secret
     // shaped like a diagnostic ID would pass the shape check and be echoed.
-    const prior = process.env.AIW_TEST_REPLAY_SECRET;
     const secretShapedLikeAnId = "AIW-DIAG-wrun_01SECRETRUNIDVALUE000000000-node-1";
-    process.env.AIW_TEST_REPLAY_SECRET = secretShapedLikeAnId;
-    try {
-      const sanitized = sanitizeRunDetailForResponse({
-        run: {
-          ...run,
-          error: { message: `Publish failed. Diagnostic ID: ${secretShapedLikeAnId}` },
-        },
-        steps: [],
-      });
-      expect(JSON.stringify(sanitized)).not.toContain("01SECRETRUNIDVALUE");
-      expect(sanitized.run.error?.code).toBeUndefined();
-    } finally {
-      if (prior === undefined) delete process.env.AIW_TEST_REPLAY_SECRET;
-      else process.env.AIW_TEST_REPLAY_SECRET = prior;
-    }
+    const sanitized = sanitizeRunDetailForResponse({
+      run: {
+        ...run,
+        error: { message: `Publish failed. Diagnostic ID: ${secretShapedLikeAnId}` },
+      },
+      steps: [],
+      secrets: [secretShapedLikeAnId],
+    });
+    expect(JSON.stringify(sanitized)).not.toContain("01SECRETRUNIDVALUE");
+    expect(sanitized.run.error?.code).toBeUndefined();
   });
 
   it("drops a malformed code rather than echoing or truncating it", () => {
-    const sanitized = sanitizeRunDetailForResponse({
+    const sanitized = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: {
         ...run,
         error: { message: "Publish failed.", code: "AIW-DIAG-123" },
@@ -247,37 +244,28 @@ describe("sanitizeRunDetailForResponse", () => {
 
   it("still admits a real diagnostic ID from either the code field or the message", () => {
     const id = "AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1";
-    const fromCode = sanitizeRunDetailForResponse({
+    const fromCode = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: { ...run, error: { message: "Publish failed.", code: id } },
       steps: [],
     });
     expect(fromCode.run.error?.code).toBe(id);
 
-    const fromMessage = sanitizeRunDetailForResponse({
+    const fromMessage = sanitizeRunDetailForResponse({ secrets: NO_SECRETS,
       run: { ...run, error: { message: `Publish failed. Diagnostic ID: ${id}` } },
       steps: [],
     });
     expect(fromMessage.run.error?.code).toBe(id);
   });
 
-  it("redacts even short configured environment secrets", () => {
-    const prior = process.env.AIW_TEST_REPLAY_SECRET;
-    process.env.AIW_TEST_REPLAY_SECRET = "q7!";
-    try {
-      const sanitized = sanitizeRunDetailForResponse({
-        run: {
-          ...run,
-          error: { message: "provider echoed q7! exactly" },
-        },
-        steps: [],
-      });
-      expect(sanitized.run.error?.message).not.toContain("q7!");
-    } finally {
-      if (prior === undefined) {
-        delete process.env.AIW_TEST_REPLAY_SECRET;
-      } else {
-        process.env.AIW_TEST_REPLAY_SECRET = prior;
-      }
-    }
+  it("redacts even short configured secrets", () => {
+    const sanitized = sanitizeRunDetailForResponse({
+      run: {
+        ...run,
+        error: { message: "provider echoed q7! exactly" },
+      },
+      steps: [],
+      secrets: ["q7!"],
+    });
+    expect(sanitized.run.error?.message).not.toContain("q7!");
   });
 });

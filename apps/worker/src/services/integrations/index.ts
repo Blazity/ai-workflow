@@ -64,6 +64,14 @@ export async function readVcsBotLogin(
   return resolver.readVcsBotLogin(kind);
 }
 
+// The secrets core redacts and scans for, and the one failure policy every
+// caller shares: see secret-values.ts.
+export {
+  IntegrationSecretsUnreadableError,
+  integrationSecretValues,
+  knownSecretValues,
+} from "./secret-values.js";
+
 export {
   databaseEnvironment,
   decideIntegrationWriteAccess,

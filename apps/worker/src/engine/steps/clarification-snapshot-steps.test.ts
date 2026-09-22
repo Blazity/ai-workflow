@@ -13,7 +13,25 @@ const mocks = vi.hoisted(() => ({
   unregisterSandbox: vi.fn(),
   configure: vi.fn(),
   recordSnapshot: vi.fn(),
+  integrationSecretValues: vi.fn(),
 }));
+
+/**
+ * What this deployment has connected: a tracing provider, whose key is in every
+ * agent sandbox by design (ADR-010, decision 7), and an issue tracker, whose
+ * token never is. The source applies the caller's filter the way the real one
+ * does (services/integrations/secret-values.test.ts holds that part).
+ */
+const CONNECTED = [
+  { capabilities: ["agent_tracing"], secret: "integration-fresh" },
+  { capabilities: ["issue_tracker"], secret: "tracker-token-fresh" },
+];
+function connectedSecretValues(options?: {
+  include?: (manifest: { capabilities: string[] }) => boolean;
+}): string[] {
+  const include = options?.include ?? (() => true);
+  return CONNECTED.filter((entry) => include(entry)).map((entry) => entry.secret);
+}
 
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: { get: mocks.get, create: mocks.create },
@@ -44,7 +62,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
 // to cover it too, and core no longer knows its variable name: it asks the
 // connected integrations. That is the seam this stands in for.
 vi.mock("../../services/integrations/runtime.js", () => ({
-  integrationSecretValues: async () => ["integration-fresh"],
+  integrationSecretValues: (options?: unknown) => mocks.integrationSecretValues(options),
   // Nothing is connected in this test, so a restored sandbox is configured
   // with no tracing at all.
   usableIntegrations: async () => [],
@@ -73,6 +91,73 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       },
     });
     mocks.recordSnapshot.mockResolvedValue(undefined);
+    mocks.integrationSecretValues.mockImplementation(async (options) =>
+      connectedSecretValues(options as Parameters<typeof connectedSecretValues>[0]),
+    );
+  });
+
+  /** A running source sandbox whose scan passes, with its calls recorded. */
+  function runningSource() {
+    const writeFiles = vi.fn(async () => undefined);
+    const runCommand = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: async () => "",
+      stderr: async () => "",
+    }));
+    const snapshot = vi.fn(async () => ({
+      snapshotId: "snap-1",
+      sourceSandboxId: "sbx-source",
+      expiresAt: new Date("2026-07-24T00:00:00.000Z"),
+      status: "created",
+    }));
+    mocks.get
+      .mockResolvedValueOnce({ sandboxId: "sbx-source", status: "running", writeFiles, runCommand, snapshot })
+      .mockResolvedValue({ sandboxId: "sbx-source", status: "stopped" });
+    return { writeFiles, runCommand, snapshot };
+  }
+
+  const snapshotInput = {
+    subjectKey: "ticket:jira:AIW-96",
+    ownerToken: "owner-parked",
+    clarificationId: "clar-1",
+    sandboxId: "sbx-source",
+    snapshotRequestedAt: "2026-07-17T00:00:00.000Z",
+    timeoutMs: 10_000,
+    pollIntervalMs: 0,
+  };
+
+  function decodedPatterns(writeFiles: ReturnType<typeof vi.fn>): string[] {
+    const [[files]] = writeFiles.mock.calls as unknown as [[Array<{ content: Buffer }>]];
+    return (JSON.parse(String(files[0]?.content)) as string[]).map((value) =>
+      Buffer.from(value, "base64").toString("utf8"),
+    );
+  }
+
+  // Red when: the scan asks for every connected integration's secret. Its
+  // patterns are written INTO the sandbox, so a tracker token, a GitHub App
+  // private key or any other credential the sandbox never held would be handed
+  // to whatever the agent left running there, by the scan itself.
+  it("writes into the sandbox only what the sandbox was handed: agent keys and the tracing key", async () => {
+    const { writeFiles } = runningSource();
+
+    await snapshotClarificationSandboxStep(snapshotInput);
+
+    const patterns = decodedPatterns(writeFiles);
+    expect(patterns).toEqual(expect.arrayContaining(["anthropic-fresh", "integration-fresh"]));
+    expect(patterns).not.toContain("tracker-token-fresh");
+  });
+
+  // Red when: settings that cannot be read are treated as "nothing connected",
+  // and the snapshot is taken with the tracing key never scanned for.
+  it("takes no snapshot when the integration settings cannot be read", async () => {
+    const { writeFiles, snapshot } = runningSource();
+    mocks.integrationSecretValues.mockRejectedValue(new Error("integration settings unreadable"));
+
+    await expect(snapshotClarificationSandboxStep(snapshotInput)).rejects.toThrow(
+      "clarification credential scan could not be prepared",
+    );
+    expect(writeFiles).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
   });
 
   it("scrubs credentials, snapshots for seven days, and polls until the source stopped", async () => {

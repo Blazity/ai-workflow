@@ -6,6 +6,7 @@ import { createMcpToolServices } from "../services/mcp/tool-services.js";
 import type { Adapters } from "../engine/support/adapters.js";
 import { unactivatedRepositoryCatalog } from "./repository-catalog.js";
 import { testDeploymentIntegrations } from "./integrations.js";
+import { knownSecretValues } from "../services/integrations/index.js";
 
 export function actorFor(overrides: Partial<McpActorContext> = {}): McpActorContext {
   return {
@@ -49,6 +50,9 @@ export function depsFor(
     // about integrations means. A test that IS about them overrides this with
     // `testDeploymentIntegrations([...])`, one line, no module mocked.
     loadDeploymentIntegrations: async () => testDeploymentIntegrations(),
+    // The same read the transport makes, on the test's own database. A test
+    // about one particular secret passes its own list.
+    loadKnownSecrets: () => knownSecretValues({ db }),
     requestId: "request-execute",
     traceId: "trace-execute",
     now,

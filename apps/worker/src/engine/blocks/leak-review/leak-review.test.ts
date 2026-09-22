@@ -5,7 +5,7 @@ import { RunBudgetError } from "../../helpers/run-budget.js";
 const mocks = vi.hoisted(() => ({
   sandboxGet: vi.fn(),
   generateStructured: vi.fn(),
-  configuredReplaySecrets: vi.fn(() => [] as string[]),
+  knownSecrets: vi.fn(() => [] as string[]),
   warn: vi.fn(),
   captureAgentBriefing: vi.fn(async (_briefing: unknown) => ({ outcome: "recorded", briefingId: 1 })),
 }));
@@ -20,8 +20,13 @@ vi.mock("../../agent-visibility/capture.js", () => ({
 vi.mock("../../../infra/logger.js", () => ({
   logger: { warn: mocks.warn, info: vi.fn(), error: vi.fn() },
 }));
-vi.mock("../../../run-observability/configured-secrets.js", () => ({
-  configuredReplaySecrets: mocks.configuredReplaySecrets,
+// The deployment's known secrets, the environment's and every connected
+// integration's (a token an admin stored in the dashboard included). The scan
+// asks this source and nothing else, so a value handed back here and set in no
+// environment variable is exactly what a stored connection looks like to it.
+vi.mock("../../../services/integrations/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/integrations/runtime.js")>()),
+  knownSecretValues: async () => mocks.knownSecrets(),
 }));
 
 import { execute } from "./execute.js";
@@ -140,7 +145,7 @@ describe("leak_review paramsSchema", () => {
 describe("leak_review execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.configuredReplaySecrets.mockReturnValue([]);
+    mocks.knownSecrets.mockReturnValue([]);
   });
 
   it("reports ok for a clean diff and screens it with the LLM once", async () => {
@@ -236,7 +241,7 @@ describe("leak_review execute", () => {
     expect(passes.output!.status).toBe("ok");
 
     vi.clearAllMocks();
-    mocks.configuredReplaySecrets.mockReturnValue([]);
+    mocks.knownSecrets.mockReturnValue([]);
     cleanScan();
     const added = await execute(
       makeNode("leak_review"),
@@ -390,7 +395,7 @@ describe("leak_review execute", () => {
   });
 
   it("fails when a configured environment secret appears in the diff", async () => {
-    mocks.configuredReplaySecrets.mockReturnValue(["hunter2-configured-secret"]);
+    mocks.knownSecrets.mockReturnValue(["hunter2-configured-secret"]);
     const ctx = singleRepoCtx({
       head: "head1",
       log: "chore: add config\n",
@@ -408,7 +413,7 @@ describe("leak_review execute", () => {
   });
 
   it("keeps most of a short configured secret out of the failure message", async () => {
-    mocks.configuredReplaySecrets.mockReturnValue(["abcd1234"]);
+    mocks.knownSecrets.mockReturnValue(["abcd1234"]);
     const ctx = singleRepoCtx({
       head: "head1",
       log: "chore: add config\n",

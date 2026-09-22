@@ -30,7 +30,13 @@ export { checkIntegrationPin, environmentReaderFrom } from "./resolve.js";
 
 export { resolveUsableIntegrations, usableIntegrations } from "./usable.js";
 
-export { integrationSecretValues } from "./secret-values.js";
+// The secrets core redacts and scans for. One source: see secret-values.ts for
+// the rule and for the failure policy every caller shares.
+export {
+  IntegrationSecretsUnreadableError,
+  integrationSecretValues,
+  knownSecretValues,
+} from "./secret-values.js";
 
 export async function getVcsBotLogin(
   kind: import("@shared/contracts").VcsProviderKind,

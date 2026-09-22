@@ -46,7 +46,6 @@ import {
   type VisibilityRemoval,
   type VisibilitySanitizer,
 } from "@shared/agent-visibility";
-import { configuredReplaySecrets } from "./configured-secrets.js";
 import { JWT_PATTERN, PERSONAL_DATA_RULES } from "./sanitizer.js";
 
 /**
@@ -76,7 +75,7 @@ export class VisibilityCaptureRefusal extends Error {
 }
 
 export interface VisibilityDetectorOptions {
-  /** Every configured secret value, as `configuredReplaySecrets` lists them. */
+  /** Every secret value the deployment knows (`knownSecretValues`), or the list a test states. */
   secrets: readonly string[];
   /** Defaults to `BRIEFING_REDACTS_PERSONAL_DATA`. */
   personalData?: boolean;
@@ -318,11 +317,15 @@ export function createVisibilityDetector(options: VisibilityDetectorOptions): Vi
   };
 }
 
-/** The detector over this deployment's configured secrets. */
-export function configuredVisibilityDetector(
-  environment: Readonly<Record<string, string | undefined>> = process.env,
-): VisibilitySanitizer {
-  return createVisibilityDetector({ secrets: configuredReplaySecrets(environment) });
+/**
+ * The detector over every secret this deployment knows (`knownSecretValues`),
+ * a connection an admin stored in the dashboard included. Asynchronous because
+ * that set is read, not listed; it throws when it cannot be read, and each
+ * caller stores or serves nothing in that case (secret-values.ts has the rule).
+ */
+export async function knownSecretsVisibilityDetector(): Promise<VisibilitySanitizer> {
+  const { knownSecretValues } = await import("../services/integrations/runtime.js");
+  return createVisibilityDetector({ secrets: await knownSecretValues() });
 }
 
 /**

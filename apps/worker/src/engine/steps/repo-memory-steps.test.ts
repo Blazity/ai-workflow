@@ -68,18 +68,25 @@ vi.mock("../../infra/logger.js", () => ({
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 vi.mock("../llm.js", () => ({ generateStructured: mocks.generateStructured }));
-// Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
-// this one included, so failing it here is what drives the null-result branch.
-vi.mock("../../run-observability/configured-secrets.js", async (importOriginal) => {
+// Passthrough by default. Failing it is what "the secrets could not be read"
+// looks like to a memory write: the write resolves the whole set first and
+// stores nothing without it.
+vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../run-observability/configured-secrets.js")>();
+    await importOriginal<typeof import("../../services/integrations/runtime.js")>();
   return {
     ...actual,
-    configuredReplaySecrets: (
-      ...args: Parameters<typeof actual.configuredReplaySecrets>
-    ) => {
-      if (mocks.redactionThrows) throw new Error("secret source unavailable");
-      return actual.configuredReplaySecrets(...args);
+    knownSecretValues: async () => {
+      if (mocks.redactionThrows) {
+        throw new actual.IntegrationSecretsUnreadableError(new Error("secret source unavailable"));
+      }
+      // A deployment with nothing connected: its environment's secrets. Read
+      // from the environment rather than the database, because several cases
+      // swap the database for a fake that only answers the store's own calls.
+      const { environmentSecretValues } = await import(
+        "../../run-observability/configured-secrets.js"
+      );
+      return environmentSecretValues();
     },
   };
 });
@@ -1541,7 +1548,7 @@ describe("distillRepoMemoryStep", () => {
     ]);
   });
 
-  it("does not store a document redaction could not scrub", async () => {
+  it("does not store a document when the secrets to redact it with cannot be read", async () => {
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
     mocks.redactionThrows = true;
     respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
@@ -1564,7 +1571,7 @@ describe("distillRepoMemoryStep", () => {
       { text: "Package manager is pnpm", runId: null },
     ]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: REPO_KEY, docPath: "facts", code: "rejected" }),
+      expect.objectContaining({ repo: REPO_KEY, docPath: "facts", code: "unavailable" }),
       "repo_memory_write_refused",
     );
   });
@@ -1601,7 +1608,7 @@ describe("distillRepoMemoryStep", () => {
     // The bracket the case rests on: the merge keeps both items because the
     // render fits exactly, and redaction is what pushes it over.
     expect(Buffer.byteLength(rendered, "utf8")).toBe(DOC_CAP);
-    expect(prepareMemoryContent(rendered, DOC_CAP, false)?.truncated).toBe(true);
+    expect(prepareMemoryContent(rendered, DOC_CAP, false, [SECRET])?.truncated).toBe(true);
 
     await storeRepoDocument("facts", [filler]);
     respond({ repositories: [{ repository: REPO_KEY, facts: [secretFact], lessons: [] }] });
@@ -2532,7 +2539,7 @@ describe("distillRepoMemoryStep org promotion", () => {
     );
   });
 
-  it("does not store an owner document redaction could not scrub", async () => {
+  it("does not store an owner document when the secrets to redact it with cannot be read", async () => {
     await storeFacts("github", REPO_PATH, ["Package manager is pnpm"]);
     await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm"]);
     mocks.redactionThrows = true;
@@ -2554,7 +2561,7 @@ describe("distillRepoMemoryStep org promotion", () => {
     expect(orgUpserts()).toEqual([]);
     expect(await orgRows()).toHaveLength(0);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ org: `github:${OWNER}`, docPath: "facts", code: "rejected" }),
+      expect.objectContaining({ org: `github:${OWNER}`, docPath: "facts", code: "unavailable" }),
       "repo_memory_write_refused",
     );
   });
@@ -2588,7 +2595,7 @@ describe("distillRepoMemoryStep org promotion", () => {
     // The bracket the case rests on: the merge keeps both items because the
     // render fits exactly, and redaction is what pushes it over.
     expect(Buffer.byteLength(rendered, "utf8")).toBe(DOC_CAP);
-    expect(prepareMemoryContent(rendered, DOC_CAP, false)?.truncated).toBe(true);
+    expect(prepareMemoryContent(rendered, DOC_CAP, false, [SECRET])?.truncated).toBe(true);
 
     await storeFacts("github", REPO_PATH, promoted);
     await storeFacts("github", SIBLING_REPO_PATH, promoted);

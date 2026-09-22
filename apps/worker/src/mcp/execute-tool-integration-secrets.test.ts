@@ -29,13 +29,10 @@ vi.mock("../infra/vcs-config.js", () => ({
   },
 }));
 const secretValues = vi.hoisted(() => vi.fn());
-vi.mock("../services/integrations/secret-values.js", () => ({
-  integrationSecretValues: () => secretValues(),
-}));
 
 const { createTestDb } = await import("../db/test-db.js");
 const { organization } = await import("../db/schema.js");
-const { executeMcpRead } = await import("./execute-tool.js");
+const { executeMcpMutation, executeMcpRead } = await import("./execute-tool.js");
 const { depsFor } = await import("../test-support/mcp.js");
 const { testSettingsSnapshot } = await import("../test-support/settings.js");
 
@@ -57,7 +54,10 @@ beforeEach(async () => {
 describe("an MCP result carrying a connected integration's secret", () => {
   it("comes back with the value redacted, asked for on this call", async () => {
     const result = await executeMcpRead({
-      deps: depsFor(db, () => new Date("2026-09-19T10:00:00.000Z"), { settings }),
+      deps: depsFor(db, () => new Date("2026-09-19T10:00:00.000Z"), {
+        settings,
+        loadKnownSecrets: () => secretValues(),
+      }),
       toolName: "runs.get",
       targetRefs: ["run:1"],
       operation: async () => ({ log: `agent printed env: KEY=${SECRET} and carried on` }),
@@ -74,7 +74,10 @@ describe("an MCP result carrying a connected integration's secret", () => {
     secretValues.mockResolvedValueOnce([]).mockResolvedValueOnce([SECRET]);
     const call = () =>
       executeMcpRead({
-        deps: depsFor(db, () => new Date("2026-09-19T10:00:00.000Z"), { settings }),
+        deps: depsFor(db, () => new Date("2026-09-19T10:00:00.000Z"), {
+        settings,
+        loadKnownSecrets: () => secretValues(),
+      }),
         toolName: "runs.get",
         targetRefs: ["run:1"],
         operation: async () => ({ log: `KEY=${SECRET}` }),
@@ -82,5 +85,47 @@ describe("an MCP result carrying a connected integration's secret", () => {
 
     expect(JSON.stringify(await call())).toContain(SECRET);
     expect(JSON.stringify(await call())).not.toContain(SECRET);
+  });
+
+  // Red when: a set that cannot be read is used as an empty one, so a result is
+  // sanitized with the environment's secrets alone and a stored token leaves.
+  it("is refused as retryable before anything runs when the secrets cannot be read", async () => {
+    secretValues.mockRejectedValue(new Error("integration settings unreadable"));
+    const operation = vi.fn(async () => ({ log: `KEY=${SECRET}` }));
+
+    await expect(
+      executeMcpRead({
+        deps: depsFor(db, () => new Date("2026-09-19T10:00:00.000Z"), {
+          settings,
+          loadKnownSecrets: () => secretValues(),
+        }),
+        toolName: "runs.get",
+        targetRefs: ["run:1"],
+        operation,
+      }),
+    ).rejects.toMatchObject({ code: "DEPENDENCY_UNAVAILABLE", retryable: true });
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  // Red when: the refusal is raised after the idempotency key is taken, which
+  // stores it as that key's outcome and makes the caller's retry a replay of a
+  // failure instead of the call it asked for.
+  it("leaves a mutation's idempotency key unspent, so the retry runs", async () => {
+    const call = () =>
+      executeMcpMutation({
+        deps: depsFor(db, () => new Date("2026-09-19T10:00:00.000Z"), {
+          settings,
+          loadKnownSecrets: () => secretValues(),
+        }),
+        toolName: "workflows.dispatch",
+        targetRefs: ["workflow:1"],
+        idempotencyKey: "dispatch-key-secrets",
+        payloadHash: "payload-secrets",
+        operation: async () => ({ started: true }),
+      });
+    secretValues.mockRejectedValueOnce(new Error("integration settings unreadable"));
+
+    await expect(call()).rejects.toMatchObject({ code: "DEPENDENCY_UNAVAILABLE" });
+    await expect(call()).resolves.toMatchObject({ data: { started: true } });
   });
 });

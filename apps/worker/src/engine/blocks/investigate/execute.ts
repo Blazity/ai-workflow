@@ -436,10 +436,11 @@ async function blockInvestigateRetrievalStep(input: {
   const { redactConfiguredSecretsInText } = await import(
     "../../../run-observability/sanitizer.js"
   );
-  const { configuredReplaySecrets } = await import(
-    "../../../run-observability/configured-secrets.js"
-  );
-  const secrets = configuredReplaySecrets();
+  // Every secret the deployment knows: ticket and chat evidence is text other
+  // people wrote, and a token pasted into it must not ride out in the step
+  // result. A set that cannot be read fails this step (maxRetries 0).
+  const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
+  const secrets = await knownSecretValues();
   return {
     evidence: evidence.map((item) => Object.assign({}, item, {
       title: redactConfiguredSecretsInText(item.title, secrets),

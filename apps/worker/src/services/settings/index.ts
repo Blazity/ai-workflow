@@ -8,7 +8,6 @@
 export {
   betterAuthBaseUrl,
   betterAuthSecret,
-  configuredSecretValues,
   cronSecret,
   dashboardOrganizationSettings,
   dashboardOrigin,

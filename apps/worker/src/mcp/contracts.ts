@@ -80,6 +80,15 @@ export type McpToolDependencies = {
    * this build shipped its first integration.
    */
   loadDeploymentIntegrations: () => Promise<DeploymentIntegrations>;
+  /**
+   * Every secret this deployment knows, which every result is redacted with
+   * before it leaves (`knownSecretValues`: the environment's and every
+   * connected integration's, a token stored in the dashboard included). A
+   * thunk for the reason the two above are: the transport passes the connected
+   * read, a test passes a value. It throws when the integration settings cannot
+   * be read, and the call is refused before anything runs.
+   */
+  loadKnownSecrets: () => Promise<string[]>;
   requestId: string;
   traceId: string;
   now: () => Date;

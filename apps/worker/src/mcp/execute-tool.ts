@@ -10,11 +10,7 @@ import type {
 import { McpPublicError } from "./contracts.js";
 import { logger } from "../services/system/logger.js";
 import type { McpRateLimitVerdict } from "../services/mcp/rate-limit-store.js";
-import {
-  configuredSecretValues,
-  mcpSettings,
-} from "../services/settings/runtime-settings.js";
-import { integrationSecretValues } from "../services/integrations/secret-values.js";
+import { mcpSettings } from "../services/settings/runtime-settings.js";
 import { authorizeTool, policyFor } from "./policy.js";
 import {
   MCP_CONTRACT_HASH,
@@ -85,12 +81,12 @@ type ExecutionContext = {
   inputHash: string;
   idempotencyKeyHash: string | null;
   /**
-   * What must never leave in a result: core's own credentials plus every
-   * connected integration's, resolved once per call. The integrations are
-   * read rather than listed, because their variable names belong to them and
-   * a stored connection has no variable at all. A provider's key can reach a
-   * result the long way round: it lives inside an agent sandbox, an agent can
-   * echo its own environment, and what it wrote is what a tool hands back.
+   * What must never leave in a result: every secret the deployment knows
+   * (`knownSecretValues`), core's own and every connected integration's,
+   * resolved once per call after the call is authorized. A provider's key can
+   * reach a result the long way round: it lives inside an agent sandbox, an
+   * agent can echo its own environment, and what it wrote is what a tool
+   * hands back. Empty until `prepare` fills it; nothing sanitizes before then.
    */
   secrets: string[];
 };
@@ -231,9 +227,6 @@ async function rejectRateLimited(
 }
 
 async function prepare(context: ExecutionContext): Promise<void> {
-  // Resolved here rather than at every sanitize, so one call reads one set,
-  // and before anything runs, so a failure cannot leave a result unredacted.
-  context.secrets.push(...(await integrationSecretValues()));
   const policy = policyFor(context.toolName);
   // Cheapest guard first, and ahead of the attempted row on purpose: a caller
   // over its budget writes at most one row per window, so a flood of refused
@@ -258,6 +251,27 @@ async function prepare(context: ExecutionContext): Promise<void> {
   } catch (error) {
     await auditFailure(context, error);
   }
+  // Resolved once per call, after the guards so a throttled or refused call
+  // does not pay for it, and before anything runs so a result can never be
+  // sanitized with part of the set. A set that cannot be read is a backend
+  // that is down: the call is refused as retryable, and for a mutation that
+  // happens before its idempotency key is taken, so no key is spent on it.
+  try {
+    context.secrets.push(...(await context.deps.loadKnownSecrets()));
+  } catch (error) {
+    logger.warn(
+      {
+        requestId: context.deps.requestId,
+        toolName: context.toolName,
+        err: error instanceof Error ? error.message : String(error),
+      },
+      "mcp_known_secrets_unreadable",
+    );
+    await auditFailure(
+      context,
+      new McpPublicError("DEPENDENCY_UNAVAILABLE", "Dependency unavailable", true),
+    );
+  }
 }
 
 function sanitize<T>(context: ExecutionContext, data: T): McpEnvelope<T> {
@@ -280,7 +294,9 @@ export async function executeMcpRead<T>(input: {
   deps: McpToolDependencies;
   toolName: McpToolName;
   targetRefs: string[];
-  operation: (signal: AbortSignal) => Promise<T>;
+  /** `secrets` is the set this call resolved, for an operation that runs a
+   *  sanitizer of its own before the result is sanitized again on the way out. */
+  operation: (signal: AbortSignal, secrets: readonly string[]) => Promise<T>;
 }): Promise<McpEnvelope<T>> {
   const startedAt = input.deps.now();
   const context: ExecutionContext = {
@@ -293,7 +309,7 @@ export async function executeMcpRead<T>(input: {
       toolName: input.toolName,
     }),
     idempotencyKeyHash: null,
-    secrets: configuredSecretValues(),
+    secrets: [],
   };
   await prepare(context);
 
@@ -301,7 +317,10 @@ export async function executeMcpRead<T>(input: {
   try {
     envelope = sanitize(
       context,
-      await input.operation(AbortSignal.timeout(readTimeoutMs(input.deps.settings))),
+      await input.operation(
+        AbortSignal.timeout(readTimeoutMs(input.deps.settings)),
+        context.secrets,
+      ),
     );
   } catch (error) {
     return auditFailure(context, error);
@@ -344,7 +363,7 @@ export async function executeMcpMutation<T>(input: {
     startedAt,
     inputHash: input.payloadHash,
     idempotencyKeyHash: hashCanonicalJson(input.idempotencyKey),
-    secrets: configuredSecretValues(),
+    secrets: [],
   };
   // Guarded rather than trusted, because "must be pure and must not throw" is a
   // docstring and not a mechanism. This runs in argument position on the audit

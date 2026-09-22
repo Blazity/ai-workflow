@@ -1,6 +1,5 @@
 import type { JsonValue } from "@shared/contracts";
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
-import { configuredReplaySecrets } from "../../../run-observability/configured-secrets.js";
 import { redactConfiguredSecretsInText } from "../../../run-observability/sanitizer.js";
 import {
   workspaceRepositoryAccess,
@@ -314,8 +313,12 @@ function describeSecretHits(hits: readonly SecretHit[]): string {
  * cleared every known secret shape, and replay sanitization redacts configured
  * secrets again downstream.
  */
-function sanitizeModelText(value: string, maxChars: number): string {
-  let text = redactConfiguredSecretsInText(value, configuredReplaySecrets());
+function sanitizeModelText(
+  value: string,
+  maxChars: number,
+  secrets: readonly string[],
+): string {
+  let text = redactConfiguredSecretsInText(value, secrets);
   for (const pattern of SECRET_MASK_PATTERNS) {
     text = text.replace(pattern, (match) => maskSecretValue(match));
   }
@@ -324,7 +327,7 @@ function sanitizeModelText(value: string, maxChars: number): string {
   return text.length > maxChars ? text.slice(0, maxChars) : text;
 }
 
-function normalizeLlmFindings(raw: unknown): LeakReviewFinding[] {
+function normalizeLlmFindings(raw: unknown, secrets: readonly string[]): LeakReviewFinding[] {
   if (raw === null || typeof raw !== "object") return [];
   const findings = (raw as { findings?: unknown }).findings;
   if (!Array.isArray(findings)) return [];
@@ -341,24 +344,29 @@ function normalizeLlmFindings(raw: unknown): LeakReviewFinding[] {
         file: sanitizeModelText(
           typeof record.file === "string" ? record.file : "",
           MAX_FILE_CHARS,
+          secrets,
         ),
         excerpt: sanitizeModelText(
           typeof record.excerpt === "string" ? record.excerpt : "",
           MAX_EXCERPT_CHARS,
+          secrets,
         ),
         reason: sanitizeModelText(
           typeof record.reason === "string" ? record.reason : "",
           MAX_REASON_CHARS,
+          secrets,
         ),
       },
     ];
   });
 }
 
-function normalizeLlmSummary(raw: unknown): string {
+function normalizeLlmSummary(raw: unknown, secrets: readonly string[]): string {
   if (raw === null || typeof raw !== "object") return "";
   const summary = (raw as { summary?: unknown }).summary;
-  return typeof summary === "string" ? sanitizeModelText(summary, MAX_SUMMARY_CHARS) : "";
+  return typeof summary === "string"
+    ? sanitizeModelText(summary, MAX_SUMMARY_CHARS, secrets)
+    : "";
 }
 
 async function readGitOutput(
@@ -396,7 +404,12 @@ async function blockLeakReviewCollectStep(input: {
     ...getSandboxCredentials(),
   });
 
-  const secrets = scannableConfiguredSecrets(configuredReplaySecrets());
+  // Every secret the deployment knows, a token an admin stored in the
+  // dashboard included: this scan is the backstop that stops an agent from
+  // publishing one, and the environment alone never holds a stored one. A set
+  // that cannot be read fails the step; nothing is published unscanned.
+  const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
+  const secrets = scannableConfiguredSecrets(await knownSecretValues());
   const sections: string[] = [];
   const diffStats: string[] = [];
   const scanned: string[] = [];
@@ -530,7 +543,13 @@ async function blockLeakReviewLlmScanStep(input: {
     () => import("../../agent-visibility/capture.js"),
   );
   const startedAt = Date.now();
+  // Resolved before the model is asked, so a set that cannot be read skips this
+  // report-only layer (it must never fail a run) instead of paying for an
+  // answer that could not be cleaned before it is kept.
+  let secrets: readonly string[] = [];
   try {
+    const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
+    secrets = await knownSecretValues();
     const result = await generateStructured({
       model: input.model,
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
@@ -541,8 +560,8 @@ async function blockLeakReviewLlmScanStep(input: {
     });
     return {
       ok: true,
-      findings: normalizeLlmFindings(result.object),
-      summary: normalizeLlmSummary(result.object),
+      findings: normalizeLlmFindings(result.object, secrets),
+      summary: normalizeLlmSummary(result.object, secrets),
       usage: result.usage,
       durationMs: Date.now() - startedAt,
     };
@@ -553,7 +572,7 @@ async function blockLeakReviewLlmScanStep(input: {
     // secrets, mask known secret-shaped runs, and bound it before it reaches a
     // log sink.
     const message = err instanceof Error ? err.message : String(err);
-    let redacted = redactConfiguredSecretsInText(message, configuredReplaySecrets());
+    let redacted = redactConfiguredSecretsInText(message, secrets);
     for (const pattern of SECRET_MASK_PATTERNS) {
       redacted = redacted.replace(pattern, (match) => maskSecretValue(match));
     }

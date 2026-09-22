@@ -32,18 +32,25 @@ vi.mock("../../infra/logger.js", () => ({
 }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
-// Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
-// this one included, so failing it here is what drives the null-result branch.
-vi.mock("../../run-observability/configured-secrets.js", async (importOriginal) => {
+// Passthrough by default. Failing it is what "the secrets could not be read"
+// looks like to a memory write: the write resolves the whole set first and
+// stores nothing without it.
+vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../run-observability/configured-secrets.js")>();
+    await importOriginal<typeof import("../../services/integrations/runtime.js")>();
   return {
     ...actual,
-    configuredReplaySecrets: (
-      ...args: Parameters<typeof actual.configuredReplaySecrets>
-    ) => {
-      if (mocks.redactionThrows) throw new Error("secret source unavailable");
-      return actual.configuredReplaySecrets(...args);
+    knownSecretValues: async () => {
+      if (mocks.redactionThrows) {
+        throw new actual.IntegrationSecretsUnreadableError(new Error("secret source unavailable"));
+      }
+      // A deployment with nothing connected: its environment's secrets. Read
+      // from the environment rather than the database, because several cases
+      // swap the database for a fake that only answers the store's own calls.
+      const { environmentSecretValues } = await import(
+        "../../run-observability/configured-secrets.js"
+      );
+      return environmentSecretValues();
     },
   };
 });
@@ -475,7 +482,7 @@ describe("seedRepoMemoryStep", () => {
     ]);
   });
 
-  it("does not store a seed redaction could not scrub", async () => {
+  it("does not store a seed when the secrets to redact it with cannot be read", async () => {
     mocks.redactionThrows = true;
     fakeSandbox({
       ...packageJson({ scripts: { test: "vitest run" } }),
@@ -487,12 +494,12 @@ describe("seedRepoMemoryStep", () => {
       pruned: 0,
       // S13: the provider refused this text and the step reports why, instead
       // of reading the same as a repository with nothing to derive.
-      unavailable: expect.stringContaining("could not be scrubbed"),
+      unavailable: expect.stringContaining("could not be read"),
     });
     expect(stepUpserts()).toEqual([]);
     expect(await repoRows()).toHaveLength(0);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api", code: "rejected" }),
+      expect.objectContaining({ repo: "github:acme/api", code: "unavailable" }),
       "repo_memory_seed_refused",
     );
   });
@@ -1066,7 +1073,7 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(await repoRows()).toHaveLength(0);
   });
 
-  it("does not store a pruned document redaction could not scrub", async () => {
+  it("does not store a pruned document when the secrets to redact it with cannot be read", async () => {
     await storeFacts(["Run lint with: pnpm lint"], "run_0");
     fakeSandbox(packageJson({ scripts: { test: "vitest run" } }));
     mocks.redactionThrows = true;
@@ -1076,7 +1083,7 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(await seedRepoMemoryStep(input)).toEqual({
       seeded: 0,
       pruned: 0,
-      unavailable: expect.stringContaining("could not be scrubbed"),
+      unavailable: expect.stringContaining("could not be read"),
     });
     expect(stepUpserts()).toEqual([]);
     expect(await factTexts()).toEqual(["Run lint with: pnpm lint"]);

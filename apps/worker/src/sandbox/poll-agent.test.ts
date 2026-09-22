@@ -100,6 +100,14 @@ vi.mock("@vercel/sandbox", () => sandboxModule);
 
 vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 
+// Every secret the deployment knows. The run-log tail is redacted with this
+// source and no other, so a value handed back here and set in no environment
+// variable is what a token an admin stored in the dashboard looks like to it.
+const knownSecrets = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
+vi.mock("../services/integrations/runtime.js", () => ({
+  knownSecretValues: () => knownSecrets(),
+}));
+
 function expectCurrentSandboxGet(sandboxId = "sbx-test-123") {
   expect(mockSandboxGet).toHaveBeenCalledTimes(1);
   const [options] = mockSandboxGet.mock.calls[0] as [
@@ -544,5 +552,30 @@ describe("collectPhase", () => {
           (args as string[])[1] === String(128 * 1024),
       ),
     ).toHaveLength(2);
+  });
+
+  // Red when: the persisted run-log tail is redacted with the environment's
+  // secrets alone. An agent that echoes a token an admin stored in the
+  // dashboard puts it in exactly this tail, and it is what a person reads.
+  it("redacts a secret stored in the dashboard out of the run-log tail it keeps", async () => {
+    const stored = "plainvalue3307stored";
+    knownSecrets.mockResolvedValueOnce([stored]);
+    mockRunCommand.mockImplementation((cmd: string, args: string[]) => {
+      const file = args.at(-1) ?? "";
+      if (cmd === "wc") return result("64");
+      if (file.includes("stderr")) return result(`agent echoed ${stored} into its log`);
+      if (file.includes("exit-code")) return result("1");
+      return result("");
+    });
+
+    const diagnostics = await collectPhaseReplayDiagnostics("sbx-test-123", {
+      stdout: "/tmp/stdout",
+      stderr: "/tmp/stderr",
+      structuredOutput: null,
+      exitCode: "/tmp/exit-code",
+    });
+
+    expect(JSON.stringify(diagnostics)).not.toContain(stored);
+    expect(diagnostics.stderr).toContain("[REDACTED:configured_secret]");
   });
 });

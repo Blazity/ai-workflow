@@ -5,7 +5,7 @@ import type { IntegrationConnectionPin } from "@shared/contracts";
 import type { CoreMessagingDelivery } from "../support/messaging.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { type WorkflowExecutionLogEvent } from "../../run-observability/safe-execution-log.js";
-import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
+import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { type AgentWorkflowInput } from "../agent-input.js";
 import type { ActiveRunOwner, TicketTransitionOwner } from "../internal/ports.js";
@@ -42,6 +42,20 @@ export async function postPrLinksComment(
 }
 postPrLinksComment.maxRetries = 0;
 
+/**
+ * What workflow scope built, redacted with every secret the deployment knows
+ * before a step stores it or posts it to the ticket. Workflow scope redacts
+ * with the environment's secrets alone, and a connection an admin stored in
+ * the dashboard is never in the environment. Throws when the set cannot be
+ * read (services/integrations/secret-values.ts has the rule), so nothing is
+ * written or posted with part of it.
+ */
+async function withKnownSecretsRedacted<T>(value: T): Promise<T> {
+  const { knownSecretValues } = await import("../../services/integrations/runtime.js");
+  const { redactConfiguredSecretsInJson } = await import("../../run-observability/sanitizer.js");
+  return redactConfiguredSecretsInJson(value, await knownSecretValues());
+}
+
 /** Durable report writer kept as a workflow step so a replay/cold resume can
  * safely retry the database boundary without importing the DB client into the
  * workflow bundle. */
@@ -49,7 +63,7 @@ async function recordRunAnalysisReportStep(report: RunAnalysisReport): Promise<v
   "use step";
   const { logger } = await import("../../infra/logger.js");
   const { recordConnectedRunAnalysisReport } = await import("../../run-analysis/persistence.js");
-  await recordConnectedRunAnalysisReport(report);
+  await recordConnectedRunAnalysisReport(await withKnownSecretsRedacted(report));
   logger.info({ runId: report.runId, stage: report.stage }, "run_analysis_report_recorded");
 }
 recordRunAnalysisReportStep.maxRetries = 2;
@@ -147,9 +161,10 @@ export async function postRunAnalysisCommentStep(
     return { state: "posted", attemptedAt, commentUrl: existingCommentUrl, error: null };
   }
   const dashboardUrl = ticketRunUrl(env.DASHBOARD_ORIGIN, ticketKey, report.runId);
+  const safeReport = await withKnownSecretsRedacted(report);
   const body = stage === "research"
-    ? formatResearchAnalysisComment(report, dashboardUrl)
-    : formatPublishedAnalysisComment(report, dashboardUrl);
+    ? formatResearchAnalysisComment(safeReport, dashboardUrl)
+    : formatPublishedAnalysisComment(safeReport, dashboardUrl);
   await assertConnectedActiveRunOwner(owner);
   const commentUrl = await issueTracker.postComment(ticketKey, body);
   const { logger } = await import("../../infra/logger.js");
@@ -191,9 +206,11 @@ function safeRunAnalysisReportError(error: unknown): string {
   return safeRunAnalysisError(error, "Run analysis report capture failed.");
 }
 
+/** Workflow scope, so the environment's secrets are all it can redact with;
+ *  the text only reaches a console line. */
 function safeRunAnalysisError(error: unknown, fallback: string): string {
   const envelope = sanitizeReplayValue(errorMessage(error), {
-    secrets: configuredReplaySecrets(),
+    secrets: environmentSecretValues(),
     maxBytes: 2 * 1024,
   });
   return !envelope.metadata.unavailable && typeof envelope.value === "string"
@@ -302,8 +319,11 @@ async function postFailureReasonCommentStep(
   const { createAdapters } = await loadAdaptersPort();
   const { issueTracker } = await createAdapters();
   try {
+    // Composed in workflow scope, which cannot see a secret stored in the
+    // dashboard; a set that cannot be read posts nothing (the catch below).
+    const safeReason = await withKnownSecretsRedacted(reason);
     await assertConnectedActiveRunOwner(owner);
-    await issueTracker.postComment(ticketKey, reason);
+    await issueTracker.postComment(ticketKey, safeReason);
   } catch (err) {
     if (isRunControlError(err)) throw err;
     const { logger } = await import("../../infra/logger.js");
@@ -361,8 +381,9 @@ async function recordRunFailureReasonStep(
       import("@shared/contracts"),
       import("../../infra/logger.js"),
     ]);
-  const parts = runStatusReasonParts(reason);
   try {
+    // The same sentence the ticket is given, redacted the same way.
+    const parts = runStatusReasonParts(await withKnownSecretsRedacted(reason));
     await recordConnectedRunStatusReason(
       runId,
       // The clamp is the sentence's, not the code's: a closed-set member is

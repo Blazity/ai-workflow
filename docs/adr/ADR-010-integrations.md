@@ -2094,13 +2094,20 @@ the whole of what a page sees beyond what its own package ships.
 
 Three core reads now ask the registry instead of naming a provider:
 
-- `integrationSecretValues()` feeds the redaction pass over MCP results and the
-  credential scan a clarification snapshot runs. Core used to list
-  `GENAI_ENGINE_API_KEY` by hand; an integration's variable names are its own,
-  and a stored connection has no variable at all, so the set is resolved rather
-  than listed. A tracing provider's key is inside a sandbox by design and an
-  agent can echo its own environment, so dropping that coverage with the
-  variable would have been a real regression.
+- `knownSecretValues()` (`services/integrations/secret-values.ts`) is the one
+  set every redaction and scan in core uses: run logs, replays, telemetry,
+  memory, briefings, the analysis report and failure comments, leak review and
+  MCP results. It is the environment's secret-named values plus every connected
+  integration's secret fields, so a connection stored in the dashboard, which
+  never reaches the environment, is covered the same as one from a variable.
+  When the integration settings cannot be read it throws, and no caller carries
+  on with the environment half: a smaller set there is a stored secret written
+  in the clear. Workflow scope cannot read a connection, so it redacts with the
+  environment half and the step that writes or publishes the value applies the
+  whole set. The clarification snapshot scan asks the same source for the
+  `agent_tracing` integrations only, because its patterns are written into the
+  sandbox and decision 7 names tracing as the one integration whose secret is
+  there by design.
 - Integration settings that cannot be read mean "nothing usable" where the
   caller is doing something alongside the work (tracing a sandbox, drawing a
   page, where the page says the worker did not answer rather than that the

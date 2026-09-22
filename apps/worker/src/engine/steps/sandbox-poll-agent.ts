@@ -4,7 +4,6 @@ import {
   REPLAY_CAPTURE_TIMEOUT_MS,
   replayCaptureWithinTimeout,
 } from "../../run-observability/capture-timeout.js";
-import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import type { ReplaySanitizationMetadata } from "@shared/contracts";
 import {
@@ -146,12 +145,13 @@ interface BoundedDiagnosticTail {
 
 function safeReplayDiagnostic(
   source: BoundedDiagnosticTail,
+  secrets: readonly string[],
 ): {
   text: string;
   metadata: ReplaySanitizationMetadata;
 } {
   const envelope = sanitizeReplayValue(source.text, {
-    secrets: configuredReplaySecrets(),
+    secrets,
     retain: "tail",
   });
   return {
@@ -239,8 +239,14 @@ export async function collectPhaseReplayDiagnostics(
     collectBoundedReplayPhaseDiagnostics(sandboxId, paths),
     timeoutMs,
   );
-  const stdout = safeReplayDiagnostic(artifacts.stdout);
-  const stderr = safeReplayDiagnostic(artifacts.stderr);
+  // Every secret the deployment knows, not the environment's alone: an agent
+  // that echoes its tracing key or a token an admin stored in the dashboard
+  // puts it in exactly this tail. A set that cannot be read fails the step
+  // rather than returning a tail redacted with part of it.
+  const { knownSecretValues } = await import("../../services/integrations/runtime.js");
+  const secrets = await knownSecretValues();
+  const stdout = safeReplayDiagnostic(artifacts.stdout, secrets);
+  const stderr = safeReplayDiagnostic(artifacts.stderr, secrets);
   return {
     stdout: stdout.text,
     stderr: stderr.text,

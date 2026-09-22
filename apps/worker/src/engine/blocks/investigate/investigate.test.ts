@@ -19,8 +19,9 @@ vi.mock("../../../engine/support/adapters.js", () => ({
     messaging: { searchMessages: mocks.searchMessages },
   }),
 }));
-vi.mock("../../../run-observability/configured-secrets.js", () => ({
-  configuredReplaySecrets: () => mocks.secrets,
+vi.mock("../../../services/integrations/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/integrations/runtime.js")>()),
+  knownSecretValues: async () => mocks.secrets,
 }));
 
 import {
