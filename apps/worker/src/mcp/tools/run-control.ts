@@ -6,6 +6,7 @@ import type {
 import type { HookClarificationRow } from "../../services/mcp/tool-services.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
+import { issueTrackerIfConnected, requireIssueTracker } from "../issue-tracker-access.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
@@ -363,7 +364,9 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
             // person reading why their run stopped sees which client stopped it.
             actorLabel: `MCP ${deps.actor.clientId}`,
             runRegistry: deps.adapters.runRegistry,
-            issueTracker: deps.adapters.issueTracker,
+            // Optional: a cancel stops the run whether or not there is a board,
+            // and moves its ticket back only when there is one to move it on.
+            issueTracker: issueTrackerIfConnected(deps.adapters),
           });
 
           switch (result.outcome) {

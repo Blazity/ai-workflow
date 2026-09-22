@@ -5,11 +5,13 @@ export {
 } from "../../adapters/issue-tracker/types.js";
 export { logger } from "../../infra/logger.js";
 /**
- * The subject key derived from the tracker this deployment actually has.
- * Re-exported here for the same reason as the line above: the MCP tools are
- * app tier and reach the engine through this file (ADR-001).
+ * The subject key a ticket has on a given tracker. The tool holds the tracker
+ * its call resolved (`mcp/issue-tracker-access.ts`) and derives the key from
+ * that, rather than resolving the tracker a second time. Re-exported here for
+ * the same reason as the line above: the MCP tools are app tier and reach the
+ * engine through this file (ADR-001).
  */
-export { ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
+export { ticketSubjectKey } from "../../engine/support/subject-key.js";
 export {
   isLegacyStoredWorkflowDefinition,
 } from "../../engine/definition/stored-definition.js";

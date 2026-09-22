@@ -65,15 +65,16 @@ import {
   organization,
   workflowRuns,
 } from "../../db/schema.js";
-import type { Adapters } from "../../engine/support/adapters.js";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,
 } from "../../adapters/run-registry/types.js";
+import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import { MCP_TOOL_CATALOG } from "../tool-catalog.js";
 import { policyFor } from "../policy.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerRunControlTools } from "./run-control.js";
 
 const ORG_ID = "org-execute";
@@ -195,16 +196,18 @@ function registryStub(): RunRegistryAdapter {
 
 async function connectedClient(
   actor: Partial<McpActorContext> = { scopes: DISPATCH_ONLY },
+  tracker: Parameters<typeof adaptersFor>[0] = {
+    fetchTicket,
+    moveTicket,
+    postComment,
+  } as unknown as IssueTrackerAdapter,
 ) {
   const server = new McpServer({ name: "run-control-test", version: "0.1.0" });
   registerRunControlTools(
     server,
     depsFor(db, () => now, {
       actor: actorFor(actor),
-      adapters: {
-        issueTracker: { fetchTicket, moveTicket, postComment },
-        runRegistry,
-      } as unknown as Adapters,
+      adapters: adaptersFor(tracker, { runRegistry }),
     }),
   );
   const client = new Client({ name: "run-control-test-client", version: "1.0.0" });
@@ -546,6 +549,24 @@ describe("runs.cancel", () => {
     // MCP client stopped it rather than an unexplained stop.
     expect(await runStatus()).toBe("blocked");
   });
+
+  // A deployment with no usable tracker can still stop a run. The tool read the
+  // throwing getter, so every cancel there was an INTERNAL_ERROR that also spent
+  // its key. The tracker is optional to the cancel itself: without one the run
+  // is stopped and its ticket is simply not moved.
+  it.each(["not_connected", "unreadable"] as const)(
+    "stops a live run when the tracker is %s",
+    async (tracker) => {
+      const client = await connectedClient({ scopes: DISPATCH_ONLY }, tracker);
+
+      const result = await cancel(client);
+
+      expect(dataOf(result)).toMatchObject({ runId: RUN_ID, outcome: "cancelled" });
+      expect(hooks.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(moveTicket).not.toHaveBeenCalled();
+      expect(await runStatus()).toBe("blocked");
+    },
+  );
 
   it("retires the question a cancelled run was parked on", async () => {
     const client = await connectedClient();

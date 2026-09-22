@@ -3,7 +3,7 @@ import { settingsSnapshotFromEnvironment } from "../services/settings/snapshot.j
 import type { Db } from "../db/types.js";
 import type { McpActorContext, McpToolDependencies } from "../mcp/contracts.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
-import type { Adapters } from "../engine/support/adapters.js";
+import { adaptersFor } from "./issue-tracker.js";
 import { unactivatedRepositoryCatalog } from "./repository-catalog.js";
 import { testDeploymentIntegrations } from "./integrations.js";
 import { knownSecretValues } from "../services/integrations/index.js";
@@ -39,7 +39,9 @@ export function depsFor(
     overrides.settings ?? settingsSnapshotFromEnvironment();
   return {
     services: createMcpToolServices(db, settings),
-    adapters: {} as Adapters,
+    // No issue tracker connected, for the same reason as the integrations
+    // below: a test that is about a tracker says which one it has.
+    adapters: adaptersFor("not_connected"),
     actor: actorFor(),
     settings,
     // The bridge, which is what a deployment that has not activated the catalog

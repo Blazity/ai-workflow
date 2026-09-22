@@ -31,11 +31,11 @@ import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js
 import type { Db } from "../../db/client.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import type { Adapters } from "../../engine/support/adapters.js";
 import type { ActiveRunEntry } from "../../adapters/run-registry/types.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { policyFor } from "../policy.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerTicketWriteTools } from "./ticket-write.js";
 
 const TICKET = "PROJ-1";
@@ -125,7 +125,7 @@ function ownedBy(runId: string | null): ActiveRunEntry {
 }
 
 async function connectedClient(
-  issueTracker: IssueTrackerAdapter,
+  issueTracker: Parameters<typeof adaptersFor>[0],
   over: {
     runRegistry?: ReturnType<typeof fakeRunRegistry>;
     actor?: Partial<McpActorContext>;
@@ -136,10 +136,9 @@ async function connectedClient(
     server,
     depsFor(db, () => new Date("2026-08-13T12:00:00.000Z"), {
       actor: actorFor({ scopes: WRITE_ONLY, ...over.actor }),
-      adapters: {
-        issueTracker,
+      adapters: adaptersFor(issueTracker, {
         runRegistry: over.runRegistry ?? fakeRunRegistry(null),
-      } as unknown as Adapters,
+      }),
     }),
   );
   const client = new Client({ name: "ticket-write-test-client", version: "1.0.0" });
@@ -300,6 +299,48 @@ describe("tickets.comment", () => {
     expect(issueTracker.postComment).not.toHaveBeenCalled();
     expect(policyFor("tickets.comment").scope).toBe("tickets:write");
   });
+});
+
+describe("ticket writes without a usable issue tracker", () => {
+  const calls = [
+    ["tickets.comment", { ticketKey: TICKET, body: "Deployed to preview.", idempotencyKey: KEY_ONE }],
+    ["tickets.transition", { ticketKey: TICKET, target: "Ai", idempotencyKey: KEY_ONE }],
+    ["tickets.create", { summary: "Fix the login redirect", idempotencyKey: KEY_ONE }],
+  ] as const;
+
+  // Each tool used to read a getter that throws a plain error with no tracker:
+  // INTERNAL_ERROR, which told the agent nothing, and a key spent on a call that
+  // did nothing. Refused by name now, before any effect.
+  it.each(calls)("%s refuses with the deployment's answer", async (name, args) => {
+    const runRegistry = fakeRunRegistry(null);
+    const client = await connectedClient("not_connected", { runRegistry });
+
+    const result = await client.callTool({ name, arguments: { ...args } });
+
+    expect(errorPayload(result)).toMatchObject({ code: "VALIDATION_FAILED", retryable: false });
+    expect(errorPayload(result).message).toContain("Integrations page");
+    expect(runRegistry.get).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["nothing is connected", "not_connected", "VALIDATION_FAILED", false],
+    ["the settings cannot be read", "unreadable", "DEPENDENCY_UNAVAILABLE", true],
+  ] as const)(
+    "gives the key back when %s, so the same call succeeds once a tracker is there",
+    async (_shape, tracker, code, retryable) => {
+      const args = { ticketKey: TICKET, body: "Deployed to preview.", idempotencyKey: KEY_ONE };
+      const refusing = await connectedClient(tracker);
+      const refused = await refusing.callTool({ name: "tickets.comment", arguments: args });
+      expect(errorPayload(refused)).toMatchObject({ code, retryable });
+
+      const issueTracker = fakeIssueTracker();
+      const connected = await connectedClient(issueTracker);
+      const posted = await connected.callTool({ name: "tickets.comment", arguments: args });
+
+      expect(dataOf(posted)).toMatchObject({ ticketKey: TICKET, alreadyPosted: false });
+      expect(issueTracker.postComment).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("tickets.transition", () => {

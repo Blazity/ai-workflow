@@ -105,7 +105,9 @@ export interface McpToolServices extends McpGateServices {
     options: {
       actorLabel: string;
       runRegistry: RunRegistryAdapter;
-      issueTracker: IssueTrackerAdapter;
+      /** Absent when no tracker is usable: the run is stopped either way, and
+       *  its ticket is moved back only when there is a board to move it on. */
+      issueTracker?: IssueTrackerAdapter;
     },
   ): ReturnType<typeof cancelRunForOperator>;
 

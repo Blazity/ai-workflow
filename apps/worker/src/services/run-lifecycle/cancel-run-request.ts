@@ -9,7 +9,7 @@
  */
 import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import type { SettingsSnapshot } from "@shared/contracts";
-import { createAdapters } from "../../engine/support/adapters.js";
+import { createAdapters, issueTrackerIfConnected } from "../../engine/support/adapters.js";
 import {
   cancelConnectedRunForOperator,
   type CancelRunForOperatorResult,
@@ -30,7 +30,10 @@ export async function cancelRunAsOperator(
   return cancelConnectedRunForOperator(runId, {
     actorLabel,
     runRegistry: adapters.runRegistry,
-    issueTracker: adapters.issueTracker,
+    // Optional, as it is to the cancel itself: a deployment with no usable
+    // tracker can still stop a run. Reading the throwing getter here refused
+    // every dashboard cancel on such a deployment with a server error.
+    issueTracker: issueTrackerIfConnected(adapters),
     settings,
   });
 }

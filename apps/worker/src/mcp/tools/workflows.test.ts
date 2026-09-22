@@ -24,13 +24,13 @@ const service = vi.hoisted(() => ({
 }));
 vi.mock("../../services/manual-dispatch/service.js", () => service);
 
-import type { Adapters } from "../../engine/support/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";
 import { ManualDispatchError } from "../../services/manual-dispatch/errors.js";
 import type { McpActorContext } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerWorkflowTools } from "./workflows.js";
 
 const ORG_ID = "org-execute";
@@ -75,7 +75,7 @@ async function connectedClient(actor: Partial<McpActorContext> = {}) {
     server,
     // `now` is read through the closure so a single client can act twice a day
     // apart, which is what the idempotency reclaim case needs.
-    depsFor(db, () => now, { actor: actorFor(actor), adapters: {} as Adapters }),
+    depsFor(db, () => now, { actor: actorFor(actor), adapters: adaptersFor("not_connected") }),
   );
   const client = new Client({ name: "workflows-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
