@@ -1,5 +1,5 @@
 Status: draft
-Last-verified: 2026-09-21
+Last-verified: 2026-09-22
 
 # Integrations: every third party as one package that unlocks blocks, screens and tools
 
@@ -832,24 +832,36 @@ environment, the `GITHUB_OWNER`/`GITHUB_REPO` pair and the single-provider
 page rows, which is the same trade S10 made. Local gates do not stand in for
 the stage's production run or the drain; those remain release evidence.
 
-S11 drain, 2026-09-21: no step identity is added, removed, moved or renamed,
-and no step's recorded input or result changes shape. Two recorded VALUES
-change, and a run replaying across either boundary is unsupported:
+S11 drain, 2026-09-21, corrected 2026-09-22: no step identity is added,
+removed, moved or renamed. One recorded shape and one recorded value change:
 
-- The opaque handle on a failed check. A `check_run` delivery whose `app`
-  carries no slug used to mint `owner: <sender login>` while the adapter
-  reading the same check back minted `owner: ""`, so the two never compared
-  equal and the check bound to nothing. Both are `check.app?.slug ?? ""` now.
-  Every step whose recorded input carries a `trigger_pr_checks_failed` payload
-  holds handles in the old shape: `acknowledgePrTriggerDispatchStep`,
-  `blockPrTriggerRepositoriesWithSiblingsStep` and `blockFetchPrContextsStep`.
+- The failed check on a `trigger_pr_checks_failed` envelope. Main recorded a
+  GitHub check as `checkRunId` plus `appSlug`, and a GitLab one by name (a job
+  name, or `"pipeline"` for the whole pipeline) under a `pipelineId` on the
+  pull request. This branch records an opaque `handle` instead. An envelope
+  outlives a deploy: a queued or drained ingestion row, and the input of
+  `acknowledgePrTriggerDispatchStep`, `blockPrTriggerRepositoriesWithSiblingsStep`
+  and `blockFetchPrContextsStep` in a run that started before it. The one
+  place that compares checks, `bindCurrentPullRequest`, therefore reads both
+  shapes: a check without a handle reaches the provider as
+  `recordedCheckIdentity(check, pr)`, and each provider's `sameHandle` rebuilds
+  the identity it once wrote (GitHub by check run id and app slug, GitLab by
+  pipeline id, the sentinel as the pipeline and a job by its pipeline and
+  name). That is what main compared, blind spot included: a GitHub check whose
+  app had no slug was recorded under the sender's login and never matched on
+  main either. Main-shape envelopes in
+  `engine/support/trigger-handle-binding.test.ts` prove it. Every other reader
+  takes only a check's name, conclusion and link, which kept their shape.
+  A delivery without `trustedByDefault` is read the same way, by the legacy
+  default in `dispatch-trigger.ts`.
 - `PrePrCheckFailure.provider` on the checks-budget record
   (`engine/blocks/pre-pr-checks.ts`), which was `"github"` when no repository
   was skipped and is the empty string now.
 
 This branch requires a total drain before it merges in any case, under the
-protocol above, so neither is a new drain event; both are listed because the
-list has to stay honest about what a replay would read.
+protocol above. Neither change adds a drain event: the first is read in both
+shapes, and the second is listed because the list has to stay honest about
+what a replay would read.
 
 S11 connection shape, 2026-09-21: the pinned connection shape now carries
 GitHub's eight fields (`services/integrations/connection-shape.test.ts`

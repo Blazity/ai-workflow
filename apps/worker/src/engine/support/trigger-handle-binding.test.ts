@@ -1,5 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
+import type { TriggerEvent } from "@shared/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 /**
@@ -300,5 +301,175 @@ describe("a failed GitLab pipeline binds to the merge request it ran for", () =>
     expect(
       bindCurrentPullRequest(event!, current, (left, right) => vcs.sameHandle(left, right)),
     ).toBeNull();
+  });
+});
+
+/**
+ * Envelopes stored before this deploy. A trigger is persisted when it arrives
+ * and bound when it dispatches, which can be after a deploy: a drained or
+ * queued envelope was written by main's normalizer, whose failed checks carry
+ * `checkRunId` and `appSlug` (GitHub) or sit under a `pipelineId` on the pull
+ * request (GitLab) and have no `handle`. These are typed as plain objects in
+ * exactly main's shape (`packages/contracts/trigger-events.ts` on main), not
+ * built by today's normalizer, because today's normalizer cannot write them.
+ */
+describe("an envelope recorded before checks carried a handle still binds", () => {
+  function recordedGitHubEnvelope(checkRunId: number) {
+    return {
+      delivery: {
+        provider: "github" as const,
+        producer: "github-actions",
+        deliveryId: "legacy-gh",
+        semanticKey: `checks:Codertocat/Hello-World:2:${delivery.check_run.head_sha}`,
+      },
+      triggerType: "trigger_pr_checks_failed" as const,
+      pr: {
+        provider: "github" as const,
+        repoPath: "Codertocat/Hello-World",
+        prNumber: 2,
+        prUrl: "https://github.com/Codertocat/Hello-World/pull/2",
+        headRef: "changes",
+        headSha: delivery.check_run.head_sha,
+        baseRef: "master",
+        title: "",
+        author: "unknown",
+        isDraft: false,
+        failedChecks: [
+          {
+            name: delivery.check_run.name,
+            conclusion: delivery.check_run.conclusion,
+            detailsUrl: delivery.check_run.details_url,
+            checkRunId,
+            appSlug: "github-actions",
+          },
+        ],
+      },
+    };
+  }
+
+  it("binds a GitHub check recorded by its check run id and app", async () => {
+    const vcs = adapter();
+    mockOctokit.pulls.get.mockResolvedValue(pullRequest());
+    mockOctokit.paginate.mockResolvedValue(checkRunsForHead({ slug: "github-actions" }));
+    const current = await vcs.getPRHead(2);
+
+    const bound = bindCurrentPullRequest(
+      recordedGitHubEnvelope(delivery.check_run.id) as unknown as TriggerEvent,
+      current,
+      (left, right) => vcs.sameHandle(left, right),
+    );
+
+    expect(bound?.pr.failedChecks?.map((check) => check.name)).toEqual([
+      delivery.check_run.name,
+    ]);
+  });
+
+  it("drops a GitHub check recorded for a different check run", async () => {
+    const vcs = adapter();
+    mockOctokit.pulls.get.mockResolvedValue(pullRequest());
+    mockOctokit.paginate.mockResolvedValue(checkRunsForHead({ slug: "github-actions" }));
+    const current = await vcs.getPRHead(2);
+
+    expect(
+      bindCurrentPullRequest(
+        recordedGitHubEnvelope(delivery.check_run.id + 1) as unknown as TriggerEvent,
+        current,
+        (left, right) => vcs.sameHandle(left, right),
+      ),
+    ).toBeNull();
+  });
+
+  function recordedGitLabEnvelope(failedChecks: Array<{ name: string; conclusion: string }>) {
+    return {
+      delivery: {
+        provider: "gitlab" as const,
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId: "legacy-gl",
+      },
+      triggerType: "trigger_pr_checks_failed" as const,
+      pr: {
+        provider: "gitlab" as const,
+        repoPath: "gitlab-org/gitlab-test",
+        providerProjectId: 1,
+        prNumber: 1,
+        prUrl: "http://192.168.64.1:3005/gitlab-org/gitlab-test/merge_requests/1",
+        headRef: "test",
+        headSha: "",
+        baseRef: "master",
+        title: "Test",
+        author: "root",
+        isDraft: false,
+        pipelineId: 31,
+        failedChecks,
+      },
+    };
+  }
+
+  function gitLabHead(headPipelineId: number) {
+    const client = {
+      MergeRequests: {
+        show: vi.fn().mockResolvedValue({
+          diff_refs: { head_sha: "5f2d4c1e9a7b3d6f8e0c2a4b6d8f0e1c3a5b7d9f" },
+          source_branch: "test",
+          target_branch: "master",
+          state: "opened",
+          head_pipeline: { id: headPipelineId, status: "failed" },
+        }),
+      },
+      Jobs: {
+        all: vi.fn().mockResolvedValue([
+          { id: 378, name: "test-build", status: "failed" },
+          { id: 377, name: "test-image", status: "success" },
+        ]),
+      },
+    };
+    return new GitLabAdapter(
+      { token: "t", projectId: "gitlab-org/gitlab-test", baseBranch: "master" },
+      client as never,
+    );
+  }
+
+  it("binds a GitLab job recorded by name under its pipeline", async () => {
+    const vcs = gitLabHead(31);
+    const current = await vcs.getPRHead(1);
+
+    const bound = bindCurrentPullRequest(
+      recordedGitLabEnvelope([{ name: "test-build", conclusion: "failed" }]) as unknown as TriggerEvent,
+      current,
+      (left, right) => vcs.sameHandle(left, right),
+    );
+
+    expect(bound?.pr.headSha).toBe("5f2d4c1e9a7b3d6f8e0c2a4b6d8f0e1c3a5b7d9f");
+    expect(bound?.pr.failedChecks?.map((check) => check.name)).toEqual(["test-build"]);
+  });
+
+  it("binds GitLab's whole-pipeline sentinel while that pipeline is still the failed head", async () => {
+    const vcs = gitLabHead(31);
+    const current = await vcs.getPRHead(1);
+
+    const bound = bindCurrentPullRequest(
+      recordedGitLabEnvelope([{ name: "pipeline", conclusion: "failed" }]) as unknown as TriggerEvent,
+      current,
+      (left, right) => vcs.sameHandle(left, right),
+    );
+
+    expect(bound?.pr.failedChecks?.map((check) => check.name)).toEqual(["pipeline"]);
+  });
+
+  it("drops a GitLab envelope once another pipeline is the merge request's head", async () => {
+    const vcs = gitLabHead(32);
+    const current = await vcs.getPRHead(1);
+
+    for (const failedChecks of [
+      [{ name: "test-build", conclusion: "failed" }],
+      [{ name: "pipeline", conclusion: "failed" }],
+    ]) {
+      expect(
+        bindCurrentPullRequest(recordedGitLabEnvelope(failedChecks) as unknown as TriggerEvent, current, (left, right) =>
+          vcs.sameHandle(left, right),
+        ),
+      ).toBeNull();
+    }
   });
 });

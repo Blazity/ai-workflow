@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrTriggerPayload } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
@@ -207,15 +208,19 @@ function deps(overrides: Record<string, unknown> = {}) {
     repositoryCatalog,
     ...(!("getCurrentHead" in overrides) && !("getCurrentPullRequest" in overrides)
       ? {
+          // The provider still reports every check the event names as failed,
+          // each read back as a fresh object and compared by value, the way a
+          // provider re-reading a check from its API compares it.
           getCurrentPullRequest: vi.fn(async (pr: PrTriggerPayload) => ({
             headSha: pr.headSha,
             headRef: pr.headRef,
             baseRef: pr.baseRef,
             state: "open" as const,
             checks: pr.failedChecks
-              ? { state: "red" as const, failed: pr.failedChecks }
+              ? { state: "red" as const, failed: structuredClone(pr.failedChecks) }
               : { state: "green" as const, failed: [] },
           })),
+          sameHandle: (left: unknown, right: unknown) => isDeepStrictEqual(left, right),
         }
       : {}),
     issueTracker: { fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }) },
@@ -771,7 +776,9 @@ describe("provider trigger dispatch", () => {
         triggerType: "trigger_pr_checks_failed",
         pr: {
           ...event().pr,
-          failedChecks: [{ name: "ci / build", conclusion: "failure" }],
+          failedChecks: [
+            { name: "ci / build", conclusion: "failure", handle: { id: 101, owner: "ci" } },
+          ],
         },
       });
 
@@ -1082,7 +1089,9 @@ describe("pull request auto-fix cap", () => {
         ...event().pr,
         provider: "gitlab",
         prUrl: "https://gitlab.com/acme/app/-/merge_requests/7",
-        failedChecks: [{ name: "pipeline", conclusion: "failed" }],
+        failedChecks: [
+          { name: "pipeline", conclusion: "failed", handle: { kind: "aggregate", id: 31 } },
+        ],
       },
     });
   }

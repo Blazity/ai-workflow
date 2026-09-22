@@ -32,6 +32,48 @@ export interface PullRequestHead {
 declare const handle: unique symbol;
 export type VcsOpaqueHandle = { readonly [handle]: true };
 
+/**
+ * What a trigger envelope recorded about a failed check before checks carried
+ * a handle: the check and the pull request it was recorded on, exactly as they
+ * were stored.
+ *
+ * Envelopes outlive deploys (a pending trigger waiting for capacity, a
+ * delivery waiting to be retried, a run replaying its start), so every shape
+ * this product ever wrote must still bind. The fields that identified a check
+ * then were the provider's (a check run id, a pipeline id), which core cannot
+ * read, so core hands the whole record to the provider's `sameHandle` wrapped
+ * in this, and the provider recognises the shape it once wrote. A provider
+ * that never wrote one answers "not the same", which is what a missing handle
+ * answered before.
+ */
+const RECORDED_BEFORE_HANDLES = "recordedBeforeHandles";
+
+export interface RecordedCheckIdentity {
+  readonly check: Readonly<Record<string, unknown>>;
+  readonly pullRequest: Readonly<Record<string, unknown>>;
+}
+
+export function recordedCheckIdentity(
+  check: object,
+  pullRequest: object,
+): VcsOpaqueHandle {
+  return { [RECORDED_BEFORE_HANDLES]: { check, pullRequest } } as unknown as VcsOpaqueHandle;
+}
+
+/** The record inside {@link recordedCheckIdentity}, or null for a handle a
+ *  provider minted itself. */
+export function readRecordedCheckIdentity(
+  value: VcsOpaqueHandle | undefined,
+): RecordedCheckIdentity | null {
+  const recorded =
+    value && typeof value === "object"
+      ? (value as unknown as Record<string, unknown>)[RECORDED_BEFORE_HANDLES]
+      : undefined;
+  if (!recorded || typeof recorded !== "object") return null;
+  const { check, pullRequest } = recorded as Partial<RecordedCheckIdentity>;
+  return check && pullRequest ? { check, pullRequest } : null;
+}
+
 export interface PullRequestFailedCheck {
   handle?: VcsOpaqueHandle;
   name: string;

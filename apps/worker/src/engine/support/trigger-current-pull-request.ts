@@ -1,5 +1,6 @@
 import type { PullRequestHead, VcsOpaqueHandle } from "../../adapters/vcs/types.js";
 import type { TriggerEvent } from "@shared/contracts";
+import { recordedCheckIdentity } from "@integrations/sdk";
 import { createRepositoryVCS } from "./vcs-runtime.js";
 
 /** Re-read the provider facts needed to prove that a queued/bound trigger is
@@ -61,17 +62,18 @@ export function bindCurrentPullRequest<T extends TriggerEvent>(
   if (event.triggerType !== "trigger_pr_checks_failed") return event;
   if (!current.checks || current.checks.state !== "red") return null;
   const currentChecks = current.checks;
-  const failedChecks = (pr.failedChecks ?? []).filter((failed) =>
-    currentChecks.failed.some(
+  const failedChecks = (pr.failedChecks ?? []).filter((failed) => {
+    // An envelope recorded before checks carried a handle still binds: the
+    // provider that wrote it reads its own old fields back in `sameHandle`.
+    const recorded =
+      (failed.handle as VcsOpaqueHandle | undefined) ?? recordedCheckIdentity(failed, pr);
+    return currentChecks.failed.some(
       (currentFailed) =>
         currentFailed.name === failed.name &&
         currentFailed.conclusion === failed.conclusion &&
-        sameHandle(
-          currentFailed.handle,
-          failed.handle as VcsOpaqueHandle | undefined,
-        ),
-    ),
-  );
+        sameHandle(currentFailed.handle, recorded),
+    );
+  });
   if (failedChecks.length === 0) return null;
   return {
     ...event,

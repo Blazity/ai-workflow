@@ -2,6 +2,7 @@ import type { Octokit } from "@octokit/rest";
 import {
   FatalError,
   isReviewLedgerWorkItem,
+  readRecordedCheckIdentity,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
@@ -170,6 +171,19 @@ type GitHubHandle = {
 
 function githubHandle(value: GitHubHandle): VcsOpaqueHandle {
   return value as unknown as VcsOpaqueHandle;
+}
+
+/**
+ * The identity a handle names, including one an envelope recorded before
+ * handles existed: such an envelope stored the check run's id as `checkRunId`
+ * and its app beside it as `appSlug`, which is the pair a handle holds now.
+ */
+function gitHubIdentity(value: VcsOpaqueHandle): Partial<GitHubHandle> {
+  const recorded = readRecordedCheckIdentity(value);
+  if (!recorded) return value as unknown as Partial<GitHubHandle>;
+  const { checkRunId, appSlug } = recorded.check;
+  if (typeof checkRunId !== "number") return {};
+  return { id: checkRunId, owner: typeof appSlug === "string" ? appSlug : "" };
 }
 
 function isSelfAuthoredReviewError(error: unknown): boolean {
@@ -534,8 +548,8 @@ export class GitHubAdapter
 
   sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean {
     if (!left || !right) return left === right;
-    const a = left as unknown as Partial<GitHubHandle>;
-    const b = right as unknown as Partial<GitHubHandle>;
+    const a = gitHubIdentity(left);
+    const b = gitHubIdentity(right);
     return a.provider === b.provider && a.id === b.id && a.owner === b.owner;
   }
 
