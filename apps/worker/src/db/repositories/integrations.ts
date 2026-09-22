@@ -170,6 +170,40 @@ export async function readIntegrationConnections(
   return result;
 }
 
+/**
+ * Every stored version that still holds secrets, by integration id, newest
+ * first: the active one, the ones it replaced, and a latest one that never
+ * became active.
+ *
+ * What the deployment's redaction set is built from (`knownSecretValues`), and
+ * why it is every version rather than the active one: a key rotated while runs
+ * are in flight is still in their sandboxes, and dropping it from the set the
+ * moment a new version is saved printed it in the clear in those runs' logs,
+ * replays and publications. A version stops holding secrets when a disconnect
+ * redacts it (`disconnectIntegration`), which is also when it leaves this read.
+ * One statement, so the set cannot be built from two moments of the table.
+ */
+export async function readRetainedIntegrationSecrets(
+  db: Db,
+): Promise<Map<string, StoredIntegrationVersion[]>> {
+  const rows = rowsOf<VersionRow>(
+    await db.execute(sql`
+      SELECT integration_id, version, config, secrets, secret_digests,
+             test_status, test_reason, test_message, tested_at, created_at
+      FROM ${integrationConnectionVersions}
+      WHERE redacted_at IS NULL AND secrets <> '{}'::jsonb
+      ORDER BY integration_id, version DESC
+    `),
+  );
+  const byIntegration = new Map<string, StoredIntegrationVersion[]>();
+  for (const row of rows) {
+    const list = byIntegration.get(row.integration_id) ?? [];
+    list.push(toVersion(row));
+    byIntegration.set(row.integration_id, list);
+  }
+  return byIntegration;
+}
+
 export interface SaveIntegrationVersionInput {
   readonly integrationId: string;
   /** The `latestVersion` the caller last read. A mismatch writes nothing. */
@@ -499,6 +533,10 @@ export async function readIntegrationAudit(
  */
 export function readConnectedIntegrationConnections() {
   return readIntegrationConnections(getDb());
+}
+
+export function readConnectedRetainedIntegrationSecrets() {
+  return readRetainedIntegrationSecrets(getDb());
 }
 
 export function saveConnectedIntegrationVersion(input: SaveIntegrationVersionInput) {

@@ -42,6 +42,10 @@ const tracker = defineIntegration({
 vi.mock("../../db/client.js", () => ({
   getDb: () => {
     if (databaseDown) throw new Error("database unreachable");
+    if (blinks > 0) {
+      blinks -= 1;
+      throw new Error("connection reset");
+    }
     return db;
   },
 }));
@@ -68,6 +72,8 @@ const STORED_TRACKER_TOKEN = "plainvalue9902tracker";
 
 let db: Db;
 let databaseDown = false;
+/** How many reads fail before the database answers again. */
+let blinks = 0;
 const originalEnv = { ...process.env };
 
 beforeEach(async () => {
@@ -77,17 +83,23 @@ beforeEach(async () => {
   delete process.env.TRACER_API_KEY;
   delete process.env.TRACKER_API_TOKEN;
   databaseDown = false;
+  blinks = 0;
 });
 
 afterEach(() => {
   process.env = { ...originalEnv };
 });
 
-async function store(integrationId: string, key: string, value: string): Promise<void> {
+async function store(
+  integrationId: string,
+  key: string,
+  value: string,
+  expectedVersion = 0,
+): Promise<void> {
   const result = await saveIntegrationConnection({
     actor: { role: "admin", id: "user-1" },
     integrationId,
-    expectedVersion: 0,
+    expectedVersion,
     values: { [key]: value },
     clearSecrets: [],
   });
@@ -135,5 +147,54 @@ describe("the secrets this deployment knows", () => {
       include: (manifest) => manifest.capabilities.includes("agent_tracing"),
     });
     expect(tracingOnly).toEqual([STORED_TRACER_KEY]);
+  });
+
+  // Red when: the set holds only the active version. Runs in flight still carry
+  // the key they started with in their sandboxes, so a rotation mid-run printed
+  // the old key in the clear in their logs, replays and publications.
+  it("keeps a rotated key in the set, since runs started with it still hold it", async () => {
+    await store("tracer", "apiKey", STORED_TRACER_KEY);
+    await store("tracer", "apiKey", "plainvalue5520rotated", 1);
+
+    expect(await knownSecretValues()).toEqual(
+      expect.arrayContaining([STORED_TRACER_KEY, "plainvalue5520rotated"]),
+    );
+  });
+
+  it("forgets the stored keys once a disconnect has erased them", async () => {
+    await store("tracer", "apiKey", STORED_TRACER_KEY);
+    const { disconnectIntegration } = await import("../../db/repositories/integrations.js");
+    await disconnectIntegration(db, { integrationId: "tracer", actorId: "user-1" });
+
+    expect(await knownSecretValues()).not.toContain(STORED_TRACER_KEY);
+  });
+
+  // Red when: the source reads the connection tables twice (once for the
+  // states, once for the values), which is two round trips on every hot path
+  // and two moments a save can land between.
+  it("reads the connection tables in one statement", async () => {
+    await store("tracer", "apiKey", STORED_TRACER_KEY);
+    const execute = vi.spyOn(db, "execute");
+
+    await knownSecretValues();
+
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("rides out a database blink instead of failing the caller", async () => {
+    await store("tracer", "apiKey", STORED_TRACER_KEY);
+    blinks = 1;
+
+    expect(await knownSecretValues()).toContain(STORED_TRACER_KEY);
+  });
+
+  it("refuses with a sentence that carries none of the database's words", async () => {
+    databaseDown = true;
+
+    const refusal = await knownSecretValues().catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(IntegrationSecretsUnreadableError);
+    expect((refusal as Error).message).not.toContain("unreachable");
+    expect(((refusal as Error).cause as Error).message).toBe("database unreachable");
   });
 });
