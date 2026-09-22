@@ -20,7 +20,7 @@
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { unlistedMentions } from "./core-references.mjs";
+import { describeCore, MENTION_RULE, unlistedMentions } from "./core-references.mjs";
 import { INTEGRATION_ID } from "../../packages/contracts/integration-id.js";
 
 export interface NewIntegrationOptions {
@@ -140,10 +140,9 @@ export async function createIntegration(options: NewIntegrationOptions): Promise
     const more = spelled.length > MENTIONS_SHOWN ? `\n  and ${spelled.length - MENTIONS_SHOWN} more` : "";
     refuse(
       `core spells "${id}" in ${spelled.length} file${spelled.length === 1 ? "" : "s"} that no allowlist row covers:\n${shown}${more}\n` +
-        `Core is ${config.coreRoots.join(", ")}; integrations/, scripts/, docs/ and test files are not core. ` +
-        "A spelling is the id as whole words, in any case, of an identifier, a string, a regular expression, JSX text or a file path (GITHUB_TOKEN, githubClient and GitHub spell github; githubusercontent does not); comments and the text of a className or style attribute do not count. " +
+        `${describeCore(config)} ${MENTION_RULE} ` +
         `Once integrations/${id} exists the core-reference gate fails on each of these files. ` +
-        `Where a file is not about this provider (sample data, a URL, a word that contains the id), add "${id}" to the allowlist row that covers it in scripts/gates/core-references.json, or add a row with the reason, then run this again. ` +
+        `Where a file is not about this provider (sample data, a URL, a word that happens to start with the id), add "${id}" to the allowlist row that covers it in scripts/gates/core-references.json, or add a row with the reason, then run this again. ` +
         "Where it is about the provider, that code moves behind the integration first. Otherwise choose another id. Nothing was written.",
     );
   }

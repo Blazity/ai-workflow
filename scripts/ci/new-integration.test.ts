@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
+import { MENTION_RULE } from "../gates/core-references.mjs";
 import { readIntegrations } from "../gates/generate-integration-registry.js";
 import { createIntegration, parseArguments } from "../gates/new-integration.js";
 
@@ -149,12 +150,16 @@ test("an id that already names an integration is refused", async (t) => {
   );
 });
 
-test("an id core source already spells is refused, naming the files, because the core-reference gate would fail on them", async (t) => {
+test("an id core source already spells is refused, naming the files and the gate's own rule, because the core-reference gate would fail on them", async (t) => {
   const directory = await scratch(t);
-  await assert.rejects(
-    createIntegration({ root, id: "acme", target: join(directory, "acme") }),
-    /core spells "acme" in \d+ files? that no allowlist row covers:\n {2}(?:apps|packages)\/[\s\S]*Nothing was written\./u,
-  );
+  await assert.rejects(createIntegration({ root, id: "acme", target: join(directory, "acme") }), (error: Error) => {
+    assert.match(
+      error.message,
+      /core spells "acme" in \d+ files? that no allowlist row covers:\n {2}(?:apps|packages)\/[\s\S]*Nothing was written\./u,
+    );
+    assert.ok(error.message.includes(MENTION_RULE), "the refusal states the rule the gate applies, word for word");
+    return true;
+  });
 });
 
 /**
@@ -165,8 +170,11 @@ test("an id core source already spells is refused, naming the files, because the
  */
 test("an id core spells only as presentation or under an allowlist row is accepted, and the rest is named", async (t) => {
   const directory = await scratch(t);
-  const core = relative(root, join(directory, "core"));
-  mkdirSync(join(root, core), { recursive: true });
+  // Core is what git would carry, so the scratch core sits in the checkout,
+  // outside every ignored directory, and goes away with the test.
+  const coreDirectory = await mkdtemp(join(root, ".scaffold-core-"));
+  t.after(() => rm(coreDirectory, { recursive: true, force: true }));
+  const core = relative(root, coreDirectory);
   writeFileSync(
     join(root, core, "bar.tsx"),
     'export const Bar = () => <div className="ease-quokka" style={{ animation: "x 1s quokka" }} />;\n',

@@ -19,7 +19,7 @@
   "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support modules and any test-support directory, workflow-graph-suites, mcp-dogfood, fixture files and fixtures trees are test material by another name: nothing outside a test imports them, and a fixture naming a provider is the subject of the test rather than a coupling in the product.",
   "plannedIntegrations": {},
   "plannedIntegrationsReason": "A name core still writes, with the stage that takes it away. Empty since S12: every provider this build knows now arrives from the registry, so a new name here would be a provider core started writing before an integration owned it. The gate watches these as well as the registry ids, so it passes on what is here today and fails on anything new.",
-  "incidentalReason": "A row may carry \"incidental\": true when its files spell a provider id by accident, such as a URL on the provider's host or a CSS keyword written outside a className or style attribute, as whole words (a host named githubusercontent is one word and needs no row), rather than depending on the provider; the gate then keeps the row listed but never reports it as stale, because such a hit comes and goes with ordinary edits and a failure on one could not be acted on. Text inside a className or style attribute is never a mention, so it needs no row.",
+  "incidentalReason": "A row may carry \"incidental\": true when its files spell a provider id by accident, such as a URL on the provider's host or a CSS keyword written outside a className or style attribute, rather than depending on the provider; the gate then keeps the row listed but never reports it as stale, because such a hit comes and goes with ordinary edits and a failure on one could not be acted on. Text inside a className or style attribute is never a mention, so it needs no row.",
   "allowlist": [
     {
       "ids": [
@@ -188,8 +188,9 @@
       ],
       "stage": "never",
       "incidental": true,
-      "reason": "the public repository on github.com the sandbox installs the frontend-design skill from. The worker downloads it over plain HTTPS whatever version control integration a deployment connects, so it is not a dependency on the provider.",
+      "reason": "URLs on github.com hosts that are not the GitHub provider: the default Codex price list, which a third party publishes on raw.githubusercontent.com, and the public repository the sandbox installs the frontend-design skill from. The worker downloads both over plain HTTPS whatever version control integration a deployment connects, so neither is a dependency on the provider.",
       "paths": [
+        "apps/worker/src/infra/runtime-env.ts",
         "apps/worker/src/sandbox/agents/shared.ts"
       ]
     },

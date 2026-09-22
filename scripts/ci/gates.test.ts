@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { coreFiles, MENTION_RULE } from "../gates/core-references.mjs";
 import {
   allowed,
   classify,
@@ -1364,10 +1365,7 @@ test("text a className or style attribute carries is presentation, not a mention
  * ship. Core is each app minus the directories the allowlist names as not
  * core, so a config file added tomorrow is read without anybody listing it.
  */
-test("the real allowlist reads the files at each app's root as core", async () => {
-  const { coreFiles } = (await import("../gates/core-references.mjs")) as {
-    coreFiles: (root: string, config: unknown) => string[];
-  };
+test("the real allowlist reads the files at each app's root as core", () => {
   const config = JSON.parse(readFileSync(join(repoRoot, "scripts/gates/core-references.json"), "utf8"));
   const files = new Set(coreFiles(repoRoot, config));
   for (const path of [
@@ -1387,11 +1385,12 @@ test("the real allowlist reads the files at each app's root as core", async () =
 });
 
 /**
- * A mention is the id as whole words, however the code joins them: the
- * letters of `sentry` inside `scriptsEntry` are two words that happen to meet,
- * and refusing an integration over them is a rule nobody can act on.
+ * A mention is a word that starts with the id, however the code joins its
+ * words: the letters of `sentry` inside `scriptsEntry` are the tail of one
+ * word meeting the head of the next, and refusing an integration over them is
+ * a rule nobody can act on.
  */
-test("an id is mentioned as whole words, not as letters that run across two", () => {
+test("an id is mentioned where a word starts with it, not as letters that run across two", () => {
   const planned = { plannedIntegrations: { sentry: { stage: "S99", reason: "a planned provider" } } };
   const across = coreReferenceRoot("core-references-across-", {
     "apps/worker/src/ui/list.ts":
@@ -1418,6 +1417,87 @@ test("an id is mentioned as whole words, not as letters that run across two", ()
     gateFailure,
     "an id written as two capitalised words is still the id",
   );
+});
+
+/**
+ * A provider's own package and the identifiers built from its name are the
+ * most direct coupling there is. Each form below is split into words first,
+ * and the id counts where a word starts with it, so a package that runs the id
+ * into more letters (`mem0ai`, `@notionhq/client`) is still the provider.
+ */
+test("a provider's package names and joined identifiers are mentions in every form", () => {
+  const cases: ReadonlyArray<readonly [string, string]> = [
+    ["jira", 'import { Version2Client } from "jira-client";\n'],
+    ["jira", "export const jiraClient = 1;\n"],
+    ["jira", "export class JiraAdapter {}\n"],
+    ["slack", 'import { WebClient } from "slack_sdk";\n'],
+    ["mem0", 'import MemoryClient from "mem0ai";\n'],
+    ["notion", 'import { Client } from "@notionhq/client";\n'],
+    ["github", "export const githubApp = { slug: 1 };\n"],
+  ];
+  for (const [id, source] of cases) {
+    const root = coreReferenceRoot("core-references-forms-", {
+      "apps/worker/src/services/dispatch/route.ts": source,
+    }, { plannedIntegrations: { [id]: { stage: "S99", reason: "a planned provider" } } });
+    const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+    assert.equal(result.status, gateFailure, `${source.trim()} names ${id}: ${result.stdout}`);
+  }
+  // The exemption stays what it was: a class list is presentation.
+  const css = coreReferenceRoot("core-references-forms-css-", {
+    "apps/worker/src/ui/bar.tsx": 'export const Bar = () => <div className="jira-gradient" />;\n',
+  }, { plannedIntegrations: { jira: { stage: "S99", reason: "a planned provider" } } });
+  assert.equal(
+    gate("core-references.mjs", ["--root", css, "--config", join(css, "core-references.json")]).status,
+    gateSuccess,
+  );
+});
+
+/**
+ * Core is the source a commit carries, so git decides what is in it. A local
+ * `nitro build` writes `apps/worker/.vercel/output`, bundled code that names
+ * every provider the build ships; read as core it failed the gate, and every
+ * push through it, on any machine that had built the worker once.
+ */
+/**
+ * What a file that does not parse spells is whatever the parser's recovery
+ * kept, so a gate that read it anyway could pass a provider name it dropped.
+ * Every failure also carries the rule it applied, in the words the scaffold
+ * and the guide use.
+ */
+test("a core file that does not parse fails the gate instead of being read by guesswork", () => {
+  const broken = coreReferenceRoot("core-references-unparsed-", {
+    "apps/worker/src/ui/list.ts": 'export const label = "jira";\nexport function (\n',
+  }, { plannedIntegrations: { jira: { stage: "S99", reason: "a planned provider" } } });
+  const result = gate("core-references.mjs", ["--root", broken, "--config", join(broken, "core-references.json")]);
+  assert.notEqual(result.status, gateSuccess);
+  assert.match(`${result.stdout}${result.stderr}`, /apps\/worker\/src\/ui\/list\.ts does not parse/u);
+});
+
+test("a failing gate states the mention rule it applied", () => {
+  const named = coreReferenceRoot("core-references-rule-", {
+    "apps/worker/src/ui/list.ts": 'export const label = "Jira";\n',
+  }, { plannedIntegrations: { jira: { stage: "S99", reason: "a planned provider" } } });
+  const result = gate("core-references.mjs", ["--root", named, "--config", join(named, "core-references.json")]);
+  assert.equal(result.status, gateFailure);
+  assert.ok(result.stdout.includes(MENTION_RULE), result.stdout);
+});
+
+test("ignored build output in a git checkout is not core", () => {
+  const root = coreReferenceRoot("core-references-ignored-", {
+    ".gitignore": ".vercel/\n",
+    "apps/worker/src/services/dispatch/route.ts": "export const kind = 1;\n",
+    "apps/worker/.vercel/output/functions/flow.func/index.js": 'export const provider = "jira";\n',
+  }, { coreRoots: ["apps/worker"] });
+  const init = spawnSync("git", ["init", "-q"], { cwd: root, encoding: "utf8" });
+  assert.equal(init.status, 0, init.stderr);
+  const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(result.status, gateSuccess, result.stdout);
+
+  // The same file, not ignored, is core like any other, tracked or not.
+  writeFileSync(join(root, ".gitignore"), "");
+  const unignored = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(unignored.status, gateFailure, unignored.stdout);
+  assert.match(unignored.stdout, /\.vercel\/output\/functions\/flow\.func\/index\.js names "jira"/u);
 });
 
 test("no gate source carries a NUL byte, so git and ripgrep read the gates as text", () => {

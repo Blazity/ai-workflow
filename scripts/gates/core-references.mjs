@@ -17,7 +17,7 @@
  * there: scripts/gates/core-references.json, and ADR-010.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -96,6 +96,11 @@ function isPresentation(literal) {
  */
 export function spelledPieces(source, path = "source.ts") {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, scriptKind(path));
+  // What a file that does not parse spells is a guess, and a gate that guessed
+  // could pass a provider name the error recovery happened to drop.
+  if (file.parseDiagnostics.length > 0) {
+    throw new Error(`${path} does not parse, so what it spells is unproven: ${ts.flattenDiagnosticMessageText(file.parseDiagnostics[0].messageText, " ")}`);
+  }
   const pieces = [];
   const visit = (node) => {
     switch (node.kind) {
@@ -142,12 +147,23 @@ function wordsOf(piece) {
 }
 
 /**
- * Whether the id is one or more whole, consecutive words of one piece.
- * `"github"`, `GITHUB_TOKEN`, `githubClient`, `GitHub` and `api.github.com`
- * all name it; `githubusercontent` and the `sEntry` inside `scriptsEntry` are
- * letters that happen to meet, and a gate that failed on them would refuse an
- * integration over a word core never wrote. Words never join across two
- * pieces, so an identifier and the string beside it cannot spell an id
+ * What counts as core spelling a provider id, in one sentence. The gate prints
+ * it with every failure, the scaffold with every refusal, and the integration
+ * guide quotes it (a test holds the guide to these words), so the rule a
+ * person is told is the rule `mentions` applies.
+ */
+export const MENTION_RULE =
+  "Core spells a provider id where a word starts with it, in any case, in a file's path or in one identifier, string, template, regular expression or piece of JSX text; words split at punctuation and at case changes, so GITHUB_TOKEN, githubClient, GitHub, jira-client and mem0ai each spell their id, while the letters sEntry inside scriptsEntry spell nothing. Comments and the text of a className or style attribute are not read.";
+
+/**
+ * Whether a word of one piece starts with the id, the id possibly running
+ * across consecutive words (`git hub App`) and into the letters that follow
+ * (`mem0ai`, `notionhq`, `githubusercontent`): a provider's own package and the
+ * names built from it are the most direct coupling there is. A word that
+ * merely contains the id (`scriptsEntry` holds `sentry` across its two words
+ * only by accident) is not a mention, and a gate that failed on it would
+ * refuse an integration over a word core never wrote. Words never join across
+ * two pieces, so an identifier and the string beside it cannot spell an id
  * between them.
  */
 export function mentions(pieces, id) {
@@ -155,31 +171,69 @@ export function mentions(pieces, id) {
     const words = wordsOf(piece);
     for (let start = 0; start < words.length; start += 1) {
       let joined = "";
-      for (let end = start; end < words.length && joined.length < id.length; end += 1) {
+      for (let end = start; end < words.length; end += 1) {
         joined += words[end];
-        if (joined === id) return true;
+        if (joined.length >= id.length) {
+          if (joined.startsWith(id)) return true;
+          break;
+        }
       }
     }
     return false;
   });
 }
 
+/** What the gate reads as core, derived from the config rather than restated. */
+export function describeCore(config) {
+  return `Core is ${config.coreRoots.join(", ")}, as git lists them, minus every path matching an \`exclude\` pattern in scripts/gates/core-references.json.`;
+}
+
+/**
+ * The files under the core roots that a commit could carry: tracked, or new
+ * and not ignored, as git lists them. Ignored build output (`.vercel/output`,
+ * `.next`, a coverage report) is bundled code that names every provider a
+ * build ships, and no allowlist row could ever describe it. Null when the root
+ * is not inside a git work tree, which is a gate test's fixture.
+ */
+function gitListedFiles(root, coreRoots) {
+  const inside = spawnSync("git", ["-C", root, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  if (inside.status !== 0 || inside.stdout.trim() !== "true") return null;
+  const listed = spawnSync(
+    "git",
+    ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...coreRoots],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (listed.status !== 0) {
+    throw new Error(`git ls-files could not list the core roots, so ${INVARIANT} is unproven: ${listed.stderr.trim()}`);
+  }
+  return listed.stdout
+    .split("\0")
+    .filter(Boolean)
+    .map(slash)
+    // `--cached` still lists a tracked file deleted in the working tree.
+    .filter((path) => existsSync(join(root, path)));
+}
+
 /** Every source file this gate reads as core, repository-relative and sorted. */
 export function coreFiles(root, config) {
   const excluded = config.exclude.map((pattern) => new RegExp(pattern));
+  const isCore = (path) => SOURCE.test(path) && !excluded.some((pattern) => pattern.test(path));
+  for (const coreRoot of config.coreRoots) {
+    requireAnchor(root, coreRoot, "a core root this gate scans", INVARIANT);
+  }
+  const listed = gitListedFiles(root, config.coreRoots);
+  if (listed) return listed.filter(isCore).sort();
+
   const found = [];
   const visit = (directory) => {
     for (const entry of readdirSync(join(root, directory), { withFileTypes: true })) {
-      if (["node_modules", ".next", ".output", ".nitro", "dist"].includes(entry.name)) continue;
+      if (["node_modules", ".next", ".output", ".nitro", ".vercel", "dist"].includes(entry.name)) continue;
       const path = `${directory}/${entry.name}`;
       if (entry.isDirectory()) visit(path);
-      else if (entry.isFile() && SOURCE.test(entry.name) && !excluded.some((p) => p.test(path))) {
-        found.push(path);
-      }
+      else if (entry.isFile() && isCore(path)) found.push(path);
     }
   };
   for (const coreRoot of config.coreRoots) {
-    requireAnchor(root, coreRoot, "a core root this gate scans", INVARIANT);
     const absolute = join(root, coreRoot);
     if (statSync(absolute).isDirectory()) visit(slash(relative(root, absolute)));
   }
@@ -318,6 +372,7 @@ function main() {
       `${id} is both an integration and a planned one. Delete its plannedIntegrations entry and its allowlist rows: the integration owns the name now.`,
     );
   }
+  if (unlisted.length > 0) console.log(`${MENTION_RULE} ${describeCore(config)}`);
   for (const { path, id } of unlisted) {
     const stage = config.plannedIntegrations[id]?.stage;
     console.log(
