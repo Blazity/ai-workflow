@@ -550,6 +550,34 @@ describe("GitLabAdapter", () => {
     });
   });
 
+  describe("parsePullRequestUrl", () => {
+    it("reads a merge request URL on gitlab.com", () => {
+      expect(
+        glAdapter().parsePullRequestUrl(
+          new URL("https://gitlab.com/platform/services/api/-/merge_requests/17"),
+        ),
+      ).toEqual({ repoPath: "platform/services/api", prNumber: 17 });
+    });
+
+    it("keeps an instance's relative URL root out of the project path", () => {
+      // GitLab installed at https://code.example.com/gitlab: the root is the
+      // instance's, and a repository path carrying it matches nothing in the
+      // catalog, so manual dispatch would say the repository is not enabled.
+      const adapter = glAdapter({ host: "https://code.example.com/gitlab/" });
+
+      expect(
+        adapter.parsePullRequestUrl(
+          new URL("https://code.example.com/gitlab/platform/api/-/merge_requests/17"),
+        ),
+      ).toEqual({ repoPath: "platform/api", prNumber: 17 });
+      expect(
+        adapter.parsePullRequestUrl(
+          new URL("https://code.example.com/other/platform/api/-/merge_requests/17"),
+        ),
+      ).toBeNull();
+    });
+  });
+
   describe("findPR", () => {
     it("returns null when no MR exists", async () => {
       mockMergeRequests.all.mockResolvedValueOnce([]);

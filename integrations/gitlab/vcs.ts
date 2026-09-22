@@ -729,9 +729,14 @@ export class GitLabAdapter implements
   }
 
   parsePullRequestUrl(url: URL): { repoPath: string; prNumber: number } | null {
-    const host = new URL(this.config.host ?? "https://gitlab.com").host.toLowerCase();
-    if (url.host.toLowerCase() !== host) return null;
-    const segments = url.pathname.split("/").filter(Boolean);
+    const base = new URL(this.config.host ?? "https://gitlab.com");
+    if (url.host.toLowerCase() !== base.host.toLowerCase()) return null;
+    // GitLab may be installed under a relative URL root
+    // (`https://example.com/gitlab`). That root is the instance's, not part of
+    // any project's path, so it is removed before the path is read.
+    const root = base.pathname.replace(/\/+$/u, "");
+    if (root && url.pathname !== root && !url.pathname.startsWith(`${root}/`)) return null;
+    const segments = url.pathname.slice(root.length).split("/").filter(Boolean);
     const marker = segments.findIndex(
       (segment, index) => segment === "-" && segments[index + 1] === "merge_requests",
     );
