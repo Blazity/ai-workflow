@@ -64,6 +64,22 @@ beforeEach(async () => {
 });
 
 describe("loadRunStartSettingsStep", () => {
+  // The wiring is frozen for the whole run, so a run that starts without it
+  // has no ticket links and moves by bare column name to its end. It used to
+  // start so in silence, whether nothing was connected or the settings could
+  // not be read.
+  it("says why a run starts without the tracker's wiring", async () => {
+    const { logger } = await import("../../infra/logger.js");
+
+    const stored = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
+
+    expect(stored.tracker).toBeUndefined();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining("No issue tracker is connected") }),
+      "run_start_tracker_wiring_absent",
+    );
+  });
+
   it("resolves the snapshot from stored rows", async () => {
     const result = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 
