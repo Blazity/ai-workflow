@@ -80,6 +80,27 @@ export interface IntegrationRepositoryShape {
    * path is exactly the first two segments whatever follows them.
    */
   readonly nestedPaths?: boolean;
+  /**
+   * What this provider calls a change request, and how a person references
+   * one. Core used to know that GitLab says `MR !12` where GitHub says
+   * `PR #12`; on GitLab `#12` names issue 12, so the wrong prefix points at
+   * something else. Omitted means `PR` and `#`.
+   */
+  readonly changeRequest?: IntegrationChangeRequestShape;
+}
+
+/** How one provider's change requests are named and linked. */
+export interface IntegrationChangeRequestShape {
+  /** What a person calls one: `PR`, `MR`. */
+  readonly noun: string;
+  /** The character a reference to one starts with: `#`, `!`. */
+  readonly referencePrefix: string;
+  /**
+   * A path segment every link to one carries, such as `/-/merge_requests/`.
+   * It names a change request recorded with its link and no provider, which
+   * is every gate run and every run from before the provider was stored.
+   */
+  readonly linkSegment: string;
 }
 
 /**

@@ -66,6 +66,7 @@ export {
   type IntegrationConnection,
   type IntegrationHealthCheck,
   type IntegrationManifest,
+  type IntegrationChangeRequestShape,
   type IntegrationPage,
   type IntegrationRepositoryShape,
 } from "./manifest";
