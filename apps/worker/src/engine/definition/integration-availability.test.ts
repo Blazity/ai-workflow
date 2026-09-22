@@ -355,6 +355,22 @@ describe("integrationsUsedBy", () => {
     // No selection is the parameter's own default, which is both sources on.
     expect(integrationsUsedBy([{ type: "investigate" }], integrations)).toEqual(["acmenotify"]);
   });
+
+  // The pins, the run-start blocker and the disable preview all hand stored
+  // nodes, which carry their parameters as `configuration`.
+  it("reads a stored node's configuration, not only a runtime node's params", () => {
+    const integrations = deploymentIntegrations({
+      manifests: [notify],
+      states: new Map([["acmenotify", state("acmenotify")]]),
+    });
+
+    expect(
+      integrationsUsedBy(
+        [{ type: "investigate", configuration: { sources: ["issue_tracker"] } }],
+        integrations,
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("what a graph reaches beyond the blocks the palette gates", () => {

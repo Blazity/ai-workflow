@@ -465,6 +465,9 @@ export function coreBlockCapabilities(
 export function integrationsUsedBy(
   nodes: readonly {
     readonly type: string;
+    /** A stored definition's node carries its parameters here. */
+    readonly configuration?: Readonly<Record<string, unknown>>;
+    /** A runtime node carries the same parameters here. */
     readonly params?: Readonly<Record<string, unknown>>;
   }[],
   integrations: DeploymentIntegrations,
@@ -483,7 +486,11 @@ export function integrationsUsedBy(
       for (const capability of requirement.capabilities) addProvidersOf(capability);
       continue;
     }
-    for (const capability of coreBlockCapabilities(node.type, node.params).reached) {
+    // Every caller but the palette hands stored nodes, whose parameters are
+    // `configuration`: reading only `params` saw none of them, so an
+    // investigation that opted out of chat still pinned the chat provider.
+    const parameters = node.configuration ?? node.params;
+    for (const capability of coreBlockCapabilities(node.type, parameters).reached) {
       addProvidersOf(capability);
     }
   }
