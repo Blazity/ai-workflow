@@ -112,7 +112,7 @@ describe("normalizeGitLabEvent", () => {
     const botMr = mrPayload("open");
     botMr.user.username = "blazebot";
     expect(
-      normalizeGitLabEvent("Merge Request Hook", botMr, { botUsername: "blazebot" })
+      normalizeGitLabEvent("Merge Request Hook", botMr, { botLogin: "blazebot" })
         ?.triggerType,
     ).toBe("trigger_pr_created");
 
@@ -130,7 +130,7 @@ describe("normalizeGitLabEvent", () => {
             target_branch: "main",
           },
         },
-        { botUsername: "blazebot" },
+        { botLogin: "blazebot" },
       )?.triggerType,
     ).toBe("trigger_pr_checks_failed");
   });
@@ -167,7 +167,7 @@ describe("normalizeGitLabEvent", () => {
     payload.user.username = "alice";
     expect(
       normalizeGitLabEvent("Merge Request Hook", payload, {
-        botUsername: "blazebot",
+        botLogin: "blazebot",
       })?.triggerType,
     ).toBe("trigger_pr_updated");
   });
@@ -193,7 +193,6 @@ describe("normalizeGitLabEvent", () => {
   it("never infers requested changes from a GitLab merge-request note", () => {
     const evt = normalizeGitLabEvent("Note Hook", notePayload(), {
       deliveryId: "gitlab-review-1",
-      reviewStates: ["changes_requested", "commented"],
     });
 
     expect(evt?.triggerType).toBe("trigger_pr_review");
@@ -208,20 +207,11 @@ describe("normalizeGitLabEvent", () => {
     });
   });
 
-  it("does not map a GitLab note when only changes_requested is configured", () => {
-    expect(
-      normalizeGitLabEvent("Note Hook", notePayload(), {
-        deliveryId: "gitlab-review-unsupported",
-        reviewStates: ["changes_requested"],
-      }),
-    ).toBeNull();
-  });
-
   it("maps an opted-in GitLab merge-request note to a commented review", () => {
     const evt = normalizeGitLabEvent(
       "Note Hook",
       notePayload(),
-      { deliveryId: "gitlab-note-1", reviewStates: ["commented"] },
+      { deliveryId: "gitlab-note-1" },
     );
 
     expect(evt?.triggerType).toBe("trigger_pr_review");
@@ -236,7 +226,7 @@ describe("normalizeGitLabEvent", () => {
     });
   });
 
-  it("filters GitLab system notes, bot notes, and review states that were not configured", () => {
+  it("filters GitLab system notes and the automation account's own notes", () => {
     const note = {
       ...notePayload(),
       user: { username: "blazebot" },
@@ -244,8 +234,7 @@ describe("normalizeGitLabEvent", () => {
     };
     expect(
       normalizeGitLabEvent("Note Hook", note, {
-        botUsername: "blazebot",
-        reviewStates: ["commented"],
+        botLogin: "blazebot",
       }),
     ).toBeNull();
     expect(
@@ -256,14 +245,7 @@ describe("normalizeGitLabEvent", () => {
           user: { username: "alice" },
           object_attributes: { ...note.object_attributes, system: true },
         },
-        { reviewStates: ["commented"] },
-      ),
-    ).toBeNull();
-    expect(
-      normalizeGitLabEvent(
-        "Note Hook",
-        { ...note, user: { username: "alice" } },
-        { reviewStates: ["changes_requested"] },
+        {},
       ),
     ).toBeNull();
   });
@@ -276,8 +258,7 @@ describe("normalizeGitLabEvent", () => {
     };
     expect(
       normalizeGitLabEvent("Note Hook", note, {
-        botUsername: "  GitLab-Bot  ",
-        reviewStates: ["commented"],
+        botLogin: "  GitLab-Bot  ",
       }),
     ).toBeNull();
   });
@@ -286,7 +267,6 @@ describe("normalizeGitLabEvent", () => {
     const note = notePayload();
     note.object_attributes.id = 4321;
     const evt = normalizeGitLabEvent("Note Hook", note, {
-      reviewStates: ["commented"],
     });
     expect(evt?.delivery.semanticKey).toBe("note:4321");
   });
@@ -295,7 +275,7 @@ describe("normalizeGitLabEvent", () => {
     const note = notePayload();
     note.object_attributes.note = `looks good ${AI_WORKFLOW_COMMENT_MARKER}`;
     expect(
-      normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] }),
+      normalizeGitLabEvent("Note Hook", note, {}),
     ).toBeNull();
   });
 
@@ -310,7 +290,7 @@ describe("normalizeGitLabEvent", () => {
       "Still broken on mobile, please look again.",
     );
 
-    const evt = normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] });
+    const evt = normalizeGitLabEvent("Note Hook", note, {});
 
     expect(evt?.triggerType).toBe("trigger_pr_review");
   });
@@ -319,7 +299,7 @@ describe("normalizeGitLabEvent", () => {
     const note = notePayload();
     note.object_attributes.note = settlerReply("d8f1a2b3");
     expect(
-      normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] }),
+      normalizeGitLabEvent("Note Hook", note, {}),
     ).toBeNull();
   });
 
@@ -329,7 +309,6 @@ describe("normalizeGitLabEvent", () => {
 
     expect(
       normalizeGitLabEvent("Note Hook", note, {
-        reviewStates: ["commented"],
       }),
     ).toBeNull();
   });
@@ -340,7 +319,6 @@ describe("normalizeGitLabEvent", () => {
 
     expect(
       normalizeGitLabEvent("Note Hook", note, {
-        reviewStates: ["commented"],
       }),
     ).toBeNull();
   });
@@ -446,7 +424,7 @@ describe("normalizeGitLabEvent", () => {
     const created = normalizeGitLabEvent("Merge Request Hook", {
       ...mrPayload("open"),
       user: { username: "blazebot" },
-    }, { botUsername: "blazebot" });
+    }, { botLogin: "blazebot" });
     expect(created?.triggerType).toBe("trigger_pr_created");
 
     const checks = normalizeGitLabEvent("Pipeline Hook", {
@@ -461,7 +439,7 @@ describe("normalizeGitLabEvent", () => {
         title: "AIW-3",
         url: "https://gitlab.com/group/demo/-/merge_requests/42",
       },
-    }, { botUsername: "blazebot" });
+    }, { botLogin: "blazebot" });
     expect(checks?.triggerType).toBe("trigger_pr_checks_failed");
   });
 

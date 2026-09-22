@@ -121,6 +121,24 @@ describe("GitLab published webhook payload bytes", () => {
     });
   });
 
+  it("drops a note the automation account wrote, by the login its connection names", async () => {
+    // The published note is by `root`; a connection whose bot is `root` must
+    // not turn our own note into a review that starts a run.
+    const result = await receive("Note Hook", recorded.note, { botLogin: "Root" });
+
+    expect(result).toMatchObject({ kind: "trigger_events", events: [] });
+  });
+
+  it("answers an unconfigured secret with 503 rather than the mismatch 401", async () => {
+    // "Nobody configured the secret" and "the secret drifted" need different
+    // people to act, so they are different statuses.
+    const result = await receive("Merge Request Hook", recorded.mergeRequest, {
+      webhookSecret: undefined,
+    });
+
+    expect(result).toMatchObject({ kind: "refused", status: 503 });
+  });
+
   it("refuses the published bytes before parsing when the token is wrong", async () => {
     const result = await receiveGitLabWebhook(
       {
