@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FatalError } from "@integrations/sdk";
 import type { PrTriggerPayload } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import {
@@ -274,6 +275,42 @@ describe("provider trigger dispatch", () => {
     await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
       pending: false,
       result: { result: "ignored_stale_head" },
+    });
+  });
+
+  // What the adapters throw when the provider refuses for good (see
+  // `getPRHead` in both VCS integrations): a GitLab group webhook reports every
+  // project in the group, including ones the token may not read. Answering that
+  // as a failure would have the provider redeliver it, and GitLab switch the
+  // webhook off after a few.
+  it("ignores for good a pull request the provider says this connection cannot read", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        event(),
+        deps({ getCurrentHead: vi.fn().mockRejectedValue(new FatalError("403 Forbidden")) }),
+      ),
+    ).resolves.toEqual({ result: "ignored_pull_request_unreadable" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("closes an accepted delivery whose pull request stopped being readable", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
+    const getCurrentHead = vi
+      .fn()
+      .mockResolvedValueOnce("abc123")
+      .mockRejectedValue(new FatalError("404 Not Found"));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps({ getCurrentHead }))).resolves.toEqual({
+      result: "ignored_pull_request_unreadable",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      pending: false,
+      result: { result: "ignored_pull_request_unreadable" },
     });
   });
 

@@ -377,6 +377,33 @@ describe("GitHubAdapter", () => {
         checks: { state: "green", failed: [] },
       });
     });
+
+    function refused(status: number, message: string, headers: Record<string, string> = {}) {
+      return Object.assign(new Error(message), { status, response: { headers } });
+    }
+
+    it.each([
+      ["gone", refused(404, "Not Found")],
+      ["forbidden to the installation", refused(403, "Resource not accessible by integration")],
+    ])("calls a pull request that is %s fatal", async (_label, error) => {
+      mockOctokit.pulls.get.mockRejectedValueOnce(error);
+
+      const caught = await ghAdapter().getPRHead(42).catch((failure) => failure as Error);
+
+      expect(caught).toMatchObject({ name: "FatalError" });
+    });
+
+    it.each([
+      ["a primary rate limit", refused(403, "API rate limit exceeded", { "x-ratelimit-remaining": "0" })],
+      ["a secondary rate limit", refused(403, "You have exceeded a secondary rate limit", { "retry-after": "60" })],
+      ["a server error", refused(502, "Bad Gateway")],
+    ])("lets %s be retried", async (_label, error) => {
+      mockOctokit.pulls.get.mockRejectedValueOnce(error);
+
+      const caught = await ghAdapter().getPRHead(42).catch((failure) => failure as Error);
+
+      expect(caught).toBe(error);
+    });
   });
 
   describe("getManualDispatchPullRequest", () => {

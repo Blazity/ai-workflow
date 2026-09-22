@@ -1,3 +1,4 @@
+import { FatalError } from "workflow";
 import { start } from "workflow/api";
 import type {
   WorkflowBlockType,
@@ -89,6 +90,10 @@ export type DispatchTriggerResult =
   | { result: "ignored_repository_not_enabled" }
   | { result: "ignored_producer" }
   | { result: "ignored_stale_head" }
+  /** The provider says this connection cannot read the pull request, and
+   *  asking again will not change that: a GitLab group webhook reports every
+   *  project in the group, including ones the token may not see. */
+  | { result: "ignored_pull_request_unreadable" }
   | { result: "ignored_untrusted_event" }
   | { result: "ignored_malformed_delivery" }
   /** A workflow-owned pull request whose ticket cannot be confirmed because
@@ -323,16 +328,12 @@ export async function dispatchTriggerEvent(
     const eligibleEvent = selectEligibleEvent(event, params, botLogin);
     if (!eligibleEvent) return { result: "ignored_untrusted_event" };
 
-    const currentResult = await readCurrentPullRequest(eligibleEvent, deps);
-    if (currentResult.status === "unreachable") {
-      return { result: "error", diagnosticId: currentResult.diagnosticId };
+    const bound = await bindToCurrentPullRequest(eligibleEvent, deps);
+    if (bound.status === "unreachable") {
+      return { result: "error", diagnosticId: bound.diagnosticId };
     }
-    const currentEvent = bindCurrentPullRequest(
-      eligibleEvent,
-      currentResult.current,
-      currentResult.sameHandle,
-    );
-    if (!currentEvent) return { result: "ignored_stale_head" };
+    if (bound.status === "ignored") return { result: bound.result };
+    const currentEvent = bound.event;
 
     const identity = await resolveSubjectIdentity(currentEvent, scope, deps);
     if (identity.status === "ignored") return { result: "ignored_not_workflow_owned" };
@@ -715,28 +716,20 @@ async function dispatchAcceptedTrigger(
   existingDiagnosticId?: string,
 ): Promise<DispatchTriggerResult> {
   try {
-    const currentResult = await readCurrentPullRequest(
-      acceptedInput,
-      deps,
-      existingDiagnosticId,
-    );
-    if (currentResult.status === "unreachable") {
+    const bound = await bindToCurrentPullRequest(acceptedInput, deps, existingDiagnosticId);
+    if (bound.status === "unreachable") {
       const result = {
         result: "error" as const,
-        diagnosticId: currentResult.diagnosticId,
+        diagnosticId: bound.diagnosticId,
       };
       await persistAcceptedRetryableFailure(deps.db, acceptedInput, result);
       return result;
     }
-    const accepted = bindCurrentPullRequest(
-      acceptedInput,
-      currentResult.current,
-      currentResult.sameHandle,
-    );
-    if (!accepted) {
-      await completeDelivery(deps.db, acceptedInput, { result: "ignored_stale_head" });
-      return { result: "ignored_stale_head" };
+    if (bound.status === "ignored") {
+      await completeDelivery(deps.db, acceptedInput, { result: bound.result });
+      return { result: bound.result };
     }
+    const accepted = bound.event;
 
     // Persist the exact accepted envelope before a Workflow candidate can be
     // started. The candidate removes this row only after it wins owner CAS and
@@ -914,29 +907,21 @@ export async function drainOldestPendingTrigger(
       continue;
     }
 
-    const currentResult = await readCurrentPullRequest(
-      pending,
-      deps,
-      existingDiagnosticId,
-    );
-    if (currentResult.status === "unreachable") {
+    const bound = await bindToCurrentPullRequest(pending, deps, existingDiagnosticId);
+    if (bound.status === "unreachable") {
       const result = {
         result: "error",
-        diagnosticId: currentResult.diagnosticId,
+        diagnosticId: bound.diagnosticId,
       } as const;
       await persistAcceptedRetryableFailure(deps.db, pending, result);
       return result;
     }
-    const currentPending = bindCurrentPullRequest(
-      pending,
-      currentResult.current,
-      currentResult.sameHandle,
-    );
-    if (!currentPending) {
+    if (bound.status === "ignored") {
       await deleteDurablePendingTrigger(deps.db, pending);
-      await completeDelivery(deps.db, pending, { result: "ignored_stale_head" });
+      await completeDelivery(deps.db, pending, { result: bound.result });
       continue;
     }
+    const currentPending = bound.event;
     // The catalog is re-asked here, not trusted from acceptance time: this event
     // was queued because the deployment was at capacity or the subject was busy,
     // and a repository disabled in the meantime must not be dispatched by the
@@ -1131,6 +1116,29 @@ async function resolveTicketIdentity(
   }
 }
 
+/**
+ * The event bound to what the provider says about the pull request now, or why
+ * it cannot be: a head or a check that moved on is stale, a pull request this
+ * connection may never read is ignored for good, and a provider that did not
+ * answer is a fault of this moment that a redelivery can cure.
+ */
+async function bindToCurrentPullRequest<T extends TriggerEvent>(
+  event: T,
+  deps: DispatchTriggerDeps,
+  existingDiagnosticId?: string,
+): Promise<
+  | { status: "bound"; event: T }
+  | { status: "ignored"; result: "ignored_stale_head" | "ignored_pull_request_unreadable" }
+  | { status: "unreachable"; diagnosticId: string }
+> {
+  const read = await readCurrentPullRequest(event, deps, existingDiagnosticId);
+  if (read.status !== "ok") return read;
+  const bound = bindCurrentPullRequest(event, read.current, read.sameHandle);
+  return bound
+    ? { status: "bound", event: bound }
+    : { status: "ignored", result: "ignored_stale_head" };
+}
+
 async function readCurrentPullRequest(
   event: Pick<TriggerEvent, "triggerType" | "pr">,
   deps: DispatchTriggerDeps,
@@ -1144,6 +1152,7 @@ async function readCurrentPullRequest(
         right: VcsOpaqueHandle | undefined,
       ) => boolean;
     }
+  | { status: "ignored"; result: "ignored_pull_request_unreadable" }
   | { status: "unreachable"; diagnosticId: string }
 > {
   const { pr } = event;
@@ -1168,6 +1177,22 @@ async function readCurrentPullRequest(
     }
     return { status: "ok", current, sameHandle };
   } catch (error) {
+    // The provider's own verdict that asking again cannot help (see
+    // `FatalError` in the SDK): answered as an ignore the provider's delivery
+    // log shows, never as a failure it would redeliver until GitLab switched
+    // the webhook off.
+    if (FatalError.is(error)) {
+      logger.info(
+        {
+          provider: pr.provider,
+          repoPath: pr.repoPath,
+          prNumber: pr.prNumber,
+          reason: error.message,
+        },
+        "trigger_pull_request_unreadable",
+      );
+      return { status: "ignored", result: "ignored_pull_request_unreadable" };
+    }
     const diagnosticId = recordIngestionFailure(
       "trigger_current_head_lookup_failed_closed",
       error,
@@ -1210,6 +1235,9 @@ function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTri
     return { result: "started", runId: result.runId };
   }
   if (result.result === "ignored_stale_head") return { result: "ignored_stale_head" };
+  if (result.result === "ignored_pull_request_unreadable") {
+    return { result: "ignored_pull_request_unreadable" };
+  }
   if (result.result === "ignored_not_workflow_owned") {
     return { result: "ignored_not_workflow_owned" };
   }

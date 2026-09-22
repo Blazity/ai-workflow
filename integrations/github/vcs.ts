@@ -174,6 +174,29 @@ function githubHandle(value: GitHubHandle): VcsOpaqueHandle {
 }
 
 /**
+ * Whether GitHub refused a request in a way that asking again will not change:
+ * the resource does not exist for this installation (404), or it is forbidden
+ * to it (403). A 403 is also how GitHub answers a rate limit, primary (with
+ * `x-ratelimit-remaining: 0`) or secondary (with `retry-after`, or saying so in
+ * its message), and that one passes.
+ */
+function isPermanentRefusal(err: unknown): boolean {
+  const failure = err as {
+    status?: number;
+    message?: string;
+    response?: { headers?: Record<string, string | undefined> };
+  } | null;
+  if (failure?.status === 404) return true;
+  if (failure?.status !== 403) return false;
+  const headers = failure.response?.headers ?? {};
+  return (
+    headers["x-ratelimit-remaining"] !== "0" &&
+    headers["retry-after"] === undefined &&
+    !/rate limit/iu.test(failure.message ?? "")
+  );
+}
+
+/**
  * The identity a handle names, including one an envelope recorded before
  * handles existed: such an envelope stored the check run's id as `checkRunId`
  * and its app beside it as `appSlug`, which is the pair a handle holds now.
@@ -776,10 +799,21 @@ export class GitHubAdapter
   }
 
   async getPRHead(prId: number): Promise<PullRequestHead> {
-    const { data } = await this.octokit.pulls.get({
-      ...this.ownerRepo,
-      pull_number: prId,
-    });
+    let data;
+    try {
+      ({ data } = await this.octokit.pulls.get({
+        ...this.ownerRepo,
+        pull_number: prId,
+      }));
+    } catch (err) {
+      if (isPermanentRefusal(err)) {
+        throw new FatalError(
+          `GitHub PR #${prId} in ${this.ownerRepo.owner}/${this.ownerRepo.repo} cannot be read with this installation`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
     const baseRef = data.base.ref?.trim();
     if (!baseRef) throw new Error(`GitHub PR #${prId} is missing its target branch`);
     const state = data.merged === true ? "merged" : data.state;

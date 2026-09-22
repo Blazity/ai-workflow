@@ -47,6 +47,7 @@ export type StoredTriggerResult =
         // constraint, so widening the union needs no migration.
         | "ignored_repository_not_enabled"
         | "ignored_stale_head"
+        | "ignored_pull_request_unreadable"
         | "ignored_not_workflow_owned";
     };
 

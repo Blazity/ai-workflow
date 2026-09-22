@@ -460,6 +460,29 @@ describe("GitLabAdapter", () => {
         checks: { state: "green", failed: [] },
       });
     });
+
+    // A group webhook reports merge requests in every project of the group,
+    // including ones this token may not read. That answer never changes, so
+    // it is fatal, and core ignores the delivery instead of failing it.
+    it.each([403, 404])("calls a merge request the token cannot read (%i) fatal", async (status) => {
+      const error = new Error(`${status} Forbidden`) as any;
+      error.cause = { response: { status } };
+      mockMergeRequests.show.mockRejectedValueOnce(error);
+
+      const caught = await glAdapter().getPRHead(42).catch((failure) => failure as Error);
+
+      expect(caught).toMatchObject({ name: "FatalError" });
+    });
+
+    it.each([429, 502])("lets a merge request read that may succeed later (%i) be retried", async (status) => {
+      const error = new Error(`${status}`) as any;
+      error.cause = { response: { status } };
+      mockMergeRequests.show.mockRejectedValueOnce(error);
+
+      const caught = await glAdapter().getPRHead(42).catch((failure) => failure as Error);
+
+      expect(caught).toBe(error);
+    });
   });
 
   describe("getManualDispatchPullRequest", () => {

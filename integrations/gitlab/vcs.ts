@@ -645,10 +645,16 @@ export class GitLabAdapter implements
     /** The head pipeline when it failed, with the jobs that failed in it. */
     failedPipeline: { id: number; failedJobs: GitLabJob[] } | null;
   }> {
-    const mr = (await this.gl.MergeRequests.show(
-      this.projectId,
-      prId,
-    )) as unknown as GitLabMRHead;
+    let mr: GitLabMRHead;
+    try {
+      mr = (await this.gl.MergeRequests.show(this.projectId, prId)) as unknown as GitLabMRHead;
+    } catch (err) {
+      // A merge request this token may not read answers the same way every
+      // time, and a group webhook reports every project in the group, readable
+      // or not. That, and one that no longer exists, is fatal: retrying cannot
+      // change it.
+      this.throwWithProviderRetrySemantics(err);
+    }
     const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
     if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);
     const baseRef = mr.target_branch?.trim();

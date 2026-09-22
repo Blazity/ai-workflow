@@ -198,6 +198,7 @@ export async function completeTriggerDelivery(
       | "ignored_provider"
       | "ignored_repository_not_enabled"
       | "ignored_stale_head"
+      | "ignored_pull_request_unreadable"
       | "ignored_not_workflow_owned";
     runId?: string;
     diagnosticId?: string;
@@ -223,6 +224,9 @@ export async function completeTriggerDelivery(
         when ${triggerDeliveries.result}->>'result' in ('candidate_started', 'coalesced', 'error')
           and ${result.result} in (
             'ignored_stale_head',
+            -- Terminal for the same reason: the provider says this connection
+            -- will never read the pull request.
+            'ignored_pull_request_unreadable',
             'ignored_not_workflow_owned',
             -- A queued successor the drain retires because the catalog no
             -- longer enables its repository. Same class as a stale head: the
