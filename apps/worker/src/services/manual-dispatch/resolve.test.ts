@@ -82,9 +82,6 @@ vi.mock("../../db/repositories/approvals.js", () => ({
   hasConnectedDispatchBlockingApprovalForTicket:
     mocks.hasDispatchBlockingApprovalForTicket,
 }));
-vi.mock("../../post-pr-gate/config.js", () => ({
-  loadPostPrGateConfig: () => ({ postPrGate: { steps: [] } }),
-}));
 
 const { parsePullRequestUrl, resolveManualDispatch, selectManualTriggerEvent } =
   await import("./resolve.js");
@@ -439,6 +436,46 @@ describe("manual dispatch against a definition repository pin", () => {
     ).resolves.toMatchObject({
       inputPayload: { scope: "any", pr: expect.objectContaining({ repoPath: "acme/api" }) },
     });
+  });
+
+  it("never starts a run off a check our own gate reported", async () => {
+    // The gate's checks carry a managed prefix in either naming generation. A
+    // run started off one would have the gate chase its own tail.
+    const graph = deployed("any", { repositories: [{ provider: "github", repoPath: "acme/api" }] });
+    graph.definition.nodes[0]!.type = "trigger_pr_checks_failed";
+    graph.definition.nodes[0]!.configuration = { scope: "any", trustedProducers: ["github-actions"] } as never;
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(graph);
+    const failed = (name: string, id: number) => ({
+      name,
+      conclusion: "failure",
+      handle: { id, owner: "github-actions" } as never,
+      producer: "github-actions",
+    });
+    const request = {
+      db: definitionDb,
+      issueTracker,
+      definitionId: 5,
+      triggerNodeId: "trigger",
+      dispatchInput: { kind: "pull_request" as const, url: pr.prUrl },
+      repositoryCatalog,
+    };
+
+    mocks.getManualDispatchPullRequest.mockResolvedValue(
+      snapshot({
+        failedChecks: [failed("AI Workflow / code-hygiene", 1), failed("blazebot / lint", 2)],
+      }),
+    );
+    await expect(resolveManualDispatch(request)).rejects.toThrow("does not match this trigger");
+
+    mocks.getManualDispatchPullRequest.mockResolvedValue(
+      snapshot({
+        failedChecks: [failed("AI Workflow / code-hygiene", 1), failed("ci / build", 3)],
+      }),
+    );
+    const resolved = await resolveManualDispatch(request);
+    expect(
+      (resolved.inputPayload as { pr: PrTriggerPayload }).pr.failedChecks?.map((check) => check.name),
+    ).toEqual(["ci / build"]);
   });
 
   it("reports every block type the deployed graph carries, so the preflight can ask about its integrations", async () => {

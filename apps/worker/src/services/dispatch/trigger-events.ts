@@ -1,5 +1,4 @@
 import type { TriggerEvent } from "@shared/contracts";
-import { isManagedGateCheckName } from "../../engine/support/workflow-naming.js";
 
 export type { TriggerEvent } from "@shared/contracts";
 
@@ -32,20 +31,4 @@ export function isLegacyTrustedCheckDelivery(
     delivery.producer === "github-actions" ||
     delivery.source === "merge_request_event"
   );
-}
-
-/**
- * Whether a check name is one the post-PR gate created itself.
- *
- * Provider neutral: a name this deployment configured for a gate step, or one
- * carrying a managed prefix. Acting on our own check would make the gate chase
- * its own tail.
- */
-export function isGateCheckName(
-  name: string,
-  gateCheckNames: readonly string[],
-): boolean {
-  if (typeof name !== "string") return false;
-  if (gateCheckNames.includes(name)) return true;
-  return isManagedGateCheckName(name);
 }

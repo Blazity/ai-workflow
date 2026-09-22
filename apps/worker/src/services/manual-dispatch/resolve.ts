@@ -19,7 +19,6 @@ import type { Db } from "../../db/types.js";
 import { findWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import { findConnectedWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import {
-  isGateCheckName,
   isRepositoryDispatchable,
   REPOSITORY_NOT_IN_CATALOG_REASON,
   selectEligibleEvent,
@@ -28,12 +27,12 @@ import {
 } from "../dispatch/index.js";
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey } from "../../engine/support/subject-key.js";
+import { isManagedGateCheckName } from "../../engine/support/workflow-naming.js";
 import { issueTrackerWiring, ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
 import {
   createManualDispatchPrReader,
   resolveConfiguredPullRequestUrl,
 } from "../../engine/support/vcs-runtime.js";
-import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 import { loadSettingsSnapshot, loadSettingsSnapshotOn } from "../settings/index.js";
 import {
   getWorkflowDefinitionName,
@@ -415,16 +414,14 @@ async function resolvePullRequestDispatch(
     );
   }
   const pr = snapshotToPayload(parsed.provider, parsed.repoPath, snapshot);
-  const gateCheckNames = loadPostPrGateConfig().postPrGate.steps.map(
-    (step) => `blazebot / ${step.name ?? step.uses}`,
-  );
   const eligible = selectManualTriggerEvent(
     deployed.triggerType,
     pr,
     {
       ...snapshot,
+      // Our own gate's checks, in either naming generation, never start a run.
       failedChecks: snapshot.failedChecks.filter(
-        (check) => !isGateCheckName(check.name, gateCheckNames),
+        (check) => !isManagedGateCheckName(check.name),
       ),
     },
     params,
