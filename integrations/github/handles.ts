@@ -28,6 +28,17 @@ export function checkRunHandle(check: { id: number; appSlug: string | undefined 
   return githubHandle({ id: check.id, owner: check.appSlug ?? "" });
 }
 
+/**
+ * Whether a check run's app is trusted when a workflow names no producers.
+ * Only GitHub's own runner is: widening this to every app would start runs
+ * from check runs an outside app reported. Here beside the handle for the same
+ * reason: the webhook and the manual dispatch snapshot both ask, so the two
+ * ways a failed check arrives agree.
+ */
+export function isTrustedByDefaultCheckProducer(appSlug: string | undefined): boolean {
+  return appSlug === "github-actions";
+}
+
 export const githubHandleIdentity: VcsHandleIdentity = {
   sameHandle(left, right) {
     if (!left || !right) return left === right;

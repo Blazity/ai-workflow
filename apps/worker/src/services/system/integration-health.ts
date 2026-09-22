@@ -20,8 +20,8 @@ import type {
   SystemHealthMode,
 } from "@shared/contracts";
 
-import { PublicHealthProbeError } from "./collect.js";
-import { latestWebhookDeliveries, WEBHOOK_DELIVERY_CHECK_ID } from "./observations.js";
+import { PublicHealthProbeError, WEBHOOK_DELIVERY_CHECK_ID } from "./collect.js";
+import { latestWebhookDeliveries } from "./observations.js";
 import { redactIntegrationText } from "../integrations/index.js";
 
 import type {

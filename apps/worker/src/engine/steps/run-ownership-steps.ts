@@ -78,8 +78,23 @@ export async function acknowledgePrTriggerDispatchStep(
     triggerType: entry.triggerType,
     pr: entry.pr,
   };
-  const { current, handles } = await readProviderCurrentPullRequest(triggerEvent);
-  if (!bindCurrentPullRequest(triggerEvent, current, handles)) {
+  const { isPullRequestUnreadableError } = await import("@integrations/sdk");
+  let read: Awaited<ReturnType<typeof readProviderCurrentPullRequest>>;
+  try {
+    read = await readProviderCurrentPullRequest(triggerEvent);
+  } catch (error) {
+    // The same answer dispatch gives it: a pull request this connection can
+    // never read closes the delivery, and this run stands down, instead of
+    // failing. Any other failure is still thrown.
+    if (!isPullRequestUnreadableError(error)) throw error;
+    await completeConnectedTriggerDelivery(
+      entry.delivery.provider,
+      entry.delivery.deliveryId,
+      { result: "ignored_pull_request_unreadable" },
+    );
+    return false;
+  }
+  if (!bindCurrentPullRequest(triggerEvent, read.current, read.handles)) {
     await completeConnectedTriggerDelivery(
       entry.delivery.provider,
       entry.delivery.deliveryId,

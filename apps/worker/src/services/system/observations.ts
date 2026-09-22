@@ -7,6 +7,7 @@ import {
   type SystemHealthObservationOutcome,
 } from "../../db/repositories/system-health.js";
 import { deploymentPublicBaseUrl } from "../../infra/public-base-url.js";
+import { WEBHOOK_DELIVERY_CHECK_ID } from "./collect.js";
 
 export type { SystemHealthObservation, SystemHealthObservationOutcome };
 
@@ -20,14 +21,13 @@ export function systemHealthObservationScope(identity: string | undefined): stri
   return `deployment:${createHash("sha256").update(identity).digest("hex")}`;
 }
 
-/** The check an integration webhook's deliveries are recorded and reported under. */
-export const WEBHOOK_DELIVERY_CHECK_ID = "webhook-delivery";
 
 /**
- * Integration webhook deliveries as THIS deployment saw them.
+ * Webhook deliveries as THIS deployment saw them: every integration's, and
+ * core's own Resend webhook's.
  *
- * The generic route writes them and the health page reads them, both through
- * the pair below, so the two cannot disagree about which deployment's record
+ * The routes write them and the health page reads them, both through the pair
+ * below, so the two cannot disagree about which deployment's record
  * they mean. The scope is the deployment's public address, hashed: demo shares
  * production's database, and a delivery demo accepted must not paint
  * production's webhook Live. Core never reads an integration's signing secret
@@ -57,27 +57,6 @@ export function latestWebhookDeliveries(integrationId: string): Promise<SystemHe
     WEBHOOK_DELIVERY_CHECK_ID,
     webhookDeliveryScope(),
   );
-}
-
-export function recordSystemHealthObservation(
-  input: {
-    integrationId: string;
-    checkId: string;
-    scope?: string;
-    outcome: SystemHealthObservationOutcome;
-    reason: string;
-  },
-  now: Date = new Date(),
-): Promise<void> {
-  return recordConnectedSystemHealthObservation(input, now);
-}
-
-export function getLatestSystemHealthObservations(
-  integrationId: string,
-  checkId: string,
-  scope?: string,
-): Promise<SystemHealthObservation[]> {
-  return getConnectedLatestSystemHealthObservations(integrationId, checkId, scope);
 }
 
 export function sweepSystemHealthObservations(

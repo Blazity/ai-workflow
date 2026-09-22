@@ -856,6 +856,20 @@ removed, moved or renamed. One recorded shape and one recorded value change:
   takes only a check's name, conclusion and link, which kept their shape.
   A delivery without `trustedByDefault` is read the same way, by the legacy
   default in `dispatch-trigger.ts`.
+  `recordedCheckHandle` is removed once this counts zero on production and no
+  run started before the handle deploy is still in flight (queued and failed
+  deliveries are the envelopes a drain or a retry still binds):
+
+  ```sql
+  select count(*)
+  from trigger_deliveries d
+  cross join lateral jsonb_array_elements(
+    case when jsonb_typeof(d.payload #> '{pr,failedChecks}') = 'array'
+      then d.payload #> '{pr,failedChecks}' end
+  ) c
+  where (d.pending or d.result ->> 'result' = 'error')
+    and not c ? 'handle';
+  ```
 - `PrePrCheckFailure.provider` on the checks-budget record
   (`engine/blocks/pre-pr-checks.ts`), which was `"github"` when no repository
   was skipped and is the empty string now.

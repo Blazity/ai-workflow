@@ -103,4 +103,32 @@ describe("bindCurrentPullRequest", () => {
 
     expect(bindCurrentPullRequest(event, openHead)).toBeNull();
   });
+
+  // `recordedCheckHandle` is a shim only the two providers that recorded the
+  // old shape carry. A provider without one binds a check that has no handle
+  // to nothing, and a check that carries one exactly as before.
+  it("binds only handled checks for a provider that never recorded the old shape", () => {
+    const sameValue = { sameHandle: (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right) };
+    const red: PullRequestHead = {
+      ...openHead,
+      checks: {
+        state: "red",
+        failed: [{ name: "build", conclusion: "failure", handle: { run: 3 } as never }],
+      },
+    };
+    const checksEvent = (failed: Record<string, unknown>): TriggerEvent => ({
+      delivery: { provider: "github", producer: "ci", deliveryId: "d3" },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...reviewEvent().pr,
+        headSha: "live-sha",
+        baseRef: "main",
+        review: undefined,
+        failedChecks: [{ name: "build", conclusion: "failure", ...failed }] as never,
+      },
+    });
+
+    expect(bindWith(checksEvent({ checkRunId: 3 }), red, sameValue)).toBeNull();
+    expect(bindWith(checksEvent({ handle: { run: 3 } }), red, sameValue)).not.toBeNull();
+  });
 });

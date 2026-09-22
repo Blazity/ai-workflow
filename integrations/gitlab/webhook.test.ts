@@ -168,7 +168,16 @@ describe("a deployment that still names one legacy GitLab project", () => {
 
     expect(result).toEqual({
       kind: "answered",
-      response: { status: 202, body: { status: "ignored", reason: "other_project" } },
+      response: {
+        status: 202,
+        body: {
+          status: "ignored",
+          reason: "other_project",
+          // Named, so a project enabled in the catalog and still refused here
+          // says why in GitLab's delivery log.
+          detail: expect.stringMatching(/GITLAB_PROJECT_ID.*platform\/api/u),
+        },
+      },
     });
   });
 

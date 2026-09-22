@@ -1,5 +1,4 @@
-import type { VcsHandleIdentity } from "@integrations/sdk";
-import { FatalError } from "workflow";
+import { isPullRequestUnreadableError, type VcsHandleIdentity } from "@integrations/sdk";
 import { start } from "workflow/api";
 import type {
   WorkflowBlockType,
@@ -97,6 +96,10 @@ export type DispatchTriggerResult =
    *  project in the group, including ones the token may not see. */
   | { result: "ignored_pull_request_unreadable" }
   | { result: "ignored_untrusted_event" }
+  /** A commented review the workflow asks for, dropped only because this
+   *  deployment does not know its own automation account. Its own word, since
+   *  naming the bot login is what an operator does about it. */
+  | { result: "ignored_bot_login_unknown" }
   | { result: "ignored_malformed_delivery" }
   /** A workflow-owned pull request whose ticket cannot be confirmed because
    *  this deployment has no usable issue tracker (none connected, disabled,
@@ -104,7 +107,13 @@ export type DispatchTriggerResult =
    *  retryably would have the provider redeliver, and GitLab switch the
    *  webhook off, until somebody reconnected the tracker. */
   | { result: "ignored_issue_tracker_unavailable"; diagnosticId: string }
+  /** Accepted and queued: its pending row is kept, and the drain starts it
+   *  once the pull request's current run or the deployment has room. */
   | { result: "coalesced" }
+  /** Accepted and dropped for good by the trigger's start budget, or by the
+   *  pull request's fix-attempt cap. Nothing is queued: no run will follow. */
+  | { result: "rate_limited" }
+  | { result: "autofix_cap_reached" }
   | { result: "at_capacity" }
   | { result: "error"; diagnosticId: string }
   | { result: "started"; runId: string };
@@ -330,7 +339,13 @@ export async function dispatchTriggerEvent(
       botLogin = reading.login;
     }
     const eligibleEvent = selectEligibleEvent(event, params, botLogin);
-    if (!eligibleEvent) return { result: "ignored_untrusted_event" };
+    if (!eligibleEvent) {
+      return {
+        result: isCommentedReviewWithoutAccount(event, params, botLogin)
+          ? "ignored_bot_login_unknown"
+          : "ignored_untrusted_event",
+      };
+    }
 
     const bound = await bindToCurrentPullRequest(eligibleEvent, deps);
     if (bound.status === "unreachable") {
@@ -492,12 +507,28 @@ function reviewStatesThatMayStartARun(
   params: Record<string, unknown>,
   botLogin: string | undefined,
 ): string[] {
-  const configuredStates =
-    Array.isArray(params.on) && params.on.length > 0 ? params.on : DEFAULT_REVIEW_TRIGGER_STATES;
   const knowsItself = normalizeVcsLogin(botLogin) !== undefined;
-  return configuredStates.filter(
+  return configuredReviewStates(params).filter(
     (state): state is string =>
       state === "changes_requested" || (state === "commented" && knowsItself),
+  );
+}
+
+function configuredReviewStates(params: Record<string, unknown>): readonly unknown[] {
+  return Array.isArray(params.on) && params.on.length > 0 ? params.on : DEFAULT_REVIEW_TRIGGER_STATES;
+}
+
+/** The one refusal above an operator fixes by naming the bot login. */
+function isCommentedReviewWithoutAccount(
+  event: TriggerEvent,
+  params: Record<string, unknown>,
+  botLogin: string | undefined,
+): boolean {
+  return (
+    event.triggerType === "trigger_pr_review" &&
+    event.pr.review?.state === "commented" &&
+    normalizeVcsLogin(botLogin) === undefined &&
+    configuredReviewStates(params).includes("commented")
   );
 }
 
@@ -759,6 +790,9 @@ async function dispatchAcceptedTrigger(
     // must refund it (see the "error" branch below), since the guard has to
     // spend before start is attempted and cannot yet know whether it succeeds.
     let spentCapKey: PrAutofixCapKey | null = null;
+    // Which of the two terminal drops the guard made, since both leave it as
+    // one reason (`rate_limited`) and the provider's log has to tell them apart.
+    let dropped: "rate_limited" | "autofix_cap_reached" = "rate_limited";
     const dispatched = await claimSubjectRun(
       {
         subjectKey: accepted.subjectKey,
@@ -782,6 +816,7 @@ async function dispatchAcceptedTrigger(
           const cap = await prAutofixCapReached(deps.db, accepted);
           if (cap) spentCapKey = cap.key;
           if (cap?.reached) {
+            dropped = "autofix_cap_reached";
             return { started: false, reason: "rate_limited" as const };
           }
           return null;
@@ -820,9 +855,9 @@ async function dispatchAcceptedTrigger(
       // too: retaining it would let the drain retry the delivery into a run
       // once the window rolls, which is the deferred queue the rate limit
       // deliberately does not provide.
-      await completeDelivery(deps.db, accepted, { result: "coalesced" });
+      await completeDelivery(deps.db, accepted, { result: dropped });
       await deleteDurablePendingTrigger(deps.db, accepted);
-      return { result: "coalesced" };
+      return { result: dropped };
     }
 
     if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {
@@ -1177,11 +1212,12 @@ async function readCurrentPullRequest(
     }
     return { status: "ok", ...(await readProviderCurrentPullRequest(event)) };
   } catch (error) {
-    // The provider's own verdict that asking again cannot help (see
-    // `FatalError` in the SDK): answered as an ignore the provider's delivery
-    // log shows, never as a failure it would redeliver until GitLab switched
-    // the webhook off.
-    if (FatalError.is(error)) {
+    // The provider says this connection can never read this pull request (see
+    // `PullRequestUnreadableError`): answered as an ignore the provider's
+    // delivery log shows, never as a failure it would redeliver until GitLab
+    // switched the webhook off. A refused credential is not this: it falls
+    // through to the retryable answer below, and a queued trigger is kept.
+    if (isPullRequestUnreadableError(error)) {
       logger.info(
         {
           provider: pr.provider,
@@ -1246,6 +1282,9 @@ function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTri
     return { result: "ignored_repository_not_enabled" };
   }
   if (result.result === "at_capacity") return { result: "at_capacity" };
+  if (result.result === "rate_limited" || result.result === "autofix_cap_reached") {
+    return { result: result.result };
+  }
   if (result.result === "error") {
     return { result: "error", diagnosticId: result.diagnosticId };
   }

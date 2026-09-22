@@ -96,11 +96,6 @@ describe("GitHubAdapter", () => {
   });
 
   describe("the operational surfaces core detects by method", () => {
-    it("reports the configured bot login and nothing when none is set", () => {
-      expect(ghAdapter({ botLogin: "ai-workflow[bot]" }).botLogin).toBe("ai-workflow[bot]");
-      expect(ghAdapter().botLogin).toBeUndefined();
-    });
-
     it("maps every repository the installation can see", async () => {
       mockOctokit.paginate.mockResolvedValueOnce([
         {
@@ -378,22 +373,40 @@ describe("GitHubAdapter", () => {
       });
     });
 
-    function refused(status: number, message: string, headers: Record<string, string> = {}) {
-      return Object.assign(new Error(message), { status, response: { headers } });
+    // The shape of Octokit's `RequestError`: the status, the answer's headers,
+    // and the request it answered, whose URL tells a refusal of the pull
+    // request from a refusal of the installation token minted inside the call.
+    const pullRequestUrl = "https://api.github.com/repos/test-org/test-repo/pulls/42";
+    const installationTokenUrl = "https://api.github.com/app/installations/99/access_tokens";
+    function refused(
+      status: number,
+      message: string,
+      headers: Record<string, string> = {},
+      url = pullRequestUrl,
+    ) {
+      return Object.assign(new Error(message), {
+        status,
+        response: { headers },
+        request: { url },
+      });
     }
 
     it.each([
       ["gone", refused(404, "Not Found")],
       ["forbidden to the installation", refused(403, "Resource not accessible by integration")],
-    ])("calls a pull request that is %s fatal", async (_label, error) => {
+    ])("calls a pull request that is %s unreadable for good", async (_label, error) => {
       mockOctokit.pulls.get.mockRejectedValueOnce(error);
 
       const caught = await ghAdapter().getPRHead(42).catch((failure) => failure as Error);
 
-      expect(caught).toMatchObject({ name: "FatalError" });
+      expect(caught).toMatchObject({ name: "PullRequestUnreadableError" });
+      expect((caught as Error).cause).toBe(error);
     });
 
     it.each([
+      ["a refused credential", refused(401, "Bad credentials")],
+      ["an installation that is gone", refused(404, "Not Found", {}, installationTokenUrl)],
+      ["an installation that is suspended", refused(403, "This installation has been suspended", {}, installationTokenUrl)],
       ["a primary rate limit", refused(403, "API rate limit exceeded", { "x-ratelimit-remaining": "0" })],
       ["a secondary rate limit", refused(403, "You have exceeded a secondary rate limit", { "retry-after": "60" })],
       ["a server error", refused(502, "Bad Gateway")],

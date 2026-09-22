@@ -231,6 +231,7 @@ type TriggerDeliveryVerdict =
       kind: "answer";
       body:
         | { status: "dispatched"; runId?: string; reason?: string }
+        | { status: "queued" }
         | { status: "ignored"; reason: string; diagnosticId?: string };
     }
   | { kind: "unchanged" };
@@ -267,6 +268,7 @@ async function actOnTriggerEvents(
     dispatchPostPrGateWebhook,
     dispatchTriggerEvent,
     isRepositoryDispatchable,
+    recordIngestionFailure,
   } = await import("../../services/dispatch/index.js");
   const { connectedWorkflowPushNormalizationOptions, isWorkflowGeneratedPush } = await import(
     "../../services/publication/index.js"
@@ -277,37 +279,53 @@ async function actOnTriggerEvents(
     getRequestRepositoryCatalogSnapshot(event),
   ]);
 
-  /** Whether a push is one this workflow made, from its ownership record. */
+  /**
+   * Whether a push is one this workflow made, from its ownership record, or a
+   * retry verdict when the automation account could not be read. That FAILS
+   * CLOSED: acted on without the account, every commit the workflow made
+   * reads as somebody else's, and it starts a run off its own push. The
+   * verdict is the one dispatch's own unreadable account turns into.
+   */
   const isOurPush = async (push: {
     provider: string;
     repoPath: string;
     prNumber: number;
     headSha: string;
     pusher: string;
-  }) =>
-    isWorkflowGeneratedPush({
+  }): Promise<boolean | Extract<TriggerDeliveryVerdict, { kind: "retry" }>> => {
+    const reading = await readBotLogin(push.provider);
+    if (!reading.readable) {
+      return {
+        kind: "retry",
+        reason: "bot_login_unreadable",
+        diagnosticId: recordIngestionFailure("trigger_bot_login_unreadable", new Error(reading.reason), {
+          integration: id,
+          provider: push.provider,
+        }),
+      };
+    }
+    return isWorkflowGeneratedPush({
       currentHeadSha: push.headSha,
       producer: push.pusher,
-      botIdentity: await knownBotLogin(readBotLogin, push.provider),
+      botIdentity: reading.login,
       ...(await connectedWorkflowPushNormalizationOptions({
         provider: push.provider,
         repoPath: push.repoPath,
         prNumber: push.prNumber,
       })),
     });
+  };
 
   let suppressedWorkflowPush = false;
   // Why the last candidate that did not claim the delivery did not. The loop
   // stops at the first that claims, so this is only read when none did.
   let unclaimedReason: string | undefined;
   for (const candidate of reception.events) {
-    if (
+    const ours =
       candidate.triggerType === "trigger_pr_updated" &&
-      (await isOurPush({
-        ...candidate.pr,
-        pusher: candidate.delivery.producer,
-      }))
-    ) {
+      (await isOurPush({ ...candidate.pr, pusher: candidate.delivery.producer }));
+    if (typeof ours === "object") return ours;
+    if (ours) {
       suppressedWorkflowPush = true;
       continue;
     }
@@ -331,6 +349,10 @@ async function actOnTriggerEvents(
     if (result.result === "started") {
       return { kind: "answer", body: { status: "dispatched", runId: result.runId } };
     }
+    // Kept, and started by the drain once the pull request's current run or
+    // the deployment has room. A drop (a rate limit, the fix-attempt cap)
+    // reads as ignored below, under its reason: no run will follow it.
+    if (result.result === "coalesced") return { kind: "answer", body: { status: "queued" } };
     return {
       kind: "answer",
       body: {
@@ -359,13 +381,15 @@ async function actOnTriggerEvents(
         "webhook_push_author_unknown",
       );
     } else {
-      suppressedWorkflowPush = await isOurPush({
+      const ours = await isOurPush({
         provider: gate.workflowInput.provider,
         repoPath: gate.workflowInput.ownerRepo,
         prNumber: gate.workflowInput.prNumber,
         headSha: gate.workflowInput.headSha,
         pusher: gate.pusher,
       });
+      if (typeof ours === "object") return ours;
+      suppressedWorkflowPush = ours;
     }
   }
   if (gate && !suppressedWorkflowPush) {
@@ -475,26 +499,6 @@ function memoizedVcsBotLogin(): VcsBotLoginReader {
     byProvider.set(provider, started);
     return started;
   };
-}
-
-/**
- * The login, for a caller that must not act without it. FAILS CLOSED, like the
- * first settings read one screen up: a delivery acted on with an unknown
- * automation account is how the workflow starts a run off its own push, since
- * every commit it made reads as somebody else's.
- */
-async function knownBotLogin(
-  readBotLogin: VcsBotLoginReader,
-  provider: string,
-): Promise<string | undefined> {
-  const reading = await readBotLogin(provider);
-  if (!reading.readable) {
-    throw createError({
-      statusCode: 503,
-      statusMessage: `The automation account for ${provider} could not be read on this deployment (${reading.reason}), so the delivery was not acted on.`,
-    });
-  }
-  return reading.login;
 }
 
 function lowercased(headers: Record<string, string | undefined>): Record<string, string> {

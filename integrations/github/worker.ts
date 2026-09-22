@@ -38,7 +38,6 @@ function adapter(ctx: GitHubContext, repository?: { repoPath: string; baseBranch
     owner,
     repo,
     baseBranch: target.baseBranch,
-    ...(ctx.connection.botLogin ? { botLogin: ctx.connection.botLogin } : {}),
     log: ctx.log,
   });
 }

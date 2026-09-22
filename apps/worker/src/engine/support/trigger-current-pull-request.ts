@@ -33,9 +33,10 @@ export function bindCurrentPullRequest<T extends TriggerEvent>(
 ): T | null {
   if (!current) return null;
   const { pr } = event;
-  // Review triggers are about the PR, not a specific head. A comment event may
-  // carry no base ref (issue_comment), so an empty pr.baseRef means "unknown,
-  // adopt the provider-authoritative value" rather than "stale".
+  // Review triggers are about the PR, not a specific head (see `headSha` on
+  // `PrTriggerPayload`). A comment event may carry no base ref (issue_comment),
+  // so an empty pr.baseRef means "unknown, adopt the provider-authoritative
+  // value" rather than "stale".
   const isReview = event.triggerType === "trigger_pr_review";
   if (current.baseRef !== pr.baseRef && !(isReview && pr.baseRef === "")) return null;
   const expectedState =
@@ -50,11 +51,9 @@ export function bindCurrentPullRequest<T extends TriggerEvent>(
       pr: { ...pr, headRef, headSha: current.headSha, baseRef: current.baseRef },
     };
   }
-  // A checks event may not know the head: the delivery names the commit its
-  // checks ran on, which is not always the pull request's head (a merged-results
-  // pipeline runs on a temporary merge commit). Its failed-check handles are
-  // what prove it is about this head, below, so an empty head is "unknown,
-  // adopt the provider's" there and stale for every other trigger.
+  // What an empty head means per trigger is the contract's (`headSha` on
+  // `PrTriggerPayload`): for a checks event, the failed-check handles below
+  // are what prove it is about this head.
   const headUnknown = pr.headSha === "" && event.triggerType === "trigger_pr_checks_failed";
   if (!headUnknown && current.headSha !== pr.headSha) return null;
   if (event.triggerType !== "trigger_pr_checks_failed") return event;
@@ -65,7 +64,8 @@ export function bindCurrentPullRequest<T extends TriggerEvent>(
     // provider that wrote it rebuilds the handle from its own old fields.
     const recorded =
       (failed.handle as VcsOpaqueHandle | undefined) ??
-      handles.recordedCheckHandle(failed, pr as unknown as Readonly<Record<string, unknown>>);
+      handles.recordedCheckHandle?.(failed, pr as unknown as Readonly<Record<string, unknown>>) ??
+      null;
     return (
       recorded !== null &&
       currentChecks.failed.some(

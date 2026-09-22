@@ -129,9 +129,6 @@ const integrationStore = {
   },
   usableIntegrations: async () => connected(),
   checkIntegrationPin: () => ({ ok: true }),
-  // The adapter resolution asks the facade for this; the case that is actually
-  // about the automation account calls the real resolver below instead.
-  getVcsBotLogin: async () => "forgejo-bot",
 };
 
 vi.mock("../../services/integrations/runtime.js", () => integrationStore);

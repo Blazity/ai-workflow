@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { Gitlab } from "@gitbeaker/rest";
 import {
   FatalError,
+  isPullRequestRefusal,
   isReviewLedgerWorkItem,
+  PullRequestUnreadableError,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
@@ -617,9 +619,22 @@ export class GitLabAdapter implements
     } catch (err) {
       // A merge request this token may not read answers the same way every
       // time, and a group webhook reports every project in the group, readable
-      // or not. That, and one that no longer exists, is fatal: retrying cannot
-      // change it.
-      this.throwWithProviderRetrySemantics(err);
+      // or not. That, and one that no longer exists, is closed for good. A
+      // token GitLab no longer accepts (401) or one without the scope to read
+      // at all (403 `insufficient_scope`) refuses every merge request: that is
+      // the connection's fault and is thrown as it came.
+      const refusal = {
+        status: this.getStatusCode(err),
+        message: err instanceof Error ? err.message : "",
+        response: { headers: (err as { cause?: { response?: { headers?: unknown } } })?.cause?.response?.headers },
+      };
+      if (err instanceof Error && err.message !== "insufficient_scope" && isPullRequestRefusal(refusal)) {
+        throw new PullRequestUnreadableError(
+          `GitLab merge request !${prId} in ${this.projectId} cannot be read with this token`,
+          { cause: err },
+        );
+      }
+      throw err;
     }
     const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
     if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);

@@ -32,8 +32,13 @@ vi.mock("../../infra/vcs-config.js", () => ({
   ],
 }));
 
+const botLogin = vi.hoisted(() => ({
+  reading: { readable: true, login: "workflow-bot" } as
+    | { readable: true; login: string | undefined }
+    | { readable: false; reason: string },
+}));
 vi.mock("../vcs/index.js", () => ({
-  getVcsBotLogin: () => "workflow-bot",
+  readVcsBotLogin: async () => botLogin.reading,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -476,6 +481,77 @@ describe("manual dispatch against a definition repository pin", () => {
     expect(
       (resolved.inputPayload as { pr: PrTriggerPayload }).pr.failedChecks?.map((check) => check.name),
     ).toEqual(["ci / build"]);
+  });
+
+  function pullRequestRequest() {
+    return {
+      db: definitionDb,
+      issueTracker,
+      definitionId: 5,
+      triggerNodeId: "trigger",
+      dispatchInput: { kind: "pull_request" as const, url: pr.prUrl },
+      repositoryCatalog,
+    };
+  }
+
+  // A mistyped number, or a pull request the connection may not see, is the
+  // person's to fix: waiting would not change the answer.
+  it("tells the person a pull request this connection cannot read is not eligible", async () => {
+    const { PullRequestUnreadableError } = await import("@integrations/sdk");
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      new PullRequestUnreadableError("GitHub PR #42 in acme/api cannot be read"),
+    );
+
+    await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+      statusCode: 422,
+      code: "not_eligible",
+    });
+  });
+
+  it("tells the person when the provider cannot read pull requests at all", async () => {
+    const { ManualDispatchUnsupportedError } = await import("../../adapters/vcs/types.js");
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      new ManualDispatchUnsupportedError("github"),
+    );
+
+    await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+      statusCode: 422,
+      code: "not_eligible",
+      message: expect.stringContaining("cannot read pull requests"),
+    });
+  });
+
+  it("calls any other failure to read the pull request an outage", async () => {
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      Object.assign(new Error("Bad credentials"), { status: 401 }),
+    );
+
+    await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+      statusCode: 502,
+      code: "provider_unavailable",
+    });
+  });
+
+  // Without the account, a review the workflow itself left would look like a
+  // person's, and the run would answer its own comment.
+  it("refuses a review dispatch while the automation account cannot be read", async () => {
+    const graph = deployed("any", {});
+    graph.definition.nodes[0]!.type = "trigger_pr_review";
+    graph.definition.nodes[0]!.configuration = { scope: "any", on: ["commented"] } as never;
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(graph);
+    botLogin.reading = { readable: false, reason: "settings unreadable" };
+
+    try {
+      await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+        statusCode: 503,
+        code: "provider_unavailable",
+      });
+    } finally {
+      botLogin.reading = { readable: true, login: "workflow-bot" };
+    }
   });
 
   it("reports every block type the deployed graph carries, so the preflight can ask about its integrations", async () => {

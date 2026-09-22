@@ -15,6 +15,8 @@ import {
   defineIntegrationRuntime,
   FatalError,
   IssueTrackerNotFoundError,
+  isPullRequestRefusal,
+  PullRequestUnreadableError,
   z,
   type AgentTracingAdapter,
   type ConnectionValues,
@@ -50,8 +52,32 @@ async function readJson(ctx: FixtureContext, path: string, init?: RequestInit): 
     headers: { authorization: `Bearer ${ctx.connection.apiToken}` },
   });
   if (response.status === 401) throw new FatalError("The fixture provider refused the API token.");
-  if (!response.ok) throw new Error(`Fixture provider answered ${response.status} for ${path}.`);
+  if (!response.ok) {
+    // The status and headers ride along, so a caller can tell a refusal of
+    // one resource from any other failure (`isPullRequestRefusal`).
+    throw Object.assign(new Error(`Fixture provider answered ${response.status} for ${path}.`), {
+      status: response.status,
+      response: { headers: response.headers },
+    });
+  }
   return response.json();
+}
+
+/** Equality by value: handles cross JSON, so the same check is never the
+ *  same object twice. */
+function sameJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== "object" || typeof right !== "object" || left === null || right === null) {
+    return false;
+  }
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const keys = Object.keys(leftRecord);
+  return (
+    keys.length === Object.keys(rightRecord).length &&
+    keys.every((key) => Object.hasOwn(rightRecord, key) && sameJson(leftRecord[key], rightRecord[key]))
+  );
 }
 
 class FixtureTracker implements IssueTrackerAdapter {
@@ -192,7 +218,16 @@ class FixtureRepository implements VCSAdapter {
   }
 
   async getPRHead(prId: number): Promise<PullRequestHead> {
-    return (await readJson(this.ctx, this.path(`/pulls/${prId}/head`))) as PullRequestHead;
+    try {
+      return (await readJson(this.ctx, this.path(`/pulls/${prId}/head`))) as PullRequestHead;
+    } catch (error) {
+      // Gone, or forbidden to this token, is closed for good; a refused token
+      // or an outage is thrown as it came, so the delivery can be retried.
+      if (isPullRequestRefusal(error)) {
+        throw new PullRequestUnreadableError(`Fixture pull request ${prId} cannot be read.`, { cause: error });
+      }
+      throw error;
+    }
   }
 
   async listReviewThreads(): Promise<ReviewThreadFeed> {
@@ -298,11 +333,11 @@ const definition: IntegrationRuntimeDefinition<FixtureManifest> = {
     vcs: (ctx, repository) => new FixtureRepository(ctx, repository),
     messaging: fixtureMessaging,
   },
-  // The fixture mints no handle of its own, so the one comparison it can make
-  // is identity, and nothing it recorded predates handles.
+  // The fixture's handles are whatever its provider answers, compared by value
+  // because they come back parsed. It never recorded a check without a handle,
+  // so it has no `recordedCheckHandle`.
   vcsHandles: {
-    sameHandle: (left, right) => left === right,
-    recordedCheckHandle: () => null,
+    sameHandle: (left, right) => left !== undefined && right !== undefined && sameJson(left, right),
   },
   blocks: {
     sdkfixture_research: async ({ params, inputs }, ctx) => {

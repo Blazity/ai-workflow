@@ -38,6 +38,11 @@ export type StoredTriggerResult =
   | {
       result:
         | "coalesced"
+        // A terminal drop, told apart from a queued `coalesced` so the
+        // provider's log can say no run will follow. Rows written before
+        // this split read `coalesced` for both.
+        | "rate_limited"
+        | "autofix_cap_reached"
         | "at_capacity"
         | "ignored_provider"
         // Distinct from ignored_provider on purpose: an operator reading the

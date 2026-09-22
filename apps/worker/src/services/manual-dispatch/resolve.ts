@@ -13,8 +13,12 @@ import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
+import { isPullRequestUnreadableError } from "@integrations/sdk";
 import { isRepositoryWithinPinnedScope } from "../../adapters/vcs/repository-directory.js";
-import type { ManualDispatchPullRequestSnapshot } from "../../adapters/vcs/types.js";
+import {
+  ManualDispatchUnsupportedError,
+  type ManualDispatchPullRequestSnapshot,
+} from "../../adapters/vcs/types.js";
 import type { Db } from "../../db/types.js";
 import { findWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import { findConnectedWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
@@ -46,7 +50,7 @@ import type { PrTriggerPayload } from "../../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import { ManualDispatchError } from "./errors.js";
-import { getVcsBotLogin } from "../vcs/index.js";
+import { readVcsBotLogin } from "../vcs/index.js";
 import {
   readConnectedDeployedWorkflowDefinitionVersion,
   readConnectedWorkflowDefinitionVersion,
@@ -360,7 +364,19 @@ async function resolvePullRequestDispatch(
   let snapshot: ManualDispatchPullRequestSnapshot;
   try {
     snapshot = await vcs.getManualDispatchPullRequest(parsed.prNumber);
-  } catch {
+  } catch (error) {
+    // A wrong number, or a pull request this connection may not see, is the
+    // person's to fix, not an outage to wait out.
+    if (isPullRequestUnreadableError(error)) {
+      throw new ManualDispatchError(
+        422,
+        "not_eligible",
+        "This pull request does not exist, or this deployment's connection cannot read it.",
+      );
+    }
+    if (error instanceof ManualDispatchUnsupportedError) {
+      throw new ManualDispatchError(422, "not_eligible", error.message);
+    }
     throw new ManualDispatchError(
       502,
       "provider_unavailable",
@@ -425,9 +441,7 @@ async function resolvePullRequestDispatch(
       ),
     },
     params,
-    deployed.triggerType === "trigger_pr_review"
-      ? await getVcsBotLogin(pr.provider)
-      : undefined,
+    deployed.triggerType === "trigger_pr_review" ? await knownBotLogin(pr.provider) : undefined,
   );
   if (!eligible) {
     throw new ManualDispatchError(
@@ -639,4 +653,20 @@ function normalizeTicketKey(value: string): string {
 function projectKey(identifier: string): string | null {
   const dash = identifier.indexOf("-");
   return dash > 0 ? identifier.slice(0, dash).trim().toUpperCase() : null;
+}
+
+/**
+ * The automation account, for a review this person asked to run. Read the way
+ * automatic dispatch reads it: an account this deployment could not read is
+ * refused out loud, never taken for "none", because a commented review allowed
+ * without it is how the workflow answers its own comment.
+ */
+async function knownBotLogin(provider: string): Promise<string | undefined> {
+  const reading = await readVcsBotLogin(provider);
+  if (reading.readable) return reading.login;
+  throw new ManualDispatchError(
+    503,
+    "provider_unavailable",
+    `The automation account for ${provider} could not be read on this deployment (${reading.reason}). Try again once its integration settings can be read.`,
+  );
 }

@@ -65,6 +65,7 @@ vi.mock("../../services/dispatch/index.js", () => ({
   dispatchTriggerEvent: state.dispatch,
   dispatchPostPrGateWebhook: state.legacyGate,
   isRepositoryDispatchable: () => true,
+  recordIngestionFailure: () => "AIW-DIAG-ingest-test",
 }));
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: vi.fn(),
@@ -888,6 +889,38 @@ describe("POST /webhooks/:id", () => {
 
       expect(response.status).toBe(503);
       expect(state.dispatch).not.toHaveBeenCalled();
+      expect(state.legacyGate).not.toHaveBeenCalled();
+      // The same verdict as dispatch's own unreadable account: a retry this
+      // deployment owes, with a diagnostic, not a handler that crashed.
+      expect(await response.json()).toMatchObject({
+        statusMessage: "bot_login_unreadable",
+        data: { diagnosticId: "AIW-DIAG-ingest-test" },
+      });
+      expect(state.observations.at(-1)).toEqual({
+        integrationId: "github",
+        outcome: "rejected",
+        reason: "bot_login_unreadable",
+      });
+    });
+
+    it("tells a delivery that will still run from one that never will", async () => {
+      // Queued behind the pull request's current run, the delivery starts when
+      // that run ends. Dropped by the start budget or the fix-attempt cap,
+      // nothing follows. The provider's log is where an operator tells the two
+      // apart, so they must not read the same.
+      state.dispatch.mockResolvedValue({ result: "coalesced" });
+      const queued = await app()(githubSyncRequest());
+      await Promise.all(deferred);
+      expect(queued.status).toBe(202);
+      expect(await queued.json()).toEqual({ status: "queued" });
+
+      for (const reason of ["rate_limited", "autofix_cap_reached"]) {
+        state.dispatch.mockResolvedValue({ result: reason });
+        const dropped = await app()(githubSyncRequest());
+        await Promise.all(deferred);
+        expect(dropped.status).toBe(202);
+        expect(await dropped.json()).toEqual({ status: "ignored", reason });
+      }
       expect(state.legacyGate).not.toHaveBeenCalled();
     });
 

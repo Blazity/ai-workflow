@@ -33,8 +33,11 @@ const repositoryPolicy = z
  * The review states this trigger waits for when a workflow names none: the
  * explicit "request changes" only. A plain comment is opt-in, because it needs
  * the automation account to be known (or the workflow answers its own review)
- * and because GitLab reports nothing else. The schema, the palette, dispatch
- * and the starter template all read it here.
+ * and because GitLab reports nothing else. The schema, dispatch, the block
+ * registry the palette seeds a new node from, and the generated block catalog
+ * the dashboard's editor falls back to all read it here. The starter template
+ * does not: it names both states on purpose, because a template waiting for
+ * "request changes" alone never fires on GitLab.
  */
 export const DEFAULT_REVIEW_TRIGGER_STATES = [
   "changes_requested",

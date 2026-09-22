@@ -57,7 +57,20 @@ export async function receiveGitLabWebhook(
       { project: body?.project?.path_with_namespace ?? null, expected: legacyProjectId },
       "gitlab_webhook_skipped_other_project",
     );
-    return { kind: "answered", response: { status: 202, body: { status: "ignored", reason: "other_project" } } };
+    // The setting by both its names, in the provider's delivery log: a project
+    // enabled in the repository catalog is still refused here, and that log is
+    // where an operator looks for why its merge requests start nothing.
+    return {
+      kind: "answered",
+      response: {
+        status: 202,
+        body: {
+          status: "ignored",
+          reason: "other_project",
+          detail: `The Legacy default project setting (GITLAB_PROJECT_ID) limits this deployment's GitLab webhooks to ${legacyProjectId}.`,
+        },
+      },
+    };
   }
   const events = normalizeGitLabEvents(eventName, body, {
     deliveryId,

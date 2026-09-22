@@ -1,7 +1,9 @@
 import type { Octokit } from "@octokit/rest";
 import {
   FatalError,
+  isPullRequestRefusal,
   isReviewLedgerWorkItem,
+  PullRequestUnreadableError,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
@@ -24,7 +26,12 @@ import {
   type VcsRepositoryMetadata,
   type VcsSandboxCredentials,
 } from "@integrations/sdk";
-import { checkRunHandle, githubHandle, type GitHubHandle } from "./handles";
+import {
+  checkRunHandle,
+  githubHandle,
+  isTrustedByDefaultCheckProducer,
+  type GitHubHandle,
+} from "./handles";
 import {
   buildOctokit,
   getBotIdentity,
@@ -33,7 +40,6 @@ import {
 } from "./auth";
 import { createGitHubProfileSource } from "./profile-source";
 import { createGitHubSkillSource } from "./skills";
-import { isTrustedByDefaultCheckProducer } from "./webhook";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasReviewLedgerFailureMarker,
@@ -159,31 +165,18 @@ export interface GitHubConfig {
   owner: string;
   repo: string;
   baseBranch: string;
-  botLogin?: string;
   log?: IntegrationLogger;
 }
 
-/**
- * Whether GitHub refused a request in a way that asking again will not change:
- * the resource does not exist for this installation (404), or it is forbidden
- * to it (403). A 403 is also how GitHub answers a rate limit, primary (with
- * `x-ratelimit-remaining: 0`) or secondary (with `retry-after`, or saying so in
- * its message), and that one passes.
- */
-function isPermanentRefusal(err: unknown): boolean {
-  const failure = err as {
-    status?: number;
-    message?: string;
-    response?: { headers?: Record<string, string | undefined> };
-  } | null;
-  if (failure?.status === 404) return true;
-  if (failure?.status !== 403) return false;
-  const headers = failure.response?.headers ?? {};
-  return (
-    headers["x-ratelimit-remaining"] !== "0" &&
-    headers["retry-after"] === undefined &&
-    !/rate limit/iu.test(failure.message ?? "")
-  );
+/** The path of the request an Octokit `RequestError` was answered for. */
+function refusedRequestPath(err: unknown): string | undefined {
+  const url = (err as { request?: { url?: unknown } } | null)?.request?.url;
+  if (typeof url !== "string") return undefined;
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return undefined;
+  }
 }
 
 function isSelfAuthoredReviewError(error: unknown): boolean {
@@ -538,10 +531,6 @@ export class GitHubAdapter
     this.octokit = buildOctokit(config.credential);
   }
 
-  get botLogin(): string | undefined {
-    return this.config.botLogin;
-  }
-
   private get ownerRepo() {
     return { owner: this.config.owner, repo: this.config.repo };
   }
@@ -768,22 +757,33 @@ export class GitHubAdapter
     }
   }
 
-  async getPRHead(prId: number): Promise<PullRequestHead> {
-    let data;
+  /**
+   * One pull request, with the one failure core closes for good told apart
+   * (see `PullRequestUnreadableError`). Only when the refused request was the
+   * pull request itself: the App's installation token is minted inside this
+   * same call, and a 404 or 403 there (the installation was removed, suspended
+   * or reinstalled) is a credential fault every pull request shares.
+   */
+  private async readPullRequest(prId: number) {
     try {
-      ({ data } = await this.octokit.pulls.get({
+      const { data } = await this.octokit.pulls.get({
         ...this.ownerRepo,
         pull_number: prId,
-      }));
+      });
+      return data;
     } catch (err) {
-      if (isPermanentRefusal(err)) {
-        throw new FatalError(
+      if (refusedRequestPath(err)?.endsWith(`/pulls/${prId}`) && isPullRequestRefusal(err)) {
+        throw new PullRequestUnreadableError(
           `GitHub PR #${prId} in ${this.ownerRepo.owner}/${this.ownerRepo.repo} cannot be read with this installation`,
           { cause: err },
         );
       }
       throw err;
     }
+  }
+
+  async getPRHead(prId: number): Promise<PullRequestHead> {
+    const data = await this.readPullRequest(prId);
     const baseRef = data.base.ref?.trim();
     if (!baseRef) throw new Error(`GitHub PR #${prId} is missing its target branch`);
     const state = data.merged === true ? "merged" : data.state;
@@ -826,10 +826,7 @@ export class GitHubAdapter
   async getManualDispatchPullRequest(
     prId: number,
   ): Promise<ManualDispatchPullRequestSnapshot> {
-    const { data } = await this.octokit.pulls.get({
-      ...this.ownerRepo,
-      pull_number: prId,
-    });
+    const data = await this.readPullRequest(prId);
     const baseRef = data.base.ref?.trim();
     if (!baseRef) throw new Error(`GitHub PR #${prId} is missing its target branch`);
     const state = data.merged === true ? "merged" : data.state;

@@ -7,6 +7,10 @@ import type {
   SystemHealthResponse,
 } from "@shared/contracts";
 
+/** The check a webhook's deliveries are recorded and reported under: core's
+ *  own Resend webhook's and every integration's. */
+export const WEBHOOK_DELIVERY_CHECK_ID = "webhook-delivery";
+
 export type SystemHealthConfig = {
   databaseUrl?: string;
   agentKind: "claude" | "codex";
@@ -224,7 +228,7 @@ function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[]
     ]),
     integration("email", "Email delivery", "auth-email", false, [
       checked("sender", "API and sender domain", ["RESEND_API_KEY", "RESEND_FROM_EMAIL"], emailMode, true),
-      checked("webhook-delivery", "Delivery-status webhook", ["RESEND_WEBHOOK_SECRET"], optionalValueMode(config.resendWebhookSecret), false, "provider-delivery"),
+      checked(WEBHOOK_DELIVERY_CHECK_ID, "Delivery-status webhook", ["RESEND_WEBHOOK_SECRET"], optionalValueMode(config.resendWebhookSecret), false, "provider-delivery"),
     ]),
     integration("mcp", "Remote MCP", "platform", false, [
       checked("contract", "Published tool contract", ["MCP_ENABLED"], config.mcpEnabled ? "configured" : "not-configured", true),

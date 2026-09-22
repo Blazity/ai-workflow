@@ -371,6 +371,59 @@ describe("workflow owner steps", () => {
     },
   );
 
+  function reviewCandidate(deliveryId: string) {
+    return {
+      kind: "pr_trigger" as const,
+      triggerType: "trigger_pr_review" as const,
+      subjectKey: "pr:github:acme/api#7",
+      ownerToken: "owner",
+      definitionId: 1,
+      definitionVersion: 2,
+      scope: "any" as const,
+      delivery: { provider: "github" as const, producer: "alice", deliveryId },
+      pr: {
+        provider: "github" as const,
+        repoPath: "acme/api",
+        prNumber: 7,
+        headSha: "sha",
+        baseRef: "main",
+      } as any,
+    };
+  }
+
+  // The pull request was deleted, or the App lost access to its repository,
+  // between dispatch and this step. Failing the step would fail the run over a
+  // delivery that can never be served; the delivery is closed instead.
+  it("closes a candidate whose pull request this connection can no longer read", async () => {
+    const { PullRequestUnreadableError } = await import("@integrations/sdk");
+    getPRHead.mockRejectedValue(new PullRequestUnreadableError("GitHub PR #7 cannot be read"));
+    const { acknowledgePrTriggerDispatchStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      acknowledgePrTriggerDispatchStep(reviewCandidate("delivery-unreadable"), "run-gone"),
+    ).resolves.toBe(false);
+    expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
+    expect(completeTriggerDelivery).toHaveBeenCalledWith(
+      "github",
+      "delivery-unreadable",
+      { result: "ignored_pull_request_unreadable" },
+    );
+  });
+
+  // A refused credential is the connection's fault: the step throws, the
+  // DevKit retries it, and nothing is closed on the delivery's behalf.
+  it("lets a refused credential fail the step so it is retried", async () => {
+    const refused = Object.assign(new Error("Bad credentials"), { status: 401 });
+    getPRHead.mockRejectedValue(refused);
+    const { acknowledgePrTriggerDispatchStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      acknowledgePrTriggerDispatchStep(reviewCandidate("delivery-credential"), "run-retry"),
+    ).rejects.toBe(refused);
+    expect(completeTriggerDelivery).not.toHaveBeenCalled();
+    expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
+  });
+
   it("rejects a same-head GitHub checks candidate after its exact Check Run passes", async () => {
     acknowledgeStartedDelivery.mockResolvedValue(true);
     getPRHead.mockResolvedValue({

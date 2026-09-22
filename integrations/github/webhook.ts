@@ -9,7 +9,7 @@ import type {
 } from "@integrations/sdk";
 import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
-import { checkRunHandle } from "./handles";
+import { checkRunHandle, isTrustedByDefaultCheckProducer } from "./handles";
 import { vcsLoginsMatch } from "./review-markers";
 
 type GitHubContext = IntegrationContext<typeof manifest>;
@@ -162,16 +162,6 @@ function reviewStatesFor(eventName: string): readonly string[] | undefined {
     return ["commented"];
   }
   return undefined;
-}
-
-/**
- * Whether a check run's app is trusted when a workflow names no producers.
- * Only GitHub's own runner is: widening this to every app would start runs
- * from check runs an outside app reported. The webhook and the manual dispatch
- * snapshot both ask here, so the two ways a failed check arrives agree.
- */
-export function isTrustedByDefaultCheckProducer(appSlug: string | undefined): boolean {
-  return appSlug === "github-actions";
 }
 
 export interface NormalizeGitHubOptions {

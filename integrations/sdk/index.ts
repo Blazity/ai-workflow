@@ -57,6 +57,12 @@ export {
 } from "./capabilities";
 
 export {
+  isPullRequestRefusal,
+  isPullRequestUnreadableError,
+  PullRequestUnreadableError,
+} from "./pull-request-unreadable";
+
+export {
   defineIntegration,
   defineIntegrationBlock,
   type ConnectionField,

@@ -124,29 +124,36 @@ export function canonicalWorkflowBlockType<T>(type: T): T {
 
 /**
  * A node's `configuration` object with renamed keys replaced by their new
- * names and, for `investigate`'s `sources`, renamed values too; for
- * `trigger_pr_checks_failed`, the retired producer filters folded into
- * `trustedProducers`. Returns the
- * same reference when nothing needed changing, so a node that needs no
- * change keeps its identity and `changed` stays accurate for its caller.
+ * names and, for `investigate`'s `sources`, renamed values too. For
+ * `trigger_pr_checks_failed`, the retired producer filters are then folded
+ * into `trustedProducers`, after the renames, so a rename added to the table
+ * for that block applies too. Returns the same reference when nothing needed
+ * changing, so a node that needs no change keeps its identity and `changed`
+ * stays accurate for its caller.
  */
 function canonicalizeWorkflowBlockConfiguration(
   canonicalType: string,
   configuration: unknown,
 ): { value: unknown; changed: boolean } {
+  const renamed = renameWorkflowBlockParams(canonicalType, configuration);
+  const value = renamed.value;
   if (
-    canonicalType === "trigger_pr_checks_failed" &&
-    configuration &&
-    typeof configuration === "object" &&
-    !Array.isArray(configuration)
+    canonicalType !== "trigger_pr_checks_failed" ||
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
   ) {
-    const upgraded = upgradeRetiredCheckProducerFilters(
-      configuration as Record<string, unknown>,
-    );
-    return upgraded
-      ? { value: upgraded, changed: true }
-      : { value: configuration, changed: false };
+    return renamed;
   }
+  const upgraded = upgradeRetiredCheckProducerFilters(value as Record<string, unknown>);
+  return upgraded ? { value: upgraded, changed: true } : renamed;
+}
+
+/** The table-driven half of `canonicalizeWorkflowBlockConfiguration`. */
+function renameWorkflowBlockParams(
+  canonicalType: string,
+  configuration: unknown,
+): { value: unknown; changed: boolean } {
   const paramRenames = RENAMED_WORKFLOW_BLOCK_PARAMS[canonicalType];
   if (!paramRenames || !configuration || typeof configuration !== "object") {
     return { value: configuration, changed: false };

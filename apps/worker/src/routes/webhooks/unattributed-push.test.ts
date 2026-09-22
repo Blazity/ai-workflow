@@ -98,6 +98,7 @@ vi.mock("../../services/dispatch/index.js", () => ({
   dispatchTriggerEvent: state.dispatch,
   dispatchPostPrGateWebhook: state.gate,
   isRepositoryDispatchable: () => true,
+  recordIngestionFailure: () => "AIW-DIAG-ingest-test",
 }));
 vi.mock("../../services/publication/index.js", () => ({
   connectedWorkflowPushNormalizationOptions: async () => ({
@@ -110,7 +111,6 @@ vi.mock("../../services/publication/index.js", () => ({
   },
 }));
 vi.mock("../../services/vcs/index.js", () => ({
-  getVcsBotLogin: async () => "ai-workflow-bot",
   readVcsBotLogin: async () => ({ readable: true, login: "ai-workflow-bot" }),
 }));
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));

@@ -461,22 +461,37 @@ describe("GitLabAdapter", () => {
       });
     });
 
+    // Gitbeaker's error: the message is GitLab's `error` or `message` field,
+    // and the answer rides on `cause.response`.
+    function refused(status: number, message: string, headers: Record<string, string> = {}) {
+      return Object.assign(new Error(message), {
+        cause: { response: new Response(null, { status, headers }) },
+      });
+    }
+
     // A group webhook reports merge requests in every project of the group,
     // including ones this token may not read. That answer never changes, so
-    // it is fatal, and core ignores the delivery instead of failing it.
-    it.each([403, 404])("calls a merge request the token cannot read (%i) fatal", async (status) => {
-      const error = new Error(`${status} Forbidden`) as any;
-      error.cause = { response: { status } };
+    // core closes the delivery instead of failing it.
+    it.each([
+      ["forbidden to this token", refused(403, "403 Forbidden")],
+      ["gone", refused(404, "404 Merge Request Not Found")],
+    ])("calls a merge request that is %s unreadable for good", async (_label, error) => {
       mockMergeRequests.show.mockRejectedValueOnce(error);
 
       const caught = await glAdapter().getPRHead(42).catch((failure) => failure as Error);
 
-      expect(caught).toMatchObject({ name: "FatalError" });
+      expect(caught).toMatchObject({ name: "PullRequestUnreadableError" });
+      expect((caught as Error).cause).toBe(error);
     });
 
-    it.each([429, 502])("lets a merge request read that may succeed later (%i) be retried", async (status) => {
-      const error = new Error(`${status}`) as any;
-      error.cause = { response: { status } };
+    // A token GitLab stopped accepting, or one without the scope to read
+    // anything, refuses every merge request: the connection is at fault.
+    it.each([
+      ["a refused token", refused(401, "401 Unauthorized")],
+      ["a token without the read scope", refused(403, "insufficient_scope")],
+      ["a rate limit", refused(429, "429 Too Many Requests", { "retry-after": "30" })],
+      ["a server error", refused(502, "502 Bad Gateway")],
+    ])("lets %s be retried", async (_label, error) => {
       mockMergeRequests.show.mockRejectedValueOnce(error);
 
       const caught = await glAdapter().getPRHead(42).catch((failure) => failure as Error);

@@ -70,6 +70,8 @@ export interface ManualDispatchPrCapableVCS {
   getManualDispatchPullRequest(prId: number): Promise<ManualDispatchPullRequestSnapshot>;
 }
 
+/** Ask of a resolved adapter only: a deferred one answers every member with a
+ *  function, so this would always be true of it. */
 export function hasManualDispatchPrCapability(
   adapter: VCSAdapter,
 ): adapter is VCSAdapter & ManualDispatchPrCapableVCS {
@@ -77,6 +79,15 @@ export function hasManualDispatchPrCapability(
     typeof (adapter as Partial<ManualDispatchPrCapableVCS>)
       .getManualDispatchPullRequest === "function"
   );
+}
+
+/** The provider has no way to read a pull request for a manual run. Its own
+ *  class, so the person is told that rather than that the provider is down. */
+export class ManualDispatchUnsupportedError extends Error {
+  constructor(readonly provider: string) {
+    super(`Version control provider ${provider} cannot read pull requests for a manual run.`);
+    this.name = "ManualDispatchUnsupportedError";
+  }
 }
 
 // --- Review ledger contract (types only; adapters, logic and wiring land in later stages) ---

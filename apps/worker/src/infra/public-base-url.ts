@@ -8,6 +8,11 @@
  * page reports. Deployments that share one database (demo shares
  * production's) differ here and nowhere else core may look.
  *
+ * Not yet the only reader: `integrationWebhookUrl` in
+ * `services/integrations/context.ts` still reads `BETTER_AUTH_URL` with the
+ * same trim itself. That file belongs to the connections branch, and it calls
+ * this function when the two branches are assembled.
+ *
  * Read off `process.env` rather than the validated environment module, so a
  * module reached from the integrations barrel can call it: importing
  * environment validation there fails wherever the variables are not set. The

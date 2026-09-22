@@ -11,6 +11,7 @@ import type { IntegrationConnectionPin } from "@shared/contracts";
 import { env, type VcsProviderKind } from "../../infra/vcs-config.js";
 import {
   hasManualDispatchPrCapability,
+  ManualDispatchUnsupportedError,
   type ManualDispatchPrCapableVCS,
 } from "../../adapters/vcs/types.js";
 import type { SandboxProviderConfig } from "../../sandbox/manager.js";
@@ -165,14 +166,12 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
     throw new TypeError(`${usable.manifest.name} declares version control and ships no adapter.`);
   }
 
-  const { getVcsBotLogin } = await import("../../services/integrations/runtime.js");
+  // The legacy single-provider login is core's to resolve (`readVcsBotLogin`),
+  // never an adapter's to read.
   const { legacyBotLogin: _legacyBotLogin, ...connectionWithoutLegacyBot } = usable.ctx.connection;
   const ctx = {
     ...usable.ctx,
-    connection: {
-      ...connectionWithoutLegacyBot,
-      botLogin: await getVcsBotLogin(target.provider),
-    },
+    connection: connectionWithoutLegacyBot,
   } as unknown as IntegrationContext<IntegrationManifest>;
   return (factory as unknown as (
     context: IntegrationContext<IntegrationManifest>,
@@ -186,7 +185,6 @@ function lazyAdapter(resolve: () => Promise<VCSAdapter>): DeferredVcsAdapter {
   return new Proxy({} as DeferredVcsAdapter, {
     get(_target, property) {
       if (property === "then") return;
-      if (property === "botLogin") return;
       return async (...args: unknown[]) => {
         const concrete = await adapter();
         const member = (concrete as unknown as Record<PropertyKey, unknown>)[property];
@@ -242,11 +240,17 @@ export function createManualDispatchPrReader(target: {
   provider: VcsProviderKind;
   repoPath: string;
 }): ManualDispatchPrCapableVCS {
-  const vcs = createRepositoryVCS({ ...target, baseBranch: "" });
-  if (!hasManualDispatchPrCapability(vcs)) {
-    throw new Error(`VCS provider ${target.provider} cannot read pull requests`);
-  }
-  return vcs;
+  return {
+    async getManualDispatchPullRequest(prId) {
+      // The capability is asked of the resolved adapter: the deferred one
+      // answers every member with a function.
+      const adapter = await resolveIntegrationAdapter({ ...target, baseBranch: "" });
+      if (!hasManualDispatchPrCapability(adapter)) {
+        throw new ManualDispatchUnsupportedError(target.provider);
+      }
+      return adapter.getManualDispatchPullRequest(prId);
+    },
+  };
 }
 
 export async function resolveConfiguredPullRequestUrl(

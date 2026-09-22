@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FatalError } from "@integrations/sdk";
+import { PullRequestUnreadableError } from "@integrations/sdk";
 import type { PrTriggerPayload } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import {
@@ -66,6 +66,8 @@ const gitlabProvider = vi.hoisted(() => ({
   connected: false,
   mergeRequest: undefined as unknown,
   jobs: [] as unknown[],
+  /** GitLab refusing the merge request read, as its REST API answers one. */
+  refusal: undefined as { status: number; message: string } | undefined,
 }));
 vi.mock("../integrations/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../integrations/runtime.js")>();
@@ -91,8 +93,6 @@ vi.mock("../integrations/runtime.js", async (importOriginal) => {
         states: new Map([["gitlab", { integrationId: "gitlab", usable: true }]]),
       } as never;
     },
-    getVcsBotLogin: async (provider: string) =>
-      gitlabProvider.connected ? "gitlab-bot" : actual.getVcsBotLogin(provider as never),
   };
 });
 const mockStart = vi.fn();
@@ -328,7 +328,7 @@ describe("provider trigger dispatch", () => {
     await expect(
       dispatchTriggerEvent(
         event(),
-        deps({ getCurrentHead: vi.fn().mockRejectedValue(new FatalError("403 Forbidden")) }),
+        deps({ getCurrentHead: vi.fn().mockRejectedValue(new PullRequestUnreadableError("403 Forbidden")) }),
       ),
     ).resolves.toEqual({ result: "ignored_pull_request_unreadable" });
     expect(mockStart).not.toHaveBeenCalled();
@@ -339,7 +339,7 @@ describe("provider trigger dispatch", () => {
     const getCurrentHead = vi
       .fn()
       .mockResolvedValueOnce("abc123")
-      .mockRejectedValue(new FatalError("404 Not Found"));
+      .mockRejectedValue(new PullRequestUnreadableError("404 Not Found"));
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
     await expect(dispatchTriggerEvent(event(), deps({ getCurrentHead }))).resolves.toEqual({
@@ -821,10 +821,11 @@ describe("provider trigger dispatch", () => {
 
   it("honours a custom trust list a check trigger was published with before S10", async () => {
     // The deployed graph reaches dispatch through the one reader of a stored
-    // row, exactly as trigger routing hands it over, so the per-provider list
-    // this node was saved with is what decides trust: a non-default app is
-    // trusted and the provider's default runner, which the list left out, is
-    // not.
+    // row, as trigger routing hands it over (that routing does upgrade it is
+    // proved in `engine/definition-trigger-routing.test.ts`). Here: the
+    // per-provider list this node was saved with is what decides trust, so a
+    // non-default app is trusted and the provider's default runner, which the
+    // list left out, is not.
     const { parseStoredWorkflowDefinition } = await import(
       "../../engine/definition/stored-definition.js"
     );
@@ -885,7 +886,9 @@ describe("a commented review and the automation account", () => {
     });
   }
 
-  it("is dropped when the provider's bot login is not configured", async () => {
+  it("is dropped when the provider's bot login is not configured, saying so", async () => {
+    // Its own word rather than the untrusted-producer one: naming the bot
+    // login is what the operator reading the provider's log has to do.
     testEnv.GITHUB_BOT_LOGIN = undefined;
     mockGetEnabled.mockResolvedValue(
       enabled({ scope: "any", on: ["changes_requested", "commented"] }, "trigger_pr_review"),
@@ -893,7 +896,7 @@ describe("a commented review and the automation account", () => {
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
     await expect(dispatchTriggerEvent(commentedReview("rv-no-bot"), deps())).resolves.toEqual({
-      result: "ignored_untrusted_event",
+      result: "ignored_bot_login_unknown",
     });
     expect(mockStart).not.toHaveBeenCalled();
   });
@@ -922,6 +925,26 @@ describe("a commented review and the automation account", () => {
     ).resolves.toMatchObject({ result: "error", diagnosticId: expect.any(String) });
     expect(mockStart).not.toHaveBeenCalled();
     await expect(getTriggerDelivery(db, "github", "rv-unreadable")).resolves.toBeNull();
+  });
+
+  // The webhook route reads the account once per delivery and hands that
+  // reading down; dispatch reading its own again would cost a second settings
+  // read per event and could disagree with the first.
+  it("decides on the reading its caller hands it instead of reading its own", async () => {
+    botLoginReadable.value = false;
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any", on: ["changes_requested", "commented"] }, "trigger_pr_review"),
+    );
+    const { readVcsBotLogin } = await import("../vcs/index.js");
+    vi.mocked(readVcsBotLogin).mockClear();
+    const readBotLogin = vi.fn(async () => ({ readable: true as const, login: "github-app[bot]" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(commentedReview("rv-handed"), deps({ readBotLogin })),
+    ).resolves.toEqual({ result: "started", runId: "run-pr" });
+    expect(readBotLogin).toHaveBeenCalledExactlyOnceWith("github");
+    expect(readVcsBotLogin).not.toHaveBeenCalled();
   });
 
   it("keeps a changes-requested review eligible without a bot login", async () => {
@@ -992,13 +1015,13 @@ describe("PR trigger rate limit", () => {
     // A refused start is a terminal drop, not a queued retry: the delivery is
     // settled and the refusal tallied.
     await expect(dispatchTriggerEvent(secondEvent(), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "rate_limited",
     });
 
     expect(mockStart).toHaveBeenCalledOnce();
     await expect(getTriggerDelivery(db, "github", "delivery-2")).resolves.toMatchObject({
       pending: false,
-      result: { result: "coalesced" },
+      result: { result: "rate_limited" },
     });
     expect(await db.select().from(triggerRateLimits)).toEqual([
       expect.objectContaining({ definitionId: "5", nodeId: "trigger", count: 2 }),
@@ -1055,7 +1078,7 @@ describe("PR trigger rate limit", () => {
 
     await dispatchTriggerEvent(event(), deps());
     await expect(dispatchTriggerEvent(secondEvent(), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "rate_limited",
     });
   });
 });
@@ -1221,7 +1244,7 @@ describe("pull request auto-fix cap", () => {
     });
     await finishRun("run-1");
     await expect(dispatchTriggerEvent(checksEvent("ci-2"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledOnce();
@@ -1243,7 +1266,7 @@ describe("pull request auto-fix cap", () => {
     // pending snapshot is gone, so the drain cannot retry it into a run.
     await expect(getTriggerDelivery(db, "gitlab", "ci-2")).resolves.toMatchObject({
       pending: false,
-      result: { result: "coalesced" },
+      result: { result: "autofix_cap_reached" },
     });
     await expect(pendingDeliveryIds()).resolves.not.toContain("ci-2");
   });
@@ -1292,7 +1315,7 @@ describe("pull request auto-fix cap", () => {
     });
     await finishRun("run-1");
     await expect(dispatchTriggerEvent(checksEvent("ci-2"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledOnce();
@@ -1382,7 +1405,7 @@ describe("pull request auto-fix cap", () => {
     // No maxFixAttemptsPerPr stored either: the third dispatch crosses the
     // registry default of 2.
     await expect(dispatchTriggerEvent(checksEvent("ci-3"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledTimes(2);
@@ -1411,7 +1434,7 @@ describe("pull request auto-fix cap", () => {
     });
     await finishRun("run-2");
     await expect(dispatchTriggerEvent(checksEvent("ci-3"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledTimes(2);
@@ -1480,7 +1503,7 @@ describe("pull request auto-fix cap", () => {
       await finishRun(`run-${i}`);
     }
     await expect(dispatchTriggerEvent(reviewEvent("rv-11"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledTimes(10);
@@ -1514,7 +1537,7 @@ describe("pull request auto-fix cap", () => {
     });
     await finishRun("run-2");
     await expect(dispatchTriggerEvent(reviewEvent("rv-3"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledTimes(2);
@@ -1605,6 +1628,13 @@ describe("binding a failed pipeline through the production version control path"
     // not expected to make.
     vi.stubGlobal("fetch", async (request: Request) => {
       const path = new URL(request.url).pathname;
+      const refusal = gitlabProvider.refusal;
+      if (refusal && path.endsWith("/merge_requests/7")) {
+        return new Response(JSON.stringify({ message: refusal.message }), {
+          status: refusal.status,
+          headers: { "content-type": "application/json" },
+        });
+      }
       const body = path.endsWith("/merge_requests/7")
         ? gitlabProvider.mergeRequest
         : /\/pipelines\/\d+\/jobs$/u.test(path)
@@ -1625,6 +1655,7 @@ describe("binding a failed pipeline through the production version control path"
 
   afterEach(() => {
     gitlabProvider.connected = false;
+    gitlabProvider.refusal = undefined;
     vi.unstubAllGlobals();
   });
 
@@ -1713,6 +1744,64 @@ describe("binding a failed pipeline through the production version control path"
     await expect(
       dispatchTriggerEvent(recordedByMainFromPipeline31("gl-legacy-current"), provider()),
     ).resolves.toEqual({ result: "started", runId: "run-1" });
+  });
+
+  /** A fix running for the merge request, and a second failure queued behind
+   *  it, waiting for the subject to be free. */
+  async function queueBehindARunningFix(queuedDeliveryId: string) {
+    headPipeline(31, 378);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    const subjectKey = prSubjectKey("gitlab", "acme/app", 7);
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-running"), provider()),
+    ).resolves.toEqual({ result: "started", runId: "run-1" });
+    const running = (await listPendingTriggersForSubject(db, subjectKey))[0]!;
+    expect(await acknowledgeStartedTriggerDelivery(db, running, "run-1")).toBe(true);
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31(queuedDeliveryId), provider()),
+    ).resolves.toEqual({ result: "coalesced" });
+    const owner = await registry.get(subjectKey);
+    expect(await registry.release(subjectKey, owner!.ownerToken, "run-1")).toBe(true);
+    return subjectKey;
+  }
+
+  // A token GitLab stopped accepting refuses every merge request. Fixing the
+  // connection makes the same work possible again, so the queued failure has
+  // to survive the refusal rather than be closed as unreadable.
+  it("keeps a queued failure through a refused token and starts it once the token works", async () => {
+    const subjectKey = await queueBehindARunningFix("gl-queued");
+    const { drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+
+    gitlabProvider.refusal = { status: 401, message: "401 Unauthorized" };
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toMatchObject({
+      result: "error",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    expect(await listPendingTriggersForSubject(db, subjectKey)).toHaveLength(1);
+    await expect(getTriggerDelivery(db, "gitlab", "gl-queued")).resolves.toMatchObject({
+      pending: true,
+      result: { result: "error" },
+    });
+
+    gitlabProvider.refusal = undefined;
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toEqual({
+      result: "started",
+      runId: "run-2",
+    });
+  });
+
+  it("closes a queued failure whose merge request this token can no longer read", async () => {
+    const subjectKey = await queueBehindARunningFix("gl-queued-gone");
+    const { drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+
+    gitlabProvider.refusal = { status: 404, message: "404 Not found" };
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toBeNull();
+    expect(await listPendingTriggersForSubject(db, subjectKey)).toHaveLength(0);
+    await expect(getTriggerDelivery(db, "gitlab", "gl-queued-gone")).resolves.toMatchObject({
+      pending: false,
+      result: { result: "ignored_pull_request_unreadable" },
+    });
+    expect(mockStart).toHaveBeenCalledTimes(1);
   });
 
   it("drops an envelope main recorded once a newer pipeline is the head", async () => {
