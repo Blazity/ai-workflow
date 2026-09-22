@@ -31,6 +31,7 @@ import {
   type RequestBlockContracts,
 } from "./block-contracts.js";
 import type { ResolvedHarnessProfilesForDeployment } from "../../engine/definition/deployment-validation.js";
+import { trackerQueryTemplateFindings } from "./tracker-query-templates.js";
 import { resolveConnectedVerifiedHarnessProfileVersion } from "../../harness-profiles/resolved-version.js";
 import {
   dispatchManualWorkflow,
@@ -98,12 +99,24 @@ function structural(definition: WorkflowDefinition): WorkflowDefinition {
 // helper serves both halves of every pair below: the db-bound half has to
 // resolve the settings on the connection it was handed, and the connected half
 // on the deployment's own.
+/**
+ * Whether the tracker's query rule may refuse this validation, and against
+ * what: `{ deployed }` asks it about every template the deployed version (or
+ * null, when nothing is deployed) does not already run. Absent, the rule is
+ * not asked. Only paths that put new work in front of the rule pass it: saving
+ * a version, creating a definition from a seed and deploying a draft. Rolling
+ * back, restoring and enabling make a stored version live again, and a rule
+ * newer than that version must not take those away (tracker-query-templates.ts).
+ */
+type TrackerRuleBaseline = { deployed: WorkflowDefinition | null };
+
 async function definitionDeploymentValidation(
   contracts: RequestBlockContracts,
   definition: WorkflowDefinition,
   resolveSuppliedHarnessProfiles?: (
     definition: WorkflowDefinition,
   ) => Promise<ResolvedHarnessProfilesForDeployment>,
+  trackerRule?: TrackerRuleBaseline,
 ): Promise<{
   parsed: WorkflowDefinition;
   analysis: ReturnType<RequestBlockContracts["analyzeValues"]>;
@@ -114,14 +127,19 @@ async function definitionDeploymentValidation(
     await resolveSuppliedHarnessProfiles?.(parsed) ??
     await contracts.resolveHarnessProfiles?.(parsed);
   const analysis = contracts.analyzeValues(parsed);
-  const issues = validateWorkflowDefinitionIssuesForDeployment(
-    parsed,
-    contracts.resolveContract,
-    contracts.blockParamsSchemas,
-    contracts.configuredVcsProviders,
-    analysis,
-    resolvedHarnessProfiles ? { resolvedHarnessProfiles } : {},
-  );
+  const issues = [
+    ...validateWorkflowDefinitionIssuesForDeployment(
+      parsed,
+      contracts.resolveContract,
+      contracts.blockParamsSchemas,
+      contracts.configuredVcsProviders,
+      analysis,
+      resolvedHarnessProfiles ? { resolvedHarnessProfiles } : {},
+    ),
+    ...(trackerRule
+      ? trackerQueryTemplateFindings(parsed, contracts.trackerQueryRule, trackerRule.deployed).refused
+      : []),
+  ];
   return { parsed, analysis, issues };
 }
 
@@ -131,11 +149,13 @@ async function validStored(
   resolveHarnessProfiles?: (
     definition: WorkflowDefinition,
   ) => Promise<ResolvedHarnessProfilesForDeployment>,
+  trackerRule?: TrackerRuleBaseline,
 ): Promise<WorkflowDefinition> {
   const { parsed, issues } = await definitionDeploymentValidation(
     contracts,
     definition,
     resolveHarnessProfiles,
+    trackerRule,
   );
   if (issues.length > 0) {
     throw new raw.WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.map(({ message }) => message).join("; ")}`);
@@ -192,11 +212,17 @@ async function assertNoTriggerOverlap(
 
 const TRIGGER_TAKEN_MESSAGE = "Its trigger is already handled by another enabled definition";
 
-async function deployable(db: Db, definition: WorkflowDefinition): Promise<WorkflowDefinition> {
+async function deployable(
+  db: Db,
+  definition: WorkflowDefinition,
+  trackerRule?: TrackerRuleBaseline,
+): Promise<WorkflowDefinition> {
   const contracts = await blockContractsOn(db);
   const { parsed, analysis, issues } = await definitionDeploymentValidation(
     contracts,
     definition,
+    undefined,
+    trackerRule,
   );
   if (issues.length > 0) throw new raw.WorkflowDefinitionValidationError(issues);
   const promptIssues = await validateWorkflowPromptAuthoringIssues(
@@ -286,7 +312,11 @@ function unavailableDefinitionError(
 
 export async function createWorkflowDefinition(db: Db, input: { name: string; seed: WorkflowDefinition | null; actor: WorkflowDefinitionActor; seedValidation?: "deployment" | "structural" }) {
   requireEditor(input.actor.role);
-  const seed = input.seed === null ? null : input.seedValidation === "structural" ? structural(input.seed) : await validStored(await blockContractsOn(db), input.seed);
+  const seed = input.seed === null
+    ? null
+    : input.seedValidation === "structural"
+      ? structural(input.seed)
+      : await validStored(await blockContractsOn(db), input.seed, undefined, { deployed: null });
   let inserted;
   try {
     inserted = await raw.insertWorkflowDefinition(db, {
@@ -372,8 +402,25 @@ export async function saveWorkflowDefinitionVersion(db: Db, input: { definitionI
   requireEditor(input.actor.role);
   return appendWorkflowDefinitionVersionWithPolicy(db, {
     ...input,
-    definition: await validStored(await blockContractsOn(db), input.definition),
+    definition: await validStored(await blockContractsOn(db), input.definition, undefined, {
+      deployed: await deployedDefinitionOf(db, input.definitionId),
+    }),
   });
+}
+
+/** The graph the definition runs today, or null when it has never been deployed. */
+async function deployedDefinitionOf(db: Db, definitionId: number): Promise<WorkflowDefinition | null> {
+  const row = await raw.getWorkflowDefinition(db, definitionId);
+  if (row?.deployedVersion == null) return null;
+  const version = await readWorkflowDefinitionVersion(db, definitionId, row.deployedVersion);
+  return version?.schema === "v2" ? version.definition : null;
+}
+
+async function connectedDeployedDefinitionOf(definitionId: number): Promise<WorkflowDefinition | null> {
+  const row = await getConnectedWorkflowDefinition(definitionId);
+  if (row?.deployedVersion == null) return null;
+  const version = await readConnectedWorkflowDefinitionVersion(definitionId, row.deployedVersion);
+  return version?.schema === "v2" ? version.definition : null;
 }
 
 export async function restoreWorkflowDefinitionVersion(db: Db, input: { definitionId: number; version: number; actor: WorkflowDefinitionActor }) {
@@ -424,7 +471,9 @@ export async function deployWorkflowDefinition(db: Db, input: { definitionId: nu
     throw new raw.WorkflowDefinitionStoreError(409, "Definition changed; reload before deploying");
   }
   const source = await readWorkflowDefinitionVersion(db, input.definitionId, input.expectedDraftRevision);
-  if (source?.schema === "v2") await deployable(db, source.definition);
+  if (source?.schema === "v2") {
+    await deployable(db, source.definition, { deployed: await deployedDefinitionOf(db, input.definitionId) });
+  }
   if (!source || source.schema !== "v2") throw new raw.WorkflowDefinitionStoreError(409, RETIRED_SCHEMA_MESSAGE);
   let selected;
   try {
@@ -622,6 +671,7 @@ async function createWorkflowDefinitionConnected(
           await connectedDefinitionBlockContracts(),
           input.seed,
           connectedHarnessProfilesForDefinition,
+          { deployed: null },
         );
   let inserted;
   try {
@@ -735,7 +785,11 @@ async function deployWorkflowDefinitionConnected(input: Parameters<typeof deploy
     throw new raw.WorkflowDefinitionStoreError(409, "Definition changed; reload before deploying");
   }
   const source = await readConnectedWorkflowDefinitionVersion(input.definitionId, input.expectedDraftRevision);
-  if (source?.schema === "v2") await deployableConnected(source.definition);
+  if (source?.schema === "v2") {
+    await deployableConnected(source.definition, {
+      deployed: await connectedDeployedDefinitionOf(input.definitionId),
+    });
+  }
   if (!source || source.schema !== "v2") throw new raw.WorkflowDefinitionStoreError(409, RETIRED_SCHEMA_MESSAGE);
   let selected;
   try {
@@ -852,12 +906,16 @@ async function updateWorkflowDefinitionConnected(input: Parameters<typeof update
   return updated;
 }
 
-async function deployableConnected(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
+async function deployableConnected(
+  definition: WorkflowDefinition,
+  trackerRule?: TrackerRuleBaseline,
+): Promise<WorkflowDefinition> {
   const contracts = await connectedDefinitionBlockContracts();
   const { parsed, analysis, issues } = await definitionDeploymentValidation(
     contracts,
     definition,
     connectedHarnessProfilesForDefinition,
+    trackerRule,
   );
   if (issues.length > 0) throw new raw.WorkflowDefinitionValidationError(issues);
   const promptIssues = await validateConnectedDefinitionPromptAuthoring(
@@ -910,10 +968,19 @@ async function connectedDashboardOrganizationId(): Promise<string> {
   return organization.id;
 }
 
-export function validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(
+/**
+ * The editor's validation of a graph it holds. Given the definition it
+ * belongs to, the tracker's query rule refuses a template the deployed version
+ * does not run and reports one it does run as a notice; without one, every
+ * template is new.
+ */
+export async function validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(
   candidate: unknown,
+  definitionId?: number,
 ) {
-  return validateConnectedDefinitionCandidate(candidate);
+  return validateConnectedDefinitionCandidate(candidate, {
+    deployed: definitionId === undefined ? null : await connectedDeployedDefinitionOf(definitionId),
+  });
 }
 
 export function previewConnectedWorkflowPromptCandidate(

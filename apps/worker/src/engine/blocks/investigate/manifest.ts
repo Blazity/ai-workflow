@@ -36,37 +36,6 @@ const paramsSchema = z
   })
   .strict();
 
-/** The tracker a saved template will be sent to, as far as saving needs it. */
-export interface InvestigateQueryTracker {
-  /** Its name, for the person reading the refusal. */
-  readonly name: string;
-  /** Its `issueTrackerQueries` (`IssueTrackerQueryRule` in @integrations/sdk,
-   *  written out because a core block manifest imports no package). */
-  readonly queries: { problem(query: string): string | null };
-}
-
-/**
- * The params schema a definition is saved against when a tracker is there to
- * ask: the query template checked by that tracker's own rule. The template is
- * written in the tracker's query language, so only the tracker can say
- * whether it would run it, and core keeps no copy of any tracker's syntax.
- * Without a tracker only the length is checked, and at run time the adapter
- * still drops a query it would not run.
- */
-export function paramsSchemaForTracker(tracker: InvestigateQueryTracker) {
-  return paramsSchema.superRefine((params, ctx) => {
-    const template = params.issueTrackerQueryTemplate;
-    if (template === undefined) return;
-    const problem = tracker.queries.problem(template);
-    if (problem === null) return;
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["issueTrackerQueryTemplate"],
-      message: `${tracker.name} would not run this query, so the block would search without it. ${problem}`,
-    });
-  });
-}
-
 export const manifest = {
   type: "investigate",
   paramsSchema,

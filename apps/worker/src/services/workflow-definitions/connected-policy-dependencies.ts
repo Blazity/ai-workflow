@@ -21,6 +21,7 @@ import { listConnectedWebhookTriggerRejections } from "../../db/repositories/web
 import type { WorkflowDefinition } from "@shared/contracts";
 import type { WorkflowValueAnalysis } from "@shared/workflow-graph";
 import { connectedBlockContracts } from "./block-contracts.js";
+import { trackerQueryTemplateFindings } from "./tracker-query-templates.js";
 
 /**
  * The block data definition policy decides against.
@@ -42,15 +43,40 @@ export function validateConnectedDefinitionPromptAuthoring(
   return validateConnectedWorkflowPromptAuthoringIssues(definition, analysis);
 }
 
-export async function validateConnectedDefinitionCandidate(candidate: unknown) {
+/**
+ * The editor's validation, with the tracker's word on the query templates:
+ * a template `deployed` does not run and the tracker would not run is an
+ * issue, and one `deployed` already runs is a notice that never counts
+ * against `valid` (tracker-query-templates.ts).
+ */
+export async function validateConnectedDefinitionCandidate(
+  candidate: unknown,
+  baseline: { deployed: WorkflowDefinition | null },
+) {
   const contracts = await connectedBlockContracts();
-  return validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(
+  const validation = await validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(
     candidate,
     contracts.resolveContract,
     contracts.blockParamsSchemas,
     contracts.configuredVcsProviders,
     contracts.analyzeValues,
   );
+  if (!validation.parsed) return validation;
+  const { refused, standing } = trackerQueryTemplateFindings(
+    validation.parsed,
+    contracts.trackerQueryRule,
+    baseline.deployed,
+  );
+  const issues = [...validation.response.issues, ...refused];
+  return {
+    ...validation,
+    response: {
+      ...validation.response,
+      valid: validation.response.valid && refused.length === 0,
+      issues,
+      ...(standing.length > 0 ? { notices: standing } : {}),
+    },
+  };
 }
 
 export function previewConnectedDefinitionPrompt(input: {
