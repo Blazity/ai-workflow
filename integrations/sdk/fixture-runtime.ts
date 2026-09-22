@@ -221,8 +221,10 @@ class FixtureRepository implements VCSAdapter {
     try {
       return (await readJson(this.ctx, this.path(`/pulls/${prId}/head`))) as PullRequestHead;
     } catch (error) {
-      // Gone, or forbidden to this token, is closed for good; a refused token
-      // or an outage is thrown as it came, so the delivery can be retried.
+      // Gone, or forbidden to this token for this pull request alone, is
+      // closed for good. A refused token, a token without the scope to read
+      // pull requests at all, and an outage are thrown as they came, so the
+      // delivery can be retried once the connection is repaired.
       if (isPullRequestRefusal(error)) {
         throw new PullRequestUnreadableError(`Fixture pull request ${prId} cannot be read.`, { cause: error });
       }

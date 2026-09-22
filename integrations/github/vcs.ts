@@ -759,10 +759,16 @@ export class GitHubAdapter
 
   /**
    * One pull request, with the one failure core closes for good told apart
-   * (see `PullRequestUnreadableError`). Only when the refused request was the
-   * pull request itself: the App's installation token is minted inside this
-   * same call, and a 404 or 403 there (the installation was removed, suspended
-   * or reinstalled) is a credential fault every pull request shares.
+   * (see `PullRequestUnreadableError`): a 404 for the pull request itself.
+   *
+   * Not a 403. GitHub answers 403 on a pull request when the installation
+   * lacks the permission (`Resource not accessible by integration`, which its
+   * REST docs define as a token without the endpoint's permission) or the
+   * organisation enforces SAML: both refuse every pull request alike, so they
+   * are thrown as they came. And only when the refused request was the pull
+   * request: the App's installation token is minted inside this same call,
+   * and a 404 there (the installation was removed or reinstalled) is a
+   * credential fault every pull request shares.
    */
   private async readPullRequest(prId: number) {
     try {
@@ -772,7 +778,11 @@ export class GitHubAdapter
       });
       return data;
     } catch (err) {
-      if (refusedRequestPath(err)?.endsWith(`/pulls/${prId}`) && isPullRequestRefusal(err)) {
+      if (
+        refusedRequestPath(err)?.endsWith(`/pulls/${prId}`) &&
+        isPullRequestRefusal(err) &&
+        (err as { status?: unknown }).status === 404
+      ) {
         throw new PullRequestUnreadableError(
           `GitHub PR #${prId} in ${this.ownerRepo.owner}/${this.ownerRepo.repo} cannot be read with this installation`,
           { cause: err },

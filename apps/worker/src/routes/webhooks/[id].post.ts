@@ -193,7 +193,11 @@ export default defineEventHandler(async (event) => {
         ...(verdict.diagnosticId ? { data: { diagnosticId: verdict.diagnosticId } } : {}),
       });
     }
-    observeWebhook(id, "accepted", "request_accepted");
+    if (verdict.kind === "answer" && verdict.rejectedAs) {
+      observeWebhook(id, "rejected", verdict.rejectedAs);
+    } else {
+      observeWebhook(id, "accepted", "request_accepted");
+    }
     return respond(event, {
       ...reception.response,
       ...(verdict.kind === "answer" ? { body: verdict.body } : {}),
@@ -228,6 +232,9 @@ export default defineEventHandler(async (event) => {
  *   integration's own `response` was decided before dispatch and can only say
  *   whether there was anything to dispatch, so an event for a repository
  *   nobody enabled would read as accepted with nowhere to see nothing ran.
+ *   `rejectedAs`: answered 2xx, recorded as rejected, for a fault that lasts
+ *   until an operator repairs something. The health row is where they see
+ *   it; a 5xx would say it only to GitLab, which switches the webhook off.
  * - `unchanged`: there was nothing to act on, and the integration said so.
  */
 type TriggerDeliveryVerdict =
@@ -238,6 +245,7 @@ type TriggerDeliveryVerdict =
         | { status: "dispatched"; runId?: string; reason?: string }
         | { status: "queued" }
         | { status: "ignored"; reason: string; diagnosticId?: string };
+      rejectedAs?: string;
     }
   | { kind: "unchanged" };
 
@@ -365,6 +373,7 @@ async function actOnTriggerEvents(
         reason: result.result,
         ...("diagnosticId" in result ? { diagnosticId: result.diagnosticId } : {}),
       },
+      ...(result.result === "vcs_credential_refused" ? { rejectedAs: result.result } : {}),
     };
   }
 

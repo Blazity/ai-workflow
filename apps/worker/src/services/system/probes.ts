@@ -135,7 +135,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
     probes["email.sender"] = (signal) => resendSenderResult(config, signal);
   }
 
-
   if (config.mcpEnabled) {
     probes["mcp.contract"] = async () => {
       const toolCount: number = FIRST_SLICE_TOOLS.length;
@@ -148,7 +147,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
   Object.assign(probes, agentProbes(config));
   return probes;
 }
-
 
 /** Turns the worker's own record of signed requests into a check result. With
  * no request in the window the secret is merely "configured": the scan makes

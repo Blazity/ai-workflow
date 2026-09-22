@@ -65,6 +65,7 @@ export {
 export {
   isPullRequestRefusal,
   isPullRequestUnreadableError,
+  providerAnswerOf,
   PullRequestUnreadableError,
 } from "./pull-request-unreadable";
 

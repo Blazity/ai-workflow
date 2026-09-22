@@ -66,8 +66,9 @@ const gitlabProvider = vi.hoisted(() => ({
   connected: false,
   mergeRequest: undefined as unknown,
   jobs: [] as unknown[],
-  /** GitLab refusing the merge request read, as its REST API answers one. */
-  refusal: undefined as { status: number; message: string } | undefined,
+  /** GitLab refusing the merge request read, with the JSON body its REST API
+   *  answers (`{ message }`, or `{ error, error_description }` for a scope). */
+  refusal: undefined as { status: number; body: Record<string, unknown> } | undefined,
 }));
 vi.mock("../integrations/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../integrations/runtime.js")>();
@@ -76,7 +77,13 @@ vi.mock("../integrations/runtime.js", async (importOriginal) => {
     resolveUsableIntegrations: async (input: Parameters<typeof actual.resolveUsableIntegrations>[0]) => {
       if (!gitlabProvider.connected) return actual.resolveUsableIntegrations(input);
       const { integrationRuntime } = await import("@integrations/registry/worker");
-      const runtime = integrationRuntime("gitlab")!;
+      const { redactingRuntime } = await import("../integrations/usable.js");
+      const { redactedError } = await import("../integrations/context.js");
+      // Behind core's own boundary, as the resolver hands it out: what the
+      // adapter throws reaches dispatch as core's redacted copy.
+      const runtime = redactingRuntime(integrationRuntime("gitlab")!, (error) =>
+        redactedError(error, (text) => text),
+      );
       const entry = {
         manifest: runtime.manifest,
         runtime,
@@ -1630,7 +1637,7 @@ describe("binding a failed pipeline through the production version control path"
       const path = new URL(request.url).pathname;
       const refusal = gitlabProvider.refusal;
       if (refusal && path.endsWith("/merge_requests/7")) {
-        return new Response(JSON.stringify({ message: refusal.message }), {
+        return new Response(JSON.stringify(refusal.body), {
           status: refusal.status,
           headers: { "content-type": "application/json" },
         });
@@ -1772,7 +1779,7 @@ describe("binding a failed pipeline through the production version control path"
     const subjectKey = await queueBehindARunningFix("gl-queued");
     const { drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
 
-    gitlabProvider.refusal = { status: 401, message: "401 Unauthorized" };
+    gitlabProvider.refusal = { status: 401, body: { message: "401 Unauthorized" } };
     await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toMatchObject({
       result: "error",
       diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
@@ -1790,11 +1797,67 @@ describe("binding a failed pipeline through the production version control path"
     });
   });
 
+  // GitLab's documented answer for a token without the scope (REST
+  // authentication docs): refuses every merge request, so the queued failure
+  // waits for the connection rather than being closed.
+  it("keeps a queued failure through a token without the scope, as GitLab answers it", async () => {
+    const subjectKey = await queueBehindARunningFix("gl-queued-scope");
+    const { drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+
+    gitlabProvider.refusal = {
+      status: 403,
+      body: {
+        error: "insufficient_scope",
+        error_description: "The request requires higher privileges than provided by the access token.",
+        scope: "api read_api",
+      },
+    };
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toMatchObject({
+      result: "error",
+    });
+    expect(await listPendingTriggersForSubject(db, subjectKey)).toHaveLength(1);
+
+    gitlabProvider.refusal = undefined;
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toEqual({
+      result: "started",
+      runId: "run-2",
+    });
+  });
+
+  // A delivery not yet accepted, whose read the token was refused on. The
+  // refusal lasts until somebody rotates the token, so it is answered as a
+  // fault the health row shows, never as a failure GitLab would count towards
+  // switching the webhook off. Nothing is written for it.
+  it("answers a delivery read with a refused token as a credential fault", async () => {
+    headPipeline(31, 378);
+    gitlabProvider.refusal = { status: 401, body: { message: "401 Unauthorized" } };
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-refused-token"), provider()),
+    ).resolves.toEqual({
+      result: "vcs_credential_refused",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    await expect(getTriggerDelivery(db, "gitlab", "gl-refused-token")).resolves.toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("answers a GitLab that did not answer as a failure to redeliver", async () => {
+    headPipeline(31, 378);
+    gitlabProvider.refusal = { status: 502, body: { message: "502 Bad Gateway" } };
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-outage"), provider()),
+    ).resolves.toMatchObject({ result: "error" });
+  });
+
   it("closes a queued failure whose merge request this token can no longer read", async () => {
     const subjectKey = await queueBehindARunningFix("gl-queued-gone");
     const { drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
 
-    gitlabProvider.refusal = { status: 404, message: "404 Not found" };
+    gitlabProvider.refusal = { status: 404, body: { message: "404 Not found" } };
     await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toBeNull();
     expect(await listPendingTriggersForSubject(db, subjectKey)).toHaveLength(0);
     await expect(getTriggerDelivery(db, "gitlab", "gl-queued-gone")).resolves.toMatchObject({

@@ -410,18 +410,21 @@ describe("workflow owner steps", () => {
     );
   });
 
-  // A refused credential is the connection's fault: the step throws, the
-  // DevKit retries it, and nothing is closed on the delivery's behalf.
-  it("lets a refused credential fail the step so it is retried", async () => {
+  // A refused credential is the connection's fault, not the delivery's. This
+  // step is not retried (`maxRetries` 0), so throwing would fail the run: it
+  // stands down instead, and nothing is closed or acknowledged, which leaves
+  // the delivery pending for the drain to bind again.
+  it("stands the run down on a refused credential and leaves the delivery pending", async () => {
     const refused = Object.assign(new Error("Bad credentials"), { status: 401 });
     getPRHead.mockRejectedValue(refused);
     const { acknowledgePrTriggerDispatchStep } = await import("./run-ownership-steps.js");
 
     await expect(
       acknowledgePrTriggerDispatchStep(reviewCandidate("delivery-credential"), "run-retry"),
-    ).rejects.toBe(refused);
+    ).resolves.toBe(false);
     expect(completeTriggerDelivery).not.toHaveBeenCalled();
     expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
+    expect(deletePending).not.toHaveBeenCalled();
   });
 
   it("rejects a same-head GitHub checks candidate after its exact Check Run passes", async () => {

@@ -920,6 +920,33 @@ describe("POST /webhooks/:id", () => {
       });
     });
 
+    // GitLab switches a webhook off after four failed deliveries in a row, and
+    // for good after forty: a token that expired overnight would leave the
+    // group hook off after it was rotated. So a refused credential answers
+    // 2xx, and the health row, which reads the observation, goes red instead.
+    it("answers a refused provider credential 2xx and records it as rejected", async () => {
+      state.dispatch.mockResolvedValue({
+        result: "vcs_credential_refused",
+        diagnosticId: "AIW-DIAG-ingest-refused",
+      });
+
+      const response = await app()(githubSyncRequest());
+      await Promise.all(deferred);
+
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({
+        status: "ignored",
+        reason: "vcs_credential_refused",
+        diagnosticId: "AIW-DIAG-ingest-refused",
+      });
+      expect(state.observations.at(-1)).toEqual({
+        integrationId: "github",
+        outcome: "rejected",
+        reason: "vcs_credential_refused",
+      });
+      expect(state.legacyGate).not.toHaveBeenCalled();
+    });
+
     it("tells a delivery that will still run from one that never will", async () => {
       // Queued behind the pull request's current run, the delivery starts when
       // that run ends. Dropped by the start budget or the fix-attempt cap,

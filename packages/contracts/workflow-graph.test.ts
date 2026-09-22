@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import { expect } from "./test-expect.js";
-import { canonicalizeWorkflowBlockTypes } from "./workflow-graph.js";
+import {
+  canonicalizeWorkflowBlockTypes,
+  RENAMED_WORKFLOW_BLOCK_PARAMS,
+} from "./workflow-graph.js";
 
 /**
  * `investigate`'s parameters moved from provider names to capability ids
@@ -135,5 +138,25 @@ describe("canonicalizeWorkflowBlockTypes: check trigger producer filters", () =>
     const raw = checksNode({ trustedProducers: ["circleci"] });
 
     expect(canonicalizeWorkflowBlockTypes(raw)).toBe(raw);
+  });
+
+  // No rename is listed for this block today. The day one is, a stored node
+  // must get both: the renamed key and the folded list, whichever comes first
+  // in the code.
+  it("applies a parameter rename listed for this block as well as the fold", () => {
+    const table = RENAMED_WORKFLOW_BLOCK_PARAMS as Record<string, Record<string, string>>;
+    table.trigger_pr_checks_failed = { failedCheckNames: "checkNames" };
+    try {
+      const raw = checksNode({ failedCheckNames: ["ci / build"], githubAppSlugs: ["circleci"] });
+
+      const result = canonicalizeWorkflowBlockTypes(raw) as typeof raw;
+
+      expect(result.nodes[0]!.configuration).toEqual({
+        checkNames: ["ci / build"],
+        trustedProducers: ["circleci", "merge_request_event"],
+      });
+    } finally {
+      delete table.trigger_pr_checks_failed;
+    }
   });
 });

@@ -461,11 +461,17 @@ describe("GitLabAdapter", () => {
       });
     });
 
-    // Gitbeaker's error: the message is GitLab's `error` or `message` field,
-    // and the answer rides on `cause.response`.
-    function refused(status: number, message: string, headers: Record<string, string> = {}) {
+    // Gitbeaker 43.8.0's error: GitLab's `error` or `message` field is kept on
+    // `cause.description` (documented) and used as the message (not
+    // documented), and the answer rides on `cause.response`.
+    function refused(
+      status: number,
+      description: string,
+      headers: Record<string, string> = {},
+      message = description,
+    ) {
       return Object.assign(new Error(message), {
-        cause: { response: new Response(null, { status, headers }) },
+        cause: { description, response: new Response(null, { status, headers }) },
       });
     }
 
@@ -489,6 +495,11 @@ describe("GitLabAdapter", () => {
     it.each([
       ["a refused token", refused(401, "401 Unauthorized")],
       ["a token without the read scope", refused(403, "insufficient_scope")],
+      // The documented place, whatever a later client puts in the message.
+      [
+        "a token without the read scope, read from its description",
+        refused(403, "insufficient_scope", {}, "Forbidden"),
+      ],
       ["a rate limit", refused(429, "429 Too Many Requests", { "retry-after": "30" })],
       ["a server error", refused(502, "502 Bad Gateway")],
     ])("lets %s be retried", async (_label, error) => {
@@ -497,6 +508,9 @@ describe("GitLabAdapter", () => {
       const caught = await glAdapter().getPRHead(42).catch((failure) => failure as Error);
 
       expect(caught).toBe(error);
+      // With GitLab's status on it: core reads a copy of this error, which
+      // keeps an own `status` and drops Gitbeaker's `cause.response`.
+      expect(caught).toHaveProperty("status", error.cause.response.status);
     });
   });
 

@@ -12,15 +12,14 @@ import { WEBHOOK_DELIVERY_CHECK_ID } from "./collect.js";
 export type { SystemHealthObservation, SystemHealthObservationOutcome };
 
 /**
- * A one-way scope for evidence this deployment records, from a value that
- * tells it apart from another deployment writing to the same database: a
- * provider's signing secret, or the deployment's public address.
+ * A one-way scope for evidence this deployment records, from the value that
+ * tells it apart from another deployment writing to the same database: its
+ * public address (see `webhookDeliveryScope`).
  */
 export function systemHealthObservationScope(identity: string | undefined): string {
   if (!identity) return "deployment:unconfigured";
   return `deployment:${createHash("sha256").update(identity).digest("hex")}`;
 }
-
 
 /**
  * Webhook deliveries as THIS deployment saw them: every integration's, and

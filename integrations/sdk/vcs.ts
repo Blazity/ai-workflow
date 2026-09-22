@@ -270,11 +270,14 @@ export interface VCSAdapter {
    *
    * Throws `PullRequestUnreadableError` exactly when this connection can never
    * read it: it does not exist for this connection (404), or it is forbidden
-   * to it (403 that is not a rate limit); `isPullRequestRefusal` decides that
-   * from the provider's answer. A refused credential (401, an installation
-   * token that cannot be minted, a token without the scope to read at all) is
-   * the connection's fault and is thrown as it came, so the delivery stays
-   * retryable. So is everything else.
+   * to it alone (a 403 that is neither a rate limit nor a missing scope or
+   * permission); `isPullRequestRefusal` decides that from the provider's
+   * answer. A refused credential (401, an installation token that cannot be
+   * minted, a token without the scope or the permission to read pull
+   * requests) is the connection's fault and is thrown as it came, with the
+   * provider's HTTP status on it as `status` (core reads a copy of the error
+   * that keeps an own `status` and nothing the client hid elsewhere), so the
+   * delivery stays retryable. So is everything else.
    */
   getPRHead(prId: number): Promise<PullRequestHead>;
   listReviewThreads(prId: number): Promise<ReviewThreadFeed>;

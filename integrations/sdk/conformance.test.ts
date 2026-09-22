@@ -464,12 +464,19 @@ test("the fixture's handles compare equal after a JSON round trip", async () => 
   assert.equal(sameHandle(handle, undefined), false);
 });
 
-test("the fixture closes only a pull request it cannot read, never a refused token", async () => {
-  const refusedWith = async (status: number) =>
-    fixtureRepository(() => new Response("{}", { status })).getPRHead(1).catch((error: Error) => error);
+test("the fixture closes only a pull request it cannot read, never a refused credential", async () => {
+  const refusedWith = async (status: number, headers: Record<string, string> = {}) =>
+    fixtureRepository(() => new Response("{}", { status, headers }))
+      .getPRHead(1)
+      .catch((error: Error) => error);
 
   assert.equal((await refusedWith(404)).name, "PullRequestUnreadableError");
   assert.equal((await refusedWith(403)).name, "PullRequestUnreadableError");
+  // A token without the scope refuses every pull request alike: the
+  // connection is at fault, and the delivery waits for it to be repaired.
+  const scope = { "www-authenticate": 'Bearer realm="fixture", error="insufficient_scope"' };
+  assert.notEqual((await refusedWith(403, scope)).name, "PullRequestUnreadableError");
+  assert.notEqual((await refusedWith(403, { "retry-after": "30" })).name, "PullRequestUnreadableError");
   assert.notEqual((await refusedWith(401)).name, "PullRequestUnreadableError");
   assert.notEqual((await refusedWith(502)).name, "PullRequestUnreadableError");
 });

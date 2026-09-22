@@ -85,12 +85,30 @@ export async function acknowledgePrTriggerDispatchStep(
   } catch (error) {
     // The same answer dispatch gives it: a pull request this connection can
     // never read closes the delivery, and this run stands down, instead of
-    // failing. Any other failure is still thrown.
-    if (!isPullRequestUnreadableError(error)) throw error;
-    await completeConnectedTriggerDelivery(
-      entry.delivery.provider,
-      entry.delivery.deliveryId,
-      { result: "ignored_pull_request_unreadable" },
+    // failing.
+    if (isPullRequestUnreadableError(error)) {
+      await completeConnectedTriggerDelivery(
+        entry.delivery.provider,
+        entry.delivery.deliveryId,
+        { result: "ignored_pull_request_unreadable" },
+      );
+      return false;
+    }
+    // Any other failure (a refused credential, a provider that did not
+    // answer) belongs to this moment or to the connection, not to the
+    // delivery. This step is not retried, so throwing would leave a failed run
+    // for a delivery that will still be served: the run stands down instead,
+    // and the delivery stays pending for the drain to bind again once this
+    // run has released the pull request.
+    const { logger } = await import("../../infra/logger.js");
+    logger.warn(
+      {
+        subjectKey: entry.subjectKey,
+        deliveryId: entry.delivery.deliveryId,
+        runId: workflowRunId,
+        err: error instanceof Error ? error.message : String(error),
+      },
+      "pr_trigger_head_read_failed_run_stood_down",
     );
     return false;
   }

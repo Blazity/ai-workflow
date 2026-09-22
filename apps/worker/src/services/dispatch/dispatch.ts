@@ -55,7 +55,9 @@ export interface DispatchResult {
     | "wrong_project_key"
     | "no_definition"
     | "approval_pending"
-    | "rate_limited";
+    | "rate_limited"
+    /** A pull request trigger's fix-attempt cap, refused in its guard. */
+    | "autofix_cap_reached";
 }
 
 export interface ClaimSubject {

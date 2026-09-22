@@ -393,7 +393,6 @@ describe("GitHubAdapter", () => {
 
     it.each([
       ["gone", refused(404, "Not Found")],
-      ["forbidden to the installation", refused(403, "Resource not accessible by integration")],
     ])("calls a pull request that is %s unreadable for good", async (_label, error) => {
       mockOctokit.pulls.get.mockRejectedValueOnce(error);
 
@@ -405,6 +404,16 @@ describe("GitHubAdapter", () => {
 
     it.each([
       ["a refused credential", refused(401, "Bad credentials")],
+      // GitHub's REST docs: the installation lacks the endpoint's permission,
+      // which refuses every pull request alike.
+      [
+        "an installation without the pull request permission",
+        refused(403, "Resource not accessible by integration - https://docs.github.com/rest/pulls/pulls#get-a-pull-request"),
+      ],
+      [
+        "an organisation that enforces SAML",
+        refused(403, "Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization."),
+      ],
       ["an installation that is gone", refused(404, "Not Found", {}, installationTokenUrl)],
       ["an installation that is suspended", refused(403, "This installation has been suspended", {}, installationTokenUrl)],
       ["a primary rate limit", refused(403, "API rate limit exceeded", { "x-ratelimit-remaining": "0" })],

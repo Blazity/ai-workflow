@@ -1,4 +1,8 @@
-import { isPullRequestUnreadableError, type VcsHandleIdentity } from "@integrations/sdk";
+import {
+  isPullRequestUnreadableError,
+  readProviderFailure,
+  type VcsHandleIdentity,
+} from "@integrations/sdk";
 import { start } from "workflow/api";
 import type {
   WorkflowBlockType,
@@ -115,6 +119,14 @@ export type DispatchTriggerResult =
   | { result: "rate_limited" }
   | { result: "autofix_cap_reached" }
   | { result: "at_capacity" }
+  /** The provider refused this deployment's credential while the delivery
+   *  was being read (a token it stopped accepting, one without the scope or
+   *  the permission, an App whose installation token cannot be minted). It
+   *  lasts until somebody repairs the connection, so it is answered and
+   *  recorded as a fault rather than failed, which GitLab would answer by
+   *  switching the webhook off. Only a delivery not yet accepted: an accepted
+   *  one keeps its pending row and waits for the drain as `error`. */
+  | { result: "vcs_credential_refused"; diagnosticId: string }
   | { result: "error"; diagnosticId: string }
   | { result: "started"; runId: string };
 
@@ -349,7 +361,9 @@ export async function dispatchTriggerEvent(
 
     const bound = await bindToCurrentPullRequest(eligibleEvent, deps);
     if (bound.status === "unreachable") {
-      return { result: "error", diagnosticId: bound.diagnosticId };
+      return bound.refusedCredential
+        ? { result: "vcs_credential_refused", diagnosticId: bound.diagnosticId }
+        : { result: "error", diagnosticId: bound.diagnosticId };
     }
     if (bound.status === "ignored") return { result: bound.result };
     const currentEvent = bound.event;
@@ -790,9 +804,6 @@ async function dispatchAcceptedTrigger(
     // must refund it (see the "error" branch below), since the guard has to
     // spend before start is attempted and cannot yet know whether it succeeds.
     let spentCapKey: PrAutofixCapKey | null = null;
-    // Which of the two terminal drops the guard made, since both leave it as
-    // one reason (`rate_limited`) and the provider's log has to tell them apart.
-    let dropped: "rate_limited" | "autofix_cap_reached" = "rate_limited";
     const dispatched = await claimSubjectRun(
       {
         subjectKey: accepted.subjectKey,
@@ -810,14 +821,11 @@ async function dispatchAcceptedTrigger(
             return { started: false, reason: "rate_limited" as const };
           }
           // Last of all, so a candidate the rate limit refuses does not spend a
-          // fix attempt either. The reason is shared with the rate limit
-          // because both are the same terminal drop for this dispatcher, and
-          // DispatchResult's reason union belongs to dispatch.ts.
+          // fix attempt either.
           const cap = await prAutofixCapReached(deps.db, accepted);
           if (cap) spentCapKey = cap.key;
           if (cap?.reached) {
-            dropped = "autofix_cap_reached";
-            return { started: false, reason: "rate_limited" as const };
+            return { started: false, reason: "autofix_cap_reached" as const };
           }
           return null;
         },
@@ -850,14 +858,15 @@ async function dispatchAcceptedTrigger(
       return storedResultToDispatch(stored?.result ?? null);
     }
 
-    if (dispatched.reason === "rate_limited") {
+    if (dispatched.reason === "rate_limited" || dispatched.reason === "autofix_cap_reached") {
       // Terminal drop, tallied by the guard. The pending snapshot is removed
       // too: retaining it would let the drain retry the delivery into a run
-      // once the window rolls, which is the deferred queue the rate limit
-      // deliberately does not provide.
-      await completeDelivery(deps.db, accepted, { result: dropped });
+      // once the window rolls, which is the deferred queue the rate limit and
+      // the cap deliberately do not provide.
+      const dropped = { result: dispatched.reason } as const;
+      await completeDelivery(deps.db, accepted, dropped);
       await deleteDurablePendingTrigger(deps.db, accepted);
-      return { result: dropped };
+      return dropped;
     }
 
     if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {
@@ -1155,6 +1164,11 @@ async function resolveTicketIdentity(
   }
 }
 
+/** The pull request could not be read now. `refusedCredential`: the provider
+ *  refused this deployment's credential, which lasts until the connection is
+ *  repaired; otherwise it gave no answer, which may pass on its own. */
+type HeadReadFailure = { status: "unreachable"; diagnosticId: string; refusedCredential: boolean };
+
 /**
  * The event bound to what the provider says about the pull request now, or why
  * it cannot be: a head or a check that moved on is stale, a pull request this
@@ -1168,7 +1182,7 @@ async function bindToCurrentPullRequest<T extends TriggerEvent>(
 ): Promise<
   | { status: "bound"; event: T }
   | { status: "ignored"; result: "ignored_stale_head" | "ignored_pull_request_unreadable" }
-  | { status: "unreachable"; diagnosticId: string }
+  | HeadReadFailure
 > {
   const read = await readCurrentPullRequest(event, deps, existingDiagnosticId);
   if (read.status !== "ok") return read;
@@ -1189,7 +1203,7 @@ async function readCurrentPullRequest(
       handles: VcsHandleIdentity;
     }
   | { status: "ignored"; result: "ignored_pull_request_unreadable" }
-  | { status: "unreachable"; diagnosticId: string }
+  | HeadReadFailure
 > {
   const { pr } = event;
   try {
@@ -1229,13 +1243,19 @@ async function readCurrentPullRequest(
       );
       return { status: "ignored", result: "ignored_pull_request_unreadable" };
     }
+    // Read on core's copy of the error, which keeps its class and status but
+    // not the provider's headers (see `readProviderFailure`): a GitHub 403
+    // that is a rate limit only by its headers reads as a refusal here.
+    const refusedCredential = readProviderFailure(error).kind === "refused";
     const diagnosticId = recordIngestionFailure(
-      "trigger_current_head_lookup_failed_closed",
+      refusedCredential
+        ? "trigger_vcs_credential_refused"
+        : "trigger_current_head_lookup_failed_closed",
       error,
       { provider: pr.provider, repoPath: pr.repoPath },
       existingDiagnosticId,
     );
-    return { status: "unreachable", diagnosticId };
+    return { status: "unreachable", diagnosticId, refusedCredential };
   }
 }
 
