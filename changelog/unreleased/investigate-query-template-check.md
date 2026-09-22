@@ -1,0 +1,1 @@
+- Saving a workflow checks the Investigate block's query template the way the connected issue tracker reads it: Jira accepts values in single or double quotes, and a template Jira would skip, such as one with an unclosed quote or a stray parenthesis, is refused with the reason, so the block never searches without the filter you wrote.

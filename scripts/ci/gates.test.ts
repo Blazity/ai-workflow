@@ -1482,6 +1482,18 @@ test("a failing gate states the mention rule it applied", () => {
   assert.ok(result.stdout.includes(MENTION_RULE), result.stdout);
 });
 
+/**
+ * The rule an author reads in the guide is the rule the gate applies: the
+ * guide quotes `MENTION_RULE`, and a guide that paraphrased it drifted the day
+ * the rule changed (it still said "any spelling" after the rule became whole
+ * words, and whole words after it became word starts).
+ */
+test("the integration guide quotes the gate's mention rule word for word", () => {
+  const guide = readFileSync(join(repoRoot, "docs/architecture/integrations.md"), "utf8");
+  const prose = guide.replace(/^\s*>\s?/gmu, "").replace(/\s+/gu, " ");
+  assert.ok(prose.includes(MENTION_RULE), "docs/architecture/integrations.md no longer quotes MENTION_RULE from scripts/gates/core-references.mjs");
+});
+
 test("ignored build output in a git checkout is not core", () => {
   const root = coreReferenceRoot("core-references-ignored-", {
     ".gitignore": ".vercel/\n",
