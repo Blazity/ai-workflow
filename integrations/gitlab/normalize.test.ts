@@ -11,6 +11,22 @@ function settlerReply(threadId: string): string {
   return `Addressed in \`deadbeef\`.\nAdded the null check.\n\n${marker}`;
 }
 
+/** One of our own notes on a merge request, marker and all. */
+const OUR_OWN_NOTE = `Automated fix pushed: 2 files changed.\n\n${AI_WORKFLOW_COMMENT_MARKER}`;
+
+/**
+ * What quoting a note produces: the body being answered copied line by line
+ * behind a `>`, marker included, then the reviewer's own words. Built from the
+ * note it quotes, so the fixture cannot drift from what we actually post.
+ */
+function quoteReply(quoted: string, written: string): string {
+  return [
+    ...quoted.split("\n").map((line) => (line ? `> ${line}` : ">")),
+    "",
+    written,
+  ].join("\n");
+}
+
 describe("normalizeGitLabEvent", () => {
   function mrPayload(action: string): any {
     return {
@@ -281,6 +297,22 @@ describe("normalizeGitLabEvent", () => {
     expect(
       normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] }),
     ).toBeNull();
+  });
+
+  it("starts a run for a GitLab note quoting one of our notes", () => {
+    // The reviewer quoted our "automated fix pushed" note and wrote under it,
+    // so their note carries our marker without their having written it.
+    // Dropping it starts no run at all: no comment, no failure, nothing for
+    // them to open, and they are right to conclude they were ignored.
+    const note = notePayload();
+    note.object_attributes.note = quoteReply(
+      OUR_OWN_NOTE,
+      "Still broken on mobile, please look again.",
+    );
+
+    const evt = normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] });
+
+    expect(evt?.triggerType).toBe("trigger_pr_review");
   });
 
   it("drops a GitLab note that is the ledger settler's own thread reply", () => {

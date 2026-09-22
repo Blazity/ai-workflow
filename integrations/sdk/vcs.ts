@@ -260,3 +260,80 @@ export interface VcsIntegrationAdapter extends VCSAdapter {
   skillSource?(): RepositorySkillSource;
   readonly botLogin?: string;
 }
+
+/**
+ * EVERY marker family this workflow writes into a pull request or a merge
+ * request, in one pattern, so a marker added tomorrow is ours without anybody
+ * remembering to come back here.
+ *
+ * The bot marker is not enough on its own: review findings and review
+ * submissions carry their own families and no bot marker at all, and a rule
+ * that knew only the bot marker read our own findings as a person's words.
+ */
+export const AI_WORKFLOW_MARKER_PATTERN = /<!--\s*ai-workflow[:-][^>]*-->/;
+
+/** What the author of a comment actually wrote: every line they quoted, gone.
+ *  Markdown allows up to three spaces before the `>`, and a nested quote opens
+ *  with one too. */
+function unquoted(body: string): string {
+  return body
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith(">"))
+    .join("\n");
+}
+
+/**
+ * Did this workflow write this comment, judged from its body alone?
+ *
+ * WHOSE LINE, not just which marker. "Quote reply" copies the body it answers
+ * verbatim, marker included, with every line blockquoted, so a reviewer quoting
+ * our "automated fix pushed" note to say the button is still dead posts a
+ * comment carrying our marker. Reading that as ours starts no run at all, and
+ * their request goes nowhere with nothing for anybody to look at.
+ *
+ * Safe by construction in the direction that matters: everything this workflow
+ * posts carries one of these markers on a line of its own, so one of ours
+ * cannot be read as a person's and fire a trigger against our own comment. The
+ * reverse mistake, reading a person as us, is the one that silences a reviewer.
+ *
+ * Core answers the same question about a fetched comment in
+ * `adapters/vcs/vcs-bot-identity.ts`, which uses this pattern rather than a
+ * second copy of it.
+ */
+export function isOurOwnVcsComment(body: unknown): boolean {
+  return typeof body === "string" && AI_WORKFLOW_MARKER_PATTERN.test(unquoted(body));
+}
+
+/**
+ * Is this review thread the agent's to answer? Three kinds are carried as
+ * background instead:
+ *
+ * - one already answered by us, which is waiting on a person, not on the agent;
+ * - one opened by a third-party reviewer, which the ledger never replies to;
+ * - one of our own general notes ("automated fix pushed", a run summary), which
+ *   is bookkeeping rather than review feedback. Our own *inline* thread is a
+ *   real finding from the review pass and stays work.
+ *
+ * Here rather than in core: it is a statement about the `ReviewThread` every
+ * provider produces, both core and the provider packages ask it, and the
+ * workflow bundle needs it where no Node module may be imported.
+ */
+export function isReviewLedgerWorkItem(thread: {
+  awaitingHuman: boolean;
+  source: "human" | "bot" | "third_party";
+  filePath?: string | undefined;
+}): boolean {
+  if (thread.awaitingHuman) return false;
+  if (thread.source === "third_party") return false;
+  return !(thread.source === "bot" && thread.filePath === undefined);
+}
+
+export function selectReviewLedgerWorkItems<
+  T extends {
+    awaitingHuman: boolean;
+    source: "human" | "bot" | "third_party";
+    filePath?: string | undefined;
+  },
+>(feed: { threads: T[] }): T[] {
+  return feed.threads.filter((thread) => isReviewLedgerWorkItem(thread));
+}

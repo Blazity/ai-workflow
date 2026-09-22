@@ -5,7 +5,7 @@ import type { ActiveRunOwner } from "../../../db/repositories/active-runs.js";
 import { scrubForPublication } from "../../support/publication-scrub.js";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
-  hasAiWorkflowCommentMarker,
+  hasUnquotedAiWorkflowCommentMarker,
 } from "../../../adapters/vcs/vcs-bot-identity.js";
 import type { SettledThread } from "../../steps/review-ledger-settle.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
@@ -52,7 +52,11 @@ async function blockPostPrCommentStep(
   const scrubbed = scrubForPublication(body);
   // Every comment we post carries the marker so that even a misconfigured bot
   // login cannot let our own comments re-trigger the workflow (AIW-140).
-  const markedBody = hasAiWorkflowCommentMarker(scrubbed)
+  // UNQUOTED, because that is the only kind that counts now: a body whose only
+  // marker sits inside a quote is a body quoting us, and every reader treats it
+  // as somebody else's. Skipping the append there would post a comment of ours
+  // that the trigger filter and the no-change gate both read as a person's.
+  const markedBody = hasUnquotedAiWorkflowCommentMarker(scrubbed)
     ? scrubbed
     : `${scrubbed}\n\n${AI_WORKFLOW_COMMENT_MARKER}`;
 

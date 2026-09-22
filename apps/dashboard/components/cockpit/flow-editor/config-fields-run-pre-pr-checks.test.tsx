@@ -7,6 +7,48 @@ import type { PrePrChecksResponse, WorkflowEditorOptions } from "@shared/contrac
 import type { FlowNodeDef } from "@/lib/flows";
 import { ConfigFields } from "./config-fields";
 
+/** What `settle` watches: the reads these panels have out, and how many they
+ *  have started, so a turn that started another one is not mistaken for quiet. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/**
+ * Installs `handler` as the fetch for one test and returns the undo.
+ *
+ * Every answer lands a turn later, the way a response does: resolving in the
+ * caller's own microtask is what let a counted wait look reliable.
+ * `FIXTURE_SLOW_MS` delays every answer by that many milliseconds, which is
+ * how this harness reproduces a runner slow enough to break a counted wait.
+ */
+function installFetch(handler: (url: string, init?: RequestInit) => Promise<Response>): () => void {
+  const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    mine.inFlight += 1;
+    mine.started += 1;
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      return handler(String(url), init);
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
+  }) as typeof globalThis.fetch;
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // next/link's prefetch idle callback reaches for `self`, which the plain
@@ -27,6 +69,44 @@ function nodeText(instance: ReactTestInstance): string {
     .flatMap((child) => (typeof child === "string" ? [child] : [nodeText(child)]))
     .join("");
 }
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of loads a panel starts finish, and waits for exactly that.
+ *
+ * NEVER A COUNT OF TURNS. How many turns a chain costs is the runner's
+ * business, so a fixed count passes on an idle machine and, on a loaded one,
+ * returns while reads are still in flight: the assertion then reads a loading
+ * panel and the failure looks like the product. Quiet is the condition those
+ * assertions mean, and it is two things, because a read that lands usually
+ * starts the next one: nothing in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a panel that never settles fails as a readable timeout rather
+ * than hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the panel was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
+  }
+}
+
 
 const RESPONSE: PrePrChecksResponse = {
   current: {
@@ -71,14 +151,12 @@ async function renderPanelWithConfig(n: FlowNodeDef): Promise<ReactTestRenderer>
       <ConfigFields node={n} options={options} canEdit onChange={() => undefined} />,
     );
   });
-  await act(async () => {});
-  await act(async () => {});
+  await settle();
   return renderer;
 }
 
 test("the gate panel names what it will require, per repository, instead of pointing elsewhere", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const renderer = await renderPanelWithConfig(node({}));
   try {
@@ -98,13 +176,12 @@ test("the gate panel names what it will require, per repository, instead of poin
     assert.doesNotMatch(html, /Commands/);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("the gate panel opens the Repositories page in a new tab", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const renderer = await renderPanelWithConfig(node({}));
   try {
@@ -115,13 +192,12 @@ test("the gate panel opens the Repositories page in a new tab", async () => {
     assert.equal(link!.props.rel, "noreferrer");
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a positive legacy maxFixCycles gets an inert-parameter note instead of silently doing nothing", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const renderer = await renderPanelWithConfig(node({ maxFixCycles: 3 }));
   try {
@@ -131,13 +207,12 @@ test("a positive legacy maxFixCycles gets an inert-parameter note instead of sil
     );
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a node with no maxFixCycles or a value of 0 gets no inert-parameter note", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   try {
     const withoutParam = await renderPanelWithConfig(node({}));
@@ -154,6 +229,6 @@ test("a node with no maxFixCycles or a value of 0 gets no inert-parameter note",
       await act(async () => zero.unmount());
     }
   } finally {
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });

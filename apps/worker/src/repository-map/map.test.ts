@@ -1,0 +1,768 @@
+import { describe, expect, it } from "vitest";
+import type { WorkScopeEntry } from "@shared/contracts";
+import {
+  buildRepositoryMap,
+  relatedRepositoryKeys,
+  repositoryMapTrailSummary,
+  type RepositoryMapFacts,
+  type RepositoryMapInput,
+} from "./map.js";
+
+const API = "github:acme/api";
+const WEB = "github:acme/web";
+const OPS = "github:acme/ops";
+const DOCS = "github:acme/docs";
+
+const PERSON = { kind: "person", actorId: "u1", actorLabel: "Ada" } as const;
+
+function entry(over: Partial<WorkScopeEntry> & { repositoryKey: string }): WorkScopeEntry {
+  return {
+    state: "selected",
+    origin: "person",
+    rationale: "chosen",
+    decidedBy: PERSON,
+    decidedAt: "2026-09-01T10:00:00.000Z",
+    ...over,
+  } as WorkScopeEntry;
+}
+
+function facts(over: Partial<RepositoryMapFacts> & { key: string }): RepositoryMapFacts {
+  return { enabled: true, usable: true, ...over };
+}
+
+/** A ticket that names api, where the catalog says api is the backend for web. */
+function neighbourhood(over: Partial<RepositoryMapInput> = {}): RepositoryMapInput {
+  return {
+    repositories: [
+      facts({
+        key: API,
+        catalogDescription:
+          "The payments API. It owns the ledger and the webhook fan-out, and every money movement goes through it.",
+        relationships: [{ kind: "backend_for", targetKey: WEB, direction: "outgoing" }],
+      }),
+      facts({
+        key: WEB,
+        catalogDescription: "The customer dashboard. Checkout and the invoice screens live here.",
+        providerDescription: "acme web app",
+      }),
+      facts({ key: DOCS, catalogDescription: "The developer docs site." }),
+    ],
+    attached: [{ key: API, localPath: "/vercel/sandbox", access: "write", rationale: "The ticket text names this repository path." }],
+    namedKeys: [API],
+    catalogActivated: true,
+    ...over,
+  };
+}
+
+describe("buildRepositoryMap", () => {
+  it("gives the neighbour of a named repository a full entry naming the source and the relationship", () => {
+    const map = buildRepositoryMap(neighbourhood());
+    const web = map.repositories.find((repository) => repository.key === WEB);
+    expect(web?.rendering).toBe("full");
+    expect(web?.inclusion).toEqual({
+      cause: "related",
+      via: { key: API, relationship: "backend_for", direction: "outgoing" },
+    });
+    expect(map.text).toContain(
+      "Why it is here: `github:acme/api` is the backend for `github:acme/web`.",
+    );
+  });
+
+  it("describes a repository in the operator's own words", () => {
+    const map = buildRepositoryMap(neighbourhood());
+    expect(map.text).toContain(
+      "What it is: The customer dashboard. Checkout and the invoice screens live here.",
+    );
+    expect(map.text).not.toContain("acme web app");
+    expect(map.repositories.find((repository) => repository.key === WEB)?.description.source).toBe(
+      "catalog",
+    );
+  });
+
+  it("falls back to the provider's listing text and labels it as the provider's", () => {
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({ key: API, relationships: [{ kind: "backend_for", targetKey: WEB, direction: "outgoing" }] }),
+          facts({ key: WEB, providerDescription: "acme web app" }),
+        ],
+      }),
+    );
+    expect(map.text).toContain(
+      "What it is: acme web app (the provider's own listing text; nobody here wrote a description)",
+    );
+    expect(map.repositories.find((repository) => repository.key === WEB)?.description.source).toBe(
+      "provider",
+    );
+  });
+
+  it("shows a repository a person excluded as excluded, with the record's own sentence", () => {
+    const map = buildRepositoryMap(
+      neighbourhood({
+        entries: [entry({ repositoryKey: WEB, state: "excluded" })],
+        leftOut: [{ repositoryKey: WEB, reason: "Ada excluded github:acme/web on 1 September." }],
+      }),
+    );
+    const web = map.repositories.find((repository) => repository.key === WEB);
+    expect(web?.state).toBe("excluded");
+    expect(web?.reason).toBe("Ada excluded github:acme/web on 1 September.");
+    expect(map.text).toContain(
+      "a person left it out of this work, do not request it: Ada excluded github:acme/web on 1 September.",
+    );
+  });
+
+  it("marks a disabled, a not-enabled and an unusable repository do not request, each with its own reason", () => {
+    // Each of the three is here because of THIS work: the catalog relates web
+    // to the repository the ticket names, the ticket names ops itself, and the
+    // record holds an entry for docs. A repository closed by configuration that
+    // this work never touched is a different case, covered below.
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({ key: API, relationships: [{ kind: "backend_for", targetKey: WEB, direction: "outgoing" }] }),
+          facts({ key: WEB, enabled: false }),
+          facts({ key: OPS, enabled: true, usable: false }),
+          facts({ key: DOCS, enabled: undefined, usable: undefined }),
+        ],
+        namedKeys: [API, OPS],
+        entries: [
+          entry({ repositoryKey: DOCS, state: "unavailable", unavailableReason: "not_enabled" }),
+        ],
+      }),
+    );
+    const state = (key: string) => map.repositories.find((repository) => repository.key === key);
+    expect(state(WEB)?.state).toBe("disabled");
+    expect(state(OPS)?.state).toBe("unusable");
+    expect(state(DOCS)?.state).toBe("not_enabled");
+    expect(map.text).toContain("switched off in the repository catalog, do not request it");
+    expect(map.text).toContain(
+      "enabled here, but the provider offers nothing to check out, do not request it",
+    );
+    expect(map.text).toContain("nobody has enabled it, do not request it");
+    for (const key of [WEB, OPS, DOCS]) {
+      expect(state(key)?.reason ?? "").not.toBe("");
+    }
+  });
+
+  /**
+   * A description and a relationship are somebody typing on the Repositories
+   * page, and nothing reads them against the code. Unlabelled, one such line
+   * reached an implementation agent on production as a plain statement and it
+   * shipped a pull request documenting a call that does not exist.
+   */
+  it("says where the operator's description and relationship sentences came from", () => {
+    const map = buildRepositoryMap(neighbourhood());
+    expect(map.text).toContain(
+      "What it is: The customer dashboard. Checkout and the invoice screens live here. (recorded on the Repositories page, not checked against the code)",
+    );
+    expect(map.text).toContain(
+      "How it relates: It is the backend for `github:acme/web`. (recorded on the Repositories page, not checked against the code)",
+    );
+    // Said once per line, not once per relationship: a hub repository carries
+    // eight of them and eight copies of one qualification is a paragraph.
+    const api = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({
+            key: API,
+            catalogDescription: "The payments API.",
+            relationships: [
+              { kind: "backend_for", targetKey: WEB, direction: "outgoing" },
+              { kind: "depends_on", targetKey: DOCS, direction: "outgoing" },
+            ],
+          }),
+          facts({ key: WEB }),
+          facts({ key: DOCS }),
+        ],
+      }),
+    );
+    const clauses = api.text.match(/recorded on the Repositories page/g) ?? [];
+    expect(clauses).toHaveLength(2);
+  });
+
+  it("does not qualify a description nobody here wrote", () => {
+    // The provider's credit already says whose words they are. Two
+    // qualifications on one sentence is the map arguing with itself.
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({ key: API, relationships: [{ kind: "backend_for", targetKey: WEB, direction: "outgoing" }] }),
+          facts({ key: WEB, providerDescription: "acme web app" }),
+        ],
+      }),
+    );
+    expect(map.text).toContain(
+      "What it is: acme web app (the provider's own listing text; nobody here wrote a description)",
+    );
+    expect(map.text).not.toContain("acme web app (recorded on the Repositories page");
+  });
+
+  it("renders byte-identical text for the same input twice", () => {
+    expect(buildRepositoryMap(neighbourhood()).text).toBe(
+      buildRepositoryMap(neighbourhood()).text,
+    );
+  });
+
+  it("does not depend on the order the catalog happens to arrive in", () => {
+    const forwards = neighbourhood();
+    const backwards = neighbourhood({
+      repositories: [...(forwards.repositories ?? [])].reverse(),
+    });
+    expect(buildRepositoryMap(backwards).text).toBe(buildRepositoryMap(forwards).text);
+  });
+
+  it("explains a relationship whose target this run's catalog does not hold, instead of dropping it", () => {
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({
+            key: API,
+            relationships: [{ kind: "depends_on", targetKey: "github:acme/gone", direction: "outgoing" }],
+          }),
+        ],
+        attached: [{ key: API, localPath: "/vercel/sandbox", access: "write" }],
+      }),
+    );
+    // The edge is rendered, AND the repository it points at gets its own entry
+    // saying why it cannot be used. Dropping either would teach the agent that
+    // the neighbourhood is smaller than the operator said it is.
+    expect(map.text).toContain("It depends on a package published from `github:acme/gone`.");
+    const gone = map.repositories.find((repository) => repository.key === "github:acme/gone");
+    expect(gone?.state).toBe("outside_catalog");
+    expect(gone?.reason).toBe("github:acme/gone is not in the catalog this run may use.");
+    expect(map.text).toContain(
+      "- `github:acme/gone` - outside the catalog this run may use, do not request it",
+    );
+  });
+
+  it("marks a relationship whose target nothing in this run describes", () => {
+    // The neighbourhood is ONE hop, so a neighbour's own edge to a third
+    // repository reaches nothing this map describes. The edge is still the
+    // operator's statement, so it is rendered and the gap is named rather than
+    // silently dropped, which would teach the agent that the neighbourhood is
+    // smaller than the operator said it is.
+    const map = buildRepositoryMap({
+      repositories: [
+        facts({
+          key: API,
+          relationships: [{ kind: "frontend_for", targetKey: WEB, direction: "outgoing" }],
+        }),
+        facts({
+          key: WEB,
+          relationships: [
+            { kind: "deploys", targetKey: "github:acme/unknown", direction: "outgoing" },
+          ],
+        }),
+      ],
+      attached: [{ key: API, access: "write" }],
+      catalogActivated: true,
+    });
+    expect(map.text).toContain(
+      "It deploys `github:acme/unknown` (we do not know this repository on this run)",
+    );
+  });
+
+  it("gives a settled repository a line and a reason, never a full entry", () => {
+    // A settled repository cannot be acted on, so its relationships and its
+    // description would be prompt spent on a decision already made. What it
+    // must carry is the reason, on the line, where the model reads it.
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({ key: API }),
+          facts({
+            key: OPS,
+            catalogDescription: "The deployment pipelines.",
+            relationships: [{ kind: "deploys", targetKey: API, direction: "outgoing" }],
+          }),
+        ],
+        entries: [entry({ repositoryKey: OPS, state: "excluded" })],
+      }),
+    );
+    const ops = map.repositories.find((repository) => repository.key === OPS);
+    expect(ops?.rendering).toBe("line");
+    expect(map.text).toContain(
+      "- `github:acme/ops` - a person left it out of this work, do not request it",
+    );
+    expect(map.text).not.toContain("How it relates:");
+    // The structured entry still carries the relationship: the prompt drops a
+    // detail, the record does not lose a fact.
+    expect(ops?.relationships).toHaveLength(1);
+  });
+
+  it("counts the relationships whose other end is gone from the catalog", () => {
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [facts({ key: API, unknownRelationshipCount: 2 })],
+        attached: [{ key: API, access: "write" }],
+      }),
+    );
+    expect(map.text).toContain(
+      "2 recorded relationships point at a repository that is no longer in the catalog",
+    );
+  });
+
+  it("says the relationships could not be read instead of showing none", () => {
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [facts({ key: API }), facts({ key: WEB })],
+        relationshipsUnreadable: true,
+      }),
+    );
+    expect(map.text).toContain(
+      "The repository relationships could not be read for this run, so no repository below lists any. Do not read that as these repositories being unrelated.",
+    );
+    expect(map.notes).toHaveLength(1);
+  });
+
+  it("says the map was not available rather than rendering an empty catalog", () => {
+    const map = buildRepositoryMap({
+      silence: "not_recorded",
+      attached: [{ key: API, localPath: "/vercel/sandbox", access: "write" }],
+    });
+    expect(map.text).toContain("The repository map was not available for this send");
+    expect(map.text).toContain("`github:acme/api`");
+  });
+
+  it("reads a relationship from the side the catalog recorded it on", () => {
+    // The catalog stores one edge and two sentences for it. Read forwards, an
+    // incoming edge says the opposite of what the operator recorded: that the
+    // API holds the tests for the e2e suite, rather than the other way round.
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({
+            key: API,
+            relationships: [
+              { kind: "tests", targetKey: "github:acme/api-e2e", direction: "incoming" },
+            ],
+          }),
+          facts({ key: "github:acme/api-e2e" }),
+        ],
+      }),
+    );
+    expect(map.text).toContain("It is tested by `github:acme/api-e2e`.");
+    expect(map.text).not.toContain("It holds tests or fixtures for `github:acme/api-e2e`");
+    expect(map.text).toContain(
+      "Why it is here: `github:acme/api` is tested by `github:acme/api-e2e`.",
+    );
+  });
+
+  it("renders an unknown relationship kind as itself", () => {
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [
+          facts({
+            key: API,
+            relationships: [{ kind: "vendors_for" as never, targetKey: WEB, direction: "outgoing" }],
+          }),
+          facts({ key: WEB }),
+        ],
+      }),
+    );
+    expect(map.text).toContain("is recorded as `vendors_for` of `github:acme/web`");
+  });
+
+  it("shows a read-only attachment as read only", () => {
+    const map = buildRepositoryMap(
+      neighbourhood({
+        attached: [
+          { key: API, localPath: "/a", access: "write" },
+          { key: WEB, localPath: "/b", access: "read_only", rationale: "Related to github:acme/api" },
+        ],
+      }),
+    );
+    expect(map.text).toContain("- `github:acme/web` at `/b` (read only)");
+    expect(map.repositories.find((repository) => repository.key === WEB)?.state).toBe("read_only");
+  });
+
+  describe("bounds", () => {
+    /** One repository wired to 150 neighbours, each carrying a 5 KB description:
+     *  the shape the contract allows and nothing in the catalog forbids. */
+    const wideNeighbourhood = (): RepositoryMapInput => {
+      const neighbours = Array.from({ length: 150 }, (_, index) => {
+        const key = `github:acme/neighbour-${String(index).padStart(3, "0")}`;
+        return facts({ key, catalogDescription: "x".repeat(5 * 1024) });
+      });
+      return {
+        repositories: [
+          facts({
+            key: API,
+            catalogDescription: "y".repeat(5 * 1024),
+            relationships: neighbours.map((neighbour) => ({
+              kind: "depends_on" as const,
+              targetKey: neighbour.key,
+              direction: "outgoing" as const,
+            })),
+          }),
+          ...neighbours,
+        ],
+        attached: [{ key: API, localPath: "/vercel/sandbox", access: "write" }],
+        namedKeys: [API],
+        catalogActivated: true,
+      };
+    };
+
+    it("stays far under the prompt section cap and still names the neighbourhood", () => {
+      const map = buildRepositoryMap(wideNeighbourhood());
+      expect(map.text.length).toBeLessThanOrEqual(16_000);
+      expect(map.text).toContain("`github:acme/api`");
+      expect(map.text).toContain("`github:acme/neighbour-000`");
+      expect(map.unlistedCount).toBeGreaterThan(0);
+      expect(map.text).toContain("Ask for one by its exact provider:path.");
+    });
+
+    it("never lets one description spend the whole budget", () => {
+      const map = buildRepositoryMap(wideNeighbourhood());
+      for (const repository of map.repositories) {
+        expect(repository.description.text.length).toBeLessThanOrEqual(280);
+      }
+    });
+
+    it("keeps every settled repository even when the neighbourhood is huge", () => {
+      const wide = wideNeighbourhood();
+      const map = buildRepositoryMap({
+        ...wide,
+        entries: [entry({ repositoryKey: OPS, state: "excluded" })],
+        leftOut: [{ repositoryKey: OPS, reason: "Ada excluded github:acme/ops." }],
+      });
+      expect(map.text).toContain("github:acme/ops");
+      expect(map.text).toContain("Ada excluded github:acme/ops.");
+      expect(map.unlistedKeys).not.toContain(OPS);
+    });
+  });
+
+  /**
+   * THE SHAPE PRODUCTION ACTUALLY HAS: a catalog with a handful of enabled
+   * repositories, inside an installation that exposes hundreds nobody ever
+   * configured. Run `wrun_01M2Z7HFNA7TE170D14T0N3MZR` sent 73 of those by name
+   * and counted 131 more, under a heading claiming each one had been decided
+   * for that work.
+   */
+  describe("a catalog nobody connected to this work", () => {
+    const OFF = (index: number) => `github:acme/off-${String(index).padStart(3, "0")}`;
+
+    /** Two repositories in the workspace, four more enabled, and however many
+     *  the installation exposes that nobody switched on. */
+    const installation = (
+      switchedOff: number,
+      over: Partial<RepositoryMapInput> = {},
+    ): RepositoryMapInput => ({
+      repositories: [
+        facts({
+          key: API,
+          catalogDescription: "The payments API. It owns the ledger and the webhook fan-out.",
+          relationships: [{ kind: "backend_for", targetKey: WEB, direction: "outgoing" }],
+        }),
+        facts({ key: WEB, catalogDescription: "The customer dashboard." }),
+        ...Array.from({ length: 4 }, (_, index) =>
+          facts({ key: `github:acme/enabled-${index}`, catalogDescription: `Enabled ${index}.` }),
+        ),
+        ...Array.from({ length: switchedOff }, (_, index) =>
+          facts({
+            key: OFF(index),
+            enabled: false,
+            providerDescription: `A private service nobody here configured, number ${index}`,
+          }),
+        ),
+      ],
+      attached: [
+        { key: API, localPath: "/vercel/sandbox", access: "write", rationale: "The ticket names it." },
+        { key: WEB, localPath: "/vercel/sandbox/repos/github__acme__web", access: "read_only" },
+      ],
+      namedKeys: [API],
+      catalogActivated: true,
+      expansionOpen: true,
+      ...over,
+    });
+
+    const workspaceText = (input: RepositoryMapInput) =>
+      buildRepositoryMap(input)
+        .parts.filter((entry) => entry.id.startsWith("repository-map-workspace"))
+        .map((entry) => entry.content)
+        .join("");
+
+    it("does not grow the map, however many repositories the installation exposes", () => {
+      const none = buildRepositoryMap(installation(0));
+      const some = buildRepositoryMap(installation(73));
+      const many = buildRepositoryMap(installation(204));
+      // Byte-identical, not merely similar: the size of somebody's repository
+      // list is not a fact about this work, so it may not move a single byte.
+      expect(some.text).toBe(none.text);
+      expect(many.text).toBe(none.text);
+      expect(many.text.length).toBeLessThan(2_000);
+    });
+
+    it("never names one of them, or repeats what the provider says about it", () => {
+      const map = buildRepositoryMap(installation(204));
+      expect(map.text).not.toContain("off-");
+      expect(map.text).not.toContain("A private service nobody here configured");
+      expect(map.repositories.map((repository) => repository.key)).not.toContain(OFF(0));
+    });
+
+    /**
+     * THE CORRECTNESS HARM, NOT THE TIDINESS ONE, AND THE ONE MOST LIKELY TO
+     * COME BACK.
+     *
+     * The settled group is spent BEFORE the rest of the catalog, so every line
+     * about a repository nobody configured is a line the enabled ones no longer
+     * have. On the production shape that was not a bloated prompt, it was a map
+     * that stopped naming `github:acme/enabled-3`: a repository somebody had
+     * switched on, that this work was allowed to ask for, and that the agent was
+     * never told existed. Each of the four is asserted BY NAME, because a loop
+     * that silently ran zero times would prove nothing.
+     */
+    it("does not push a repository somebody enabled off the end of the map", () => {
+      const map = buildRepositoryMap(installation(204));
+      expect(map.text).toContain("- `github:acme/enabled-0`");
+      expect(map.text).toContain("- `github:acme/enabled-1`");
+      expect(map.text).toContain("- `github:acme/enabled-2`");
+      expect(map.text).toContain("- `github:acme/enabled-3`");
+      expect(map.repositories.map((repository) => repository.key)).toEqual([
+        API,
+        WEB,
+        "github:acme/enabled-0",
+        "github:acme/enabled-1",
+        "github:acme/enabled-2",
+        "github:acme/enabled-3",
+      ]);
+    });
+
+    it("states one rule that covers every one of them, however many there are", () => {
+      const map = buildRepositoryMap(installation(204));
+      expect(map.text).toContain(
+        "Any repository this map does not name or count is closed to this work: a request for one is refused, the run pays a pass for it, and nothing changes.",
+      );
+      // The old heading promised the same thing about a list of 73 with 131
+      // missing from it. Nothing is left over to contradict the rule.
+      expect(map.text).not.toContain("Already decided, do not request these");
+      expect(map.unlistedCount).toBe(0);
+      expect(map.unlistedKeys).toEqual([]);
+    });
+
+    it("leaves the workspace byte-identical whatever the installation exposes", () => {
+      expect(workspaceText(installation(204))).toBe(workspaceText(installation(0)));
+      // The whole workspace section, spelled out, because it is the part of the
+      // map no budget and no catalog may move.
+      expect(workspaceText(installation(204))).toBe(
+        "### In the workspace\n\n" +
+          "Only a repository marked (write) may be changed. A repository marked (read only) is context: read it, never change it.\n\n" +
+          "- `github:acme/api` at `/vercel/sandbox` (write)\n" +
+          "  Why it is here: The ticket names it.\n" +
+          "  What it is: The payments API. It owns the ledger and the webhook fan-out. (recorded on the Repositories page, not checked against the code)\n" +
+          "  How it relates: It is the backend for `github:acme/web`. (recorded on the Repositories page, not checked against the code)\n" +
+          "- `github:acme/web` at `/vercel/sandbox/repos/github__acme__web` (read only)\n" +
+          "  Why it is here: it was attached to this work.\n" +
+          "  What it is: The customer dashboard. (recorded on the Repositories page, not checked against the code)\n\n",
+      );
+    });
+
+    it("still names a repository a person excluded on this work, with the record's own reason", () => {
+      const map = buildRepositoryMap(
+        installation(204, {
+          entries: [entry({ repositoryKey: OPS, state: "excluded" })],
+          leftOut: [{ repositoryKey: OPS, reason: "Ada excluded github:acme/ops on 1 September." }],
+        }),
+      );
+      expect(map.text).toContain("### Already decided, do not request these");
+      expect(map.text).toContain(
+        "- `github:acme/ops` - a person left it out of this work, do not request it: Ada excluded github:acme/ops on 1 September.",
+      );
+      // And where the record holds the entry but this run composed no sentence
+      // for it, the entry alone is what keeps the repository on the map.
+      const recordOnly = buildRepositoryMap(
+        installation(204, { entries: [entry({ repositoryKey: OPS, state: "excluded" })] }),
+      );
+      expect(recordOnly.text).toContain(
+        "- `github:acme/ops` - a person left it out of this work, do not request it: Somebody left github:acme/ops out of this work.",
+      );
+    });
+
+    it("still names a repository this run already refused, so the next pass does not ask again", () => {
+      // The refusal is the ONLY thing that puts this key in the map, and the
+      // map gives it the cause `catalog` because nothing else explains it. A
+      // map that read the cause to decide what to keep would drop exactly the
+      // repository the eleven minute planning failure was made of.
+      const requested = "github:acme/enabled-1";
+      const map = buildRepositoryMap(
+        installation(204, {
+          refusedKeys: [requested],
+          leftOut: [{ repositoryKey: requested, reason: "This run already refused github:acme/enabled-1." }],
+        }),
+      );
+      expect(
+        map.repositories.find((repository) => repository.key === requested)?.inclusion.cause,
+      ).toBe("catalog");
+      expect(map.text).toContain(
+        "- `github:acme/enabled-1` - this run already refused a request for it, do not request it again: This run already refused github:acme/enabled-1.",
+      );
+    });
+
+    it("still names a repository the ticket asks for that nobody enabled", () => {
+      const map = buildRepositoryMap(installation(204, { namedKeys: [API, OFF(3)] }));
+      expect(map.text).toContain(
+        "- `github:acme/off-003` - switched off in the repository catalog, do not request it: github:acme/off-003 is switched off on the Repositories page.",
+      );
+    });
+
+    it("records exactly the repositories it named", () => {
+      const map = buildRepositoryMap(
+        installation(204, {
+          entries: [entry({ repositoryKey: OPS, state: "excluded" })],
+          leftOut: [{ repositoryKey: OPS, reason: "Ada excluded it." }],
+        }),
+      );
+      const named = [...map.text.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]);
+      expect(map.repositories.map((repository) => repository.key).sort()).toEqual(
+        [...named].sort(),
+      );
+    });
+
+    it("claims nothing about what it did not name when this run read no catalog", () => {
+      const map = buildRepositoryMap({
+        silence: "not_recorded",
+        attached: [{ key: API, localPath: "/vercel/sandbox", access: "write" }],
+      });
+      expect(map.text).not.toContain("is closed to this work");
+      expect(map.text).toContain("The repository map was not available for this send");
+    });
+  });
+});
+
+describe("relatedRepositoryKeys", () => {
+  it("returns one hop in either direction and never the seeds themselves", () => {
+    const repositories = [
+      facts({ key: API, relationships: [{ kind: "backend_for", targetKey: WEB, direction: "outgoing" }] }),
+      facts({ key: OPS, relationships: [{ kind: "deploys", targetKey: API, direction: "outgoing" }] }),
+      facts({ key: DOCS, relationships: [{ kind: "documents", targetKey: WEB, direction: "outgoing" }] }),
+    ];
+    expect(relatedRepositoryKeys(repositories, [API])).toEqual([OPS, WEB]);
+  });
+
+  it("stops at one hop", () => {
+    const repositories = [
+      facts({ key: API, relationships: [{ kind: "backend_for", targetKey: WEB, direction: "outgoing" }] }),
+      facts({ key: WEB, relationships: [{ kind: "documents", targetKey: DOCS, direction: "outgoing" }] }),
+    ];
+    expect(relatedRepositoryKeys(repositories, [API])).toEqual([WEB]);
+  });
+});
+
+describe("a workspace the budget pushed onto one line each", () => {
+  /** Two checkouts and almost no room: the first gets a full entry, the rest
+   *  fall to a line. */
+  const cramped = () =>
+    buildRepositoryMap(
+      neighbourhood({
+        repositories: [facts({ key: API }), facts({ key: WEB })],
+        attached: [
+          { key: API, localPath: "/vercel/sandbox/repos/github__acme__api", access: "write" },
+          { key: WEB, localPath: "/vercel/sandbox/repos/github__acme__web", access: "read_only" },
+        ],
+      }),
+      { maxLength: 400 },
+    );
+
+  it("keeps the pull request a sibling is here for, even on one line", () => {
+    // The pull request and the commit under review reach the agent here and
+    // nowhere else. A sibling the budget shortened used to keep its path and
+    // its access and lose them, which leaves a reviewer told to inspect a
+    // repository and not told what it is inspecting.
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [facts({ key: API }), facts({ key: WEB })],
+        attached: [
+          { key: API, localPath: "/vercel/sandbox/repos/github__acme__api", access: "write" },
+          {
+            key: WEB,
+            localPath: "/vercel/sandbox/repos/github__acme__web",
+            access: "read_only",
+            reviewPullRequest: { url: "https://github.com/acme/web/pull/7", headSha: "abc1234" },
+          },
+        ],
+      }),
+      { maxLength: 400 },
+    );
+    const web = map.repositories.find((repository) => repository.key === WEB);
+    expect(web?.rendering).toBe("line");
+    expect(map.text).toContain(
+      `- \`${WEB}\` at \`/vercel/sandbox/repos/github__acme__web\` (read only), under review: https://github.com/acme/web/pull/7 at \`abc1234\``,
+    );
+  });
+
+  it("says the commit is unknown rather than inventing one", () => {
+    const map = buildRepositoryMap(
+      neighbourhood({
+        repositories: [facts({ key: WEB })],
+        attached: [
+          {
+            key: WEB,
+            localPath: "/vercel/sandbox/repos/github__acme__web",
+            access: "read_only",
+            reviewPullRequest: { url: "https://github.com/acme/web/pull/7" },
+          },
+        ],
+      }),
+    );
+    expect(map.text).toContain(
+      "under review: https://github.com/acme/web/pull/7 at an unknown commit",
+    );
+  });
+
+  it("still says where each one is and what may be done to it", () => {
+    // A repository the budget shortened used to read as a bare key: no path to
+    // look in, and nothing saying whether it may be written to. An agent
+    // standing in a checkout it cannot name, beside one it must not change,
+    // is how a read-only repository gets written to.
+    const map = cramped();
+    const web = map.repositories.find((repository) => repository.key === WEB);
+    expect(web?.rendering).toBe("line");
+    expect(map.text).toContain(
+      `- \`${WEB}\` at \`/vercel/sandbox/repos/github__acme__web\` (read only)`,
+    );
+    expect(map.text).toContain(`- \`${API}\` at \`/vercel/sandbox/repos/github__acme__api\` (write)`);
+  });
+});
+
+describe("repositoryMapTrailSummary", () => {
+  it("summarizes the same build inside the trail's own bound", () => {
+    const map = buildRepositoryMap(neighbourhood());
+    const summary = repositoryMapTrailSummary(map, "provisioned");
+    expect(summary.text.length).toBeLessThanOrEqual(1600);
+    expect(summary.text).toContain(`${API}: write`);
+    expect(summary.repositoryKeys).toEqual(map.repositories.map((repository) => repository.key));
+  });
+
+  /**
+   * The row a run writes before it has a workspace. A trail line outlives the
+   * briefing beside it, so it is the copy a person is left with, and until this
+   * it said `write` for every repository the run had chosen: provisioning
+   * clones them read and promotes one later, so the record claimed an access
+   * nothing had decided, on the surface that lasts longest.
+   */
+  it("says a repository is in the workspace without claiming what may be done to it", () => {
+    const map = buildRepositoryMap(neighbourhood());
+    const summary = repositoryMapTrailSummary(map, "not_provisioned_yet");
+    expect(summary.text).toContain(`${API}: in the workspace`);
+    expect(summary.text).not.toContain(": write");
+    expect(summary.text).not.toContain(": read_only");
+    // And nothing the workspace did not decide changes: a repository somebody
+    // switched off still says so, in the same words.
+    expect(summary.text).toBe(
+      repositoryMapTrailSummary(map, "provisioned").text.replace(`${API}: write`, `${API}: in the workspace`),
+    );
+  });
+
+  it("stays inside the bound and says how many it left out on a large catalog", () => {
+    const map = buildRepositoryMap({
+      repositories: Array.from({ length: 400 }, (_, index) =>
+        facts({ key: `github:acme/repo-${String(index).padStart(3, "0")}` }),
+      ),
+      attached: [],
+      catalogActivated: true,
+    });
+    const summary = repositoryMapTrailSummary(map, "provisioned");
+    expect(summary.text.length).toBeLessThanOrEqual(1600);
+    expect(summary.text).toMatch(/\nand \d+ more$/);
+  });
+});

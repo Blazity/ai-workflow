@@ -7,6 +7,7 @@ paths:
   - "apps/worker/src/post-pr-gate/**"
   - "apps/worker/src/sandbox/**"
   - "apps/worker/src/services/prompts/**"
+  - "packages/agent-visibility/**"
   - "packages/contracts/**"
   - "packages/workflow-graph/**"
 ---
@@ -24,7 +25,8 @@ paths:
   in both `message` and `errorMap`, because Zod 3 and Zod 4 consume different
   options there.
 - Run the compatibility gates after changing these schemas. Guard:
-  `pnpm run test:packages:zod4` for contracts and workflow graph schemas, and
+  `pnpm run test:packages:zod4` for contracts, workflow graph and agent
+  visibility schemas, and
   `pnpm --filter worker run test:zod4` for the MCP tool catalog. Do not treat
   the rest of the worker suite as a Zod 4 gate, because error wording differs;
   the worker alias tests assert refusals rather than exact sentences.

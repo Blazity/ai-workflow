@@ -157,7 +157,7 @@ describe("resolvePromptReferencesInNodes", () => {
       const compilation = await compileEffectivePrompt({
         nodeId: "node-implementation_agent",
         blockPrompt: text,
-        runtimeData: "",
+        runtimeData: [],
         slots,
         slotBindings: { scope: { kind: "literal", value: "the billing module" } },
         bindingContext,
@@ -174,7 +174,7 @@ describe("resolvePromptReferencesInNodes", () => {
       const compilation = await compileEffectivePrompt({
         nodeId: "node-implementation_agent",
         blockPrompt: text,
-        runtimeData: "",
+        runtimeData: [],
         bindingContext,
       });
 

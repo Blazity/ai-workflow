@@ -1,1 +1,0 @@
-ALTER TABLE "workflow_runs" ADD COLUMN "integration_pins" jsonb;

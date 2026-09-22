@@ -163,6 +163,10 @@ export {
 } from "./issue-tracker";
 
 export {
+  AI_WORKFLOW_MARKER_PATTERN,
+  isOurOwnVcsComment,
+  isReviewLedgerWorkItem,
+  selectReviewLedgerWorkItems,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,

@@ -67,13 +67,31 @@ function render(
 ): Harness {
   const queue = [...responses];
   let calls = 0;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = ((url: string) => {
     assert.equal(String(url), "/api/repository-catalog/suggest");
     calls += 1;
     const next = queue.shift();
     assert.ok(next, "an unexpected extra suggestion was asked for");
-    return Promise.resolve(next());
+    mine.inFlight += 1;
+    mine.started += 1;
+    // Every answer lands a turn later, the way a response does: resolving in
+    // the caller's own microtask is what let a counted wait look reliable.
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      return next();
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
   }) as typeof globalThis.fetch;
 
   const accepted: PrePrCheckRepositoryConfig[] = [];
@@ -105,6 +123,54 @@ function render(
   };
 }
 
+/** What `settle` watches: the calls this file has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One render per test, and this file's tests run one at a time. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of calls this panel starts finish, and waits for exactly
+ * that.
+ *
+ * NEVER A COUNT OF TURNS. How many turns a chain costs is the runner's
+ * business, so a fixed count passes on an idle machine and, on a loaded one,
+ * returns while calls are still in flight: the assertion then reads a waiting
+ * screen and the failure looks like the product. Quiet is the condition those
+ * assertions mean, and it is two things, because an answer that lands may
+ * start the next call (the one automatic retry): nothing in flight, and a turn
+ * that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a screen that never settles fails as a readable timeout rather
+ * than hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the screen was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
+  }
+}
+
 function text(node: ReactTestInstance): string {
   return node
     .findAll(() => true)
@@ -121,9 +187,10 @@ function button(root: ReactTestInstance, label: string): ReactTestInstance {
 }
 
 async function ask(harness: Harness, label = "Suggest from repository") {
-  await act(async () => {
+  act(() => {
     button(harness.root, label).props.onClick();
   });
+  await settle();
 }
 
 test("a proposal is shown beside what the repository declares today, one tick per group", async (t) => {

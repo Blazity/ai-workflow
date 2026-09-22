@@ -315,6 +315,14 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
               // client answered rather than a colleague.
               label: `MCP ${deps.actor.clientId}`,
             },
+            // Where this answer really came from, stated rather than read out
+            // of the label above: the ticket comment names the client and,
+            // where the deployment knows them, the person behind it.
+            surface: {
+              kind: "mcp",
+              clientId: deps.actor.clientId,
+              userId: deps.actor.userId,
+            },
             issueTracker: deps.adapters.issueTracker,
           });
           if (outcome.kind !== "answered") throwForOutcome(outcome);

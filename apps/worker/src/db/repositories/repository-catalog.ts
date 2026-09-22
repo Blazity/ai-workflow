@@ -856,6 +856,121 @@ export async function listRepositoryRules(
   );
 }
 
+/** One repository as the repository map has to describe it. */
+export interface RepositoryCatalogMapRow {
+  /** `provider:owner/name`, cased down: the key a run carries. */
+  key: string;
+  /** Whether the catalog row is switched on. */
+  enabled: boolean;
+  /** What an operator typed on the Repositories page. May be blank, and a blank
+   *  one is a fact the map states rather than a row it drops. */
+  description: string;
+  relationships: RepositoryCatalogMapRelationship[];
+  /** Relationships whose target row is no longer in the catalog. They cannot be
+   *  named, so they are counted: an operator's own statement that we can no
+   *  longer resolve is still worth telling the agent about, and dropping it
+   *  teaches the agent that the neighbourhood is smaller than it is. */
+  unknownRelationshipCount: number;
+}
+
+interface RepositoryCatalogMapRelationship {
+  direction: "outgoing" | "incoming";
+  /** `provider:owner/name` of the repository at the other end, cased down. */
+  targetKey: string;
+  targetEnabled: boolean;
+  kind: RepositoryRelationshipKind;
+  note: string | null;
+}
+
+/**
+ * Every named repository as the repository map needs it: its description, its
+ * relationships, and the gaps.
+ *
+ * A SECOND READER BESIDE `listRepositoryRules`, ON PURPOSE. That one answers
+ * "which repositories have prompt content worth injecting", so it drops a row
+ * whose profile is blank and drops an edge whose target row is gone, and both
+ * of those are correct for it: an empty rules section helps nobody. This one
+ * answers the opposite question, "what must the map explain", and a blank
+ * profile and a dangling edge are exactly what it exists to explain. Merging
+ * them behind a flag would leave one query serving two contracts, and the next
+ * person would tune it for whichever caller they had in mind.
+ *
+ * One statement, because production runs on neon-http and cannot open a
+ * transaction. The composite key is spelled table-qualified inside the
+ * template for the reason `listRepositoryRules` spells it that way.
+ */
+export async function listRepositoryCatalogMapRows(
+  db: Db,
+  keys: readonly string[],
+): Promise<RepositoryCatalogMapRow[]> {
+  if (keys.length === 0) return [];
+  const requestedKeys = [...new Set(keys)];
+  const result = await db.execute(sql`
+    WITH requested AS (
+      SELECT r.id, r.provider, r.path, r.enabled, r.description, r.relationships
+      FROM ${repositories} AS r
+      WHERE (r.provider || ':' || lower(r.path)) IN (${sql.join(requestedKeys.map((key) => sql`${key}`), sql`, `)})
+    ), edges AS (
+      SELECT (owner.provider || ':' || lower(owner.path)) AS owner_key,
+        'outgoing'::text AS direction,
+        target.provider AS related_provider, target.path AS related_path,
+        target.enabled AS related_enabled,
+        relation->>'kind' AS kind, relation->>'note' AS note
+      FROM requested AS owner
+      CROSS JOIN LATERAL jsonb_array_elements(owner.relationships) AS relation
+      LEFT JOIN ${repositories} AS target ON target.id = (relation->>'repositoryId')::integer
+      UNION ALL
+      SELECT (owner.provider || ':' || lower(owner.path)) AS owner_key,
+        'incoming'::text AS direction,
+        source.provider AS related_provider, source.path AS related_path,
+        source.enabled AS related_enabled,
+        relation->>'kind' AS kind, relation->>'note' AS note
+      FROM requested AS owner
+      INNER JOIN ${repositories} AS source ON source.id <> owner.id
+      CROSS JOIN LATERAL jsonb_array_elements(source.relationships) AS relation
+      WHERE (relation->>'repositoryId')::integer = owner.id
+    )
+    SELECT (requested.provider || ':' || lower(requested.path)) AS key,
+      requested.enabled, requested.description,
+      edges.direction, edges.related_provider, edges.related_path,
+      edges.related_enabled, edges.kind, edges.note
+    FROM requested LEFT JOIN edges
+      ON edges.owner_key = (requested.provider || ':' || lower(requested.path))
+    ORDER BY requested.provider, requested.path
+  `);
+  const grouped = new Map<string, RepositoryCatalogMapRow>();
+  for (const row of (result as { rows?: Record<string, unknown>[] }).rows ?? []) {
+    const key = String(row.key);
+    let entry = grouped.get(key);
+    if (!entry) {
+      entry = {
+        key,
+        enabled: Boolean(row.enabled),
+        description: String(row.description ?? ""),
+        relationships: [],
+        unknownRelationshipCount: 0,
+      };
+      grouped.set(key, entry);
+    }
+    // No edge at all on this row: the LEFT JOIN's placeholder for a repository
+    // that has none. A row that reached here with a kind but no target is an
+    // edge whose target row was deleted, which is counted rather than named.
+    if (row.kind === null || row.kind === undefined) continue;
+    if (row.related_provider === null || row.related_provider === undefined) {
+      entry.unknownRelationshipCount += 1;
+      continue;
+    }
+    entry.relationships.push({
+      direction: row.direction === "incoming" ? "incoming" : "outgoing",
+      targetKey: `${String(row.related_provider)}:${String(row.related_path).toLowerCase()}`,
+      targetEnabled: Boolean(row.related_enabled),
+      kind: row.kind as RepositoryRelationshipKind,
+      note: row.note === null || row.note === undefined ? null : String(row.note),
+    });
+  }
+  return [...grouped.values()];
+}
+
 /**
  * The state row as stored, or null when the catalog has never been activated.
  *
@@ -1203,6 +1318,10 @@ export function getConnectedCurrentCheckConfiguration(
 
 export function listConnectedRepositoryRules(keys: readonly string[]) {
   return listRepositoryRules(getDb(), keys);
+}
+
+export function listConnectedRepositoryCatalogMapRows(keys: readonly string[]) {
+  return listRepositoryCatalogMapRows(getDb(), keys);
 }
 
 /**

@@ -1,0 +1,26 @@
+[profile: Harness Profile: Claude]
+  profile                          91  profile ref=builtin-claude  "Harness Profile instructions"
+
+[block: Block role and task]
+  authored:1                       17  block_prompt  "Block prompt text"
+  value:1                           7  bound_data ref=steps.entry.output.ticket.key  "Bound data steps.entry.output.ticket.key"
+  authored:2                       56  block_prompt  "Block prompt text"
+
+[runtime: Runtime data]
+  bound-inputs                    240  bound_data  "Bound inputs"
+  clarification-answer             95  clarification  "Human clarification answer"
+  repository-map                   18  repository_catalog  "Repository map"
+  repository-map-workspace         22  repository_catalog  "Repositories in the workspace"
+  repository-map-workspace-rule    120  platform  "Repositories in the workspace: the rule"
+  repository-map-workspace:1      485  repository_catalog ref=github:acme/api  "Repository github:acme/api"
+  repository-map-workspace:2      265  repository_catalog ref=github:acme/web  "Repository github:acme/web"
+  repository-map-related           48  repository_catalog  "Related repositories"
+  repository-map-related-rule     247  platform  "Related repositories: the rule"
+  repository-map-related:1        269  repository_catalog ref=github:acme/sdk  "Repository github:acme/sdk"
+  repository-map-settled           43  repository_catalog  "Repositories already decided"
+  repository-map-settled-rule     174  platform  "Repositories already decided: the rule"
+  repository-map-settled:1        238  repository_catalog ref=github:acme/legacy-auth  "Repository github:acme/legacy-auth"
+  repository-map-rest              25  repository_catalog  "The rest of the catalog"
+  repository-map-rest-rule         78  platform  "The rest of the catalog: the rule"
+  repository-map-rest:1            60  repository_catalog ref=github:acme/docs  "Repository github:acme/docs"
+  repository-map-closed           121  platform  "Every other repository"

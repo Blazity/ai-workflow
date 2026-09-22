@@ -103,7 +103,7 @@ describe("GET /api/v1/settings", () => {
     const res = await get();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.settings).toHaveLength(26);
+    expect(body.settings).toHaveLength(27);
     expect(entry(body.settings, "MAX_CONCURRENT_AGENTS")).toMatchObject({
       value: 3,
       default: 3,

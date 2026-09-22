@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PRFile } from "../../adapters/vcs/types.js";
-import { assembleReviewContext } from "../../sandbox/context.js";
+import { assembleReviewContext, reviewContextParts } from "../../sandbox/context.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
 import {
   assembleReviewChangeSetAddition,
@@ -66,7 +66,7 @@ function reviewContextWith(additions: ReturnType<typeof renderPullRequestChangeS
 }
 
 describe("review change set", () => {
-  it("puts the pull request identity, changed files and diff into the review context", () => {
+  it("puts the pull request identity, changed files and diff into the review context", async () => {
     const files: PRFile[] = [
       {
         path: "src/login.ts",
@@ -83,11 +83,15 @@ describe("review change set", () => {
       },
     ];
 
-    const context = reviewContextWith([
-      renderPullRequestChangeSet(target, { ok: true, files }),
-    ]);
+    // Through the function the workflow calls, so this is what the review
+    // agent is sent, marker included.
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      listPRFiles: vi.fn().mockResolvedValue(files),
+    });
+    const context = reviewContextWith([await assembleReviewChangeSetAddition(target)]);
 
-    expect(context).toContain("## Pre-Sandbox: Pull request change set");
+    expect(context).toContain("\n## Pull request change set\n\n- Provider: github");
+    expect(context).not.toContain("Pre-Sandbox");
     expect(context).toContain("- Provider: github");
     expect(context).toContain("- Repository: acme/app");
     expect(context).toContain("- Pull request: #7");
@@ -186,13 +190,40 @@ describe("review change set", () => {
     const addition = await assembleReviewChangeSetAddition(target);
     const context = reviewContextWith([addition]);
 
-    expect(context).toContain("## Pre-Sandbox: Pull request change set");
+    expect(context).toContain("\n## Pull request change set\n\n");
+    expect(context).not.toContain("This information was produced before sandbox creation.");
     expect(context).toContain(
       "The change set could not be fetched from the provider: provider returned 502.",
     );
     expect(context).toContain("The diff is unavailable for this review.");
     expect(context).toContain("Do not report that nothing changed.");
     expect(context).toContain("- Pull request: #7");
+  });
+
+  it("reaches the review agent as the run's own part, never as a pre-sandbox addition", async () => {
+    // The change set is fetched after the sandbox exists, so the label the
+    // pre-sandbox additions carry would be false of it, whatever the step or
+    // an older journal returned.
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      listPRFiles: vi.fn().mockResolvedValue([]),
+    });
+    const parts = reviewContextParts({
+      ticket: {
+        identifier: "pr:github:acme/app#7",
+        title: "Add login",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+      },
+      prompt: "",
+      researchPlanMarkdown: "",
+      preSandboxAdditions: [await assembleReviewChangeSetAddition(target)],
+    });
+    expect(parts.find((entry) => entry.id === "review-change-set:1")).toMatchObject({
+      origin: { kind: "pull_request", label: "change set" },
+      content: expect.stringContaining("## Pull request change set\n\n- Provider: github"),
+    });
+    expect(parts.filter((entry) => entry.origin.kind === "pre_sandbox")).toEqual([]);
   });
 
   it("states the gap when the provider cannot list pull request files at all", async () => {

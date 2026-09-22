@@ -1,0 +1,135 @@
+<<<AI_WORKFLOW_PROFILE_BEGIN: Harness Profile: Claude>>>
+Follow the block's fixed role, the repository instructions, and the supplied workflow data.
+<<<AI_WORKFLOW_PROFILE_END>>>
+
+<<<AI_WORKFLOW_REPOSITORY_BEGIN: acme/api/AGENTS.md>>>
+Run `pnpm test src/auth` before committing. Never log tokens.
+<<<AI_WORKFLOW_REPOSITORY_END>>>
+
+<<<AI_WORKFLOW_REPOSITORY_BEGIN: Repository rules for acme/api>>>
+Changes to src/auth need a regression test.
+<<<AI_WORKFLOW_REPOSITORY_END>>>
+
+<<<AI_WORKFLOW_BLOCK_BEGIN: Block role and task>>>
+Address every review thread and make the failing unit check pass.
+<<<AI_WORKFLOW_BLOCK_END>>>
+
+<<<AI_WORKFLOW_RUNTIME_BEGIN: Runtime data>>>
+# Fix Requirements
+
+## Ticket ID
+
+AIW-512
+
+## Ticket
+
+Session refresh drops the user after a deploy
+
+## Acceptance Criteria
+
+- A deploy does not log anybody out.
+- The refresh path has a regression test.
+
+## Clarifications (Q&A)
+
+### Round 1
+
+1. Should existing sessions survive a key rotation, or only a deploy?
+
+Answer (by Anna Nowak, 2026-09-18T09:12:00.000Z): Only a deploy. A key rotation may log people out.
+
+## Review Threads
+
+Every open thread on this pull request is listed below with a stable alias. Answer every alias in this list through the `reviewThreads` field of your output.
+
+### T1 (human) in `src/auth/session.ts` line 88
+
+Piotr: The refresh path still reads the rotated key. Please read the previous key too.
+
+### Context only: do not disposition these
+
+These threads are part of the review and their content matters, but they are not yours to answer. Leave them out of `reviewThreads`.
+
+#### T2 (another vendor's bot): not answered by this workflow
+
+coderabbitai: Consider caching the key set.
+
+### How to answer
+
+Return one entry in `reviewThreads` for every alias listed above the context block, and for no other alias:
+
+- `actionable`: this run changes the code the thread asks about. Describe the change in `reply` in one line.
+- `already_addressed`: `already_addressed` means the change is on the branch right now. Set `evidence.filePath` to the thread's own file and `evidence.quote` to a literal excerpt copied from that file, close to the commented line. If it only comes into existence during this run, the disposition is `actionable`, not `already_addressed`.
+- `question`: the thread asks something. Answer it in `reply`.
+- `out_of_scope`: the request belongs somewhere else. Justify that in `reply`.
+
+## PR Review Feedback
+
+Piotr: Changes requested: see the thread on session.ts.
+
+## CI/CD Check Results
+
+Passed: lint
+
+### Failed: unit
+session.test.ts: expected 200, got 401
+
+## Internal Review Results
+
+<review-results>
+[
+  {
+    "decision": "request_changes",
+    "findings": [
+      {
+        "file": "src/auth/session.ts",
+        "description": "The refresh path ignores the previous key.",
+        "severity": "Blocker"
+      }
+    ]
+  }
+]
+</review-results>
+
+## Merge Conflicts
+
+These repositories have merge conflicts: github:acme/api. Resolve the conflict markers, stage the files, and continue the merge in each repository.
+
+## Repositories
+
+### In the workspace
+
+Only a repository marked (write) may be changed. A repository marked (read only) is context: read it, never change it.
+
+- `github:acme/api` at `/vercel/sandbox/repos/github__acme__api` (write)
+  Why it is here: the ticket names the signing keys in acme/api
+  What it is: The session and billing API. It owns key rotation, the refresh path and the webhook fan-out. (recorded on the Repositories page, not checked against the code)
+  How it relates: It publishes a package used by `github:acme/sdk`. It is the backend for `github:acme/web`. (recorded on the Repositories page, not checked against the code)
+
+### Related to this work, not in the workspace
+
+These are not checked out, and this phase cannot attach them. They are here so you know what the workspace sits next to: do not request one, and do not treat its code as readable. Where the work truly needs one, say which and why in your output.
+
+- `github:acme/sdk` - not in the workspace, and this phase cannot attach it
+  Why it is here: `github:acme/api` publishes a package used by `github:acme/sdk`.
+  What it is: Client SDK for the acme API (the provider's own listing text; nobody here wrote a description)
+- `github:acme/web` - not in the workspace, and this phase cannot attach it
+  Why it is here: `github:acme/api` is the backend for `github:acme/web`.
+  What it is: The customer dashboard. Sign-in and the account screens live here. (recorded on the Repositories page, not checked against the code)
+
+### Already decided, do not request these
+
+Each of these was already decided for this work, and the reason is on its line. Do not request one: the request is refused, the run pays a pass for it, and nothing changes.
+
+- `github:acme/legacy-auth` - a person left it out of this work, do not request it: github:acme/legacy-auth was excluded on this ticket by Anna Nowak on 2026-09-17. - The retired auth monolith. Read only, kept for its migration history.
+
+### Also in the catalog
+
+One line each, so you know they exist. This phase cannot attach any of them.
+
+- `github:acme/docs` - The public developer documentation.
+
+Any repository this map does not name or count is closed to this work, and this phase could not attach one in any case.
+
+
+<<<AI_WORKFLOW_RUNTIME_END>>>

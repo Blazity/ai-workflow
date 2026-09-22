@@ -172,9 +172,15 @@ describe("the sentences that teach somebody how to name a repository", () => {
       [],
     );
     expect(decision.kind).toBe("clarification_needed");
-    expect(decision.kind === "clarification_needed" && decision.questions[0]).toContain(
-      "Reply with full provider-scoped paths (for example forgejo:acme/app).",
-    );
+    // No example any more, and that is the stronger answer: the question names
+    // the candidate itself, so the person types a key that exists on this
+    // deployment rather than one modelled on an example. What still must never
+    // appear is another provider's shape, or the word "provider" standing in
+    // for one.
+    const question = decision.kind === "clarification_needed" ? decision.questions[0] ?? "" : "";
+    expect(question).toContain("forgejo:acme/app");
+    expect(question).not.toContain("github:");
+    expect(question).not.toContain("provider:owner");
   });
 
   it("names a repository the run already knows ahead of any example", () => {

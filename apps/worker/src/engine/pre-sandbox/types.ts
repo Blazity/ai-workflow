@@ -15,6 +15,7 @@ import type {
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import type { RunStartWorkScope } from "../steps/run-start-settings.js";
 import type { TicketTextReading } from "../work-scope/context.js";
+import type { RepositoryMapFacts } from "../../repository-map/map.js";
 
 /**
  * The repositories a question a pre-sandbox step raised named, and why each one
@@ -67,6 +68,47 @@ export interface PreSandboxRepositoryDiscovery {
   mandatoryRepositories: SelectedRepository[];
 }
 
+/**
+ * What every repository-working send needs to describe the repositories, read
+ * once in the pre-sandbox step because nothing after it may touch a database.
+ *
+ * ABSENT IS A FACT, NOT AN EMPTY MAP. A run whose journal predates this field
+ * hands back a result without it, and a send built from that must say the map
+ * was not available rather than render an empty one, which would be a positive
+ * claim that the catalog holds nothing.
+ */
+/**
+ * How many repositories may be in the workspace before a person is asked which
+ * ones are essential (`engine/blocks/prepare-workspace/execute.ts`).
+ *
+ * It lives here rather than in that block because the pre-sandbox decides what
+ * goes into the workspace and the block decides what to do when there is too
+ * much of it: two files, one number, and a run handed an unnecessary question
+ * is the failure that comes from them disagreeing.
+ */
+export const WORKSPACE_NARROWING_CEILING = 8;
+
+export interface PreSandboxRepositoryMap {
+  /** Every repository this run knows of, with the operator's own description
+   *  and the relationships, as the map renderer reads them. */
+  repositories: RepositoryMapFacts[];
+  /** True when the catalog profile read failed. The map then says so instead of
+   *  rendering no relationships, which reads as "these are unrelated". */
+  relationshipsUnreadable?: boolean;
+  /** True when that same read failed, said as the wider fact it is: the
+   *  operator's descriptions were in those rows too, so the map must not
+   *  report every repository as one nobody ever described. */
+  catalogUnreadable?: boolean;
+  /** Repositories this run attached because they are related to one the ticket
+   *  or the event names, so the map and the trail name the same source and the
+   *  same relationship. Attached READ ONLY: nobody asked for write. */
+  relatedAttachments?: Array<{
+    repositoryKey: string;
+    viaRepositoryKey: string;
+    relationship: string;
+  }>;
+}
+
 /** Telemetry for how much a definition pin reduced what selection could see. */
 export interface PreSandboxRepositoryScopeNarrowing {
   /** Repositories the provider listing offered this run. A pin that selects
@@ -104,6 +146,9 @@ export type PreSandboxStepResult =
       promptAdditions?: PreSandboxPromptAddition[];
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      /** The repositories every send describes, read once here. Absent means
+       *  this run could not gather them, which a send says out loud. */
+      repositoryMap?: PreSandboxRepositoryMap;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
@@ -160,6 +205,9 @@ export type PreSandboxStepResult =
       promptAdditions?: PreSandboxPromptAddition[];
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      /** The repositories every send describes, read once here. Absent means
+       *  this run could not gather them, which a send says out loud. */
+      repositoryMap?: PreSandboxRepositoryMap;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
@@ -336,6 +384,9 @@ export type RunPreSandboxPhaseResult =
       promptAdditions: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      /** The repositories every send describes, read once here. Absent means
+       *  this run could not gather them, which a send says out loud. */
+      repositoryMap?: PreSandboxRepositoryMap;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
@@ -365,6 +416,9 @@ export type RunPreSandboxPhaseResult =
       promptAdditions: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      /** The repositories every send describes, read once here. Absent means
+       *  this run could not gather them, which a send says out loud. */
+      repositoryMap?: PreSandboxRepositoryMap;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;

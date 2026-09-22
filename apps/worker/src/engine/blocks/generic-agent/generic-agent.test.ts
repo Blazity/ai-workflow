@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  captureAgentBriefing: vi.fn(async (_briefing: unknown) => ({ outcome: "recorded", briefingId: 1 })),
   sleep: vi.fn().mockResolvedValue(undefined),
   checkPhaseDone: vi.fn(),
   collectPhase: vi.fn(),
@@ -27,6 +28,10 @@ vi.mock("../../steps/sandbox-poll-agent.js", () => ({
   collectPhaseReplayDiagnostics: mocks.collectPhase,
 }));
 vi.mock("../../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
+vi.mock("../../agent-visibility/capture.js", () => ({
+  captureAgentBriefing: mocks.captureAgentBriefing,
+  captureSkippedSend: vi.fn(async () => ({ outcome: "refused", reason: "skipped" })),
+}));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
 vi.mock("../../../sandbox/agents/index.js", () => ({
@@ -148,9 +153,16 @@ describe("generic_agent execute", () => {
       }),
       exitCode: 0,
     });
-    const compileEffectivePrompt = vi.fn().mockResolvedValue({
+    const compileInvocationPrompt = vi.fn().mockResolvedValue({
       ok: true,
-      prompt: "COMPILED EFFECTIVE PROMPT",
+      compilation: {
+        prompt: "COMPILED EFFECTIVE PROMPT",
+        hash: "h",
+        sections: [],
+        provenance: [],
+        unresolvedSources: [],
+        issues: [],
+      },
     });
 
     const block = makeNode("generic_agent", {
@@ -173,15 +185,39 @@ describe("generic_agent execute", () => {
       ctx,
       { plan: "Bound plan", count: 2 },
       makeInvocation(ctx, {
+        nodeId: block.id,
+        blockType: "generic_agent",
         clarificationAnswer: "Use Redis",
-        compileEffectivePrompt,
+        compileInvocationPrompt,
       }),
     );
 
-    expect(compileEffectivePrompt).toHaveBeenCalledWith({
+    // Red when: this send stops passing a briefing, or is reached with no
+    // invocation so the plan returns null. TypeScript forces an argument to
+    // be passed at the call site, not the right one, and a send that silently
+    // stops recording is invisible from anywhere else.
+    expect(mocks.captureAgentBriefing).toHaveBeenCalledTimes(1);
+    expect(
+      (mocks.captureAgentBriefing.mock.calls[0] as unknown as [{ identity: Record<string, unknown> }])[0]
+        .identity,
+    ).toMatchObject({ nodeId: block.id, blockType: "generic_agent", kind: "agent", sequence: 1 });
+
+    expect(compileInvocationPrompt).toHaveBeenCalledWith({
       blockPrompt: "Authored prompt",
-      runtimeData:
-        'Resolved inputs:\n{\n  "plan": "Bound plan",\n  "count": 2\n}\n\nHuman clarification answer:\nUse Redis',
+      runtimeData: [
+        {
+          id: "bound-inputs",
+          title: "Bound inputs",
+          origin: { kind: "bound_data" },
+          content: 'Resolved inputs:\n{\n  "plan": "Bound plan",\n  "count": 2\n}\n\n',
+        },
+        {
+          id: "clarification-answer",
+          title: "Human clarification answer",
+          origin: { kind: "clarification" },
+          content: "Human clarification answer:\nUse Redis",
+        },
+      ],
       sandboxId: "scratch-1",
     });
     expect(mocks.writeFiles).toHaveBeenCalledWith(

@@ -12,7 +12,7 @@ import type { PrTriggerPayload } from "../../agent-input.js";
 import { selectWorkItems } from "../../helpers/review-ledger.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { catalogRefusalExecutionOptions } from "../../support/repository-access.js";
-import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult, type EngineCtx } from "../support/types.js";
 
 /**
  * Resolve the repositories a PR-trigger run operates on: the PR's repository,
@@ -236,6 +236,40 @@ export interface FetchPrContextOptions {
 }
 
 /**
+ * ONE ANSWER to "does this fetch want thread feeds", for every caller.
+ *
+ * A run fetches its pull request contexts more than once: the block itself, a
+ * checkpoint restore, the refetch after research takes another repository, the
+ * human-expansion path. A caller that leaves these options out drops
+ * `reviewThreads` from the contexts while `ctx.reviewLedger` keeps the feed it
+ * was built from, and the two then disagree for the rest of the run: the
+ * prompt renders no alias block, so the agent has nothing to write
+ * dispositions about, so verification rejects every work item, and the reviewer
+ * gets a red run and a note saying their threads were rejected twice. Built
+ * here so a new call site cannot forget what the first one knew.
+ */
+export function reviewLedgerFetchOptions(ctx: {
+  entry: EngineCtx["entry"];
+  settings: EngineCtx["settings"];
+  integrationPins?: EngineCtx["integrationPins"];
+}): FetchPrContextOptions {
+  // The pins travel on every fetch, ledger or not: they decide WHICH provider
+  // answers, which is not a property of the trigger that started the run.
+  // Only a run somebody's review comment started gets the ledger; see the block
+  // body below for why a checks-fix run on the same PR must not be given it.
+  return ctx.entry.kind === "pr_trigger" && ctx.entry.triggerType === "trigger_pr_review"
+    ? {
+        reviewLedgerEnabled: ctx.settings.REVIEW_LEDGER_ENABLED,
+        reviewLedgerFor: {
+          provider: ctx.entry.pr.provider,
+          repoPath: ctx.entry.pr.repoPath,
+        },
+        integrationPins: ctx.integrationPins,
+      }
+    : { integrationPins: ctx.integrationPins };
+}
+
+/**
  * Fetch PR comments, check results, and conflict status for every repository
  * with a workflow-owned PR. The only implementation: the workflow body imports
  * and calls this step (`engine/agent-workflow.ts:1555`, `:2315`, `:2577`) rather than keeping a
@@ -395,16 +429,7 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       // fix agent answer threads it was never prompted about, fail the run on
       // "no disposition survived verification", and burn one of the PR's fix
       // attempts without ever pushing the fix.
-      ctx.entry.kind === "pr_trigger" && ctx.entry.triggerType === "trigger_pr_review"
-        ? {
-            reviewLedgerEnabled: ctx.settings.REVIEW_LEDGER_ENABLED,
-            reviewLedgerFor: {
-              provider: ctx.entry.pr.provider,
-              repoPath: ctx.entry.pr.repoPath,
-            },
-            integrationPins: ctx.integrationPins,
-          }
-        : { integrationPins: ctx.integrationPins },
+      reviewLedgerFetchOptions(ctx),
     );
     ctx.repositoryContexts = contexts;
 

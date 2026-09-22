@@ -79,6 +79,8 @@ describe("MCP public contracts", () => {
       "settings.reset",
       "work_scope.get",
       "work_scope.edit",
+      "runs.briefing",
+      "workflows.node_briefing",
       "memory.list",
       "memory.get",
       "memory.forget",

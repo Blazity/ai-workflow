@@ -72,6 +72,112 @@ function screenText(root: ReactTestInstance): string {
 
 type FetchCall = { url: string; init: RequestInit | undefined };
 
+/** What `settle` watches: the requests this screen has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One render per test, and this file's tests run one at a time. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/**
+ * Installs `handler` as the fetch for one test and returns the undo.
+ *
+ * Every answer lands a turn later, the way a response does: resolving in the
+ * caller's own microtask is what let a counted wait look reliable.
+ * `FIXTURE_SLOW_MS` delays every answer by that many milliseconds, which is how
+ * this harness reproduces a runner slow enough to break a counted wait.
+ */
+function installFetch(
+  calls: FetchCall[],
+  respond: () => Response,
+): () => void {
+  const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
+  (globalThis as { fetch: unknown }).fetch = (url: string, init?: RequestInit) => {
+    calls.push({ url: String(url), init });
+    mine.inFlight += 1;
+    mine.started += 1;
+    // `respond` runs now, when the request goes out, because a test that holds
+    // its own answer open takes the resolver from this very call.
+    const answered = respond();
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      return answered;
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the requests a screen has out finish, and waits for exactly that.
+ *
+ * NEVER A COUNT OF TURNS. A cancel here is a POST whose body lands a turn or
+ * more after the call, and the screen only then shows its outcome. How many
+ * turns that costs is the runner's business, so a fixed count passes on an idle
+ * machine and, on a loaded one, returns while the request is still in flight:
+ * the assertion then reads a screen that has not heard back and the failure
+ * looks like the product. Quiet is the condition those assertions mean, and it
+ * is two things, because a request that lands can start the next one: nothing
+ * in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of failing,
+ * and a screen that never settles fails as a readable timeout rather than
+ * hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the screen was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
+  }
+}
+
+/**
+ * Waits for the thing the next assertion is about, and fails with what the
+ * screen showed instead. For a state a person reaches through work the screen
+ * does after its requests land, where "nothing in flight" is true too early.
+ */
+async function waitForText(root: ReactTestInstance, expected: RegExp, timeoutMs = 10_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const seen = screenText(root);
+    if (expected.test(seen)) return seen;
+    if (Date.now() >= deadline) {
+      assert.fail(`waited ${timeoutMs} ms for ${expected}, and the screen showed: ${seen.slice(0, 900)}`);
+    }
+    await turn();
+  }
+}
+
 /** Minimal app router: the screen only calls refresh, and WindowSelector
  *  needs the context to exist at all (its useRouter() call throws otherwise). */
 function stubRouter(
@@ -115,10 +221,7 @@ function renderDesktop(
   const pushes: string[] = [];
   const replacements: string[] = [];
   const backs: string[] = [];
-  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    return respond();
-  };
+  const uninstallFetch = installFetch(calls, respond);
 
   const router = stubRouter(refreshes, pushes, replacements, backs);
   const tree = (next: DesktopProps) => (
@@ -132,6 +235,7 @@ function renderDesktop(
   });
   t.after(() => {
     act(() => renderer.unmount());
+    uninstallFetch();
   });
   return {
     root: renderer.root,
@@ -167,10 +271,7 @@ function renderMobile(
   const pushes: string[] = [];
   const replacements: string[] = [];
   const backs: string[] = [];
-  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    return respond();
-  };
+  const uninstallFetch = installFetch(calls, respond);
 
   const router = stubRouter(refreshes, pushes, replacements, backs);
   const tree = (next: MobileProps) => (
@@ -184,6 +285,7 @@ function renderMobile(
   });
   t.after(() => {
     act(() => renderer.unmount());
+    uninstallFetch();
   });
   return {
     root: renderer.root,
@@ -349,9 +451,10 @@ test("confirming posts the cancel proxy for the exact run id", async (t) => {
   act(() => {
     button(root, "Cancel").props.onClick();
   });
-  await act(async () => {
+  act(() => {
     button(root, "Confirm").props.onClick();
   });
+  await settle();
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/api/runs/run_42/cancel");
@@ -369,9 +472,10 @@ test("a cancelled outcome shows success feedback and refreshes", async (t) => {
   act(() => {
     button(root, "Cancel").props.onClick();
   });
-  await act(async () => {
+  act(() => {
     button(root, "Confirm").props.onClick();
   });
+  await settle();
 
   assert.match(screenText(root), /Run cancelled\./);
   assert.doesNotMatch(screenText(root), /already ended/);
@@ -395,9 +499,10 @@ test("an already_terminal outcome is never shown as a fresh cancel, but still re
   act(() => {
     button(root, "Cancel").props.onClick();
   });
-  await act(async () => {
+  act(() => {
     button(root, "Confirm").props.onClick();
   });
+  await settle();
 
   assert.match(screenText(root), /Run had already ended\./);
   assert.doesNotMatch(screenText(root), /Run cancelled\./);
@@ -415,9 +520,10 @@ test("an unconfirmed (409) outcome offers a retry and does not refresh", async (
   act(() => {
     button(root, "Cancel").props.onClick();
   });
-  await act(async () => {
+  act(() => {
     button(root, "Confirm").props.onClick();
   });
+  await settle();
 
   assert.match(screenText(root), /Could not confirm the cancel\. Try again\./);
   assert.deepEqual(refreshes, [], "an unconfirmed cancel has nothing for the server to catch up on");
@@ -538,13 +644,16 @@ test("mobile: confirming posts the cancel proxy and reports a cancelled outcome"
   act(() => {
     button(root, "Cancel").props.onClick({ stopPropagation: () => undefined });
   });
-  await act(async () => {
+  act(() => {
     button(root, "Confirm").props.onClick();
   });
+  await settle();
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/api/runs/run_7/cancel");
   assert.equal(calls[0].init?.method, "POST");
-  assert.match(screenText(root), /Run cancelled\./);
+  // The mobile sheet swaps "Cancelling…" for the outcome through work it does
+  // after the answer lands, so "nothing in flight" is true a moment too early.
+  await waitForText(root, /Run cancelled\./);
   assert.deepEqual(refreshes, ["refresh"]);
 });

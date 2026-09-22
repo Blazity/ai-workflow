@@ -23,6 +23,7 @@ import type {
   WorkflowRepositoryScope,
 } from "@shared/contracts";
 import type { RunWorkScopeWrite } from "../work-scope/apply-plans.js";
+import { recordSendBriefing, recordSkippedSend, type AgentBriefingCapture } from "../agent-visibility/plan.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import type { CostProvider, TokenPrice } from "@shared/costs";
 import { combineHarnessRuntimeLimits } from "../../sandbox/harness-runtime-limits.js";
@@ -473,13 +474,25 @@ async function writeAndStartPhase(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-  runtime?: ResolvedHarnessRuntime,
+  runtime: ResolvedHarnessRuntime | undefined,
   /** What the expansion before this pass refused, when it attached nothing.
    *  The next zero-retry step on that path is this one, and a refusal has to
    *  ride a step that cannot retry: it changes no entry, so losing the line to
    *  a dead invocation costs nothing, while a second copy of it reads as an
    *  agent that asked twice. Absent on every run that froze no record. */
-  workScopeWrite?: RunWorkScopeWrite,
+  workScopeWrite: RunWorkScopeWrite | undefined,
+  /**
+   * What this send gave the model, to record beside it.
+   *
+   * REQUIRED IN TYPE, OPTIONAL IN THE JOURNAL. A run suspended inside this
+   * step across the deploy replays with the arguments it was created with, so
+   * the body must read a missing value as "no briefing" and say nothing; but a
+   * call site that simply forgot to pass one is a mistake nobody would notice,
+   * because losing a briefing costs no run. Requiring it here makes forgetting
+   * a compile error and leaves the replay behaviour untouched. Null means this
+   * send deliberately records nothing.
+   */
+  briefing: AgentBriefingCapture | null,
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -505,6 +518,11 @@ async function writeAndStartPhase(
     ]);
     const chmod = await sandbox.runCommand("chmod", ["+x", scriptPath]);
     if (chmod.exitCode !== 0) {
+      // Nothing was sent, and the sequence number this send took is already
+      // spent. A gap a reader has to interpret is a classification made in a
+      // reader's head, so the record says it instead: this place in the order
+      // exists, and nothing went out under it.
+      await recordSkippedSend(briefing, () => import("../agent-visibility/capture.js"));
       return {
         ok: false,
         failure: await commandProtocolFailure({
@@ -517,6 +535,21 @@ async function writeAndStartPhase(
         }),
       };
     }
+
+    // BEFORE the agent starts, and after its prompt is in the sandbox.
+    // Recording afterwards would leave a window in which this invocation is
+    // killed with an agent already burning credits while the person reading
+    // the run is told the prompt was never sent. Recording here means a launch
+    // that then fails leaves a briefing beside a recorded failure, which reads
+    // truthfully as "this is what it was given, and it did not start".
+    //
+    // The import is guarded too: this step cannot retry, and a module that
+    // fails to load cold would otherwise take the agent down with it.
+    await recordSendBriefing(
+      briefing,
+      { prompt: inputContent, wrapperScript: scriptContent },
+      () => import("../agent-visibility/capture.js"),
+    );
 
     const command = await sandbox.runCommand({
       cmd: "bash",

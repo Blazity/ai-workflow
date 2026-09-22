@@ -1,0 +1,6 @@
+[discovery prompt]
+  instructions                   1027  platform  "Discovery instructions"
+  ticket                          592  ticket ref=AIW-512  "Ticket"
+  mandatory-repositories           45  repository_selection  "Mandatory repositories"
+  catalog                         445  repository_catalog  "Accessible repository catalog"
+  relationships                   130  repository_catalog  "Relationship context by candidate"

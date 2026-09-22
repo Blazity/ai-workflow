@@ -98,6 +98,11 @@ const REVIEWED_TOOLS: readonly string[] = [
   "memory.list",
   "memory.get",
   "memory.forget",
+  // Reads of what a run's agents were sent. Neither touches a connection: they
+  // return recorded prompt text addressed by run or by definition node, and a
+  // briefing names an integration only where the prompt it recorded did.
+  "runs.briefing",
+  "workflows.node_briefing",
 ];
 
 /**

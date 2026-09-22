@@ -8,6 +8,7 @@ import type {
   TriggerEvent,
   VcsOpaqueHandle,
 } from "@integrations/sdk";
+import { isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
 
 type GitHubContext = IntegrationContext<typeof manifest>;
@@ -31,7 +32,6 @@ type GitHubContext = IntegrationContext<typeof manifest>;
  * - **Whether the repository is enabled.** The catalog is core's.
  */
 
-const BOT_MARKER = "<!-- ai-workflow:bot -->";
 
 /**
  * Names the post-PR gate creates its own checks under, in both generations.
@@ -540,11 +540,16 @@ function isManagedCheckName(name: unknown): boolean {
 }
 
 /**
- * Every comment this deployment writes carries the bot marker, ledger replies
- * included, so one check keeps the workflow from answering itself.
+ * Ours by what the author wrote, not by a marker anywhere in the body.
+ *
+ * "Quote reply" copies our marker into a person's own comment, and dropping
+ * that person here starts no run at all, so their request goes nowhere with
+ * nothing to look at. The rule is the SDK's, shared with core, and it covers
+ * every marker family rather than the bot marker alone: our review findings
+ * carry no bot marker and still must not fire a trigger.
  */
 function isOurComment(body: unknown): boolean {
-  return typeof body === "string" && body.includes(BOT_MARKER);
+  return isOurOwnVcsComment(body);
 }
 
 /**

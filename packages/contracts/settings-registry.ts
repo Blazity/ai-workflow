@@ -244,6 +244,19 @@ export const SETTINGS_REGISTRY = [
     overridablePerTrigger: false,
   },
   {
+    key: "ENABLE_AGENT_BRIEFINGS",
+    group: "features",
+    type: "boolean",
+    // On, because the record only becomes useful once it covers every send: a
+    // feature that starts empty answers nothing about the run somebody opens
+    // tomorrow.
+    default: true,
+    description:
+      "Records what each model send gave the agent: the prompt section by section with where each piece came from, the harness settings and the repositories in scope. A run reads this once at its start, so switching it off stops the next run rather than one already under way. Every send of a run that started with it off is still marked, as not recorded because capture was off, never as never sent.",
+    appliesToRunsInFlight: "next run",
+    overridablePerTrigger: false,
+  },
+  {
     key: "REVIEW_LEDGER_ENABLED",
     group: "features",
     type: "boolean",

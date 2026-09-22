@@ -1,0 +1,27 @@
+{
+  "name": "@shared/agent-visibility",
+  "description": "Pure agent visibility records that may define, build, page and explain what one send gave a model and the clarification rounds of a subject, and may not compose a prompt, perform runtime work, reach infrastructure, read the environment or import any workspace package other than contracts.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "dependencies": {
+    "@shared/contracts": "workspace:*",
+    "zod": "catalog:"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"*.test.ts\"",
+    "test:zod4": "node --import tsx --import ../zod4-alias.mjs --test \"*.test.ts\""
+  },
+  "devDependencies": {
+    "zod4": "catalog:"
+  }
+}

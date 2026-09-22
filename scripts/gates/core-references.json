@@ -11,12 +11,12 @@
     "\\.(?:test|spec)\\.[cm]?[jt]sx?$",
     "\\.generated\\.[cm]?[jt]sx?$",
     "(?:^|/)test-support\\.[cm]?[jt]sx?$",
-    "^apps/worker/src/test-support/",
+    "(?:^|/)test-support/",
     "^apps/worker/src/workflow-graph-suites/",
     "^apps/worker/src/mcp-dogfood/",
     "(?:^|/)(?:fixtures/|[^/]+\\.fixture\\.)"
   ],
-  "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support modules and directory, workflow-graph-suites, mcp-dogfood, fixture files and fixtures trees are test material by another name: nothing outside a test imports them, and a fixture naming a provider is the subject of the test rather than a coupling in the product.",
+  "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support modules and any test-support directory, workflow-graph-suites, mcp-dogfood, fixture files and fixtures trees are test material by another name: nothing outside a test imports them, and a fixture naming a provider is the subject of the test rather than a coupling in the product.",
   "plannedIntegrations": {},
   "plannedIntegrationsReason": "A name core still writes, with the stage that takes it away. Empty since S12: every provider this build knows now arrives from the registry, so a new name here would be a provider core started writing before an integration owned it. The gate watches these as well as the registry ids, so it passes on what is here today and fails on anything new.",
   "incidentalReason": "A row may carry \"incidental\": true when its files spell a provider id by accident, such as a CSS keyword or a URL, rather than depending on the provider; the gate then keeps the row listed but never reports it as stale, because such a hit comes and goes with ordinary edits and a failure on one could not be acted on.",
@@ -40,6 +40,7 @@
       "paths": [
         "apps/worker/src/engine/blocks/leak-review/execute.ts",
         "apps/worker/src/mcp/sanitize-result.ts",
+        "apps/worker/src/run-observability/visibility-detector.ts",
         "apps/worker/src/sandbox/agents/redact.ts",
         "apps/worker/src/services/repository-catalog/suggest.ts"
       ]
@@ -152,6 +153,43 @@
         "apps/dashboard/components/cockpit/flow-editor/blocks/shared.tsx",
         "apps/worker/src/engine/blocks/investigate/execute.ts",
         "packages/contracts/workflow-graph.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira"
+      ],
+      "stage": "migration",
+      "reason": "the delivery surface of a clarification answer, persisted as the literal `jira` in `agent_briefing`'s sibling tables and checked by a CHECK constraint, then carried through the services that write it and the dashboard that labels it. It means \"the answer arrived as a ticket comment\", which is the issue tracker capability and not one provider: on a deployment running another tracker this word is already wrong, and the run still records it. Renaming it to `issue_tracker` is a migration over rows shipped on 2026-09-19 plus a constraint change, so it is a delivery of its own rather than part of moving the providers out. Until then core names a provider here and this row says so.",
+      "paths": [
+        "apps/dashboard/lib/agent-visibility/wording.ts",
+        "apps/worker/src/db/repositories/agent-visibility.ts",
+        "apps/worker/src/db/schema/agent-visibility.ts",
+        "apps/worker/src/services/agent-visibility/deliveries.ts",
+        "apps/worker/src/services/clarifications/answer-core.ts",
+        "apps/worker/src/services/clarifications/resume-from-comments.ts",
+        "packages/agent-visibility/vocabulary.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github",
+        "jira"
+      ],
+      "stage": "kept",
+      "reason": "EXAMPLES of the subject key shape (`ticket:jira:AWP-1`, `pr:github:acme/app#7`) in the validation message that teaches a caller to write one. The provider segment is a registry id chosen at runtime; one instance of it is shown because a caller told only `ticket:<provider>:<KEY>` types the word `provider` and is refused.",
+      "paths": [
+        "packages/contracts/work-scope.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira"
+      ],
+      "stage": "kept",
+      "reason": "the same key-shape example in the MCP tool descriptions, plus two tracker behaviours explained in prose: a summary field's 255 characters, and a board that resolves a move only through two transitions. Those two are the tracker's limits described in core, and they belong with the tracker capability rather than in a tool description; they are here because rewriting a published tool description is a contract change with its own review, not part of moving the providers out.",
+      "paths": [
+        "apps/worker/src/mcp/tool-catalog.ts"
       ]
     }
   ]

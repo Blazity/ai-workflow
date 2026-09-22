@@ -567,3 +567,100 @@ describe("attempt envelope budgets", () => {
     expect(bounded.output).toEqual(output);
   });
 });
+
+/**
+ * The phone rule against the numbers a run really logs.
+ *
+ * Production served a cost as `0.[REDACTED:phone]` and a harness manifest's
+ * `"maxTokens":"[REDACTED:token]"` through runs.logs
+ * (wrun_01M2WCQ37TMM2RR4D55HPY4MD7). Every literal below is one of those real
+ * false positives, or a real phone number that must still go.
+ */
+describe("sanitizeReplayValue: numbers that are not phone numbers", () => {
+  // Red when: the phone rule matches a bare digit run, a decimal, a date, a
+  // time, an IP address or a model's date suffix again.
+  it.each([
+    ["a cost", "cost 0.0512345 USD"],
+    ["a model with a date suffix", "model claude-sonnet-4-5-20250929 answered"],
+    ["another model with a date suffix", "model gpt-4o-2024-08-06 answered"],
+    ["a date", "released on 2026-09-01"],
+    ["a timestamp", "started 2026-09-19 12:34 UTC"],
+    ["an IP address", "connected to 192.168.10.20"],
+    ["a decimal", "ratio 123.4567"],
+    ["epoch milliseconds", "at 1726750000000"],
+    ["a token budget in text", "maxTokens: 200000"],
+    ["a day-first date with dots", "due 19.09.2026"],
+    ["a day-first date with hyphens", "due 19-09-2026"],
+    ["a workflow run id in a path", "see actions/runs/11234567890 for the log"],
+    ["epoch seconds", "at 1726750000"],
+    ["an older model with a date suffix", "model claude-3-5-sonnet-20241022 answered"],
+    ["a dotted build number", "build 2026.09.19.1 deployed"],
+    // These three pass the card checksum, and the card rule runs before the
+    // phone rule, so they would come back as payment cards instead.
+    ["epoch milliseconds that pass the card checksum (1)", "at 1726750000001"],
+    ["epoch milliseconds that pass the card checksum (2)", "at 1726750000019"],
+    ["epoch milliseconds that pass the card checksum (3)", "at 1726750000027"],
+  ])("keeps %s", (_label, text) => {
+    const envelope = sanitizeReplayValue(text);
+    expect(envelope.value).toBe(text);
+    expect(envelope.metadata.redactions).toEqual({});
+  });
+
+  // Red when: the fix for the false positives above loses a real number.
+  it.each([
+    ["an international number with spaces", "call +48 601 234 567 today", "+48 601 234 567"],
+    ["a US number with an area code in parentheses", "call (415) 555-2671 today", "(415) 555-2671"],
+    ["an international number with hyphens", "call +1-202-555-0143 today", "+1-202-555-0143"],
+    ["a local number with hyphens", "call 601-234-567 today", "601-234-567"],
+    ["a local number with spaces", "call 601 234 567 today", "601 234 567"],
+    ["an international number written without spaces", "call +48601234567 today", "+48601234567"],
+    ["an international number with a 00 prefix", "call 0048 601 234 567 today", "0048 601 234 567"],
+  ])("still redacts %s", (_label, text, number) => {
+    const envelope = sanitizeReplayValue(text);
+    expect(envelope.value).toBe(text.replace(number, "[REDACTED:phone]"));
+    expect(envelope.metadata.redactions.phone).toBe(1);
+  });
+});
+
+describe("sanitizeReplayValue: fields named after tokens", () => {
+  // Red when: a count whose name merely contains "token" is replaced by a
+  // redaction marker, as production served a harness manifest.
+  it("keeps the value of a token count field", () => {
+    const manifest = {
+      maxTokens: 200000,
+      maxOutputTokens: "64000",
+      tokensInput: 1234,
+      tokenCount: 42,
+      usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cacheReadInputTokens: 5 },
+    };
+    const envelope = sanitizeReplayValue(manifest);
+    expect(envelope.value).toEqual(manifest);
+    expect(envelope.metadata.redactions.token).toBeUndefined();
+  });
+
+  // Red when: the count exemption lets a credential through, by its name or
+  // by a value that is not a count.
+  it("still redacts fields that hold a credential", () => {
+    const credentials = {
+      token: "opaque-credential-1",
+      accessToken: "opaque-credential-2",
+      access_token: "opaque-credential-3",
+      refresh_token: "opaque-credential-4",
+      id_token: "opaque-credential-5",
+      apiToken: "opaque-credential-6",
+      GITHUB_TOKEN: "opaque-credential-7",
+      "x-auth-token": "opaque-credential-8",
+      oauthToken: "opaque-credential-9",
+      apiTokens: ["opaque-credential-10"],
+      refreshToken: 12345678,
+      maxTokens: "opaque-credential-11",
+    };
+    const envelope = sanitizeReplayValue(credentials);
+    const text = serialized(envelope);
+    for (let index = 1; index <= 11; index += 1) {
+      expect(text).not.toContain(`opaque-credential-${index}"`);
+    }
+    expect(text).not.toContain("12345678");
+    expect(envelope.metadata.redactions.token).toBe(Object.keys(credentials).length);
+  });
+});

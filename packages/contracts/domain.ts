@@ -945,10 +945,17 @@ export const FIRST_SLICE_TOOLS = [
   // to it, which is what makes an exclusion recoverable.
   "work_scope.get",
   "work_scope.edit",
-  // Appended for the same reason again. What the agent remembered was readable
-  // and erasable from the dashboard and from nowhere else, which left an agent
-  // that had learned something false with no way to say so. These three are the
-  // memory screen's own three actions.
+  // Appended for the same reason as the slices above, and last, because the
+  // published contract and tools/list are pinned to this order. The record of
+  // what an agent was really sent was written by every run and read back by
+  // nothing; this is the read of it, and it has to exist here as well as in the
+  // dashboard or debugging a run would mean leaving the terminal.
+  "runs.briefing",
+  "workflows.node_briefing",
+  // Appended after those, for the same reason again and in the same place: what
+  // the agent remembered was readable and erasable from the dashboard and from
+  // nowhere else, which left an agent that had learned something false with no
+  // way to say so. These three are the memory screen's own three actions.
   "memory.list",
   "memory.get",
   "memory.forget",

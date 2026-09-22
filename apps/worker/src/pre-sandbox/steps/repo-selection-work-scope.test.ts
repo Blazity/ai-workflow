@@ -198,8 +198,42 @@ function appliedPlans(): WorkScopeWritePlan[] {
   );
 }
 
+/**
+ * The DECISIONS in the trail.
+ *
+ * `map_shown` is not one: every run writes exactly one, recording what the
+ * agent was told about its repositories, and it says nothing about what the
+ * run decided. It has its own tests; folding it into these would make every
+ * case about the record's decisions also assert the map's summary.
+ */
 function appliedTrail(): WorkScopeWritePlan["trail"] {
-  return appliedPlans().flatMap((plan) => plan.trail);
+  return appliedPlans().flatMap((plan) =>
+    plan.trail.filter((event) => event.kind !== "map_shown"),
+  );
+}
+
+/** The one row per run that records what the map said. */
+function appliedMapShown(): WorkScopeWritePlan["trail"] {
+  return appliedPlans().flatMap((plan) =>
+    plan.trail.filter((event) => event.kind === "map_shown"),
+  );
+}
+
+/**
+ * The plans, with the map's own row taken out, for the cases that ask "was
+ * anything written ABOUT this repository". The map names every repository it
+ * described, including the ones the run may not touch, which is the point of
+ * it; those cases are about the RECORD, where naming a repository is a claim
+ * that something was decided about it.
+ */
+function appliedDecisionPlans(): WorkScopeWritePlan[] {
+  const decisions: WorkScopeWritePlan[] = [];
+  for (const plan of appliedPlans()) {
+    const trail = plan.trail.filter((event) => event.kind !== "map_shown");
+    if (plan.upserts.length === 0 && plan.deletes.length === 0 && trail.length === 0) continue;
+    decisions.push({ upserts: plan.upserts, deletes: plan.deletes, trail });
+  }
+  return decisions;
 }
 
 beforeEach(() => {
@@ -1622,6 +1656,62 @@ describe("a repository this deployment holds and this run may not open, named on
     expect(selection.workScopeRecoveryNotes).toContain(THE_WAY_BACK);
   });
 
+  /**
+   * A briefing is kept for thirty days and the repository record outlives it,
+   * so after that the trail line is the only place a person can still see what
+   * the agent was told about its repositories. One row, at the moment the map
+   * is first built, summarizing the same build the prompt renders.
+   */
+  it("records once what the map said, including the repositories it may not use", async () => {
+    await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      ticket: ticketWith([human("acme/ops")]),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    const shown = appliedMapShown();
+    expect(shown).toHaveLength(1);
+    const row = shown[0]!;
+    expect(row.kind).toBe("map_shown");
+    if (row.kind !== "map_shown") throw new Error("unreachable");
+    expect(row.repositoryKeys).toContain("github:acme/ops");
+    expect(row.text).toContain("github:acme/ops:");
+    // The contract bounds this at 1,600 characters. The trail carries a
+    // summary; the map itself is far larger, and a row past the bound is a row
+    // the write refuses.
+    expect(row.text.length).toBeLessThanOrEqual(1600);
+  });
+
+  /**
+   * NOTHING HAS DECIDED THE ACCESS WHEN THIS ROW IS WRITTEN, AND IT SAYS SO.
+   *
+   * The row used to read `github:acme/web: write` for every chosen repository.
+   * Provisioning clones the workspace read and gives write to a workflow-owned
+   * branch (`blocks/prepare-workspace/execute.ts`), so the record claimed an
+   * access that had not been decided, and it claimed it on the surface that
+   * outlives the briefing.
+   */
+  it("does not say a repository may be written to before anything provisioned it", async () => {
+    await runStep({
+      repositories: LISTED,
+      enabledKeys: ENABLED,
+      ticket: ticketWith([human("acme/ops")]),
+      botAccountId: "bot-account",
+      workScope: NO_ANSWER,
+    });
+
+    const row = appliedMapShown()[0]!;
+    if (row.kind !== "map_shown") throw new Error("unreachable");
+    expect(row.text).toContain("github:acme/web: in the workspace");
+    expect(row.text).not.toMatch(/: write$/m);
+    expect(row.text).not.toMatch(/: read_only$/m);
+    // Everything the workspace did not decide is untouched: a repository
+    // switched off in the catalog still reads as switched off.
+    expect(row.text).toContain("github:acme/ops: disabled");
+  });
+
   it("writes nothing to the record about it", async () => {
     const selection = await runStep({
       repositories: LISTED,
@@ -1642,7 +1732,7 @@ describe("a repository this deployment holds and this run may not open, named on
     ]);
     // Every statement the step applied, upserts, deletes and trail lines
     // together, because a mention must not reach any of them.
-    const plans = JSON.stringify(appliedPlans());
+    const plans = JSON.stringify(appliedDecisionPlans());
     expect(plans).toContain("github:acme/web");
     expect(plans).not.toContain("github:acme/ops");
   });
@@ -1810,7 +1900,7 @@ describe("a repository the catalog enables and this workflow's pin leaves out", 
     expect(selection.workScopeLeftOut).toEqual([
       { repositoryKey: "github:acme/docs", reason: OUTSIDE_THE_PIN },
     ]);
-    expect(JSON.stringify(appliedPlans())).not.toContain("github:acme/docs");
+    expect(JSON.stringify(appliedDecisionPlans())).not.toContain("github:acme/docs");
   });
 });
 
@@ -1976,7 +2066,7 @@ describe("a repository the catalog enables and no run can check out", () => {
     );
     expect(addition?.content).toContain("github:acme/ops");
     expect(JSON.stringify(selection.promptAdditions ?? [])).not.toContain("cannot serve");
-    expect(JSON.stringify(appliedPlans())).not.toContain("github:acme/ops");
+    expect(JSON.stringify(appliedDecisionPlans())).not.toContain("github:acme/ops");
   });
 });
 
@@ -2807,10 +2897,12 @@ describe("what the ticket's text may decide after the answer it raised", () => {
     // and a path written after the answer would be taken. Telling the person
     // the comment door is shut, because an older question once asked about five,
     // would be false; the sentence counts what this run just counted.
+    // The example is the lowest key of the three left out, not the first of
+    // them, so the sentence reads the same whatever order they were refused in.
     expect(result.workScopeRecoveryNotes).toEqual([
       "Leaving a repository out of an answer is not final: this work's repository list can be" +
         " changed through the work scope API or the work_scope.edit tool, or the repository's" +
-        " full path can be written in a ticket comment, as github:acme/web, and the next run" +
+        " full path can be written in a ticket comment, as github:acme/api, and the next run" +
         " reads both.",
     ]);
   });

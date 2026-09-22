@@ -17,6 +17,48 @@ import type { FlowNodeDef } from "@/lib/flows";
 import { ConfigFields } from "./config-fields";
 import { PromptAuthoringProvider } from "./prompt-authoring-context";
 
+/** What `settle` watches: the reads these panels have out, and how many they
+ *  have started, so a turn that started another one is not mistaken for quiet. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/**
+ * Installs `handler` as the fetch for one test and returns the undo.
+ *
+ * Every answer lands a turn later, the way a response does: resolving in the
+ * caller's own microtask is what let a counted wait look reliable.
+ * `FIXTURE_SLOW_MS` delays every answer by that many milliseconds, which is
+ * how this harness reproduces a runner slow enough to break a counted wait.
+ */
+function installFetch(handler: (url: string, init?: RequestInit) => Promise<Response>): () => void {
+  const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    mine.inFlight += 1;
+    mine.started += 1;
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      return handler(String(url), init);
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
+  }) as typeof globalThis.fetch;
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -107,17 +149,49 @@ function confirmButton(root: ReactTestInstance, text: string): ReactTestInstance
   return matches[0];
 }
 
-async function settle() {
-  await act(async () => {});
-  await act(async () => {});
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
+
+/**
+ * Lets the chain of loads a panel starts finish, and waits for exactly that.
+ *
+ * NEVER A COUNT OF TURNS. How many turns a chain costs is the runner's
+ * business, so a fixed count passes on an idle machine and, on a loaded one,
+ * returns while reads are still in flight: the assertion then reads a loading
+ * panel and the failure looks like the product. Quiet is the condition those
+ * assertions mean, and it is two things, because a read that lands usually
+ * starts the next one: nothing in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a panel that never settles fails as a readable timeout rather
+ * than hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the panel was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
+  }
+}
+
 
 // An optional key that the registry defaults for must clear on empty rather than
 // persist "", or the worker's strict schema rejects the deploy.
 test("emptying the header name deletes the param instead of storing a blank", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () =>
-    Response.json({ state: "await_deploy", endpoint: null })) as typeof fetch;
+  const restore = installFetch(async () =>
+    Response.json({ state: "await_deploy", endpoint: null }));
   const changes: [string, unknown][] = [];
   let renderer!: ReactTestRenderer;
   try {
@@ -140,16 +214,15 @@ test("emptying the header name deletes the param instead of storing a blank", as
     assert.deepEqual(changes, [["params.headerName", undefined]]);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 // The replay-protection checkbox writes the boolean flag; the tolerance input
 // parses to an int and clears the key on a non-numeric value.
 test("toggling replay protection writes the flag; the tolerance parses to an int", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () =>
-    Response.json({ state: "await_deploy", endpoint: null })) as typeof fetch;
+  const restore = installFetch(async () =>
+    Response.json({ state: "await_deploy", endpoint: null }));
   const changes: [string, unknown][] = [];
   let renderer!: ReactTestRenderer;
   try {
@@ -181,16 +254,15 @@ test("toggling replay protection writes the flag; the tolerance parses to an int
     assert.deepEqual(changes.at(-1), ["params.timestampToleranceSeconds", undefined]);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 // Reveal must survive a later reload failure and Copy must lift the cleartext,
 // never the mask, so drive the real container through the confirm flow.
 test("reveal shows the cleartext once; Copy lifts it and Hide drops it", async () => {
-  const originalFetch = globalThis.fetch;
   const configCalls: string[] = [];
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/webhook/config")) {
       configCalls.push(path);
@@ -203,7 +275,7 @@ test("reveal shows the cleartext once; Copy lifts it and Hide drops it", async (
       return Response.json({ endpointId: "wh_9f3c", secret: CLEARTEXT });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   const clipboard: string[] = [];
   const originalClipboard = Object.getOwnPropertyDescriptor(
@@ -259,7 +331,7 @@ test("reveal shows the cleartext once; Copy lifts it and Hide drops it", async (
     );
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
     if (originalClipboard) {
       Object.defineProperty(globalThis.navigator, "clipboard", originalClipboard);
     } else {
@@ -271,10 +343,9 @@ test("reveal shows the cleartext once; Copy lifts it and Hide drops it", async (
 // Importing a sender-dictated secret posts only the pasted value in the request
 // body, reloads the masked config, and never renders the value back on screen.
 test("Set secret posts the pasted value, reloads config, and never echoes it", async () => {
-  const originalFetch = globalThis.fetch;
   const configCalls: string[] = [];
   const posted: string[] = [];
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/webhook/config")) {
       configCalls.push(path);
@@ -289,7 +360,7 @@ test("Set secret posts the pasted value, reloads config, and never echoes it", a
       return Response.json(activeConfig.endpoint);
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   const IMPORTED = "sentry_client_secret_ab12cd34ef56";
   let renderer!: ReactTestRenderer;
@@ -327,6 +398,6 @@ test("Set secret posts the pasted value, reloads config, and never echoes it", a
     );
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });

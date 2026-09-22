@@ -3,8 +3,11 @@ import type {
   TriggerRepositoryPolicy,
   WorkScope,
   WorkScopeActor,
+  WorkScopeEntry,
+  WorkScopeWritePlan,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
+import { workScopeWritePlanSchema } from "@shared/contracts";
 import {
   filterPinnedRepositories,
   pinnedScopeExcludesProvider,
@@ -17,6 +20,7 @@ import type {
   PreSandboxConfigStep,
   PreSandboxPromptAddition,
   PreSandboxRepositoryCatalogDegradation,
+  PreSandboxRepositoryMap,
   PreSandboxRepositoryScopeNarrowing,
   PreSandboxStepContext,
   PreSandboxStepHandler,
@@ -31,6 +35,13 @@ import {
   type RunWorkScopeRecorder,
   type TicketTextReading,
 } from "../../work-scope/context.js";
+import { buildRepositoryMap, repositoryMapTrailSummary } from "../../../repository-map/map.js";
+import {
+  loadRepositoryMapCatalog,
+  repositoryKey,
+  selectedRepository,
+  takeRelatedRepositories,
+} from "./related-repositories.js";
 import { replySaysNoAboutAnything } from "../../work-scope/answer.js";
 // The one reading of the words on a ticket, for the two readers here that have
 // an opinion about them: the scan that finds repository paths and the rule that
@@ -49,7 +60,6 @@ import {
   buildRepositoryCatalog,
   buildRepositoryCatalogEntries,
   type RepositoryCatalogEntry,
-  type RepositoryRelationshipSource,
 } from "../../repository-discovery/catalog.js";
 // Pure token parser, no adapters behind it: runner.js imports only types plus
 // catalog.js, which this module already pulls in.
@@ -95,6 +105,17 @@ export interface WorkflowOwnedBranchSelectionInput {
  */
 interface WorkScopeCarrier {
   recorder: RunWorkScopeRecorder | null;
+  /**
+   * The one `map_shown` row this run writes, waiting for the write below.
+   *
+   * ONE ROW PER RUN, at the moment the map is first built. A briefing is kept
+   * for thirty days and the repository record outlives it, so after that the
+   * trail line is the only place a person can still see what the agent was
+   * told about its repositories. It is a summary, never a second map: the
+   * contract bounds it at 1,600 characters, and it is derived from the same
+   * build rather than from a second reading of the catalog.
+   */
+  mapShown: WorkScopeWritePlan | null;
 }
 
 /**
@@ -108,9 +129,9 @@ interface WorkScopeCarrier {
  * second time.
  */
 export const repoSelectionStep: PreSandboxStepHandler = async (stepInput) => {
-  const carrier: WorkScopeCarrier = { recorder: null };
+  const carrier: WorkScopeCarrier = { recorder: null, mapShown: null };
   const result = await selectRepositoriesForRun(stepInput, carrier);
-  return recordWorkScopeDecisions(result, carrier.recorder);
+  return recordWorkScopeDecisions(result, carrier);
 };
 
 /**
@@ -133,15 +154,99 @@ export const repoSelectionStep: PreSandboxStepHandler = async (stepInput) => {
  */
 async function recordWorkScopeDecisions(
   result: PreSandboxStepResult,
-  recorder: RunWorkScopeRecorder | null,
+  carrier: WorkScopeCarrier,
 ): Promise<PreSandboxStepResult> {
+  const recorder = carrier.recorder;
   if (!recorder) return result;
   const runId = recorder.runId;
-  if (runId !== null && recorder.plans.length > 0) {
+  // The map's own row rides the same write as the decisions, so a run either
+  // records what it decided and what it showed, or neither.
+  const plans = carrier.mapShown ? [...recorder.plans, carrier.mapShown] : recorder.plans;
+  if (runId !== null && plans.length > 0) {
     const { applyRunWorkScopePlans } = await import("../../work-scope/apply-plans.js");
-    await applyRunWorkScopePlans({ subjectKey: recorder.subjectKey, runId, plans: recorder.plans });
+    await applyRunWorkScopePlans({ subjectKey: recorder.subjectKey, runId, plans });
   }
   return withWorkScopeOutcome(result, recorder);
+}
+
+/**
+ * What the agent was shown about its repositories, as one Decision Trail line.
+ *
+ * Built from the SAME builder and the same inputs as the prompt, at the moment
+ * the run first knows both halves: the catalog facts, and which repositories
+ * the workspace will hold. The prompt builds again later with the run's live
+ * refusals, and those refusals write their own trail rows, so the two never
+ * claim to be the same thing.
+ *
+ * ONE HALF OF THE PROMPT'S MAP IS NOT KNOWN HERE, and the row says so rather
+ * than guessing it: nothing has provisioned the workspace yet, so no manifest
+ * says what may be done to a checkout. This row outlives the briefing beside
+ * it, which is the reason it may not carry a guess: after thirty days it is
+ * what a person is left with.
+ */
+function recordMapShown(
+  carrier: WorkScopeCarrier,
+  repositoryMap: PreSandboxRepositoryMap,
+  chosen: readonly SelectedRepository[],
+  entries: readonly WorkScopeEntry[],
+  catalogActivated: boolean,
+): void {
+  const recorder = carrier.recorder;
+  if (!recorder || recorder.runId === null || carrier.mapShown) return;
+  const summary = repositoryMapTrailSummary(
+    buildRepositoryMap({
+      repositories: repositoryMap.repositories,
+      ...(repositoryMap.relationshipsUnreadable ? { relationshipsUnreadable: true } : {}),
+      ...(repositoryMap.catalogUnreadable ? { silence: "catalog_unreadable" as const } : {}),
+      // THE ACCESS IS NOT DECIDED YET, AND THIS LINE NO LONGER GUESSES IT.
+      // Provisioning clones the whole workspace read and gives write to a
+      // repository carrying a workflow-owned branch
+      // (`blocks/prepare-workspace/execute.ts`), and a promotion can change
+      // that later; the manifest it writes is what the prompt's map reads. None
+      // of that exists yet here, so the summary below is told so and says a
+      // repository is in the workspace without claiming what may be done to it.
+      // The value passed here is therefore never printed; read-only is the side
+      // that cannot invite a wrong belief if it ever were.
+      attached: chosen.map((repo) => ({
+        key: repositoryKey(repo),
+        access: "read_only" as const,
+        ...(repo.selectedRationale ? { rationale: repo.selectedRationale } : {}),
+      })),
+      namedKeys: [...(recorder.ticketText?.matchedKeys ?? [])],
+      // WHAT THIS RUN HAS ALREADY REFUSED, which the prompt's map gets from
+      // `ctx.workScopeLeftOut` and this row used to get from nowhere.
+      //
+      // `matchedKeys` above is the ticket's names ALREADY NARROWED to what this
+      // run may touch, so a repository the ticket names that nobody enabled is
+      // not in it. The refusal is the only input that still carries such a
+      // repository, and without it the row and the prompt describe two
+      // different maps of one send: the prompt names the repository with the
+      // record's own sentence, and the trail, which outlives the briefing and
+      // is what a person is left with after thirty days, does not name it at
+      // all.
+      leftOut: recorder.leftOut,
+      entries,
+      catalogActivated,
+    }),
+    "not_provisioned_yet",
+  );
+  // Parsed rather than trusted, exactly as a decided plan is: this is about to
+  // be spelled into one SQL statement as jsonb, where a shape the contract
+  // refuses lands as a row nothing can read back. A trail line is a record of
+  // something the run computed and not the only copy of a person's decision,
+  // so a refused shape is reported and dropped rather than failing the run.
+  const parsed = workScopeWritePlanSchema.safeParse({
+    upserts: [],
+    deletes: [],
+    trail: [
+      { kind: "map_shown", text: summary.text, repositoryKeys: summary.repositoryKeys },
+    ],
+  });
+  if (!parsed.success) {
+    console.error("work_scope_map_shown_plan_refused", parsed.error.message);
+    return;
+  }
+  carrier.mapShown = parsed.data;
 }
 
 /** The ask a question carried, and the sentences saying what the run left out,
@@ -481,24 +586,76 @@ const selectRepositoriesForRun = async (
     listing.failures,
     selected.status === "catalog_incomplete",
   );
+  /**
+   * THE CATALOG PROFILES, ON EVERY PATH, not only where discovery runs.
+   *
+   * They used to be read on the discovery branch alone, so a ticket that named
+   * its repository (the common shape) reached the agent with no description, no
+   * relationships and no idea what else existed. Composition runs in workflow
+   * scope and may not touch a database, so if this step does not read them
+   * nothing downstream can.
+   *
+   * The key set is wider than the enabled list on purpose: a repository the
+   * ticket names, or the record holds, may be DISABLED, and the difference
+   * between "switched off here" and "we have never heard of it" is exactly what
+   * the map has to tell the agent.
+   */
+  const mapCatalog = await loadRepositoryMapCatalog({
+    keys: [
+      ...context.repositoryAccess.enabledKeys,
+      ...(workScope?.scope?.entries ?? []).map((entry) => entry.repositoryKey),
+      ...repositories.map(repositoryKey),
+      ...withheldRepositories.map(repositoryKey),
+    ],
+    listed: [...repositories, ...withheldRepositories],
+    enabledKeys: context.repositoryAccess.enabledKeys,
+    catalogActivated: context.repositoryAccess.activated,
+  });
   /** The "continue with a selection" result, in one place because two paths now
    *  reach it: the deterministic selection below, and a remembered routing answer
-   *  standing in for the question the discovery fallback would have asked. */
-  const selectionResult = (chosen: SelectedRepository[]): PreSandboxStepResult => ({
-    status: "continue",
-    selectedRepositories: chosen,
-    promptAdditions: [
-      {
-        target: ["research", "implementation", "review"],
-        title: "Selected Repositories",
-        content: chosen
-          .map((repo) => `- ${repo.provider}:${repo.repoPath}: ${repo.selectedRationale}`)
-          .join("\n"),
-      },
-    ],
-    ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
-    ...(degradation ? { repositoryCatalogDegradation: degradation } : {}),
-  });
+   *  standing in for the question the discovery fallback would have asked.
+   *
+   * THE "Selected Repositories" ADDITION IS GONE FROM HERE. It was the second of
+   * the two repository listings a prompt carried, said the same thing as the
+   * workspace list in `sandbox/context.ts` in a different shape, and carried no
+   * fact the map does not. One description, one shape. */
+  const selectionResult = (chosen: SelectedRepository[]): PreSandboxStepResult => {
+    const related = takeRelatedRepositories({
+      chosen,
+      recorder: carrier.recorder,
+      facts: mapCatalog.facts,
+      // Both halves the sweep reads: the catalog relationships this run
+      // actually loaded, and a ticket this run actually read. A failed catalog
+      // read looks like an operator deleting every relationship, and neither
+      // may take a repository off somebody's record.
+      evidenceReadable: !mapCatalog.catalogUnreadable && carrier.recorder?.ticketText != null,
+      // The repositories the ticket's own words name, as the one scan this step
+      // made read them, so what the map calls named and what this takes a
+      // neighbour of are the same set.
+      seedKeys: [...(carrier.recorder?.ticketText?.matchedKeys ?? [])],
+      repositoriesByKey: new Map(repositories.map((repo) => [repositoryKey(repo), repo] as const)),
+    });
+    const repositoryMap = {
+      ...mapCatalog.result.repositoryMap,
+      ...(related.relatedAttachments.length > 0
+        ? { relatedAttachments: related.relatedAttachments }
+        : {}),
+    };
+    recordMapShown(
+      carrier,
+      repositoryMap,
+      related.chosen,
+      workScope?.scope?.entries ?? [],
+      context.repositoryAccess.activated,
+    );
+    return {
+      status: "continue",
+      selectedRepositories: related.chosen,
+      repositoryMap,
+      ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
+      ...(degradation ? { repositoryCatalogDegradation: degradation } : {}),
+    };
+  };
 
   if (selected.status === "catalog_incomplete") {
     const incomplete = incompleteCatalogMessage(
@@ -577,24 +734,13 @@ const selectRepositoriesForRun = async (
         }).attach.length > 0;
       if (attached) return selectionResult([remembered]);
     }
-    let relationshipSources: RepositoryRelationshipSource[] = [];
-    try {
-      const { listConnectedRepositoryRules } = await import(
-        "../../../db/repositories/repository-catalog.js"
-      );
-      relationshipSources = await listConnectedRepositoryRules(
-        context.repositoryAccess.enabledKeys,
-      );
-    } catch (error) {
-      const { logger } = await import("../../../infra/logger.js");
-      logger.warn(
-        { err: error instanceof Error ? error.message : String(error) },
-        "repository_discovery_relationships_unreadable",
-      );
-    }
+    // ONE READ OF THE CATALOG PROFILES PER RUN, taken above for every path.
+    // Discovery used to make its own, and the rest of the run made none, which
+    // is how the operator's descriptions reached the discovery model and no
+    // agent after it.
     const catalog = addRepositoryDiscoveryRelationships({
       catalog: selected.catalog,
-      sources: relationshipSources,
+      facts: mapCatalog.facts,
       attachedKeys: selected.mandatoryRepositories.map(repositoryKey),
       enabledKeys: context.repositoryAccess.enabledKeys,
     });
@@ -604,6 +750,7 @@ const selectRepositoriesForRun = async (
         catalog,
         mandatoryRepositories: selected.mandatoryRepositories,
       },
+      ...mapCatalog.result,
       ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
       ...(degradation ? { repositoryCatalogDegradation: degradation } : {}),
     };
@@ -2117,10 +2264,6 @@ function incompleteCatalog(
   return { status: "catalog_incomplete", providers };
 }
 
-function repositoryKey(repo: Pick<RepositoryMetadata, "provider" | "repoPath">): string {
-  return `${repo.provider}:${repo.repoPath.toLowerCase()}`;
-}
-
 /**
  * Does the provider offer nothing this run could check out for this repository?
  *
@@ -2135,18 +2278,6 @@ function providerOffersNoCheckout(
   repository: Pick<RepositoryMetadata, "archived" | "defaultBranch">,
 ): boolean {
   return repository.archived || repository.defaultBranch.trim().length === 0;
-}
-
-function selectedRepository(
-  repo: RepositoryMetadata,
-  selectedRationale: string,
-): SelectedRepository {
-  return {
-    provider: repo.provider,
-    repoPath: repo.repoPath,
-    defaultBranch: repo.defaultBranch,
-    selectedRationale,
-  };
 }
 
 /**

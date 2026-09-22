@@ -16,7 +16,7 @@ async function migrateBeforeProviderConstraintDrop(): Promise<PGlite> {
   return client;
 }
 
-describe("0072 open VCS provider migration", () => {
+describe("0072 integrations contract migration", () => {
   it("keeps existing meanings and lets registry validation own new provider ids", async () => {
     const client = await migrateBeforeProviderConstraintDrop();
     await client.exec(`
@@ -29,7 +29,7 @@ describe("0072 open VCS provider migration", () => {
       client.exec(`INSERT INTO repositories (provider, path, source) VALUES ('forgejo', 'acme/new', 'imported')`),
     ).rejects.toThrow();
 
-    await client.exec(readFileSync(`${migrationsDir}0072_open_vcs_providers.sql`, "utf8"));
+    await client.exec(readFileSync(`${migrationsDir}0072_integrations_contract.sql`, "utf8"));
 
     await client.exec(`
       INSERT INTO repositories (provider, path, source)
@@ -54,13 +54,14 @@ describe("0072 open VCS provider migration", () => {
   });
 
   it("can be applied again after a half-applied attempt", async () => {
-    // Production is neon-http, which cannot open an interactive transaction, so
-    // this file's two drops do not succeed or fail together: the first can
-    // commit and the second fail on a dropped network connection. Without
-    // `IF EXISTS` the retry dies on the constraint the first attempt already
-    // removed, and the migration can never be applied again on that database.
+    // Production is neon-http, which cannot open an interactive transaction,
+    // and drizzle sends this file one statement at a time, so its statements do
+    // not succeed or fail together: any of them can commit and the next fail on
+    // a dropped network connection. Every statement here is therefore written
+    // to survive its own retry, because the worker's build runs the migrations
+    // and a file that cannot be applied twice stops the next deploy dead.
     const client = await migrateBeforeProviderConstraintDrop();
-    const migration = readFileSync(`${migrationsDir}0072_open_vcs_providers.sql`, "utf8");
+    const migration = readFileSync(`${migrationsDir}0072_integrations_contract.sql`, "utf8");
     await client.exec(migration);
 
     await expect(client.exec(migration)).resolves.toBeDefined();

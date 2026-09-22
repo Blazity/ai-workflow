@@ -155,8 +155,18 @@ interface EffectivePromptPreviewUnresolvedSource {
   kind: "profile" | "repository" | "data" | "slot";
   reference: string;
   message: string;
+  /** `filled_at_run`, `fails_the_run` or `not_in_preview`: what execution does
+   *  with this source. Absent from a worker older than the contract, and read
+   *  as a claim nobody made rather than as a harmless one. */
+  atRun?: string;
 }
 
+/**
+ * The fields below `issues` arrived with the worker's truthful preview and are
+ * all OPTIONAL here, because the worker and the dashboard deploy separately: a
+ * worker from before it says nothing about the profile switches, and a screen
+ * that filled in a default would be inventing the very fact it exists to show.
+ */
 export interface EffectivePromptPreviewResponse {
   blockId: string;
   prompt: string;
@@ -165,6 +175,13 @@ export interface EffectivePromptPreviewResponse {
   provenance: EffectivePromptPreviewProvenance[];
   unresolvedSources: EffectivePromptPreviewUnresolvedSource[];
   issues: WorkflowDefinitionValidationIssue[];
+  /** The applied profile's own switches, as execution reads them. */
+  context?: { includeWorkflowData: boolean; includeRepositoryInstructions: boolean };
+  /** The profile this prompt was compiled with; null where the one the block
+   *  names could not be resolved, which a run refuses to start on. */
+  profile?: { profileId: string; version: number; name: string; applied: string } | null;
+  /** Sections only a prepared workspace composes, named rather than missing. */
+  notPreviewable?: { kind: string; reason: string }[];
 }
 
 interface RunSearchHit {
@@ -256,6 +273,27 @@ function jsonInit(
     body: JSON.stringify(body),
     ...options,
   };
+}
+
+/** A path with the given query parameters, leaving out the ones not set. */
+function withParams(path: string, params: Record<string, string | number | null | undefined>): string {
+  const query = new URLSearchParams();
+  for (const [name, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined) query.set(name, String(value));
+  }
+  const text = query.toString();
+  return text ? `${path}?${text}` : path;
+}
+
+function briefingPath(runId: string, briefingId: string, suffix: string): string {
+  return `/api/runs/${encodeURIComponent(runId)}/briefings/${encodeURIComponent(briefingId)}/${suffix}`;
+}
+
+/** A page of a cursor-paged list: where it starts and, optionally, how many
+ *  bytes it may hold. */
+interface ListPageRequest {
+  cursor?: string | null;
+  limit?: number;
 }
 
 function definitionTriggerPath(
@@ -701,6 +739,53 @@ export const apiClient = {
       ),
   },
 
+  /**
+   * What an agent was sent, one send at a time (agent briefings). Every body is
+   * returned unparsed: `lib/agent-visibility/contract.ts` reads it, so a newer
+   * worker's record degrades to a sentence instead of a crash.
+   */
+  briefings: {
+    /** The sends of one Block Attempt, with why any are missing. */
+    attempt: (
+      runId: string,
+      filter: { nodeId: string; attempt: number; activationScopeId: string },
+      page: ListPageRequest = {},
+      options?: BrowserRequestOptions,
+    ) =>
+      requestJson<unknown>(
+        withParams(`/api/runs/${encodeURIComponent(runId)}/briefings`, { ...filter, ...page }),
+        options,
+      ),
+    sections: (runId: string, briefingId: string, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(withParams(briefingPath(runId, briefingId, "sections"), { ...page }), options),
+    /** One page of a section's stored text, from a UTF-8 byte offset. */
+    sectionText: (
+      runId: string,
+      briefingId: string,
+      sectionIndex: number,
+      offset: number,
+      options?: BrowserRequestOptions,
+    ) =>
+      requestJson<unknown>(
+        withParams(briefingPath(runId, briefingId, `sections/${sectionIndex}`), { offset }),
+        options,
+      ),
+    parts: (runId: string, briefingId: string, sectionIndex: number, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(
+        withParams(briefingPath(runId, briefingId, `sections/${sectionIndex}/parts`), { ...page }),
+        options,
+      ),
+    spans: (runId: string, briefingId: string, sectionIndex: number, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(
+        withParams(briefingPath(runId, briefingId, `sections/${sectionIndex}/spans`), { ...page }),
+        options,
+      ),
+    repositoryContext: (runId: string, briefingId: string, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(withParams(briefingPath(runId, briefingId, "repository-context"), { ...page }), options),
+    unresolvedSources: (runId: string, briefingId: string, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(withParams(briefingPath(runId, briefingId, "unresolved-sources"), { ...page }), options),
+  },
+
   settings: {
     /** One key's recorded changes. The listing already carries the newest one,
      *  so this is only fetched when a history drawer is opened. */
@@ -729,6 +814,38 @@ export const apiClient = {
         `/api/users/${encodeURIComponent(userId)}/role`,
         jsonInit("PATCH", { role }),
       ),
+  },
+
+  /** The repository record of a subject and its repository questions, as
+   *  rounds. Bodies are returned unparsed for `lib/agent-visibility/contract.ts`. */
+  workScope: {
+    /** Rounds are opt-in on the worker, so a caller from before they existed
+     *  keeps its inline answer. This dashboard always wants them. */
+    get: (subjectKey: string, roundsCursor: string | null = null, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(withParams("/api/work-scope", { subjectKey, rounds: "true", roundsCursor }), options),
+    deliveries: (
+      subjectKey: string,
+      roundId: string,
+      page: ListPageRequest = {},
+      options?: BrowserRequestOptions,
+    ) =>
+      requestJson<unknown>(
+        withParams(`/api/work-scope/rounds/${encodeURIComponent(roundId)}/deliveries`, { subjectKey, ...page }),
+        options,
+      ),
+    effects: (subjectKey: string, roundId: string, page: ListPageRequest = {}, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(
+        withParams(`/api/work-scope/rounds/${encodeURIComponent(roundId)}/effects`, { subjectKey, ...page }),
+        options,
+      ),
+    /** A person's change to the record. `expectedVersion` is the version they
+     *  read: the worker refuses a stale one rather than overwriting, and there
+     *  is no force flag to offer. */
+    edit: (body: {
+      subjectKey: string;
+      expectedVersion: number;
+      changes: { repositoryKey: string; action: "select" | "exclude" | "remove"; rationale?: string }[];
+    }) => requestJson<unknown>("/api/work-scope", jsonInit("PATCH", body)),
   },
 
   workflowDefinitions: {
@@ -817,6 +934,14 @@ export const apiClient = {
       requestJson<EffectivePromptPreviewResponse>(
         `/api/workflow-definitions/${id}/prompt-preview`,
         jsonInit("POST", { definition, blockId }, { cache: "no-store", ...options }),
+      ),
+    /** What this block last put in front of a model, over every run of this
+     *  definition, or the reason there is none. Read, not authored: it says
+     *  nothing about the unsaved definition in the editor. */
+    nodeLastBriefing: (id: number, nodeId: string, options?: BrowserRequestOptions) =>
+      requestJson<unknown>(
+        `/api/workflow-definitions/${id}/nodes/${encodeURIComponent(nodeId)}/last-briefing`,
+        { cache: "no-store", ...options },
       ),
   },
 

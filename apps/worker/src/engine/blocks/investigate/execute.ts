@@ -8,6 +8,8 @@ import type {
 import type { Adapters } from "../../support/adapters.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { resolveCallLlmTarget } from "../call-llm/execute.js";
+import { planLlmBriefing } from "../../agent-visibility/block.js";
+import { recordSendBriefing, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 
 const DEFAULT_CHAT_LOOKBACK_DAYS = 30;
@@ -245,14 +247,33 @@ function buildTheoryPrompt(input: {
   ].join("\n");
 }
 
+/**
+ * Record what one of this block's two model calls was asked, before it is
+ * asked. Both calls do the same thing, so the guard is spelled once: capture
+ * may never fail a run, not even by failing to load.
+ */
+async function recordInvestigateSend(
+  briefing: AgentBriefingCapture | null,
+  prompt: string,
+): Promise<void> {
+  await recordSendBriefing(briefing, { prompt, wrapperScript: null }, () =>
+    import("../../agent-visibility/capture.js"),
+  );
+}
+
 async function blockInvestigateKeywordsStep(input: {
   model: string;
   provider?: "claude" | "codex";
   prompt: string;
+  /** What this send gave the model. Read as absent on a journal written
+   *  before it existed, which is a send with no briefing. */
+  briefing: AgentBriefingCapture | null;
 }): Promise<string[]> {
   "use step";
   const { generateStructured } = await import("../../llm.js");
-  const result = await generateStructured({ ...input, schema: KEYWORDS_SCHEMA });
+  const { briefing, ...call } = input;
+  await recordInvestigateSend(briefing, call.prompt);
+  const result = await generateStructured({ ...call, schema: KEYWORDS_SCHEMA });
   const parsed = keywordsResultSchema.safeParse(result.object);
   if (!parsed.success) {
     throw new Error("LLM keyword output did not match the requested schema");
@@ -374,13 +395,20 @@ async function blockInvestigateRetrievalStep(input: {
   // One bundle for both sources. Each `await createAdapters()` opens a run registry
   // connection, and two searches in one step asking twice is a connection
   // nobody needed.
-  const { createAdapters } = await import("../../support/adapters.js");
-  const adapters = await createAdapters();
+  // Resolved only when there is something to search with it. A block that
+  // enabled no source, or whose keywords came back empty, used to open a
+  // registry connection anyway and hand both searches an adapter bundle
+  // neither would use; on a deployment that cannot resolve one, that threw
+  // between investigate's two model calls and the second send never happened.
+  const adapters =
+    input.issueTracker === null && input.chat === null
+      ? null
+      : await (await import("../../support/adapters.js")).createAdapters();
   const [issueTracker, chat] = await Promise.all([
-    input.issueTracker === null
+    input.issueTracker === null || adapters === null
       ? Promise.resolve<ProviderOutcome<TicketSummary[]>>({ status: "disabled" })
       : searchTrackerSource(adapters, input.issueTracker),
-    input.chat === null
+    input.chat === null || adapters === null
       ? Promise.resolve<ProviderOutcome<Extract<MessageSearchOutcome, { ok: true }>>>({
           status: "disabled",
         })
@@ -426,10 +454,15 @@ async function blockInvestigateTheoryStep(input: {
   model: string;
   provider?: "claude" | "codex";
   prompt: string;
+  /** What this send gave the model. Read as absent on a journal written
+   *  before it existed, which is a send with no briefing. */
+  briefing: AgentBriefingCapture | null;
 }): Promise<z.infer<typeof theoryResultSchema>> {
   "use step";
   const { generateStructured } = await import("../../llm.js");
-  const result = await generateStructured({ ...input, schema: THEORY_SCHEMA });
+  const { briefing, ...call } = input;
+  await recordInvestigateSend(briefing, call.prompt);
+  const result = await generateStructured({ ...call, schema: THEORY_SCHEMA });
   const parsed = theoryResultSchema.safeParse(result.object);
   if (!parsed.success) {
     throw new Error("LLM theory output did not match the requested schema");
@@ -452,6 +485,8 @@ export const execute: BlockExecuteFn = async (
   block,
   _steps,
   ctx,
+  _resolvedInputs,
+  execution,
 ): Promise<BlockExecutionResult> => {
   const title = ctx.ticket.title.trim();
   const description = ctx.ticket.description.trim();
@@ -500,10 +535,26 @@ export const execute: BlockExecuteFn = async (
   );
 
   try {
+    // Two sends in one invocation, so each takes its own place in this Block
+    // Attempt's order: the keywords the search ran on, then the theory the
+    // evidence produced.
+    const keywordsPrompt = buildKeywordsPrompt(ctx.ticket.identifier, title, description);
     const keywords = await blockInvestigateKeywordsStep({
       model,
       ...(provider !== undefined ? { provider } : {}),
-      prompt: buildKeywordsPrompt(ctx.ticket.identifier, title, description),
+      prompt: keywordsPrompt,
+      briefing: planLlmBriefing({
+        execution,
+        ctx,
+        prompt: keywordsPrompt,
+        passLabel: "Keywords",
+        harness: {
+          provider: provider ?? ctx.runDefaultKind,
+          model,
+          outputSchema: KEYWORDS_SCHEMA,
+          profile: null,
+        },
+      }),
     });
 
     // Nothing to look for means no search at all, which is not a gap. The
@@ -540,14 +591,27 @@ export const execute: BlockExecuteFn = async (
     // only some of its channels did.
     const partial = [...new Set(gaps.map((gap) => gap.provider))];
 
+    const theoryPrompt = buildTheoryPrompt({
+      identifier: ctx.ticket.identifier,
+      title,
+      description,
+      evidence,
+    });
     const theoryResult = await blockInvestigateTheoryStep({
       model,
       ...(provider !== undefined ? { provider } : {}),
-      prompt: buildTheoryPrompt({
-        identifier: ctx.ticket.identifier,
-        title,
-        description,
-        evidence,
+      prompt: theoryPrompt,
+      briefing: planLlmBriefing({
+        execution,
+        ctx,
+        prompt: theoryPrompt,
+        passLabel: "Theory",
+        harness: {
+          provider: provider ?? ctx.runDefaultKind,
+          model,
+          outputSchema: THEORY_SCHEMA,
+          profile: null,
+        },
       }),
     });
 

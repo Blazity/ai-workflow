@@ -4,6 +4,8 @@ import {
   WORK_SCOPE_ASK_REASONS,
   WORK_SCOPE_ENTRY_STATES,
   WORK_SCOPE_ORIGINS,
+  WORK_SCOPE_ORIGIN_RANKS,
+  WORK_SCOPE_UNKNOWN_ORIGIN_RANK,
   WORK_SCOPE_REFUSAL_REASONS,
   WORK_SCOPE_UNAVAILABLE_REASONS,
   repositoryKeySchema,
@@ -19,6 +21,7 @@ import {
   workScopeEntrySchema,
   workScopeOriginRank,
   workScopeSchema,
+  workScopeSubjectKeySchema,
   workScopeTrailRowSchema,
   workScopeWritePlanSchema,
 } from "@shared/contracts";
@@ -47,6 +50,92 @@ const PULL_REQUEST_TRIGGER_TYPES = [
   "trigger_pr_merged",
 ] as const;
 
+/**
+ * THE NUMBERS ROWS ALREADY CARRY.
+ *
+ * `origin_rank` is written beside every entry and compared in SQL, so a rank
+ * that moves inverts precedence between rows that already exist and between two
+ * deployments running side by side during a rollout. Every value here is
+ * therefore frozen: a new origin takes a number of its own or ties, and never
+ * pushes an existing one along.
+ */
+describe("the origin ladder", () => {
+  it("never moves a rank a stored row already carries", () => {
+    expect(WORK_SCOPE_ORIGIN_RANKS).toEqual({
+      person: 0,
+      delegated: 0,
+      workflow_owned_branch: 1,
+      ticket_text: 2,
+      trigger_policy: 3,
+      related_repository: 3,
+      inferred: 4,
+    });
+  });
+
+  it("keeps a guess from taking back what a catalog relationship put here", () => {
+    // The one comparison the rank exists to decide. `inferred` is the
+    // only-accessible shortcut and the remembered routing answer, both guesses;
+    // `related_repository` is an edge an operator drew on the Repositories
+    // page. A guess overwriting that would take a repository out of a workspace
+    // with nobody's decision behind it.
+    const beatsAGuess =
+      workScopeOriginRank("related_repository") < workScopeOriginRank("inferred");
+    expect(beatsAGuess).toBe(true);
+    // And neither of the two run-derived rules outranks the other: both are a
+    // rule of this run taking a repository in without asking.
+    expect(workScopeOriginRank("related_repository")).toBe(
+      workScopeOriginRank("trigger_policy"),
+    );
+    // Everything a person, a branch or the ticket's own words decided still
+    // outranks it.
+    const outranked = ["person", "delegated", "workflow_owned_branch", "ticket_text"].filter(
+      (stronger) => workScopeOriginRank(stronger) < workScopeOriginRank("related_repository"),
+    );
+    expect(outranked).toEqual([
+      "person",
+      "delegated",
+      "workflow_owned_branch",
+      "ticket_text",
+    ]);
+  });
+
+  /**
+   * THE DEPLOY SKEW. The migration adds the origin minutes before the code that
+   * knows it serves anything, and the dashboard deploys separately again, so a
+   * build WILL read a row whose origin is not in its own list. Before the
+   * lookup was made total it returned `undefined`, `undefined - number` was
+   * `NaN`, and the comparator that ranks a subject's entries answered `NaN` for
+   * every pair involving that row: the record came back in an order nobody
+   * could predict, and nothing anywhere went red.
+   */
+  it("gives an origin it has never heard of the weakest rank rather than NaN", () => {
+    const unknown = workScopeOriginRank("an_origin_from_a_later_migration");
+    expect(Number.isNaN(unknown)).toBe(false);
+    expect(unknown).toBe(WORK_SCOPE_UNKNOWN_ORIGIN_RANK);
+    // Never stronger than something this build does understand: a value we
+    // cannot reason about must not be able to overwrite a person's decision.
+    const strongerThanUnknown = WORK_SCOPE_ORIGINS.filter(
+      (known) => workScopeOriginRank(known) > unknown,
+    );
+    expect(strongerThanUnknown).toEqual([]);
+    // And a comparator built on it still orders: this is the shape
+    // `decide.ts` sorts held entries with.
+    const sorted = ["an_origin_from_a_later_migration", "person", "inferred", "ticket_text"].sort(
+      (left, right) => workScopeOriginRank(left) - workScopeOriginRank(right),
+    );
+    // Everything this build understands and outranks it comes first, and the
+    // tie with `inferred` keeps its input order because the sort is stable.
+    // What matters is that it is an ORDER: with `NaN` in the comparator the
+    // result depended on the engine's sort implementation.
+    expect(sorted).toEqual([
+      "person",
+      "ticket_text",
+      "an_origin_from_a_later_migration",
+      "inferred",
+    ]);
+  });
+});
+
 describe("work scope vocabulary", () => {
   it("freezes the states, reasons and origins", () => {
     expect(WORK_SCOPE_ENTRY_STATES).toEqual(["selected", "excluded", "unavailable"]);
@@ -62,6 +151,7 @@ describe("work scope vocabulary", () => {
       "workflow_owned_branch",
       "ticket_text",
       "trigger_policy",
+      "related_repository",
       "inferred",
     ]);
     expect(WORK_SCOPE_REFUSAL_REASONS).toEqual([
@@ -536,8 +626,12 @@ describe("work scope edit request", () => {
     repositoryKey: `github:blazity/repository-${index}`,
     action: "select",
   });
+  // A subject key as `engine/support/subject-key.ts` writes one. This fixture
+  // used to send the bare ticket key, which no surface can resolve: the schema
+  // took it, the read answered `carriesRecord: false` with an empty record, and
+  // the caller could not tell that from a subject kind that keeps none.
   const request = (changes: unknown[], expectedVersion = 0) => ({
-    subjectKey: "AWP-176",
+    subjectKey: "ticket:jira:AWP-176",
     expectedVersion,
     changes,
   });
@@ -576,6 +670,49 @@ describe("work scope edit request", () => {
 
   it("refuses a negative expected version", () => {
     expect(workScopeEditRequestSchema.safeParse(request([change(1)], -1)).success).toBe(false);
+  });
+});
+
+/**
+ * A MISTYPED KEY IS TOLD, RATHER THAN ANSWERED WITH A CONFIDENT EMPTY RECORD.
+ *
+ * Production, 2026-09-20: a caller read `AWP-261` instead of
+ * `ticket:jira:AWP-261` and got `carriesRecord: false` with no entries, which is
+ * exactly what a subject kind that legitimately keeps no record answers. The
+ * ticket's record held four decisions at the time, and the read was one step
+ * from being reported as a lost record.
+ *
+ * The refusal is in the schema rather than in a route, so every surface that
+ * takes a subject key refuses the same keys: the read, the rounds pages and the
+ * edit cannot disagree about what a key even is.
+ */
+describe("work scope subject key", () => {
+  it("accepts a key of every subject kind this deployment writes", () => {
+    for (const key of [
+      "ticket:jira:AWP-261",
+      "pr:github:acme/app#7",
+      "webhook:endpoint-1:subject-9",
+      "schedule:sched-1:1758000000000",
+      "repo:github:acme/app",
+      "org:github:acme",
+    ]) {
+      expect(workScopeSubjectKeySchema.safeParse(key).success).toBe(true);
+    }
+  });
+
+  it("refuses a key that names no subject kind, and says which kinds there are", () => {
+    const refused = workScopeSubjectKeySchema.safeParse("AWP-261");
+
+    expect(refused.success).toBe(false);
+    // The message has to name the kinds, because the caller's mistake is not
+    // knowing them. "subjectKey is required" about a key they plainly sent is
+    // the sentence this replaces.
+    const message = refused.success === false ? refused.error.issues[0].message : "";
+    expect(message.includes("ticket:") && message.includes("pr:")).toBe(true);
+  });
+
+  it("refuses a bare pull request path, which is the other shape people write", () => {
+    expect(workScopeSubjectKeySchema.safeParse("acme/app#7").success).toBe(false);
   });
 });
 

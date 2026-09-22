@@ -7,11 +7,16 @@ const mocks = vi.hoisted(() => ({
   generateStructured: vi.fn(),
   configuredReplaySecrets: vi.fn(() => [] as string[]),
   warn: vi.fn(),
+  captureAgentBriefing: vi.fn(async (_briefing: unknown) => ({ outcome: "recorded", briefingId: 1 })),
 }));
 
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("../../llm.js", () => ({ generateStructured: mocks.generateStructured }));
+vi.mock("../../agent-visibility/capture.js", () => ({
+  captureAgentBriefing: mocks.captureAgentBriefing,
+  captureSkippedSend: vi.fn(async () => ({ outcome: "refused", reason: "skipped" })),
+}));
 vi.mock("../../../infra/logger.js", () => ({
   logger: { warn: mocks.warn, info: vi.fn(), error: vi.fn() },
 }));
@@ -21,7 +26,7 @@ vi.mock("../../../run-observability/configured-secrets.js", () => ({
 
 import { execute } from "./execute.js";
 import { manifest as leakManifest } from "./manifest.js";
-import { expectOutputConformsToRegistry, makeCtx, makeNode } from "../support/test-support.js";
+import { expectOutputConformsToRegistry, makeCtx, makeInvocation, makeNode } from "../support/test-support.js";
 
 const ANTHROPIC_SECRET = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const GITHUB_SECRET = `ghp_${"A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}`;
@@ -147,11 +152,32 @@ describe("leak_review execute", () => {
       diff: "+++ b/src/app.ts\n+const answer = 42;\n",
     });
 
-    const result = await execute(makeNode("leak_review", {}, "leak"), {}, ctx);
+    const result = await execute(
+      makeNode("leak_review", {}, "leak"),
+      {},
+      ctx,
+      {},
+      makeInvocation(ctx, { nodeId: "leak", blockType: "leak_review" }),
+    );
 
     expect(result.kind).toBe("next");
     expect(result.output!.status).toBe("ok");
     expect(result.output!.findings).toEqual([]);
+    // Red when: the scan stops recording what it was given. It reads the whole
+    // unpublished diff, and a run whose other sends have briefings while this
+    // one silently has none is the one state this feature promised never to
+    // produce.
+    expect(mocks.captureAgentBriefing).toHaveBeenCalledTimes(1);
+    const briefing = (mocks.captureAgentBriefing.mock.calls[0] as unknown as [
+      { identity: Record<string, unknown>; sections: { kind: string }[] },
+    ])[0];
+    expect(briefing.identity).toMatchObject({
+      nodeId: "leak",
+      blockType: "leak_review",
+      kind: "llm",
+      sequence: 1,
+    });
+    expect(briefing.sections.map((section) => section.kind)).toEqual(["system", "block"]);
     expect(result.output!.truncated).toBe(false);
     expect(result.output!.diffStat).toContain("src/app.ts");
     expect(result.output!.summary).toContain("No sensitive data found.");

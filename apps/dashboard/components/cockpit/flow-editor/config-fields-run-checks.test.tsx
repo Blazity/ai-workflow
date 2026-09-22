@@ -8,6 +8,48 @@ import type { FlowNodeDef } from "@/lib/flows";
 import { ConfigFields } from "./config-fields";
 import { RepositoryScopeProvider } from "./repository-scope-context";
 
+/** What `settle` watches: the reads these panels have out, and how many they
+ *  have started, so a turn that started another one is not mistaken for quiet. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/**
+ * Installs `handler` as the fetch for one test and returns the undo.
+ *
+ * Every answer lands a turn later, the way a response does: resolving in the
+ * caller's own microtask is what let a counted wait look reliable.
+ * `FIXTURE_SLOW_MS` delays every answer by that many milliseconds, which is
+ * how this harness reproduces a runner slow enough to break a counted wait.
+ */
+function installFetch(handler: (url: string, init?: RequestInit) => Promise<Response>): () => void {
+  const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    mine.inFlight += 1;
+    mine.started += 1;
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      return handler(String(url), init);
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
+  }) as typeof globalThis.fetch;
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // next/link's prefetch idle callback reaches for `self`, which the plain
@@ -59,9 +101,41 @@ function nodeText(instance: ReactTestInstance): string {
     .join("");
 }
 
-async function settle() {
-  await act(async () => {});
-  await act(async () => {});
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of loads a panel starts finish, and waits for exactly that.
+ *
+ * NEVER A COUNT OF TURNS. How many turns a chain costs is the runner's
+ * business, so a fixed count passes on an idle machine and, on a loaded one,
+ * returns while reads are still in flight: the assertion then reads a loading
+ * panel and the failure looks like the product. Quiet is the condition those
+ * assertions mean, and it is two things, because a read that lands usually
+ * starts the next one: nothing in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a panel that never settles fails as a readable timeout rather
+ * than hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the panel was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
+  }
 }
 
 function byLabel(renderer: ReactTestRenderer, label: string): ReactTestInstance | undefined {
@@ -130,8 +204,7 @@ async function rerender(
 }
 
 test("with no named groups run_checks shows the gate selection it will actually resolve, per repository", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const renderer = await render(runChecksNode({}));
   try {
@@ -147,13 +220,12 @@ test("with no named groups run_checks shows the gate selection it will actually 
     assert.equal(byLabel(renderer, "Run group checks"), undefined);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a node with named groups reads back as Named, and switching to Gate groups clears them", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const changes: [string, unknown][] = [];
   const renderer = await render(runChecksNode({ groups: ["lint"] }), (path, value) =>
@@ -173,13 +245,12 @@ test("a node with named groups reads back as Named, and switching to Gate groups
     assert.deepEqual(changes.at(-1), ["params.groups", undefined]);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("choosing Named groups opens the picker before any name has been selected", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const changes: [string, unknown][] = [];
   const renderer = await render(runChecksNode({}), (path, value) => changes.push([path, value]));
@@ -191,13 +262,12 @@ test("choosing Named groups opens the picker before any name has been selected",
     assert.deepEqual(changes.at(-1), ["params.groups", ["checks"]]);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("run_checks words the undeclared-group warning for its own reporting, not run_scripts'", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const renderer = await render(runChecksNode({ groups: ["nonexistent", "vet"] }));
   try {
@@ -213,13 +283,12 @@ test("run_checks words the undeclared-group warning for its own reporting, not r
     );
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("explicit commands take the group selection out of play and one button puts it back", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const changes: [string, unknown][] = [];
   const renderer = await render(runChecksNode({ commands: ["pnpm test"] }), (path, value) =>
@@ -239,13 +308,12 @@ test("explicit commands take the group selection out of play and one button puts
     assert.deepEqual(changes.at(-1), ["params.commands", undefined]);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a read-only run_checks panel still shows which groups are selected", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const renderer = await render(runChecksNode({ groups: ["lint"] }), () => undefined, false);
   try {
@@ -254,13 +322,12 @@ test("a read-only run_checks panel still shows which groups are selected", async
     assert.equal(byLabel(renderer, "Run group lint"), undefined);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("filling both Commands and Groups surfaces an inline error; filling only one does not", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const ERROR_TEXT = /Commands and Groups are both set\. They are mutually exclusive: clear one\s+before saving\./;
 
@@ -296,13 +363,12 @@ test("filling both Commands and Groups surfaces an inline error; filling only on
       await act(async () => neither.unmount());
     }
   } finally {
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("unchecking the last group stays in Named mode and blocks Save instead of re-arming the gate", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const changes: [string, unknown][] = [];
   const record = (path: string, value: unknown) => changes.push([path, value]);
@@ -324,13 +390,12 @@ test("unchecking the last group stays in Named mode and blocks Save instead of r
     assert.match(html, /No groups selected\. Pick at least one, or switch back to Gate groups\./);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a Gate and back round trip restores the named selection instead of destroying it", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const changes: [string, unknown][] = [];
   const record = (path: string, value: unknown) => changes.push([path, value]);
@@ -348,13 +413,12 @@ test("a Gate and back round trip restores the named selection instead of destroy
     assert.deepEqual(changes.at(-1), ["params.groups", ["checks", "lint"]]);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("the selection mode does not leak from one node onto the next", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const renderer = await render(runChecksNode({ groups: ["lint"] }));
   try {
@@ -379,13 +443,12 @@ test("the selection mode does not leak from one node onto the next", async () =>
     assert.doesNotMatch(html, /A named selection is report-only/);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a repository pin narrows the coverage denominator and the gate readout", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   // The pin is stored in the case the operator picked; matching ignores it.
   const renderer = await render(runChecksNode({ groups: ["lint"] }), () => undefined, true, [
@@ -402,13 +465,12 @@ test("a repository pin narrows the coverage denominator and the gate readout", a
     assert.equal(byLabel(renderer, "Run group vet"), undefined);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("the pinned gate readout lists only pinned repositories", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const renderer = await render(runChecksNode({}), () => undefined, true, ["acme/api"]);
   try {
@@ -417,13 +479,12 @@ test("the pinned gate readout lists only pinned repositories", async () => {
     assert.doesNotMatch(html, /acme\/web/);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a viewer cannot clear commands to select groups", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(RESPONSE));
 
   const renderer = await render(
     runChecksNode({ commands: ["pnpm test"], groups: ["lint"] }),
@@ -437,7 +498,7 @@ test("a viewer cannot clear commands to select groups", async () => {
     assert.equal(clear, undefined, "a viewer must not get an action that edits params");
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
@@ -471,8 +532,7 @@ const SAME_PATH_TWO_PROVIDERS: PrePrChecksResponse = {
 };
 
 test("a pin matches on provider and path together, not on the path alone", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(SAME_PATH_TWO_PROVIDERS)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(SAME_PATH_TWO_PROVIDERS));
 
   const renderer = await render(runChecksNode({ groups: ["checks"] }), () => undefined, true, [
     "acme/web",
@@ -486,13 +546,12 @@ test("a pin matches on provider and path together, not on the path alone", async
     assert.equal(byLabel(renderer, "Run group deploy"), undefined);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("the gate readout counts and qualifies the two providers separately", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => Response.json(SAME_PATH_TWO_PROVIDERS)) as typeof fetch;
+  const restore = installFetch(async () => Response.json(SAME_PATH_TWO_PROVIDERS));
 
   // Pinned to the GitLab one, which sets no gate groups. The GitHub entry's
   // gate groups must not show up under a path that reads identical.
@@ -516,6 +575,6 @@ test("the gate readout counts and qualifies the two providers separately", async
     assert.match(html, /gitlab:acme\/web · every group runs at the gate \(1 group\)/);
   } finally {
     await act(async () => unpinned.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });

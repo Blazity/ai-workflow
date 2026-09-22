@@ -1,5 +1,24 @@
 "use client";
 
+/**
+ * What this block sends, in two views an operator can tell apart.
+ *
+ * "Sent last time" is one real briefing out of one real run, rendered by the
+ * run replay's own component. "Would send now" is a compile of the definition
+ * in this editor, saved or not. They must never blur into one another: the
+ * first is evidence, the second is a projection, and a projection dressed as
+ * evidence is what this whole surface exists to stop.
+ *
+ * WHAT A PREVIEW CANNOT KNOW is said on the preview rather than left to be
+ * discovered, and the worker now knows most of it
+ * (`apps/worker/src/services/workflow-definitions/prompt-preview.ts`): which
+ * profile compiled this and what its switches let a run send, which unresolved
+ * values STOP a run rather than being filled in, and which sections only a
+ * prepared workspace composes. Each of those replaces a sentence this screen
+ * used to guess at. What is left of the guess is one line, and a worker that
+ * reports none of it falls back to that line alone rather than to a default
+ * switch position, which would invent the fact the panel exists to show.
+ */
 import { useRef, useState } from "react";
 import type {
   WorkflowDefinitionV2,
@@ -10,8 +29,19 @@ import {
   type EffectivePromptPreviewResponse,
 } from "@/lib/api/client";
 import { Button, IconButton } from "@/components/ui";
+import {
+  contextLines,
+  gapTitle,
+  profileLine,
+  sourceFate,
+} from "@/lib/workflow-editor/prompt-preview";
+
+import { LastBriefingView } from "./last-briefing-view";
 
 export type { EffectivePromptPreviewResponse } from "@/lib/api/client";
+
+/** Which of the two things a person is looking at. */
+type View = "now" | "then";
 
 function Provenance({
   entries,
@@ -44,18 +74,49 @@ export function EffectivePromptPreviewResultView({
 }: {
   result: EffectivePromptPreviewResponse;
 }) {
+  // A source this build cannot classify joins the ordinary ones with the
+  // worker's own words: claiming it is fatal would cry wolf, and claiming it is
+  // harmless is the mistake this whole split exists to stop.
+  const fatal = result.unresolvedSources.filter((source) => sourceFate(source.atRun) === "fatal");
+  const rest = result.unresolvedSources.filter((source) => sourceFate(source.atRun) !== "fatal");
+  const gaps = result.notPreviewable ?? [];
   return (
     <div className="space-y-2">
+      {/* What a run would stop on, first and loudest: the value in the prompt
+          below is one this screen made up, and a preview that reads as green
+          for a definition that dies on its first run is the whole defect. */}
+      {fatal.length > 0 && (
+        <div role="alert" className="rounded-xs border border-fail bg-fail-bg px-2 py-2">
+          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-fail-fg">
+            A run would stop here
+          </div>
+          <ul className="m-0 mt-1 space-y-1 p-0">
+            {fatal.map((source, index) => (
+              <li
+                key={`${source.kind}:${source.reference}:${index}`}
+                className="list-none font-body text-[10px] leading-[1.35] text-fail-fg"
+              >
+                <span className="font-mono">
+                  {source.kind} · {source.reference}
+                </span>
+                {": "}
+                {source.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {result.issues.length > 0 && (
-        <div role="alert" className="rounded-xs border border-red-200 bg-red-50 px-2 py-2">
-          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-red-800">
+        <div role="alert" className="rounded-xs border border-fail-bg bg-fail-bg px-2 py-2">
+          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-fail-fg">
             Preview errors
           </div>
           <ul className="m-0 mt-1 space-y-1 p-0">
             {result.issues.map((issue, index) => (
               <li
                 key={`${issue.code}:${issue.path}:${index}`}
-                className="list-none font-body text-[10px] leading-[1.35] text-red-800"
+                className="list-none font-body text-[10px] leading-[1.35] text-fail-fg"
               >
                 {issue.path && (
                   <span className="font-mono">{issue.path}: </span>
@@ -67,13 +128,74 @@ export function EffectivePromptPreviewResultView({
         </div>
       )}
 
-      {result.unresolvedSources.length > 0 && (
+      <div className="rounded-xs border border-neutral-200 bg-off-white px-2 py-2">
+        <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-neutral-600">
+          A preview is not a send
+        </div>
+        {/* The profile decides which sections exist at all, so the prompt below
+            cannot be read without knowing which one made it. */}
+        <p className="m-0 mt-1 font-body text-[10px] leading-[1.35] text-neutral-700">
+          {profileLine(result.profile)}
+        </p>
+        {result.context ? (
+          <ul className="m-0 mt-1 space-y-1 p-0">
+            {contextLines(result.context).map((line) => (
+              <li
+                key={line.text}
+                className={`list-none font-body text-[10px] leading-[1.35] ${line.sends ? "text-neutral-600" : "text-coal"}`}
+              >
+                {line.text}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          // A worker from before the switches were reported. It composed the
+          // preview without reading them, so the old, weaker sentence is the
+          // only true one left.
+          <p className="m-0 mt-1 font-body text-[10px] leading-[1.35] text-neutral-600">
+            The values below are examples built from each binding&apos;s schema, not what a run would carry. This
+            worker does not say which switches the profile applied.
+          </p>
+        )}
+      </div>
+
+      {/* Named, not missing: an operator who cannot see a section has no way to
+          tell "a run adds this" from "nothing adds this". The heading and the
+          closing line are both load bearing. This list grew once already, when
+          the repository map arrived and nothing came back to add it, and an
+          operator who read the list as the whole difference concluded the map
+          was not being sent and went to change their catalog. A list of what a
+          run adds can always fall behind what a run adds; saying so is the only
+          part of that which cannot. */}
+      {gaps.length > 0 && (
+        <div className="rounded-xs border border-neutral-200 bg-off-white px-2 py-2">
+          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-neutral-600">
+            A run composes these, this screen cannot
+          </div>
+          <ul className="m-0 mt-1 space-y-1 p-0">
+            {gaps.map((gap) => (
+              <li key={gap.kind} className="list-none font-body text-[10px] leading-[1.35] text-neutral-600">
+                <span className="font-semibold text-neutral-700">{gapTitle(gap.kind)}</span>
+                {": "}
+                {gap.reason}
+              </li>
+            ))}
+          </ul>
+          <p className="m-0 mt-1.5 font-body text-[10px] leading-[1.35] text-neutral-600">
+            Not a complete list, and it cannot be: a run composes from a workspace, a ticket and a pull request that do
+            not exist yet. A section missing here is not a section a run leaves out. What one run actually sent is on
+            its briefing, under &quot;Sent last time&quot;.
+          </p>
+        </div>
+      )}
+
+      {rest.length > 0 && (
         <div className="rounded-xs border border-neutral-200 bg-off-white px-2 py-2">
           <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-neutral-600">
             Resolved at runtime
           </div>
           <ul className="m-0 mt-1 space-y-1 p-0">
-            {result.unresolvedSources.map((source, index) => (
+            {rest.map((source, index) => (
               <li
                 key={`${source.kind}:${source.reference}:${index}`}
                 className="list-none font-body text-[10px] leading-[1.35] text-neutral-600"
@@ -130,14 +252,21 @@ export function EffectivePromptPreview({
   definitionId,
   definition,
   blockId,
+  openVersion,
 }: {
   definitionId: number;
   definition: WorkflowDefinitionV2;
   blockId: string;
+  openVersion?: number | null;
 }) {
   const [result, setResult] =
     useState<EffectivePromptPreviewResponse | null>(null);
   const [open, setOpen] = useState(false);
+  // The editor opens on the compile, because that is what the person pressing
+  // this button in the middle of an edit came for. "Sent last time" is one
+  // click away and loads only when asked: it is a read of a past run and has
+  // no business costing anything while nobody is looking at it.
+  const [view, setView] = useState<View>("now");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
@@ -149,6 +278,7 @@ export function EffectivePromptPreview({
     setLoading(true);
     setError(null);
     setOpen(true);
+    setView("now");
     try {
       const response = await apiClient.workflowDefinitions.promptPreview(
         definitionId,
@@ -180,32 +310,39 @@ export function EffectivePromptPreview({
 
   return (
     <section className="mt-2 overflow-hidden rounded-xs border border-neutral-200 bg-panel">
-      <div className="flex items-center gap-2 px-2.5 py-2">
+      <div className="flex flex-wrap items-center gap-2 px-2.5 py-2">
         <div className="min-w-0 flex-1">
           <div className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
-            Effective prompt
+            What this block sends
           </div>
           <p className="m-0 mt-0.5 font-body text-[10px] text-neutral-500">
-            Preview the exact ordered sections for this unsaved workflow.
+            {open && view === "then"
+              ? "The last briefing this block produced, from the run it came out of."
+              : "The ordered sections compiled from this workflow as it is in the editor, saved or not."}
           </p>
         </div>
-        <Button
-          type="button"
-          variant="text"
-          size="sm"
-          disabled={loading}
-          onClick={() => void load()}
-          className="appearance-none rounded-xs border border-mariner bg-panel px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
-        >
-          {loading ? "Building…" : result ? "Refresh" : "Preview"}
-        </Button>
+        {/* Compiling belongs to the view that compiles. In the past view this
+            button would either do nothing a person can see or throw them back
+            to the preview, which is not what "refresh" means to them. */}
+        {!open || view === "now" ? (
+          <Button
+            type="button"
+            variant="text"
+            size="sm"
+            disabled={loading}
+            onClick={() => void load()}
+            className="appearance-none rounded-xs border border-mariner bg-panel px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
+          >
+            {loading ? "Building…" : result ? "Refresh" : "Preview"}
+          </Button>
+        ) : null}
         {open && (
           <IconButton
             type="button"
             variant="text"
             size="sm"
             onClick={() => setOpen(false)}
-            aria-label="Close effective prompt preview"
+            aria-label="Close what this block sends"
             className="appearance-none border-none bg-transparent font-mono text-[12px] text-neutral-500"
           >
             ×
@@ -213,19 +350,53 @@ export function EffectivePromptPreview({
         )}
       </div>
       {open && (
-        <div className="max-h-[560px] overflow-y-auto border-t border-neutral-200 p-2">
-          {error ? (
-            <div role="alert" className="rounded-xs border border-red-200 bg-red-50 px-2 py-2 font-body text-[10px] text-red-800">
-              {error}
-            </div>
-          ) : result ? (
-            <EffectivePromptPreviewResultView result={result} />
-          ) : (
-            <div className="py-4 text-center font-mono text-[9px] text-neutral-500">
-              Building preview…
-            </div>
-          )}
-        </div>
+        <>
+          {/* The two views are named by time, not by mechanism: "sent last
+              time" and "would send now" is the distinction the operator
+              actually makes, and it is the one that stops a projection from
+              being read as a record. */}
+          <div
+            role="group"
+            aria-label="What this block sends"
+            className="flex flex-wrap gap-1.5 border-t border-neutral-200 px-2.5 py-2"
+          >
+            <Button
+              type="button"
+              variant={view === "then" ? "selected" : "secondary"}
+              size="sm"
+              aria-pressed={view === "then"}
+              onClick={() => setView("then")}
+              className="h-auto py-1 font-mono text-[9px] uppercase tracking-[0.04em]"
+            >
+              Sent last time
+            </Button>
+            <Button
+              type="button"
+              variant={view === "now" ? "selected" : "secondary"}
+              size="sm"
+              aria-pressed={view === "now"}
+              onClick={() => setView("now")}
+              className="h-auto py-1 font-mono text-[9px] uppercase tracking-[0.04em]"
+            >
+              Would send now
+            </Button>
+          </div>
+          <div className="max-h-[560px] overflow-y-auto border-t border-neutral-200 p-2">
+            {view === "then" ? (
+              <LastBriefingView definitionId={definitionId} nodeId={blockId} openVersion={openVersion} />
+            ) : error ? (
+              <div role="alert" className="rounded-xs border border-fail-bg bg-fail-bg px-2 py-2 font-body text-[10px] text-fail-fg">
+                {error}
+              </div>
+            ) : result ? (
+              <EffectivePromptPreviewResultView result={result} />
+            ) : (
+              <div className="py-4 text-center font-mono text-[9px] text-neutral-500">
+                Building preview…
+              </div>
+            )}
+          </div>
+        </>
       )}
     </section>
   );

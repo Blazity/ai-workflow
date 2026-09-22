@@ -1,6 +1,6 @@
 {
-  "id": "1fd11c6e-5b9a-42dd-9aa5-e4fdf702d866",
-  "prevId": "58fd72ef-9ce9-4148-9cb8-f0ac229c9b0d",
+  "id": "acbe85de-3dc5-4115-ba6e-4213c7c7e706",
+  "prevId": "0ba6450a-cc6e-4350-a101-3089e0f51b1f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -238,6 +238,486 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.agent_briefing_runs": {
+      "name": "agent_briefing_runs",
+      "schema": "",
+      "columns": {
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "captured_count": {
+          "name": "captured_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "disabled_count": {
+          "name": "disabled_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "skipped_count": {
+          "name": "skipped_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "failed_count": {
+          "name": "failed_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "conflict_count": {
+          "name": "conflict_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "first_recorded_at": {
+          "name": "first_recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_recorded_at": {
+          "name": "last_recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.agent_briefing_texts": {
+      "name": "agent_briefing_texts",
+      "schema": "",
+      "columns": {
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "text": {
+          "name": "text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bytes": {
+          "name": "bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_referenced_at": {
+          "name": "last_referenced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_briefing_texts_sha256_check": {
+          "name": "agent_briefing_texts_sha256_check",
+          "value": "\"agent_briefing_texts\".\"sha256\" ~ '^[0-9a-f]{64}$'"
+        },
+        "agent_briefing_texts_bytes_check": {
+          "name": "agent_briefing_texts_bytes_check",
+          "value": "\"agent_briefing_texts\".\"bytes\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.agent_briefings": {
+      "name": "agent_briefings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt": {
+          "name": "attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "activation_scope_id": {
+          "name": "activation_scope_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "capture": {
+          "name": "capture",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "briefing_index": {
+          "name": "briefing_index",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "content_sha256": {
+          "name": "content_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "text_sha256s": {
+          "name": "text_sha256s",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bytes": {
+          "name": "bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "detail": {
+          "name": "detail",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "captured_at": {
+          "name": "captured_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "agent_briefings_identity_unique": {
+          "name": "agent_briefings_identity_unique",
+          "columns": [
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "node_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "attempt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "activation_scope_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sequence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_briefings_expires_at_idx": {
+          "name": "agent_briefings_expires_at_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_briefings_text_sha256s_idx": {
+          "name": "agent_briefings_text_sha256s_idx",
+          "columns": [
+            {
+              "expression": "text_sha256s",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "gin",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_briefings_kind_check": {
+          "name": "agent_briefings_kind_check",
+          "value": "\"agent_briefings\".\"kind\" in ('discovery', 'agent', 'llm')"
+        },
+        "agent_briefings_capture_check": {
+          "name": "agent_briefings_capture_check",
+          "value": "\"agent_briefings\".\"capture\" in ('captured', 'capture_disabled', 'capture_skipped')"
+        },
+        "agent_briefings_attempt_check": {
+          "name": "agent_briefings_attempt_check",
+          "value": "\"agent_briefings\".\"attempt\" > 0"
+        },
+        "agent_briefings_sequence_check": {
+          "name": "agent_briefings_sequence_check",
+          "value": "\"agent_briefings\".\"sequence\" > 0"
+        },
+        "agent_briefings_captured_index_check": {
+          "name": "agent_briefings_captured_index_check",
+          "value": "(\"agent_briefings\".\"capture\" = 'captured') = (\"agent_briefings\".\"briefing_index\" is not null and \"agent_briefings\".\"content_sha256\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.clarification_answer_deliveries": {
+      "name": "clarification_answer_deliveries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "clarification_id": {
+          "name": "clarification_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "previous_id": {
+          "name": "previous_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "words": {
+          "name": "words",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "author_kind": {
+          "name": "author_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "author_display": {
+          "name": "author_display",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "surface": {
+          "name": "surface",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reading": {
+          "name": "reading",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_at": {
+          "name": "first_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_at": {
+          "name": "last_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "count": {
+          "name": "count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        }
+      },
+      "indexes": {
+        "clarification_answer_deliveries_chain_unique": {
+          "name": "clarification_answer_deliveries_chain_unique",
+          "columns": [
+            {
+              "expression": "clarification_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "previous_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "clarification_answer_deliveries_clarification_idx": {
+          "name": "clarification_answer_deliveries_clarification_idx",
+          "columns": [
+            {
+              "expression": "clarification_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "clarification_answer_deliveries_clarification_id_clarification_requests_id_fk": {
+          "name": "clarification_answer_deliveries_clarification_id_clarification_requests_id_fk",
+          "tableFrom": "clarification_answer_deliveries",
+          "tableTo": "clarification_requests",
+          "columnsFrom": [
+            "clarification_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "clarification_answer_deliveries_author_kind_check": {
+          "name": "clarification_answer_deliveries_author_kind_check",
+          "value": "\"clarification_answer_deliveries\".\"author_kind\" in ('person', 'several_people')"
+        },
+        "clarification_answer_deliveries_surface_check": {
+          "name": "clarification_answer_deliveries_surface_check",
+          "value": "\"clarification_answer_deliveries\".\"surface\" in ('jira', 'dashboard', 'mcp', 'other')"
+        },
+        "clarification_answer_deliveries_count_check": {
+          "name": "clarification_answer_deliveries_count_check",
+          "value": "\"clarification_answer_deliveries\".\"count\" >= 1"
+        },
+        "clarification_answer_deliveries_previous_check": {
+          "name": "clarification_answer_deliveries_previous_check",
+          "value": "\"clarification_answer_deliveries\".\"previous_id\" >= 0"
+        },
+        "clarification_answer_deliveries_time_check": {
+          "name": "clarification_answer_deliveries_time_check",
+          "value": "\"clarification_answer_deliveries\".\"last_at\" >= \"clarification_answer_deliveries\".\"first_at\""
+        }
+      },
       "isRLSEnabled": false
     },
     "public.carry_schema_resync_audit": {
@@ -1786,237 +2266,6 @@
         "harness_skill_artifacts_source_shape_check": {
           "name": "harness_skill_artifacts_source_shape_check",
           "value": "(\n        \"harness_skill_artifacts\".\"source_kind\" <> 'github'\n        or (\n          \"harness_skill_artifacts\".\"source_owner\" is not null\n          and \"harness_skill_artifacts\".\"source_repository\" is not null\n          and \"harness_skill_artifacts\".\"source_path\" is not null\n          and \"harness_skill_artifacts\".\"source_commit_sha\" is not null\n          and \"harness_skill_artifacts\".\"local_path\" is null\n          and \"harness_skill_artifacts\".\"local_content_sha256\" is null\n        )\n      ) and (\n        \"harness_skill_artifacts\".\"source_kind\" <> 'local'\n        or (\n          \"harness_skill_artifacts\".\"local_path\" is not null\n          and \"harness_skill_artifacts\".\"local_content_sha256\" is not null\n          and \"harness_skill_artifacts\".\"source_owner\" is null\n          and \"harness_skill_artifacts\".\"source_repository\" is null\n          and \"harness_skill_artifacts\".\"source_path\" is null\n          and \"harness_skill_artifacts\".\"source_commit_sha\" is null\n        )\n      )"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.integration_connection_versions": {
-      "name": "integration_connection_versions",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "integration_id": {
-          "name": "integration_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "config": {
-          "name": "config",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "secrets": {
-          "name": "secrets",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "secret_digests": {
-          "name": "secret_digests",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "test_status": {
-          "name": "test_status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "test_reason": {
-          "name": "test_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "test_message": {
-          "name": "test_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "tested_at": {
-          "name": "tested_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "redacted_at": {
-          "name": "redacted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "actor_id": {
-          "name": "actor_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "integration_connection_versions_unique": {
-          "name": "integration_connection_versions_unique",
-          "columns": [
-            {
-              "expression": "integration_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "version",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "integration_connection_versions_test_status_check": {
-          "name": "integration_connection_versions_test_status_check",
-          "value": "\"integration_connection_versions\".\"test_status\" in ('passed', 'failed')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.integration_connections": {
-      "name": "integration_connections",
-      "schema": "",
-      "columns": {
-        "integration_id": {
-          "name": "integration_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "source": {
-          "name": "source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'environment'"
-        },
-        "latest_version": {
-          "name": "latest_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "active_version": {
-          "name": "active_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_test_status": {
-          "name": "last_test_status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_test_reason": {
-          "name": "last_test_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_test_message": {
-          "name": "last_test_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_test_at": {
-          "name": "last_test_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_test_fingerprint": {
-          "name": "last_test_fingerprint",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_by": {
-          "name": "updated_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "integration_connections_source_check": {
-          "name": "integration_connections_source_check",
-          "value": "\"integration_connections\".\"source\" in ('environment', 'stored')"
-        },
-        "integration_connections_last_test_status_check": {
-          "name": "integration_connections_last_test_status_check",
-          "value": "\"integration_connections\".\"last_test_status\" is null or \"integration_connections\".\"last_test_status\" in ('passed', 'failed')"
-        },
-        "integration_connections_active_version_check": {
-          "name": "integration_connections_active_version_check",
-          "value": "\"integration_connections\".\"active_version\" is null or (\"integration_connections\".\"active_version\" >= 1 and \"integration_connections\".\"active_version\" <= \"integration_connections\".\"latest_version\")"
         }
       },
       "isRLSEnabled": false
@@ -4457,12 +4706,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "status_reason_code": {
-          "name": "status_reason_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "subject_key": {
           "name": "subject_key",
           "type": "text",
@@ -6062,7 +6305,7 @@
         },
         "work_scope_entries_origin_check": {
           "name": "work_scope_entries_origin_check",
-          "value": "\"work_scope_entries\".\"origin\" in ('person', 'delegated', 'workflow_owned_branch', 'ticket_text', 'trigger_policy', 'inferred')"
+          "value": "\"work_scope_entries\".\"origin\" in ('person', 'delegated', 'workflow_owned_branch', 'ticket_text', 'trigger_policy', 'related_repository', 'inferred')"
         },
         "work_scope_entries_origin_rank_check": {
           "name": "work_scope_entries_origin_rank_check",

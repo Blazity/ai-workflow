@@ -1,50 +1,9 @@
-import { NextResponse } from "next/server";
+import { SAFE_ID, forward, notFound, type WorkerProxy } from "../worker-forward";
 
-type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 type ReplayRouteContext = { params: Promise<{ runId: string }> };
 type AttemptRouteContext = {
   params: Promise<{ runId: string; attemptId: string }>;
 };
-
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/;
-
-function notFound() {
-  return NextResponse.json(
-    { error: "Not found" },
-    { status: 404, headers: { "cache-control": "no-store" } },
-  );
-}
-
-async function forward(
-  workerProxy: WorkerProxy,
-  path: string,
-  method: "GET" | "POST" = "GET",
-) {
-  try {
-    const response = await workerProxy(path, { method });
-    return NextResponse.json(await response.json().catch(() => ({})), {
-      status: response.status,
-      headers: { "cache-control": "private, no-store" },
-    });
-  } catch (error) {
-    if (isWorkerTimeoutError(error)) {
-      return NextResponse.json(
-        { error: "Worker request timed out" },
-        {
-          status: 504,
-          headers: { "cache-control": "private, no-store" },
-        },
-      );
-    }
-    throw error;
-  }
-}
-
-function isWorkerTimeoutError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; name?: unknown };
-  return candidate.name === "TimeoutError" || candidate.code === 23;
-}
 
 function replayQuery(request: Request): string {
   const searchParams = new URL(request.url).searchParams;

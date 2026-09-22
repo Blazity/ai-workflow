@@ -66,6 +66,7 @@ is the authority on status and beats this list wherever the two disagree.
 - Visual, typed, multi-step workflows with branching, loops, and human steps.
 - Prompt and workflow versioning with history, comparison, and restoration.
 - Per-run monitoring for steps, outcomes, timing, model usage, and artifacts.
+- The exact prompt every agent was sent, section by section with where each part came from, what was held back, and the repositories it was given, readable in the dashboard and through MCP.
 - Deployment of the application, database, credentials and sandbox execution into a Vercel project and a Neon database you own, as described in [SETUP.md](./SETUP.md).
 
 In progress or planned:
@@ -108,14 +109,14 @@ Version-control setup:
 - [GitHub App setup](./docs/runbooks/GITHUB-APP-SETUP.md)
 - [GitLab setup](./docs/runbooks/GITLAB-SETUP.md)
 
-## Repository Map
+## Repository Layout
 
 ```text
 ai-workflow/
 ├── apps/
 │   ├── worker/      # Events, orchestration, agents, adapters, and APIs
-│   ├── dashboard/   # Workflow authoring, observability, and administration
-│   └── shared/      # Shared contracts and workflow conditions
+│   └── dashboard/   # Workflow authoring, observability, and administration
+├── packages/        # Pure code with two consumers: contracts, prompts, agent visibility
 ├── docs/            # index.md lists every current document
 ├── SETUP.md
 └── package.json

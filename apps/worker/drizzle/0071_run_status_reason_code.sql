@@ -1,1 +1,0 @@
-ALTER TABLE "workflow_runs" ADD COLUMN "status_reason_code" text;

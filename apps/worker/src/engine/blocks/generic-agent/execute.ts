@@ -1,6 +1,7 @@
 import { agentTracingRun } from "../../support/integration-run-state.js";
 import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
+import { concatPromptParts, type EffectivePromptPart } from "@shared/prompts";
 import type { AgentKind } from "../../../sandbox/agents/index.js";
 import type {
   AgentProtocolResult,
@@ -21,7 +22,14 @@ import {
   type ParsedJsonSchema,
 } from "../../definition/json-schema.js";
 import { resolveBlockAgent } from "../../definition/resolve-agent.js";
+import { repositoryMapContext } from "../../../repository-map/context.js";
+import type { RepositoryMapContext } from "../../../repository-map/map.js";
+import { repositoryMapPromptParts, type SentRepositoryMap } from "../../../sandbox/context.js";
+import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
+import type { WorkspaceManifest } from "../../../sandbox/repo-workspace.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
+import { planBlockAgentBriefing } from "../../agent-visibility/block.js";
+import { recordSendBriefing, recordSkippedSend, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import {
   ensureAgentSandbox,
   prepareHarnessAgentInvocationStep,
@@ -122,7 +130,11 @@ async function blockGenericAgentStartPhaseStep(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-  runtime?: ResolvedHarnessRuntime,
+  runtime: ResolvedHarnessRuntime | undefined,
+  /** What this send gave the model. Required in type so a call site cannot
+   *  quietly stop recording, read as absent on a journal written before it
+   *  existed. See `engine/steps/phase.ts`. */
+  briefing: AgentBriefingCapture | null,
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -144,6 +156,11 @@ async function blockGenericAgentStartPhaseStep(
     ]);
     const chmod = await sandbox.runCommand("chmod", ["+x", scriptPath]);
     if (chmod.exitCode !== 0) {
+      // Nothing was sent, and the sequence number this send took is already
+      // spent. A gap a reader has to interpret is a classification made in a
+      // reader's head, so the record says it instead: this place in the order
+      // exists, and nothing went out under it.
+      await recordSkippedSend(briefing, () => import("../../agent-visibility/capture.js"));
       return {
         ok: false,
         failure: await commandProtocolFailure({
@@ -156,6 +173,14 @@ async function blockGenericAgentStartPhaseStep(
         }),
       };
     }
+    // Before the agent starts, so a launch that fails still leaves the record
+    // of what it was given. See `engine/steps/phase.ts` for the reasoning and
+    // for why the import itself is guarded.
+    await recordSendBriefing(
+      briefing,
+      { prompt: inputContent, wrapperScript: scriptContent },
+      () => import("../../agent-visibility/capture.js"),
+    );
     const command = await sandbox.runCommand({
       cmd: "bash",
       args: [scriptPath],
@@ -261,6 +286,81 @@ async function blockGenericAgentSchemaFailureStep(
 }
 
 /**
+ * The run's contribution to a generic_agent prompt: every bound input except
+ * the prompt itself, then the human's answer when the block resumes from a
+ * question.
+ */
+/** What this phase tells the agent about its repositories, from the same
+ *  builder every other phase reads. */
+function genericAgentRepositories(
+  ctx: Parameters<BlockExecuteFn>[2],
+): {
+  repositoryMap?: RepositoryMapContext;
+  repositories?: SelectedRepository[];
+  workspaceManifest?: WorkspaceManifest;
+} {
+  const map = repositoryMapContext(ctx, {
+    expansionOpen: false,
+    leftOut: ctx.workScopeLeftOut ?? [],
+  });
+  return {
+    ...(map ? { repositoryMap: map } : {}),
+    repositories: ctx.selectedRepositories,
+    ...(ctx.workspaceManifest ? { workspaceManifest: ctx.workspaceManifest } : {}),
+  };
+}
+
+export function genericAgentRuntimeData(
+  resolvedInputs: Record<string, unknown>,
+  clarificationAnswer: string | undefined,
+  /**
+   * The repositories this phase is standing in, and the ones it is not.
+   *
+   * The generic agent was the one repository-working phase that received no
+   * repository list at all: it worked in a checkout whose shape nobody had
+   * described, next to a catalog it could not see. It gets the same map from
+   * the same builder as every other phase; it has no channel for requesting
+   * one, so the map never offers it one. Absent in the unit tests that only
+   * care about bound inputs.
+   */
+  repositories?: {
+    repositoryMap?: RepositoryMapContext;
+    repositories?: SelectedRepository[];
+    workspaceManifest?: WorkspaceManifest;
+  },
+  /** Where this send puts the map it rendered, so the briefing records the
+   *  same pass the model read rather than a differently budgeted rebuild. */
+  sent?: SentRepositoryMap,
+): EffectivePromptPart[] {
+  const runtimeInputs = Object.fromEntries(
+    Object.entries(resolvedInputs).filter(([name]) => name !== "prompt"),
+  );
+  const parts: EffectivePromptPart[] = [];
+  if (Object.keys(runtimeInputs).length > 0) {
+    parts.push({
+      id: "bound-inputs",
+      title: "Bound inputs",
+      origin: { kind: "bound_data" },
+      content: `Resolved inputs:\n${JSON.stringify(runtimeInputs, null, 2)}`,
+    });
+  }
+  if (clarificationAnswer) {
+    parts.push({
+      id: "clarification-answer",
+      title: "Human clarification answer",
+      origin: { kind: "clarification" },
+      content: `Human clarification answer:\n${clarificationAnswer}`,
+    });
+  }
+  const composed = concatPromptParts(
+    parts.flatMap((entry, index) => (index === 0 ? [entry] : ["\n\n", entry])),
+  );
+  const mapParts = repositories ? repositoryMapPromptParts(repositories, composed, sent) : [];
+  if (mapParts.length === 0) return composed;
+  return concatPromptParts(composed.length > 0 ? [composed, "\n\n", mapParts] : [mapParts]);
+}
+
+/**
  * generic_agent: run a free-form agent phase on the attached workspace. The
  * prompt param is written verbatim as the phase input file. Without an
  * outputSchema param the phase uses GENERIC_SCHEMA and its status maps to
@@ -354,24 +454,16 @@ export const execute: BlockExecuteFn = async (
       : typeof block.params.prompt === "string"
         ? block.params.prompt
         : "";
-  const runtimeInputs = Object.fromEntries(
-    Object.entries(resolvedInputs).filter(([name]) => name !== "prompt"),
-  );
-  const runtimeParts: string[] = [];
-  if (Object.keys(runtimeInputs).length > 0) {
-    runtimeParts.push(
-      `Resolved inputs:\n${JSON.stringify(runtimeInputs, null, 2)}`,
-    );
-  }
-  if (execution?.clarificationAnswer) {
-    runtimeParts.push(
-      `Human clarification answer:\n${execution.clarificationAnswer}`,
-    );
-  }
+  const genericSentMap: SentRepositoryMap = { map: null };
   const resolvedPrompt = await resolveAgentInput({
-    compileEffectivePrompt: execution?.compileEffectivePrompt,
+    compileInvocationPrompt: execution?.compileInvocationPrompt,
     blockPrompt: basePrompt,
-    runtimeData: runtimeParts.join("\n\n"),
+    runtimeData: genericAgentRuntimeData(
+      resolvedInputs,
+      execution?.clarificationAnswer,
+      genericAgentRepositories(ctx),
+      genericSentMap,
+    ),
     sandboxId,
     fallbackInput: execution?.clarificationAnswer
       ? `${basePrompt}\n\nHuman clarification answer:\n${execution.clarificationAnswer}`
@@ -437,6 +529,14 @@ export const execute: BlockExecuteFn = async (
       paths.wrapper,
       script,
       runtime,
+      planBlockAgentBriefing({
+        execution,
+        ctx,
+        compilation: resolvedPrompt.compilation,
+        prompt,
+        harness: { kind, model, runtime, schema: jsonSchema },
+        repositoryMap: genericSentMap.map,
+      }),
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;

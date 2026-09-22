@@ -1440,6 +1440,7 @@ export function FlowEditor({
   selectionRequest,
   onSelectionChange,
   definitionId,
+  definitionVersion,
 }: {
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
@@ -1496,6 +1497,8 @@ export function FlowEditor({
   selectionRequest?: { nodeId: string; requestId: number } | null;
   onSelectionChange?: (nodeId: string | null) => void;
   definitionId?: number;
+  /** The deployed version of the workflow this canvas was opened from. */
+  definitionVersion?: number | null;
 }) {
   const [selection, setSelection] = useState<CanvasSelection>(() =>
     initialSelectedId && nodes.some((n) => n.id === initialSelectedId)
@@ -2210,6 +2213,7 @@ export function FlowEditor({
               options={options}
               previewDefinition={previewDefinition}
               definitionId={definitionId}
+              definitionVersion={definitionVersion}
               nodeContracts={effectiveNodeContracts}
               availableValues={dataCatalog?.catalogByNode[selected.id] ?? []}
               valuesRefreshing={dataCatalogRefreshing}
@@ -2248,6 +2252,7 @@ export function FlowEditor({
                   options={options}
                   previewDefinition={previewDefinition}
                   definitionId={definitionId}
+                  definitionVersion={definitionVersion}
                   nodeContracts={effectiveNodeContracts}
                   availableValues={dataCatalog?.catalogByNode[selected.id] ?? []}
                   valuesRefreshing={dataCatalogRefreshing}
@@ -2338,6 +2343,7 @@ function NodeConfig({
 
   previewDefinition,
   definitionId,
+  definitionVersion,
   nodeContracts,
   availableValues,
   valuesRefreshing,
@@ -2362,6 +2368,8 @@ function NodeConfig({
   options: WorkflowEditorOptions;
   previewDefinition: WorkflowDefinitionV2 | null;
   definitionId?: number;
+  /** The deployed version of the workflow this canvas was opened from. */
+  definitionVersion?: number | null;
   nodeContracts: WorkflowValidationState["nodeContracts"];
   availableValues: WorkflowDataCatalogEntry[];
   valuesRefreshing: boolean;
@@ -2472,6 +2480,7 @@ function NodeConfig({
                     definitionId,
                     definition: previewDefinition,
                     blockId: node.id,
+                    openVersion: definitionVersion ?? null,
                   }
                 : undefined
             }

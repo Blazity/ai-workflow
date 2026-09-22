@@ -2,12 +2,14 @@ import { z } from "zod";
 
 // Protocol values cross the pre-sandbox and engine boundary without service state.
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
+import type { PreSandboxPromptAddition } from "../../sandbox/context.js";
 import {
   repositoryCatalogKey,
   type RepositoryCatalogEntry,
 } from "./catalog.js";
 import { exclusionRecoveryNotes, unnamedRecoveryNotes } from "../work-scope/context.js";
 import { exampleRepositoryPath } from "../support/repository-path-example.js";
+import { replyThatDecidesCandidates } from "../support/clarification-comment-format.js";
 import { isGuessEntry, isUnnamedInAnswer } from "../work-scope/decide.js";
 import {
   workScopeUnnamedSentence,
@@ -103,12 +105,16 @@ export type RepositoryDiscoveryDecision =
        *
        * One, when the catalog refused it, because the loop below refuses at the
        * FIRST repository it cannot use. Several, when the model proposed them
-       * and was not confident enough to be believed. EMPTY, deliberately, on
-       * every clarification that is about no repository: a response that did
-       * not parse, a proposal in which nothing the model named is a key we hold,
-       * and a model that asked for clarification itself are all the model's
-       * behaviour rather than a question about a repository, and there is
-       * nothing an answer to them could be recorded against.
+       * and was not confident enough to be believed. EMPTY on every
+       * clarification that puts no CANDIDATE in front of anybody: a response
+       * that did not parse, a proposal in which nothing the model named is a key
+       * we hold, and a model that asked for clarification itself.
+       *
+       * EMPTY IS ABOUT THE CANDIDATES AND NEVER ABOUT THE QUESTION. All three
+       * still ask a person which repository this work is about, so all three
+       * carry an ask that lists nothing rather than no ask at all
+       * (`repositoryDiscoveryQuestion`): a full path in the reply is the
+       * strongest form of deciding there is, and it is recorded.
        */
       about: RepositoryDiscoveryAsk[];
     }
@@ -132,6 +138,26 @@ export type RepositoryDiscoveryDecision =
 interface RepositoryLeftOut {
   repositoryKey: string;
   reason: string;
+}
+
+/**
+ * What the agents are told about the repositories discovery left out, in the
+ * same place the pre-sandbox puts the ones it kept back.
+ *
+ * Here rather than in the workflow body, where no test can reach it: the
+ * marker is what keeps the prompt from calling this a pre-sandbox addition,
+ * which it is not (discovery ran in a sandbox), so dropping it must turn a
+ * test red.
+ */
+export function discoveryLeftOutAddition(
+  leftOut: readonly { reason: string }[],
+): PreSandboxPromptAddition {
+  return {
+    target: ["research", "implementation", "review"],
+    title: "Repositories left out",
+    content: leftOut.map((left) => `- ${left.reason}`).join("\n"),
+    producedBy: "repository_discovery",
+  };
 }
 
 type ProposedRepository = {
@@ -865,8 +891,38 @@ export function repositoryDiscoveryQuestion(input: {
   ask: { subjectKey: string; askedRepositories: WorkScopeAskedRepository[] } | null;
 } {
   const [refused] = input.decision.about;
-  if (!refused || input.subjectKey === null) {
+  // NO RECORD TO ASK AGAINST IS THE ONLY NULL HERE. A run that froze no record
+  // has nowhere to put an answer, and that is the whole of it.
+  if (input.subjectKey === null) {
     return { questions: input.decision.questions, ask: null };
+  }
+  // AN ASK THAT LISTS NOTHING IS NOT NO ASK AT ALL, and the answer path turns on
+  // exactly that difference: an absent list is a clarification that was never
+  // about repositories, and its answer is read as words on another subject and
+  // recorded nowhere (`services/clarifications/answer-authorship.ts`), while an
+  // EMPTY list is a repository question that named none, whose answer is read
+  // and whose repository paths are written down.
+  //
+  // Every question reaching this line is the second thing. Discovery has one
+  // job, choosing repositories, so the three ways it can get here are a
+  // response that did not parse, a proposal naming nothing this deployment
+  // holds, and the model asking a question of its own: all three ask a person
+  // which repository this work is about, and two of them ask it in OUR words
+  // (`whichRepositoryQuestion`). The block's own bare version of that question
+  // already records itself this way, for the reason spelled out beside it
+  // (`askWhichRepositories`, `blocks/prepare-workspace/execute.ts`).
+  //
+  // Production, AWP-263 on 2026-09-20: discovery asked "Which repository
+  // contains the pricing helper to tidy?", the person answered
+  // github:blazity/ai-workflow-demo, and the answer left no entry, no trail row
+  // and no sentence anywhere, because the question had carried no ask. The next
+  // question offered that same repository as a fresh candidate, as if nobody had
+  // ever named it.
+  if (!refused) {
+    return {
+      questions: input.decision.questions,
+      ask: { subjectKey: input.subjectKey, askedRepositories: [] },
+    };
   }
   if (refused.reason === "selection") {
     // The model proposed these and was not confident enough to be believed, so
@@ -1025,26 +1081,48 @@ function whichRepositoryQuestion(hint?: string): string {
 // recorded nowhere is a question that comes back every run however it is
 // answered, and one recorded here and named nowhere is a decision taken from
 // somebody who never saw it.
+//
+// AND IT ASKS FOR THE REPLY THE READER ACTUALLY TAKES. It used to end "Reply
+// with full provider-scoped paths (for example github:acme/app)", which is the
+// right instruction for the question that lists NO candidate and the wrong one
+// here: a reading may never widen what was asked, so a path naming something
+// other than these candidates is unreadable, and the person is refused for
+// doing exactly what the question said. Production, AWP-263 on 2026-09-20.
+// The sentence is composed where the refusal composes its own
+// (`replyThatDecidesCandidates`), so the question and the refusal teach one
+// reply rather than two.
+//
+// The candidates come BEFORE it, because an instruction about "these" that a
+// person reads before seeing them is an instruction about nothing.
 function candidateClarificationQuestion(asks: RepositoryDiscoveryAsk[]): string {
   const candidates = asks
     .map((ask) => `${ask.repositoryKey} (${ask.rationale})`)
     .join(", ");
+  const askedKeys = asks.map((ask) => ask.repositoryKey);
   return [
     "Repository discovery was not confident enough to select automatically.",
-    "Which repository or repositories should this ticket inspect or modify?",
-    // The example is scoped to a provider this question is already naming
-    // candidates from, never to whichever one the build happens to ship first.
-    `Reply with full provider-scoped paths (for example ${exampleRepositoryPath(
-      "acme/app",
-      asks.map((ask) => ask.repositoryKey),
-    )}).`,
     `Proposed candidates: ${candidates}.`,
+    askedKeys.length === 1
+      ? "Should this ticket inspect or modify it?"
+      : "Which of these should this ticket inspect or modify?",
+    replyThatDecidesCandidates({
+      // The same shape the reading of the answer is made against
+      // (`repositoryQuestionOfRow`): this question spells every candidate out,
+      // so the two counts are the same count.
+      shape: askedKeys.length === 1 ? "one" : "list",
+      askedKeys,
+    }),
+    // AND WHAT THIS QUESTION IS NOT FOR. Naming something else is the reply
+    // that reads as unreadable, and until now nothing warned anybody off it.
+    // No lever and no route, because a question is copied into the agent's
+    // prompts and the memory file (rule 7); the route rides the ticket comment
+    // beside the question, where a person alone reads it.
+    "Naming a repository this question does not list decides nothing about it and does not bring it into this work.",
     // WHAT THE ANSWER BINDS, as the which-of-these question says it (A11g):
     // a candidate listed here and left out of the answer is refused to every
     // later guess on this work (`isUnnamedInAnswer`). Only the candidates,
     // because they are the repositories this question puts in front of the
-    // person; a path they write beside them binds nothing. No lever, because a
-    // question is copied into the agent's prompts and the memory file (rule 7).
+    // person; a path they write beside them binds nothing.
     "A proposed candidate you do not name is left out of this work from now on, and no later run takes it on its own.",
   ].join(" ");
 }

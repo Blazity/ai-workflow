@@ -26,6 +26,48 @@ import {
 } from "./config-fields";
 import { PromptAuthoringProvider } from "./prompt-authoring-context";
 
+/** What `settle` watches: the reads these panels have out, and how many they
+ *  have started, so a turn that started another one is not mistaken for quiet. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/**
+ * Installs `handler` as the fetch for one test and returns the undo.
+ *
+ * Every answer lands a turn later, the way a response does: resolving in the
+ * caller's own microtask is what let a counted wait look reliable.
+ * `FIXTURE_SLOW_MS` delays every answer by that many milliseconds, which is
+ * how this harness reproduces a runner slow enough to break a counted wait.
+ */
+function installFetch(handler: (url: string, init?: RequestInit) => Promise<Response>): () => void {
+  const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    mine.inFlight += 1;
+    mine.started += 1;
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      return handler(String(url), init);
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
+  }) as typeof globalThis.fetch;
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // next/link's client-side prefetch effect calls requestIdleCallback, which
@@ -1072,11 +1114,41 @@ function findButton(root: ReactTestInstance, text: string): ReactTestInstance {
   return matches[0];
 }
 
-async function settle() {
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
-  await act(async () => {});
+}
+
+/**
+ * Lets the chain of loads a panel starts finish, and waits for exactly that.
+ *
+ * NEVER A COUNT OF TURNS. How many turns a chain costs is the runner's
+ * business, so a fixed count passes on an idle machine and, on a loaded one,
+ * returns while reads are still in flight: the assertion then reads a loading
+ * panel and the failure looks like the product. Quiet is the condition those
+ * assertions mean, and it is two things, because a read that lands usually
+ * starts the next one: nothing in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a panel that never settles fails as a readable timeout rather
+ * than hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`the panel was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`);
+    }
+  }
 }
 
 function scheduleConfig(overrides: Partial<ScheduleConfigResponse> = {}): ScheduleConfigResponse {
@@ -1089,10 +1161,9 @@ function scheduleConfig(overrides: Partial<ScheduleConfigResponse> = {}): Schedu
 }
 
 test("the status panel loads config, shows Pause, and Pause posts and reloads as paused", async () => {
-  const originalFetch = globalThis.fetch;
   const calls: string[] = [];
   let paused = false;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       calls.push("config");
@@ -1114,7 +1185,7 @@ test("the status panel loads config, shows Pause, and Pause posts and reloads as
       return Response.json({ scheduleId: "sch_1", pausedAt: "2026-08-05T09:00:05.000Z" });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1133,13 +1204,12 @@ test("the status panel loads config, shows Pause, and Pause posts and reloads as
     findButton(renderer.root, "Resume");
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a 403 on Pause states the permission problem plainly, not a generic failure", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) return Response.json(scheduleConfig());
     if (path.endsWith("/schedule/preview")) {
@@ -1152,7 +1222,7 @@ test("a 403 on Pause states the permission problem plainly, not a generic failur
       });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1167,13 +1237,12 @@ test("a 403 on Pause states the permission problem plainly, not a generic failur
     assert.match(nodeText(renderer.root), /You do not have permission to pause or resume this schedule\./);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a failed config load still lets Pause and Resume through, live", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string) => {
+  const restore = installFetch(async (url: string) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return new Response("upstream unavailable", { status: 502 });
@@ -1182,7 +1251,7 @@ test("a failed config load still lets Pause and Resume through, live", async () 
       return Response.json({ ok: true, cron: "0 9 * * *", timezone: "UTC", runs: [], suggestedGraceMinutes: 30 });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1196,14 +1265,13 @@ test("a failed config load still lets Pause and Resume through, live", async () 
     findButton(renderer.root, "Resume");
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("Resume posts and the panel returns to a normal Pause-offering state", async () => {
-  const originalFetch = globalThis.fetch;
   let resumed = false;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json(
@@ -1223,7 +1291,7 @@ test("Resume posts and the panel returns to a normal Pause-offering state", asyn
       return Response.json({ scheduleId: "sch_1" });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1240,13 +1308,12 @@ test("Resume posts and the panel returns to a normal Pause-offering state", asyn
     findButton(renderer.root, "Pause");
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("occurrence history is hidden while the schedule is still a draft", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string) => {
+  const restore = installFetch(async (url: string) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json({ state: "draft", schedule: null, occurrences: [] });
@@ -1258,7 +1325,7 @@ test("occurrence history is hidden while the schedule is still a draft", async (
       });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1271,13 +1338,12 @@ test("occurrence history is hidden while the schedule is still a draft", async (
     assert.match(nodeText(renderer.root), /This schedule is not deployed yet/);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("a revoked schedule fetched from the worker shows Refresh only, and still lists its last run", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string) => {
+  const restore = installFetch(async (url: string) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json(
@@ -1296,7 +1362,7 @@ test("a revoked schedule fetched from the worker shows Refresh only, and still l
       return Response.json({ ok: true, cron: "0 9 * * *", timezone: "UTC", runs: [], suggestedGraceMinutes: 30 });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1320,7 +1386,7 @@ test("a revoked schedule fetched from the worker shows Refresh only, and still l
     assert.equal(refreshButtons.length, 2);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
@@ -1330,9 +1396,8 @@ test("a revoked schedule fetched from the worker shows Refresh only, and still l
 // compiled, timezone included, even though the field still shows the zone the
 // operator originally typed.
 test("switching to an interval preset saves UTC, not the typed timezone, and returns to Custom", async () => {
-  const originalFetch = globalThis.fetch;
   const previewRequests: Record<string, unknown>[] = [];
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json({ state: "draft", schedule: null, occurrences: [] });
@@ -1357,7 +1422,7 @@ test("switching to an interval preset saves UTC, not the typed timezone, and ret
       });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   const changes: [string, unknown][] = [];
   let renderer!: ReactTestRenderer;
@@ -1410,7 +1475,7 @@ test("switching to an interval preset saves UTC, not the typed timezone, and ret
     assert.equal(findButton(renderer.root, "Custom").props.disabled, false);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
@@ -1422,8 +1487,7 @@ test("switching to an interval preset saves UTC, not the typed timezone, and ret
 // render's "the note is absent" holds for every preset kind alike, interval ones
 // included, and would tell us nothing about the distinction being made here.
 test("a clock-anchored preset does not warn that the timezone is ignored", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json({ state: "draft", schedule: null, occurrences: [] });
@@ -1439,7 +1503,7 @@ test("a clock-anchored preset does not warn that the timezone is ignored", async
       });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   const changes: [string, unknown][] = [];
   let renderer!: ReactTestRenderer;
@@ -1481,7 +1545,7 @@ test("a clock-anchored preset does not warn that the timezone is ignored", async
     assert.doesNotMatch(nodeText(renderer.root), note);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
@@ -1489,8 +1553,7 @@ test("a clock-anchored preset does not warn that the timezone is ignored", async
 // one must restore the timezone the operator actually typed, not silently
 // keep the interval override or, worse, let a later clock preset inherit it.
 test("switching from an interval preset back to a clock preset restores the operator's own timezone", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json({ state: "draft", schedule: null, occurrences: [] });
@@ -1515,7 +1578,7 @@ test("switching from an interval preset back to a clock preset restores the oper
       });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   const changes: [string, unknown][] = [];
   let renderer!: ReactTestRenderer;
@@ -1557,15 +1620,14 @@ test("switching from an interval preset back to a clock preset restores the oper
     assert.match(nodeText(renderer.root), /Restored your previous timezone \(Europe\/Warsaw\)/);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 // G: suggestedGraceMinutes from the preview response is a suggestion the
 // operator can pick up, never a value that overwrites their own on its own.
 test("a catch-up grace suggestion appears next to the field, and only writes params on click", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json({ state: "draft", schedule: null, occurrences: [] });
@@ -1581,7 +1643,7 @@ test("a catch-up grace suggestion appears next to the field, and only writes par
       });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   const changes: [string, unknown][] = [];
   let renderer!: ReactTestRenderer;
@@ -1606,13 +1668,12 @@ test("a catch-up grace suggestion appears next to the field, and only writes par
     assert.deepEqual(changes, [["params.catchUpGraceMinutes", 20]]);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("no catch-up grace suggestion is offered once it matches the authored value", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json({ state: "draft", schedule: null, occurrences: [] });
@@ -1628,7 +1689,7 @@ test("no catch-up grace suggestion is offered once it matches the authored value
       });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1642,7 +1703,7 @@ test("no catch-up grace suggestion is offered once it matches the authored value
     assert.doesNotMatch(nodeText(renderer.root), /Use suggested/);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
@@ -1650,8 +1711,7 @@ test("no catch-up grace suggestion is offered once it matches the authored value
 // firing, and its response read by outcome rather than response.ok ---
 
 test("Cancel current run is offered while evaluating once a last started run id exists", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string) => {
+  const restore = installFetch(async (url: string) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json(
@@ -1668,7 +1728,7 @@ test("Cancel current run is offered while evaluating once a last started run id 
       return Response.json({ ok: true, cron: "0 9 * * *", timezone: "UTC", runs: [], suggestedGraceMinutes: 30 });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1680,13 +1740,12 @@ test("Cancel current run is offered while evaluating once a last started run id 
     findButton(renderer.root, "Cancel current run");
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("Cancel current run stays hidden while evaluating with no last started run id", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string) => {
+  const restore = installFetch(async (url: string) => {
     const path = String(url);
     // scheduleConfig()'s own default already carries lastStartedRunId: null.
     if (path.endsWith("/schedule/config")) return Response.json(scheduleConfig());
@@ -1694,7 +1753,7 @@ test("Cancel current run stays hidden while evaluating with no last started run 
       return Response.json({ ok: true, cron: "0 9 * * *", timezone: "UTC", runs: [], suggestedGraceMinutes: 30 });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1706,14 +1765,13 @@ test("Cancel current run stays hidden while evaluating with no last started run 
     assert.throws(() => findButton(renderer.root, "Cancel current run"));
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("Cancel current run asks for confirmation, then posts to the run cancel endpoint and reloads on a fresh cancel", async () => {
-  const originalFetch = globalThis.fetch;
   const calls: string[] = [];
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       calls.push("config");
@@ -1735,7 +1793,7 @@ test("Cancel current run asks for confirmation, then posts to the run cancel end
       return Response.json({ outcome: "cancelled", runId: "run_77", subjectKey: "schedule:sch_1" });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1764,13 +1822,12 @@ test("Cancel current run asks for confirmation, then posts to the run cancel end
     );
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("an already_terminal outcome reads as distinct from a fresh cancel, since a 200 here is not proof of one", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json(
@@ -1790,7 +1847,7 @@ test("an already_terminal outcome reads as distinct from a fresh cancel, since a
       return Response.json({ outcome: "already_terminal", runId: "run_77", runStatus: "completed" });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1808,13 +1865,12 @@ test("an already_terminal outcome reads as distinct from a fresh cancel, since a
     assert.doesNotMatch(nodeText(renderer.root), /Run cancelled\. The schedule starts clean/);
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });
 
 test("an unconfirmed (409) cancel offers a retry, not a generic failure", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  const restore = installFetch(async (url: string, init?: RequestInit) => {
     const path = String(url);
     if (path.endsWith("/schedule/config")) {
       return Response.json(
@@ -1837,7 +1893,7 @@ test("an unconfirmed (409) cancel offers a retry, not a generic failure", async 
       });
     }
     throw new Error(`unexpected fetch ${path}`);
-  }) as typeof fetch;
+  });
 
   let renderer!: ReactTestRenderer;
   try {
@@ -1856,6 +1912,6 @@ test("an unconfirmed (409) cancel offers a retry, not a generic failure", async 
     findButton(renderer.root, "Cancel this run");
   } finally {
     await act(async () => renderer.unmount());
-    globalThis.fetch = originalFetch;
+    restore();
   }
 });

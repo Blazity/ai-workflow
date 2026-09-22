@@ -8,12 +8,12 @@ import type {
   TriggerEvent,
   VcsOpaqueHandle,
 } from "@integrations/sdk";
+import { isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
 
 type GitLabContext = IntegrationContext<typeof manifest>;
 
 const SUPPORTED_EVENTS = new Set(["Merge Request Hook", "Pipeline Hook", "Note Hook"]);
-const BOT_MARKER = "<!-- ai-workflow:bot -->";
 
 export const webhook: IntegrationWebhook<typeof manifest> = {
   receive: async (request, ctx) => receiveGitLabWebhook(request, ctx),
@@ -181,8 +181,11 @@ export function normalizeGitLabEvent(
       attrs.system === true || attrs.internal === true || attrs.confidential === true ||
       !reviewStates.includes("commented") ||
       sameLogin(producer, options.botLogin ?? options.botUsername) ||
-      String(attrs.note ?? "").includes(BOT_MARKER) ||
-      String(attrs.note ?? "").includes("<!-- ai-workflow:review-ledger")
+      // Ours only when the author wrote the marker, not when they quoted one of
+      // ours back at us: the same rule the GitHub comment paths use, and the
+      // reason a reviewer's "this still does not work" reply is not silently
+      // dropped. It already covers the ledger family, so no second check.
+      isOurOwnVcsComment(attrs.note)
     ) return null;
     return {
       ...event(options.deliveryId, producer, "trigger_pr_review", {

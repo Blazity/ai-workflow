@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { fakeAnswerReadingModel, replyFromPrompt } from "../work-scope/read-answer.fake.js";
 import type { AnswerReadingModel } from "../work-scope/index.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,11 +13,13 @@ import {
 import {
   activeRuns,
   clarificationRequests,
+  user,
   workflowRuns,
 } from "../../db/schema.js";
+import { listClarificationAnswerDeliveryRows } from "../../db/repositories/agent-visibility.js";
 import { createTestDb } from "../../db/test-db.js";
 import { logger } from "../../infra/logger.js";
-import { answerClarificationAndResume } from "./answer-core.js";
+import { answerClarificationAndResume, MAX_ANSWER_LENGTH } from "./answer-core.js";
 import { composedAnswerActorId } from "./answer-authorship.js";
 import {
   getHookClarification,
@@ -156,6 +158,9 @@ async function answer(
     skipTicketFetch?: boolean;
     skipTicketMove?: boolean;
     skipAnswerComment?: boolean;
+    /** Where the answer came from; the dashboard unless a test is about a
+     *  channel that says something else. */
+    surface?: Parameters<typeof answerClarificationAndResume>[0]["surface"];
   } = {},
 ) {
   const row = await getHookClarification(db, id);
@@ -165,6 +170,7 @@ async function answer(
     row,
     rawAnswer: text,
     actor: extra.actor ?? ACTOR,
+    surface: extra.surface ?? { kind: "dashboard" },
     ...(extra.answerAuthorCount === undefined
       ? {}
       : { answerAuthorCount: extra.answerAuthorCount }),
@@ -949,5 +955,262 @@ describe("answerClarificationAndResume: where an unclear answer leaves the ticke
     expect(outcome.kind).toBe("answered");
     expect(movesToBacklog(tracker)).toHaveLength(0);
     expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * WHAT ARRIVED, AND FROM WHERE.
+ *
+ * Every arrival of an answer is kept as a delivery: the words as delivered,
+ * who delivered them, through which surface, how they were read and what was
+ * posted back. Until this existed, somebody debugging "I answered three times
+ * and nothing happened" had no record that the words ever arrived, and the
+ * ticket said every answer came "in the dashboard".
+ */
+describe("answerClarificationAndResume: what arrived, and from where", () => {
+  const TWO_ASKED: WorkScopeAskedRepository[] = [
+    { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    { repositoryKey: "github:acme/ops", askedBecause: "selection", named: true },
+  ];
+  const QUESTION = "Which of these two should this work use?";
+  const UNCLEAR = "Ada: not the fixture one";
+  const OTHER_UNCLEAR = "Ada: not sure";
+  /** What `resume-from-comments.ts` hands the core on the comment path. */
+  const JIRA = {
+    actor: { id: composedAnswerActorId("human-1"), label: "Ada (via Jira)" },
+    answerAuthorCount: 1,
+    skipTicketFetch: true,
+    skipTicketMove: true,
+    skipAnswerComment: true,
+    surface: { kind: "jira" } as const,
+  };
+
+  const deliveries = (id: string) => listClarificationAnswerDeliveryRows(db, [id]);
+
+  beforeEach(() => {
+    mocks.resumeHook.mockResolvedValue(undefined);
+  });
+
+  // Red when: a weekend of poll ticks re-reading one unchanged answer buries
+  // the round under a row per tick, or folds words a person came back from
+  // into the ones they said before.
+  it("keeps a weekend of identical ticks as one delivery and A, B, A as three", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    for (let tick = 0; tick < 300; tick += 1) {
+      await answer(tracker, row.id, UNCLEAR, JIRA);
+    }
+    await answer(tracker, row.id, OTHER_UNCLEAR, JIRA);
+    await answer(tracker, row.id, UNCLEAR, JIRA);
+
+    const rows = await deliveries(row.id);
+    expect(rows.map((delivery) => [delivery.words, delivery.count, delivery.surface])).toEqual([
+      [UNCLEAR, 300, "jira"],
+      [OTHER_UNCLEAR, 1, "jira"],
+      [UNCLEAR, 1, "jira"],
+    ]);
+    // The telling that really went out, kept once and never wiped by the 299
+    // ticks that posted nothing.
+    expect(rows[0]!.note).toBe(tracker.postComment.mock.calls[0]![1]);
+    expect(rows[0]!.lastAt.getTime()).toBeGreaterThanOrEqual(rows[0]!.firstAt.getTime());
+    // Each one reads as it was read, and the reader ran once per new answer.
+    expect(rows.map((delivery) => (delivery.reading as { outcome: { kind: string } }).outcome.kind)).toEqual([
+      "unclear",
+      "unclear",
+      "unclear",
+    ]);
+  });
+
+  // Red when: a person who answers only in Jira is never told, because a
+  // comment that failed to post still counted as "already told" and every
+  // later tick stayed silent.
+  it("tells the person again on the next delivery when the comment could not be posted", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+    tracker.postComment.mockRejectedValueOnce(new Error("Jira comment denied"));
+
+    const first = await answer(tracker, row.id, UNCLEAR, JIRA);
+    const second = await answer(tracker, row.id, UNCLEAR, JIRA);
+
+    expect([first.kind, second.kind]).toEqual(["answer_unclear", "answer_unclear"]);
+    expect(tracker.postComment).toHaveBeenCalledTimes(2);
+    // The delivery that failed to post claims no note; the one that told them
+    // keeps it.
+    const rows = await deliveries(row.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ count: 2, note: expect.stringContaining("could not") });
+  });
+
+  // Red when: an answer from a screen is recorded as a Jira comment, or the
+  // reading and the note a person got are lost.
+  it("records a dashboard answer with its surface, reading and reply", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "github:acme/api", {
+      surface: { kind: "dashboard" },
+    });
+
+    expect(outcome.kind).toBe("answered");
+    const [delivery] = await deliveries(row.id);
+    expect(delivery).toMatchObject({
+      words: "github:acme/api",
+      surface: "dashboard",
+      authorKind: "person",
+      authorDisplay: ACTOR.label,
+      count: 1,
+    });
+    expect((delivery!.reading as { outcome: { kind: string } }).outcome.kind).toBe("repositories");
+  });
+
+  // Red when: an MCP answer is recorded, and posted to the ticket, as one
+  // written in the dashboard by somebody called "MCP fBEUsk...".
+  it("records an MCP answer as an MCP answer, and names the client and the person on the ticket", async () => {
+    await db.insert(user).values({ id: "user_9", name: "Filip Maszota", email: "filip@example.com" });
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "github:acme/api", {
+      actor: { id: "user_9", label: "MCP fBEUskClient" },
+      surface: { kind: "mcp", clientId: "fBEUskClient", userId: "user_9" },
+    });
+
+    expect(outcome.kind).toBe("answered");
+    const [delivery] = await deliveries(row.id);
+    // The person, not only the client id: the round says who answered.
+    expect(delivery).toMatchObject({
+      surface: "mcp",
+      authorDisplay: "Filip Maszota (MCP fBEUskClient)",
+    });
+    expect(tracker.postComment.mock.calls[0]![1]).toContain(
+      "Filip Maszota answered the clarification through the MCP client fBEUskClient; the run is resuming.",
+    );
+  });
+
+  // Red when: a dashboard answer's ticket comment changes wording under a
+  // person who has read it a hundred times.
+  it("leaves the dashboard sentence exactly as it was", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "github:acme/api", { surface: { kind: "dashboard" } });
+
+    expect(tracker.postComment.mock.calls[0]![1]).toBe(
+      ["Ada answered the clarification in the dashboard; the run is resuming.", "Answer:\ngithub:acme/api"].join(
+        "\n\n",
+      ),
+    );
+  });
+
+  // Red when: our own redelivery of a stored answer is recorded as a person
+  // answering again, in a channel they never used.
+  it("records nothing new when the cron redelivers a stored answer", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+    mocks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
+    mocks.getHookByToken.mockResolvedValue({ token: "hook" });
+
+    const first = await answer(tracker, row.id, "github:acme/api", { surface: { kind: "dashboard" } });
+    expect(first.kind).toBe("resume_failed_retryable");
+    // The Jira cron redelivers the stored answer, as resume-from-comments does.
+    const retry = await answer(tracker, row.id, "github:acme/api", { surface: { kind: "jira" } });
+
+    expect(retry.kind).toBe("answered");
+    const rows = await deliveries(row.id);
+    expect(rows.map((delivery) => [delivery.surface, delivery.count])).toEqual([["dashboard", 1]]);
+  });
+
+  // Red when: a decline or a delegation is kept as a bare arrival, so the
+  // round cannot say what a person's "none of these" was taken to mean.
+  it.each([
+    ["a decline", "Ada: none", "declined_all"],
+    ["a delegation", "Ada: whatever you think is best", "delegated"],
+  ])("records %s as it was read, with the note it got", async (_label, words, kind) => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, words, JIRA);
+
+    const [delivery] = await deliveries(row.id);
+    expect((delivery!.reading as { outcome: { kind: string } }).outcome.kind).toBe(kind);
+    expect(delivery!.note).toBe(tracker.postComment.mock.calls.at(-1)![1]);
+  });
+
+  // Red when: an answer nobody could take leaves no trace, which is exactly
+  // the case a person comes looking for: they sent something and nothing
+  // happened. The round shows the arrival with no effects.
+  it("records an answer too long to take, and does nothing else with it", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+    const tooLong = `Ada: ${"github:acme/api ".repeat(MAX_ANSWER_LENGTH)}`;
+
+    const outcome = await answer(tracker, row.id, tooLong, JIRA);
+
+    expect(outcome.kind).toBe("invalid_answer");
+    const [delivery] = await deliveries(row.id);
+    expect(delivery).toMatchObject({ surface: "jira", count: 1, note: null, reading: null });
+    expect(delivery!.words.startsWith("Ada: github:acme/api")).toBe(true);
+    // Kept, but not without a bound: the row is a record, not a paste bin.
+    expect(delivery!.words.length).toBeLessThan(tooLong.length);
+    expect((await getHookClarification(db, row.id))?.status).toBe("pending");
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+  });
+
+  // Red when: an answer that arrives at a question somebody else has just
+  // answered leaves nothing behind, so the person who wrote it is told
+  // nothing and the round shows no sign of them.
+  it("records an answer that arrived too late", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+    await answer(tracker, row.id, "github:acme/api", { surface: { kind: "dashboard" } });
+
+    const late = await answer(tracker, row.id, "Bo: github:acme/ops", JIRA);
+
+    expect(late.kind).toBe("conflict");
+    const rows = await deliveries(row.id);
+    expect(rows.map((delivery) => [delivery.words, delivery.surface])).toEqual([
+      ["github:acme/api", "dashboard"],
+      ["Bo: github:acme/ops", "jira"],
+    ]);
+    expect(rows[1]).toMatchObject({ note: null, reading: null });
+  });
+
+  // Red when: an answer to a question whose resume is already spent is
+  // dropped silently, so a person keeps answering a stopped run with no
+  // record that they ever did.
+  it("records an answer to a question whose resume was given up on", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+    await db
+      .update(clarificationRequests)
+      .set({ status: "resume_failed" })
+      .where(eq(clarificationRequests.id, row.id));
+
+    const outcome = await answer(tracker, row.id, "Ada: github:acme/api", JIRA);
+
+    expect(outcome.kind).toBe("resume_terminal");
+    const [delivery] = await deliveries(row.id);
+    expect(delivery).toMatchObject({ words: "Ada: github:acme/api", surface: "jira", note: null });
+  });
+
+  // Red when: a delivery that could not be written changes what the answer
+  // did. The record of an arrival is worth a lot and never worth an answer.
+  it("answers exactly the same when the delivery cannot be written", async () => {
+    const row = await seedPending(TWO_ASKED, [QUESTION]);
+    const tracker = makeTracker();
+    const warn = vi.spyOn(logger, "warn");
+    await db.execute(sql`DROP TABLE clarification_answer_deliveries`);
+
+    const outcome = await answer(tracker, row.id, "github:acme/api", { surface: { kind: "dashboard" } });
+
+    expect(outcome.kind).toBe("answered");
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+    expect((await getHookClarification(db, row.id))?.status).toBe("answered");
+    expect(tracker.postComment).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: RUN, clarificationId: row.id }),
+      "clarification_answer_delivery_failed",
+    );
   });
 });

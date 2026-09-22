@@ -634,15 +634,12 @@ describe("human repository expansion beyond the model round limit", () => {
     expect(researchAsksForPrivate()).toEqual({ kind: "proceed" });
     expect(ctx.repositoryExpansion.expansionClosed).toBe("human");
 
-    // Pass three, closed: still asking for it ends the run, still without a
-    // second question, and the last word says what to do about it.
+    // Pass three, closed: still asking for it buys nothing. The run does not
+    // ask a second time and does not die either: the corrective pass it spent
+    // on pass two was the last one this request could buy, so the loop stops
+    // restarting and the run plans with what it holds.
     expect(await applyHumanRepositoryExpansion(ctx, deps)).toEqual({ kind: "noop" });
-    const last = researchAsksForPrivate();
-    expect(last.kind).toBe("fail");
-    if (last.kind === "fail") {
-      expect(last.message).toContain("github:acme/private");
-      expect(last.message).toContain("Enable it on the Repositories page and start a new run.");
-    }
+    expect(researchAsksForPrivate()).toEqual({ kind: "plan_without" });
     expect(raised).toHaveLength(1);
     expect(deps.attach).toHaveBeenCalledTimes(1);
   });
@@ -1252,7 +1249,7 @@ describe("expansion state survives a clarification round-trip", () => {
   // which no human can answer, because everything named was already there.
   // AIW-377: the round limit no longer overtakes that no-op either, so the
   // consecutive all-attached bound is what ends the loop.
-  it("keeps researching on an all-attached request and closes expansion on the third", () => {
+  it("keeps researching on an all-attached request once, and only once", () => {
     const ctx = makeCtx({
       sandboxId: "sbx-research",
       workspaceManifest: { version: 2, repositories: [] },
@@ -1292,37 +1289,24 @@ describe("expansion state survives a clarification round-trip", () => {
     expect(ctx.repositoryExpansion.rounds).toBe(1);
     expect(ctx.repositoryExpansion.priorRequests).toEqual(requests);
 
+    // And that first pass was the one corrective pass this run had. The second
+    // all-attached request buys nothing: the loop stops re-running research and
+    // the run plans with the repositories it already holds. Three more rounds
+    // of the same request used to follow, and then a dead run.
     const second = advanceExpansion(ctx, requests, ctx.selectedRepositories);
-    expect(second.action).toEqual({ kind: "proceed" });
+    expect(second.action).toEqual({ kind: "plan_without" });
     expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
 
-    // Round three used to be the expansion-limit question a human had no new
-    // answer to. It closes expansion instead, and asks nothing.
-    const third = advanceExpansion(ctx, requests, ctx.selectedRepositories);
-    expect(third.action).toEqual({ kind: "proceed" });
-    expect(ctx.repositoryExpansion.expansionClosed).toBe("bound");
-
-    // And from here the run is on a countdown: one more request is absorbed
-    // without a round, on the pass that carries the "expansion closed" note,
-    // and the next one ends the run instead of buying another research pass.
-    expect(ctx.repositoryExpansion.rounds).toBe(3);
+    // It stays that way however many times the model asks.
     expect(advanceExpansion(ctx, requests, ctx.selectedRepositories).action).toEqual({
-      kind: "proceed",
+      kind: "plan_without",
     });
-    expect(ctx.repositoryExpansion.rounds).toBe(3);
-    expect(ctx.repositoryExpansion.closedRequests).toBe(1);
-
-    const last = advanceExpansion(ctx, requests, ctx.selectedRepositories);
-    expect(last.action.kind).toBe("fail");
-    if (last.action.kind === "fail") {
-      expect(last.action.message).toContain("Start a new run");
-    }
   });
 
   // Research asking for more context without naming any repository used to
   // park the whole run on "Which repository is required?", which no human can
   // answer: the model itself could not name one.
-  it("continues without a clarification and still burns a round when no repository is named", () => {
+  it("continues without a clarification when no repository is named, for one pass", () => {
     const ctx = makeCtx({
       sandboxId: "sbx-research",
       workspaceManifest: { version: 2, repositories: [] },
@@ -1345,14 +1329,12 @@ describe("expansion state survives a clarification round-trip", () => {
     // untouched: the round limit is what bounds this one.
     expect(ctx.repositoryExpansion.allAttachedRequests).toBeUndefined();
 
+    // A pass that asked for nothing at all is as spent as one that asked for a
+    // repository it cannot have, so it draws on the same single corrective
+    // pass: the second one does not buy a third.
     expect(advanceExpansion(ctx, [], ctx.selectedRepositories).action).toEqual({
-      kind: "proceed",
+      kind: "plan_without",
     });
-    const third = advanceExpansion(ctx, [], ctx.selectedRepositories);
-    expect(third.action.kind).toBe("ask_limit");
-    if (third.action.kind === "ask_limit") {
-      expect(third.action.questions[0]).toContain("maximum of 2");
-    }
   });
 });
 

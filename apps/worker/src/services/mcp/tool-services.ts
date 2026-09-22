@@ -94,6 +94,10 @@ export interface McpToolServices extends McpGateServices {
     row: HookClarificationRow;
     rawAnswer: string;
     actor: { id: string; label: string };
+    /** Which client answered and who is behind it, so the record and the
+     *  ticket comment say "through an MCP client" rather than "in the
+     *  dashboard". */
+    surface: { kind: "mcp"; clientId: string; userId: string | null };
     issueTracker: IssueTrackerAdapter;
   }): Promise<AnswerClarificationOutcome>;
   cancelRunForOperator(

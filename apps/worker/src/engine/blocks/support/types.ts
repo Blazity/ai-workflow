@@ -11,6 +11,10 @@ import type {
 } from "@shared/contracts";
 import type { CostProviderKind } from "@shared/costs";
 import type {
+  EffectivePromptCompilation,
+  EffectivePromptPart,
+} from "@shared/prompts";
+import type {
   BlockExecutionContext,
   BlockExecutionResult,
   StepsRecord,
@@ -44,12 +48,14 @@ import type { WorkspaceGate } from "../../steps/workspace-gate.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
 import type {
   PreSandboxRepositoryDiscovery,
+  PreSandboxRepositoryMap,
   PreSandboxRepositoryScopeNarrowing,
   PreSandboxWorkScopeAsk,
   PreSandboxWorkScopeLeftOut,
 } from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../../sandbox/agents/types.js";
 import type { RepositoryExpansionState } from "../../repository-discovery/runner.js";
+import type { BriefingSequence } from "../../agent-visibility/plan.js";
 import type { ReviewLedgerState } from "../../../adapters/vcs/types.js";
 import type { SettledThread } from "../../steps/review-ledger-settle.js";
 import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
@@ -325,6 +331,16 @@ export interface EngineCtx {
   reviewLedgerSettled?: SettledThread[];
   /** Server-authored catalog and mandatory scope used for model-assisted selection. */
   repositoryDiscovery: PreSandboxRepositoryDiscovery | null;
+  /**
+   * The repositories every repository-working send describes, read once in the
+   * pre-sandbox step because composition runs in workflow scope and may not
+   * touch a database.
+   *
+   * NULL IS A FACT. A run whose journal predates this field replays without it,
+   * and a send built from that says the map was not available rather than
+   * rendering an empty catalog, which would claim there is nothing else.
+   */
+  repositoryMap: PreSandboxRepositoryMap | null;
   /** Repositories pinned to the definition, inherited by every run it dispatches.
    *  Absent when the operator pinned none, which keeps unpinned runs on exactly
    *  their pre-pin path. */
@@ -424,8 +440,27 @@ export type { BlockExecutionResult, StepsRecord } from "@shared/workflow-graph";
 export { executionError };
 
 /**
+ * Compiles the effective prompt of one agent invocation from the block's
+ * prompt and the run's contribution as named parts, and hands back the whole
+ * compilation: the prompt to send and the sections, provenance and parts it
+ * was made of, so the send site holds exactly what the model receives.
+ */
+export type InvocationPromptCompiler = (input: {
+  blockPrompt: string;
+  runtimeData: readonly EffectivePromptPart[];
+  sandboxId: string | null;
+}) => Promise<
+  | { ok: true; compilation: EffectivePromptCompilation }
+  | {
+      ok: false;
+      result: Extract<BlockExecutionResult, { kind: "execution_error" }>;
+    }
+>;
+
+/**
  * One block invocation as this worker sees it: everything the scheduler hands
- * an executor, plus the run budget the invocation is charged against.
+ * an executor, plus the run budget the invocation is charged against, plus the
+ * prompt compiler.
  *
  * The budget is not optional. `@shared/workflow-graph` carried these two
  * functions as optional fields until stage 12-6b, and every reader had to fall
@@ -433,9 +468,41 @@ export { executionError };
  * invocation has no profile budget" and "the caller forgot" looked the same.
  * The one construction site (`agent-workflow.ts`) now decides which of the two
  * it means, once.
+ *
+ * The compiler is the worker's own for the same kind of reason: the shared
+ * `compileEffectivePrompt` seam can carry only a prompt string, because that
+ * package may not name the compilation type, so it is left out here and the
+ * worker's typed compiler takes its place.
  */
-export interface BlockInvocationContext extends BlockExecutionContext {
+export interface BlockInvocationContext
+  extends Omit<BlockExecutionContext, "compileEffectivePrompt"> {
   budget: RunBudgetHooks;
+  compileInvocationPrompt?: InvocationPromptCompiler;
+  /**
+   * Which block this invocation is of.
+   *
+   * Every executor already knows it from its own node argument, but the
+   * closures the workflow body shares between blocks (repository discovery,
+   * workspace provisioning) do not, and the record of a send is keyed by the
+   * node it belongs to. One place, so a send can never be filed under the
+   * wrong block.
+   */
+  nodeId: string;
+  blockType: string;
+  /**
+   * The numbering of this Block Attempt's sends, for the record of what each
+   * one gave the model.
+   *
+   * It belongs to the invocation and to nothing wider. One attempt sends many
+   * times (a planning pass, the discovery it triggers, the next pass), and two
+   * runs in one worker instance reach the same node id at the same moment, so
+   * a counter held anywhere above this object would hand two different sends
+   * the same identity and the insert would drop one of them in silence.
+   *
+   * Not optional, for the same reason the budget is not: an invocation without
+   * a counter and a caller that forgot would otherwise look alike.
+   */
+  briefingSequence: BriefingSequence;
 }
 
 /**

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
     getDb: vi.fn(),
     listWorkflowOwnedBranchesForTicket: vi.fn(),
     listRepositoryRules: vi.fn().mockResolvedValue([]),
+    listRepositoryCatalogMapRows: vi.fn().mockResolvedValue([]),
     getMemoryDocument: vi.fn(),
     upsertMemoryDocument: vi.fn(),
     logger: { info: vi.fn(), warn: vi.fn() },
@@ -74,6 +75,8 @@ vi.mock("../../db/repositories/runs.js", () => ({
 
 vi.mock("../../db/repositories/repository-catalog.js", () => ({
   listConnectedRepositoryRules: (keys: string[]) => mocks.listRepositoryRules(keys),
+  listConnectedRepositoryCatalogMapRows: (keys: string[]) =>
+    mocks.listRepositoryCatalogMapRows(keys),
 }));
 
 vi.mock("../../db/repositories/memory.js", () => ({
@@ -1019,31 +1022,28 @@ describe("repoSelectionStep", () => {
   it("loads discovery relationships for the frozen enabled list and marks inaccessible context", async () => {
     mocks.listRepositories.mockResolvedValueOnce(repos);
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
-    mocks.listRepositoryRules.mockResolvedValueOnce([
+    mocks.listRepositoryCatalogMapRows.mockResolvedValueOnce([
       {
         key: "github:acme/web",
-        version: 3,
-        rules: "",
+        enabled: true,
+        description: "",
         relationships: [
           {
             direction: "outgoing",
-            repositoryId: 2,
-            provider: "github",
-            path: "acme/api",
-            enabled: true,
+            targetKey: "github:acme/api",
+            targetEnabled: true,
             kind: "calls",
             note: "runtime edge",
           },
           {
             direction: "incoming",
-            repositoryId: 9,
-            provider: "gitlab",
-            path: "other/private",
-            enabled: true,
+            targetKey: "gitlab:other/private",
+            targetEnabled: true,
             kind: "documents",
             note: null,
           },
         ],
+        unknownRelationshipCount: 0,
       },
     ]);
 
@@ -1061,10 +1061,12 @@ describe("repoSelectionStep", () => {
       step: { uses: "repo-selection", onFailure: "fail" },
     });
 
-    expect(mocks.listRepositoryRules).toHaveBeenCalledWith([
-      "github:acme/web",
-      "github:acme/api",
-    ]);
+    // The enabled list plus everything this run listed, because the map has to
+    // explain a repository the catalog holds and keeps switched off as well as
+    // the ones it serves.
+    expect(mocks.listRepositoryCatalogMapRows).toHaveBeenCalledWith(
+      expect.arrayContaining(["github:acme/web", "github:acme/api"]),
+    );
     expect(result.repositoryDiscovery?.catalog).toEqual([
       expect.objectContaining({
         repoPath: "acme/api",
@@ -1124,7 +1126,10 @@ describe("repoSelectionStep", () => {
         workflowOwnedBranch: expect.objectContaining({ branchName: "blazebot/aiw-45" }),
       }),
     ]);
-    expect(result.promptAdditions?.[0]?.content).toContain("github:acme/web");
+    // The repository the branch lives in reaches the prompt through the
+    // repository map, which every send now renders from one object; there is no
+    // second "Selected Repositories" list beside it any more.
+    expect(result.repositoryMap?.repositories).toBeDefined();
   });
 
   // The answer reaches this step as an answer, through the structural field,
@@ -1834,11 +1839,10 @@ describe("repoSelectionStep remembered repository routing", () => {
           selectedRationale: "remembered from a human answer for a matching ticket label",
         },
       ]);
-      // The label is a ticket author's text and never reaches a prompt.
-      expect(result.promptAdditions?.[0]?.content).toBe(
-        "- github:acme/api: remembered from a human answer for a matching ticket label",
-      );
-      expect(result.promptAdditions?.[0]?.content).not.toContain("billing");
+      // The label is a ticket author's text and never reaches a prompt. The
+      // rationale is what the map renders as "why it is here", so the invariant
+      // is asserted on the one string that now carries it.
+      expect(result.selectedRepositories?.[0]?.selectedRationale).not.toContain("billing");
     });
 
     it("matches a label case insensitively and ignores unrelated labels", async () => {

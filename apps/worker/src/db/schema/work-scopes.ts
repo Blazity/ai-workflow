@@ -75,9 +75,13 @@ export const workScopeEntries = pgTable(
       "work_scope_entries_unavailable_reason_pairing_check",
       sql`(${t.unavailableReason} is not null) = (${t.state} = 'unavailable')`,
     ),
+    // ONE LIST, AND `WORK_SCOPE_ORIGINS` IS THE OTHER HALF OF IT. Adding an
+    // origin means a generated migration that drops and re-adds this
+    // constraint; `related_repository` ranks 3 alongside `trigger_policy`, so
+    // the rank check below is untouched and no stored rank moves.
     check(
       "work_scope_entries_origin_check",
-      sql`${t.origin} in ('person', 'delegated', 'workflow_owned_branch', 'ticket_text', 'trigger_policy', 'inferred')`,
+      sql`${t.origin} in ('person', 'delegated', 'workflow_owned_branch', 'ticket_text', 'trigger_policy', 'related_repository', 'inferred')`,
     ),
     check("work_scope_entries_origin_rank_check", sql`${t.originRank} between 0 and 4`),
   ],

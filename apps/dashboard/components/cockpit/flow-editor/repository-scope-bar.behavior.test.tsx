@@ -74,6 +74,92 @@ const CATALOG: RepositoryOption[] = [
   gl("acme-group/platform/billing-core", "develop"),
 ];
 
+/** What `settle` watches: the reads the bar has out, and how many it has
+ *  started, so a turn that started another one is not mistaken for quiet.
+ *  One mount per test, and this file's tests run one at a time. */
+interface Reads {
+  inFlight: number;
+  started: number;
+}
+let reads: Reads = { inFlight: 0, started: 0 };
+
+/**
+ * Installs `handler` as the fetch for one test and returns the undo.
+ *
+ * Every answer lands a turn later, the way a response does: resolving in the
+ * caller's own microtask is what let a counted wait look reliable.
+ * `FIXTURE_SLOW_MS` delays every answer by that many milliseconds, which is
+ * how this harness reproduces a runner slow enough to break a counted wait.
+ */
+function installFetch(
+  handler: (url: string, init?: RequestInit) => Promise<Response>,
+): () => void {
+  const originalFetch = globalThis.fetch;
+  // The count belongs to this installation, not to the file: a test may end
+  // while an answer is still on its way, and a count the next test had zeroed
+  // would go negative when that answer lands, so nothing would ever look quiet
+  // again. A leftover answer decrements the count of the test it belongs to,
+  // where nobody is watching any more.
+  const mine: Reads = { inFlight: 0, started: 0 };
+  reads = mine;
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    mine.inFlight += 1;
+    mine.started += 1;
+    const answer = async () => {
+      const slow = Number(process.env.FIXTURE_SLOW_MS ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(slow, 0)));
+      return handler(String(url), init);
+    };
+    return answer().finally(() => {
+      mine.inFlight -= 1;
+    });
+  }) as typeof globalThis.fetch;
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+/** One turn of what a browser does between two paints: the microtasks a
+ *  resolved promise queues, and the macrotask a fetch body lands on. */
+async function turn() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Lets the chain of reads the catalog starts finish, and waits for exactly
+ * that.
+ *
+ * NEVER A COUNT OF TURNS. One refresh is two reads whose bodies land a turn or
+ * more after the call, and a landed read can start the next one. How many
+ * turns that costs is the runner's business, so a fixed count passes on an
+ * idle machine and, on a loaded one, returns while a read is still in flight:
+ * the assertion then reads a half-loaded bar and the failure looks like the
+ * product. Quiet is the condition those assertions mean, and it is two things:
+ * nothing in flight, and a turn that started nothing new.
+ *
+ * The bound is wall clock, so a slower machine waits longer instead of
+ * failing, and a bar that never settles fails as a readable timeout rather
+ * than hanging the suite.
+ */
+async function settle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await turn();
+    if (reads.inFlight === 0) {
+      const started = reads.started;
+      await turn();
+      if (reads.inFlight === 0 && reads.started === started) return;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(
+        `the bar was still loading after ${timeoutMs} ms: ${reads.inFlight} request(s) in flight`,
+      );
+    }
+  }
+}
+
 function nodeText(node: ReactTestInstance): string {
   return node.children
     .flatMap((child) => (typeof child === "string" ? [child] : [nodeText(child)]))
@@ -570,7 +656,6 @@ test("the shared modal dismisses on Escape and wraps Tab focus", async () => {
 });
 
 test("catalog refresh drops a newly selected repository that disappears", async () => {
-  const originalFetch = globalThis.fetch;
   const queue = [
     [gh("Blazity/ai-workflow-prod"), gh("Blazity/ai-workflow-demo")],
     [gh("Blazity/ai-workflow-demo")],
@@ -578,8 +663,8 @@ test("catalog refresh drops a newly selected repository that disappears", async 
   // One refresh is two reads now: the catalog decides what may be pinned and
   // the directory is the fleet the bridge still offers, so the stub answers by
   // URL rather than by turn.
-  globalThis.fetch = ((url: string) => {
-    if (String(url).startsWith("/api/repository-catalog")) {
+  const uninstallFetch = installFetch((url) => {
+    if (url.startsWith("/api/repository-catalog")) {
       return Promise.resolve(
         Response.json({
           state: {
@@ -604,7 +689,7 @@ test("catalog refresh drops a newly selected repository that disappears", async 
         ],
       }),
     );
-  }) as typeof globalThis.fetch;
+  });
 
   let current: WorkflowRepositoryScope = {};
   const changes: WorkflowRepositoryScope[] = [];
@@ -625,7 +710,7 @@ test("catalog refresh drops a newly selected repository that disappears", async 
     await act(async () => {
       renderer = create(element());
     });
-    await act(async () => undefined);
+    await settle();
     await act(async () =>
       buttonWithText(renderer.root, "Configure").props.onClick(),
     );
@@ -638,7 +723,7 @@ test("catalog refresh drops a newly selected repository that disappears", async 
     await act(async () =>
       buttonWithText(renderer.root, "Refresh catalog").props.onClick(),
     );
-    await act(async () => undefined);
+    await settle();
 
     assert.equal(
       renderer.root.findAll(
@@ -656,6 +741,6 @@ test("catalog refresh drops a newly selected repository that disappears", async 
     if (renderer!) {
       await act(async () => renderer.unmount());
     }
-    globalThis.fetch = originalFetch;
+    uninstallFetch();
   }
 });

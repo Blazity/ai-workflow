@@ -12,6 +12,7 @@ import type {
 } from "../../../sandbox/agents/types.js";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
+import { WORKSPACE_NARROWING_CEILING } from "../../pre-sandbox/types.js";
 import type { TicketTextReading } from "../../work-scope/context.js";
 import type {
   WorkspaceManifest,
@@ -59,6 +60,7 @@ import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js
 import type {
   PreSandboxRepositoryCatalogDegradation,
   PreSandboxRepositoryDiscovery,
+  PreSandboxRepositoryMap,
   PreSandboxRepositoryScopeNarrowing,
   PreSandboxWorkScopeAsk,
   PreSandboxWorkScopeLeftOut,
@@ -116,6 +118,10 @@ type PreSandboxOutcome =
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      /** Read once in the pre-sandbox step, because composition may not touch a
+       *  database. Absent on a run whose journal predates it, which a send says
+       *  out loud rather than rendering an empty map. */
+      repositoryMap?: PreSandboxRepositoryMap;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
@@ -139,6 +145,10 @@ type PreSandboxOutcome =
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      /** Read once in the pre-sandbox step, because composition may not touch a
+       *  database. Absent on a run whose journal predates it, which a send says
+       *  out loud rather than rendering an empty map. */
+      repositoryMap?: PreSandboxRepositoryMap;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
@@ -922,6 +932,11 @@ export async function ensureWorkspace(
 
   try {
     let selected: SelectedRepository[];
+    /** Repositories this run took only because the catalog relates them to one
+     *  the work names. Workspace access defaults to write, so without this the
+     *  run could commit to a repository nobody was asked about on the strength
+     *  of an edge in a catalog. */
+    let relatedReadOnlyKeys = new Set<string>();
     let discoverySandboxId: string | null = null;
     // The approved-scope path carries each repository's trusted research baseline
     // into provisioning so the manager rejects a branch that moved between approval
@@ -1171,7 +1186,18 @@ export async function ensureWorkspace(
         ctx.preSandboxAdditions = preSandbox.promptAdditions;
       }
       ctx.repositoryDiscovery = preSandbox.repositoryDiscovery ?? null;
+      ctx.repositoryMap = preSandbox.repositoryMap ?? null;
       selected = preSandbox.selectedRepositories ?? [];
+      // A REPOSITORY TAKEN BECAUSE IT IS RELATED TO ONE THE TICKET NAMES IS
+      // READ ONLY. `access` lives on the workspace input rather than on the
+      // selection, so the keys travel and the access is set where the input is
+      // built, below. Guard: `prepare-workspace.test.ts`, "clones a related
+      // repository read only".
+      relatedReadOnlyKeys = new Set(
+        (preSandbox.repositoryMap?.relatedAttachments ?? []).map(
+          (attachment) => attachment.repositoryKey,
+        ),
+      );
       if (selected.length === 0 && preSandbox.repositoryDiscovery) {
         if (!options.discoverRepositories) {
           const questions = [
@@ -1199,7 +1225,7 @@ export async function ensureWorkspace(
       const questions = ["Which repository should this ticket modify?"];
       return askWhichRepositories(questions);
     }
-    if (selected.length > 8) {
+    if (selected.length > WORKSPACE_NARROWING_CEILING) {
       // NOBODY IS ASKED A QUESTION THEY HAVE ALREADY ANSWERED.
       //
       // Discovery rebuilds this list from the ticket on every run and on every
@@ -1230,7 +1256,7 @@ export async function ensureWorkspace(
       if (narrowedTo === null) {
         return askWhichRepositories(
           [
-            "More than 8 repositories are in scope. Which repositories are essential for this ticket?",
+            `More than ${WORKSPACE_NARROWING_CEILING} repositories are in scope. Which repositories are essential for this ticket?`,
           ],
           "narrowing",
         );
@@ -1277,6 +1303,16 @@ export async function ensureWorkspace(
           // branch already exists remotely, so this never creates or resets a branch.
           // Repositories without an owned branch keep the read-only default.
           ...(context.repository.workflowOwnedBranch ? { access: "write" as const } : {}),
+          // LAST, so it wins. A repository nobody chose is never written to.
+          // It cannot collide with the line above in practice, because a
+          // repository carrying this run's own branch is already in the
+          // selection and so is never taken as a neighbour; if that ever
+          // changes, read-only is the safe side of the disagreement.
+          ...(relatedReadOnlyKeys.has(
+            `${context.repository.provider}:${context.repository.repoPath.toLowerCase()}`,
+          )
+            ? { access: "read" as const }
+            : {}),
           ...(expectedResearchBaseSha ? { expectedResearchBaseSha } : {}),
         };
       },

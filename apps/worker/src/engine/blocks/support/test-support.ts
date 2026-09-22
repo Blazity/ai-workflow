@@ -27,6 +27,7 @@ import {
 import type { PrTriggerPayload } from "../../agent-input.js";
 import type { BlockInvocationContext, EngineCtx } from "./types.js";
 import { MESSAGING_CONNECTED } from "../../definition/messaging-deployment.fixture.js";
+import { createBriefingSequence } from "../../agent-visibility/plan.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -189,6 +190,7 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     selectedRepositories: [],
     repositoryContexts: [],
     repositoryDiscovery: null,
+    repositoryMap: null,
     repositoryExpansion: { rounds: 0, priorRequests: [] },
     researchWriteRepositories: [],
     preSandboxAdditions: { research: [], implementation: [], review: [] },
@@ -234,6 +236,9 @@ export function makeInvocation(
       observeBudget: ctx.observeBudget,
       recordBudgetUsage: () => {},
     },
+    nodeId: "node-1",
+    blockType: "generic_agent",
+    briefingSequence: createBriefingSequence(),
     ...overrides,
   };
 }

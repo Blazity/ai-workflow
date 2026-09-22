@@ -3,6 +3,7 @@ import { getWorld } from "workflow/runtime";
 import { logger } from "../../../infra/logger.js";
 import { GateStore } from "../../../post-pr-gate/gate-store.js";
 import { deleteConnectedExpiredRunObservations } from "../../../db/repositories/runs/run-observability.js";
+import { deleteConnectedExpiredAgentBriefings } from "../../../db/repositories/agent-visibility.js";
 import { reconcileConnectedPendingPrChecks } from "../../../engine/runtime/pr-external-resources.js";
 import {
   getConnectedApproval,
@@ -202,6 +203,29 @@ function skippedTicketPhases(): TicketPhases {
     approvalRecovery: { scanned: 0, started: 0, blocked: 0, errors: 0 },
     atCapacityQueue: { queued: 0, commented: 0 },
   };
+}
+
+/**
+ * The briefings whose retention has passed, swept beside the replay.
+ *
+ * Briefings go with the replay that reaches them: each carries the later of
+ * its run's replay expiry and thirty days from the send, so a run parked past
+ * its retention, one whose observations were never captured, and a batch that
+ * failed halfway all expire on a later pass.
+ *
+ * Its own statement, and its own failure: a sweep that cannot run leaves the
+ * rest of the tick alone and says so once. Extracted so both halves of that
+ * are testable without running the whole pass.
+ */
+export async function sweepExpiredBriefings(
+  sweep: typeof deleteConnectedExpiredAgentBriefings = deleteConnectedExpiredAgentBriefings,
+): Promise<{ briefings: number; texts: number }> {
+  try {
+    return await sweep({});
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "poll_briefing_retention_failed");
+    return { briefings: 0, texts: 0 };
+  }
 }
 
 export async function runPollPass(
@@ -476,6 +500,7 @@ export async function runPollPass(
       );
       return { deleted: 0, runIds: [] };
     });
+  const briefingRetention = await sweepExpiredBriefings();
   // Webhook deliveries that could not start when they arrived (busy subject, no
   // capacity, a failed start) stay pending, so this is what actually starts
   // them; the two sweeps drop counter rows whose window nothing can read again.
@@ -611,6 +636,7 @@ export async function runPollPass(
     webhookRecovery,
     scheduleTriggers,
     replayRetention: { deleted: replayRetention.deleted },
+    briefingRetention,
     mcpAuditRetention: { deleted: mcpAuditRetention.deleted },
     mcpIdempotencyRetention: { deleted: mcpIdempotencyRetention.deleted },
     prCheckReconciliation,

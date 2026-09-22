@@ -42,6 +42,7 @@ import type {
   WorkScopeActor,
   WorkScopeRefusalReason,
 } from "@shared/contracts";
+import { workScopeUnnamedWhy } from "@shared/contracts";
 import { REQUEST_REPOSITORIES_MAX } from "./decide.js";
 
 /**
@@ -193,9 +194,11 @@ export function workScopeRefusalSentence(
  * later removed, and there that clause would be false. What stays true in both
  * cases is what it says.
  */
-export function workScopeUnnamedWhy(repositoryKey: RepositoryKey): string {
-  return `${repositoryKey} was listed in a repository question already answered on this work and is not selected on it`;
-}
+// The sentence itself moved to `@shared/contracts`, unchanged, so the
+// repository map can say the same words on the pass BEFORE the request, and
+// the two can never drift into a prompt that refuses in one voice and warns in
+// another. Re-exported here so every caller keeps the name it already uses.
+export { workScopeUnnamedWhy };
 
 /**
  * The unnamed repository a person DID write about after the answer, in a comment

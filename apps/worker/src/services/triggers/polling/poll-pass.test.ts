@@ -23,7 +23,7 @@ vi.mock("../../../infra/logger.js", () => ({ logger }));
 // import from demanding a configured deployment.
 vi.mock("../../../infra/vcs-config.js", () => ({ env: {} }));
 
-const { createRepositoryCatalogReader } = await import("./poll-pass.js");
+const { createRepositoryCatalogReader, sweepExpiredBriefings } = await import("./poll-pass.js");
 
 // The snapshot's shape is irrelevant here: what is tested is whether the reader
 // hands one over or refuses, and what it says when it refuses.
@@ -134,5 +134,36 @@ describe("createRepositoryCatalogReader", () => {
       error: "the pool is closed",
       stack: undefined,
     });
+  });
+});
+
+/**
+ * Retention for what capture keeps. The tick is the only thing that runs it,
+ * so a sweep that throws must leave the rest of the tick alone: every other
+ * piece of housekeeping in this pass is best effort for the same reason.
+ */
+describe("sweepExpiredBriefings", () => {
+  // Red when: the tick reports nothing about the sweep, so a retention that
+  // has quietly deleted nothing for a month looks exactly like one that works.
+  it("reports what the sweep removed", async () => {
+    const sweep = vi.fn(async () => ({ briefings: 7, texts: 3 }));
+
+    expect(await sweepExpiredBriefings(sweep)).toEqual({ briefings: 7, texts: 3 });
+    expect(sweep).toHaveBeenCalledWith({});
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  // Red when: a failing sweep takes the tick with it, and one broken statement
+  // stops dispatch, recovery and every other sweep behind it.
+  it("survives a sweep that rejects, and says so once", async () => {
+    const sweep = vi.fn(async () => {
+      throw new Error("relation does not exist");
+    });
+
+    expect(await sweepExpiredBriefings(sweep)).toEqual({ briefings: 0, texts: 0 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      { err: "relation does not exist" },
+      "poll_briefing_retention_failed",
+    );
   });
 });

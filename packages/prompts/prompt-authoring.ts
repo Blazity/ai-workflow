@@ -10,12 +10,14 @@ import {
   type WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
 import {
-  compatibilityPromptSourceForV2Node,
+  compatibilityPromptForV2Node,
   type EffectivePromptCompilation,
   type EffectivePromptCompileInput,
+  type EffectivePromptProfileContext,
   type EffectivePromptProfileSource,
   type EffectivePromptRepositorySource,
 } from "./effective-prompt";
+import type { EffectivePromptPart } from "./prompt-parts";
 import {
   resolvePromptReferences,
   type PromptReferenceLoader,
@@ -50,7 +52,15 @@ export interface ResolveNodePromptAuthoringInput {
   profileSource?: EffectivePromptProfileSource | null;
   repositorySources?: readonly EffectivePromptRepositorySource[];
   unresolvedRepositorySources?: readonly string[];
-  runtimeData?: string;
+  /** What the preview shows as the run's contribution; empty when omitted. */
+  runtimeData?: readonly EffectivePromptPart[];
+  /**
+   * The profile switches this block would run with. Passed through so the
+   * COMPILER decides what a switch leaves out, exactly as it does for a send:
+   * a caller that withheld the input itself would keep its own copy of that
+   * rule and drift from execution the day the rule changes.
+   */
+  profileContext?: EffectivePromptProfileContext;
   compile: (
     input: Omit<
       EffectivePromptCompileInput,
@@ -135,10 +145,10 @@ export async function resolveNodePromptAuthoringPure(
     throw new Error(`Block "${input.node.id}" does not compile an agent prompt`);
   }
   const authored = input.node.configuration[field];
+  const compatibility =
+    typeof authored === "string" ? null : compatibilityPromptForV2Node(input.node);
   const source =
-    typeof authored === "string"
-      ? authored
-      : compatibilityPromptSourceForV2Node(input.node) ?? "";
+    typeof authored === "string" ? authored : compatibility?.source ?? "";
   let text = source;
   let slots: PromptSlotDefinition[] = [];
   let promptManifest: ResolvedPromptReference[] = [];
@@ -215,7 +225,9 @@ export async function resolveNodePromptAuthoringPure(
   const compilation = await input.compile({
     nodeId: input.node.id,
     blockPrompt: text,
-    runtimeData: input.runtimeData ?? "",
+    ...(compatibility ? { blockPromptOrigin: compatibility.origin } : {}),
+    runtimeData: input.runtimeData ?? [],
+    ...(input.profileContext ? { profileContext: input.profileContext } : {}),
     slots,
     slotBindings: input.node.configuration.promptSlotBindings,
     promptManifest,

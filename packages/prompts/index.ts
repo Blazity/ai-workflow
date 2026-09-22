@@ -53,12 +53,13 @@ export { effectiveDefaultPromptValue } from "./effective-default";
  *  real schema callbacks; the package test only reaches the shared compiler. */
 export { EFFECTIVE_PROMPT_PARITY_INPUT } from "./effective-prompt.parity-fixture";
 export {
-  compatibilityPromptSourceForV2Node,
+  compatibilityPromptForV2Node,
   compileEffectivePrompt,
   REPOSITORY_RULES_SOURCE_PATH,
   type EffectivePromptCompilation,
   type EffectivePromptCompileInput,
   type EffectivePromptMemorySource,
+  type EffectivePromptProfileContext,
   type EffectivePromptProfileSource,
   type EffectivePromptProvenance,
   type EffectivePromptRepositorySource,
@@ -66,6 +67,13 @@ export {
   type EffectivePromptSectionKind,
   type EffectivePromptUnresolvedSource,
 } from "./effective-prompt";
+export {
+  concatPromptParts,
+  joinPromptParts,
+  type EffectivePromptPart,
+  type EffectivePromptPartOrigin,
+  type PromptCutCause,
+} from "./prompt-parts";
 export { filterPrompts } from "./filter";
 export { fnv1a } from "./hash";
 export {
