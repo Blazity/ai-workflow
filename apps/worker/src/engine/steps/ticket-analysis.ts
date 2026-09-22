@@ -267,10 +267,8 @@ export async function notifyTicket(
   const { loadActiveRunOwnerPort, loadAdaptersPort } = await import("../internal/ports.js");
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
-  // Destructuring takes the sender and never touches `issueTracker`, which is
-  // the getter that refuses where no tracker is connected. A notification must
-  // never change a run's outcome, and a deployment with chat and no tracker
-  // still sends this one.
+  // Only the sender: a notification must never change a run's outcome, and a
+  // deployment with chat and no tracker still sends this one.
   const { messaging } = await createAdapters(undefined, pins);
   await assertConnectedActiveRunOwner(owner);
   return messaging.notifyForTicket(ticketKey, event);

@@ -32,7 +32,15 @@ vi.mock("../../infra/logger.js", () => ({
   logger: { warn: mocks.loggerWarn },
 }));
 
-import { buildSandboxProviderConfigs, createRepositoryVcsRuntime } from "./vcs-runtime.js";
+import type { IntegrationManifest } from "@integrations/sdk";
+import type { IntegrationState } from "@shared/contracts";
+import { deploymentIntegrations } from "../../engine/definition/integration-availability.js";
+import { integrationPinsFor } from "../../engine/definition/integration-run.js";
+import {
+  buildSandboxProviderConfigs,
+  createRepositoryVcsRuntime,
+  listVcsRepositories,
+} from "./vcs-runtime.js";
 
 function connected(
   id: string,
@@ -210,5 +218,108 @@ describe("createRepositoryVcsRuntime", () => {
       "Version control provider GitLab moved after this run started (reconfigured). Start a new run.",
     );
     expect(vcs).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A run suspended across the deploy that widened what a run pins.
+ *
+ * Pins are a recorded step result and replay unchanged, so a run started on
+ * the earlier build comes back holding what that build pinned. For an agent
+ * plus send_message graph that was its chat provider alone. Its next version
+ * control call used to read GitHub's absence from that set as GitHub having
+ * moved, and stopped the run with a sentence about a change nobody made.
+ */
+describe("a run whose recorded pins do not name the VCS provider", () => {
+  const chatOnly = [{ integrationId: "slack", configFingerprint: "workspace-1" }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("works on the repository against the provider as it is now", async () => {
+    const findPR = vi.fn().mockResolvedValue(null);
+    resolvesTo(connected("github", { findPR }));
+
+    const runtime = createRepositoryVcsRuntime({
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+      integrationPins: chatOnly,
+    });
+
+    await expect(runtime.vcs.findPR("ai-workflow/aiw-1")).resolves.toBeNull();
+    expect(findPR).toHaveBeenCalledTimes(1);
+    expect(mocks.checkIntegrationPin).not.toHaveBeenCalled();
+  });
+
+  it("still lists that provider's repositories", async () => {
+    resolvesTo(
+      connected("github", {
+        listRepositories: async () => [{ provider: "github", path: "acme/api" }],
+      }),
+    );
+
+    const listed = await listVcsRepositories({ integrationPins: chatOnly });
+
+    expect(listed.failures).toEqual([]);
+    expect(listed.repositories).toEqual([{ provider: "github", path: "acme/api" }]);
+  });
+
+  it("compares the pin a run started today records for the same graph", async () => {
+    // The other half: a run started on this build pins version control for an
+    // agent block, so the same call is held to the connection it started with.
+    const manifest = (id: string, capability: string): IntegrationManifest =>
+      ({
+        id,
+        name: id,
+        description: "",
+        connection: { fields: [] },
+        capabilities: [capability],
+        blocks: [],
+        pages: [],
+        health: [],
+      }) as unknown as IntegrationManifest;
+    const state = (id: string, fingerprint: string): IntegrationState =>
+      ({
+        integrationId: id,
+        enabled: true,
+        source: "environment",
+        status: "connected",
+        connection: "connected",
+        verification: { state: "never_tested" },
+        failure: null,
+        usable: true,
+        environment: { setVariables: [], missingVariables: [], complete: true },
+        stored: { latestVersion: 0, activeVersion: null, missingFields: [], complete: false, prepared: null },
+        pin: { integrationId: id, configFingerprint: fingerprint },
+        secretsKeyAvailable: true,
+      }) as IntegrationState;
+    const pins = integrationPinsFor(
+      [{ type: "trigger_ticket_ai" }, { type: "implementation_agent" }, { type: "send_message" }],
+      deploymentIntegrations({
+        manifests: [manifest("github", "vcs"), manifest("slack", "messaging")],
+        states: new Map([
+          ["github", state("github", "app-1")],
+          ["slack", state("slack", "workspace-1")],
+        ]),
+      }),
+    );
+    const findPR = vi.fn().mockResolvedValue(null);
+    resolvesTo(connected("github", { findPR }));
+    mocks.checkIntegrationPin.mockReturnValue({ ok: true });
+
+    const runtime = createRepositoryVcsRuntime({
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+      integrationPins: pins,
+    });
+
+    await expect(runtime.vcs.findPR("ai-workflow/aiw-1")).resolves.toBeNull();
+    expect(mocks.checkIntegrationPin).toHaveBeenCalledWith(
+      { integrationId: "github", configFingerprint: "app-1" },
+      expect.anything(),
+    );
   });
 });
