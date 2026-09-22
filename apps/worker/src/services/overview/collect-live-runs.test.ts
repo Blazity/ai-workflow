@@ -56,7 +56,8 @@ function makeTracker(
     fetchTicket: vi.fn(),
     moveTicket: vi.fn(),
     postComment: vi.fn().mockResolvedValue(null),
-    searchTickets: vi.fn(),
+    ticketsInStatus: vi.fn(),
+    getCurrentUserAccountId: vi.fn().mockResolvedValue("bot-not-the-actor"),
     ...overrides,
   };
 }
@@ -85,7 +86,7 @@ describe("collectLiveRuns", () => {
     const rows = await collectLiveRuns({
       registry,
       issueTracker: tracker,
-      jiraBaseUrl: "https://example.atlassian.net",
+      ticketOrigin: "https://example.atlassian.net",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
 
@@ -114,7 +115,7 @@ describe("collectLiveRuns", () => {
     const rows = await collectLiveRuns({
       registry,
       issueTracker: makeTracker(),
-      jiraBaseUrl: "https://example.atlassian.net",
+      ticketOrigin: "https://example.atlassian.net",
       // Only the first run has attributable evidence; the second must not be
       // labelled with the org default (AIW-253).
       resolveModels: async (runIds) => {
@@ -138,7 +139,7 @@ describe("collectLiveRuns", () => {
     const rows = await collectLiveRuns({
       registry,
       issueTracker: tracker,
-      jiraBaseUrl: "https://example.atlassian.net",
+      ticketOrigin: "https://example.atlassian.net",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
 
@@ -154,7 +155,7 @@ describe("collectLiveRuns", () => {
     const rows = await collectLiveRuns({
       registry: makeRegistry([]),
       issueTracker: makeTracker(),
-      jiraBaseUrl: "https://example.atlassian.net",
+      ticketOrigin: "https://example.atlassian.net",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
     expect(rows).toEqual([]);
@@ -167,7 +168,7 @@ describe("collectLiveRuns", () => {
         { ticketKey: "AWT-2", runId: "run-parked", state: "parked" },
       ]),
       issueTracker: makeTracker(),
-      jiraBaseUrl: "https://example.atlassian.net",
+      ticketOrigin: "https://example.atlassian.net",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
 
@@ -197,7 +198,7 @@ describe("collectLiveRuns", () => {
     const rows = await collectLiveRuns({
       registry,
       issueTracker: tracker,
-      jiraBaseUrl: "https://example.atlassian.net/",
+      ticketOrigin: "https://example.atlassian.net/",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
 

@@ -347,11 +347,11 @@ describe("integrationsUsedBy", () => {
 
     expect(
       integrationsUsedBy(
-        [{ type: "investigate", params: { providers: ["jira"] } }],
+        [{ type: "investigate", params: { sources: ["issue_tracker"] } }],
         integrations,
       ),
     ).toEqual([]);
-    // No selection is the parameter's own default, which is both providers on.
+    // No selection is the parameter's own default, which is both sources on.
     expect(integrationsUsedBy([{ type: "investigate" }], integrations)).toEqual(["acmenotify"]);
   });
 });

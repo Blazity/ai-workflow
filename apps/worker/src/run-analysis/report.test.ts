@@ -514,7 +514,7 @@ describe("run analysis report", () => {
   it("marks Jira delivery not applicable for ticketless planning runs", () => {
     const report = buildResearchAnalysisReport({
       runId: "ticketless",
-      jiraApplicable: false,
+      ticketApplicable: false,
       researchResult: { body: "Plan" },
       usage,
     });

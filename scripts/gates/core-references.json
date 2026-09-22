@@ -17,13 +17,8 @@
     "(?:^|/)(?:fixtures/|[^/]+\\.fixture\\.)"
   ],
   "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support modules and directory, workflow-graph-suites, mcp-dogfood, fixture files and fixtures trees are test material by another name: nothing outside a test imports them, and a fixture naming a provider is the subject of the test rather than a coupling in the product.",
-  "plannedIntegrations": {
-    "jira": {
-      "stage": "S12",
-      "reason": "Jira becomes integrations/jira, and the ticket lifecycle runs on the issue_tracker capability"
-    }
-  },
-  "plannedIntegrationsReason": "A name core still writes, with the stage that takes it away. The gate watches these as well as the ids the registry holds, so it passes on what is here today and fails on anything new. When the stage lands, its id arrives from the registry, this entry and its allowlist rows go, and the gate says so if they do not.",
+  "plannedIntegrations": {},
+  "plannedIntegrationsReason": "A name core still writes, with the stage that takes it away. Empty since S12: every provider this build knows now arrives from the registry, so a new name here would be a provider core started writing before an integration owned it. The gate watches these as well as the registry ids, so it passes on what is here today and fails on anything new.",
   "incidentalReason": "A row may carry \"incidental\": true when its files spell a provider id by accident, such as a CSS keyword or a URL, rather than depending on the provider; the gate then keeps the row listed but never reports it as stale, because such a hit comes and goes with ordinary edits and a failure on one could not be acted on.",
   "allowlist": [
     {
@@ -101,178 +96,6 @@
     },
     {
       "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "dashboard screens and helpers that still name the provider; S12 removes them",
-      "paths": [
-        "apps/dashboard/components/cockpit/flow-editor/block-palette.ts",
-        "apps/dashboard/components/cockpit/flow-editor/blocks/shared.tsx",
-        "apps/dashboard/components/cockpit/flow-editor/blocks/trigger_ticket_ai.tsx",
-        "apps/dashboard/components/cockpit/screens/health.tsx",
-        "apps/dashboard/components/cockpit/screens/run-analysis-report.tsx",
-        "apps/dashboard/lib/settings/overview.ts"
-      ]
-    },
-    {
-      "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "other worker call sites that still name the provider; S12 removes them",
-      "paths": [
-        "apps/worker/src/engine/support/messaging.ts",
-        "apps/worker/src/mcp/tools/run-stats.ts",
-        "apps/worker/src/mcp/tools/ticket-write.ts",
-        "apps/worker/src/run-analysis/persistence.ts"
-      ]
-    },
-    {
-      "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "the provider adapters behind the capability ports; S12 removes them",
-      "paths": [
-        "apps/worker/src/adapters/issue-tracker/jira.ts"
-      ]
-    },
-    {
-      "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "stored identifiers, schema defaults and the provider CHECK constraints; the code moves, and the stored identifiers themselves survive it: rows here going away is not the measure of the stage being done",
-      "paths": [
-        "apps/worker/src/db/repositories/clarifications.ts",
-        "apps/worker/src/db/repositories/runs/analysis-report.ts"
-      ]
-    },
-    {
-      "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "engine call sites that still name the provider; S12 removes them",
-      "paths": [
-        "apps/worker/src/engine/agent-workflow.ts",
-        "apps/worker/src/engine/blocks/investigate/execute.ts",
-        "apps/worker/src/engine/blocks/investigate/manifest.ts",
-        "apps/worker/src/engine/definition/templates.ts",
-        "apps/worker/src/engine/steps/ticket-analysis.ts",
-        "apps/worker/src/engine/support/adapters.ts",
-        "apps/worker/src/engine/support/run-analysis-report.ts"
-      ]
-    },
-    {
-      "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "provider configuration and credentials read from the environment; S12 removes them",
-      "paths": [
-        "apps/worker/src/infra/runtime-env.ts"
-      ]
-    },
-    {
-      "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "the provider webhook and API routes, which keep their URLs; the code moves, and the URL a provider already calls survives it: rows here going away is not the measure of the stage being done",
-      "paths": [
-        "apps/worker/src/routes/webhooks/jira.post.ts"
-      ]
-    },
-    {
-      "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "what a sandbox agent is handed about the provider; S12 removes them",
-      "paths": [
-        "apps/worker/src/sandbox/attachments.ts",
-        "apps/worker/src/sandbox/harness-runtime.ts"
-      ]
-    },
-    {
-      "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "service call sites that still name the provider; S12 removes them",
-      "paths": [
-        "apps/worker/src/services/approvals/dispatch.ts",
-        "apps/worker/src/services/clarifications/answer-authorship.ts",
-        "apps/worker/src/services/clarifications/answer-core.ts",
-        "apps/worker/src/services/clarifications/resume-from-comments.ts",
-        "apps/worker/src/services/dispatch/dispatch.ts",
-        "apps/worker/src/services/manual-dispatch/resolve.ts",
-        "apps/worker/src/services/manual-dispatch/service.ts",
-        "apps/worker/src/services/mcp/connected-tool-services.ts",
-        "apps/worker/src/services/mcp/tool-services.ts",
-        "apps/worker/src/services/overview/collect-awaiting-store.ts",
-        "apps/worker/src/services/overview/collect-live-runs.ts",
-        "apps/worker/src/services/run-control/execute.ts",
-        "apps/worker/src/services/run-lifecycle/cancel-run.ts",
-        "apps/worker/src/services/run-lifecycle/dashboard-run-data.ts",
-        "apps/worker/src/services/run-lifecycle/durable-run-detail.ts",
-        "apps/worker/src/services/run-lifecycle/reconcile.ts",
-        "apps/worker/src/services/run-lifecycle/run-detail-read.ts",
-        "apps/worker/src/services/run-lifecycle/run-reads.ts",
-        "apps/worker/src/services/run-lifecycle/run-stall-watchdog.ts",
-        "apps/worker/src/services/settings/index.ts",
-        "apps/worker/src/services/settings/integration-settings.ts",
-        "apps/worker/src/services/settings/runtime-settings.ts",
-        "apps/worker/src/services/system/collect.ts",
-        "apps/worker/src/services/system/probes.ts",
-        "apps/worker/src/services/system/provider-webhook-observation.ts",
-        "apps/worker/src/services/tickets/ai-review-destination.ts",
-        "apps/worker/src/services/tickets/ai-review-transition.ts",
-        "apps/worker/src/services/tickets/move-targets.ts",
-        "apps/worker/src/services/tickets/ticket-runs-read.ts",
-        "apps/worker/src/services/triggers/index.ts",
-        "apps/worker/src/services/triggers/jira/handle-jira-webhook.ts",
-        "apps/worker/src/services/triggers/polling/poll-pass.ts"
-      ]
-    },
-    {
-      "ids": [
-        "jira"
-      ],
-      "stage": "S12",
-      "reason": "shared contracts, prompts and skills that still name the provider; S12 removes them",
-      "paths": [
-        "packages/contracts/run-analysis.ts",
-        "packages/contracts/workflow-graph.ts"
-      ]
-    },
-    {
-      "ids": [
-        "slack"
-      ],
-      "stage": "S12",
-      "reason": "the investigate block names the provider as DATA, not as something core talks to: a stored parameter value (providers: [\"jira\", \"slack\"]), the parameter keys slackChannels and slackLookbackDays, the editor fields that write them, the resolver rule that reads them, and the built-in templates and historical metadata that carry them. Filip kept investigate in core until S12 (2026-09-20, amending plan decision 17) so two enabled production definitions keep working. S12 splits the block and its parameters become capability-shaped; these rows go with it. Core reaches the messages themselves through the messaging capability and imports nothing of the provider.",
-      "paths": [
-        "apps/dashboard/components/cockpit/flow-editor/block-palette.ts",
-        "apps/dashboard/components/cockpit/flow-editor/blocks/shared.tsx",
-        "apps/worker/src/engine/blocks/investigate/execute.ts",
-        "apps/worker/src/engine/blocks/investigate/manifest.ts",
-        "apps/worker/src/engine/definition/templates.ts"
-      ]
-    },
-    {
-      "ids": [
-        "slack"
-      ],
-      "stage": "S12",
-      "reason": "the investigate block's stored parameter vocabulary in the shared workflow contract still includes slackChannels and slackLookbackDays. S12 splits investigate and replaces those parameters with capability-shaped values; this exception leaves with them.",
-      "paths": [
-        "packages/contracts/workflow-graph.ts"
-      ]
-    },
-    {
-      "ids": [
         "slack"
       ],
       "stage": "R1",
@@ -289,6 +112,46 @@
       "reason": "the leak review scans an unpushed diff for the SHAPES of credentials, and it names each shape so the finding a person reads says which kind of token leaked. The pattern would be worth keeping if this product never talked to the provider at all, so it is not a dependency and no stage removes it.",
       "paths": [
         "apps/worker/src/engine/blocks/leak-review/execute.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira"
+      ],
+      "stage": "kept",
+      "reason": "the key `jira` inside the run analysis report, which is a JSON document already written to `run_analysis_reports` for every run that has produced one. It names the two deliveries that report makes about a ticket, research and pull request. Renaming the key is a migration over that history, not a rename: a build that read the new name would report every existing row as malformed and the run view would go blank on it. Core reaches the tracker itself only through the `issue_tracker` capability; this is the stored word and nothing else.",
+      "paths": [
+        "apps/dashboard/components/cockpit/screens/run-analysis-report.tsx",
+        "apps/worker/src/db/repositories/runs/analysis-report.ts",
+        "apps/worker/src/engine/support/run-analysis-report.ts",
+        "apps/worker/src/run-analysis/persistence.ts",
+        "packages/contracts/run-analysis.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira"
+      ],
+      "stage": "kept",
+      "reason": "identifiers earlier builds WROTE and these lines only read back. `ticket:jira:<KEY>` is reconstructed for a clarification row from before `subjectKey` was a column, and for the string form of the workflow entry point, which only a run suspended before that entry point changed can still arrive through; `jira:` prefixes the actor recorded on a composed clarification answer. New keys are derived from the active issue tracker's id in `engine/support/issue-tracker-runtime.ts`, which is `jira` today and is the same string, so nothing already written changes meaning. Rewriting any of these would orphan the rows they belong to.",
+      "paths": [
+        "apps/worker/src/db/repositories/clarifications.ts",
+        "apps/worker/src/engine/agent-workflow.ts",
+        "apps/worker/src/services/clarifications/answer-authorship.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira",
+        "slack"
+      ],
+      "stage": "R1",
+      "reason": "the compatibility half of the S12 parameter rename on the `investigate` block: the map from `jiraJqlTemplate` to `issueTrackerQueryTemplate` and from the stored value `jira` to `issue_tracker`, the block reading the old key beside the new one, and the editor drawing a node saved with the old vocabulary as what it really is. A stored definition the one-off rewrite has not reached, and a run replaying a plan recorded before the rename, both still hand us the old words, and reading them as nothing selected would tell a person their node investigates nothing and then make that true on the next save. These go with the one-off rewrite in R1, the same way the `send_slack_message` alias does.",
+      "paths": [
+        "apps/dashboard/components/cockpit/flow-editor/block-palette.ts",
+        "apps/dashboard/components/cockpit/flow-editor/blocks/shared.tsx",
+        "apps/worker/src/engine/blocks/investigate/execute.ts",
+        "packages/contracts/workflow-graph.ts"
       ]
     }
   ]

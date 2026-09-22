@@ -12,7 +12,10 @@ import type {
   IssueTrackerMoveTarget,
 } from "../../adapters/issue-tracker/types.js";
 import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
-import { ticketSubjectKey } from "./subject-key.js";
+import {
+  ticketSubject,
+  trackerMoveTarget,
+} from "../../engine/support/issue-tracker-runtime.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 
 /**
@@ -183,7 +186,7 @@ export async function cancelRunDetailed(
   input: CancelRunDetailedInput,
 ): Promise<CancelRunResult> {
   const { ticketKey, issueTracker, targetColumn } = input;
-  const subjectKey = ticketSubjectKey("jira", ticketKey);
+  const subjectKey = await ticketSubject(ticketKey);
   const confirmTicketMove = issueTracker && targetColumn
     ? async (owner: { subjectKey: string; ownerToken: string; runId: string | null }) => {
       const { moveConnectedTicketForRun } = await import("../tickets/ticket-transition.js");
@@ -361,20 +364,17 @@ export async function cancelRunById(
           runRegistry,
           undefined,
           async (owner) => {
-            const [{ env }, { withdrawConnectedTicketFromAiForRun }] = await Promise.all([
-              import("../../infra/vcs-config.js"),
-              import("../tickets/ticket-transition.js"),
-            ]);
+            const { withdrawConnectedTicketFromAiForRun } = await import(
+              "../tickets/ticket-transition.js"
+            );
             await withdrawConnectedTicketFromAiForRun({
               issueTracker: opts.issueTracker!,
               ticketKey: claim.ticketKey!,
               aiColumn: opts.settings.COLUMN_AI,
-              target: env.JIRA_BACKLOG_TRANSITION_ID
-                ? {
-                    name: opts.settings.COLUMN_BACKLOG,
-                    transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
-                  }
-                : opts.settings.COLUMN_BACKLOG,
+              target: await trackerMoveTarget(
+                opts.settings.COLUMN_BACKLOG,
+                "backlog",
+              ),
               owner,
               requiredOwnerState: "cancelling",
             });
@@ -792,20 +792,14 @@ async function withdrawTerminalTicketFromAi(
     return declined("ticket_withdrawal_unavailable");
   }
   try {
-    const [{ env }, { withdrawConnectedTicketFromAiForRun }] = await Promise.all([
-      import("../../infra/vcs-config.js"),
-      import("../tickets/ticket-transition.js"),
-    ]);
+    const { withdrawConnectedTicketFromAiForRun } = await import(
+      "../tickets/ticket-transition.js"
+    );
     await withdrawConnectedTicketFromAiForRun({
       issueTracker: opts.issueTracker,
       ticketKey: claim.ticketKey,
       aiColumn: opts.settings.COLUMN_AI,
-      target: env.JIRA_BACKLOG_TRANSITION_ID
-        ? {
-            name: opts.settings.COLUMN_BACKLOG,
-            transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
-          }
-        : opts.settings.COLUMN_BACKLOG,
+      target: await trackerMoveTarget(opts.settings.COLUMN_BACKLOG, "backlog"),
       owner: {
         subjectKey: claim.subjectKey,
         ownerToken: entry.ownerToken,

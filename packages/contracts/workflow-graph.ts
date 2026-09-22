@@ -46,6 +46,37 @@ export const RENAMED_WORKFLOW_BLOCK_TYPES: Readonly<Record<string, WorkflowBlock
   send_slack_message: "send_message" as WorkflowBlockType,
 };
 
+/**
+ * Parameter keys this build renamed, per CANONICAL block type: old key to new
+ * key.
+ *
+ * Same reason as `RENAMED_WORKFLOW_BLOCK_TYPES`, one level down: a stored
+ * definition the one-off rewrite has not reached still carries the old
+ * parameter names, and a run suspended before the rename replays a recorded
+ * plan built against them. Both must keep reading correctly, so the rename is
+ * a rewrite rather than a deletion (ADR-010).
+ *
+ * Each entry is removed once every stored graph carries the new keys and no
+ * run can still be replaying the old ones.
+ */
+export const RENAMED_WORKFLOW_BLOCK_PARAMS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  /** Until S12 of the integrations plan, when investigate's two providers
+   *  became capability ids. */
+  investigate: {
+    providers: "sources",
+    slackChannels: "chatChannels",
+    slackLookbackDays: "chatLookbackDays",
+    jiraJqlTemplate: "issueTrackerQueryTemplate",
+  },
+};
+
+/** The value this build knows an investigate source by, in the `sources`
+ *  array: `jira` to `issue_tracker`, `slack` to `chat`. */
+const RENAMED_WORKFLOW_SOURCE_VALUES: Readonly<Record<string, string>> = {
+  jira: "issue_tracker",
+  slack: "chat",
+};
+
 /** The name this build knows a block type by. Unchanged for every other type. */
 export function canonicalWorkflowBlockType<T>(type: T): T {
   return typeof type === "string"
@@ -54,14 +85,49 @@ export function canonicalWorkflowBlockType<T>(type: T): T {
 }
 
 /**
- * The same graph with every renamed node type replaced, or the value
- * untouched when there is nothing to replace.
+ * A node's `configuration` object with renamed keys replaced by their new
+ * names and, for `investigate`'s `sources`, renamed values too. Returns the
+ * same reference when nothing needed changing, so a node that needs no
+ * change keeps its identity and `changed` stays accurate for its caller.
+ */
+function canonicalizeWorkflowBlockConfiguration(
+  canonicalType: string,
+  configuration: unknown,
+): { value: unknown; changed: boolean } {
+  const paramRenames = RENAMED_WORKFLOW_BLOCK_PARAMS[canonicalType];
+  if (!paramRenames || !configuration || typeof configuration !== "object") {
+    return { value: configuration, changed: false };
+  }
+  let changed = false;
+  const rewritten: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(configuration as Record<string, unknown>)) {
+    const canonicalKey = paramRenames[key] ?? key;
+    if (canonicalKey !== key) changed = true;
+    rewritten[canonicalKey] = value;
+  }
+  if (canonicalType === "investigate" && Array.isArray(rewritten.sources)) {
+    const sources = rewritten.sources as unknown[];
+    const renamedSources = sources.map((source) =>
+      typeof source === "string" ? (RENAMED_WORKFLOW_SOURCE_VALUES[source] ?? source) : source,
+    );
+    if (renamedSources.some((value, index) => value !== sources[index])) {
+      changed = true;
+      rewritten.sources = renamedSources;
+    }
+  }
+  return changed ? { value: rewritten, changed: true } : { value: configuration, changed: false };
+}
+
+/**
+ * The same graph with every renamed node type and parameter replaced, or the
+ * value untouched when there is nothing to replace.
  *
  * Applied where a definition enters this build: reading a stored row and
  * accepting a candidate. Doing it at the edge means the registry, the
  * parameter schemas, the resolver, the editor and the run all see one name,
- * and a publish writes it, which is how the old type leaves the database
- * without a migration that a preview deployment could fire at production.
+ * and a publish writes it, which is how the old type and the old parameter
+ * names leave the database without a migration that a preview deployment
+ * could fire at production.
  */
 export function canonicalizeWorkflowBlockTypes(raw: unknown): unknown {
   if (!raw || typeof raw !== "object") return raw;
@@ -71,13 +137,29 @@ export function canonicalizeWorkflowBlockTypes(raw: unknown): unknown {
   const rewritten: unknown[] = [];
   for (const node of nodes) {
     const type = node && typeof node === "object" ? (node as { type?: unknown }).type : undefined;
-    const canonical = typeof type === "string" ? RENAMED_WORKFLOW_BLOCK_TYPES[type] : undefined;
-    if (!canonical) {
+    const typeRenamed = typeof type === "string" ? RENAMED_WORKFLOW_BLOCK_TYPES[type] : undefined;
+    const canonicalType = (typeRenamed ?? type) as string | undefined;
+    const configuration =
+      node && typeof node === "object"
+        ? (node as { configuration?: unknown }).configuration
+        : undefined;
+    const configResult =
+      typeof canonicalType === "string"
+        ? canonicalizeWorkflowBlockConfiguration(canonicalType, configuration)
+        : { value: configuration, changed: false };
+    if (!typeRenamed && !configResult.changed) {
       rewritten.push(node);
       continue;
     }
     changed = true;
-    rewritten.push(Object.assign({}, node, { type: canonical }));
+    rewritten.push(
+      Object.assign(
+        {},
+        node,
+        typeRenamed ? { type: typeRenamed } : {},
+        configResult.changed ? { configuration: configResult.value } : {},
+      ),
+    );
   }
   return changed ? { ...(raw as object), nodes: rewritten } : raw;
 }
@@ -332,10 +414,10 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   transform: [],
   fetch_pr_context: [],
   investigate: [
-    "providers",
-    "slackChannels",
-    "slackLookbackDays",
-    "jiraJqlTemplate",
+    "sources",
+    "chatChannels",
+    "chatLookbackDays",
+    "issueTrackerQueryTemplate",
     "maxResults",
     "model",
   ],

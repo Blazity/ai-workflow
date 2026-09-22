@@ -193,7 +193,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
 
   const server = createMcpServer({
     services,
-    adapters: createAdapters(),
+    adapters: await createAdapters(),
     actor,
     settings,
     loadRepositoryCatalog: () => getRequestRepositoryCatalogSnapshot(event),

@@ -126,8 +126,6 @@ const NO_JSON_BODY: Record<string, string> = {
     "reads another format: the MCP transport reads a byte-bounded body itself and answers a bad envelope as a JSON-RPC error, checked against the MCP contract rather than an HTTP body schema.",
   "webhooks/custom/[endpointId].post.ts":
     "reads another format: raw bytes, because the endpoint's signature is computed over exactly what arrived.",
-  "webhooks/jira.post.ts":
-    "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
   "webhooks/resend.post.ts":
     "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
   "webhooks/[id].post.ts":

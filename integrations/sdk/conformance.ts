@@ -71,7 +71,6 @@ export const CORE_HEALTH_SECTION_IDS: readonly string[] = [
   "dashboard-auth",
   "database",
   "email",
-  "jira",
   "sso",
 ];
 

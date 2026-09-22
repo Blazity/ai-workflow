@@ -479,7 +479,7 @@ export async function snapshotClarificationSandboxStep(
   }
 
   const { createAdapters } = await import("../support/adapters.js");
-  const { runRegistry } = createAdapters();
+  const { runRegistry } = await createAdapters();
   if (typeof runRegistry.unregisterSandbox === "function") {
     try {
       await runRegistry.unregisterSandbox(
@@ -532,7 +532,7 @@ export async function restoreClarificationSandboxStep(
     throw unavailableSnapshotError(input.snapshotId, error);
   }
 
-  const { runRegistry } = createAdapters();
+  const { runRegistry } = await createAdapters();
   try {
     await runRegistry.registerSandbox(input.subjectKey, input.ownerToken, sandbox.sandboxId);
     const { agentTracingPlans } = await import("../support/integration-tracing.js");

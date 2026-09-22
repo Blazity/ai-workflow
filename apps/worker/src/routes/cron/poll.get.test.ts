@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
 }));
 const mocks = vi.hoisted(() => ({
   dispatchTicket: vi.fn(),
+  discoverTickets: vi.fn(),
   reconcileAtCapacityQueue: vi.fn(),
   reconcileRuns: vi.fn(),
   reconcileClarifications: vi.fn(),
@@ -70,10 +71,7 @@ vi.mock("../../db/repositories/repository-catalog.js", async (importOriginal) =>
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
-      searchTickets: vi.fn(async () => {
-        state.order.push("discover");
-        return state.discovered.length > 0 ? state.discovered : ["AIW-1", "AIW-2"];
-      }),
+      ticketsInStatus: (...args: any[]) => mocks.discoverTickets(...args),
       postComment: vi.fn(async () => null),
     },
     runRegistry: {},
@@ -243,13 +241,21 @@ vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   sweepConnectedOrphanedRunningRuns: (...args: unknown[]) =>
     mocks.sweepOrphanedRunningRuns(...args),
 }));
+const reconcilePendingPrChecks = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ attempted: 0, closed: 0, pending: 0 }),
+);
 vi.mock("../../engine/runtime/pr-external-resources.js", () => ({
-  reconcileConnectedPendingPrChecks: vi.fn().mockResolvedValue({
-    attempted: 0,
-    closed: 0,
-    pending: 0,
-  }),
+  reconcileConnectedPendingPrChecks: reconcilePendingPrChecks,
 }));
+
+// This deployment has an issue tracker connected. Which one, and what it is
+// wired to, is an integration connection since S12 and is resolved from the
+// database; this suite is about what happens to a RUN, so it says the one
+// thing it means and leaves the resolution to its own tests.
+vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
+  const support = await import("../../test-support/issue-tracker.js");
+  return support.connectedIssueTracker({ projectKey: "AIW" });
+});
 
 const poll = (await import("./poll.get.js")).default;
 const { createTestDb } = await import("../../db/test-db.js");
@@ -285,6 +291,10 @@ describe("cron clarification recovery ordering", () => {
     state.order = [];
     state.discovered = [];
     mocks.reconcileAtCapacityQueue.mockResolvedValue({ queued: 0, commented: 0 });
+    mocks.discoverTickets.mockImplementation(async () => {
+      state.order.push("discover");
+      return state.discovered.length > 0 ? state.discovered : ["AIW-1", "AIW-2"];
+    });
     mocks.reconcileClarifications.mockImplementation(async () => {
       state.order.push("reconcile-clarifications");
       return [];
@@ -368,6 +378,115 @@ describe("cron clarification recovery ordering", () => {
       drain: { listed: 0, started: 0, revoked: 0, deferred: 0, errors: 0 },
       expired: 0,
       failures: 0,
+    });
+  });
+
+  // A deployment can have no issue tracker at all since S12, and reading the
+  // board is a database read that fails transiently on a deployment that has
+  // one. Both used to leave `runPollPass` on its first line, taking every
+  // phase below it with them: no check reconciliation, no webhook drain, no
+  // schedule fired, and nothing said so. The ticket half is the only half that
+  // may stop.
+  // Two shapes, because they reach the tick by different routes and only one
+  // of them was covered. A resolver that ANSWERS a refusal is the deployment
+  // with nothing connected; a resolver that THROWS is a database blip. Both
+  // reach the board read at the top of the ticket half, which is what this
+  // covers. The OTHER route a throw takes, through `createAdapters` before any
+  // phase runs, cannot be seen from here because this suite doubles that
+  // function; it is proved against the real one in
+  // `engine/support/issue-tracker-runtime.test.ts`.
+  it.each([
+    [
+      "answers a refusal",
+      () => ({
+        ok: false,
+        unreadable: false,
+        reason: "No issue tracker is connected on this deployment.",
+      }),
+    ],
+    [
+      "throws",
+      () => {
+        throw new Error("integration settings unreadable");
+      },
+    ],
+  ])(
+    "keeps the rest of the tick running when the tracker resolution %s",
+    async (_shape, answer) => {
+    const { resolveActiveIssueTracker } = await import(
+      "../../engine/support/issue-tracker-runtime.js"
+    );
+    const connected = vi.mocked(resolveActiveIssueTracker).getMockImplementation();
+    vi.mocked(resolveActiveIssueTracker).mockImplementation(answer as never);
+    try {
+      const response = await request();
+
+      expect(response.status).toBe(200);
+      // The housekeeping half, each one a phase that was unreachable before.
+      expect(reconcilePendingPrChecks).toHaveBeenCalled();
+      expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalled();
+      expect(mocks.runScheduleTriggerPass).toHaveBeenCalled();
+      expect(mocks.sweepOrphanedAwaitingRuns).toHaveBeenCalled();
+      expect(mocks.pruneMcpAudits).toHaveBeenCalled();
+      // The ticket half did nothing, and says so rather than reading like a
+      // quiet tick, which reports the same zeroes.
+      expect(mocks.dispatchTicket).not.toHaveBeenCalled();
+      expect(mocks.reconcileRuns).not.toHaveBeenCalled();
+      expect(mocks.reconcileAtCapacityQueue).not.toHaveBeenCalled();
+      await expect(response.json()).resolves.toMatchObject({
+        status: "ok",
+        ticketPhases: "skipped",
+        discovered: 0,
+        started: 0,
+      });
+    } finally {
+      vi.mocked(resolveActiveIssueTracker).mockImplementation(connected!);
+    }
+    },
+  );
+
+  // The second door onto the same failure. `createAdapters` freezes its
+  // resolution when the pass starts; the board is read later. A tracker
+  // connected between the two, or a read that failed at the first and
+  // succeeded at the second, makes `adapters.issueTracker` throw from the
+  // MIDDLE of the ticket half, past a containment that only covered the board
+  // read. The housekeeping below has to survive that too.
+  it("keeps the rest of the tick running when the tracker throws mid-half", async () => {
+    mocks.discoverTickets.mockRejectedValue(
+      new Error("No issue tracker is connected on this deployment."),
+    );
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    expect(reconcilePendingPrChecks).toHaveBeenCalled();
+    expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalled();
+    expect(mocks.runScheduleTriggerPass).toHaveBeenCalled();
+    expect(mocks.pruneMcpAudits).toHaveBeenCalled();
+    expect(mocks.dispatchTicket).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      ticketPhases: "skipped",
+    });
+  });
+
+  // Clarification expiry runs ABOVE the ticket half, because it is about a
+  // window closing and has nothing to do with a tracker. That put it outside
+  // the containment: a database blip inside it killed the whole tick, which is
+  // the exact failure the containment below is supposed to prevent.
+  it("keeps the rest of the tick running when clarification expiry fails", async () => {
+    mocks.expireClarifications.mockRejectedValue(new Error("db down"));
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    expect(reconcilePendingPrChecks).toHaveBeenCalled();
+    expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalled();
+    expect(mocks.runScheduleTriggerPass).toHaveBeenCalled();
+    expect(mocks.dispatchTicket).toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      clarificationExpiry: { expired: 0, retryable: 0, cleanupFailed: 0 },
     });
   });
 

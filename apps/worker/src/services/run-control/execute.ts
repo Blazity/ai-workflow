@@ -27,7 +27,7 @@ import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,
 } from "../../adapters/issue-tracker/types.js";
-import { ticketSubjectKey } from "../../engine/support/subject-key.js";
+import { ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
 import { ticketUrlFor } from "../../engine/support/messaging.js";
 import { logger } from "../../infra/logger.js";
 import type { CancelRunTarget } from "../run-lifecycle/index.js";
@@ -109,7 +109,7 @@ async function summary(deps: RunControlDeps): Promise<RunControlAnswer> {
 }
 
 async function status(ticketKey: string, deps: RunControlDeps): Promise<RunControlAnswer> {
-  const entry = await deps.registry.get(ticketSubjectKey("jira", ticketKey));
+  const entry = await deps.registry.get(await ticketSubject(ticketKey));
   const runId =
     entry &&
     (entry.state === "bound" || entry.state === "parking" || entry.state === "parked")
@@ -138,7 +138,7 @@ async function status(ticketKey: string, deps: RunControlDeps): Promise<RunContr
 }
 
 async function inspect(ticketKey: string, deps: RunControlDeps): Promise<RunControlAnswer> {
-  const entry = await deps.registry.get(ticketSubjectKey("jira", ticketKey)).catch(() => null);
+  const entry = await deps.registry.get(await ticketSubject(ticketKey)).catch(() => null);
   const [sandboxIds, conversation, failed] = await Promise.all([
     entry
       ? deps.registry.listSandboxes(entry.subjectKey, entry.ownerToken).catch(() => [])
@@ -165,7 +165,7 @@ async function cancel(
   actor: string | undefined,
   deps: RunControlDeps,
 ): Promise<RunControlAnswer> {
-  const entry = await deps.registry.get(ticketSubjectKey("jira", ticketKey));
+  const entry = await deps.registry.get(await ticketSubject(ticketKey));
   const answer = (outcome: RunControlCancelOutcome, runId: string | null): RunControlAnswer => ({
     kind: "cancelled",
     ticketKey,
@@ -214,7 +214,7 @@ async function reset(ticketKey: string, deps: RunControlDeps): Promise<RunContro
   let blockedByActiveRun = false;
 
   try {
-    const entry = await deps.registry.get(ticketSubjectKey("jira", ticketKey));
+    const entry = await deps.registry.get(await ticketSubject(ticketKey));
     if (entry?.state === "reserved") {
       const released = await deps.registry.releaseReservation(entry.subjectKey, entry.ownerToken);
       if (released) cleared.push("reservation");
@@ -276,8 +276,8 @@ export async function runControlDeps(): Promise<RunControlDeps> {
   const { issueTrackerBaseUrl, loadSettingsSnapshot, ticketBoardSettings } = await import(
     "../settings/index.js"
   );
-  const { runRegistry, issueTracker } = createAdapters();
-  const board = ticketBoardSettings(await loadSettingsSnapshot());
+  const { runRegistry, issueTracker } = await createAdapters();
+  const board = await ticketBoardSettings(await loadSettingsSnapshot());
   return {
     registry: runRegistry,
     issueTracker,
@@ -285,6 +285,6 @@ export async function runControlDeps(): Promise<RunControlDeps> {
     backlog: board.backlogTransitionId
       ? { name: board.backlogColumn, transitionId: board.backlogTransitionId }
       : board.backlogColumn,
-    trackerBaseUrl: issueTrackerBaseUrl(),
+    trackerBaseUrl: await issueTrackerBaseUrl(),
   };
 }

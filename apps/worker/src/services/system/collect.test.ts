@@ -3,10 +3,6 @@ import { collectSystemHealth, type SystemHealthConfig } from "./collect.js";
 
 const baseConfig: SystemHealthConfig = {
   databaseUrl: "postgres://fixture/db",
-  jiraBaseUrl: "https://jira.example",
-  jiraApiToken: "jira-secret",
-  jiraProjectKey: "TEST",
-  jiraWebhookSecret: "jira-webhook",
   agentKind: "claude",
   anthropicApiKey: "anthropic-secret",
   anthropicModel: "claude-test",
@@ -17,60 +13,6 @@ const baseConfig: SystemHealthConfig = {
 };
 
 describe("collectSystemHealth", () => {
-  it("keeps provider capabilities separate and aggregates only their real states", async () => {
-    const result = await collectSystemHealth({
-      config: baseConfig,
-      probes: {
-        "database.connectivity": async () => {},
-        "jira.api": async () => {},
-        "jira.webhook-delivery": async () => ({
-          mode: "configured",
-          message: "No recent delivery.",
-        }),
-        "agent.model": async () => {},
-      },
-      now: () => new Date("2026-08-20T12:00:00.000Z"),
-    });
-
-    expect(result.integrations.find((entry) => entry.id === "jira")).toMatchObject({
-      mode: "live",
-      checks: expect.arrayContaining([
-        expect.objectContaining({ id: "webhook-delivery", mode: "configured" }),
-      ]),
-    });
-  });
-
-  it("takes a provider down when one of its required checks fails, and counts it once", async () => {
-    // The webhook check beside it is optional and healthy. A provider whose
-    // required check is down is down whatever else passes, because everything
-    // that provider does goes through the credential that just failed.
-    const result = await collectSystemHealth({
-      config: baseConfig,
-      probes: {
-        "database.connectivity": async () => {},
-        "jira.api": async () => ({
-          mode: "down",
-          message: "Jira answered HTTP 401.",
-        }),
-        "jira.webhook-delivery": async () => ({ mode: "live" }),
-        "agent.model": async () => {},
-      },
-    });
-
-    expect(result.integrations.find((entry) => entry.id === "jira")).toMatchObject({
-      mode: "down",
-      checks: expect.arrayContaining([
-        expect.objectContaining({
-          id: "api",
-          mode: "down",
-          message: expect.stringContaining("HTTP 401"),
-        }),
-        expect.objectContaining({ id: "webhook-delivery", mode: "live" }),
-      ]),
-    });
-    expect(result.summary.criticalDown).toBe(1);
-  });
-
   it("uses degraded for an optional failure without hiding healthy required checks", async () => {
     const result = await collectSystemHealth({
       config: {
@@ -91,28 +33,6 @@ describe("collectSystemHealth", () => {
       mode: "degraded",
     });
     expect(result.summary.criticalDown).toBe(0);
-  });
-
-  it("surfaces untrusted rejection evidence as a warning, not a hard outage", async () => {
-    const result = await collectSystemHealth({
-      config: baseConfig,
-      probes: {
-        "jira.api": async () => {},
-        "jira.webhook-delivery": async () => ({
-          mode: "degraded",
-          message: "A recent request was rejected.",
-        }),
-      },
-    });
-
-    expect(
-      result.integrations
-        .find((entry) => entry.id === "jira")
-        ?.checks.find((check) => check.id === "webhook-delivery"),
-    ).toMatchObject({ mode: "degraded" });
-    expect(result.integrations.find((entry) => entry.id === "jira")).toMatchObject({
-      mode: "degraded",
-    });
   });
 
   it("keeps OAuth-backed agents configured, never live, when no safe probe exists", async () => {
@@ -145,8 +65,6 @@ describe("collectSystemHealth", () => {
       },
       probes: {
         "database.connectivity": async () => {},
-        "jira.api": async () => {},
-        "jira.webhook-delivery": async () => ({ mode: "configured" }),
         "agent.model": async () => {},
         "sso.discovery": async () => {},
         "arthur.api": async () => {},
@@ -205,18 +123,13 @@ describe("collectSystemHealth", () => {
     ).toMatchObject({ mode: "live" });
   });
 
-  it("exposes every capability variable name without values", async () => {
+  it("no longer knows Jira or Slack, whose variables are named by their own integration now", async () => {
     const result = await collectSystemHealth({ config: baseConfig, probes: {} });
-    expect(result.integrations.find((entry) => entry.id === "jira")?.envVars).toEqual([
-      "JIRA_BASE_URL",
-      "JIRA_API_TOKEN",
-      "JIRA_PROJECT_KEY",
-      "JIRA_WEBHOOK_SECRET",
-    ]);
-    // Slack's variables are named by its own card and its own health section
-    // now (`integrations/slack/manifest.ts`), not by core's environment list.
+    // Jira's health section moved to its own integration
+    // (`integrations/jira/manifest.ts`), the same way Slack's did
+    // (`integrations/slack/manifest.ts`); core no longer lists either.
+    expect(result.integrations.map((entry) => entry.id)).not.toContain("jira");
     expect(result.integrations.map((entry) => entry.id)).not.toContain("slack");
-    expect(JSON.stringify(result)).not.toContain("jira-secret");
   });
 
   it("appends contributed sections without touching a single core one", async () => {

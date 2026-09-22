@@ -20,7 +20,7 @@ export async function cancelRunAsOperator(
   actor: { userId: string },
   settings: SettingsSnapshot,
 ): Promise<CancelRunForOperatorResult> {
-  const adapters = createAdapters();
+  const adapters = await createAdapters();
   const actorLabel = await getConnectedDashboardUserLabel(actor.userId);
   // The cancel AND the schedule-ledger settle: both live in cancelRunForOperator
   // so this path and the MCP tool cannot drift on what an operator cancel means.

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { connectedIssueTracker } from "../../test-support/issue-tracker.js";
 import { z } from "zod";
 import type { IntegrationManifest } from "@integrations/sdk";
 import type { IntegrationState, WorkflowDefinitionV2 } from "@shared/contracts";
@@ -55,6 +56,10 @@ vi.mock("@integrations/registry", () => ({
 vi.mock("../../services/integrations/runtime.js", () => ({
   readIntegrationStates: () => states(),
 }));
+// This deployment has a tracker, because the palette gates the ticket blocks
+// these plans are built from on one. Which integration serves it is not this
+// suite's subject and is proved in `support/issue-tracker-runtime.test.ts`.
+vi.mock("../support/issue-tracker-runtime.js", () => connectedIssueTracker());
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     ANTHROPIC_API_KEY: "sk-ant-test",

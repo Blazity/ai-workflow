@@ -40,7 +40,7 @@ const RUN_STATUSES = new Set<RunStatus>([
   "awaiting",
 ]);
 
-function mapTicketRun(row: DashboardRunRow, now: Date, jiraOrigin: string): Run {
+function mapTicketRun(row: DashboardRunRow, now: Date, ticketOrigin: string): Run {
   const effective = row.startedAt ?? row.firstSeenAt;
   const tokens = row.tokensInput !== null || row.tokensOutput !== null
     ? (row.tokensInput ?? 0) + (row.tokensOutput ?? 0)
@@ -66,7 +66,7 @@ function mapTicketRun(row: DashboardRunRow, now: Date, jiraOrigin: string): Run 
     guardrailHits: null,
     ticketTitle: row.ticketTitle ?? row.ticketKey ?? "",
     prNumber: row.prNumber,
-    ticketUrl: row.ticketUrl ?? (row.ticketKey ? `${jiraOrigin}/browse/${row.ticketKey}` : ""),
+    ticketUrl: row.ticketUrl ?? (row.ticketKey ? `${ticketOrigin}/browse/${row.ticketKey}` : ""),
     prUrl: row.prUrl,
     prs: row.prs,
   };
@@ -81,14 +81,14 @@ export async function listTicketRuns(ticketKey: string): Promise<TicketRunsPaylo
   if (!ticketKey) return EMPTY;
   try {
     const now = new Date();
-    const jiraOrigin = issueTrackerBaseUrl().replace(/\/+$/, "");
+    const ticketOrigin = (await issueTrackerBaseUrl()).replace(/\/+$/, "");
     const data = await connectedDashboardRunQueries.listTicketRuns(ticketKey);
-    const runs = data.map((row) => mapTicketRun(row, now, jiraOrigin));
+    const runs = data.map((row) => mapTicketRun(row, now, ticketOrigin));
     const newest = data[0];
     const ticket = newest ? {
       key: newest.ticketKey ?? ticketKey,
       title: newest.ticketTitle ?? newest.ticketKey ?? ticketKey,
-      url: newest.ticketUrl ?? `${jiraOrigin}/browse/${newest.ticketKey ?? ticketKey}`,
+      url: newest.ticketUrl ?? `${ticketOrigin}/browse/${newest.ticketKey ?? ticketKey}`,
     } : null;
     const counts = { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 };
     let cost = 0;

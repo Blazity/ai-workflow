@@ -23,7 +23,7 @@ beforeEach(async () => {
   db = await createTestDb();
 });
 
-const base = { jiraBaseUrl: JIRA, now: NOW };
+const base = { ticketOrigin: JIRA, now: NOW };
 
 async function seedRun(over: {
   runId: string;

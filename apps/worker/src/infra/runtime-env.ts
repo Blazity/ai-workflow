@@ -12,15 +12,13 @@ export const env = createEnv({
     throw new Error(`Invalid environment variables:\n${details}`);
   },
   server: {
-    // Issue Tracker
-    ISSUE_TRACKER_KIND: z.literal("jira").default("jira"),
-    JIRA_BASE_URL: z.string().url(),
-    JIRA_API_TOKEN: z.string().min(1),
-    JIRA_PROJECT_KEY: z.string().min(1),
-
-    JIRA_BACKLOG_TRANSITION_ID: z.string().min(1).optional(),
-    JIRA_AI_TRANSITION_ID: z.string().min(1).optional(),
-    JIRA_AI_REVIEW_TRANSITION_ID: z.string().min(1).optional(),
+    // The issue tracker's site, credentials, project and transitions left this
+    // file in S12: they are the connection of the integration serving the
+    // `issue_tracker` capability, which reads the same variable names, so a
+    // deployment configured through its environment needs no change. A
+    // deployment with no tracker connected at all now boots, which it could
+    // not before; the loud failure a required project key used to give at boot
+    // is the tracker's own `project` health check.
 
     // VCS
     // Login of the bot's own automation account, for a deployment with exactly
@@ -77,9 +75,6 @@ export const env = createEnv({
 
     // Cron
     CRON_SECRET: z.string().min(1).optional(),
-
-    // Jira Webhook
-    JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
 
     // Webhook trigger blocks: 32-byte AES-256-GCM key (64 hex chars) that
     // encrypts per-endpoint signing secrets at rest. Intentionally optional:

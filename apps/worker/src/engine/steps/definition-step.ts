@@ -156,7 +156,7 @@ export async function loadWorkflowDefinitionFor(
     return deploymentIntegrations({
       manifests: integrationManifests,
       states: await readIntegrationStates(),
-      builtinCapabilities: builtinCapabilitiesOfDeployment(),
+      builtinCapabilities: await builtinCapabilitiesOfDeployment(),
     });
   };
 

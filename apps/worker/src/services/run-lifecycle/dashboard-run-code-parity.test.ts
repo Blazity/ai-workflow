@@ -31,7 +31,7 @@ function list() {
     window: "all",
     q: null,
     now,
-    jiraBaseUrl: "https://jira.example",
+    ticketOrigin: "https://jira.example",
   });
 }
 

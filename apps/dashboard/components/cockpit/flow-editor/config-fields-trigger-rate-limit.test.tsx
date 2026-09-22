@@ -164,33 +164,43 @@ function investigateNode(
   } as unknown as FlowNodeDef;
 }
 
-test("investigate renders providers, slack defaults, jql, max results and model", () => {
+test("investigate renders its sources, chat defaults, query template, max results and model", () => {
   const html = render(investigateNode());
 
-  assert.match(html, /Context providers/);
-  assert.match(html, /Jira \(similar tickets\)/);
-  assert.match(html, /Slack \(channel history\)/);
-  assert.match(html, /Slack channels/);
-  assert.match(html, /Slack lookback \(days\)/);
+  assert.match(html, /Context sources/);
+  assert.match(html, /Issue tracker \(similar tickets\)/);
+  assert.match(html, /Chat \(channel history\)/);
+  assert.match(html, /Chat channels/);
+  assert.match(html, /Chat lookback \(days\)/);
   assert.match(html, /value="30"/);
-  assert.match(html, /Jira JQL template \(optional\)/);
+  assert.match(html, /Issue tracker query template \(optional\)/);
   assert.match(html, /Max results per provider/);
   assert.match(html, /value="10"/);
   assert.match(html, /Model \(optional\)/);
 });
 
-test("investigate hides a provider's fields when the selection omits it", () => {
-  const html = render(investigateNode({}, { providers: ["slack"] }));
+test("investigate hides a source's fields when the selection omits it", () => {
+  const html = render(investigateNode({}, { sources: ["chat"] }));
 
-  assert.match(html, /Slack channels/);
-  assert.doesNotMatch(html, /Jira JQL template/);
+  assert.match(html, /Chat channels/);
+  assert.doesNotMatch(html, /Issue tracker query template/);
 });
 
 test("investigate reads the selection from flat params too", () => {
-  const html = render(investigateNode({ providers: ["jira"] }, {}));
+  const html = render(investigateNode({ sources: ["issue_tracker"] }, {}));
 
-  assert.doesNotMatch(html, /Slack channels/);
-  assert.match(html, /Jira JQL template/);
+  assert.doesNotMatch(html, /Chat channels/);
+  assert.match(html, /Issue tracker query template/);
+});
+
+test("investigate draws a node saved before the sources rename", () => {
+  // The editor has to show a stored definition as it really is. Showing the
+  // old vocabulary as nothing selected would make a person fix a node that
+  // was not broken, and the fix would be the first thing that broke it.
+  const html = render(investigateNode({}, { providers: ["slack"] }));
+
+  assert.match(html, /Chat channels/);
+  assert.doesNotMatch(html, /Issue tracker query template/);
 });
 
 test("investigate caps max results at the retrieval ceiling", () => {

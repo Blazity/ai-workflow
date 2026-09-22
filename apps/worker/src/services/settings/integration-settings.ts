@@ -11,39 +11,78 @@
 import type { SettingsSnapshot } from "@shared/contracts";
 import { env } from "../../infra/vcs-config.js";
 
-/** Provider ids that carry a signed webhook, as system health observes them. */
-export type WebhookProviderId = "jira" | "email";
+/** Provider ids that carry a signed webhook core itself verifies. The issue
+ *  tracker left this list in S12: an integration verifies its own deliveries
+ *  and the shared webhook route records them. */
+export type WebhookProviderId = "email";
 
-/** The issue-tracker columns and project the ticket triggers are scoped to.
- *  The project key and the transition id are tracker wiring, not settings.
+/**
+ * The board the ticket triggers are scoped to: where a ticket has to be for a
+ * run to start, where a run puts it when it finishes, fails or parks, and how
+ * the tracker is wired to reach those places.
  *
- *  The snapshot is required. It used to be optional, and the three trigger
- *  entry points that left it out resolved their columns from the environment
- *  on the spot: a deployment whose operator had renamed a column on the
- *  Settings page kept dispatching against the old name from the poller while
- *  the dashboard showed the new one. */
-export function ticketBoardSettings(settings: SettingsSnapshot): TicketBoardSettings {
+ * THE ONE SEAM where the two halves meet, and it has to stay the one seam. The
+ * columns are operator behaviour and live in stored settings; the project and
+ * the transition ids are provider wiring and live on the tracker's connection.
+ * The snapshot argument used to be optional, and the three trigger entry
+ * points that left it out resolved their columns separately: a deployment
+ * whose operator had renamed a column kept dispatching against the old name
+ * from the poller while the dashboard showed the new one. Reading either half
+ * anywhere else brings that back.
+ *
+ * ASYNCHRONOUS since S12: the wiring half is an integration's connection now
+ * rather than an environment variable, and reading a connection is a database
+ * read. A deployment with no issue tracker connected has no board, and this
+ * says so rather than handing back empty strings that would match nothing and
+ * silently ignore every ticket.
+ */
+export async function ticketBoardSettings(
+  settings: SettingsSnapshot,
+): Promise<TicketBoardSettings> {
+  const { resolveActiveIssueTracker, trackerIdentityOf } = await import(
+    "../../engine/support/issue-tracker-runtime.js"
+  );
+  const tracker = await resolveActiveIssueTracker();
+  if (!tracker.ok) throw new Error(tracker.reason);
   return {
-    projectKey: env.JIRA_PROJECT_KEY,
+    trackerName: tracker.name,
+    trackerIdentity: trackerIdentityOf(tracker.id, tracker.wiring.baseUrl),
+    projectKey: tracker.wiring.projectKey,
     aiColumn: settings.COLUMN_AI,
     aiReviewColumn: settings.COLUMN_AI_REVIEW,
     backlogColumn: settings.COLUMN_BACKLOG,
-    backlogTransitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+    ...(tracker.wiring.backlogTransitionId
+      ? { backlogTransitionId: tracker.wiring.backlogTransitionId }
+      : {}),
+    ...(tracker.wiring.aiTransitionId ? { aiTransitionId: tracker.wiring.aiTransitionId } : {}),
+    ...(tracker.wiring.aiReviewTransitionId
+      ? { aiReviewTransitionId: tracker.wiring.aiReviewTransitionId }
+      : {}),
   };
 }
 
-interface TicketBoardSettings {
+export interface TicketBoardSettings {
+  /**
+   * What this deployment's issue tracker calls itself, for the sentences a
+   * person reads about it: a cancellation reason on a ticket, an error in the
+   * dashboard. Core writes the sentence and the provider supplies its own
+   * name, so the words a person sees are unchanged while core spells no
+   * provider.
+   */
+  trackerName: string;
+  /** Which tracker instance this board belongs to, as an opaque string.
+   *  Compared, never parsed: it is what stops a value cached against one
+   *  connection being reused after an admin repointed it. */
+  trackerIdentity: string;
   projectKey: string;
   aiColumn: string;
   aiReviewColumn: string;
   backlogColumn: string;
-  /** Set only where the tracker needs a transition id to reach the backlog. */
+  /** Set only where the tracker needs a transition id to reach the column,
+   *  rather than being able to move a ticket by its status name. */
   backlogTransitionId?: string;
-}
-
-/** The shared secret Jira signs its webhook deliveries with, when configured. */
-export function jiraWebhookSecret(): string | undefined {
-  return env.JIRA_WEBHOOK_SECRET;
+  aiTransitionId?: string;
+  aiReviewTransitionId?: string;
 }
 
 /** Svix signing secret for Resend delivery events. */
@@ -66,14 +105,24 @@ export function providerWebhookSecret(
   integrationId: WebhookProviderId,
 ): string | undefined {
   switch (integrationId) {
-    case "jira":
-      return env.JIRA_WEBHOOK_SECRET;
     case "email":
       return env.RESEND_WEBHOOK_SECRET;
   }
 }
 
-/** The issue tracker's base URL, for the ticket links run reads publish. */
-export function issueTrackerBaseUrl(): string {
-  return env.JIRA_BASE_URL;
+/**
+ * The issue tracker's base URL, for the ticket links run reads publish.
+ *
+ * Empty when no tracker is connected, and that is the right answer here rather
+ * than a refusal: every caller is building a link beside something else it is
+ * already showing, and a run list that refused to render because a tracker was
+ * disconnected would take away the page somebody needs in order to see what
+ * happened. A link is dropped, the rest of the row stands.
+ */
+export async function issueTrackerBaseUrl(): Promise<string> {
+  const { resolveActiveIssueTracker } = await import(
+    "../../engine/support/issue-tracker-runtime.js"
+  );
+  const tracker = await resolveActiveIssueTracker();
+  return tracker.ok ? tracker.wiring.baseUrl : "";
 }

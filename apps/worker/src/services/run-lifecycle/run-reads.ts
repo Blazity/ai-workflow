@@ -58,7 +58,7 @@ export async function listDashboardRuns(query: {
       window: parseWindow(query.window),
       q: parseSearch(query.q),
       now: new Date(),
-      jiraBaseUrl: issueTrackerBaseUrl(),
+      ticketOrigin: await issueTrackerBaseUrl(),
     });
     const models = await resolveRunModels(rows.map((row) => row.id));
     return {
@@ -86,7 +86,7 @@ export async function listWorkflowAggregates(
     const { rows, total } = await connectedWorkflowAgg({
       window: parseWindow(query.window),
       now: new Date(),
-      jiraBaseUrl: issueTrackerBaseUrl(),
+      ticketOrigin: await issueTrackerBaseUrl(),
       registry: getWorkflowRegistry(settings),
     });
     return { rows, total };
@@ -106,17 +106,17 @@ export async function listWorkflowAggregates(
  * registry entry must not mask a parked run.
  */
 export async function listLiveRuns(): Promise<LiveRunsResponse> {
-  const adapters = createAdapters();
+  const adapters = await createAdapters();
   const now = new Date();
-  const jiraBaseUrl = issueTrackerBaseUrl();
+  const ticketOrigin = await issueTrackerBaseUrl();
   const [running, awaiting] = await Promise.all([
     collectLiveRuns({
       registry: adapters.runRegistry,
       issueTracker: adapters.issueTracker,
-      jiraBaseUrl,
+      ticketOrigin,
       resolveModels: resolveRunModels,
     }),
-    collectAwaitingRuns({ jiraBaseUrl, now }),
+    collectAwaitingRuns({ ticketOrigin, now }),
   ]);
 
   const awaitingIds = new Set(awaiting.map((r) => r.id));
@@ -128,13 +128,13 @@ export async function listLiveRuns(): Promise<LiveRunsResponse> {
  * Per-block statuses, optionally narrowed to one definition. A definitionId
  * that is not a positive integer names no definition, so it narrows nothing.
  */
-export function readRunBlockStatuses(query: {
+export async function readRunBlockStatuses(query: {
   definitionId?: unknown;
 }): Promise<RunBlockStatusesResponse["run"]> {
   const parsed = Number(query.definitionId);
   const definitionId = Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
   return collectBlockStatuses({
-    registry: createAdapters().runRegistry,
+    registry: (await createAdapters()).runRegistry,
     definitionId,
   });
 }

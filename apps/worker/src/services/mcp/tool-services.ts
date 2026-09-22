@@ -140,7 +140,7 @@ export interface McpToolServices extends McpGateServices {
    *  reader that matched on it would break the first time we improved it. */
   fetchRunDetail(
     runId: string,
-    jiraBaseUrl: string,
+    ticketOrigin: string,
   ): Promise<{
     run: RunDetail;
     steps: RunStep[];
@@ -168,7 +168,7 @@ export interface McpToolServices extends McpGateServices {
     window: TimeWindow;
     q: string | null;
     now: Date;
-    jiraBaseUrl: string;
+    ticketOrigin: string;
     limit: number;
   }): ReturnType<typeof listRuns>;
   costAgg(input: { window: TimeWindow; now: Date }): ReturnType<typeof costAgg>;
@@ -278,11 +278,11 @@ export function createMcpToolServices(
       return savePromptVersionWithPolicy(db, { ...input, body: validatePromptBody(input.body) });
     },
 
-    fetchRunDetail: (runId, jiraBaseUrl) =>
+    fetchRunDetail: (runId, ticketOrigin) =>
       fetchRunDetailFromDb({
         db,
         runId,
-        jiraBaseUrl,
+        ticketOrigin,
       }),
     getRunReplay: (input) => getRunReplay({ db, ...input }),
     getRunReplayAvailability: (input) => getRunReplayAvailability({ db, ...input }),

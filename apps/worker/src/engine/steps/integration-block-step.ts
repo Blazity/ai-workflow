@@ -112,7 +112,7 @@ export async function runIntegrationBlockStep(
   const integrations = deploymentIntegrations({
     manifests: integrationManifests,
     states,
-    builtinCapabilities: builtinCapabilitiesOfDeployment(),
+    builtinCapabilities: await builtinCapabilitiesOfDeployment(),
   });
   const state = states.get(input.integrationId);
   if (!state) {
@@ -189,7 +189,7 @@ export async function runIntegrationBlockStep(
       {
         ...context,
         run: input.run,
-        capabilities: integrationCapabilityAccess(block.requires?.capabilities ?? []),
+        capabilities: await integrationCapabilityAccess(block.requires?.capabilities ?? []),
         ...(block.requires?.llm === true ? { llm: integrationLlm(input.llm) } : {}),
       } as never,
     );

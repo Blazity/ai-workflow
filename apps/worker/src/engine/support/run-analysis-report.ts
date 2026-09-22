@@ -87,7 +87,7 @@ interface AnalysisInputBase {
   phaseModels?: Record<string, string>;
   priceLookup?: PriceLookup;
   model?: string;
-  jiraApplicable?: boolean;
+  ticketApplicable?: boolean;
 }
 
 export interface BuildResearchAnalysisReportInput extends AnalysisInputBase {}
@@ -443,7 +443,7 @@ export function buildResearchAnalysisReport(input: BuildResearchAnalysisReportIn
     publication: null,
     usage: { research: usage, publication: null, final: null },
     jira: {
-      research: emptyDelivery(input.jiraApplicable === false ? "not_applicable" : "pending"),
+      research: emptyDelivery(input.ticketApplicable === false ? "not_applicable" : "pending"),
       pullRequest: emptyDelivery("not_applicable"),
     },
     sanitization: sanitized.metadata,

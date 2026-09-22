@@ -15,7 +15,7 @@ import { capacityConsumerCount } from "./dispatch.js";
 export async function readDispatchCapacity(
   settings: SettingsSnapshot,
 ): Promise<DispatchCapacityResponse> {
-  const adapters = createAdapters();
+  const adapters = await createAdapters();
   const [occupiedSlots, queued] = await Promise.all([
     capacityConsumerCount(adapters.runRegistry),
     listConnectedQueuedDispatchTickets(),

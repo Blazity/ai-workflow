@@ -3,10 +3,6 @@ import type { SystemHealthConfig } from "./collect.js";
 
 const environment = vi.hoisted(() => ({
   DATABASE_URL: "postgres://db.example/workflow",
-  JIRA_BASE_URL: "https://jira.example",
-  JIRA_API_TOKEN: "jira-token",
-  JIRA_PROJECT_KEY: "AIW",
-  JIRA_WEBHOOK_SECRET: "jira-webhook",
   GITHUB_APP_ID: 11,
   GITHUB_APP_PRIVATE_KEY: "github-key",
   GITHUB_INSTALLATION_ID: 22,
@@ -63,22 +59,6 @@ const settings = {
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
 
-function mockJira(
-  registrations:
-    | Array<{ url: string; enabled: boolean; events: string[] }>
-    | { status: number },
-) {
-  fetchMock.mockImplementation(async (url: string) => {
-    if (url.includes("/_edge/tenant_info")) return Response.json({ cloudId: "cloud-1" });
-    if (url.includes("/rest/webhooks/1.0/webhook")) {
-      return Array.isArray(registrations)
-        ? Response.json(registrations)
-        : new Response(null, { status: registrations.status });
-    }
-    throw new Error(`Unexpected request: ${url}`);
-  });
-}
-
 describe("deployment system-health probes", () => {
   beforeEach(() => {
     fetchMock.mockReset();
@@ -88,10 +68,6 @@ describe("deployment system-health probes", () => {
   it("maps credentials for every independently checked capability", () => {
     expect(configFromEnvironment(settings)).toEqual({
       databaseUrl: environment.DATABASE_URL,
-      jiraBaseUrl: environment.JIRA_BASE_URL,
-      jiraApiToken: environment.JIRA_API_TOKEN,
-      jiraProjectKey: environment.JIRA_PROJECT_KEY,
-      jiraWebhookSecret: environment.JIRA_WEBHOOK_SECRET,
       agentKind: "codex",
       anthropicApiKey: environment.ANTHROPIC_API_KEY,
       anthropicModel: "claude-opus-4-8",
@@ -152,27 +128,12 @@ describe("deployment system-health probes", () => {
   });
 
 
-  it("names the Jira call that failed instead of one blended error", async () => {
-    const signal = new AbortController().signal;
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes("/_edge/tenant_info")) return Response.json({ cloudId: "cloud-1" });
-      if (url.includes("/rest/api/3/myself")) return new Response(null, { status: 401 });
-      throw new Error(`Unexpected request: ${url}`);
-    });
-    await expect(
-      probesForEnvironment(configFromEnvironment(settings))["jira.api"]!(signal),
-    ).rejects.toThrow("Jira authentication failed: the base URL or API token was not accepted.");
-
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes("/_edge/tenant_info")) return Response.json({ cloudId: "cloud-1" });
-      if (url.includes("/rest/api/3/myself")) return Response.json({ accountId: "acc-1" });
-      if (url.includes("/statuses")) return new Response(null, { status: 404 });
-      throw new Error(`Unexpected request: ${url}`);
-    });
-    await expect(
-      probesForEnvironment(configFromEnvironment(settings))["jira.api"]!(signal),
-    ).rejects.toThrow("Jira authenticated, but the configured project is not accessible");
-  });
+  // The Jira checks this suite used to hold left with S12. An integration
+  // answers for its own provider now, so what a token Jira did not accept, a
+  // project key that names nothing and a webhook registered somewhere else
+  // read like is proved in `integrations/jira/worker.test.ts`, and whether a
+  // delivery actually arrived is the generic `webhook-delivery` check in
+  // `integration-health.ts`.
 
   it("omits a fake probe for OAuth-only agent tokens instead of inventing a result", () => {
     const config: SystemHealthConfig = {
@@ -182,79 +143,6 @@ describe("deployment system-health probes", () => {
       mcpEnabled: false,
     };
     expect(probesForEnvironment(config)["agent.model"]).toBeUndefined();
-  });
-
-  it("verifies the Jira webhook registration through the Jira API", async () => {
-    mockJira([
-      {
-        url: "https://worker.example/webhooks/jira",
-        enabled: true,
-        events: ["jira:issue_updated"],
-      },
-    ]);
-
-    const result = await probesForEnvironment(configFromEnvironment(settings))[
-      "jira.webhook-delivery"
-    ]?.(new AbortController().signal);
-
-    expect(result).toMatchObject({
-      mode: "live",
-      evidenceSource: "provider-config",
-      message: expect.stringContaining("registered and enabled"),
-    });
-  });
-
-  it("reports a Jira instance with no webhook pointing at this worker", async () => {
-    mockJira([
-      { url: "https://elsewhere.example/hook", enabled: true, events: ["jira:issue_updated"] },
-    ]);
-
-    await expect(
-      probesForEnvironment(configFromEnvironment(settings))["jira.webhook-delivery"]?.(
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow(/No Jira webhook points at this worker/);
-  });
-
-  it("falls back to delivery evidence when Jira forbids listing webhooks", async () => {
-    mockJira({ status: 403 });
-
-    const result = await probesForEnvironment(configFromEnvironment(settings))[
-      "jira.webhook-delivery"
-    ]?.(new AbortController().signal);
-
-    expect(result).toMatchObject({
-      mode: "configured",
-      message: expect.stringContaining("cannot list system webhooks"),
-    });
-  });
-
-  it("points a handler failure at the worker, not at the provider", async () => {
-    mockJira([
-      {
-        url: "https://worker.example/webhooks/jira",
-        enabled: true,
-        events: ["jira:issue_updated"],
-      },
-    ]);
-    getLatestSystemHealthObservations.mockResolvedValueOnce([
-      {
-        outcome: "rejected",
-        reason: "handler_failed",
-        count: 1,
-        observedAt: new Date(),
-      },
-    ]);
-
-    const result = await probesForEnvironment(configFromEnvironment(settings))[
-      "jira.webhook-delivery"
-    ]?.(new AbortController().signal);
-
-    expect(result).toMatchObject({
-      mode: "degraded",
-      message: expect.stringContaining("worker handler failed"),
-    });
-    expect(result?.message).not.toContain("unsolicited traffic");
   });
 
   it("accepts a restricted send-only Resend key as a verified key, not down", async () => {

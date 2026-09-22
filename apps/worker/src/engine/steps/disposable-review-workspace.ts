@@ -216,7 +216,7 @@ export async function provisionDisposableReviewWorkspaceStep(
     runtime: "node24",
     timeout: input.jobTimeoutMs,
   });
-  const { runRegistry } = createAdapters();
+  const { runRegistry } = await createAdapters();
 
   try {
     // Register before the first setup command so cancellation/reconciliation can

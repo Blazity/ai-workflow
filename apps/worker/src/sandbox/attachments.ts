@@ -53,7 +53,7 @@ export function formatAttachmentsIndex(
   const lines: string[] = [
     "## Attachments",
     "",
-    "The following files from the Jira ticket are available in `/tmp/attachments/`.",
+    "The following files from the ticket are available in `/tmp/attachments/`.",
     "Read them when relevant to the task.",
     "",
   ];

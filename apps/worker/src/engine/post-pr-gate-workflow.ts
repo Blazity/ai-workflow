@@ -33,7 +33,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
   const { hasGateStatusCapability } = await import("../adapters/vcs/types.js");
 
   const config = loadPostPrGateConfig();
-  const adapters = createAdapters({
+  const adapters = await createAdapters({
     provider: input.provider,
     repoPath: input.ownerRepo,
     baseBranch: input.baseRef,

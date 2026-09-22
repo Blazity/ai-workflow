@@ -19,7 +19,6 @@ export {
 } from "./runtime-settings.js";
 export {
   issueTrackerBaseUrl,
-  jiraWebhookSecret,
   outboundEmailSettings,
   providerWebhookSecret,
   resendWebhookSecret,

@@ -368,7 +368,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   });
   try {
     const { createAdapters } = await import("../support/adapters.js");
-    const { runRegistry } = createAdapters();
+    const { runRegistry } = await createAdapters();
     await runRegistry.registerSandbox(
       input.subjectKey,
       input.ownerToken,

@@ -54,6 +54,8 @@ Do these in any order — you'll paste the resulting values into Vercel in step 
 
 ### 2.1 Jira
 
+Jira is an integration: its credentials live on its connection, seeded from the `JIRA_*` variables below or entered in the dashboard under **Integrations → Jira → Connection**. The worker boots without it, and its two health checks (Account access and Project access) say on the Health screen whether the token is accepted and whether the project key names a project this account can actually see.
+
 ai-workflow authenticates to Jira as an **Atlassian service account** — a machine identity managed in the organization admin, with no human login. Tokens are Bearer-style and routed through `api.atlassian.com/ex/jira/{cloudId}`. Don't use a personal API token from a real user account: rotation, audit, and least-privilege all break down when the bot shares identity with a human.
 
 **Create the service account** (requires Atlassian org admin):
@@ -279,8 +281,8 @@ vercel env add JIRA_API_TOKEN production
 
 | Variable                                                                                           | Purpose                                                |
 | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`                                              | Jira credentials (scoped service-account Bearer token) |
-| `JIRA_BACKLOG_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID`                                       | Optional stable transition IDs for Jira moves; recommended when Jira localizes transition names |
+| `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`                                              | If Jira is configured: the site, a scoped service-account Bearer token, and the project this deployment watches. Jira is an integration, so these seed its connection; an admin can instead enter them in the dashboard (Integrations → Jira → Connection). The worker starts without them, and a deployment with no issue tracker runs the workflows that do not involve a ticket. |
+| `JIRA_BACKLOG_TRANSITION_ID`, `JIRA_AI_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID`              | Optional stable transition IDs for Jira moves; recommended when Jira localizes transition names |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If GitHub is configured (GitHub App auth). Provider credentials are additive: configure GitHub, GitLab, or both in one deployment, and a run can then mix repositories from both providers. |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If GitHub is configured: signs the GitHub webhook deliveries that drive the PR workflow triggers. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
 | `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                        | If GitLab is configured: GitLab.com token with `api` + `write_repository`, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. GitLab is an integration, so these seed its connection; an admin can instead enter them in the dashboard (Integrations → GitLab → Connection). |
@@ -380,7 +382,7 @@ Without this, ai-workflow only learns about ticket changes via the 1-minute cron
 1. Go to **Jira → System Settings → WebHooks** (admin only) or use the Atlassian REST API.
 2. Create a webhook:
    - **URL:** `https://<your-vercel-domain>/webhooks/jira`
-   - **Secret:** the `JIRA_WEBHOOK_SECRET` value from step 5. Jira signs each delivery with HMAC-SHA256 in the `X-Hub-Signature` header; the handler at `apps/worker/src/routes/webhooks/jira.post.ts` verifies it with `timingSafeEqual`.
+   - **Secret:** the `JIRA_WEBHOOK_SECRET` value from step 5. Jira signs each delivery with HMAC-SHA256 in the `X-Hub-Signature` header, and the Jira integration verifies it over the exact bytes received (`integrations/jira/webhook.ts`). The URL is served by the shared integration webhook route, `apps/worker/src/routes/webhooks/[id].post.ts`, which records each delivery for the Webhook delivery health check.
    - **Events:** `jira:issue_updated` (required). Add `jira:issue_created` and `comment_created` if you want creates and comments to dispatch instantly. Answering clarification questions does not require `comment_created`: the answers are picked up when the ticket is moved back to the AI column (comment first, then move), and the cron poller is the backstop if that webhook is missed.
    - **JQL filter** (optional): `project = AWT` to limit deliveries to the relevant project.
 3. Save.

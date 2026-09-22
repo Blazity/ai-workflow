@@ -902,6 +902,168 @@ S11 review round, 2026-09-22 (six defects, all in what the stage deleted):
 - The webhook route fails closed when the automation account cannot be read,
   the way the first settings read already does.
 
+S12 round three, 2026-09-22: the poll containment had a hole above itself and
+this round's own fixes carried two new failure paths. Fixed and covered:
+
+- Clarification expiry runs above the ticket half, by design, and was
+  unguarded. A database blip inside it killed the whole tick, which is the
+  exact failure the containment reports as contained. It is best-effort now,
+  like every other housekeeping phase in that pass.
+- An unexpected THROW out of the tracker resolution left `createAdapters`
+  entirely, and the poller builds its adapters before its first phase. It
+  lands on the same point-of-use getter as every other refusal now, carrying
+  what threw. That also answers `usable.ts`: only its two database reads are
+  guarded, and a module load failure inside it reaches the caller. Containing
+  it at the caller is right either way, because a caller that never touches
+  the tracker should not care what failed inside the resolution.
+- The AI review destination cache was keyed on the column name alone. That was
+  safe while the transition id came from an environment variable; since S12 it
+  comes from a connection read that can fail for one tick, so a degraded
+  resolution was cached for the life of the process. The key now covers the
+  transition id, absence included, and the reconciler logs the degraded read
+  rather than swallowing it.
+- Completing a bare column name now reads the settings guarded, matches
+  trimmed and case-insensitively as the reconciler does, and completes only
+  when EXACTLY ONE column answers to the name. Two columns answering meant the
+  first match won, and an operator renaming the AI column to the review
+  column's old name would have sent a finished run's ticket back into the AI
+  column for the poller to start again.
+
+S12 round four, 2026-09-22, both on the operation this branch exists to make
+possible, an admin repointing a connection:
+
+- The AI review destination cache is keyed on the tracker's identity as well
+  as the column and the transition id. Repointing Jira on a warm worker left
+  every cached status id belonging to the old instance, and the reconciler
+  read a ticket sitting in AI Review as one that had left the AI column and
+  cancelled a healthy run. `resetAiReviewDestinationCache` has only test
+  callers and was never going to save it; a key that covers what the value
+  depends on needs nobody to remember anything.
+- The ticket half of a poll pass is contained as a whole rather than at the
+  board read inside it. `createAdapters` freezes its resolution at the top of
+  the pass and the board is read later, so a tracker connected between the two
+  threw from the middle of the half and took the housekeeping with it. Two
+  tests now cover the two doors.
+- One policy for the tracker wiring read in `run-lifecycle/reconcile.ts`: it
+  throws, at every site. The half is contained, so a failed read costs the
+  reconciler and nothing else. The fallback it replaced decided the review
+  destination by name alone, which misses on a localized board and cancels a
+  run that is finishing; a silent degrade there is worse than a skipped pass.
+- The two dropped board reads in `steps/ticket-transition-step.ts` log
+  `ticket_move_board_read_unavailable`.
+
+Answered, not changed: `resolveActiveIssueTracker` is contained at
+`createAdapters` alone because that is the one caller reached before anybody
+decided they needed a tracker. The five callers that let a throw through are
+each called by something already committed to ticket work, where a fallback
+would be a wrong answer rather than a smaller one; their containment belongs
+at the ticket half and the webhook handler, which is where it now is. The
+function's own doc comment says so.
+
+S12 claims withdrawn, 2026-09-22: "one derivation" means one derivation for
+every key this build WRITES. Two places reconstruct a key an earlier build
+wrote and spell `jira` themselves, because the word those rows carry is a
+historical fact rather than this deployment's configuration:
+`db/repositories/clarifications.ts` and `engine/agent-workflow.ts`, the latter
+in workflow scope where no connection can be read at all. The core-reference
+gate allowlists exactly these two with that reason. The earlier report also
+said clarification expiry had been moved above the ticket half; it had always
+been there and was not moved. It is guarded where it stands.
+
+S12 evidence, 2026-09-22, two claims corrected after the gate:
+
+- The characterisation suite passed unedited across the rewrite, but nobody can
+  check that: the file was never committed before the rewrite, so no record of
+  it exists from before. It rests on the author's word alone and should be read
+  that way. For the rest of this branch, characterisation tests are committed
+  BEFORE the rewrite they pin, which makes the property provable.
+- The five recorded payloads are Zulip's open source Jira webhook fixtures at a
+  pinned commit, not deliveries this deployment received. Each `.source.txt`
+  says so with its URL, revision, retrieval date and digest, and the suite
+  recomputes every digest. They are real Jira Cloud bytes; they are not ours.
+
+S12 implementation audit, 2026-09-22: Jira ships from `integrations/jira` and
+core reaches every ticket through the `issue_tracker` capability. The
+integration owns the HMAC verification, Jira's own delivery envelope, the
+project comparison and the "was that move ours" question; core keeps what a
+ticket move means for a run, which is the columns, the claim, dispatch, cancel,
+resume and plan approval. A new reception kind, `ticket_events`, carries the
+result, because the VCS-shaped `trigger_events` says nothing about a status
+change. `/webhooks/jira` keeps its URL and its signature scheme, served by the
+generic route, which records each delivery for the `webhook-delivery` check it
+already wrote for every other integration. Recorded payloads are five real Jira
+Cloud deliveries, each with its source URL, pinned revision, retrieval date and
+digest beside the bytes, and the first test re-computes every digest. Core's
+`jira.api` and `jira.webhook-delivery` probes are gone; the integration reports
+Account access, Project access and Webhook registration, and `jira` leaves
+`CORE_HEALTH_SECTION_IDS` in the same change, which is what lets the package
+take the name.
+
+S12 boot failure, 2026-09-22: the worker refused to start without
+`JIRA_BASE_URL`, `JIRA_API_TOKEN` and `JIRA_PROJECT_KEY`, and a deployment with
+no issue tracker is a legitimate state now, so that failure had to move rather
+than disappear. It is the integration's Project access check: a project key
+that names nothing, or that the token account cannot see, reads Down on the
+Health screen and says which value to fix, rather than every delivery being
+ignored in silence as belonging to another project. The connection test refuses
+to save such a connection at all.
+
+S12 drain, 2026-09-22: no step identity is added, removed, moved or renamed.
+The 158 `"use step"` identities (module path plus function name) are
+byte-identical to the ones on the branch's start commit, checked by extracting
+the pair from every step-bearing file at `0486b82c` and in the tree. One
+recorded RESULT gains a field:
+
+- `runStartSettingsStep` records an optional `tracker` (the site and up to
+  three transition ids). A run suspended before this change replays a result
+  without it, so every transition id it builds a move from is absent. That is
+  NOT benign on a board that reaches a column only by a named transition: the
+  move by column name finds nothing and the ticket is stranded at the end of an
+  otherwise successful run. A bare column name is therefore completed against
+  the current board in `steps/ticket-transition-step.ts`, which runs in the
+  worker and can read the connection, and only for a name that board still
+  recognises. The ticket link is the part of absence that really is benign: it
+  is dropped.
+
+THE TRACKER IS NOT PINNED, and an earlier version of this paragraph said it
+was. `resolveActiveIssueTracker` can compare a recorded pin, but no caller in
+core passes one: every tracker call reaches `createAdapters()` without pins, so
+the comparison does not run in production. An absent or empty pin set also
+means "nothing holds this run" here, exactly as `hasRecordedIntegrationPins`
+states for the VCS side, so a run whose row predates
+`workflow_runs.integration_pins` proceeds against the tracker as it is
+configured now rather than refusing. Nothing about the merge may rest on that
+check. The branch still requires the total drain the protocol above states, for
+the reasons S10 and S11 recorded.
+
+S12 connection shape, 2026-09-22: the pinned connection shape gains Jira's
+seven fields (`services/integrations/connection-shape.test.ts` snapshot, +68
+lines). No existing integration's fingerprint changes. `apiToken` is
+deliberately NOT marked `identity`: the site URL already names which Jira this
+is, so rotating the token is a rotation rather than a different connection.
+
+S12 late decisions, 2026-09-22:
+
+- `getCurrentUserAccountId` is required on the port, not optional. Without it a
+  deployment cannot tell its own ticket moves from a person's, so the product
+  cancels its own runs the moment it finishes them and nothing says why. The
+  type holds for an integration compiled here and `resolveActiveIssueTracker`
+  holds for one that was not, which the SDK allows.
+- `createAdapters` became asynchronous rather than handing back a lazy proxy. A
+  proxy answers a function for every name, and eighteen places in core ask
+  whether this tracker can do an optional thing; every one of them would have
+  started answering yes. The refusal is raised on `adapters.issueTracker`
+  instead of when the set is built, so a deployment with no tracker still gets
+  its run registry, its VCS adapter and its notifications.
+- `ticketSubject(ticketKey)` is the single derivation of `ticket:jira:<KEY>`,
+  taken from the id of the integration serving the capability. That id is
+  permanently `jira` because the string is in `active_runs`; changing it later
+  is a migration over run history, and the manifest says so.
+- The `investigate` block's two provider parameters became capability
+  vocabulary (`providers` to `sources`, `jira` to `issue_tracker`,
+  `jiraJqlTemplate` to `issueTrackerQueryTemplate`). The compatibility map goes
+  with R1's one-off rewrite, the same way the `send_slack_message` alias does.
+
 ## Backlog mapping
 
 | Existing issue | Fate |

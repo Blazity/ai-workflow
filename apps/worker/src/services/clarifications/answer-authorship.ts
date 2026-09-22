@@ -186,7 +186,7 @@ export async function readBotAccountId(
   ticketKey: string,
 ): Promise<string | null> {
   try {
-    const id = (await issueTracker.getCurrentUserAccountId?.())?.trim() ?? "";
+    const id = (await issueTracker.getCurrentUserAccountId()).trim();
     if (id) return id;
   } catch {
     // Fall through: identity unavailable.

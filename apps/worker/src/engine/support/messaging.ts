@@ -21,6 +21,7 @@
  * happens.
  */
 import type { IntegrationConnectionPin, IntegrationUnavailableReason } from "@shared/contracts";
+import { ticketUrlFor } from "./ticket-url.js";
 import type {
   MessageRetrievalFailure,
   MessageSearchOutcome,
@@ -30,6 +31,8 @@ import type {
   MessagingTicket,
   TicketEvent,
 } from "@integrations/sdk";
+
+export { ticketUrlFor };
 
 /** Comfortably under the 300 s a plain function is killed at. */
 const MESSAGING_TIMEOUT_MS = 30_000;
@@ -226,19 +229,16 @@ async function activeMessaging(
  * on the tracker, and `/browse/<that>` is always a 404.
  */
 async function ticketRef(ticketKey: string): Promise<MessagingTicket> {
-  // The same variable `services/settings` reads for the tracker's base url,
-  // read here because the engine may not reach that cluster. It leaves with
-  // the tracker in S12.
-  const { env } = await import("../../infra/vcs-config.js");
-  return { key: ticketKey, url: ticketUrlFor(ticketKey, env.JIRA_BASE_URL) };
-}
-
-const TICKET_KEY_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/;
-
-export function ticketUrlFor(ticketKey: string, baseUrl: string): string | null {
-  if (!TICKET_KEY_PATTERN.test(ticketKey)) return null;
-  const base = baseUrl.replace(/\/$/, "");
-  return base === "" ? null : `${base}/browse/${ticketKey}`;
+  // Where a person opens the ticket, asked of whichever integration serves the
+  // issue tracker capability. A deployment with none answers an empty site and
+  // the message carries no link, which is right: a message about a ticket is
+  // still worth sending, and a link to nowhere is not.
+  const { resolveActiveIssueTracker } = await import("./issue-tracker-runtime.js");
+  const tracker = await resolveActiveIssueTracker();
+  return {
+    key: ticketKey,
+    url: tracker.ok ? ticketUrlFor(ticketKey, tracker.wiring.baseUrl) : null,
+  };
 }
 
 /** Why the provider this run pinned is not the one it may use now. */

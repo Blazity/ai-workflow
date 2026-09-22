@@ -4,7 +4,7 @@ import type { BlockManifest } from "@shared/contracts";
 const MAX_RESULTS_CEILING = 10;
 
 /**
- * The value a stored graph carries in `providers` for the chat half of this
+ * The value a stored graph carries in `sources` for the chat half of this
  * block. It is this block's parameter vocabulary, written into definitions
  * people already published, not a provider core talks to: messaging reaches
  * whichever integration serves the capability. It lives here so the one place
@@ -12,7 +12,11 @@ const MAX_RESULTS_CEILING = 10;
  * block's vocabulary rather than a provider. S12 splits this block and takes
  * the word with it (ADR-010).
  */
-export const INVESTIGATE_CHAT_PROVIDER = "slack";
+export const INVESTIGATE_CHAT_SOURCE = "chat";
+/** The value a stored graph carries in `sources` for the issue tracker half
+ *  of this block. Same reasoning as `INVESTIGATE_CHAT_SOURCE`. */
+const INVESTIGATE_TRACKER_SOURCE = "issue_tracker";
+
 function hasBalancedJqlStructure(clause: string): boolean {
   let depth = 0;
   let quoted = false;
@@ -34,18 +38,18 @@ function hasBalancedJqlStructure(clause: string): boolean {
 }
 const paramsSchema = z
   .object({
-    providers: z
-      .array(z.enum(["jira", INVESTIGATE_CHAT_PROVIDER]))
+    sources: z
+      .array(z.enum([INVESTIGATE_TRACKER_SOURCE, INVESTIGATE_CHAT_SOURCE]))
       .min(1)
-      .default(["jira", INVESTIGATE_CHAT_PROVIDER]),
-    slackChannels: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
-    slackLookbackDays: z.number().int().min(1).max(365).optional(),
-    jiraJqlTemplate: z
+      .default([INVESTIGATE_TRACKER_SOURCE, INVESTIGATE_CHAT_SOURCE]),
+    chatChannels: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
+    chatLookbackDays: z.number().int().min(1).max(365).optional(),
+    issueTrackerQueryTemplate: z
       .string()
       .trim()
       .min(1)
       .max(1000)
-      .refine(hasBalancedJqlStructure, "JQL template has unbalanced parentheses or quotes")
+      .refine(hasBalancedJqlStructure, "Query template has unbalanced parentheses or quotes")
       .optional(),
     maxResults: z.number().int().min(1).max(MAX_RESULTS_CEILING).optional(),
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:/-]+$/u).optional(),
@@ -64,14 +68,14 @@ export const manifest = {
   ui: {
     group: "ticket",
     label: "Investigate",
-    description: "Searches Jira and Slack for context on the ticket and builds an evidence-backed classification and theory for a human decision. Jira is always scoped to the configured project and Slack to the configured channels; a JQL template narrows within that project and cannot widen past it. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question, otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.",
+    description: "Searches this deployment's issue tracker and chat for context on the ticket and builds an evidence-backed classification and theory for a human decision. The issue tracker search is always scoped to the project the connection names, and chat to the configured channels; a query template narrows within that scope and cannot widen past it. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question, otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.",
     glyph: "⌕",
     color: "#2563EB",
     softColor: "#E9EFFD",
   },
   defaults: {
-    providers: ["jira", INVESTIGATE_CHAT_PROVIDER],
-    slackLookbackDays: 30,
+    sources: [INVESTIGATE_TRACKER_SOURCE, INVESTIGATE_CHAT_SOURCE],
+    chatLookbackDays: 30,
     maxResults: 10,
   },
   inputs: {},

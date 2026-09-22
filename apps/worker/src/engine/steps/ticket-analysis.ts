@@ -26,7 +26,7 @@ export async function postPrLinksComment(
   );
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   const lines = prs.map((pr) => `- ${pr.provider}:${pr.repoPath}: #${pr.id} ${pr.url}`);
   try {
     await assertConnectedActiveRunOwner(owner);
@@ -125,7 +125,7 @@ export async function postRunAnalysisCommentStep(
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   await assertConnectedActiveRunOwner(owner);
   const attemptedAt = new Date().toISOString();
   const marker = analysisCommentMarker(report.runId, stage);
@@ -184,7 +184,7 @@ async function recordRunAnalysisCommentFailureBestEffort(
 }
 
 function safeRunAnalysisDeliveryError(error: unknown): string {
-  return safeRunAnalysisError(error, "Jira analysis report delivery failed.");
+  return safeRunAnalysisError(error, "Issue tracker analysis report delivery failed.");
 }
 
 function safeRunAnalysisReportError(error: unknown): string {
@@ -215,7 +215,7 @@ export async function postTicketComment(
   );
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   await assertConnectedActiveRunOwner(owner);
   return issueTracker.postComment(ticketId, comment);
 }
@@ -247,7 +247,11 @@ export async function notifyTicket(
   const { loadActiveRunOwnerPort, loadAdaptersPort } = await import("../internal/ports.js");
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
-  const { messaging } = createAdapters(undefined, pins);
+  // Destructuring takes the sender and never touches `issueTracker`, which is
+  // the getter that refuses where no tracker is connected. A notification must
+  // never change a run's outcome, and a deployment with chat and no tracker
+  // still sends this one.
+  const { messaging } = await createAdapters(undefined, pins);
   await assertConnectedActiveRunOwner(owner);
   return messaging.notifyForTicket(ticketKey, event);
 }
@@ -296,7 +300,7 @@ async function postFailureReasonCommentStep(
   );
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   try {
     await assertConnectedActiveRunOwner(owner);
     await issueTracker.postComment(ticketKey, reason);
@@ -408,7 +412,7 @@ async function markTicketFailed(
   "use step";
   const { loadAdaptersPort } = await import("../internal/ports.js");
   const { createAdapters } = await loadAdaptersPort();
-  const { runRegistry } = createAdapters();
+  const { runRegistry } = await createAdapters();
   if (!owner.runId) throw new Error("Failed-ticket marking requires a bound run owner.");
   await runRegistry.markFailed(ticketIdentifier, {
     runId,

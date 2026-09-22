@@ -108,6 +108,56 @@ export default defineEventHandler(async (event) => {
   if (reception.kind === "answered") {
     return respond(event, reception.response);
   }
+  if (reception.kind === "ticket_events") {
+    // The integration read its provider's bytes and said what happened to a
+    // ticket. What that means for a run is core's, and it is the same for the
+    // next issue tracker: see `services/triggers/ticket-events.ts`.
+    if (reception.events.length === 0) {
+      const ignored = reception.ignored;
+      return respond(event, {
+        ...reception.response,
+        body: {
+          status: "ignored",
+          reason: ignored?.reason ?? "nothing_to_act_on",
+          ...(ignored?.ticketKey ? { ticketKey: ignored.ticketKey } : {}),
+        },
+      });
+    }
+    const { getRequestSettingsSnapshot } = await import("../../services/settings/index.js");
+    const { actOnTicketEvent } = await import("../../services/triggers/ticket-events.js");
+    const { TriggerHttpError } = await import(
+      "../../services/triggers/trigger-http-error.js"
+    );
+    // Memoised on the request, so the board read and the dispatch read below
+    // are one query however many phases ask for the snapshot.
+    const loadSettings = () => getRequestSettingsSnapshot(event);
+    let outcome;
+    try {
+      // One delivery, one ticket, for every tracker this contract has met. The
+      // loop is here so a tracker that batches is not a rewrite of this route,
+      // and the LAST outcome is what the delivery log shows, because a batch
+      // that dispatched and then refused has to read as refused.
+      for (const candidate of reception.events) {
+        outcome = await actOnTicketEvent(candidate, loadSettings);
+      }
+    } catch (error) {
+      // The signature checked out and this deployment could not finish acting
+      // on it. That is a rejected delivery, not an accepted one: the health
+      // screen reads the last word on a webhook, and calling this accepted
+      // would paint it Live while every delivery was failing.
+      observeWebhook(id, "rejected", "handler_failed");
+      if (error instanceof TriggerHttpError) {
+        throw createError({
+          statusCode: error.statusCode,
+          statusMessage: error.statusMessage,
+          ...(error.data ? { data: error.data } : {}),
+        });
+      }
+      throw error;
+    }
+    return respond(event, { ...reception.response, ...(outcome ? { body: outcome } : {}) });
+  }
+
   if (reception.kind === "trigger_events") {
     const { getRequestSettingsSnapshot } = await import(
       "../../services/settings/index.js"

@@ -451,9 +451,9 @@ does not have to call them additive.
 
 | Leftover | Where | Owner |
 |---|---|---|
-| `searchTicketSummaries(jql, ...)` takes a JQL string; `searchTickets(query)` is JQL in practice | `issue-tracker.ts` | S12 |
-| `IssueTrackerTransitionTarget.transitionId` is a Jira transition | `issue-tracker.ts` | S12 |
-| `downloadAttachment` returns a Node `Buffer`, a Node type in a browser-safe package | `issue-tracker.ts` | S12 |
+| ~~`searchTicketSummaries(jql, ...)` takes a JQL string; `searchTickets(query)` is JQL in practice~~ Resolved in S12: the two became `ticketsInStatus(status, {limit})` and `findTickets({keywords, limit, providerQuery})`, and no caller composes a provider query any more | `issue-tracker.ts` | done, S12 |
+| `IssueTrackerTransitionTarget.transitionId` is named after a Jira transition action, though what it means is "the provider's own id for this move". S12 did not rename it: the three ids are connection VALUES on every deployment that has one, so the rename is a migration over saved connections rather than a rename, and it buys a word | `issue-tracker.ts` | when a second tracker needs a different word |
+| `downloadAttachment` returns a Node `Buffer`, a Node type in a browser-safe package. S12 did not change it: `Uint8Array` would ripple through the attachment pipeline into the sandbox writer, which is a change to how files reach an agent and does not belong in the stage that moved Jira | `issue-tracker.ts` | AIW-14 (Linear), the first tracker that is not Jira |
 | Comments still give examples from the two current providers (`PRRT_` node ids and discussions) | `vcs.ts` | S11 |
 | `MessagingSender.notifyForTicket` takes a ticket key and `TicketEvent` has a `note` kind: both are shaped by a run having one subject. A future caller that is not a run would need a subject of its own. Nothing asks for it yet | `messaging.ts` | when something asks |
 | `GITHUB_APP_PRIVATE_KEY` is base64 in the environment (`adapters/vcs/github-auth.ts:20-21`) while `multiline` invites a raw PEM in the dashboard, and the integration cannot tell the two apart. Proposal: a `pem` format core normalises, so both forms reach the integration the same way | `manifest.ts` | S11 |

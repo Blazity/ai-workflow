@@ -22,7 +22,7 @@ beforeEach(async () => {
   db = await createTestDb();
 });
 
-const base = { jiraBaseUrl: JIRA };
+const base = { ticketOrigin: JIRA };
 
 describe("fetchRunDetailFromDb", () => {
   it("returns null for an unknown run id", async () => {

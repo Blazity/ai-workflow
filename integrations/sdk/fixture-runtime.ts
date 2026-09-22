@@ -88,8 +88,29 @@ class FixtureTracker implements IssueTrackerAdapter {
     return body.url ?? null;
   }
 
-  async searchTickets(query: string): Promise<string[]> {
-    return (await readJson(this.ctx, `/search?q=${encodeURIComponent(query)}`)) as string[];
+  async ticketsInStatus(status: string): Promise<string[]> {
+    return (await readJson(
+      this.ctx,
+      `/search?status=${encodeURIComponent(status)}`,
+    )) as string[];
+  }
+
+  /**
+   * The account this fixture connection acts as.
+   *
+   * Required by the port, and this fixture is where that requirement is worth
+   * feeling: it is the smallest complete issue tracker in the repository, so
+   * if an adapter could be written without answering "was that me", this one
+   * would be written without it. The product's own ticket moves fire the
+   * tracker's webhook, and an adapter that could not say who acted would make
+   * every one of them read as a person pulling the ticket out.
+   */
+  async getCurrentUserAccountId(): Promise<string> {
+    const body = (await readJson(this.ctx, "/me")) as { accountId?: string };
+    if (typeof body.accountId !== "string" || body.accountId === "") {
+      throw new Error("The fixture provider did not say which account this token is.");
+    }
+    return body.accountId;
   }
 }
 

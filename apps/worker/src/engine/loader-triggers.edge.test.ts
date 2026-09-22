@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { connectedIssueTracker } from "../test-support/issue-tracker.js";
 import type { WorkflowDefinition } from "@shared/contracts";
 
 // One file, the definition loader's edge cases. The GitHub webhook route that
@@ -24,6 +25,9 @@ const H = vi.hoisted(() => ({
 vi.mock("../services/integrations/runtime.js", () => ({
   readIntegrationStates: async () => new Map(),
 }));
+// A deployment with a tracker connected, which is what a ticket trigger
+// needs to exist at all. The choice of tracker is proved elsewhere.
+vi.mock("./support/issue-tracker-runtime.js", () => connectedIssueTracker());
 vi.mock("../infra/vcs-config.js", () => ({
   env: H.env,
 }));

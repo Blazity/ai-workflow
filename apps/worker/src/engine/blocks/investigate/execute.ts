@@ -20,30 +20,6 @@ const MAX_KEYWORDS = 10;
  *  prompts": the prompt sees at most maxResults bounded snippets. */
 const MAX_EXCERPT_CHARS = 500;
 
-/** A template may contain nested clauses, but it must not close a parenthesis
- * it did not open. Otherwise an authored `) OR (project = OTHER` branch can
- * escape the configured project scope because JQL gives AND higher precedence
- * than OR. Parentheses inside quoted strings are data, not structure. */
-function hasBalancedJqlStructure(clause: string): boolean {
-  let depth = 0;
-  let quoted = false;
-  for (let index = 0; index < clause.length; index += 1) {
-    const char = clause[index];
-    if (quoted) {
-      if (char === "\\") index += 1;
-      else if (char === '"') quoted = false;
-      continue;
-    }
-    if (char === '"') quoted = true;
-    else if (char === "(") depth += 1;
-    else if (char === ")") {
-      depth -= 1;
-      if (depth < 0) return false;
-    }
-  }
-  return depth === 0 && !quoted;
-}
-
 /** The verdicts the theory call may return. insufficient_data is among them on
  *  purpose: with no evidence and a vague ticket, "I cannot tell" is the honest
  *  answer and routes to a human, where guessing false_positive would close a
@@ -100,12 +76,12 @@ const theoryResultSchema = z.object({
  */
 type InvestigateEvidence = {
   ref: string;
-  source: "jira" | "slack";
+  source: "issue_tracker" | "chat";
   title: string;
   excerpt: string;
-  /** Reporter display name, or the Slack user id. */
+  /** Reporter display name, or the chat user id. */
   author: string;
-  /** Jira project key, or the Slack channel id. */
+  /** Issue tracker project key, or the chat channel id. */
   origin: string;
   /** ISO 8601, empty when the provider reports none. */
   timestamp: string;
@@ -114,16 +90,16 @@ type InvestigateEvidence = {
 };
 
 /**
- * Why some evidence is missing, per provider and, for chat, per channel. The
- * companion to `partial`: `partial` says WHICH provider is incomplete, this
+ * Why some evidence is missing, per source and, for chat, per channel. The
+ * companion to `partial`: `partial` says WHICH source is incomplete, this
  * says why, so "the bot was never invited to #support" is distinguishable from
  * "the provider timed out" and from "searched, found nothing" (both lists
  * empty).
  */
 type RetrievalGap = {
-  provider: "jira" | "slack";
+  provider: "issue_tracker" | "chat";
   reason: MessageRetrievalFailure;
-  /** The channel the gap is about, empty when the whole provider failed. */
+  /** The channel the gap is about, empty when the whole source failed. */
   scope: string;
 };
 
@@ -134,12 +110,13 @@ function truncateExcerpt(text: string): string {
     : `${collapsed.slice(0, MAX_EXCERPT_CHARS)}…`;
 }
 
-/** Jira hit -> normalized evidence. Slack's ts is a unix seconds string, Jira's
- *  updated is already ISO, so only Slack needs converting. */
-function jiraEvidence(ticket: TicketSummary): InvestigateEvidence {
+/** Issue tracker hit -> normalized evidence. Chat's ts is a unix seconds
+ *  string, the tracker's updated is already ISO, so only chat needs
+ *  converting. */
+function trackerEvidence(ticket: TicketSummary): InvestigateEvidence {
   return {
-    ref: `jira:${ticket.key}`,
-    source: "jira",
+    ref: `issue_tracker:${ticket.key}`,
+    source: "issue_tracker",
     title: `${ticket.key} ${ticket.summary}`.trim(),
     excerpt: truncateExcerpt(
       ticket.status === "" ? ticket.excerpt : `[${ticket.status}] ${ticket.excerpt}`,
@@ -151,12 +128,12 @@ function jiraEvidence(ticket: TicketSummary): InvestigateEvidence {
   };
 }
 
-function slackEvidence(match: MessageSearchMatch): InvestigateEvidence {
+function chatEvidence(match: MessageSearchMatch): InvestigateEvidence {
   const text = truncateExcerpt(match.text);
   return {
-    ref: `slack:${match.channel}/${match.id}`,
-    source: "slack",
-    // Slack messages have no title; the opening of the message is the closest
+    ref: `chat:${match.channel}/${match.id}`,
+    source: "chat",
+    // Chat messages have no title; the opening of the message is the closest
     // honest thing, and the excerpt carries the rest.
     title: text.length <= 80 ? text : `${text.slice(0, 80)}…`,
     excerpt: text,
@@ -167,53 +144,30 @@ function slackEvidence(match: MessageSearchMatch): InvestigateEvidence {
   };
 }
 
-/** Enabled providers, mirroring the dashboard's investigateProviders. An absent
- *  or unreadable list means both are on: the schema defaults it that way, and a
- *  node whose selection cannot be read should investigate everything rather than
- *  silently investigate nothing. */
-function resolveProviders(raw: unknown): { jira: boolean; slack: boolean } {
-  if (!Array.isArray(raw)) return { jira: true, slack: true };
-  return { jira: raw.includes("jira"), slack: raw.includes("slack") };
+/**
+ * Enabled sources, mirroring the dashboard's investigateSources. Accepts both
+ * the capability vocabulary (`issue_tracker`, `chat`) and the old provider
+ * vocabulary (`jira`, `slack`), because a run suspended before the rename
+ * replays a recorded plan built with the old words: without this tolerance
+ * that run would resume investigating nothing. An absent or unreadable list
+ * means both are on: the schema defaults it that way, and a node whose
+ * selection cannot be read should investigate everything rather than silently
+ * investigate nothing.
+ */
+function resolveSources(raw: unknown): { issueTracker: boolean; chat: boolean } {
+  if (!Array.isArray(raw)) return { issueTracker: true, chat: true };
+  return {
+    issueTracker: raw.includes("issue_tracker") || raw.includes("jira"),
+    chat: raw.includes("chat") || raw.includes("slack"),
+  };
 }
 
-function resolveSlackChannels(raw: unknown): string[] {
+function resolveChatChannels(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter(
     (channel): channel is string =>
       typeof channel === "string" && channel.trim() !== "",
   );
-}
-
-function jqlLiteral(value: string): string {
-  return value.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-/**
- * Compose the Jira query. The tenant's configured project is ANDed in FIRST and
- * unconditionally, so no combination of keywords or template can reach a project
- * the deployment was not configured for: an authored template narrows inside
- * that project and cannot widen past it (a template naming another project
- * yields an empty result set rather than that project's tickets).
- *
- * Keywords become an OR'd text clause. Both the template and the keywords are
- * optional, but the project scope never is, there is no unscoped form of this
- * query.
- */
-export function buildInvestigateJql(
-  projectKey: string,
-  keywords: string[],
-  template?: string,
-): string {
-  const clauses = [`project = "${jqlLiteral(projectKey)}"`];
-  const authored = template?.trim() ?? "";
-  if (authored !== "" && hasBalancedJqlStructure(authored)) clauses.push(authored);
-  const keywordClause = keywords
-    .map(jqlLiteral)
-    .filter((keyword) => keyword !== "")
-    .map((keyword) => `text ~ "${keyword}"`)
-    .join(" OR ");
-  if (keywordClause !== "") clauses.push(keywordClause);
-  return clauses.map((clause) => `(${clause})`).join(" AND ");
 }
 
 const GAP_REASON_PROSE: Record<MessageRetrievalFailure, string> = {
@@ -237,8 +191,8 @@ export function describeRetrievalGaps(gaps: readonly RetrievalGap[]): string {
   const parts = gaps.map((gap) => {
     const where =
       gap.scope === ""
-        ? gap.provider === "jira"
-          ? "Jira"
+        ? gap.provider === "issue_tracker"
+          ? "the issue tracker"
           : "chat"
         : `chat channel ${gap.scope}`;
     return `${where} (${GAP_REASON_PROSE[gap.reason]})`;
@@ -318,47 +272,47 @@ type ProviderOutcome<T> =
 /**
  * Coarse class for a tracker error, from what the adapter actually throws: a
  * refused credential is somebody's configuration to fix, an abort is a timeout,
- * anything else is treated as an outage. The status code is read out of the
- * adapter's message because that is where it puts it; misreading it costs a
- * wrong label on a gap, never a wrong classification of the ticket.
+ * anything else is treated as an outage.
+ *
+ * This is a weak signal: the port (`IssueTrackerAdapter`) does not carry typed
+ * errors, so all this has to go on is the message text. It matches a 401 or
+ * 403 appearing as a standalone number anywhere in the message rather than one
+ * provider's exact wording, so a differently worded permission error still
+ * classifies. The cost of getting it wrong either way is the same: a
+ * permission failure may be reported to the run as merely "unavailable",
+ * which reads as an outage rather than something the tenant's connection
+ * needs fixed.
  */
-export function classifyJiraFailure(error: unknown): MessageRetrievalFailure {
+export function classifyTrackerFailure(error: unknown): MessageRetrievalFailure {
   const name = error instanceof Error ? error.name : "";
   if (name === "TimeoutError" || name === "AbortError") return "timeout";
-  const status = /Jira API error: (\d{3})/.exec(
-    error instanceof Error ? error.message : "",
-  )?.[1];
-  return status === "401" || status === "403" ? "permission" : "unavailable";
+  const message = error instanceof Error ? error.message : "";
+  const permission = /(?<![0-9])(401|403)(?![0-9])/.test(message);
+  return permission ? "permission" : "unavailable";
 }
 
-async function searchJiraProvider(adapters: Adapters, input: {
-  /** The one project this deployment may search. Resolved by the caller from the
-   *  tenant configuration, never from block params. */
-  projectKey: string;
+async function searchTrackerSource(adapters: Adapters, input: {
   keywords: string[];
   template?: string;
   maxResults: number;
 }): Promise<ProviderOutcome<TicketSummary[]>> {
   try {
-    // Fail closed: with no configured project there is no scope to search
-    // within, and searching every project the credential can reach is exactly
-    // what must not happen.
-    if (input.projectKey === "") return { status: "failed", reason: "permission" };
     const { issueTracker } = adapters;
-    if (typeof issueTracker.searchTicketSummaries !== "function") {
-      // The configured tracker cannot serve summary search at all, which is a
-      // capability gap rather than an outage, but reads the same to the caller:
-      // no Jira evidence this run.
+    if (typeof issueTracker.findTickets !== "function") {
+      // The configured tracker cannot serve keyword search at all, which is a
+      // capability gap rather than an outage, but reads the same to the
+      // caller: no tracker evidence this run.
       return { status: "failed", reason: "unavailable" };
     }
-    const value = await issueTracker.searchTicketSummaries(
-      buildInvestigateJql(input.projectKey, input.keywords, input.template),
-      input.maxResults,
-    );
+    const value = await issueTracker.findTickets({
+      keywords: input.keywords,
+      limit: input.maxResults,
+      ...(input.template ? { providerQuery: input.template } : {}),
+    });
     return { status: "ok", value };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return { status: "failed", reason: classifyJiraFailure(err) };
+    return { status: "failed", reason: classifyTrackerFailure(err) };
   }
 }
 
@@ -404,8 +358,8 @@ async function searchChatProvider(adapters: Adapters, input: {
  * evidence AND no gap: not searching is not the same as failing to search.
  */
 async function blockInvestigateRetrievalStep(input: {
-  jira: { keywords: string[]; template?: string; maxResults: number } | null;
-  slack: {
+  issueTracker: { keywords: string[]; template?: string; maxResults: number } | null;
+  chat: {
     channels: string[];
     keywords: string[];
     lookbackDays: number;
@@ -413,46 +367,42 @@ async function blockInvestigateRetrievalStep(input: {
   } | null;
 }): Promise<{ evidence: InvestigateEvidence[]; gaps: RetrievalGap[] }> {
   "use step";
-  // The issue tracker's project scope comes from here, one read, so no block
+  // The issue tracker scopes its own search from its connection; no block
   // param can widen what it is allowed to reach. The chat side has no
   // credential to fetch: it goes through the messaging capability, which
   // resolves whichever provider this deployment connected.
-  const { env } = await import("../../../infra/vcs-config.js");
-  // One bundle for both providers. Each `createAdapters()` opens a run registry
+  // One bundle for both sources. Each `await createAdapters()` opens a run registry
   // connection, and two searches in one step asking twice is a connection
   // nobody needed.
   const { createAdapters } = await import("../../support/adapters.js");
-  const adapters = createAdapters();
-  const [jira, slack] = await Promise.all([
-    input.jira === null
+  const adapters = await createAdapters();
+  const [issueTracker, chat] = await Promise.all([
+    input.issueTracker === null
       ? Promise.resolve<ProviderOutcome<TicketSummary[]>>({ status: "disabled" })
-      : searchJiraProvider(adapters, {
-          ...input.jira,
-          projectKey: env.JIRA_PROJECT_KEY?.trim() ?? "",
-        }),
-    input.slack === null
+      : searchTrackerSource(adapters, input.issueTracker),
+    input.chat === null
       ? Promise.resolve<ProviderOutcome<Extract<MessageSearchOutcome, { ok: true }>>>({
           status: "disabled",
         })
-      : searchChatProvider(adapters, input.slack),
+      : searchChatProvider(adapters, input.chat),
   ]);
 
   const evidence: InvestigateEvidence[] = [];
   const gaps: RetrievalGap[] = [];
 
-  if (jira.status === "ok") evidence.push(...jira.value.map(jiraEvidence));
-  if (jira.status === "failed") {
-    gaps.push({ provider: "jira", reason: jira.reason, scope: "" });
+  if (issueTracker.status === "ok") evidence.push(...issueTracker.value.map(trackerEvidence));
+  if (issueTracker.status === "failed") {
+    gaps.push({ provider: "issue_tracker", reason: issueTracker.reason, scope: "" });
   }
 
-  if (slack.status === "ok") {
-    evidence.push(...slack.value.matches.map(slackEvidence));
-    for (const skip of slack.value.skipped) {
-      gaps.push({ provider: "slack", reason: skip.reason, scope: skip.channel });
+  if (chat.status === "ok") {
+    evidence.push(...chat.value.matches.map(chatEvidence));
+    for (const skip of chat.value.skipped) {
+      gaps.push({ provider: "chat", reason: skip.reason, scope: skip.channel });
     }
   }
-  if (slack.status === "failed") {
-    gaps.push({ provider: "slack", reason: slack.reason, scope: "" });
+  if (chat.status === "failed") {
+    gaps.push({ provider: "chat", reason: chat.reason, scope: "" });
   }
 
   const { redactConfiguredSecretsInText } = await import(
@@ -490,9 +440,10 @@ blockInvestigateTheoryStep.maxRetries = 0;
 
 /**
  * investigate: retrieval-augmented ticket triage. Keywords come from one LLM
- * call, Jira and Slack are searched with them (each provider degrades
- * independently into the partial list), and a second LLM call turns ticket +
- * evidence into a classification and theory for a downstream human decision.
+ * call, the issue tracker and chat are searched with them (each source
+ * degrades independently into the partial list), and a second LLM call turns
+ * ticket + evidence into a classification and theory for a downstream human
+ * decision.
  * The block never mutates the ticket: the graph must terminate every path with
  * a ticket mutation or human_question, otherwise the trigger poller reruns
  * this block on every poll.
@@ -519,19 +470,28 @@ export const execute: BlockExecuteFn = async (
     };
   }
 
-  const providers = resolveProviders(block.params.providers);
+  // Every param falls back to its pre-rename name: a recorded plan from
+  // before this rename hands the block the old words, and a definition the
+  // one-off rewrite has not reached still stores them (see
+  // RENAMED_WORKFLOW_BLOCK_PARAMS in @shared/contracts).
+  const sources = resolveSources(block.params.sources ?? block.params.providers);
   const maxResults =
     typeof block.params.maxResults === "number"
       ? block.params.maxResults
       : DEFAULT_MAX_RESULTS;
-  const slackLookbackDays =
-    typeof block.params.slackLookbackDays === "number"
-      ? block.params.slackLookbackDays
+  const chatChannelsParam = block.params.chatChannels ?? block.params.slackChannels;
+  const chatLookbackDaysParam =
+    block.params.chatLookbackDays ?? block.params.slackLookbackDays;
+  const chatLookbackDays =
+    typeof chatLookbackDaysParam === "number"
+      ? chatLookbackDaysParam
       : DEFAULT_CHAT_LOOKBACK_DAYS;
-  const jiraJqlTemplate =
-    typeof block.params.jiraJqlTemplate === "string" &&
-    block.params.jiraJqlTemplate.trim() !== ""
-      ? block.params.jiraJqlTemplate
+  const issueTrackerQueryTemplateParam =
+    block.params.issueTrackerQueryTemplate ?? block.params.jiraJqlTemplate;
+  const issueTrackerQueryTemplate =
+    typeof issueTrackerQueryTemplateParam === "string" &&
+    issueTrackerQueryTemplateParam.trim() !== ""
+      ? issueTrackerQueryTemplateParam
       : undefined;
   const { provider, model } = resolveCallLlmTarget(
     block.params,
@@ -547,28 +507,29 @@ export const execute: BlockExecuteFn = async (
     });
 
     // Nothing to look for means no search at all, which is not a gap. The
-    // project scope is NOT decided here: the step reads it from the tenant's
-    // configuration, so no param can widen it.
-    const searchJira =
-      providers.jira && (keywords.length > 0 || jiraJqlTemplate !== undefined);
-    const slackChannels = providers.slack
-      ? resolveSlackChannels(block.params.slackChannels)
-      : [];
+    // project scope is NOT decided here: the tracker source scopes its own
+    // search from its connection, so no param can widen it.
+    const searchTracker =
+      sources.issueTracker &&
+      (keywords.length > 0 || issueTrackerQueryTemplate !== undefined);
+    const chatChannels = sources.chat ? resolveChatChannels(chatChannelsParam) : [];
 
     const retrieval = await blockInvestigateRetrievalStep({
-      jira: searchJira
+      issueTracker: searchTracker
         ? {
             keywords,
-            ...(jiraJqlTemplate === undefined ? {} : { template: jiraJqlTemplate }),
+            ...(issueTrackerQueryTemplate === undefined
+              ? {}
+              : { template: issueTrackerQueryTemplate }),
             maxResults,
           }
         : null,
-      slack:
-        providers.slack
+      chat:
+        sources.chat
           ? {
-              channels: slackChannels,
+              channels: chatChannels,
               keywords,
-              lookbackDays: slackLookbackDays,
+              lookbackDays: chatLookbackDays,
               maxResults,
             }
           : null,

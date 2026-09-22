@@ -159,6 +159,74 @@
     ]
   },
   {
+    "integration": "jira",
+    "fields": [
+      {
+        "key": "aiReviewTransitionId",
+        "env": "JIRA_AI_REVIEW_TRANSITION_ID",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "aiTransitionId",
+        "env": "JIRA_AI_TRANSITION_ID",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "apiToken",
+        "env": "JIRA_API_TOKEN",
+        "secret": true,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "backlogTransitionId",
+        "env": "JIRA_BACKLOG_TRANSITION_ID",
+        "secret": false,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "baseUrl",
+        "env": "JIRA_BASE_URL",
+        "secret": false,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "url"
+      },
+      {
+        "key": "projectKey",
+        "env": "JIRA_PROJECT_KEY",
+        "secret": false,
+        "identity": false,
+        "optional": false,
+        "default": null,
+        "format": "text"
+      },
+      {
+        "key": "webhookSecret",
+        "env": "JIRA_WEBHOOK_SECRET",
+        "secret": true,
+        "identity": false,
+        "optional": true,
+        "default": null,
+        "format": "text"
+      }
+    ]
+  },
+  {
     "integration": "slack",
     "fields": [
       {

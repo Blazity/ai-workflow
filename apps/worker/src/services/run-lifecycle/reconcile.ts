@@ -1,11 +1,10 @@
 import { getRun } from "workflow/api";
 import { defaultSettingsSnapshot, type SettingsSnapshot } from "@shared/contracts";
-import { env } from "../../infra/vcs-config.js";
 import {
   decideConnectedAiReviewRun,
   decideAiReviewRun,
   isAiReviewDestination,
-  PREMATURE_AI_REVIEW_CANCELLATION_REASON,
+  prematureAiReviewCancellationReason,
   withdrawConnectedTicketFromAiForRun,
   withdrawTicketFromAiForRun,
 } from "../tickets/index.js";
@@ -45,7 +44,14 @@ import {
   reconcileConnectedStalledRun,
   reconcileStalledRun,
 } from "./run-stall-watchdog.js";
-import { ticketSubjectKey } from "./subject-key.js";
+import {
+  issueTrackerName,
+  issueTrackerWiring,
+  resolveActiveIssueTracker,
+  ticketSubject,
+  trackerIdentityOf,
+  trackerMoveTarget,
+} from "../../engine/support/issue-tracker-runtime.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const NON_TERMINAL_STATUSES = new Set(["pending", "running"]);
@@ -165,6 +171,36 @@ export async function reconcileRuns(
   const entries = await runRegistry.listAll();
   let cleaned = 0;
   const parkedEntries: ActiveRunEntry[] = [];
+  /**
+   * The board this pass works against, resolved ONCE before the loop.
+   *
+   * Each of these is a connection read and the loop runs per active claim, so
+   * asking inside it turned one pass into one read per claim on a path already
+   * bounded by the invocation ceiling. Neither can change while a pass runs,
+   * and a pass that saw one change halfway would be worse than one that did
+   * not.
+   *
+   * ONE POLICY FOR THIS READ IN THIS FILE: it THROWS, here and at every other
+   * site below. The ticket half of a poll pass is contained as a whole
+   * (`triggers/polling/poll-pass.ts`), so a failed read costs the reconciler
+   * and nothing else, and the pass says which half did not run. The earlier
+   * shape fell back to "no transition id" here and threw everywhere else,
+   * which is worse than either rule on its own: deciding the review
+   * destination by name alone misses on every board that localizes its status
+   * names, and the miss reads as "the ticket left the AI column" on a run that
+   * is in fact finishing. A silent degrade cancels somebody's run; a throw
+   * skips a pass and the next one is a minute away.
+   */
+  const tracker = await resolveActiveIssueTracker();
+  if (!tracker.ok) throw new Error(tracker.reason);
+  const backlogTargetForPass: IssueTrackerMoveTarget = tracker.wiring
+    .backlogTransitionId
+    ? { name: settings.COLUMN_BACKLOG, transitionId: tracker.wiring.backlogTransitionId }
+    : settings.COLUMN_BACKLOG;
+  // What identifies the tracker these answers came from, for anything that
+  // caches across passes: an admin repointing the connection makes every
+  // status id from the old instance meaningless.
+  const trackerIdentity = trackerIdentityOf(tracker.id, tracker.wiring.baseUrl);
 
   for (const listedEntry of entries) {
     let entry = listedEntry;
@@ -268,12 +304,7 @@ export async function reconcileRuns(
     // run to every branch below. Settle it here, before the column logic, so it
     // cannot sit in RUNNING with a live claim until someone notices.
     if (entry.state === "bound") {
-      const backlogTarget: IssueTrackerMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
-        ? {
-            name: settings.COLUMN_BACKLOG,
-            transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
-          }
-        : settings.COLUMN_BACKLOG;
+      const backlogTarget: IssueTrackerMoveTarget = backlogTargetForPass;
       const stalled = await persistence.reconcileStalled({
         entry: boundEntry,
         runRegistry,
@@ -382,6 +413,10 @@ export async function reconcileRuns(
         statusName: departure.trackerStatus,
         statusId: departure.trackerStatusId,
         aiReviewColumn: settings.COLUMN_AI_REVIEW,
+        trackerIdentity,
+        ...(tracker.wiring.aiReviewTransitionId
+          ? { aiReviewTransitionId: tracker.wiring.aiReviewTransitionId }
+          : {}),
       }));
     if (reviewDestination) {
       const finalization = await decideAiReviewFinalization(
@@ -408,7 +443,7 @@ export async function reconcileRuns(
       ...(issueTracker ? { issueTracker } : {}),
       ...(onSubjectReleased ? { onReleased: onSubjectReleased } : {}),
       reason: reviewDestination
-        ? PREMATURE_AI_REVIEW_CANCELLATION_REASON
+        ? prematureAiReviewCancellationReason(await issueTrackerName())
         : "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
       clarificationNotice: { aiColumnName: settings.COLUMN_AI },
     });
@@ -666,7 +701,7 @@ async function retryCancellingClaim(
   // ticket subject would cancel nothing and leave the claim closing forever.
   if (
     !entry.ticketKey ||
-    entry.subjectKey !== ticketSubjectKey("jira", entry.ticketKey)
+    entry.subjectKey !== await ticketSubject(entry.ticketKey)
   ) {
     return cancelSubjectRunDetailed(
       entry.subjectKey,
@@ -690,12 +725,7 @@ async function retryCancellingClaim(
     return { cancelled: false, released: false };
   }
   const ticketKey = entry.ticketKey;
-  const backlogTarget = env.JIRA_BACKLOG_TRANSITION_ID
-    ? {
-        name: settings.COLUMN_BACKLOG,
-        transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
-      }
-    : settings.COLUMN_BACKLOG;
+  const backlogTarget = await trackerMoveTarget(settings.COLUMN_BACKLOG, "backlog");
   const finalFence = async (owner: {
     subjectKey: string;
     ownerToken: string;
@@ -736,7 +766,7 @@ async function readLiveTicketInAiColumn(
     const ticket = await issueTracker.fetchTicket(ticketKey);
     return (
       ticket.trackerStatus.trim().toLowerCase() === aiColumn.trim().toLowerCase() &&
-      resolveTicketProjectKey(ticket) === env.JIRA_PROJECT_KEY.trim().toUpperCase()
+      resolveTicketProjectKey(ticket) === (await issueTrackerWiring()).projectKey.trim().toUpperCase()
     );
   } catch (error) {
     if (error instanceof IssueTrackerNotFoundError || getErrorCode(error) === "NOT_FOUND") {
@@ -843,12 +873,7 @@ async function cleanFinishedManualTicket(
       issueTracker,
       ticketKey: entry.ticketKey,
       aiColumn: settings.COLUMN_AI,
-      target: env.JIRA_BACKLOG_TRANSITION_ID
-        ? {
-            name: settings.COLUMN_BACKLOG,
-            transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
-          }
-        : settings.COLUMN_BACKLOG,
+      target: await trackerMoveTarget(settings.COLUMN_BACKLOG, "backlog"),
       owner: entry,
       requiredOwnerState: "bound",
     });
@@ -914,12 +939,10 @@ async function cleanStuckTicketRun(
 
   if (!issueTracker) return 0;
 
-  const backlogTarget: IssueTrackerMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
-    ? {
-        name: settings.COLUMN_BACKLOG,
-        transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
-      }
-    : settings.COLUMN_BACKLOG;
+  const backlogTarget: IssueTrackerMoveTarget = await trackerMoveTarget(
+    settings.COLUMN_BACKLOG,
+    "backlog",
+  );
 
   const result = await cancelRunDetailed({
     ticketKey,
@@ -988,7 +1011,7 @@ async function verifyTicketLeftAiColumn(
     const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
     const expectedStatus = aiColumn.trim().toLowerCase();
     const ticketProjectKey = resolveTicketProjectKey(ticket);
-    const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
+    const expectedProjectKey = (await issueTrackerWiring()).projectKey.trim().toUpperCase();
     const trackerStatusId = ticket.trackerStatusId ?? null;
     if (ticketStatus === expectedStatus && ticketProjectKey === expectedProjectKey) {
       logger.info(

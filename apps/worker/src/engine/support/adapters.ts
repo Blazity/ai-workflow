@@ -1,7 +1,9 @@
 import type { VcsProviderKind } from "@shared/contracts";
-import { env } from "../../infra/vcs-config.js";
-import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
 import { createConnectedPostgresRunRegistry } from "../../db/repositories/active-runs.js";
+import {
+  resolveActiveIssueTracker,
+  type ResolvedIssueTracker,
+} from "./issue-tracker-runtime.js";
 import { createRepositoryVCS } from "./vcs-runtime.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../../adapters/vcs/types.js";
@@ -66,24 +68,29 @@ const vcsWithoutRepository: VCSAdapter = {
   postRunFailureNote: refuseWithoutRepository,
 };
 
-/**
- * Whether this deployment can build an issue tracker at all.
- *
- * Asked by the palette, which offers a block on the issue tracker capability
- * only where core can serve it. It lives here because this is the module that
- * builds the tracker: a caller that decided for itself would name the provider,
- * and the same question answered in two places is how a palette comes to offer
- * a block whose call then fails.
- *
- * True on every deployment that boots today, because the variables it reads are
- * required by the environment schema. It is written as a question anyway, so
- * the day the tracker becomes an integration (S12) there is one place to change.
- */
-export function coreServesIssueTracker(): boolean {
-  return Boolean(env.JIRA_BASE_URL && env.JIRA_API_TOKEN && env.JIRA_PROJECT_KEY);
-}
+export { coreServesIssueTracker } from "./issue-tracker-runtime.js";
 
-export function createAdapters(
+/**
+ * ASYNCHRONOUS since S12, and the reason is worth keeping.
+ *
+ * The issue tracker used to be constructed here from environment variables, so
+ * this could be synchronous. It is an integration's connection now, and
+ * reading a connection is a database read. The alternative was a proxy that
+ * resolved on first use, which would have kept every caller unchanged at the
+ * cost of making the eighteen "can this tracker do X" checks in core answer
+ * yes for a tracker that cannot: see `issue-tracker-runtime.ts`.
+ *
+ * The refusal is raised on `adapters.issueTracker`, not here, and that matters
+ * on a deployment with no tracker connected, which is a legitimate state now.
+ * Most callers of this function want the run registry, the VCS adapter or the
+ * messaging sender and never touch the tracker; throwing here would take the
+ * run list, the capacity snapshot and every notification down with the
+ * tracker. This is NOT the proxy the paragraph above rejects: there is no
+ * object to inspect, so `typeof adapters.issueTracker.updateLabels` never
+ * answers for a tracker that cannot do it. Reaching for the tracker at all is
+ * what fails, with the sentence a person reads.
+ */
+export async function createAdapters(
   vcsTarget?: VcsAdapterTarget,
   /**
    * What the run recorded about its integrations when it started. Given, the
@@ -92,7 +99,7 @@ export function createAdapters(
    * notification wants.
    */
   integrationPins?: readonly IntegrationConnectionPin[],
-): Adapters {
+): Promise<Adapters> {
   const runRegistry = createConnectedPostgresRunRegistry();
   let vcs: VCSAdapter | undefined;
   // Which provider carries a message is the deployment's answer, read at each
@@ -100,12 +107,28 @@ export function createAdapters(
   // reaches for, and an adapter built once would keep posting for as long as
   // this process lived.
   const messaging = messagingSender(integrationPins);
-  const adapters = {
-    issueTracker: new JiraAdapter({
-      baseUrl: env.JIRA_BASE_URL,
-      apiToken: env.JIRA_API_TOKEN,
-      projectKey: env.JIRA_PROJECT_KEY,
+  // The resolution answers a refusal for the states it knows about (nothing
+  // connected, two connected, settings unreadable). An UNEXPECTED throw is a
+  // different thing, and before this it left `createAdapters` entirely: the
+  // poller calls this before its first phase, so a module that failed to load
+  // inside the resolution killed the whole tick rather than the ticket half.
+  // It lands on the same getter as every other refusal now, carrying what
+  // threw, so a caller that never touches the tracker is unaffected and one
+  // that does is told.
+  const tracker = await resolveActiveIssueTracker(integrationPins).catch(
+    (error): ResolvedIssueTracker => ({
+      ok: false,
+      unreadable: true,
+      reason: `This deployment's issue tracker could not be resolved (${
+        error instanceof Error ? error.message : String(error)
+      }).`,
     }),
+  );
+  const adapters = {
+    get issueTracker(): IssueTrackerAdapter {
+      if (!tracker.ok) throw new Error(tracker.reason);
+      return tracker.adapter;
+    },
     get vcs() {
       // No target, no adapter. Every production reader of this getter builds
       // its adapters from a pull request or a repository it is already holding

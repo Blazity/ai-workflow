@@ -46,7 +46,7 @@ export function emptyRunDetail(): RunDetailPayload {
 }
 
 export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
-  const jiraBaseUrl = issueTrackerBaseUrl();
+  const ticketOrigin = await issueTrackerBaseUrl();
 
   // Best-effort: the run detail must never 500 because the clarification lookup
   // hiccuped, so a lookup error degrades to no clarification rather than failing.
@@ -59,7 +59,7 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
     // runs) plus the ticket/PR refs the world lacks, and is the coarse fallback.
     const dbDetail = await fetchConnectedRunDetailFromDb({
       runId,
-      jiraBaseUrl,
+      ticketOrigin,
     }).catch(() => null);
     let analysisReport = dbDetail?.analysisReport ?? null;
     if (!analysisReport) {
@@ -83,7 +83,7 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
             model: dbDetail?.run.model ?? null,
             runId,
           }),
-          fetchConnectedRunRefs(runId, jiraBaseUrl).catch(() => null),
+          fetchConnectedRunRefs(runId, ticketOrigin).catch(() => null),
         ]);
         run.prNumber = refs?.prNumber ?? null;
         run.prUrl = refs?.prUrl ?? null;
@@ -124,7 +124,7 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
     try {
       const fallback = await fetchConnectedRunDetailFromDb({
         runId,
-        jiraBaseUrl,
+        ticketOrigin,
       });
       if (fallback) {
         const safe = sanitizeRunDetailForResponse(fallback);

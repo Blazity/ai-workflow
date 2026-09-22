@@ -317,6 +317,9 @@ export function buildSetupOverview(input: {
   // Every version control provider this build ships, which since S11 is all of
   // them: the row is the health of whichever ones the scan reported.
   const vcsIntegrationIds = integrationsProviding("vcs").map((manifest) => manifest.id);
+  const issueTrackerIntegrationIds = integrationsProviding("issue_tracker").map(
+    (manifest) => manifest.id,
+  );
 
   const groups = groupSettings(settings);
   const storedRows = groups.map((group) => ({
@@ -329,7 +332,12 @@ export function buildSetupOverview(input: {
 
   return {
     rows: [
-      integrationRow("issue-tracker", "Issue tracker", byId("jira"), scanReadable),
+      integrationRow(
+        "issue-tracker",
+        "Issue tracker",
+        byId(...issueTrackerIntegrationIds),
+        scanReadable,
+      ),
       integrationRow(
         "vcs",
         "Version control",

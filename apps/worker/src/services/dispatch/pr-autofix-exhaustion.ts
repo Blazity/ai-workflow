@@ -61,7 +61,7 @@ export async function announcePrAutofixExhaustion(
   };
   // A plain factory, safe outside workflow scope, and it hands back a messaging
   // capability, which reports rather than throws when nothing is connected.
-  const adapters = createAdapters({
+  const adapters = await createAdapters({
     provider: notice.provider,
     repoPath: notice.repoPath,
     baseBranch: notice.baseRef,

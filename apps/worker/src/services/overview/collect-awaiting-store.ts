@@ -5,7 +5,7 @@ import { attributeRunModel } from "./attribute-run-model.js";
 
 export interface CollectAwaitingRunsOptions {
   db?: Db;
-  jiraBaseUrl: string;
+  ticketOrigin: string;
   now: Date;
 }
 
@@ -32,8 +32,8 @@ export interface CollectAwaitingRunsOptions {
 export async function collectAwaitingRuns(
   opts: CollectAwaitingRunsOptions,
 ): Promise<Run[]> {
-  const { db, jiraBaseUrl, now } = opts;
-  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
+  const { db, ticketOrigin, now } = opts;
+  const tenantOrigin = ticketOrigin.replace(/\/+$/, "");
 
   const rows = await listAwaitingRunRows(db);
 

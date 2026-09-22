@@ -6,11 +6,11 @@ import type {
   ManualDispatchRequest,
   ManualDispatchResponse,
 } from "@shared/contracts";
-import { env } from "../../infra/vcs-config.js";
 import type { Adapters } from "../../engine/support/adapters.js";
 import { reserveSubjectWithinCapacity } from "../dispatch/index.js";
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { aiColumnMoveTarget, moveTicketForRun } from "../tickets/index.js";
+import { issueTrackerWiring } from "../../engine/support/issue-tracker-runtime.js";
 import type { Db } from "../../db/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
 import type { DeploymentIntegrations } from "../../engine/definition/integration-availability.js";
@@ -560,7 +560,7 @@ async function processManualDispatch(input: {
         ticketKey: resolved.ticketKey,
         target: aiColumnMoveTarget({
           COLUMN_AI: resolved.aiColumn,
-          JIRA_AI_TRANSITION_ID: env.JIRA_AI_TRANSITION_ID,
+          aiTransitionId: (await issueTrackerWiring()).aiTransitionId,
         }),
         owner: {
           subjectKey: resolved.subjectKey,
@@ -585,12 +585,12 @@ async function processManualDispatch(input: {
       await input.store.fail(
         input.row.requestId,
         "provider_unavailable",
-        "Jira could not move the ticket to the AI column.",
+        "The issue tracker could not move the ticket to the AI column.",
       );
       throw new ManualDispatchError(
         502,
         "provider_unavailable",
-        "Jira could not move the ticket to the AI column.",
+        "The issue tracker could not move the ticket to the AI column.",
       );
     }
   } else if (

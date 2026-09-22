@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { JiraAdapter } from "./jira.js";
-import { IssueTrackerNotFoundError } from "./types.js";
+import { JiraAdapter } from "./issue-tracker";
+import { IssueTrackerNotFoundError } from "@integrations/sdk";
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -771,8 +771,8 @@ describe("JiraAdapter", () => {
     });
   });
 
-  describe("searchTickets", () => {
-    it("returns ticket keys matching JQL", async () => {
+  describe("ticketsInStatus", () => {
+    it("returns the keys in one status of the configured project", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -781,12 +781,37 @@ describe("JiraAdapter", () => {
       });
 
       const adapter = jiraAdapter();
-      const keys = await adapter.searchTickets('project = PROJ AND status = "AI"');
+      const keys = await adapter.ticketsInStatus("AI");
       expect(keys).toEqual(["PROJ-1", "PROJ-2"]);
+    });
+
+    it("scopes the query to the connection's project and orders it oldest first", async () => {
+      // The caller passes a column name and nothing else. The project comes
+      // from this connection, so no caller can widen the search past it, and
+      // the order is part of the port's contract: without it the capped page
+      // rotates between polls and the same ticket gets a second "waiting for
+      // capacity" comment.
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ issues: [] }) });
+
+      await jiraAdapter().ticketsInStatus("In Progress");
+
+      const url = decodeURIComponent(String(mockFetch.mock.calls.at(-1)?.[0]));
+      expect(url).toContain('project = "PROJ"');
+      expect(url).toContain('status = "In Progress"');
+      expect(url).toContain("ORDER BY created ASC");
+    });
+
+    it("never lets a column name break out of its quoted literal", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ issues: [] }) });
+
+      await jiraAdapter().ticketsInStatus('Done" OR project = "OTHER');
+
+      const url = decodeURIComponent(String(mockFetch.mock.calls.at(-1)?.[0]));
+      expect(url).not.toContain('project = "OTHER"');
     });
   });
 
-  describe("searchTicketSummaries", () => {
+  describe("findTickets", () => {
     it("bounds Jira search latency with a timeout signal", async () => {
       const controller = new AbortController();
       const timeout = vi
@@ -798,7 +823,7 @@ describe("JiraAdapter", () => {
       });
 
       try {
-        await jiraAdapter().searchTicketSummaries("project = PROJ", 5);
+        await jiraAdapter().findTickets({ keywords: [], limit: 5 });
 
         expect(timeout).toHaveBeenCalledWith(5000);
         expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal);
@@ -836,10 +861,7 @@ describe("JiraAdapter", () => {
       });
 
       const adapter = jiraAdapter();
-      const results = await adapter.searchTicketSummaries(
-        'project = PROJ AND text ~ "login"',
-        10,
-      );
+      const results = await adapter.findTickets({ keywords: ["login"], limit: 10 });
 
       expect(results).toEqual([
         {
@@ -891,7 +913,7 @@ describe("JiraAdapter", () => {
       });
 
       const adapter = jiraAdapter();
-      const [hit] = await adapter.searchTicketSummaries("project = PROJ", 1);
+      const [hit] = await adapter.findTickets({ keywords: [], limit: 1 });
 
       expect(hit!.excerpt).toHaveLength(501);
       expect(hit!.excerpt.endsWith("…")).toBe(true);
@@ -904,7 +926,7 @@ describe("JiraAdapter", () => {
       });
 
       const adapter = jiraAdapter();
-      await expect(adapter.searchTicketSummaries("project = PROJ", 5)).resolves.toEqual([]);
+      await expect(adapter.findTickets({ keywords: [], limit: 5 })).resolves.toEqual([]);
     });
 
     it("throws when the Jira API fails", async () => {
@@ -916,7 +938,7 @@ describe("JiraAdapter", () => {
 
       const adapter = jiraAdapter();
       await expect(
-        adapter.searchTicketSummaries("project = PROJ", 5),
+        adapter.findTickets({ keywords: [], limit: 5 }),
       ).rejects.toThrow(/500/);
     });
   });

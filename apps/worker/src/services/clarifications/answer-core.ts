@@ -8,7 +8,6 @@ import {
   type WorkScopeAnswerReading,
 } from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
-import { env } from "../../infra/vcs-config.js";
 import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../../db/types.js";
 import { loadRepositoryCatalogEntries } from "../repository-catalog/index.js";
@@ -48,6 +47,7 @@ import {
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
 import { aiColumnMoveTarget } from "../tickets/index.js";
+import { issueTrackerWiring } from "../../engine/support/issue-tracker-runtime.js";
 import {
   markConnectedRunResumed,
   markRunResumed,
@@ -253,7 +253,7 @@ async function moveTicketToAiColumn(input: {
     ticketKey: input.ticketKey,
     target: aiColumnMoveTarget({
       COLUMN_AI: input.aiColumn,
-      JIRA_AI_TRANSITION_ID: env.JIRA_AI_TRANSITION_ID,
+      aiTransitionId: (await issueTrackerWiring()).aiTransitionId,
     }),
     owner: {
       subjectKey: input.row.subjectKey,
@@ -307,8 +307,8 @@ async function withdrawTicketWhileQuestionWaits(input: {
       issueTracker: input.issueTracker,
       ticketKey,
       aiColumn: columns.COLUMN_AI,
-      target: env.JIRA_BACKLOG_TRANSITION_ID
-        ? { name: columns.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+      target: (await issueTrackerWiring()).backlogTransitionId
+        ? { name: columns.COLUMN_BACKLOG, transitionId: (await issueTrackerWiring()).backlogTransitionId }
         : columns.COLUMN_BACKLOG,
       owner: { subjectKey: row.subjectKey, ownerToken: owner.ownerToken, runId: row.runId },
       requiredOwnerState: "bound",

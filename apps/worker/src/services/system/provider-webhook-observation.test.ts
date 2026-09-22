@@ -9,7 +9,6 @@ vi.mock("@vercel/functions", () => ({ waitUntil: state.waitUntil }));
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     GITHUB_WEBHOOK_SECRET: "github-secret",
-    JIRA_WEBHOOK_SECRET: "jira-secret",
     RESEND_WEBHOOK_SECRET: "resend-secret",
   },
 }));
@@ -30,11 +29,11 @@ describe("provider webhook health observations", () => {
 
   it("defers the database write outside the webhook response path", () => {
     expect(
-      observeProviderWebhook("jira", "accepted", "deferred-test"),
+      observeProviderWebhook("email", "accepted", "deferred-test"),
     ).toBeUndefined();
     expect(state.record).toHaveBeenCalledOnce();
     expect(state.record).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "scope:jira-secret" }),
+      expect.objectContaining({ scope: "scope:resend-secret" }),
     );
     expect(state.waitUntil).toHaveBeenCalledOnce();
   });

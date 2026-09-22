@@ -63,7 +63,7 @@ function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAg
  * were, which is what keeps every deployment running with nothing to migrate.
  * The set shrinks to nothing as those stages land; nothing else reads it.
  */
-export function builtinCapabilitiesOfDeployment(): string[] {
+export async function builtinCapabilitiesOfDeployment(): Promise<string[]> {
   const deployment = deploymentCapabilities();
   const served: string[] = [];
   // Each one is credential-gated, the way the palette already gates the core
@@ -71,7 +71,7 @@ export function builtinCapabilitiesOfDeployment(): string[] {
   // deployment that cannot serve the capability at all, and the refusal would
   // arrive inside the call rather than in the editor. The tracker's own module
   // answers for it, so this file names no provider.
-  if (coreServesIssueTracker()) served.push("issue_tracker");
+  if (await coreServesIssueTracker()) served.push("issue_tracker");
   if (deployment.vcsProviders.length > 0) served.push("vcs");
   // `messaging` left with S9: an integration serves it now, and core reads no
   // variable of its own for it.

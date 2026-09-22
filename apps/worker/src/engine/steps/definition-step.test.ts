@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { connectedIssueTracker } from "../../test-support/issue-tracker.js";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 
@@ -20,6 +21,9 @@ vi.mock("../../infra/vcs-config.js", () => ({
 vi.mock("../../services/integrations/runtime.js", () => ({
   readIntegrationStates: async () => new Map(),
 }));
+// A deployment with a tracker connected, which is what a ticket trigger
+// needs to exist at all. The choice of tracker is proved elsewhere.
+vi.mock("../support/issue-tracker-runtime.js", () => connectedIssueTracker());
 vi.mock("../../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
 
 const mockGetCurrentVersion = vi.fn();

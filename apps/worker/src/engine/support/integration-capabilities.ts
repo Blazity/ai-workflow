@@ -19,17 +19,18 @@ import { repositoryCatalogProviderSchema, type VcsProviderKind } from "@shared/c
 import { env } from "../../infra/vcs-config.js";
 import type { LlmProvider } from "../../infra/llm-provider.js";
 import { createAdapters } from "./adapters.js";
+import { createRepositoryVCS } from "./vcs-runtime.js";
 
 /** Exactly the capabilities a block declared, each as the SDK types it. */
-export function integrationCapabilityAccess(
+export async function integrationCapabilityAccess(
   capabilities: readonly string[],
-): Partial<IntegrationCapabilityAccess> {
+): Promise<Partial<IntegrationCapabilityAccess>> {
   const access: Partial<IntegrationCapabilityAccess> = {};
   // One bundle for the whole call. Each one opens a run registry connection, so
   // a block asking for two capabilities used to get two.
   const adapters =
     capabilities.includes("issue_tracker") || capabilities.includes("messaging")
-      ? createAdapters()
+      ? await createAdapters()
       : null;
   for (const capability of capabilities) {
     if (capability === "issue_tracker" && adapters) {
@@ -45,11 +46,11 @@ export function integrationCapabilityAccess(
       // rather than an adapter: the caller names the repository it is working
       // on and core builds the adapter for that repository's provider.
       access.vcs = (repository: VcsRepositoryRef) =>
-        createAdapters({
+        createRepositoryVCS({
           provider: vcsProviderOf(repository.provider),
           repoPath: repository.repoPath,
           baseBranch: repository.baseBranch,
-        }).vcs;
+        });
     }
   }
   return access;

@@ -92,8 +92,8 @@ export function createConnectedMcpToolServices(
         body: validatePromptBody(input.body),
       });
     },
-    fetchRunDetail: (runId, jiraBaseUrl) =>
-      fetchConnectedRunDetailFromDb({ runId, jiraBaseUrl }),
+    fetchRunDetail: (runId, ticketOrigin) =>
+      fetchConnectedRunDetailFromDb({ runId, ticketOrigin }),
     getRunReplay: getConnectedRunReplay,
     getRunReplayAvailability: getConnectedRunReplayAvailability,
     getRunReplayAttempt: getConnectedRunReplayAttempt,

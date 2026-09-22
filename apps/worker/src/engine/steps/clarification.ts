@@ -22,7 +22,7 @@ export async function parkForClarificationStep(
   const { updateConnectedTicketLabelsForRun } = await import(
     "../../engine/support/ticket-label-mutation.js"
   );
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   // The questions live durably in the clarification store and the overview reads
   // awaiting state from the DB; the caller also posts a best-effort Jira comment
   // with the questions separately (postClarificationQuestionsCommentStep). This
@@ -74,7 +74,7 @@ export async function reconcileClarificationsOnPickup(
   const { reconcileConnectedClarificationPickupState } = await import(
     "../../db/repositories/clarifications.js"
   );
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   // Re-pickup housekeeping, all idempotent so default step retries are safe:
   //  - drop the awaiting-input label (best-effort; a label error must not fail
   //    the fresh run),
@@ -118,7 +118,7 @@ export async function postPickupCommentStep(
   );
   const { createAdapters } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   // No run param: the ticket view auto-selects the newest run. The link doubles
   // as the idempotency marker (hasDashboardLinkComment), so this must post at
   // most once per ticket. Best-effort: a post failure must not fail the run.
@@ -170,7 +170,7 @@ export async function postClarificationQuestionsCommentStep(
   const { formatClarificationQuestionsComment } = await import(
     "../support/clarification-comment-format.js"
   );
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   // Best-effort: surfacing the questions in Jira must never fail the paused run.
   // Returns the comment deep-link on success, null on any failure. A run-control
   // error still rethrows so the workflow ownership CAS is honored.

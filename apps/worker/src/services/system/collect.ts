@@ -9,10 +9,6 @@ import type {
 
 export type SystemHealthConfig = {
   databaseUrl?: string;
-  jiraBaseUrl?: string;
-  jiraApiToken?: string;
-  jiraProjectKey?: string;
-  jiraWebhookSecret?: string;
   agentKind: "claude" | "codex";
   anthropicApiKey?: string;
   anthropicModel?: string;
@@ -171,11 +167,6 @@ export async function collectSystemHealth(input: {
 }
 
 function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[] {
-  const jiraApiMode = requiredMode([
-    config.jiraBaseUrl,
-    config.jiraApiToken,
-    config.jiraProjectKey,
-  ]);
   const authMode = requiredMode([
     config.betterAuthSecret,
     config.betterAuthUrl,
@@ -219,10 +210,6 @@ function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[]
     integration("database", "Database", "core", true, [
       configured("configuration", "Configuration", ["DATABASE_URL"], config.databaseUrl),
       checked("connectivity", "Connection and query", ["DATABASE_URL"], config.databaseUrl ? "configured" : "misconfigured", true),
-    ]),
-    integration("jira", "Jira", "core", true, [
-      checked("api", "Account, project and statuses", ["JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY"], jiraApiMode, true),
-      checked("webhook-delivery", "Webhook registration and delivery", ["JIRA_WEBHOOK_SECRET"], optionalValueMode(config.jiraWebhookSecret), false, "provider-config"),
     ]),
     integration("agent", config.agentKind === "claude" ? "Claude agent" : "Codex agent", "core", true, [
       checked("model", "Credentials and built-in profile model", config.agentKind === "claude" ? ["ANTHROPIC_API_KEY"] : ["CODEX_API_KEY", "CODEX_CHATGPT_OAUTH_TOKEN"], agentMode, true),

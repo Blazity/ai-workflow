@@ -5,7 +5,7 @@ import {
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
 } from "../../services/mcp/app-dependencies.js";
-import { ticketSubjectKey } from "../../services/mcp/app-dependencies.js";
+import { ticketSubject } from "../../services/mcp/app-dependencies.js";
 import { scrubForPublication } from "../../services/publication/publication-scrub.js";
 import { moveTicket } from "../../services/tickets/ticket-transition.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
@@ -166,7 +166,7 @@ export function registerTicketWriteTools(
           // write. (This once mirrored a welcome-comment check in lib/dashboard-links.ts;
           // that tier and that check are both gone, and nothing replaced them.)
           const botAccountId = await issueTracker
-            .getCurrentUserAccountId?.()
+            .getCurrentUserAccountId()
             .catch(() => null);
           const alreadyPosted = ticket.comments.some(
             (comment) =>
@@ -215,7 +215,7 @@ export function registerTicketWriteTools(
         payloadHash: `sha256:${hashCanonicalJson({ ticketKey, target: input.target })}`,
         operation: async (): Promise<TransitionData> => {
           const issueTracker = deps.adapters.issueTracker;
-          const subjectKey = ticketSubjectKey("jira", ticketKey);
+          const subjectKey = await ticketSubject(ticketKey);
           // undefined means the registry read itself failed, which is NOT the same as
           // "nobody owns it": moving a ticket out from under a live run cancels it, so
           // an unknown answer has to stop the write rather than be read as a free pass.
@@ -303,9 +303,12 @@ export function registerTicketWriteTools(
           // crash between the two impossible. Without this, one lost reply leaves a
           // duplicate ticket that a later transition would start a second run on.
           const marker = `mcp-${hashCanonicalJson({ key: input.idempotencyKey }).slice(0, 12)}`;
-          const existing = await issueTracker
-            .searchTickets(`labels = "${marker}"`)
-            .catch(() => null);
+          // A tracker that cannot look a label up cannot make this idempotent,
+          // and carrying on would create the duplicate this marker exists to
+          // prevent, so it refuses by name instead.
+          const existing = issueTracker.ticketsWithLabel
+            ? await issueTracker.ticketsWithLabel(marker).catch(() => null)
+            : null;
           if (existing === null) {
             throw refused(
               "DEPENDENCY_UNAVAILABLE",

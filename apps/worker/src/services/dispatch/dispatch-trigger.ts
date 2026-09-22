@@ -1103,7 +1103,7 @@ async function resolveTicketIdentity(
   | { status: "retryable_error"; diagnosticId: string }
 > {
   try {
-    const issueTracker = deps.issueTracker ?? createAdapters().issueTracker;
+    const issueTracker = deps.issueTracker ?? (await createAdapters()).issueTracker;
     const ticket = await issueTracker.fetchTicket(ticketKey);
     if (ticket.identifier.trim().toUpperCase() !== ticketKey.trim().toUpperCase()) {
       return { status: "ignored" };

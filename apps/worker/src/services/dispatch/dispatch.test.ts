@@ -53,6 +53,15 @@ vi.mock("../../db/repositories/approvals.js", () => ({
     mockHasBlockingApproval(...args),
 }));
 
+// This deployment has an issue tracker connected. Which one, and what it is
+// wired to, is an integration connection since S12 and is resolved from the
+// database; this suite is about what happens to a RUN, so it says the one
+// thing it means and leaves the resolution to its own tests.
+vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
+  const support = await import("../../test-support/issue-tracker.js");
+  return support.connectedIssueTracker({ projectKey: "PROJ" });
+});
+
 const { dispatchTicket, STALE_CLAIM_MS, capacityConsumerCount } = await import(
   "./dispatch.js"
 );
@@ -153,7 +162,8 @@ function adapters(runRegistry = registry(), ticketValue = ticket()): Adapters {
       fetchTicket: vi.fn().mockResolvedValue(ticketValue),
       moveTicket: vi.fn(),
       postComment: vi.fn(),
-      searchTickets: vi.fn(),
+      ticketsInStatus: vi.fn(),
+      getCurrentUserAccountId: vi.fn().mockResolvedValue("bot-not-the-actor"),
     },
     messaging: {} as never,
     vcs: {} as never,

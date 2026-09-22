@@ -16,10 +16,6 @@ async function importEnvModule() {
 
 describe("env", () => {
   const VALID_ENV = {
-    ISSUE_TRACKER_KIND: "jira",
-    JIRA_BASE_URL: "https://test.atlassian.net",
-    JIRA_API_TOKEN: "token",
-    JIRA_PROJECT_KEY: "PROJ",
     GITHUB_APP_ID: "123456",
     // base64 of: -----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n
     GITHUB_APP_PRIVATE_KEY: "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCkZBS0UKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=",
@@ -53,20 +49,55 @@ describe("env", () => {
   it("parses valid env", async () => {
     Object.assign(process.env, VALID_ENV);
     const { env } = await importEnvModule();
-    expect(env.JIRA_BASE_URL).toBe("https://test.atlassian.net");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
   });
 
-  it("accepts optional Jira transition ids", async () => {
+  it("carries no issue tracker configuration at all", async () => {
+    // Core used to refuse to boot without a Jira, and every value below was
+    // parsed here. They are the Jira integration's connection fields now, read
+    // by the integration through its connection and never by core, so a
+    // deployment can set all of them and core still knows nothing about a
+    // ticket system.
     Object.assign(process.env, {
       ...VALID_ENV,
+      ISSUE_TRACKER_KIND: "jira",
+      JIRA_BASE_URL: "https://test.atlassian.net",
+      JIRA_API_TOKEN: "token",
+      JIRA_PROJECT_KEY: "PROJ",
+      JIRA_WEBHOOK_SECRET: "jira-webhook-secret",
       JIRA_BACKLOG_TRANSITION_ID: "11",
+      JIRA_AI_TRANSITION_ID: "21",
       JIRA_AI_REVIEW_TRANSITION_ID: "31",
     });
 
     const { env } = await importEnvModule();
-    expect(env.JIRA_BACKLOG_TRANSITION_ID).toBe("11");
-    expect(env.JIRA_AI_REVIEW_TRANSITION_ID).toBe("31");
+    const values = env as Record<string, unknown>;
+
+    for (const name of [
+      "ISSUE_TRACKER_KIND",
+      "JIRA_BASE_URL",
+      "JIRA_API_TOKEN",
+      "JIRA_PROJECT_KEY",
+      "JIRA_WEBHOOK_SECRET",
+      "JIRA_BACKLOG_TRANSITION_ID",
+      "JIRA_AI_TRANSITION_ID",
+      "JIRA_AI_REVIEW_TRANSITION_ID",
+    ]) {
+      expect(values[name]).toBeUndefined();
+    }
+  });
+
+  it("boots with no issue tracker configured at all", async () => {
+    // The state S12 made legitimate: a deployment that watches no board. It
+    // used to be a boot failure. Nothing about a missing tracker is silent,
+    // though: the Integrations page and the health probes are what say a
+    // tracker is absent or pointed at a project that matches nothing.
+    Object.assign(process.env, VALID_ENV);
+    for (const name of Object.keys(process.env)) {
+      if (name.startsWith("JIRA_")) delete process.env[name];
+    }
+
+    await expect(importEnvModule()).resolves.toBeDefined();
   });
 
   it("uses defaults for optional fields", async () => {
@@ -185,7 +216,8 @@ describe("env", () => {
 
   it("throws on missing required field", async () => {
     const partial = { ...VALID_ENV };
-    delete (partial as any).JIRA_API_TOKEN;
+    delete (partial as any).DATABASE_URL;
+    delete process.env.DATABASE_URL;
     Object.assign(process.env, partial);
     await expect(async () => {
       await importEnvModule();

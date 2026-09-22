@@ -16,7 +16,7 @@
  * and that nobody ever tested is usable, which is every deployment alive on
  * the day this lands; reading the test verdict here would empty their palettes.
  */
-import { INVESTIGATE_CHAT_PROVIDER } from "../blocks/investigate/manifest.js";
+import { INVESTIGATE_CHAT_SOURCE } from "../blocks/investigate/manifest.js";
 import type { IntegrationBlockManifest, IntegrationManifest } from "@integrations/sdk";
 import type {
   IntegrationConnectionPin,
@@ -344,12 +344,12 @@ export function coreBlockCapabilities(
   if (VCS_BLOCKS.has(type)) return VCS;
   if (type === "send_message") return MESSAGING;
   if (type === "investigate") {
-    // An absent selection means both providers on (the parameter's own
-    // default), so only a list that omits the chat provider opts out. The
+    // An absent selection means both sources on (the parameter's own
+    // default), so only a list that omits the chat source opts out. The
     // value is the block's own parameter vocabulary, which is why it comes
     // from the block rather than being written here.
-    const providers: unknown = params?.providers;
-    const chat = Array.isArray(providers) ? providers.includes(INVESTIGATE_CHAT_PROVIDER) : true;
+    const sources: unknown = params?.sources;
+    const chat = Array.isArray(sources) ? sources.includes(INVESTIGATE_CHAT_SOURCE) : true;
     return chat ? MESSAGING : NO_CAPABILITIES;
   }
   return NO_CAPABILITIES;

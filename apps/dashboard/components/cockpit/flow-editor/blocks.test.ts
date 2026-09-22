@@ -193,7 +193,7 @@ test("run_scripts summarises its configured group names so two script blocks are
   assert.equal(nodeSummary(empty, options), null);
 });
 
-test("the investigate card summarises its enabled context providers", () => {
+test("the investigate card summarises its enabled context sources", () => {
   const both = {
     id: "n13",
     type: "investigate",
@@ -203,7 +203,7 @@ test("the investigate card summarises its enabled context providers", () => {
     inputs: {},
     v2: { configuration: {}, inputs: {}, additionalInputs: [] },
   } as unknown as FlowNodeDef;
-  const jiraOnly = {
+  const trackerOnly = {
     id: "n14",
     type: "investigate",
     x: 0,
@@ -211,14 +211,35 @@ test("the investigate card summarises its enabled context providers", () => {
     params: {},
     inputs: {},
     v2: {
-      configuration: { providers: ["jira"] },
+      configuration: { sources: ["issue_tracker"] },
       inputs: {},
       additionalInputs: [],
     },
   } as unknown as FlowNodeDef;
 
-  assert.equal(nodeSummary(both, options), "jira · slack");
-  assert.equal(nodeSummary(jiraOnly, options), "jira");
+  assert.equal(nodeSummary(both, options), "issue tracker · chat");
+  assert.equal(nodeSummary(trackerOnly, options), "issue tracker");
+});
+
+test("the investigate card still draws a node saved before the sources rename", () => {
+  // A definition stored with the old vocabulary is read by a build that knows
+  // the new one. Drawing it as "nothing selected" would tell a person their
+  // node investigates nothing, and the next save would make that true.
+  const storedBeforeRename = {
+    id: "n15",
+    type: "investigate",
+    x: 0,
+    y: 0,
+    params: {},
+    inputs: {},
+    v2: {
+      configuration: { providers: ["jira", "slack"] },
+      inputs: {},
+      additionalInputs: [],
+    },
+  } as unknown as FlowNodeDef;
+
+  assert.equal(nodeSummary(storedBeforeRename, options), "issue tracker · chat");
 });
 
 test("the v2 palette offers the composite Review helper without replacing the bare block", () => {

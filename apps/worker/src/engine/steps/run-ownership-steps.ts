@@ -7,7 +7,7 @@ export async function bindWorkflowCandidateStep(
 ): Promise<boolean> {
   "use step";
   const { createAdapters } = await import("../support/adapters.js");
-  return createAdapters().runRegistry.markRunEntryStarted({
+  return (await createAdapters()).runRegistry.markRunEntryStarted({
     subjectKey,
     ticketKey,
     kind,
@@ -179,7 +179,7 @@ export async function repairClarificationLabelStep(
   const { updateConnectedTicketLabelsForRun } = await import(
     "../../engine/support/ticket-label-mutation.js"
   );
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   if (typeof issueTracker.updateLabels !== "function") return;
   await updateConnectedTicketLabelsForRun({
     issueTracker,

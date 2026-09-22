@@ -192,15 +192,55 @@ export interface IssueTrackerAdapter {
     issueType?: string;
     labels?: string[];
   }): Promise<{ identifier: string; url: string | null }>;
-  searchTickets(query: string): Promise<string[]>;
   /**
-   * Search tickets returning content (summary, status, browse url) for context
-   * retrieval. Optional: not all issue trackers support summary search.
+   * The keys of every ticket sitting in one status, oldest first.
+   *
+   * The question core actually asks, rather than a query it composed. Until
+   * S12 this was `searchTickets(query: string)` and the poller built
+   * `project = "X" AND status = "Y" ORDER BY created ASC` itself, which put
+   * one provider's query language in a shared interface and made a tracker
+   * that cannot parse JQL impossible to write.
+   *
+   * ORDER MATTERS, and it is part of the contract rather than a nicety: the
+   * answer is capped, so without a stable order a still queued ticket rotates
+   * out of one poll's page and back into the next, and the at-capacity
+   * bookkeeping deletes and re-inserts its row, which is a duplicate "waiting
+   * for capacity" comment on the same ticket.
+   *
+   * Scope is the provider's own: an implementation answers for the project,
+   * team or board its connection names, and never for anything else.
    */
-  searchTicketSummaries?(
-    jql: string,
-    maxResults: number,
-  ): Promise<TicketSummary[]>;
+  ticketsInStatus(status: string, options?: { limit?: number }): Promise<string[]>;
+  /**
+   * The keys of every ticket carrying one label.
+   *
+   * Idempotency, in practice. A caller that creates a ticket writes a marker
+   * label WITH it and looks the marker up before creating another, so a lost
+   * reply cannot leave two tickets and a second run started on the duplicate.
+   *
+   * Optional, and a caller that cannot have it must REFUSE rather than carry
+   * on: "I could not check" and "there is no such ticket" are the same empty
+   * answer from here, and treating the first as the second is how the
+   * duplicate gets created.
+   */
+  ticketsWithLabel?(label: string): Promise<string[]>;
+  /**
+   * Tickets worth reading about a subject, with enough content to judge
+   * relevance without a second fetch each. Optional: a tracker with no search
+   * has none, and the caller says so rather than pretending it found nothing.
+   *
+   * `providerQuery` is a query a workflow author typed, in whatever language
+   * their tracker speaks. Core never composes one and never reads one: it
+   * carries the author's own string through. A provider that cannot parse it
+   * IGNORES it and answers from `keywords`, because a workflow authored
+   * against one tracker must not go silent when the deployment changes
+   * tracker.
+   */
+  findTickets?(input: {
+    keywords: readonly string[];
+    limit: number;
+    providerQuery?: string;
+  }): Promise<TicketSummary[]>;
   /**
    * Add and/or remove labels on a ticket. Optional: not all issue trackers
    * support label mutation.
@@ -210,10 +250,28 @@ export interface IssueTrackerAdapter {
     changes: { add?: string[]; remove?: string[] },
   ): Promise<void>;
   /**
-   * Account id of the authenticated (bot) user, used to recognise the app's own
-   * comments. Optional: not all issue trackers expose a "current user" concept.
+   * Account id of the account this connection authenticates as.
+   *
+   * REQUIRED, and it is the one method on this port that is load-bearing for
+   * safety rather than for features. It answers "was that us": the product
+   * moves a ticket itself when a run finishes or parks, every such move fires
+   * the tracker's own webhook, and the only thing separating that echo from a
+   * person dragging the ticket out is whether the actor is this account.
+   *
+   * It was optional until S12, and the failure that made it required is worth
+   * spelling out: an implementation that simply left it out compiled, logged
+   * nothing, and made the product cancel its own runs the instant it finished
+   * them, with every log line reading as though a human had done it. There is
+   * no safe default for "who acted", so there is no optionality here. A
+   * tracker that genuinely cannot say is not one this product can drive a
+   * ticket lifecycle on.
+   *
+   * Throwing is a different thing from not implementing it, and it stays
+   * allowed: a token without permission to read its own account is a real
+   * state. The caller then treats the actor as UNKNOWN and says so, rather
+   * than deciding it was a person.
    */
-  getCurrentUserAccountId?(): Promise<string>;
+  getCurrentUserAccountId(): Promise<string>;
   /**
    * Download an attachment by URL. Optional: not all issue trackers support this.
    * Implementations should handle auth and redirects (e.g. signed CDN URLs) internally.

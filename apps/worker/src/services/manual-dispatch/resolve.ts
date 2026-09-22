@@ -9,7 +9,6 @@ import {
   isManuallyDispatchableTrigger,
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
-import { env } from "../../infra/vcs-config.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -29,7 +28,8 @@ import {
   TriggerEvent,
 } from "../dispatch/index.js";
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
-import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
+import { prSubjectKey } from "../../engine/support/subject-key.js";
+import { issueTrackerWiring, ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
 import {
   createManualDispatchPrReader,
   resolveConfiguredPullRequestUrl,
@@ -189,7 +189,7 @@ async function resolveManualDispatchWithPersistence(
   );
   if (deployed.triggerType === "trigger_ticket_ai") {
     if (input.dispatchInput.kind !== "ticket") {
-      throw new ManualDispatchError(422, "invalid_input", "This trigger requires a Jira ticket key.");
+      throw new ManualDispatchError(422, "invalid_input", "This trigger needs a ticket key.");
     }
     return resolveTicketDispatch(
       { ...input, dispatchInput: input.dispatchInput, persistence },
@@ -275,15 +275,15 @@ async function resolveTicketDispatch(
     throw new ManualDispatchError(
       502,
       "provider_unavailable",
-      "Jira could not be reached.",
+      "The issue tracker could not be reached.",
     );
   }
-  const expectedProject = env.JIRA_PROJECT_KEY.trim().toUpperCase();
+  const expectedProject = (await issueTrackerWiring()).projectKey.trim().toUpperCase();
   if (projectKey(ticket.identifier) !== expectedProject) {
     throw new ManualDispatchError(
       422,
       "invalid_input",
-      `Ticket must belong to Jira project ${expectedProject}.`,
+      `Ticket must belong to project ${expectedProject}.`,
     );
   }
   if (await input.persistence.hasBlockingApproval(ticketKey)) {
@@ -305,7 +305,7 @@ async function resolveTicketDispatch(
     input: { kind: "ticket", ticketKey },
     inputKind: "ticket",
     inputPayload: { kind: "ticket", ticketKey },
-    subjectKey: ticketSubjectKey("jira", ticketKey),
+    subjectKey: await ticketSubject(ticketKey),
     ticketKey,
     subjectTitle: ticket.title,
     currentStatus: ticket.trackerStatus,
@@ -475,7 +475,7 @@ async function resolvePullRequestDispatch(
       throw new ManualDispatchError(
         502,
         "provider_unavailable",
-        "The linked Jira ticket could not be verified.",
+        "The linked ticket could not be verified.",
       );
     }
     ticketKey = ticket.identifier.trim().toUpperCase();
@@ -483,7 +483,7 @@ async function resolvePullRequestDispatch(
       throw new ManualDispatchError(
         409,
         "approval_pending",
-        "The linked Jira ticket has a pending or approved workflow plan.",
+        "The linked ticket has a pending or approved workflow plan.",
       );
     }
   }
@@ -512,7 +512,7 @@ async function resolvePullRequestDispatch(
         title: "Verify current provider state",
         description: ticketKey
           ? `Linked ticket ${ticketKey} remains unchanged`
-          : "No Jira status change",
+          : "No status change",
       },
       {
         title: `Start deployed v${deployed.definition.version}`,
@@ -632,7 +632,7 @@ export async function parsePullRequestUrl(urlText: string): Promise<{
 function normalizeTicketKey(value: string): string {
   const normalized = value.trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9_]*-\d+$/.test(normalized)) {
-    throw new ManualDispatchError(422, "invalid_input", "Enter a valid Jira ticket key.");
+    throw new ManualDispatchError(422, "invalid_input", "Enter a valid ticket key.");
   }
   return normalized;
 }

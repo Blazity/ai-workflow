@@ -7,13 +7,20 @@ import {
   type TicketContent,
   type TicketComment,
   type TicketSummary,
-} from "./types.js";
+} from "@integrations/sdk";
 
 export interface JiraConfig {
   baseUrl: string;
   apiToken: string;
   projectKey: string;
   cloudId?: string;
+  /**
+   * How this adapter reaches Jira. The integration runtime passes
+   * `ctx.http.fetch`, which carries the SDK's timeout, its retry policy for
+   * reads and its secret redaction; the default is the global one, for the
+   * health probe that runs before a context exists.
+   */
+  fetch?: typeof fetch;
 }
 
 const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
@@ -32,6 +39,9 @@ type JiraTransition = {
 
 const STATUS_DISCOVERY_TIMEOUT_MS = 5000;
 const COMMENT_PAGE_SIZE = 100;
+/** How many tickets one column read hands back. The poller dispatches from
+ *  this page, so it is a page of work rather than a page of results. */
+const DISCOVERY_PAGE_SIZE = 50;
 /** How many comment pages one ticket read may cost. Twenty pages is two
  *  thousand comments, which no ticket a person answers a question on reaches;
  *  the bound is here so a provider that keeps reporting a larger total than it
@@ -79,6 +89,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
   private cloudId: string | null;
   private selfAccountIdPromise: Promise<string> | null = null;
   private projectKey: string;
+  private fetch: typeof fetch;
 
   constructor(config: JiraConfig) {
     const trimmed = config.baseUrl.replace(/\/$/, "");
@@ -86,6 +97,12 @@ export class JiraAdapter implements IssueTrackerAdapter {
     this.authHeader = `Bearer ${config.apiToken}`;
     this.projectKey = config.projectKey;
     this.cloudId = config.cloudId ?? null;
+    this.fetch = config.fetch ?? ((target, init) => fetch(target, init));
+  }
+
+  /** The site a person opens a ticket at, for a link core shows next to a run. */
+  get browseOrigin(): string {
+    return this.tenantOrigin;
   }
 
   private async getCloudId(signal?: AbortSignal | null): Promise<string> {
@@ -97,7 +114,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
 
   private async discoverCloudId(signal?: AbortSignal | null): Promise<string> {
     const url = `${this.tenantOrigin}/_edge/tenant_info`;
-    const res = await fetch(url, { signal });
+    const res = await this.fetch(url, { signal });
     if (!res.ok) {
       throw new Error(
         `Jira cloudId discovery failed: ${res.status} ${res.statusText} on ${url}`,
@@ -119,7 +136,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
 
   private async request(path: string, options?: RequestInit) {
     const url = await this.apiUrl(path, options?.signal);
-    const res = await fetch(url, {
+    const res = await this.fetch(url, {
       ...options,
       headers: {
         Authorization: this.authHeader,
@@ -454,7 +471,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     );
 
     for (let redirects = 0; redirects <= maxRedirects; redirects++) {
-      const res = await fetch(currentUrl, {
+      const res = await this.fetch(currentUrl, {
         method: "GET",
         headers: this.buildAttachmentHeaders(currentUrl),
         redirect: "manual",
@@ -512,7 +529,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
   ): Promise<Array<{ url: string; enabled: boolean; events: string[] }> | null> {
     const path = "/rest/webhooks/1.0/webhook";
     const url = await this.apiUrl(path, signal);
-    const res = await fetch(url, {
+    const res = await this.fetch(url, {
       headers: { Authorization: this.authHeader },
       signal: signal ?? undefined,
     });
@@ -535,19 +552,68 @@ export class JiraAdapter implements IssueTrackerAdapter {
     }));
   }
 
-  async searchTickets(jql: string): Promise<string[]> {
+  /**
+   * The keys of every ticket in one status of the configured project, oldest
+   * first.
+   *
+   * The ORDER BY is not decoration. The page is capped and unpaginated, so
+   * without a stable order a still queued ticket rotates out of one poll's
+   * page and back into the next, and the at-capacity bookkeeping deletes and
+   * re-inserts its row: a second "waiting for capacity" comment on the same
+   * ticket. That sentence used to live in the poller, beside the JQL it built;
+   * the query moved here and the reason moved with it.
+   */
+  async ticketsInStatus(
+    status: string,
+    options?: { limit?: number },
+  ): Promise<string[]> {
+    const jql = `project = "${jqlLiteral(this.projectKey)}" AND status = "${jqlLiteral(status)}" ORDER BY created ASC`;
     const data = await this.request(
-      `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key&maxResults=50`,
+      `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key&maxResults=${options?.limit ?? DISCOVERY_PAGE_SIZE}`,
     );
     return (data.issues ?? []).map((issue: any) => issue.key);
   }
 
-  async searchTicketSummaries(
-    jql: string,
-    maxResults: number,
-  ): Promise<TicketSummary[]> {
+  /** The keys of every ticket in the configured project carrying one label. */
+  async ticketsWithLabel(label: string): Promise<string[]> {
+    const jql = `project = "${jqlLiteral(this.projectKey)}" AND labels = "${jqlLiteral(label)}"`;
     const data = await this.request(
-      `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key,summary,status,description,reporter,project,updated&maxResults=${maxResults}`,
+      `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key&maxResults=${DISCOVERY_PAGE_SIZE}`,
+    );
+    return (data.issues ?? []).map((issue: any) => issue.key);
+  }
+
+  /**
+   * Tickets worth reading about a subject.
+   *
+   * The configured project is ANDed in FIRST and unconditionally, so no
+   * combination of keywords or authored query can reach a project this
+   * connection was not configured for: an authored query narrows inside the
+   * project and cannot widen past it. One naming another project yields
+   * nothing rather than that project's tickets.
+   *
+   * `providerQuery` is a JQL fragment a workflow author typed. It is used only
+   * when it is structurally balanced, because an unbalanced fragment would
+   * make the whole query fail and turn an author's typo into "there is no
+   * evidence".
+   */
+  async findTickets(input: {
+    keywords: readonly string[];
+    limit: number;
+    providerQuery?: string;
+  }): Promise<TicketSummary[]> {
+    const clauses = [`project = "${jqlLiteral(this.projectKey)}"`];
+    const authored = input.providerQuery?.trim() ?? "";
+    if (authored !== "" && hasBalancedJqlStructure(authored)) clauses.push(authored);
+    const keywordClause = input.keywords
+      .map(jqlLiteral)
+      .filter((keyword) => keyword !== "")
+      .map((keyword) => `text ~ "${keyword}"`)
+      .join(" OR ");
+    if (keywordClause !== "") clauses.push(keywordClause);
+    const jql = clauses.map((clause) => `(${clause})`).join(" AND ");
+    const data = await this.request(
+      `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key,summary,status,description,reporter,project,updated&maxResults=${input.limit}`,
       { signal: AbortSignal.timeout(STATUS_DISCOVERY_TIMEOUT_MS) },
     );
     return (data.issues ?? []).map((issue: any): TicketSummary => {
@@ -704,4 +770,36 @@ function sanitizeAttachmentSize(size: unknown): number {
   if (!Number.isFinite(parsed)) return 0;
   if (parsed <= 0) return 0;
   return Math.trunc(parsed);
+}
+
+/** A value safe to sit inside a double-quoted JQL literal. Quotes and
+ *  backslashes become spaces rather than being escaped: every caller here
+ *  passes a project key, a status name or a search word, none of which mean
+ *  anything with a quote in them, and a rule that cannot be got wrong beats an
+ *  escape that can. */
+function jqlLiteral(value: string): string {
+  return value.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Whether an authored JQL fragment closes everything it opened. An unbalanced
+ *  one would make the whole query fail, which reads to the person who wrote it
+ *  as "there was no evidence" rather than "your query does not parse". */
+function hasBalancedJqlStructure(clause: string): boolean {
+  let depth = 0;
+  let quoted = false;
+  for (let index = 0; index < clause.length; index += 1) {
+    const char = clause[index];
+    if (quoted) {
+      if (char === "\\") index += 1;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') quoted = true;
+    else if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      if (depth < 0) return false;
+    }
+  }
+  return depth === 0 && !quoted;
 }

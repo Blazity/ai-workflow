@@ -394,7 +394,7 @@ async function fetchAttachments(
 
   const { createAdapters } = await loadAdaptersPort();
   const { fetchAttachmentsWithRetry } = await import("../../sandbox/attachments.js");
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
 
   // downloadAttachment is optional on IssueTrackerAdapter — not all trackers
   // support it. If absent, skip attachments cleanly.
@@ -780,7 +780,7 @@ async function attachResearchRepositoriesStep(
     "../../sandbox/stop-ticket-sandboxes.js"
   );
   try {
-    await createAdapters().runRegistry.registerSandbox(
+    await (await createAdapters()).runRegistry.registerSandbox(
       owner.subjectKey,
       owner.ownerToken,
       materializer.sandboxId,

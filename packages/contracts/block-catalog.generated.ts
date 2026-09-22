@@ -450,13 +450,13 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
   },
   investigate: {
     contract: {"category":"action","ports":["out"],"allowsFailurePort":true},
-    ui: {"group":"ticket","label":"Investigate","description":"Searches Jira and Slack for context on the ticket and builds an evidence-backed classification and theory for a human decision. Jira is always scoped to the configured project and Slack to the configured channels; a JQL template narrows within that project and cannot widen past it. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question, otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.","glyph":"⌕","color":"#2563EB","softColor":"#E9EFFD"},
+    ui: {"group":"ticket","label":"Investigate","description":"Searches this deployment's issue tracker and chat for context on the ticket and builds an evidence-backed classification and theory for a human decision. The issue tracker search is always scoped to the project the connection names, and chat to the configured channels; a query template narrows within that scope and cannot widen past it. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question, otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.","glyph":"⌕","color":"#2563EB","softColor":"#E9EFFD"},
     defaults: {
-      "providers": [
-        "jira",
-        "slack"
+      "sources": [
+        "issue_tracker",
+        "chat"
       ],
-      "slackLookbackDays": 30,
+      "chatLookbackDays": 30,
       "maxResults": 10
     },
     inputs: {},

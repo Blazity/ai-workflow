@@ -126,13 +126,13 @@ export async function connectedDeploymentIntegrations(): Promise<DeploymentInteg
  * capabilities are put together. Every entry point above ends here, so
  * "what this build offers" has one answer however the state was obtained.
  */
-function deploymentIntegrationsFrom(
+async function deploymentIntegrationsFrom(
   states: Map<string, IntegrationState>,
-): DeploymentIntegrations {
+): Promise<DeploymentIntegrations> {
   return deploymentIntegrations({
     manifests: integrationManifests,
     states,
-    builtinCapabilities: builtinCapabilitiesOfDeployment(),
+    builtinCapabilities: await builtinCapabilitiesOfDeployment(),
   });
 }
 

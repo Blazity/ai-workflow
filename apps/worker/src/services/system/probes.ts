@@ -7,7 +7,6 @@ import {
 } from "@shared/harness";
 import { env } from "../../infra/vcs-config.js";
 import { mcpSettings } from "../settings/index.js";
-import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
 import {
   checkConnectedDatabaseConnectivity,
   getConnectedLatestActiveCustomWebhookDelivery,
@@ -68,10 +67,6 @@ export function configFromEnvironment(settings: SettingsSnapshot): SystemHealthC
   const defaultProfile = defaultBuiltinHarnessProfile();
   return {
     databaseUrl: env.DATABASE_URL,
-    jiraBaseUrl: env.JIRA_BASE_URL,
-    jiraApiToken: env.JIRA_API_TOKEN,
-    jiraProjectKey: env.JIRA_PROJECT_KEY,
-    jiraWebhookSecret: env.JIRA_WEBHOOK_SECRET,
     agentKind: defaultProfile.harness.provider,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     anthropicModel:
@@ -108,32 +103,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
         throw new PublicHealthProbeError("Database did not respond.");
       }
     },
-    "jira.api": async (signal) => {
-      if (!config.jiraBaseUrl || !config.jiraApiToken || !config.jiraProjectKey) return;
-      const adapter = new JiraAdapter({
-        baseUrl: config.jiraBaseUrl,
-        apiToken: config.jiraApiToken,
-        projectKey: config.jiraProjectKey,
-      });
-      // Two separate errors on purpose: a deployment where runs flow through
-      // webhooks can hide a stale project key for weeks, and one blended
-      // message made that undiagnosable from the Health screen.
-      try {
-        await adapter.getCurrentUserAccountId(signal);
-      } catch {
-        throw new PublicHealthProbeError(
-          "Jira authentication failed: the base URL or API token was not accepted.",
-        );
-      }
-      try {
-        await adapter.listStatuses(signal);
-      } catch {
-        throw new PublicHealthProbeError(
-          "Jira authenticated, but the configured project is not accessible; check JIRA_PROJECT_KEY and the token account's access to that project.",
-        );
-      }
-    },
-    "jira.webhook-delivery": (signal) => jiraWebhookResult(config, signal),
     "email.webhook-delivery": async (signal) =>
       resendWebhookResult(config, signal),
     "custom-webhooks.aggregate": () => customWebhookAggregate(),
@@ -220,49 +189,6 @@ function classifyObservations(
         : latest.reason === "invalid_signature"
           ? "A recent request failed signature verification; the secret configured at the provider differs from this deployment's."
           : `A recent request was rejected (${latest.reason}).`,
-  };
-}
-
-async function jiraWebhookResult(
-  config: SystemHealthConfig,
-  signal: AbortSignal,
-): Promise<SystemHealthProbeResult> {
-  const local = classifyObservations(
-    await localObservations("jira", config.jiraWebhookSecret),
-  );
-  if (!config.jiraBaseUrl || !config.jiraApiToken || !config.jiraProjectKey) return local;
-  const adapter = new JiraAdapter({
-    baseUrl: config.jiraBaseUrl,
-    apiToken: config.jiraApiToken,
-    projectKey: config.jiraProjectKey,
-  });
-  const registrations = await adapter.listWebhookRegistrations(signal).catch(() => {
-    throw new PublicHealthProbeError("Jira webhook listing failed.");
-  });
-  if (registrations === null) {
-    return {
-      ...local,
-      message: `The Jira token cannot list system webhooks, so registration is not checked. ${local.message}`,
-    };
-  }
-  const expectedUrl = providerWebhookUrl(config, "jira");
-  const hook = registrations.find(
-    (entry) => normalizeUrl(entry.url.split("?")[0] ?? "") === expectedUrl,
-  );
-  if (!hook) throw new PublicHealthProbeError("No Jira webhook points at this worker.");
-  if (!hook.enabled) throw new PublicHealthProbeError("The Jira webhook for this worker is disabled.");
-  if (!hook.events.includes("jira:issue_updated")) {
-    throw new PublicHealthProbeError("The Jira webhook does not send issue updates.");
-  }
-  if (local.mode === "degraded") return local;
-  return {
-    mode: "live",
-    evidenceSource: local.mode === "live" ? "local-observation" : "provider-config",
-    ...(local.observedAt ? { observedAt: local.observedAt } : {}),
-    message:
-      local.mode === "live"
-        ? "Jira webhook is registered and a recent signed delivery was accepted."
-        : "Jira webhook is registered and enabled; no delivery has arrived in the last 7 days.",
   };
 }
 
@@ -435,7 +361,7 @@ function resendFetch(
 
 function providerWebhookUrl(
   config: SystemHealthConfig,
-  provider: "resend" | "jira",
+  provider: "resend",
 ): string {
   const base = (config.betterAuthUrl ?? "").replace(/\/+$/, "");
   return normalizeUrl(`${base}/webhooks/${provider}`);

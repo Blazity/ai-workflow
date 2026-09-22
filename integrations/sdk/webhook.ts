@@ -28,12 +28,13 @@ import type {
   PostPrGateWorkflowInput,
   RunControlCommand,
   RunControlOutcome,
+  TrackerTicketEvent,
   TriggerEvent,
 } from "@shared/contracts";
 import type { IntegrationContext } from "./context";
 import type { IntegrationManifest } from "./manifest";
 
-export type { PrTriggerPayload, TriggerEvent } from "@shared/contracts";
+export type { PrTriggerPayload, TrackerTicketEvent, TriggerEvent } from "@shared/contracts";
 
 /** One request, as the route captured it. */
 export interface IntegrationWebhookRequest {
@@ -117,6 +118,24 @@ export type IntegrationWebhookReception =
         readonly pusher: string;
         readonly workflowInput: PostPrGateWorkflowInput;
       };
+    }
+  /**
+   * Verified ticket events from an issue tracker. The integration read the
+   * provider's encoding and said who acted; what a ticket moving means for a
+   * run is core's, because dispatch, cancellation, clarification and plan
+   * approval are the product rather than the tracker.
+   *
+   * `ignored` is not the absence of an event. It is the integration saying it
+   * understood the delivery and there is nothing here for this deployment: a
+   * keepalive with no ticket in it, a ticket in a project this connection does
+   * not watch. Core records it as an accepted delivery with that reason, so a
+   * delivery log shows why a well formed request did nothing.
+   */
+  | {
+      readonly kind: "ticket_events";
+      readonly events: readonly TrackerTicketEvent[];
+      readonly response: IntegrationWebhookResponse;
+      readonly ignored?: { readonly reason: string; readonly ticketKey?: string };
     }
   /**
    * Refused. `status` is the provider's language for it: a bad or stale

@@ -40,7 +40,8 @@ export async function fetchTicketStatuses(
 ): Promise<Array<{ id: string; name: string }>> {
   try {
     const adapter =
-      issueTracker ?? (await import("../support/adapters.js")).createAdapters().issueTracker;
+      issueTracker ??
+      (await (await import("../support/adapters.js")).createAdapters()).issueTracker;
     return (await adapter.listStatuses?.()) ?? [];
   } catch {
     // The editor remains usable during provider outages. Passing an empty list

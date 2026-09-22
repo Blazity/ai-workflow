@@ -15,7 +15,7 @@ import {
   type CancelRunResult,
 } from "./cancel-run.js";
 import { logger } from "../../infra/logger.js";
-import { ticketSubjectKey } from "./subject-key.js";
+import { ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
 import {
   withdrawConnectedTicketFromAiForRun,
   withdrawTicketFromAiForRun,
@@ -280,10 +280,10 @@ async function reconcileStalledRunWithPersistence(
 
   const target = { ownerToken: entry.ownerToken, runId: entry.runId };
   const ticketKey = entry.ticketKey;
-  const followsJiraTicket =
-    ticketKey !== null && entry.subjectKey === ticketSubjectKey("jira", ticketKey);
+  const followsTicket =
+    ticketKey !== null && entry.subjectKey === await ticketSubject(ticketKey);
   let moveTarget = input.moveTarget;
-  if (followsJiraTicket) {
+  if (followsTicket) {
     const decision = await safeTicketMoveTarget({
       ticketKey,
       issueTracker: input.issueTracker,
@@ -311,7 +311,7 @@ async function reconcileStalledRunWithPersistence(
   }
 
   const result: CancelRunResult =
-    followsJiraTicket
+    followsTicket
       ? await cancelRunDetailed({
           ticketKey,
           target,

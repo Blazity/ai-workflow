@@ -212,5 +212,6 @@ export type {
   IntegrationWebhookRequest,
   IntegrationWebhookResponse,
   PrTriggerPayload,
+  TrackerTicketEvent,
   TriggerEvent,
 } from "./webhook";

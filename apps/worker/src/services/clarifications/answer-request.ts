@@ -70,7 +70,7 @@ export async function answerClarificationRequest(input: {
     row,
     rawAnswer: input.rawAnswer,
     actor: { id: input.actor.userId, label },
-    issueTracker: createAdapters().issueTracker,
+    issueTracker: (await createAdapters()).issueTracker,
     aiColumn: settings.COLUMN_AI,
     cancelSettings: settings,
   });

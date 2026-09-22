@@ -70,7 +70,7 @@ export async function approveApproval(
   const approver = isDispatchRetry
     ? { id: row.decidedById ?? actor.userId, label: row.decidedByLabel ?? label }
     : decider;
-  const adapters = createAdapters();
+  const adapters = await createAdapters();
 
   // Cheap existence check before reserving anything: a deleted ticket can
   // never run, so auto-reject and tell the caller it is gone.
@@ -170,7 +170,7 @@ export async function rejectApproval(
   // the clarification path (clarifications/answer-core.ts).
   await resolveConnectedAwaitingRun(row.runId).catch(() => {});
 
-  const { issueTracker } = createAdapters();
+  const { issueTracker } = await createAdapters();
   await issueTracker.postComment(row.ticketKey, `Plan rejected by ${label}.`).catch(() => {});
 
   return { kind: "decided", approval: serializeApproval(decided), runId: null };

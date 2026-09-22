@@ -42,6 +42,15 @@ vi.mock("workflow/api", () => ({
 
 vi.mock("../../db/client.js", () => ({ getDb: () => hooks.db }));
 
+// This deployment has an issue tracker connected. Which one, and what it is
+// wired to, is an integration connection since S12 and is resolved from the
+// database; this suite is about what happens to a RUN, so it says the one
+// thing it means and leaves the resolution to its own tests.
+vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
+  const support = await import("../../test-support/issue-tracker.js");
+  return support.connectedIssueTracker({});
+});
+
 import { MAX_ANSWER_LENGTH } from "../../services/clarifications/answer-core.js";
 import {
   getHookClarification,

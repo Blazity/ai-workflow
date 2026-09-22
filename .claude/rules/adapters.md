@@ -16,9 +16,22 @@ resolves the active provider per call (`engine/support/messaging.ts`) and the
 (`engine/support/messaging-conversation.ts`). The provider code lives in
 `integrations/slack/**` and has its own tests.
 
-- Build Jira REST v3 comments as ADF through `toAdfParagraphs`. It splits LF or
-  CRLF input into paragraph nodes and never places a newline inside an ADF text
-  node. Guard: `apps/worker/src/adapters/issue-tracker/jira.test.ts`.
+Issue tracking is the same shape since S12. Core holds the port re-export
+(`adapters/issue-tracker/types.ts`) and the resolution
+(`engine/support/issue-tracker-runtime.ts`), and names no tracker. The Jira
+client, its webhook and its health checks live in `integrations/jira/**` with
+their own tests, including the ADF paragraph rule that used to be stated here.
+Two consequences bind every edit under these paths:
+
+- **A deployment may have no tracker at all.** `resolveActiveIssueTracker`
+  answers a refusal with the sentence a person reads, and a caller either shows
+  it or drops what it was going to show (a ticket link) rather than inventing
+  an empty value that matches nothing.
+- **The subject key has one derivation.** `ticketSubject(ticketKey)` in that
+  same module is what dispatch, cancel, the watchdog, the reconciler, plan
+  approval and the MCP tools all compare. Never spell `ticket:jira:<KEY>`
+  anywhere else: a second spelling makes a live run invisible to whichever
+  callers disagree.
 - A notification never changes a run. `MessagingSender` answers
   `MessagingDelivery` and does not throw, whatever the provider does; the
   `send_message` block reads that answer and reports `skipped` with the reason,

@@ -634,12 +634,12 @@ function supportInvestigationDefinition(
     {
       id: "investigate",
       type: "investigate",
-      name: "Gather Jira and Slack evidence",
+      name: "Gather ticket and chat evidence",
       column: 1,
       configuration: {
-        providers: ["jira", "slack"],
-        slackChannels: ["C_SUPPORT"],
-        slackLookbackDays: 30,
+        sources: ["issue_tracker", "chat"],
+        chatChannels: ["C_SUPPORT"],
+        chatLookbackDays: 30,
         maxResults: 10,
       },
     },
@@ -1565,7 +1565,7 @@ export function workflowDefinitionTemplates({
       id: "support-investigation",
       name: "Support investigation (Zendesk + Sentry)",
       description:
-        "Normalizes Zendesk and Sentry webhooks, gathers Jira and Slack evidence, routes non-code cases to a response summary, and gates approved code fixes before workspace preparation.",
+        "Normalizes Zendesk and Sentry webhooks, gathers issue tracker and chat evidence, routes non-code cases to a response summary, and gates approved code fixes before workspace preparation.",
       definition: supportInvestigationDefinition(provider, profileReference),
     },
   ];

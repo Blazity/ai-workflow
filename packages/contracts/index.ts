@@ -5,6 +5,7 @@ export type {
   PrTriggerPayload,
   PrTriggerType,
   SupportCase,
+  TrackerTicketEvent,
   TriggerEvent,
   WebhookTriggerEntry,
   WebhookVerifiedWith,

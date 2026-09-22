@@ -156,7 +156,7 @@ async function cancelPreviousRun(
 
   if (previous.gateStatusRefs.length === 0) return;
 
-  const adapters = createAdapters({
+  const adapters = await createAdapters({
     provider: input.provider,
     repoPath: input.ownerRepo,
     baseBranch: input.baseRef,

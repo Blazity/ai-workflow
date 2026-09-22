@@ -31,12 +31,12 @@ const RUNTIME_ENV = resolve(import.meta.dirname, "../../apps/worker/src/infra/ru
  */
 const NAME = "apps/worker/src/infra/runtime-env.ts";
 
-// CHAT_SDK_ and SLACK_ left this table in S9, GITLAB_ in S10 and GITHUB_ in
-// S11: the worker no longer declares any of them, and each provider package's
-// manifest does.
-const PROVIDER_PREFIXES: ReadonlyArray<readonly [string, string]> = [
-  ["JIRA_", "S12, Jira"],
-];
+// CHAT_SDK_ and SLACK_ left this table in S9, GITLAB_ in S10, GITHUB_ in S11
+// and JIRA_ in S12: the worker no longer declares any of them, and each
+// provider package's manifest does. The table is empty, and it stays, because
+// the next provider variable somebody adds to the worker has to land in a row
+// here or in the reserved list, and the tests below say which is missing.
+const PROVIDER_PREFIXES: ReadonlyArray<readonly [string, string]> = [];
 
 /** The keys of the `server` block, which is every variable the worker declares. */
 async function declaredVariables(): Promise<string[]> {

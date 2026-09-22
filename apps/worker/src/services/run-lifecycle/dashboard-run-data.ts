@@ -108,7 +108,7 @@ export interface ListRunsOptions {
   window: TimeWindow;
   q: string | null;
   now: Date;
-  jiraBaseUrl: string;
+  ticketOrigin: string;
   limit?: number;
 }
 
@@ -133,7 +133,7 @@ async function listRunsWithQueries(queries: Queries, options: ListRunsOptions) {
     counts[coerceStatus(row.status)] += count;
     total += count;
   }
-  const origin = options.jiraBaseUrl.replace(/\/+$/, "");
+  const origin = options.ticketOrigin.replace(/\/+$/, "");
   return { rows: data.map((row) => mapRun(row, options.now, origin)), total, counts };
 }
 
@@ -224,7 +224,7 @@ async function runKpisWithQueries(
 export interface WorkflowAggOptions {
   window: TimeWindow;
   now: Date;
-  jiraBaseUrl: string;
+  ticketOrigin: string;
   registry: WorkflowMeta[];
 }
 
@@ -243,7 +243,7 @@ async function workflowAggWithQueries(queries: Queries, options: WorkflowAggOpti
     queries.listLatestWorkflowRows(),
   ]);
   const latestById = new Map(latestRows.map((row) => [row.workflowId, row]));
-  const origin = options.jiraBaseUrl.replace(/\/+$/, "");
+  const origin = options.ticketOrigin.replace(/\/+$/, "");
   const rows: WorkflowRow[] = options.registry.map((workflow) => {
     const selected = windowRows.filter((row) => row.workflowId === workflow.id);
     const durations = selected.map((row) => row.durationSec).filter((value): value is number => value !== null);
@@ -341,21 +341,21 @@ async function costAggWithQueries(
 }
 
 export async function listRunsForTicket(
-  options: { db: Db; ticketKey: string; now: Date; jiraBaseUrl: string },
+  options: { db: Db; ticketKey: string; now: Date; ticketOrigin: string },
 ) {
   return listRunsForTicketWithQueries(explicitQueries(options.db), options);
 }
 
-export function connectedListRunsForTicket(options: { ticketKey: string; now: Date; jiraBaseUrl: string }) {
+export function connectedListRunsForTicket(options: { ticketKey: string; now: Date; ticketOrigin: string }) {
   return listRunsForTicketWithQueries(connectedDashboardRunQueries, options);
 }
 
 async function listRunsForTicketWithQueries(
   queries: Queries,
-  options: { ticketKey: string; now: Date; jiraBaseUrl: string },
+  options: { ticketKey: string; now: Date; ticketOrigin: string },
 ) {
   const data = await queries.listTicketRuns(options.ticketKey);
-  const origin = options.jiraBaseUrl.replace(/\/+$/, "");
+  const origin = options.ticketOrigin.replace(/\/+$/, "");
   const runs = data.map((row) => mapRun(row, options.now, origin));
   const counts = { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 };
   let cost = 0;

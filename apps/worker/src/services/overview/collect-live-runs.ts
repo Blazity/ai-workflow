@@ -5,7 +5,7 @@ import type { Run } from "@shared/contracts";
 export interface CollectLiveRunsOptions {
   registry: RunRegistryAdapter;
   issueTracker: IssueTrackerAdapter;
-  jiraBaseUrl: string;
+  ticketOrigin: string;
   /** Attributed models for the in-flight run ids (fetchRunModels). The registry
    * knows nothing about models, and these rows override the store's on the runs
    * and ticket screens, so they take their model from the same evidence the
@@ -27,9 +27,9 @@ export interface CollectLiveRunsOptions {
 export async function collectLiveRuns(
   opts: CollectLiveRunsOptions,
 ): Promise<Run[]> {
-  const { registry, issueTracker, jiraBaseUrl, resolveModels } = opts;
+  const { registry, issueTracker, ticketOrigin, resolveModels } = opts;
   const entries = await registry.listAll();
-  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
+  const tenantOrigin = ticketOrigin.replace(/\/+$/, "");
 
   const liveEntries = entries.filter(
     (entry): entry is typeof entry & { runId: string } =>

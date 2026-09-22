@@ -119,7 +119,7 @@ export async function resolveWorkflowTicketStep(
   const ticketKey = entry.ticketKey;
   if (!ticketKey) throw new Error("ticket-correlated workflow input is missing ticketKey");
   const { createAdapters } = await import("../support/adapters.js");
-  const issueTracker = createAdapters().issueTracker;
+  const issueTracker = (await createAdapters()).issueTracker;
   const ticket = await issueTracker.fetchTicket(ticketKey);
   if (entry.kind === "ticket" && ticket.trackerStatus.toLowerCase() !== columnAi.toLowerCase()) {
     return null;
@@ -131,7 +131,7 @@ export async function resolveWorkflowTicketStep(
   // too, and an identity match that a rename can break is not an identity.
   let botAccountId: string | undefined;
   try {
-    botAccountId = await issueTracker.getCurrentUserAccountId?.();
+    botAccountId = await issueTracker.getCurrentUserAccountId();
   } catch (err) {
     // Said out loud rather than swallowed: a tracker that stopped answering
     // "who am I" degrades the selection silently, and the log line is the only

@@ -93,7 +93,6 @@ function titleCase(value: string): string {
  */
 const DESCRIPTIONS: Record<string, string> = {
   database: "Stores workflow state, ownership, traces, and dashboard data.",
-  jira: "Authenticates the account, checks the project, and verifies the webhook registration.",
   agent: "Authenticates the active provider and checks the configured model when possible.",
   "dashboard-auth": "Presence-checks auth settings; this request already proves session enforcement.",
   sso: "Checks OIDC discovery; client credentials are presence-checked.",

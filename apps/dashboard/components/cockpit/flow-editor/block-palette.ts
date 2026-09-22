@@ -75,14 +75,23 @@ function agentModelSummary(node: FlowNodeDef): string | null {
   return provider === "claude" || provider === "codex" ? `${provider} · ${model}` : model;
 }
 
-/** The investigate block's enabled context providers, read from v2.configuration
+/** The investigate block's enabled context sources, read from v2.configuration
  *  for a deployed node and from params for a freshly edited one. An absent list
  *  means both are on, matching the param's own default: a node nobody has
- *  configured yet investigates every source it can reach. */
-export function investigateProviders(node: FlowNodeDef): { jira: boolean; slack: boolean } {
-  const raw: unknown = node.v2?.configuration.providers ?? node.params.providers;
-  if (!Array.isArray(raw)) return { jira: true, slack: true };
-  return { jira: raw.includes("jira"), slack: raw.includes("slack") };
+ *  configured yet investigates every source it can reach. Also accepts the old
+ *  vocabulary (`providers: ["jira","slack"]`) so a definition saved before the
+ *  rename still draws correctly instead of showing nothing selected. */
+export function investigateSources(node: FlowNodeDef): { issueTracker: boolean; chat: boolean } {
+  const raw: unknown =
+    node.v2?.configuration.sources ??
+    node.params.sources ??
+    node.v2?.configuration.providers ??
+    node.params.providers;
+  if (!Array.isArray(raw)) return { issueTracker: true, chat: true };
+  return {
+    issueTracker: raw.includes("issue_tracker") || raw.includes("jira"),
+    chat: raw.includes("chat") || raw.includes("slack"),
+  };
 }
 
 function rateLimitSummary(node: FlowNodeDef): string | null {
@@ -103,8 +112,11 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
   // type arrives here as a plain string once the worker ships the block.
   const nodeType: string = node.type;
   if (nodeType === "investigate") {
-    const providers = investigateProviders(node);
-    return joinSummary([providers.jira ? "jira" : null, providers.slack ? "slack" : null]);
+    const sources = investigateSources(node);
+    return joinSummary([
+      sources.issueTracker ? "issue tracker" : null,
+      sources.chat ? "chat" : null,
+    ]);
   }
   switch (node.type) {
     case "trigger_ticket_ai":

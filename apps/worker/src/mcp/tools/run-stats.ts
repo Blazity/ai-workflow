@@ -60,7 +60,7 @@ export function registerRunStatsTools(server: McpServer, deps: McpToolDependenci
               window,
               q: null,
               now,
-              jiraBaseUrl: issueTrackerBaseUrl(),
+              ticketOrigin: await issueTrackerBaseUrl(),
               limit,
             }),
             deps.services.costAgg({ window, now }),

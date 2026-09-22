@@ -1,6 +1,5 @@
 import { start } from "workflow/api";
 import { defaultSettingsSnapshot, type SettingsSnapshot } from "@shared/contracts";
-import { env } from "../../infra/vcs-config.js";
 import type { Db } from "../../db/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
@@ -14,7 +13,7 @@ import { aiColumnMoveTarget } from "../tickets/index.js";
 import { AWAITING_APPROVAL_LABEL } from "../../engine/support/ticket-labels.js";
 import { logger } from "../../infra/logger.js";
 import { isActiveRunOwnerError } from "../../engine/support/run-control-errors.js";
-import { ticketSubjectKey } from "../../engine/support/subject-key.js";
+import { issueTrackerWiring, ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
 import { claimTicketRun } from "../dispatch/index.js";
 import { updateTicketLabelsForRun, moveTicketForRun } from "../tickets/index.js";
 import type { ApprovalRow } from "../../db/repositories/approvals.js";
@@ -62,7 +61,7 @@ export async function dispatchPlanApproved(input: {
     settings = defaultSettingsSnapshot(),
   } = input;
   const ticketKey = approval.ticketKey;
-  const subjectKey = ticketSubjectKey("jira", ticketKey);
+  const subjectKey = await ticketSubject(ticketKey);
 
   // Resolve the exact definition version the approved plan pins. A human already
   // approved this plan, so it must run the graph they reviewed regardless of the
@@ -108,7 +107,7 @@ export async function dispatchPlanApproved(input: {
           ticketKey,
           target: aiColumnMoveTarget({
             COLUMN_AI: settings.COLUMN_AI,
-            JIRA_AI_TRANSITION_ID: env.JIRA_AI_TRANSITION_ID,
+            aiTransitionId: (await issueTrackerWiring()).aiTransitionId,
           }),
           owner: { subjectKey, ownerToken, runId: null },
         };

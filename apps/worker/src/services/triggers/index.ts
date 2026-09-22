@@ -1,10 +1,10 @@
 /**
  * Trigger ingress: every way work enters this system from outside.
  *
- * What is left here is the ingress core still owns: the issue tracker webhook,
- * the public custom webhook endpoints and the scheduled poll. Every provider
- * whose package has landed answers at the generic `/webhooks/<id>` route and
- * translates its own deliveries, so its handler is not in this cluster.
+ * What is left here is the ingress core still owns: the public custom webhook
+ * endpoints, the scheduled poll, and what a ticket event MEANS for a run. Every
+ * provider answers at the generic `/webhooks/<id>` route and translates its own
+ * deliveries, so no provider's handler is in this cluster any more.
  *
  * The declared interface of this cluster. Cross-cluster imports must target
  * this file; the deep imports that predate the rule are listed in
@@ -23,11 +23,11 @@ export {
   createWebhookDispatchDeps,
 } from "./custom-webhooks/dispatch-deps.js";
 export {
-  handleJiraWebhook,
-} from "./jira/handle-jira-webhook.js";
+  actOnTicketEvent,
+} from "./ticket-events.js";
 export type {
-  JiraWebhookRequest,
-} from "./jira/handle-jira-webhook.js";
+  TicketEventOutcome,
+} from "./ticket-events.js";
 export {
   cronRequestIsAuthorized,
 } from "./polling/cron-authorization.js";

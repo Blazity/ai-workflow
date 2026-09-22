@@ -61,8 +61,10 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
     await addAttachment(ticketKey, "spec.md", mdContent);
 
     // 3. Use the real JiraAdapter to fetch the ticket (like the workflow does)
+    // The integration owns the Jira client since S12, reached here the same way
+    // this file already reaches the GitHub integration's App authentication.
     const { JiraAdapter } = await import(
-      "../../src/adapters/issue-tracker/jira.js"
+      "../../../../integrations/jira/issue-tracker.js"
     );
     const jira = new JiraAdapter({
       baseUrl: e2eEnv.JIRA_BASE_URL,

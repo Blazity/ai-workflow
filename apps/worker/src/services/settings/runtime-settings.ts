@@ -112,16 +112,19 @@ export function deploymentSettings(): {
  * tool is about to publish. A value that is not set is not a secret to redact,
  * so unset entries are dropped rather than turning into an empty-string match
  * that would redact everything.
+ *
+ * The issue tracker's token and webhook secret used to be named here one by
+ * one. They are not missing: they are connection fields marked `secret` now,
+ * and the loop over the manifests below reads every one of those, which is why
+ * removing the two literals redacts exactly what it did before.
  */
 export function configuredSecretValues(): string[] {
   return [
-    env.JIRA_API_TOKEN,
     env.ANTHROPIC_API_KEY,
     env.CODEX_API_KEY,
     env.CODEX_CHATGPT_OAUTH_TOKEN,
     env.VERCEL_TOKEN,
     env.CRON_SECRET,
-    env.JIRA_WEBHOOK_SECRET,
     env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
     env.BETTER_AUTH_SECRET,
     env.SSO_CLIENT_SECRET,

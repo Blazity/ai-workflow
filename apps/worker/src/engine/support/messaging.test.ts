@@ -9,6 +9,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagingAdapter } from "@integrations/sdk";
+import {
+  connectedIssueTracker,
+  noIssueTrackerConnected,
+} from "../../test-support/issue-tracker.js";
 
 const resolveUsableIntegrations = vi.fn();
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
@@ -31,9 +35,13 @@ vi.mock("../../infra/logger.js", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../../infra/vcs-config.js", () => ({
-  env: { JIRA_BASE_URL: "https://acme.atlassian.net" },
-}));
+// Where a person opens the ticket comes from whichever integration serves the
+// issue tracker capability, so this suite says only that one is connected and
+// where it lives. Which tracker is chosen is proved in
+// `issue-tracker-runtime.test.ts`.
+vi.mock("./issue-tracker-runtime.js", () =>
+  connectedIssueTracker({ baseUrl: "https://acme.atlassian.net" }),
+);
 
 import { messagingSender, ticketUrlFor } from "./messaging.js";
 
@@ -97,6 +105,29 @@ describe("messagingSender", () => {
     expect(notifyForTicket.mock.calls[0]![2]).toMatchObject({
       handle: "1758300000.000100",
     });
+  });
+
+  it("still sends a message about a ticket when no tracker is connected", async () => {
+    // A deployment can have chat and no issue tracker since S12. The message is
+    // worth sending either way: what a person needs from it is that the run
+    // started, and a link to nowhere is worse than no link. So the link is
+    // dropped and nothing else about the delivery changes.
+    const { resolveActiveIssueTracker } = await import("./issue-tracker-runtime.js");
+    const absent = noIssueTrackerConnected();
+    // Once, so the deployment this file otherwise describes is unchanged for
+    // every case after this one.
+    vi.mocked(resolveActiveIssueTracker).mockImplementationOnce(
+      absent.resolveActiveIssueTracker as never,
+    );
+    const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>(async () => ({
+      delivered: true,
+    }));
+    readable(provider("Test Chat", { notifyForTicket }));
+
+    const delivery = await messagingSender().notifyForTicket("AWT-42", { kind: "started" });
+
+    expect(delivery).toEqual({ delivered: true });
+    expect(notifyForTicket.mock.calls[0]![0]).toEqual({ key: "AWT-42", url: null });
   });
 
   it("refuses to deliver through a provider that was reconfigured mid-run", async () => {

@@ -55,9 +55,9 @@ export const HARNESS_MCP_INTEGRATION_CATALOG = new Set<string>(
 export const HARNESS_CREDENTIAL_REFERENCE_CATALOG = new Set([
   "anthropic",
   "openai",
-  // `jira` is still core's until S12 hands it to its own package; every
-  // provider that already has one is in the registry line below.
-  "jira",
+  // Every provider with credentials of its own is an integration now, so the
+  // registry is the whole list. The two model vendors above are not: they are
+  // harness credentials rather than a connection an admin makes.
   ...integrationManifests.map((manifest) => manifest.id),
 ] as const);
 

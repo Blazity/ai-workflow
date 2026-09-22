@@ -85,6 +85,7 @@ import {
 import { canonicalizeWorkflowBlockTypes, canonicalWorkflowBlockType, createWorkflowExecutionErrorState, integrationUnavailableFailureCode, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE, runStatusReasonParts } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
 import type { CoreMessagingDelivery } from "./support/messaging.js";
+import { ticketUrlFor } from "./support/ticket-url.js";
 import type { BlockOutput, BlockRunState, RunPullRequest, RunStatusReason, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
 import type { RunWorkScopeWrite } from "./work-scope/apply-plans.js";
 import type { LoadedWorkflowPlan } from "./steps/definition-step.js";
@@ -560,6 +561,7 @@ async function agentWorkflowBody(
     runStartHasNoEnabledRepository,
     runStartRepositoryAccess,
     runStartSettings,
+    runStartTracker,
     runStartWorkScope,
   } = await import("./steps/run-start-settings.js");
   // Which subject's work scope this run freezes, decided by the CALLER rather
@@ -587,6 +589,11 @@ async function agentWorkflowBody(
   const budgetStartedAtMs = await readRunBudgetClockStep();
 
   const { env } = await import("./harness-profiles/model-env.js");
+  // The board this run works against, frozen when it started: the columns are
+  // operator settings and the transitions are the tracker's wiring, and a run
+  // that began against one board finishes against that board even if an admin
+  // reconnects the tracker while it is in flight.
+  const runTracker = runStartTracker(runStart);
   const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
   const {
@@ -598,21 +605,21 @@ async function agentWorkflowBody(
   const { openPullRequestsForPublication } = await import("./steps/workspace-publication.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
   const { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
-  // The column names come from the run's snapshot; the two transition ids stay
-  // on `env` because they are not registry keys (a Jira transition id is a
-  // board's internal identifier, not an operator setting).
+  // The column names come from the run's settings snapshot and the transition
+  // ids from its tracker wiring. A board that can be moved by status name
+  // configures neither, and then the target is the column name alone.
   const backlogMoveTarget = (): IssueTrackerMoveTarget =>
-    env.JIRA_BACKLOG_TRANSITION_ID
+    runTracker.backlogTransitionId
       ? {
           name: runSettings.COLUMN_BACKLOG,
-          transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+          transitionId: runTracker.backlogTransitionId,
         }
       : runSettings.COLUMN_BACKLOG;
   const aiReviewMoveTarget = (): IssueTrackerMoveTarget =>
-    env.JIRA_AI_REVIEW_TRANSITION_ID
+    runTracker.aiReviewTransitionId
       ? {
           name: runSettings.COLUMN_AI_REVIEW,
-          transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID,
+          transitionId: runTracker.aiReviewTransitionId,
         }
       : runSettings.COLUMN_AI_REVIEW;
 
@@ -711,7 +718,7 @@ async function agentWorkflowBody(
           ticketKey: entry.ticketKey ?? null,
           ticketTitle: ticket.title,
           ticketUrl: entry.ticketKey
-            ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
+            ? ticketUrlFor(ticket.identifier, runTracker.baseUrl)
             : entry.kind === "pr_trigger"
               ? entry.pr.prUrl
               : null,
@@ -940,7 +947,7 @@ async function agentWorkflowBody(
       ticketKey: entry.ticketKey ?? null,
       ticketTitle: ticket.title,
       ticketUrl: entry.ticketKey
-        ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
+        ? ticketUrlFor(ticket.identifier, runTracker.baseUrl)
         : entry.kind === "pr_trigger"
           ? entry.pr.prUrl
           : null,
@@ -1302,7 +1309,7 @@ async function agentWorkflowBody(
       entry,
       ticket,
       ticketUrl: entry.ticketKey
-        ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
+        ? (ticketUrlFor(ticket.identifier, runTracker.baseUrl) ?? "")
         : "",
       changeSummary: "",
       ...(clarificationHistory && clarificationHistory.length > 0
@@ -3147,7 +3154,7 @@ async function agentWorkflowBody(
                 repositoryExpansion: ctx.repositoryExpansion,
                 researchResult: research,
                 usage: researchTotals,
-                jiraApplicable: Boolean(entry.ticketKey),
+                ticketApplicable: Boolean(entry.ticketKey),
                 noChangeNeededOverride: true,
               });
               const analysisReportPersisted = ctx.analysisReport
@@ -3287,7 +3294,7 @@ async function agentWorkflowBody(
               repositoryExpansion: ctx.repositoryExpansion,
               researchResult: research,
               usage: researchTotals,
-              jiraApplicable: Boolean(entry.ticketKey),
+              ticketApplicable: Boolean(entry.ticketKey),
             });
             const analysisReportPersisted = ctx.analysisReport
               ? await recordRunAnalysisReportBestEffort(ctx.analysisReport)
@@ -4904,7 +4911,7 @@ async function agentWorkflowBody(
         ticketKey: entry.ticketKey ?? null,
         ticketTitle: ticket.title,
         ticketUrl: entry.ticketKey
-          ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
+          ? ticketUrlFor(ticket.identifier, runTracker.baseUrl)
           : entry.kind === "pr_trigger"
             ? entry.pr.prUrl
             : null,

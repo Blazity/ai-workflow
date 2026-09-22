@@ -68,7 +68,7 @@ function phasesToSteps(phases: unknown, base: Date): RunStep[] {
 export interface FetchRunDetailFromDbOptions {
   db: Db;
   runId: string;
-  jiraBaseUrl: string;
+  ticketOrigin: string;
 }
 
 /**
@@ -80,7 +80,7 @@ export interface FetchRunDetailFromDbOptions {
  */
 function mapRunDetailRow(
   row: NonNullable<Awaited<ReturnType<typeof readRunDetailRow>>>,
-  jiraBaseUrl: string,
+  ticketOrigin: string,
 ): {
   run: RunDetail;
   steps: RunStep[];
@@ -88,7 +88,7 @@ function mapRunDetailRow(
   analysisReport: RunAnalysisReport | null;
   failureCode: RunFailureCode | null;
 } {
-  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
+  const tenantOrigin = ticketOrigin.replace(/\/+$/, "");
   const base = row.startedAt ?? row.createdAt ?? row.firstSeenAt;
   const status = coerceStatus(row.status);
   const run: RunDetail = {
@@ -141,19 +141,19 @@ function mapRunDetailRow(
 
 export async function fetchRunDetailFromDb(opts: FetchRunDetailFromDbOptions) {
   const row = await readRunDetailRow(opts.db, opts.runId);
-  return row ? mapRunDetailRow(row, opts.jiraBaseUrl) : null;
+  return row ? mapRunDetailRow(row, opts.ticketOrigin) : null;
 }
 
 export async function fetchConnectedRunDetailFromDb(
   opts: Omit<FetchRunDetailFromDbOptions, "db">,
 ) {
   const row = await readConnectedRunDetailRow(opts.runId);
-  return row ? mapRunDetailRow(row, opts.jiraBaseUrl) : null;
+  return row ? mapRunDetailRow(row, opts.ticketOrigin) : null;
 }
 
 function mapRunRefs(
   row: NonNullable<Awaited<ReturnType<typeof readRunRefsRow>>>,
-  jiraBaseUrl: string,
+  ticketOrigin: string,
 ): {
   ticketKey: string | null;
   ticketUrl: string | null;
@@ -163,19 +163,19 @@ function mapRunRefs(
   prs: RunPullRequest[] | null;
   statusReason: string | null;
 } {
-  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
+  const tenantOrigin = ticketOrigin.replace(/\/+$/, "");
   return {
     ...row,
     ticketUrl: row.ticketUrl ?? (row.ticketKey ? `${tenantOrigin}/browse/${row.ticketKey}` : null),
   };
 }
 
-export async function fetchRunRefs(db: Db, runId: string, jiraBaseUrl: string) {
+export async function fetchRunRefs(db: Db, runId: string, ticketOrigin: string) {
   const row = await readRunRefsRow(db, runId);
-  return row ? mapRunRefs(row, jiraBaseUrl) : null;
+  return row ? mapRunRefs(row, ticketOrigin) : null;
 }
 
-export async function fetchConnectedRunRefs(runId: string, jiraBaseUrl: string) {
+export async function fetchConnectedRunRefs(runId: string, ticketOrigin: string) {
   const row = await readConnectedRunRefsRow(runId);
-  return row ? mapRunRefs(row, jiraBaseUrl) : null;
+  return row ? mapRunRefs(row, ticketOrigin) : null;
 }

@@ -5,7 +5,6 @@ import {
   type SettingsSnapshot,
   type WorkflowDefinition,
 } from "@shared/contracts";
-import { env } from "../../infra/vcs-config.js";
 import {
   RESERVATION_BIND_GRACE_MS,
   type RunKind,
@@ -29,7 +28,7 @@ import { agentWorkflow } from "../../engine/index.js";
 import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import type { Adapters } from "../../engine/support/adapters.js";
 import { logger } from "../../infra/logger.js";
-import { ticketSubjectKey } from "../../engine/support/subject-key.js";
+import { issueTrackerWiring, ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
 
 export const STALE_CLAIM_MS = RESERVATION_BIND_GRACE_MS;
 
@@ -77,7 +76,7 @@ export async function dispatchTicket(
   maxConcurrentAgents: number,
   settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<DispatchResult> {
-  const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
+  const expectedProjectKey = (await issueTrackerWiring()).projectKey.trim().toUpperCase();
   const expectedAiStatus = settings.COLUMN_AI.trim().toLowerCase();
   const { issueTracker, runRegistry } = adapters;
 
@@ -93,7 +92,7 @@ export async function dispatchTicket(
   let ticket: TicketContent | null = null;
   let definitionId: number | null = null;
   let definitionVersion: WorkflowDefinitionVersionPin | null = null;
-  const subjectKey = ticketSubjectKey("jira", ticketKey);
+  const subjectKey = await ticketSubject(ticketKey);
   const result = await claimSubjectRun(
     { subjectKey, ticketKey, kind: "ticket" },
     runRegistry,
@@ -384,7 +383,7 @@ export async function claimTicketRun(
 ): Promise<DispatchResult> {
   return claimSubjectRun(
     {
-      subjectKey: ticketSubjectKey("jira", ticketKey),
+      subjectKey: await ticketSubject(ticketKey),
       ticketKey,
       kind: options.kind ?? "ticket",
     },

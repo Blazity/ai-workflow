@@ -131,7 +131,7 @@ describe("parseSearch", () => {
 });
 
 describe("listRuns", () => {
-  const base = { jiraBaseUrl: JIRA, now: NOW };
+  const base = { ticketOrigin: JIRA, now: NOW };
 
   it("returns the persisted model while a run is still in flight", async () => {
     await seed({
@@ -347,7 +347,7 @@ describe("runKpis", () => {
 });
 
 describe("workflowAgg", () => {
-  const base = { jiraBaseUrl: JIRA, now: NOW, registry: REGISTRY };
+  const base = { ticketOrigin: JIRA, now: NOW, registry: REGISTRY };
 
   it("aggregates per registry workflow over the window", async () => {
     await seed({ workflowId: "wf_agent", status: "success", durationSec: 100 });
@@ -400,7 +400,7 @@ describe("costAgg", () => {
 });
 
 describe("listRunsForTicket", () => {
-  const base = { db: undefined as unknown as Db, now: NOW, jiraBaseUrl: JIRA };
+  const base = { db: undefined as unknown as Db, now: NOW, ticketOrigin: JIRA };
 
   it("returns only exact ticket_key matches, newest first", async () => {
     await seed({ runId: "r_old", ticketKey: "AWT-738", startedAt: new Date(NOW.getTime() - 2 * HOUR) });
@@ -477,7 +477,7 @@ describe("listRunsForTicket", () => {
       window: "all",
       q: null,
       now: NOW,
-      jiraBaseUrl: JIRA,
+      ticketOrigin: JIRA,
     });
 
     const byId = (runs: { id: string; model: string | null }[], id: string) =>

@@ -60,7 +60,8 @@ function fakeIssueTracker(overrides: Partial<IssueTrackerAdapter> = {}): IssueTr
     fetchTicket: vi.fn(),
     moveTicket: vi.fn(),
     postComment: vi.fn(),
-    searchTickets: vi.fn(),
+    ticketsInStatus: vi.fn(),
+    getCurrentUserAccountId: vi.fn().mockResolvedValue("bot-not-the-actor"),
     ...overrides,
   };
 }
