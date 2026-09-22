@@ -187,7 +187,7 @@ test("the reason is read from the body, where it survives the trip the reason ph
   answers = {
     "/api/v1/memory": providerRefused(
       503,
-      "Built-in memory could not answer: the store said \u201cbusy\u201d",
+      "Built-in memory could not answer: the store said \u201Cbusy\u201D",
       "",
     ),
     "/api/v1/settings": { settings: [] },
@@ -195,5 +195,5 @@ test("the reason is read from the body, where it survives the trip the reason ph
 
   const text = await renderPage(t);
 
-  assert.match(text, /Built-in memory could not answer: the store said \u201cbusy\u201d/);
+  assert.match(text, /Built-in memory could not answer: the store said \u201Cbusy\u201D/);
 });
