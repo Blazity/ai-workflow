@@ -42,7 +42,10 @@ vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
     ...actual,
     knownSecretValues: async () => {
       if (mocks.redactionThrows) {
-        throw new actual.IntegrationSecretsUnreadableError(new Error("secret source unavailable"));
+        const { IntegrationSecretsUnreadableError } = await import(
+          "../../services/integrations/secret-values.js"
+        );
+        throw new IntegrationSecretsUnreadableError(new Error("secret source unavailable"));
       }
       // A deployment with nothing connected: its environment's secrets. Read
       // from the environment rather than the database, because several cases

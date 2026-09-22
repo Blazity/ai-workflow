@@ -193,7 +193,7 @@ export function createRepositoryCatalogReader(
  *
  * Every reason but the first is logged at error with what threw.
  */
-export type TicketPhasesSkipReason =
+type TicketPhasesSkipReason =
   | "no_usable_issue_tracker"
   | "issue_tracker_unreadable"
   | "board_read_failed"
