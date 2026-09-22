@@ -81,8 +81,8 @@ function isPresentation(literal) {
 }
 
 /**
- * What a core file spells, one piece per line: every identifier, string,
- * template and regular expression literal, and the text of its JSX.
+ * What a core file spells, one piece per identifier, string, template or
+ * regular expression literal, and piece of JSX text.
  *
  * Comments are prose: a sentence that mentions GitHub is not code that depends
  * on GitHub, and a gate that fires on one is a gate the next stage turns off.
@@ -94,7 +94,7 @@ function isPresentation(literal) {
  * to that person. The one exemption is presentation (`isPresentation`), because
  * a CSS keyword that happens to spell an id is not a dependency on anything.
  */
-export function spelledText(source, path = "source.ts") {
+export function spelledPieces(source, path = "source.ts") {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, scriptKind(path));
   const pieces = [];
   const visit = (node) => {
@@ -109,8 +109,12 @@ export function spelledText(source, path = "source.ts") {
       case ts.SyntaxKind.Identifier:
       case ts.SyntaxKind.PrivateIdentifier:
       case ts.SyntaxKind.JsxText:
-      case ts.SyntaxKind.RegularExpressionLiteral:
         pieces.push(node.text);
+        break;
+      case ts.SyntaxKind.RegularExpressionLiteral:
+        // An escape is punctuation here: `\bgithub_pat_` spells github, not
+        // "bgithub".
+        pieces.push(node.text.replace(/\\./gu, " "));
         break;
       default:
         break;
@@ -118,17 +122,46 @@ export function spelledText(source, path = "source.ts") {
     ts.forEachChild(node, visit);
   };
   visit(file);
-  return pieces.join("\n");
+  return pieces;
 }
 
 /**
- * A plain case-insensitive substring. Any boundary rule that catches
- * GITHUB_TOKEN and githubClient while sparing githubusercontent is a rule
- * nobody could predict; one short allowlist row for the odd URL is cheaper
- * than a regular expression no one trusts.
+ * The words one piece of code is written in, lowercased: split at anything
+ * that is not a letter or a digit, and where a lowercase letter or a digit
+ * meets a capital (`githubClient`, `GitHub`) or a run of capitals meets a
+ * capitalised word (`JSONParser`). Digits stay with the letters before them,
+ * so `mem0` is one word.
  */
-export function mentions(text, id) {
-  return text.toLowerCase().includes(id);
+function wordsOf(piece) {
+  return piece
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/gu, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter(Boolean);
+}
+
+/**
+ * Whether the id is one or more whole, consecutive words of one piece.
+ * `"github"`, `GITHUB_TOKEN`, `githubClient`, `GitHub` and `api.github.com`
+ * all name it; `githubusercontent` and the `sEntry` inside `scriptsEntry` are
+ * letters that happen to meet, and a gate that failed on them would refuse an
+ * integration over a word core never wrote. Words never join across two
+ * pieces, so an identifier and the string beside it cannot spell an id
+ * between them.
+ */
+export function mentions(pieces, id) {
+  return pieces.some((piece) => {
+    const words = wordsOf(piece);
+    for (let start = 0; start < words.length; start += 1) {
+      let joined = "";
+      for (let end = start; end < words.length && joined.length < id.length; end += 1) {
+        joined += words[end];
+        if (joined === id) return true;
+      }
+    }
+    return false;
+  });
 }
 
 /** Every source file this gate reads as core, repository-relative and sorted. */
@@ -158,8 +191,8 @@ export function coreFiles(root, config) {
 export function coreMentions(root, config, ids) {
   const pairs = [];
   for (const path of coreFiles(root, config)) {
-    const text = `${path}\n${spelledText(readFileSync(join(root, path), "utf8"), path)}`;
-    for (const id of ids) if (mentions(text, id)) pairs.push({ path, id });
+    const pieces = [path, ...spelledPieces(readFileSync(join(root, path), "utf8"), path)];
+    for (const id of ids) if (mentions(pieces, id)) pairs.push({ path, id });
   }
   return pairs;
 }

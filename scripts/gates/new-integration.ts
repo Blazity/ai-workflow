@@ -141,7 +141,7 @@ export async function createIntegration(options: NewIntegrationOptions): Promise
     refuse(
       `core spells "${id}" in ${spelled.length} file${spelled.length === 1 ? "" : "s"} that no allowlist row covers:\n${shown}${more}\n` +
         `Core is ${config.coreRoots.join(", ")}; integrations/, scripts/, docs/ and test files are not core. ` +
-        "A spelling is the id in any case inside an identifier, a string, a regular expression, JSX text or a file path; comments and the text of a className or style attribute do not count. " +
+        "A spelling is the id as whole words, in any case, of an identifier, a string, a regular expression, JSX text or a file path (GITHUB_TOKEN, githubClient and GitHub spell github; githubusercontent does not); comments and the text of a className or style attribute do not count. " +
         `Once integrations/${id} exists the core-reference gate fails on each of these files. ` +
         `Where a file is not about this provider (sample data, a URL, a word that contains the id), add "${id}" to the allowlist row that covers it in scripts/gates/core-references.json, or add a row with the reason, then run this again. ` +
         "Where it is about the provider, that code moves behind the integration first. Otherwise choose another id. Nothing was written.",

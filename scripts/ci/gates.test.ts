@@ -1386,6 +1386,40 @@ test("the real allowlist reads the files at each app's root as core", async () =
   );
 });
 
+/**
+ * A mention is the id as whole words, however the code joins them: the
+ * letters of `sentry` inside `scriptsEntry` are two words that happen to meet,
+ * and refusing an integration over them is a rule nobody can act on.
+ */
+test("an id is mentioned as whole words, not as letters that run across two", () => {
+  const planned = { plannedIntegrations: { sentry: { stage: "S99", reason: "a planned provider" } } };
+  const across = coreReferenceRoot("core-references-across-", {
+    "apps/worker/src/ui/list.ts":
+      'export const scriptsEntry = 1;\nexport function SettingsEntryView() { return "presentry"; }\n',
+  }, planned);
+  const passes = gate("core-references.mjs", ["--root", across, "--config", join(across, "core-references.json")]);
+  assert.equal(passes.status, gateSuccess, passes.stdout);
+
+  for (const source of [
+    "export const sentryClient = 1;\n",
+    "export const SENTRY_DSN = 1;\n",
+    'export const label = "Sentry";\n',
+    'export const host = "https://o1.ingest.sentry.io/api";\n',
+  ]) {
+    const named = coreReferenceRoot("core-references-words-", { "apps/worker/src/ui/list.ts": source }, planned);
+    const fails = gate("core-references.mjs", ["--root", named, "--config", join(named, "core-references.json")]);
+    assert.equal(fails.status, gateFailure, source);
+  }
+  const camel = coreReferenceRoot("core-references-camel-", {
+    "apps/worker/src/ui/list.ts": 'export const label = "GitHub and gitHubApp";\n',
+  }, { plannedIntegrations: { github: { stage: "S99", reason: "a planned provider" } } });
+  assert.equal(
+    gate("core-references.mjs", ["--root", camel, "--config", join(camel, "core-references.json")]).status,
+    gateFailure,
+    "an id written as two capitalised words is still the id",
+  );
+});
+
 test("no gate source carries a NUL byte, so git and ripgrep read the gates as text", () => {
   const directory = join(repoRoot, "scripts/gates");
   const binary = readdirSync(directory, { recursive: true, withFileTypes: true })

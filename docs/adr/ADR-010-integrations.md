@@ -408,12 +408,15 @@ These were open to the S1 executor. Each is a two-way door.
   migrations, operations scripts, end-to-end suites, static files).
   `scripts/` is release and gate tooling, where the Arthur tenant repository
   is not the Arthur provider, and `changelog/` and `docs/` are prose. A
-  mention is a case-insensitive substring of the id in the path or in what
-  the source spells: every identifier, string, template and regular
-  expression literal, and the text of its JSX. `"github"`, `GITHUB_TOKEN` and
-  `githubClient` are one coupling written three ways, and a boundary rule that
-  caught those while sparing `githubusercontent` is a rule nobody could
-  predict. Comments are prose, so they do not count, and the TypeScript parser
+  mention is the id as one or more whole, consecutive words, in any case, of
+  the path or of one piece of what the source spells: an identifier, a
+  string, template or regular expression literal, or the text of its JSX.
+  Words split at punctuation and at case changes, so `"github"`,
+  `GITHUB_TOKEN`, `githubClient` and `GitHub` are one coupling written four
+  ways, while `githubusercontent` and the letters `sEntry` inside
+  `scriptsEntry` are not a mention (until 2026-09-22 the rule was a plain
+  substring, which refused an integration called sentry over 32 files that
+  never named it). Comments are prose, so they do not count, and the TypeScript parser
   decides what a comment is, so a `//` inside a URL is still code (until
   2026-09-22 a hand-written stripper read it as a comment and hid what
   followed). The text of a `className` or `style` attribute does not count
@@ -424,7 +427,7 @@ These were open to the S1 executor. Each is a two-way door.
   and it changes with its subject in S8 to S12; listing several hundred of
   them would churn on every test edit and get the gate switched off. A row may
   carry `incidental: true` when its files spell an id by accident, such as a
-  URL on the provider's host; the gate keeps it listed and never reports it as
+  URL on `github.com` that is not the GitHub provider; the gate keeps it listed and never reports it as
   stale, because such a hit comes and goes with ordinary edits and a failure
   on one could not be acted on. The scaffold (`pnpm run new:integration`)
   asks the gate's own question before it writes a package, so it refuses an
