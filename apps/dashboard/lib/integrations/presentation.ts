@@ -248,6 +248,21 @@ export function unlocksLines(
 }
 
 /**
+ * Whether anything is stored here for this integration right now.
+ *
+ * Read off the values the worker reported, never off `stored.latestVersion`.
+ * That counter is the highest version ever minted and the token a save
+ * carries, so a disconnect, which erases every value in every version, leaves
+ * it where it was: read as presence, it kept offering Disconnect for erased
+ * values and told the admin that what was stored had not passed a test.
+ */
+export function storesValues(integration: IntegrationDto): boolean {
+  return integration.fields.some(
+    (field) => field.storedValue !== undefined || field.storedSecretSet,
+  );
+}
+
+/**
  * The lines under an integration's name: where its values come from, what the
  * last test proved, and why it is not usable when it is not.
  *
@@ -268,7 +283,7 @@ export function statusDetailLines(integration: IntegrationDto): string[] {
   const neverConfigured =
     state.connection === "not_connected" &&
     state.environment.setVariables.length === 0 &&
-    state.stored.latestVersion === 0;
+    !storesValues(integration);
 
   if (neverConfigured) {
     const required = integration.fields.filter((field) => !field.optional);
@@ -379,7 +394,7 @@ export function testRefusal(integration: IntegrationDto): string | null {
       ? `${nothing} ${andList(missing)} ${missing.length === 1 ? "is" : "are"} not set on this deployment. Set ${missing.length === 1 ? "it" : "them"} there, or fill the values in above and save, which tests them.`
       : `${nothing} ${save}`;
   }
-  if (state.stored.latestVersion > 0) {
+  if (storesValues(integration)) {
     return `Nothing ${integration.name} could be tested with is in use: what is stored here has not passed a test, so no run uses it. Correct the values above and save again, which tests them.`;
   }
   return `${nothing} ${save}`;
@@ -618,10 +633,11 @@ export function sourceSwitchRefusal(
   if (stored.activeVersion === null) {
     // Saved and never activated is not the same as never saved: telling an
     // admin who is looking at "saved 1 time, none of it in use" that nothing is
-    // stored is the contradiction that makes a screen untrustworthy.
-    return stored.latestVersion === 0
-      ? "Nothing is stored here yet. Fill the values in and save them first; they are tested before anything switches over."
-      : "What is stored here has not passed a test, so nothing can be switched to it. Correct the values above and save again.";
+    // stored is the contradiction that makes a screen untrustworthy. Nor is
+    // erased the same as saved, which is why this reads the values.
+    return storesValues(integration)
+      ? "What is stored here has not passed a test, so nothing can be switched to it. Correct the values above and save again."
+      : "Nothing is stored here yet. Fill the values in and save them first; they are tested before anything switches over.";
   }
   return stored.complete
     ? null

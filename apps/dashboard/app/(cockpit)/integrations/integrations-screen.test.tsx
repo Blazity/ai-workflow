@@ -166,6 +166,53 @@ test("a fresh deployment is told what each integration needs and offered Connect
   assert.ok(rendered.includes("Connect"), "the card offers the action that fixes it");
 });
 
+test("a disconnected integration is offered Connect again, because nothing is stored any more", (t) => {
+  // A disconnect erases every value and leaves the version counter where it
+  // was, because that counter is the token a save carries. Read as "values are
+  // stored", it turned the card of an integration with nothing left into one
+  // being visited rather than set up.
+  const root = render(t, {
+    integrations: [
+      integration({
+        fields: [
+          {
+            key: "baseUrl",
+            label: "Site URL",
+            env: "DEMO_BASE_URL",
+            secret: false,
+            optional: false,
+            format: "url",
+            envSet: false,
+            storedSecretSet: false,
+          },
+        ],
+        state: state({
+          status: "not_connected",
+          connection: "not_connected",
+          usable: false,
+          environment: { setVariables: [], missingVariables: ["DEMO_BASE_URL"], complete: false },
+          stored: {
+            latestVersion: 3,
+            activeVersion: null,
+            missingFields: [],
+            complete: false,
+            prepared: null,
+          },
+        }),
+      }),
+    ],
+  });
+  const rendered = text(root);
+  assert.match(rendered, /Nothing configures it on this deployment yet\. It needs Site URL/);
+  assert.deepEqual(
+    root
+      .findAll((node) => node.type === "a")
+      .map((node) => text(node).trim())
+      .filter((label) => label === "Connect"),
+    ["Connect"],
+  );
+});
+
 test("a failing integration shows the provider's own reason and when it was checked", (t) => {
   const root = render(t, {
     integrations: [

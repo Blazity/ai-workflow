@@ -253,6 +253,21 @@ describe("disconnecting (INT-070)", () => {
     }
   });
 
+  it("hands back no erased version as values waiting to be tried", async () => {
+    // `latest` is what the card explains a failed save with, and what the form
+    // and the next save build on. A version whose values were erased is history
+    // for the audit, not a stored candidate: reading it back told the admin
+    // that values they had just erased "did not pass their test and are not in
+    // use", as if they were still there.
+    await save({ test: FAILED });
+    await disconnectIntegration(db, { integrationId: "fixture", actorId: "u" });
+
+    const stored = (await readIntegrationConnections(db)).get("fixture");
+    expect(stored?.latestVersion).toBe(1);
+    expect(stored?.latest).toBeNull();
+    expect(stored?.active).toBeNull();
+  });
+
   it("keeps who saved each version and when", async () => {
     await save();
     await disconnectIntegration(db, { integrationId: "fixture", actorId: "u" });

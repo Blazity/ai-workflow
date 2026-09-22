@@ -142,6 +142,8 @@ test("a partial environment names the variables that are not set", () => {
 test("a fresh deployment is told what the integration needs, not that its values came from somewhere", () => {
   const lines = statusDetailLines(
     integration({
+      // Nothing was ever saved, so no field carries a stored value either.
+      fields: [URL_FIELD, TOKEN_FIELD],
       state: state({
         source: "environment",
         status: "not_connected",
@@ -412,6 +414,7 @@ test("values saved but never activated are not reported as nothing stored", () =
 test("switching to stored values nobody saved says to save and test them first", () => {
   const refusal = sourceSwitchRefusal(
     integration({
+      fields: [URL_FIELD, TOKEN_FIELD],
       state: state({
         source: "environment",
         stored: {

@@ -8,6 +8,7 @@ import {
   NO_INTEGRATIONS_LINE,
   statusChip,
   statusDetailLines,
+  storesValues,
   unlocksLines,
   workerUnreachableLine,
   type BlockAvailability,
@@ -51,7 +52,7 @@ function IntegrationCard({
 }) {
   const chip = statusChip(integration.state);
   const href = `/integrations/${encodeURIComponent(integration.id)}/connection`;
-  const stored = integration.state.stored.latestVersion > 0;
+  const stored = storesValues(integration);
 
   return (
     <li className={`rounded-[4px] bg-panel px-4 py-3 ${CARD_EDGES[chip.tone]}`}>

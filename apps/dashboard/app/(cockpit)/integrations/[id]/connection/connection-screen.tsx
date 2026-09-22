@@ -37,6 +37,7 @@ import {
   sourceSwitchRefusal,
   statusChip,
   statusDetailLines,
+  storesValues,
   testOutcomeLines,
   testRefusal,
   unlocksLines,
@@ -266,7 +267,7 @@ export function ConnectionScreen({
   const state = integration.state;
   const chip = statusChip(state);
   const writable = canManage && writes.allowed;
-  const stored = state.stored.latestVersion > 0;
+  const stored = storesValues(integration);
 
   function applied(next: IntegrationDto) {
     setIntegration(next);
@@ -764,7 +765,7 @@ export function ConnectionScreen({
                       ? ", none of it in use yet"
                       : `, version ${state.stored.activeVersion} is the one that passed its test`
                   }.`
-                : "Nothing stored yet."}
+                : "Nothing is stored here."}
             </div>
             {writable && state.source !== "stored" && (
               <Button

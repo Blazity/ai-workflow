@@ -692,6 +692,11 @@ test("a failed impact read says unknown and the destructive save button says so"
 test("an integration whose values live in the environment is not offered Disconnect", (t) => {
   const root = render(t, {
     integration: integration({
+      // Nothing was ever saved here, so no field carries a stored value.
+      fields: [
+        { ...URL_FIELD, storedValue: undefined },
+        { ...TOKEN_FIELD, storedSecretSet: false },
+      ],
       state: state({
         source: "environment",
         environment: {
@@ -714,6 +719,44 @@ test("an integration whose values live in the environment is not offered Disconn
     0,
   );
   assert.match(text(root), /lives in the deployment's environment variables/);
+});
+
+test("after a disconnect the screen says nothing is stored, and offers nothing that needs values", (t) => {
+  // The version counter survives a disconnect, because it is the token the
+  // next save carries; the values do not. Read as "values are stored", it kept
+  // a live Disconnect for erased values and told the admin that what was
+  // stored "has not passed a test".
+  const root = render(t, {
+    integration: integration({
+      fields: [
+        { ...URL_FIELD, storedValue: undefined },
+        { ...TOKEN_FIELD, storedSecretSet: false },
+      ],
+      state: state({
+        source: "environment",
+        status: "not_connected",
+        connection: "not_connected",
+        usable: false,
+        verification: { state: "never_tested" },
+        stored: {
+          latestVersion: 5,
+          activeVersion: null,
+          missingFields: [],
+          complete: false,
+          prepared: null,
+        },
+      }),
+    }),
+  });
+  const rendered = text(root);
+  assert.equal(
+    root.findAll((node) => node.type === "button" && text(node).trim() === "Disconnect").length,
+    0,
+    "there is nothing left to disconnect",
+  );
+  assert.doesNotMatch(rendered, /Saved 5 times/);
+  assert.doesNotMatch(rendered, /has not passed a test/);
+  assert.match(rendered, /Nothing is stored here/);
 });
 
 test("stored values can be prepared while the environment is still the source", async (t) => {
