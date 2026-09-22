@@ -1298,6 +1298,20 @@ export interface IntegrationsListResponse {
   readonly writes: IntegrationWriteAccess;
 }
 
+/**
+ * How long the worker gives a provider while a person waits on the answer: a
+ * connection test (Save and test, Test what is in use) and the read behind a
+ * page an integration contributes.
+ *
+ * One number, because three things have to agree on it: the worker bounds the
+ * call with it, the dashboard waits longer than it so the answer a person
+ * reads is the worker's and never the dashboard's own timeout, and the
+ * connection screen tells the admin how long the wait can be. Two copies of it
+ * is how a provider answering in fifteen seconds came to be reported as our
+ * outage.
+ */
+export const INTEGRATION_PROVIDER_WAIT_MS = 20_000;
+
 export type IntegrationTestOutcome =
   | { readonly ok: true; readonly message?: string }
   | { readonly ok: false; readonly failure: IntegrationFailure };

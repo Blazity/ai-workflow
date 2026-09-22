@@ -15,6 +15,7 @@ import type {
   IntegrationVerification,
 } from "@shared/contracts";
 import type { IntegrationConnectionSaveRequest } from "@shared/contracts";
+import { INTEGRATION_PROVIDER_WAIT_MS } from "@shared/contracts";
 
 import { formatDateTime } from "@/lib/date-time";
 
@@ -401,9 +402,9 @@ export function testRefusal(integration: IntegrationDto): string | null {
 }
 
 /** Said while the provider is being asked, because the wait is long enough to
- *  look like nothing happening. The worker gives a test 20 seconds. */
+ *  look like nothing happening. The number is the worker's own budget. */
 export function waitingOnProviderLine(integration: IntegrationDto): string {
-  return `Asking ${integration.name} now. It has 20 seconds to answer, and nothing on this page changes until it does.`;
+  return `Asking ${integration.name} now. It has ${INTEGRATION_PROVIDER_WAIT_MS / 1000} seconds to answer, and nothing on this page changes until it does.`;
 }
 
 /**
