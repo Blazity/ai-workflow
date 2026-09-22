@@ -7,15 +7,39 @@ const MAX_RESULTS_CEILING = 10;
  * The value a stored graph carries in `sources` for the chat half of this
  * block. It is this block's parameter vocabulary, written into definitions
  * people already published, not a provider core talks to: messaging reaches
- * whichever integration serves the capability. It lives here so the one place
- * outside this block that reads it (the availability resolver) names the
- * block's vocabulary rather than a provider. S12 splits this block and takes
- * the word with it (ADR-010).
+ * whichever integration serves the capability. It lives here, read through
+ * `investigateSources` below, so the availability resolver names the block's
+ * vocabulary rather than a provider. S12 splits this block and takes the word
+ * with it (ADR-010).
  */
-export const INVESTIGATE_CHAT_SOURCE = "chat";
+const INVESTIGATE_CHAT_SOURCE = "chat";
 /** The value a stored graph carries in `sources` for the issue tracker half
  *  of this block. Same reasoning as `INVESTIGATE_CHAT_SOURCE`. */
 const INVESTIGATE_TRACKER_SOURCE = "issue_tracker";
+
+/**
+ * Which halves of the block a node turns on, read by the block's own execution
+ * and by the availability resolver, so the capabilities a node is said to use
+ * are the ones it runs with. Mirrors the dashboard's `investigateSources`.
+ *
+ * Accepts both the capability vocabulary (`issue_tracker`, `chat`) and the old
+ * provider vocabulary (`jira`, `slack`, and the `providers` key), because a run
+ * suspended before the rename replays a recorded plan built with the old words:
+ * without this tolerance that run would resume investigating nothing. An absent
+ * or unreadable list means both are on: the schema defaults it that way, and a
+ * node whose selection cannot be read should investigate everything rather than
+ * silently investigate nothing.
+ */
+export function investigateSources(
+  params: Readonly<Record<string, unknown>> | undefined,
+): { issueTracker: boolean; chat: boolean } {
+  const raw = params?.sources ?? params?.providers;
+  if (!Array.isArray(raw)) return { issueTracker: true, chat: true };
+  return {
+    issueTracker: raw.includes(INVESTIGATE_TRACKER_SOURCE) || raw.includes("jira"),
+    chat: raw.includes(INVESTIGATE_CHAT_SOURCE) || raw.includes("slack"),
+  };
+}
 
 function hasBalancedJqlStructure(clause: string): boolean {
   let depth = 0;

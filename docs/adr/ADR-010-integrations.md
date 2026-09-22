@@ -2331,6 +2331,18 @@ availability, the run's pins, and the dispatch blocker. Deriving it three times
 is how a palette and a run come to disagree about one deployment, which is the
 failure this whole file keeps returning to.
 
+It answers two questions, and the first version answered only the narrower
+one. `required` is what a block cannot be offered without, and only the palette
+and the publish gate read it. `reached` is everything a run executing the block
+touches, and the pins, the dispatch blocker and "which workflows use this
+integration" read it: a ticket trigger reaches the issue tracker for its whole
+run, and every block that prepares a workspace (the explicit block and the
+agents that prepare one on first use) reaches version control, memory and
+every agent tracing provider. Reading `required` for the pins left an agent
+graph with no version control pin, so each of its version control calls read
+the missing pin as a provider that moved, and it let a disable preview report
+that switching off the tracker stops no workflow.
+
 Worth stating plainly for S10 to S12, because the cost of getting it wrong
 grows with every stage: after those stages almost everything a run does is a
 core block over a capability. Had the pin stayed blind to them, by S12 it would

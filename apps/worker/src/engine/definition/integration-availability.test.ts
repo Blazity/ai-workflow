@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IntegrationManifest } from "@integrations/sdk";
 import type { IntegrationState } from "@shared/contracts";
 import {
+  coreBlockCapabilities,
   deploymentIntegrations,
   integrationBlockAvailability,
   integrationsUsedBy,
@@ -353,5 +354,92 @@ describe("integrationsUsedBy", () => {
     ).toEqual([]);
     // No selection is the parameter's own default, which is both sources on.
     expect(integrationsUsedBy([{ type: "investigate" }], integrations)).toEqual(["acmenotify"]);
+  });
+});
+
+describe("what a graph reaches beyond the blocks the palette gates", () => {
+  const tracker = manifest({ id: "acmetracker", capabilities: ["issue_tracker"] });
+  const notebook = manifest({ id: "acmememory", capabilities: ["memory"] });
+  const tracer = manifest({ id: "acmetracer", capabilities: ["agent_tracing"] });
+  const everything = deploymentIntegrations({
+    manifests: [tracker, versionControl, notebook, tracer, notify],
+    states: new Map(
+      ["acmetracker", "acmevcs", "acmememory", "acmetracer", "acmenotify"].map((id) => [
+        id,
+        state(id),
+      ]),
+    ),
+  });
+
+  // The disable preview asked "which workflows use the tracker?" and was told
+  // none, because no core block declared issue_tracker, and a run pinned
+  // nothing for the memory and tracing its workspace reaches. A ticket trigger
+  // makes the whole run about a ticket, and preparing a workspace reaches
+  // version control, memory and every tracing provider.
+  it("reports a ticket workflow that prepares a workspace as using all four", () => {
+    expect(
+      integrationsUsedBy(
+        [{ type: "trigger_ticket_ai" }, { type: "prepare_workspace" }, { type: "open_pr" }],
+        everything,
+      ),
+    ).toEqual(["acmetracker", "acmevcs", "acmememory", "acmetracer"]);
+  });
+
+  // F117. An agent block prepares the workspace on first use, so a graph of an
+  // agent and a message pinned the messaging provider only, and every version
+  // control call of the run then read the missing pin as a provider that moved.
+  it("pins version control for an agent block that prepares its own workspace", () => {
+    expect(
+      integrationsUsedBy(
+        [{ type: "trigger_webhook" }, { type: "implementation_agent" }, { type: "send_message" }],
+        everything,
+      ),
+    ).toEqual(["acmevcs", "acmememory", "acmetracer", "acmenotify"]);
+  });
+
+  it("traces a generic agent's sandbox without claiming it prepares a workspace", () => {
+    expect(coreBlockCapabilities("generic_agent", {}).reached).toEqual(["agent_tracing"]);
+  });
+
+  // The palette's question is narrower on purpose: an agent runs untraced
+  // without a tracing provider and remembers into the built-in store without a
+  // memory integration, so neither may take the block off the palette.
+  it("gates the palette only on what a block cannot run without", () => {
+    expect(coreBlockCapabilities("implementation_agent", {}).required).toEqual([]);
+    expect(coreBlockCapabilities("trigger_ticket_ai", {}).required).toEqual([]);
+    expect(coreBlockCapabilities("open_pr", {}).required).toEqual(["vcs"]);
+    expect(coreBlockCapabilities("send_message", {}).required).toEqual(["messaging"]);
+  });
+
+  // The words graphs were published with before the vocabulary named no
+  // provider. The block runs both halves for them, so both are what it uses.
+  it("reads an investigation's legacy source words the way the block runs them", () => {
+    expect(coreBlockCapabilities("investigate", { sources: ["jira", "slack"] })).toEqual({
+      required: ["messaging"],
+      reached: ["issue_tracker", "messaging"],
+    });
+    expect(coreBlockCapabilities("investigate", { providers: ["jira"] })).toEqual({
+      required: [],
+      reached: ["issue_tracker"],
+    });
+  });
+
+  it("names the provider of a capability an integration's own block requires", () => {
+    const announcer = manifest({
+      id: "acmeannounce",
+      blocks: [{ type: "acmeannounce_post", requires: { capabilities: ["messaging"] } }],
+    });
+    const integrations = deploymentIntegrations({
+      manifests: [announcer, notify],
+      states: new Map([
+        ["acmeannounce", state("acmeannounce")],
+        ["acmenotify", state("acmenotify")],
+      ]),
+    });
+
+    expect(integrationsUsedBy([{ type: "acmeannounce_post" }], integrations)).toEqual([
+      "acmeannounce",
+      "acmenotify",
+    ]);
   });
 });

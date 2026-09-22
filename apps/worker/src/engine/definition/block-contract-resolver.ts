@@ -109,7 +109,7 @@ function availabilityFor(
   // What this core block needs is stated once, in integration-availability, and
   // read here, by the run's pin and by the dispatch blocker alike. A second
   // statement is how a palette and a run come to disagree.
-  for (const capability of coreBlockCapabilities(type, params)) {
+  for (const capability of coreBlockCapabilities(type, params).required) {
     const issue = coreCapabilityIssue(capability, context.integrations);
     if (!issue) continue;
     return unavailable(

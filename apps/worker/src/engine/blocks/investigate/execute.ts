@@ -11,6 +11,7 @@ import { resolveCallLlmTarget } from "../call-llm/execute.js";
 import { planLlmBriefing } from "../../agent-visibility/block.js";
 import { recordSendBriefing, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
+import { investigateSources } from "./manifest.js";
 
 const DEFAULT_CHAT_LOOKBACK_DAYS = 30;
 const DEFAULT_MAX_RESULTS = 10;
@@ -146,23 +147,6 @@ function chatEvidence(match: MessageSearchMatch): InvestigateEvidence {
   };
 }
 
-/**
- * Enabled sources, mirroring the dashboard's investigateSources. Accepts both
- * the capability vocabulary (`issue_tracker`, `chat`) and the old provider
- * vocabulary (`jira`, `slack`), because a run suspended before the rename
- * replays a recorded plan built with the old words: without this tolerance
- * that run would resume investigating nothing. An absent or unreadable list
- * means both are on: the schema defaults it that way, and a node whose
- * selection cannot be read should investigate everything rather than silently
- * investigate nothing.
- */
-function resolveSources(raw: unknown): { issueTracker: boolean; chat: boolean } {
-  if (!Array.isArray(raw)) return { issueTracker: true, chat: true };
-  return {
-    issueTracker: raw.includes("issue_tracker") || raw.includes("jira"),
-    chat: raw.includes("chat") || raw.includes("slack"),
-  };
-}
 
 function resolveChatChannels(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -510,7 +494,7 @@ export const execute: BlockExecuteFn = async (
   // before this rename hands the block the old words, and a definition the
   // one-off rewrite has not reached still stores them (see
   // RENAMED_WORKFLOW_BLOCK_PARAMS in @shared/contracts).
-  const sources = resolveSources(block.params.sources ?? block.params.providers);
+  const sources = investigateSources(block.params);
   const maxResults =
     typeof block.params.maxResults === "number"
       ? block.params.maxResults
