@@ -1,6 +1,6 @@
 /**
  * The dashboard half of the demo integration: the two pages its manifest
- * declares, and the only contributed pages this repository can look at.
+ * declares, rendered from nothing but its own connection values.
  *
  * It is written the way an integration author is asked to write one, so it is
  * also the proof of the two things S7 had to get right. Every block of colour

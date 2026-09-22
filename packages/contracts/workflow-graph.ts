@@ -4,6 +4,7 @@ import {
   type BlockTypeSpec,
   type WorkflowBlockType,
 } from "./block-catalog.generated";
+import { INTEGRATION_BLOCK_TYPE } from "./integration-id";
 
 export { BLOCK_TYPE_SPECS } from "./block-catalog.generated";
 export type { BlockCategory, BlockTypeSpec, WorkflowBlockType } from "./block-catalog.generated";
@@ -11,23 +12,6 @@ export type { BlockCategory, BlockTypeSpec, WorkflowBlockType } from "./block-ca
 export const DEFAULT_OUT_PORT = "out";
 export const FAILURE_PORT = "failed";
 
-/**
- * A block type an integration contributes: its integration's id, then the
- * block's own name. The id rule is the manifest's (`INTEGRATION_ID` in the
- * generator), written here because this package may not import the SDK.
- */
-const INTEGRATION_BLOCK_TYPE = /^[a-z][a-z0-9]{2,31}_[a-z0-9]+(?:_[a-z0-9]+)*$/;
-
-/**
- * Whether a stored definition may carry this block type.
- *
- * Core's catalog is generated from core's own blocks, so it holds neither a
- * block an integration contributes nor one whose integration this build has
- * stopped shipping. Refusing either here would make a definition published
- * yesterday unreadable today, and the node would vanish instead of saying what
- * is missing. Whether the block can actually RUN is a different question, and
- * the engine's block contract answers it by name.
- */
 /**
  * Block types this build renamed, and what they are called now.
  *
@@ -164,6 +148,16 @@ export function canonicalizeWorkflowBlockTypes(raw: unknown): unknown {
   return changed ? { ...(raw as object), nodes: rewritten } : raw;
 }
 
+/**
+ * Whether a stored definition may carry this block type.
+ *
+ * Core's catalog is generated from core's own blocks, so it holds neither a
+ * block an integration contributes nor one whose integration this build has
+ * stopped shipping. Refusing either here would make a definition published
+ * yesterday unreadable today, and the node would vanish instead of saying what
+ * is missing. Whether the block can actually RUN is a different question, and
+ * the engine's block contract answers it by name.
+ */
 export function isStorableWorkflowBlockType(type: unknown): type is WorkflowBlockType {
   if (typeof type !== "string") return false;
   if (Object.prototype.hasOwnProperty.call(BLOCK_TYPE_SPECS, type)) return true;

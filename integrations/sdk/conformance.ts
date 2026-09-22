@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { WORKFLOW_SUBJECT_FIELDS } from "@shared/contracts";
+import { INTEGRATION_BLOCK_TYPE, INTEGRATION_ID, WORKFLOW_SUBJECT_FIELDS } from "@shared/contracts";
+import { integrationBlockPortsIssue } from "./block-ports";
 import { INTEGRATION_CAPABILITIES } from "./capabilities";
 
 /**
@@ -23,6 +24,8 @@ export type ConformanceCode =
   | "connection_secret_unflagged"
   | "connection_secret_default"
   | "connection_default_invalid"
+  | "connection_identity_not_secret"
+  | "repositories_invalid"
   | "capability_unknown"
   | "capability_reserved"
   | "capability_adapter_missing"
@@ -30,6 +33,8 @@ export type ConformanceCode =
   | "block_ports_unsupported"
   | "block_params_schema_missing"
   | "block_params_schema_one_argument_record"
+  | "block_params_schema_enum_record"
+  | "block_defaults_invalid"
   | "block_executor_missing"
   | "block_must_read_undeclared"
   | "block_input_default_invalid"
@@ -37,6 +42,7 @@ export type ConformanceCode =
   | "health_checks_missing"
   | "health_probe_missing"
   | "page_id_invalid"
+  | "page_legacy_path_invalid"
   | "page_reader_undeclared"
   | "run_state_missing"
   | "run_state_undeclared"
@@ -150,12 +156,11 @@ export const RESERVED_INTEGRATION_IDS: readonly string[] = [
  * own configuration and hand its value back through the dashboard, and a name
  * such as DATABASE_URL carries no credential word to catch it.
  *
- * The provider variables core reads today (JIRA_*, GITHUB_*, GITLAB_*) are
- * deliberately absent: they belong to the integrations that take them over in
- * S10 to S12. GENAI_ENGINE_* left with Arthur in S8, CHAT_SDK_* and SLACK_*
- * with Slack in S9. S1 asserts this list
- * stays equal to the core-owned names in
- * `apps/worker/src/infra/runtime-env.ts`.
+ * No provider's variable is here: each belongs to the integration that
+ * declares it. `integrations/registry/reserved-env.test.ts` holds this list
+ * equal to what core reads, in both directions: every variable
+ * `apps/worker/src/infra/runtime-env.ts` declares is reserved, and every name
+ * here is declared there or read by core without being declared.
  */
 export const RESERVED_ENVIRONMENT_VARIABLES: readonly string[] = [
   "ANTHROPIC_API_KEY",
@@ -176,7 +181,6 @@ export const RESERVED_ENVIRONMENT_VARIABLES: readonly string[] = [
   "DATABASE_URL",
   "HOME",
   "INTEGRATION_SECRETS_KEY",
-  "ISSUE_TRACKER_KIND",
   "LOG_LEVEL",
   "MCP_ALLOW_PUBLIC_DCR",
   "MCP_DOGFOOD_FIXTURE_PREFIX",
@@ -192,7 +196,6 @@ export const RESERVED_ENVIRONMENT_VARIABLES: readonly string[] = [
   "SSO_CLIENT_SECRET",
   "SSO_ISSUER",
   "VCS_BOT_LOGIN",
-  "VCS_KIND",
   "VERCEL",
   "VERCEL_ENV",
   "VERCEL_GIT_COMMIT_SHA",
@@ -203,11 +206,11 @@ export const RESERVED_ENVIRONMENT_VARIABLES: readonly string[] = [
   "WORKFLOW_SCHEDULING_GOLDEN_SINK",
 ];
 
-const ID = /^[a-z][a-z0-9]{2,31}$/;
 const ENV = /^[A-Z][A-Z0-9_]*$/;
 const SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const SNAKE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 const RESERVED_PAGE_IDS = new Set(["connection"]);
+const REPOSITORY_HOST = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d+)?$/;
+const LEGACY_PATH = /^\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 /**
  * Slots the contract names and no stage has designed yet. Empty today: S9
  * released `webhook`, the last one. Kept because the next reserved slot is one
@@ -254,10 +257,12 @@ const manifestSchema = z.object({
         optional: z.boolean().optional(),
         default: z.string().optional(),
         format: z.enum(["text", "multiline", "url", "integer"]).optional(),
+        identity: z.boolean().optional(),
       }),
     ),
   }),
   capabilities: z.array(z.string()),
+  repositories: z.object({ host: z.string().optional(), nestedPaths: z.boolean().optional() }).optional(),
   blocks: z.array(
     z.object({
       type: z.string(),
@@ -278,7 +283,7 @@ const manifestSchema = z.object({
         .optional(),
     }),
   ),
-  pages: z.array(z.object({ id: z.string(), label: text })),
+  pages: z.array(z.object({ id: z.string(), label: text, legacyPaths: z.array(z.string()).optional() })),
   health: z.array(z.object({ id: text, label: text, description: text, critical: z.boolean() })),
   runState: z.boolean().optional(),
 });
@@ -317,6 +322,7 @@ export function checkIntegrationConformance(
     );
   }
   checkCapabilities(declared, implemented, report);
+  checkRepositories(declared, report);
   checkBlocks(declared, implemented, report);
   checkHealth(declared, implemented, report);
   checkPages(declared, implemented, report);
@@ -326,7 +332,7 @@ export function checkIntegrationConformance(
 }
 
 function checkIdentity(manifest: ParsedManifest, report: Report) {
-  if (!ID.test(manifest.id)) {
+  if (!INTEGRATION_ID.test(manifest.id)) {
     report(
       "id_invalid",
       "id",
@@ -336,7 +342,7 @@ function checkIdentity(manifest: ParsedManifest, report: Report) {
     report(
       "id_reserved",
       "id",
-      `Integration id "${manifest.id}" is a word core already uses; choose the provider's own name.`,
+      `Integration id "${manifest.id}" is a word core already uses as a capability, a route, a screen or a concept (RESERVED_INTEGRATION_IDS), so core could not tell the integration from its own code. Choose another id; when the reserved word is the provider's own name, qualify it, for example with the company's name.`,
     );
   }
 }
@@ -373,6 +379,13 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
       report("duplicate", `${path}.env`, `Environment variable ${field.env} is declared by two fields.`);
     }
     envs.add(field.env);
+    if (field.identity === true && !field.secret) {
+      report(
+        "connection_identity_not_secret",
+        `${path}.identity`,
+        `Connection field "${field.key}" is marked identity, which only a secret needs: a run already pins every non-secret value. Delete the flag.`,
+      );
+    }
     if (!field.secret && namesCredential(field.key, field.env)) {
       report(
         "connection_secret_unflagged",
@@ -421,6 +434,31 @@ function checkCapabilities(manifest: ParsedManifest, runtime: Runtime, report: R
   }
 }
 
+/**
+ * `repositories` tells core how this provider's repository links and paths are
+ * shaped, which only a `vcs` integration has. The host is compared with the
+ * host of a pasted link, so a scheme, a path or a capital letter would make
+ * every link look like another provider's.
+ */
+function checkRepositories(manifest: ParsedManifest, report: Report) {
+  const shape = manifest.repositories;
+  if (shape === undefined) return;
+  if (!manifest.capabilities.includes("vcs")) {
+    report(
+      "repositories_invalid",
+      "repositories",
+      "The manifest describes repositories but does not declare the vcs capability, and nothing else reads them. Declare vcs, or delete repositories.",
+    );
+  }
+  if (shape.host !== undefined && !REPOSITORY_HOST.test(shape.host)) {
+    report(
+      "repositories_invalid",
+      "repositories.host",
+      `Repository host "${shape.host}" must be a bare lowercase host such as "github.com", optionally with a port: no scheme and no path, because core compares it with the host of a pasted link.`,
+    );
+  }
+}
+
 /** Reports an unknown or reserved capability id; true when the id has a port. */
 function checkCapabilityId(capability: string, path: string, report: Report): boolean {
   if (!Object.hasOwn(INTEGRATION_CAPABILITIES, capability)) {
@@ -449,32 +487,48 @@ function checkBlocks(manifest: ParsedManifest, runtime: Runtime, report: Report)
   const prefix = `${manifest.id}_`;
   manifest.blocks.forEach((block, index) => {
     const path = `blocks[${index}]`;
-    if (!block.type.startsWith(prefix) || !SNAKE.test(block.type.slice(prefix.length))) {
+    if (!block.type.startsWith(prefix) || !INTEGRATION_BLOCK_TYPE.test(block.type)) {
       report(
         "block_type_invalid",
         `${path}.type`,
-        `Block type "${block.type}" must be "${prefix}" followed by a snake_case name.`,
+        `Block type "${block.type}" must be "${prefix}" followed by lowercase words joined by underscores.`,
       );
     }
     if (types.has(block.type)) {
       report("duplicate", `${path}.type`, `Block type "${block.type}" is declared twice.`);
     }
     types.add(block.type);
-    if (block.contract.ports.length !== 1 || block.contract.ports[0] !== "out") {
-      report(
-        "block_ports_unsupported",
-        `${path}.contract.ports`,
-        `Block "${block.type}" declares ${JSON.stringify(block.contract.ports)}; an integration block has exactly one port named "out". ` +
-          "The workflow graph reads ports from core's generated catalog, which holds no integration block, so it resolves every one of them to a single port named \"out\": a second port is offered in the editor, refused at publish as an unknown port, and propagates to nothing at run time. " +
-          "Until the graph learns a manifest's ports (ADR-010), branch downstream on the block's status output.",
-      );
-    }
+    const portsIssue = integrationBlockPortsIssue(block.type, block.contract.ports);
+    if (portsIssue !== null) report("block_ports_unsupported", `${path}.contract.ports`, portsIssue);
     if (isZodSchema(block.paramsSchema)) {
-      for (const at of oneArgumentRecords(block.paramsSchema, `${path}.paramsSchema`, new Set())) {
+      const records = recordIssues(block.paramsSchema, `${path}.paramsSchema`, new Set());
+      for (const { at, kind } of records) {
+        if (kind === "one_argument") {
+          report(
+            "block_params_schema_one_argument_record",
+            at,
+            `Block "${block.type}" uses z.record with one argument at ${at}. zod 4, which production runs, crashes on it at the first parse; write z.record(z.string(), value).`,
+          );
+        } else {
+          report(
+            "block_params_schema_enum_record",
+            at,
+            `Block "${block.type}" keys a z.record by a fixed set of values at ${at}. zod 3, which the tests run, reads that as every key optional and zod 4, which production runs, as every key required, so the same value parses in one and fails in the other. Write z.object with each key optional, or key the record by z.string().`,
+          );
+        }
+      }
+      // A schema with a one-argument record cannot parse anything under zod 4,
+      // and that is already reported above.
+      const parsedDefaults = records.some(({ kind }) => kind === "one_argument")
+        ? { success: true as const }
+        : (block.paramsSchema as unknown as ParseableSchema).safeParse(block.defaults ?? {});
+      if (!parsedDefaults.success) {
+        const [first] = parsedDefaults.error.issues;
+        const where = first && first.path.length > 0 ? ` at ${formatPath(first.path)}` : "";
         report(
-          "block_params_schema_one_argument_record",
-          at,
-          `Block "${block.type}" uses z.record with one argument at ${at}. zod 4, which production runs, crashes on it at the first parse; write z.record(z.string(), value).`,
+          "block_defaults_invalid",
+          `${path}.defaults`,
+          `Block "${block.type}" has defaults its own params schema refuses${where}: ${first?.message ?? "invalid"}. A new node starts with its defaults, and until the editor has a form for an integration block's parameters nothing in it can change them, so the node is invalid from the moment it is dropped. Give each parameter a default that parses, and take what an author has to choose as an input instead.`,
         );
       }
     } else {
@@ -578,6 +632,7 @@ function checkHealth(manifest: ParsedManifest, runtime: Runtime, report: Report)
 
 function checkPages(manifest: ParsedManifest, runtime: Runtime, report: Report) {
   const ids = new Set<string>();
+  const legacyPaths = new Set<string>();
   manifest.pages.forEach((page, index) => {
     const path = `pages[${index}].id`;
     if (!SLUG.test(page.id) || RESERVED_PAGE_IDS.has(page.id)) {
@@ -590,6 +645,19 @@ function checkPages(manifest: ParsedManifest, runtime: Runtime, report: Report) 
       report("duplicate", path, `Page id "${page.id}" is declared twice.`);
     }
     ids.add(page.id);
+    page.legacyPaths?.forEach((legacyPath, position) => {
+      const at = `pages[${index}].legacyPaths[${position}]`;
+      if (!LEGACY_PATH.test(legacyPath)) {
+        report(
+          "page_legacy_path_invalid",
+          at,
+          `Legacy path "${legacyPath}" must be one lowercase segment such as "/evals": the dashboard answers it with a permanent redirect to this page, ahead of its own routes.`,
+        );
+      } else if (legacyPaths.has(legacyPath)) {
+        report("duplicate", at, `Legacy path "${legacyPath}" is declared twice, so it cannot say which page it leads to.`);
+      }
+      legacyPaths.add(legacyPath);
+    });
   });
   // A reader for a page nobody declared is code the cockpit can never reach,
   // and the mistake is almost always a renamed page.
@@ -685,23 +753,48 @@ function definitionOf(schema: ZodLike): Record<string, unknown> {
   return isRecord(def) ? def : {};
 }
 
-function oneArgumentRecords(schema: unknown, path: string, seen: Set<unknown>): string[] {
+type ParseableSchema = {
+  safeParse(value: unknown):
+    | { success: true }
+    | { success: false; error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } };
+};
+
+type RecordIssue = { at: string; kind: "one_argument" | "finite_keys" };
+
+/** Whether a record's key schema is a fixed set of values: an enum, a native enum or a literal. */
+function hasFiniteKeys(keyType: unknown): boolean {
+  if (!isZodSchema(keyType)) return false;
+  const values = (keyType._zod as { values?: unknown } | undefined)?.values;
+  if (values instanceof Set) return values.size > 0;
+  const typeName = definitionOf(keyType).typeName;
+  return typeName === "ZodEnum" || typeName === "ZodNativeEnum" || typeName === "ZodLiteral";
+}
+
+/**
+ * The records in a schema the two zods read differently: one written with a
+ * single argument, which zod 4 crashes on, and one keyed by a fixed set of
+ * values, which zod 3 treats as partial and zod 4 as exhaustive.
+ */
+function recordIssues(schema: unknown, path: string, seen: Set<unknown>): RecordIssue[] {
   if (!isZodSchema(schema) || seen.has(schema)) return [];
   seen.add(schema);
   const def = definitionOf(schema);
-  const found: string[] = [];
+  const found: RecordIssue[] = [];
   const isRecordSchema = def.typeName === "ZodRecord" || def.type === "record";
-  if (isRecordSchema && !isZodSchema(def.valueType)) found.push(path);
+  if (isRecordSchema && !isZodSchema(def.valueType)) found.push({ at: path, kind: "one_argument" });
+  else if (isRecordSchema && def.partial !== true && hasFiniteKeys(def.keyType)) {
+    found.push({ at: path, kind: "finite_keys" });
+  }
   const shape = typeof def.shape === "function" ? (def.shape as () => unknown)() : def.shape;
   if (isRecord(shape)) {
     for (const [key, child] of Object.entries(shape)) {
-      found.push(...oneArgumentRecords(child, `${path}.${key}`, seen));
+      found.push(...recordIssues(child, `${path}.${key}`, seen));
     }
   }
   for (const [key, value] of Object.entries(def)) {
     if (key === "shape") continue;
     const children = Array.isArray(value) ? value : [value];
-    for (const child of children) found.push(...oneArgumentRecords(child, path, seen));
+    for (const child of children) found.push(...recordIssues(child, path, seen));
   }
   return found;
 }

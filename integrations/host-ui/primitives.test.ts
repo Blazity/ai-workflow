@@ -10,17 +10,44 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import ts from "typescript";
 
 const here = import.meta.dirname;
 const primitives = readFileSync(join(here, "primitives.tsx"), "utf8");
 const index = readFileSync(join(here, "index.ts"), "utf8");
 
-/** Every name the package exports, read off the entry rather than imported:
- *  importing it would need a JSX runtime the test does not otherwise want. */
+/**
+ * Every name the package exports, values and types alike, read off the entry
+ * with the TypeScript parser rather than imported: importing it would need a
+ * JSX runtime this test does not otherwise want, and a type has no runtime
+ * name to import. The parser sees an export however it is written, on one
+ * line or several, and an `export *` comes back as "*", which no list below
+ * accepts, because it exports whatever the other file grows.
+ */
 function exportedNames(source: string): string[] {
-  return [...source.matchAll(/^\s{2}(?:type\s+)?([A-Za-z][A-Za-z0-9]*),$/gmu)]
-    .map((match) => match[1]!)
-    .toSorted();
+  const file = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const names: string[] = [];
+  for (const statement of file.statements) {
+    if (ts.isExportDeclaration(statement)) {
+      const clause = statement.exportClause;
+      if (clause === undefined) names.push("*");
+      else if (ts.isNamespaceExport(clause)) names.push(clause.name.text);
+      else for (const element of clause.elements) names.push(element.name.text);
+      continue;
+    }
+    const exported = ts.canHaveModifiers(statement)
+      ? ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+      : false;
+    if (!exported) continue;
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) names.push(declaration.name.text);
+      }
+    } else if ("name" in statement && statement.name && ts.isIdentifier(statement.name as ts.Node)) {
+      names.push((statement.name as ts.Identifier).text);
+    }
+  }
+  return names.toSorted();
 }
 
 test("the package exports exactly the contract and the primitives", () => {
@@ -63,7 +90,7 @@ test("nothing here lets a page escape the cockpit's content area", () => {
     "next/navigation",
   ]) {
     assert.ok(
-      !index.includes(`  ${forbidden},`) && !primitives.includes(forbidden),
+      !exportedNames(index).some((name) => name.includes(forbidden)) && !primitives.includes(forbidden),
       `${forbidden} would let a contributed page take the screen or move the person; it does not belong in the host UI`,
     );
   }

@@ -16,11 +16,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import {
-  checkIntegrationConformance,
-  RESERVED_ENVIRONMENT_VARIABLES,
-  type ConformanceIssue,
-} from "@integrations/sdk";
+import { checkIntegrationConformance, type ConformanceIssue } from "@integrations/sdk";
 
 const integrationsRoot = resolve(import.meta.dirname, "..");
 const repositoryRoot = resolve(integrationsRoot, "..");
@@ -142,18 +138,38 @@ for (const directory of directories) {
   });
 }
 
-test("the reserved environment variables hold no name an integration owns", () => {
-  const owned = RESERVED_ENVIRONMENT_VARIABLES.filter((variable) =>
-    variable !== "VCS_BOT_LOGIN" &&
-    directories.some((directory) =>
-      readFileSync(join(directory, "manifest.ts"), "utf8").includes(`"${variable}"`),
-    ),
-  );
+/**
+ * Variables more than one integration may declare, each with why. Conformance
+ * refuses a variable declared twice inside one manifest; across packages only
+ * this test can see it, and two integrations reading one variable means an
+ * operator who sets it for one has configured the other without knowing.
+ */
+const SHARED_ENVIRONMENT_VARIABLES: Readonly<Record<string, string>> = {
+  VCS_BOT_LOGIN:
+    "the automation account's login for a deployment with exactly one version control provider, read by whichever vcs integration is connected as its legacyBotLogin field",
+};
+
+test("no two integrations declare the same environment variable unless it is shared on purpose", async () => {
+  const declaredBy = new Map<string, string[]>();
+  for (const directory of directories) {
+    const { manifest } = (await import(pathToFileURL(join(directory, "manifest.ts")).href)) as {
+      manifest: { id: string; connection: { fields: readonly { env: string }[] } };
+    };
+    for (const { env } of manifest.connection.fields) {
+      declaredBy.set(env, [...(declaredBy.get(env) ?? []), manifest.id]);
+    }
+  }
+  const clashes = [...declaredBy]
+    .filter(([env, ids]) => ids.length > 1 && !Object.hasOwn(SHARED_ENVIRONMENT_VARIABLES, env))
+    .map(([env, ids]) => `${env} (${ids.join(", ")})`);
   assert.deepEqual(
-    owned,
+    clashes,
     [],
-    "an integration declares an environment variable core reads for itself; conformance should have refused it",
+    "two integrations read the same variable, so setting it for one configures the other. Give each its own name, or add the variable to SHARED_ENVIRONMENT_VARIABLES here with the reason both need it.",
   );
+  for (const env of Object.keys(SHARED_ENVIRONMENT_VARIABLES)) {
+    assert.ok((declaredBy.get(env)?.length ?? 0) > 1, `${env} is listed as shared but fewer than two integrations declare it`);
+  }
 });
 
 /**

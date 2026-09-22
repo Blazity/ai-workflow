@@ -9,10 +9,11 @@ function argumentValue(args: string[], name: string): string | undefined {
 }
 
 /**
- * Fixtures are a build-time decision, not a runtime one: the registry a build
- * compiles either imports `integrations/_fixtures` or does not. CI and demo set
- * the variable, production never does, and the committed registry is the one
- * generated without it.
+ * Fixtures are a generation-time decision, not a runtime one: the registry a
+ * build compiles either imports `integrations/_fixtures` or does not. Only a
+ * local generation sets the variable; the committed registry, which every
+ * build compiles and `--check` compares against, is the one generated without
+ * it.
  */
 function includeFixtures(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env[FIXTURE_FLAG];

@@ -5,8 +5,8 @@
  *
  * Moved from `apps/worker/src/adapters/issue-tracker/types.ts`, which
  * re-exports every name, so no core caller changed. The provider-specific
- * leftovers in this port (a JQL query string, Jira transition ids, a Node
- * `Buffer`) are listed as debt in ADR-010 with the stage that removes each.
+ * leftovers still in this port (a transition id named after Jira's, a Node
+ * `Buffer`) are listed as debt in ADR-010 with what removes each.
  */
 export interface TicketContent {
   id: string;

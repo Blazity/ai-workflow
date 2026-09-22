@@ -378,6 +378,77 @@ export const manifest = defineIntegration({
   assert.throws(() => readIntegrations({ root }), /node:crypto/);
 });
 
+/**
+ * The flow bundle evaluates manifests inside the Workflow DevKit's VM, which
+ * hands them `process` as `{ env }` and no `Buffer`, timers, `fetch` or
+ * `AbortSignal` (@workflow/core 4.8.0, dist/vm/index.js). Conformance runs in
+ * Node and the typecheck sees @types/node, so both pass; the deployed workflow
+ * throws a ReferenceError. The generator is the one reader that could say so.
+ */
+test("a manifest that uses a Node global is refused, because the flow bundle's VM has none", async (t) => {
+  for (const [label, expression, file] of [
+    ["Buffer", 'Buffer.from("abc").toString("base64")', "manifest"],
+    ["process", "process.cwd()", "manifest"],
+    ["performance one file away", "String(performance.now())", "helper"],
+  ] as const) {
+    const root = await fixtureRoot("gen-integrations-global");
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const value = file === "manifest" ? expression : "helperValue";
+    await writeIntegration(root, "alpha", {
+      id: "alpha",
+      manifest: `import { defineIntegration } from "@integrations/sdk";
+${file === "helper" ? 'import { helperValue } from "./helper";\n' : ""}
+export const manifest = defineIntegration({
+  id: "alpha",
+  name: "Alpha",
+  description: ${value},
+  connection: { fields: [] },
+  capabilities: [],
+  blocks: [],
+  pages: [],
+  health: [{ id: "auth", label: "Auth", description: "d", critical: true }],
+});
+`,
+    });
+    if (file === "helper") {
+      await writeFile(join(root, "integrations/alpha/helper.ts"), `export const helperValue = ${expression};\n`);
+    }
+    assert.throws(
+      () => readIntegrations({ root }),
+      (error: Error) => error.message.includes(label.split(" ")[0]!) && /flow bundle/u.test(error.message),
+      label,
+    );
+  }
+});
+
+test("a manifest may name what the VM does give it, and may bind a Node global's name locally", async (t) => {
+  const root = await fixtureRoot("gen-integrations-global-ok");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeIntegration(root, "alpha", {
+    id: "alpha",
+    manifest: `import { defineIntegration } from "@integrations/sdk";
+
+type Payload = { buffer: Buffer };
+const process = (value: string) => value.trim();
+const docs = new URL("https://alpha.test/docs").toString();
+const encoded = btoa(JSON.stringify({ at: Math.max(1, 2) }));
+
+export const manifest = defineIntegration({
+  id: "alpha",
+  name: "Alpha",
+  description: process(docs + encoded),
+  connection: { fields: [] },
+  capabilities: [],
+  blocks: [],
+  pages: [],
+  health: [{ id: "auth", label: "Auth", description: "d", critical: true }],
+});
+export type { Payload };
+`,
+  });
+  assert.deepEqual(readIntegrations({ root }).map((record) => record.id), ["alpha"]);
+});
+
 test("an integration without a worker entry is refused, because nothing could run it", async (t) => {
   const root = await fixtureRoot("gen-integrations-no-worker");
   t.after(() => rm(root, { recursive: true, force: true }));
