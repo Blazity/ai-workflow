@@ -1,5 +1,6 @@
 import {
   IssueTrackerNotFoundError,
+  type IntegrationHttp,
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
   type IssueTrackerTransitionTarget,
@@ -18,9 +19,10 @@ export interface JiraConfig {
    * How this adapter reaches Jira. The integration runtime passes
    * `ctx.http.fetch`, which carries the SDK's timeout, its retry policy for
    * reads and its secret redaction; the default is the global one, for the
-   * health probe that runs before a context exists.
+   * health probe that runs before a context exists, and it ignores the SDK's
+   * own options (`timeoutMs`, `retries`).
    */
-  fetch?: typeof fetch;
+  fetch?: IntegrationHttp["fetch"];
 }
 
 const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
@@ -89,7 +91,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
   private cloudId: string | null;
   private selfAccountIdPromise: Promise<string> | null = null;
   private projectKey: string;
-  private fetch: typeof fetch;
+  private fetch: IntegrationHttp["fetch"];
 
   constructor(config: JiraConfig) {
     const trimmed = config.baseUrl.replace(/\/$/, "");
@@ -459,6 +461,10 @@ export class JiraAdapter implements IssueTrackerAdapter {
     url: string,
     opts: { timeoutMs?: number } = {},
   ): Promise<Buffer> {
+    // The operator's per-attachment setting is the deadline for the whole
+    // download, every redirect included, so it is a signal. It is also each
+    // request's own timeout: the SDK's default of 30 s would otherwise cut a
+    // download an operator allowed longer for, and retry it from the start.
     const timeoutMs = opts.timeoutMs ?? 30_000;
     const signal = AbortSignal.timeout(timeoutMs);
     const redirectStatuses = new Set([301, 302, 303, 307, 308]);
@@ -476,6 +482,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
         headers: this.buildAttachmentHeaders(currentUrl),
         redirect: "manual",
         signal,
+        timeoutMs,
       });
 
       if (redirectStatuses.has(res.status)) {

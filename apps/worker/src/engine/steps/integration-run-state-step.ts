@@ -100,7 +100,7 @@ export async function createIntegrationRunStatesStep(
       const resolved = await resolveUsableIntegrations({
         // Its own bound, so a provider that hangs spends its own minute and
         // nobody else's.
-        signal: AbortSignal.timeout(RUN_STATE_TIMEOUT_MS),
+        lifetime: AbortSignal.timeout(RUN_STATE_TIMEOUT_MS),
         filter: (candidate) => candidate.id === integrationId,
       });
       if (!resolved.readable) {

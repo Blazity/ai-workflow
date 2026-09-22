@@ -12,8 +12,9 @@
  * port with exactly one implementation is a hypothetical seam. Everything the
  * fake does, it does through the published `MemoryAdapter` type.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryAdapter } from "@integrations/sdk";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { IntegrationManifest, MemoryAdapter } from "@integrations/sdk";
+import type { IntegrationState } from "@shared/contracts";
 
 const resolveUsableIntegrations = vi.fn();
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
@@ -23,6 +24,14 @@ vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
   checkIntegrationPin: (
     await importOriginal<typeof import("../../services/integrations/runtime.js")>()
   ).checkIntegrationPin,
+}));
+
+// The memory integrations this build ships. No real one exists yet, so each
+// case registers the fakes it is about, the way a generated registry would.
+const registered = vi.hoisted(() => [] as IntegrationManifest[]);
+vi.mock("@integrations/registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@integrations/registry")>()),
+  integrationManifests: registered,
 }));
 
 const builtinRecall = vi.fn();
@@ -37,49 +46,110 @@ vi.mock("../../memory/builtin/adapter.js", () => ({
   }),
 }));
 
-import { activeMemory } from "./memory-runtime.js";
+import { redactedError } from "../../services/integrations/context.js";
+import { activeMemory, MEMORY_CALL_BUDGET_MS } from "./memory-runtime.js";
 
 const SUBJECT = { key: "repo:github:acme/api", label: "acme/api" };
 const RECALL = { subject: SUBJECT, scope: { kind: "facts" } } as const;
+const OBSERVE = {
+  subject: SUBJECT,
+  scope: { kind: "facts" },
+  runId: "run_1",
+  ticketKey: null,
+  observation: { kind: "items", learned: ["a fact"], refuted: [] },
+} as const;
+const SECRET = "m0-key-8f3a91c2d7";
+const withoutKey = (text: string) => text.split(SECRET).join("[redacted]");
 
-/** One usable integration, as `resolveUsableIntegrations` hands it over. */
-function provider(name: string, adapter: Partial<MemoryAdapter> | null): unknown {
-  return {
-    manifest: { id: name.toLowerCase(), name, capabilities: ["memory"] },
-    runtime: { capabilities: adapter === null ? {} : { memory: () => adapter } },
-    ctx: {},
-  };
+/** One memory integration as the registry declares it. */
+function manifestOf(name: string): IntegrationManifest {
+  return { id: name.toLowerCase(), name, capabilities: ["memory"] } as unknown as IntegrationManifest;
 }
 
-function readable(...usable: unknown[]): void {
-  resolveUsableIntegrations.mockResolvedValue({ readable: true, usable, states: new Map() });
+/**
+ * One usable integration, as `resolveUsableIntegrations` hands it over: its
+ * context carries the lifetime the caller asked for, and core's redactor
+ * takes this connection's key out of what it says.
+ */
+function provider(name: string, adapter: Partial<MemoryAdapter> | null) {
+  return (lifetime: AbortSignal | undefined) => ({
+    manifest: manifestOf(name),
+    runtime: { capabilities: adapter === null ? {} : { memory: () => adapter } },
+    ctx: { signal: lifetime },
+    redaction: {
+      text: withoutKey,
+      error: (error: unknown) => redactedError(error, withoutKey),
+    },
+  });
+}
+
+type Provider = ReturnType<typeof provider>;
+
+function state(id: string, overrides: Partial<IntegrationState> = {}): IntegrationState {
+  return {
+    integrationId: id,
+    status: "connected",
+    connection: "connected",
+    enabled: true,
+    usable: true,
+    failure: null,
+    pin: { integrationId: id, configFingerprint: "fingerprint-1" },
+    ...overrides,
+  } as IntegrationState;
+}
+
+/** The provider context's lifetime from the last resolution. */
+function lastLifetime(): AbortSignal {
+  const input = resolveUsableIntegrations.mock.calls.at(-1)?.[0] as { lifetime?: AbortSignal };
+  if (!input?.lifetime) throw new Error("activeMemory resolved without a lifetime");
+  return input.lifetime;
+}
+
+/**
+ * A deployment where each of these is connected and switched on, and each of
+ * `others` is registered with the state given (disabled, failing, never
+ * connected) and therefore not usable.
+ */
+function readable(...usable: Provider[]): void {
+  deployment(usable, []);
+}
+
+function deployment(
+  usable: Provider[],
+  others: Array<{ name: string; state: Partial<IntegrationState> }>,
+): void {
+  const connected = usable.map((build) => build(undefined).manifest);
+  registered.splice(0, registered.length, ...connected, ...others.map((other) => manifestOf(other.name)));
+  resolveUsableIntegrations.mockImplementation(async (input: { lifetime?: AbortSignal }) => ({
+    readable: true,
+    usable: usable.map((build) => build(input.lifetime)),
+    states: new Map([
+      ...connected.map((manifest) => [manifest.id, state(manifest.id)] as const),
+      ...others.map(
+        (other) => [other.name.toLowerCase(), state(other.name.toLowerCase(), other.state)] as const,
+      ),
+    ]),
+  }));
 }
 
 /** The same, plus what the deployment currently says about that connection. */
 function readableWithState(name: string, fingerprint: string, adapter: unknown): void {
   const id = name.toLowerCase();
-  resolveUsableIntegrations.mockResolvedValue({
+  registered.splice(0, registered.length, manifestOf(name));
+  resolveUsableIntegrations.mockImplementation(async (input: { lifetime?: AbortSignal }) => ({
     readable: true,
-    usable: [provider(name, adapter as never)],
-    states: new Map([
-      [
-        id,
-        {
-          integrationId: id,
-          status: "connected",
-          connection: "connected",
-          enabled: true,
-          usable: true,
-          failure: null,
-          pin: { integrationId: id, configFingerprint: fingerprint },
-        },
-      ],
-    ]),
-  });
+    usable: [provider(name, adapter as never)(input.lifetime)],
+    states: new Map([[id, state(id, { pin: { integrationId: id, configFingerprint: fingerprint } })]]),
+  }));
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
+  registered.splice(0);
   builtinRecall.mockResolvedValue({ ok: true, held: false, entries: [], rendering: "" });
   builtinObserve.mockResolvedValue({
     ok: true,
@@ -211,7 +281,7 @@ describe("a deployment that connected two engines", () => {
     expect(memory.refusal).toEqual({
       code: "ambiguous",
       detail:
-        "Recall Engine and Second Engine both provide memory on this deployment and no active provider is selected, so memory was not used",
+        "Recall Engine and Second Engine both provide memory on this deployment and no active provider is selected, so memory was not used. Disable all but one of them on the Integrations page",
     });
     expect(await memory.recall(RECALL)).toMatchObject({ ok: false, code: "ambiguous" });
     expect(builtinRecall).not.toHaveBeenCalled();
@@ -294,5 +364,238 @@ describe("a run that started before the engine was connected", () => {
       code: "moved",
       detail: "Recall Engine's configuration changed after this run started, so memory was not used",
     });
+  });
+});
+
+describe("a connected engine that stops answering", () => {
+  const SPENT = expect.stringContaining(
+    "did not answer in time (memory calls in this step used their 60 s), so memory was skipped for the rest of this step",
+  );
+
+  /** Resolves `answer` after `ms` of fake time, or with a refusal when `signal` aborts first. */
+  function answersAfter<T>(ms: number, answer: T, signal: () => AbortSignal) {
+    return () =>
+      new Promise<T | { ok: false; code: "unavailable"; detail: string }>((resolve) => {
+        const timer = setTimeout(() => resolve(answer), ms);
+        signal().addEventListener("abort", () => {
+          clearTimeout(timer);
+          resolve({ ok: false, code: "unavailable", detail: "the request was aborted" });
+        });
+      });
+  }
+
+  it("costs a step at most the budget however many calls it makes, and every later call refuses at once", async () => {
+    // A distill over six repositories makes 19 calls. Against an engine that
+    // takes connections and never answers, each call waited out its own
+    // timeouts, which is ten minutes of a run's teardown. This provider does
+    // not even honour its signal, which is the worst case the budget has to
+    // bound on its own.
+    vi.useFakeTimers();
+    const recall = vi.fn(() => new Promise<never>(() => {}));
+    const observe = vi.fn(() => new Promise<never>(() => {}));
+    readable(provider("Recall Engine", { recall, observe }));
+    const memory = await activeMemory();
+
+    let first: unknown = "pending";
+    void memory.recall(RECALL).then((answer) => (first = answer));
+    await vi.advanceTimersByTimeAsync(MEMORY_CALL_BUDGET_MS - 1);
+    expect(first).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(first).toEqual({ ok: false, code: "unavailable", detail: SPENT });
+
+    // No clock moves from here on: an answer that needed time would hang.
+    const later = await Promise.all([
+      memory.recall(RECALL),
+      memory.observe(OBSERVE),
+      memory.recall(RECALL),
+    ]);
+    for (const answer of later) {
+      expect(answer).toEqual({ ok: false, code: "unavailable", detail: SPENT });
+    }
+    expect(recall).toHaveBeenCalledTimes(1);
+    expect(observe).not.toHaveBeenCalled();
+    // And the provider's own requests were told to stop.
+    expect(lastLifetime().aborted).toBe(true);
+  });
+
+  it("charges only the time spent waiting on memory, not the model call between reads and writes", async () => {
+    vi.useFakeTimers();
+    const ok = { ok: true, held: true, entries: [], rendering: "" } as const;
+    const recall = vi.fn(answersAfter(25_000, ok, lastLifetime));
+    readable(provider("Recall Engine", { recall }));
+    const memory = await activeMemory();
+
+    const first = memory.recall(RECALL);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(await first).toEqual(ok);
+
+    // The distill's model call: ten minutes in which memory is not waited on.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(lastLifetime().aborted).toBe(false);
+
+    const second = memory.recall(RECALL);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(await second).toEqual(ok);
+
+    // 50 s spent; the third call is cut when the remaining 10 s run out, not
+    // when the provider would have answered, and its request is stopped.
+    let third: unknown = "pending";
+    void memory.recall(RECALL).then((answer) => (third = answer));
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(third).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(third).toEqual({ ok: false, code: "unavailable", detail: SPENT });
+    expect(lastLifetime().aborted).toBe(true);
+  });
+
+  it("charges calls made side by side once", async () => {
+    vi.useFakeTimers();
+    const ok = { ok: true, held: false, entries: [], rendering: "" } as const;
+    readable(provider("Recall Engine", { recall: vi.fn(answersAfter(25_000, ok, lastLifetime)) }));
+    const memory = await activeMemory();
+
+    const together = Promise.all([memory.recall(RECALL), memory.recall(RECALL), memory.recall(RECALL)]);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(await together).toEqual([ok, ok, ok]);
+
+    // 25 s of waiting, not 75: a fourth call still has most of the budget.
+    const fourth = memory.recall(RECALL);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(await fourth).toEqual(ok);
+  });
+
+  it("leaves the built-in store exactly as it was: no budget, however slow the database", async () => {
+    vi.useFakeTimers();
+    readable();
+    builtinRecall.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ ok: true, held: true, entries: [], rendering: "" }), 5 * 60_000),
+        ),
+    );
+    const memory = await activeMemory();
+
+    // Ten minutes of waiting in one step, far past a connected provider's
+    // budget, and both answers are the store's own.
+    for (let call = 0; call < 2; call += 1) {
+      const slow = memory.recall(RECALL);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(await slow).toMatchObject({ ok: true, held: true });
+    }
+    expect(builtinRecall).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a memory integration that is switched on and failing", () => {
+  it("refuses, naming it and why, instead of quietly writing into the built-in store", async () => {
+    // The operator believes the engine is serving. Falling back would put this
+    // run's memory in a store they are not looking at and split the
+    // deployment's memory in two.
+    deployment([], [
+      {
+        name: "Recall Engine",
+        state: {
+          status: "failing",
+          connection: "failing",
+          usable: false,
+          failure: { reason: "credential_rejected", message: "The engine refused the API key" },
+        },
+      },
+    ]);
+
+    const memory = await activeMemory();
+
+    expect(memory.refusal).toEqual({
+      code: "unavailable",
+      detail:
+        "Recall Engine is switched on for memory and its connection is failing (The engine refused the API key), so memory was not used. Fix it on the Integrations page, or disable it there to use the built-in memory",
+    });
+    expect(await memory.observe(OBSERVE)).toMatchObject({ ok: false, code: "unavailable" });
+    expect(builtinObserve).not.toHaveBeenCalled();
+  });
+
+  it("serves the built-in store once an admin switches it off", async () => {
+    deployment([], [
+      {
+        name: "Recall Engine",
+        state: { status: "disabled", enabled: false, connection: "failing", usable: false },
+      },
+    ]);
+
+    const memory = await activeMemory();
+
+    expect(memory.refusal).toBeNull();
+    expect(memory.id).toBe("builtin");
+  });
+
+  it("serves the built-in store when the engine was never connected", async () => {
+    deployment([], [
+      { name: "Recall Engine", state: { status: "not_connected", connection: "not_connected", usable: false } },
+    ]);
+
+    expect((await activeMemory()).id).toBe("builtin");
+  });
+
+  it("counts toward two providers being switched on, rather than handing memory to the other", async () => {
+    deployment(
+      [provider("Recall Engine", { recall: vi.fn() })],
+      [
+        {
+          name: "Second Engine",
+          state: { status: "failing", connection: "failing", usable: false },
+        },
+      ],
+    );
+
+    expect((await activeMemory()).refusal).toMatchObject({
+      code: "ambiguous",
+      detail: expect.stringContaining("Disable all but one of them on the Integrations page"),
+    });
+  });
+});
+
+describe("what memory copies out of a provider", () => {
+  it("takes the connection's key out of a thrown message and out of a refusal", async () => {
+    // Every caller logs `detail` and a run shows it. A provider that quotes
+    // the header it was sent is ordinary.
+    readable(
+      provider("Recall Engine", {
+        observe: async () => {
+          throw new Error(`401: Authorization "Token ${SECRET}" rejected`);
+        },
+        recall: async () => ({ ok: false, code: "rejected", detail: `key ${SECRET} is not allowed` }),
+      }),
+    );
+    const memory = await activeMemory();
+
+    const write = await memory.observe(OBSERVE);
+    const read = await memory.recall(RECALL);
+
+    expect(write).toEqual({
+      ok: false,
+      code: "unavailable",
+      detail: 'Recall Engine failed to store it: 401: Authorization "Token [redacted]" rejected',
+    });
+    expect(read).toEqual({ ok: false, code: "rejected", detail: "key [redacted] is not allowed" });
+  });
+
+  it("takes it out of what the admin half throws, and still lets it throw", async () => {
+    readable(
+      provider("Recall Engine", {
+        recall: vi.fn(),
+        observe: vi.fn(),
+        store: {
+          list: async () => {
+            throw new Error(`listing refused for ${SECRET}`);
+          },
+          read: vi.fn(),
+          forget: vi.fn(),
+        },
+      }),
+    );
+
+    await expect((await activeMemory()).store?.list({})).rejects.toThrow(
+      "listing refused for [redacted]",
+    );
   });
 });

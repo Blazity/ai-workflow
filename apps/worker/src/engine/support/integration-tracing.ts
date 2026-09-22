@@ -46,7 +46,7 @@ export async function agentTracingPlans(input: {
   };
 
   const integrations = await usableIntegrations({
-    signal: AbortSignal.timeout(TRACING_RESOLVE_TIMEOUT_MS),
+    lifetime: AbortSignal.timeout(TRACING_RESOLVE_TIMEOUT_MS),
     filter: (manifest) => manifest.capabilities.includes("agent_tracing"),
   });
 

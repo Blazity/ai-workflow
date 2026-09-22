@@ -195,9 +195,12 @@ Memory is the one capability core serves by itself. A deployment that
 connects nothing uses the built-in store, which is a core module rather than
 a package because it needs core's database. Connecting a memory integration
 **replaces** that store; disabling the integration returns the deployment to
-the built-in store, which was not touched in between. Settings that cannot be
-read never fall back to the built-in store: that would split a deployment's
-memory across two stores with nobody told.
+the built-in store, which was not touched in between. Two things never fall
+back to the built-in store, because either would split a deployment's memory
+across two stores with nobody told: settings that cannot be read, and a
+memory integration that is enabled but Failing (a refused key, say). Runs
+then go on without memory and say which provider failed. Two enabled memory
+integrations are refused the same way until an admin disables all but one.
 
 The port (`integrations/sdk/memory.ts`) was designed against the built-in
 store and the published APIs of Mem0 and Zep. Read its comments whole; the
@@ -337,11 +340,15 @@ shape: every path out of both methods is an answer.
 
 Two facts about how core calls a memory adapter, because they decide how you
 write one. Core resolves the provider once per step and may make many calls
-through it (reading memory into one prompt is up to `1 + 2N` recalls), so your
-adapter's `ctx.signal` is a single 30 second window that every call in that
-step shares
-(`apps/worker/src/engine/support/memory-runtime.ts`); a request made after it
-closed fails at once, and must come back as `unavailable`. And a run is not
+through it (reading memory into one prompt is up to `1 + 2N` recalls). Each
+request is bounded by its own attempt timeout, and all of them together by a
+budget of 60 seconds of time spent waiting on your provider in that step
+(`MEMORY_CALL_BUDGET_MS` in `apps/worker/src/engine/support/memory-runtime.ts`).
+Time the step spends elsewhere, on a model call between a read and a write,
+is not charged. When the budget runs out core aborts `ctx.signal`, the call
+in flight and every later one in that step answer `unavailable` at once, and
+your adapter must turn an aborted request into `unavailable` too, never a
+throw. And a run is not
 yet held to the memory provider it started with: the comparison exists and no
 call site passes it a pin, so a run in flight when an admin connects you may
 read from the built-in store and write to you.
@@ -551,16 +558,22 @@ widens to `string`.
   retried unless you pass `retries`, because repeating a write after an
   ambiguous 5xx reports a conflict for work that landed. A non-2xx response is
   returned, not thrown. It is bound to `ctx.signal`, and a `signal` you pass
-  in its options is replaced by that one.
+  in its options is honoured alongside it, across retries and the waits
+  between them. A thrown error keeps its `name` (`TimeoutError`,
+  `AbortError`) and has this connection's secrets taken out of its message.
 - **`ctx.log`**: pino's argument order, fields first, then an event name in
   snake_case: `ctx.log.info({ matches }, "hippo_search_answered")`. Secrets
   are redacted.
-- **`ctx.signal`**: a deadline set by whatever core is doing when it calls
-  you, and nothing more: it is not tied to a run being cancelled. A block has
-  240 seconds, a connection test 20, a page reader 20, a webhook request 120,
-  `beginRun` 60, a health probe about 4, and a capability adapter 30 from the
-  moment core resolved it (for memory, shared by every call in that step; see
-  "Memory"). Pass it to anything you wait on that is not `ctx.http`.
+- **`ctx.signal`**: the context's lifetime, set by whatever core is doing
+  when it calls you. It is not tied to a run being cancelled. Work with a
+  deadline of its own gets that deadline: a block has 240 seconds, a
+  connection test 20, a page reader 20, a webhook request 120, `beginRun` 60,
+  a health probe about 4. A capability adapter core holds for a stretch of
+  work (a poll pass, a run's downloads) gets a lifetime that does not abort on
+  its own, so each of your requests is bounded by its attempt timeout
+  instead; memory is the exception, aborted once your provider has used up
+  the time core gives memory in one step (see "Memory"). Pass it to anything
+  you wait on that is not `ctx.http`.
 - **`ctx.webhookUrl`**: where this deployment receives your deliveries, for a
   health check that compares it with what the provider holds. Absent when
   the deployment does not know its public URL.
