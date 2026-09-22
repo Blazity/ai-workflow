@@ -410,7 +410,7 @@ beforeEach(() => {
   state.states = new Map([["slack", { enabled: true }]]);
   state.observations = [];
   state.dispatch.mockReset().mockResolvedValue({ result: "started" });
-  state.legacyGate.mockReset();
+  state.legacyGate.mockReset().mockResolvedValue({ status: "dispatched", runId: "gate-run" });
   state.boundPipeline = null;
   state.workflowPush = {};
   state.suppressPush = false;
@@ -843,7 +843,7 @@ describe("POST /webhooks/:id", () => {
         reason: "ignored_repository_not_enabled",
       });
 
-      state.dispatch.mockResolvedValue({ result: "dispatched", runId: "run-77" });
+      state.dispatch.mockResolvedValue({ result: "started", runId: "run-77" });
 
       const started = await app()(githubCheckRunRequest());
       await Promise.all(deferred);
@@ -878,9 +878,10 @@ describe("POST /webhooks/:id", () => {
       await Promise.all(deferred);
 
       expect(response.status).toBe(202);
-      // The lost trigger is what the answer says, ahead of the post-PR gate
-      // that did start: it is the half somebody has to act on.
+      // The definition owns the delivery even though no run started for it
+      // yet, so the post-PR gate does not start beside it.
       expect(await response.json()).toEqual({ status: "ignored", reason: "at_capacity" });
+      expect(state.legacyGate).not.toHaveBeenCalled();
     });
 
     it("still answers 5xx when the dispatch itself failed", async () => {
@@ -917,3 +918,135 @@ describe("POST /webhooks/:id", () => {
     expect(state.legacyGate).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * What a provider's delivery log and this deployment's health screen say about
+ * a delivery of pull request events. Both are written from the outcome, once
+ * it is known: a delivery this deployment failed to act on must never read as
+ * accepted, and one it acted on must say what it did, not merely that the
+ * integration found something to dispatch.
+ */
+describe("the verdict on a pull request delivery", () => {
+  beforeEach(() => {
+    state.usable = [connectedGitLab()];
+    state.states = new Map([["gitlab", { enabled: true }]]);
+  });
+
+  async function deliver(request: Request) {
+    const response = await app()(request);
+    await Promise.all(deferred);
+    return response;
+  }
+
+  it("reports the run a later candidate started after an earlier one found no definition", async () => {
+    // An opened merge request is both ready and created, in that order.
+    state.dispatch
+      .mockResolvedValueOnce({ result: "no_definition" })
+      .mockResolvedValueOnce({ result: "started", runId: "run-created" });
+
+    const response = await deliver(gitlabRequest());
+
+    expect(await response.json()).toEqual({ status: "dispatched", runId: "run-created" });
+    expect(state.legacyGate).not.toHaveBeenCalled();
+    expect(state.observations).toEqual([
+      { integrationId: "gitlab", checkId: "webhook-delivery", outcome: "accepted", reason: "request_accepted" },
+    ]);
+  });
+
+  it("reports the gate's run when no definition wanted the merge request", async () => {
+    state.dispatch.mockResolvedValue({ result: "no_definition" });
+
+    const response = await deliver(gitlabRequest());
+
+    expect(state.legacyGate).toHaveBeenCalledOnce();
+    expect(await response.json()).toEqual({
+      status: "dispatched",
+      reason: "post_pr_gate",
+      runId: "gate-run",
+    });
+  });
+
+  it("reports the gate's own refusal instead of claiming it dispatched", async () => {
+    state.dispatch.mockResolvedValue({ result: "no_definition" });
+    state.legacyGate.mockResolvedValue({ status: "ignored", reason: "lock_busy" });
+
+    const response = await deliver(gitlabRequest());
+
+    expect(await response.json()).toEqual({ status: "ignored", reason: "lock_busy" });
+  });
+
+  it("reports a claimed delivery that started nothing as ignored, with the reason", async () => {
+    state.dispatch.mockResolvedValue({ result: "ignored_untrusted_event" });
+
+    const response = await deliver(gitlabPipelineRequest());
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ status: "ignored", reason: "ignored_untrusted_event" });
+  });
+
+  it("does not start the legacy gate on a delivery a definition claimed at capacity", async () => {
+    // The definition owns the event and its envelope waits for capacity; a
+    // gate run beside it would review the same merge request twice.
+    state.dispatch.mockResolvedValue({ result: "at_capacity" });
+
+    const response = await deliver(gitlabRequest());
+
+    expect(await response.json()).toEqual({ status: "ignored", reason: "at_capacity" });
+    expect(state.legacyGate).not.toHaveBeenCalled();
+  });
+
+  it("records a retryable dispatch failure as rejected, never accepted", async () => {
+    state.dispatch.mockResolvedValue({ result: "error", diagnosticId: "diag-1" });
+
+    const response = await deliver(gitlabRequest());
+
+    expect(response.status).toBe(503);
+    expect(state.observations).toEqual([
+      { integrationId: "gitlab", checkId: "webhook-delivery", outcome: "rejected", reason: "trigger_error" },
+    ]);
+  });
+
+  it("records a dispatch that threw as rejected, never accepted", async () => {
+    state.dispatch.mockRejectedValue(new Error("database went away"));
+
+    const response = await deliver(gitlabRequest());
+
+    expect(response.status).toBe(500);
+    expect(state.observations).toEqual([
+      { integrationId: "gitlab", checkId: "webhook-delivery", outcome: "rejected", reason: "handler_failed" },
+    ]);
+  });
+
+  it("records an integration that threw while receiving as rejected", async () => {
+    const webhook = integrationRuntime("gitlab")!.webhook!;
+    const receive = vi.spyOn(webhook, "receive").mockRejectedValueOnce(new Error("parser bug"));
+
+    const response = await deliver(gitlabRequest());
+    receive.mockRestore();
+
+    expect(response.status).toBe(500);
+    expect(state.observations).toEqual([
+      { integrationId: "gitlab", checkId: "webhook-delivery", outcome: "rejected", reason: "handler_failed" },
+    ]);
+  });
+
+  it("refuses a wrong token without reading the automation account", async () => {
+    // The endpoint is public: a forged delivery costs the one connection read
+    // it needs to find the secret, and nothing more.
+    const forged = new Request("http://localhost/webhooks/gitlab", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitlab-token": "wrong",
+        "x-gitlab-event": "Note Hook",
+      },
+      body: "{}",
+    });
+
+    const response = await deliver(forged);
+
+    expect(response.status).toBe(401);
+    expect(state.botLogin).not.toHaveBeenCalled();
+  });
+});
+

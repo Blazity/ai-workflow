@@ -22,7 +22,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   pushSuppressionInputs: [] as Record<string, unknown>[],
   suppressPush: true,
-  gate: vi.fn(),
+  gate: vi.fn(async () => ({ status: "dispatched", runId: "gate-run" })),
   dispatch: vi.fn(async () => ({ result: "started", runId: "run-1" })),
   pusher: undefined as string | undefined,
 }));
