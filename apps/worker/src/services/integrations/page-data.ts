@@ -11,10 +11,12 @@
  * arguments beyond the context, and nothing a page does can reach the write
  * surface of a connection.
  */
-import type { JsonValue } from "@shared/contracts";
+import { INTEGRATION_PROVIDER_WAIT_MS, type JsonValue } from "@shared/contracts";
 
-/** Bounded well under the invocation ceiling; a page is a person waiting. */
-const PAGE_READ_TIMEOUT_MS = 20_000;
+/** Bounded well under the invocation ceiling; a page is a person waiting. The
+ *  dashboard waits this long plus its own margin, so the one number lives in
+ *  the contract both sides read. */
+const PAGE_READ_TIMEOUT_MS = INTEGRATION_PROVIDER_WAIT_MS;
 
 export type IntegrationPageDataResult =
   | { readonly status: "ok"; readonly value: JsonValue }
