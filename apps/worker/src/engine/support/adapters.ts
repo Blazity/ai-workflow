@@ -16,10 +16,35 @@ import type {
 } from "../../adapters/run-registry/types.js";
 
 export interface Adapters {
+  /** The tracker, or a throw carrying the sentence a person reads when there
+   *  is none. For a caller that cannot do its work without one. */
   issueTracker: IssueTrackerAdapter;
   vcs: VCSAdapter;
   messaging: MessagingSender;
   runRegistry: RunRegistryAdapter & ThreadStore;
+}
+
+/**
+ * The adapters as `createAdapters` built them, with the tracker resolution
+ * they were built from.
+ *
+ * `issueTrackerResolution` is the same answer `issueTracker` reads, as data
+ * instead of a throw: the tracker, or the refusal (nothing connected, two
+ * connected, settings unreadable) with its reason. It is for a caller that has
+ * work to do either way (the poller's claim reconciliation, a cancel that moves
+ * a ticket only when there is one) or that turns the refusal into an answer of
+ * its own (an MCP tool). One resolution behind both fields, so they cannot
+ * disagree the way two separate reads can when a tracker is connected between
+ * them.
+ */
+export interface ResolvedAdapters extends Adapters {
+  readonly issueTrackerResolution: ResolvedIssueTracker;
+}
+
+/** The tracker when there is one, and nothing when there is not: for a caller
+ *  whose tracker work is optional and which has nothing to say about why. */
+export function issueTrackerIfConnected(adapters: ResolvedAdapters): IssueTrackerAdapter | undefined {
+  return adapters.issueTrackerResolution.ok ? adapters.issueTrackerResolution.adapter : undefined;
 }
 
 export interface VcsAdapterTarget {
@@ -99,7 +124,7 @@ export async function createAdapters(
    * notification wants.
    */
   integrationPins?: readonly IntegrationConnectionPin[],
-): Promise<Adapters> {
+): Promise<ResolvedAdapters> {
   const runRegistry = createConnectedPostgresRunRegistry();
   let vcs: VCSAdapter | undefined;
   // Which provider carries a message is the deployment's answer, read at each
@@ -111,10 +136,10 @@ export async function createAdapters(
   // connected, two connected, settings unreadable). An UNEXPECTED throw is a
   // different thing, and before this it left `createAdapters` entirely: the
   // poller calls this before its first phase, so a module that failed to load
-  // inside the resolution killed the whole tick rather than the ticket half.
-  // It lands on the same getter as every other refusal now, carrying what
-  // threw, so a caller that never touches the tracker is unaffected and one
-  // that does is told.
+  // inside the resolution killed the whole tick rather than the ticket phases.
+  // It lands on the same answer as every other refusal now (the getter and
+  // `issueTrackerResolution`), carrying what threw, so a caller that never
+  // touches the tracker is unaffected and one that does is told.
   const tracker = await resolveActiveIssueTracker(integrationPins).catch(
     (error): ResolvedIssueTracker => ({
       ok: false,
@@ -129,6 +154,7 @@ export async function createAdapters(
       if (!tracker.ok) throw new Error(tracker.reason);
       return tracker.adapter;
     },
+    issueTrackerResolution: tracker,
     get vcs() {
       // No target, no adapter. Every production reader of this getter builds
       // its adapters from a pull request or a repository it is already holding

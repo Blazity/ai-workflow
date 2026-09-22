@@ -68,16 +68,36 @@ vi.mock("../../db/repositories/repository-catalog.js", async (importOriginal) =>
   getConnectedRepositoryCatalogStateRow: (...args: any[]) =>
     mocks.getConnectedRepositoryCatalogStateRow(...args),
 }));
-vi.mock("../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({
-    issueTracker: {
-      ticketsInStatus: (...args: any[]) => mocks.discoverTickets(...args),
-      postComment: vi.fn(async () => null),
+// The adapters as `createAdapters` builds them: the getter and the resolution
+// read ONE answer, the one the tracker double further down gives, so a case
+// that changes the resolution changes both, as the real function does. The
+// real function's catch, which turns a resolver that throws into an
+// `unreadable` answer, is proved against it in `issue-tracker-runtime.test.ts`.
+vi.mock("../../engine/support/adapters.js", async (importOriginal) => {
+  const runtime = await import("../../engine/support/issue-tracker-runtime.js");
+  const issueTracker = {
+    ticketsInStatus: (...args: any[]) => mocks.discoverTickets(...args),
+    postComment: vi.fn(async () => null),
+  };
+  return {
+    ...(await importOriginal<typeof import("../../engine/support/adapters.js")>()),
+    createAdapters: async () => {
+      const resolved = await runtime.resolveActiveIssueTracker();
+      const issueTrackerResolution = resolved.ok
+        ? { ...resolved, adapter: issueTracker }
+        : resolved;
+      return {
+        get issueTracker() {
+          if (!issueTrackerResolution.ok) throw new Error(issueTrackerResolution.reason);
+          return issueTracker;
+        },
+        issueTrackerResolution,
+        runRegistry: {},
+        messaging: { notifyForTicket: vi.fn() },
+      };
     },
-    runRegistry: {},
-    messaging: { notifyForTicket: vi.fn() },
-  }),
-}));
+  };
+});
 vi.mock("../../services/dispatch/dispatch.js", () => ({
   dispatchTicket: (...args: any[]) => mocks.dispatchTicket(...args),
 }));
@@ -381,92 +401,168 @@ describe("cron clarification recovery ordering", () => {
     });
   });
 
-  // A deployment can have no issue tracker at all since S12, and reading the
-  // board is a database read that fails transiently on a deployment that has
-  // one. Both used to leave `runPollPass` on its first line, taking every
-  // phase below it with them: no check reconciliation, no webhook drain, no
-  // schedule fired, and nothing said so. The ticket half is the only half that
-  // may stop.
-  // Two shapes, because they reach the tick by different routes and only one
-  // of them was covered. A resolver that ANSWERS a refusal is the deployment
-  // with nothing connected; a resolver that THROWS is a database blip. Both
-  // reach the board read at the top of the ticket half, which is what this
-  // covers. The OTHER route a throw takes, through `createAdapters` before any
-  // phase runs, cannot be seen from here because this suite doubles that
-  // function; it is proved against the real one in
-  // `engine/support/issue-tracker-runtime.test.ts`.
+  // A deployment can have no issue tracker at all since S12, and a connected
+  // one can have settings nobody can read. Neither is a reason to stop what is
+  // not about a ticket's column. Both used to leave the ticket half on its
+  // first line, and that half also held manual-dispatch recovery, the claim
+  // reconciler and both pull request trigger drains, so on such a deployment
+  // no claim was released and no queued trigger ever started. The first shape
+  // is the deployment's configuration and says so at info; the second is a
+  // failure and says so at error.
   it.each([
-    [
-      "answers a refusal",
-      () => ({
-        ok: false,
-        unreadable: false,
-        reason: "No issue tracker is connected on this deployment.",
-      }),
-    ],
-    [
-      "throws",
-      () => {
-        throw new Error("integration settings unreadable");
-      },
-    ],
-  ])(
-    "keeps the rest of the tick running when the tracker resolution %s",
-    async (_shape, answer) => {
-    const { resolveActiveIssueTracker } = await import(
-      "../../engine/support/issue-tracker-runtime.js"
-    );
-    const connected = vi.mocked(resolveActiveIssueTracker).getMockImplementation();
-    vi.mocked(resolveActiveIssueTracker).mockImplementation(answer as never);
+    ["nothing is connected", false, "no_usable_issue_tracker", "info"],
+    ["its settings cannot be read", true, "issue_tracker_unreadable", "error"],
+  ] as const)(
+    "settles claims, manual dispatches and pull request triggers without a board when %s",
+    async (_shape, unreadable, reason, level) => {
+      const { resolveActiveIssueTracker } = await import(
+        "../../engine/support/issue-tracker-runtime.js"
+      );
+      const connected = vi.mocked(resolveActiveIssueTracker).getMockImplementation();
+      vi.mocked(resolveActiveIssueTracker).mockImplementation(
+        async () =>
+          ({
+            ok: false,
+            unreadable,
+            reason: "No issue tracker is connected on this deployment.",
+          }) as never,
+      );
+      mocks.drainOldestPendingTrigger
+        .mockReset()
+        .mockResolvedValue({ result: "started", runId: "run-pr" });
+      mocks.listPendingTriggers.mockResolvedValue([{ subjectKey: "pr:github:acme/app#7" }]);
+      const info = vi.spyOn(logger, "info");
+      const error = vi.spyOn(logger, "error");
+      try {
+        const response = await request();
+
+        expect(response.status).toBe(200);
+        // The run phases that are not about a ticket's column all ran.
+        expect(mocks.recoverManualDispatches).toHaveBeenCalledOnce();
+        expect(mocks.reconcileRuns).toHaveBeenCalledOnce();
+        // With no snapshot of the column and no tracker, which is what makes
+        // the reconciler retain ticket claims and settle every other claim.
+        expect(mocks.reconcileRuns.mock.calls[0]![0]).toBeNull();
+        expect(mocks.reconcileRuns.mock.calls[0]![2]).toBeUndefined();
+        expect(mocks.drainOldestPendingTrigger).toHaveBeenCalledWith(
+          "pr:github:acme/app#7",
+          expect.anything(),
+        );
+        // The housekeeping, as on every tick.
+        expect(reconcilePendingPrChecks).toHaveBeenCalled();
+        expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalled();
+        expect(mocks.runScheduleTriggerPass).toHaveBeenCalled();
+        expect(mocks.sweepOrphanedAwaitingRuns).toHaveBeenCalled();
+        expect(mocks.pruneMcpAudits).toHaveBeenCalled();
+        // The ticket phases did nothing, and say why exactly once, at the
+        // level the reason deserves.
+        expect(mocks.discoverTickets).not.toHaveBeenCalled();
+        expect(mocks.dispatchTicket).not.toHaveBeenCalled();
+        expect(mocks.reconcileAtCapacityQueue).not.toHaveBeenCalled();
+        const skippedAt = (spy: typeof info) =>
+          spy.mock.calls.filter((call) => call[1] === "poll_ticket_phases_skipped");
+        expect(skippedAt(level === "info" ? info : error)).toEqual([
+          [expect.objectContaining({ reason }), "poll_ticket_phases_skipped"],
+        ]);
+        expect(skippedAt(level === "info" ? error : info)).toEqual([]);
+        await expect(response.json()).resolves.toMatchObject({
+          status: "ok",
+          ticketPhases: "skipped",
+          ticketPhasesReason: reason,
+          claimReconciliation: "ran",
+          discovered: 0,
+          started: 0,
+          pendingRecovered: 1,
+        });
+      } finally {
+        vi.mocked(resolveActiveIssueTracker).mockImplementation(connected!);
+        info.mockRestore();
+        error.mockRestore();
+      }
+    },
+  );
+
+  // A connected tracker that fails (a 401, a timeout) is the other way to have
+  // no board, and it is a failure: logged at error with what threw, and it
+  // costs the ticket phases only. It used to throw from the middle of the
+  // ticket half and read in the log exactly like a deployment with no tracker.
+  it("settles claims without a board when reading the AI column fails", async () => {
+    mocks.discoverTickets.mockRejectedValue(new Error("Jira answered 401"));
+    const error = vi.spyOn(logger, "error");
     try {
       const response = await request();
 
       expect(response.status).toBe(200);
-      // The housekeeping half, each one a phase that was unreachable before.
+      expect(mocks.reconcileRuns).toHaveBeenCalledOnce();
+      expect(mocks.reconcileRuns.mock.calls[0]![0]).toBeNull();
+      expect(mocks.recoverManualDispatches).toHaveBeenCalledOnce();
+      expect(mocks.listPendingTriggers).toHaveBeenCalled();
       expect(reconcilePendingPrChecks).toHaveBeenCalled();
-      expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalled();
       expect(mocks.runScheduleTriggerPass).toHaveBeenCalled();
-      expect(mocks.sweepOrphanedAwaitingRuns).toHaveBeenCalled();
-      expect(mocks.pruneMcpAudits).toHaveBeenCalled();
-      // The ticket half did nothing, and says so rather than reading like a
-      // quiet tick, which reports the same zeroes.
       expect(mocks.dispatchTicket).not.toHaveBeenCalled();
-      expect(mocks.reconcileRuns).not.toHaveBeenCalled();
-      expect(mocks.reconcileAtCapacityQueue).not.toHaveBeenCalled();
+      expect(
+        error.mock.calls.filter((call) => call[1] === "poll_ticket_phases_skipped"),
+      ).toEqual([
+        [
+          expect.objectContaining({
+            reason: "board_read_failed",
+            error: "Jira answered 401",
+            stack: expect.stringContaining("Jira answered 401"),
+          }),
+          "poll_ticket_phases_skipped",
+        ],
+      ]);
       await expect(response.json()).resolves.toMatchObject({
         status: "ok",
         ticketPhases: "skipped",
-        discovered: 0,
-        started: 0,
+        ticketPhasesReason: "board_read_failed",
+        claimReconciliation: "ran",
       });
     } finally {
-      vi.mocked(resolveActiveIssueTracker).mockImplementation(connected!);
+      error.mockRestore();
     }
-    },
-  );
+  });
 
-  // The second door onto the same failure. `createAdapters` freezes its
-  // resolution when the pass starts; the board is read later. A tracker
-  // connected between the two, or a read that failed at the first and
-  // succeeded at the second, makes `adapters.issueTracker` throw from the
-  // MIDDLE of the ticket half, past a containment that only covered the board
-  // read. The housekeeping below has to survive that too.
-  it("keeps the rest of the tick running when the tracker throws mid-half", async () => {
-    mocks.discoverTickets.mockRejectedValue(
-      new Error("No issue tracker is connected on this deployment."),
-    );
+  // The records that say which subjects a new run must not replace and which
+  // claims a clarification is waiting on. Without them the reconciler would
+  // cancel those claims as orphans and dispatch would replace them, so both
+  // stop; recovering manual dispatches and queued triggers needs neither.
+  it("neither reconciles nor dispatches when the protection records cannot be read", async () => {
+    mocks.classifyProtectedClarifications.mockRejectedValue(new Error("db down"));
+    mocks.listPendingTriggers.mockResolvedValue([{ subjectKey: "pr:github:acme/app#8" }]);
 
     const response = await request();
 
     expect(response.status).toBe(200);
-    expect(reconcilePendingPrChecks).toHaveBeenCalled();
-    expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalled();
-    expect(mocks.runScheduleTriggerPass).toHaveBeenCalled();
-    expect(mocks.pruneMcpAudits).toHaveBeenCalled();
+    expect(mocks.reconcileRuns).not.toHaveBeenCalled();
     expect(mocks.dispatchTicket).not.toHaveBeenCalled();
+    expect(mocks.recoverManualDispatches).toHaveBeenCalledOnce();
+    expect(mocks.drainOldestPendingTrigger).toHaveBeenCalledWith(
+      "pr:github:acme/app#8",
+      expect.anything(),
+    );
     await expect(response.json()).resolves.toMatchObject({
-      status: "ok",
       ticketPhases: "skipped",
+      ticketPhasesReason: "dispatch_protection_unreadable",
+      claimReconciliation: "skipped",
+      discovered: 2,
+    });
+  });
+
+  // A reconciler that throws costs the claims it did not release, and nothing
+  // else: dispatch is atomic against the claims that remain.
+  it("keeps dispatching when the claim reconciliation throws", async () => {
+    mocks.reconcileRuns.mockRejectedValue(new Error("db down"));
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    expect(mocks.dispatchTicket).toHaveBeenCalled();
+    expect(mocks.listPendingTriggers).toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      ticketPhases: "ran",
+      ticketPhasesReason: null,
+      claimReconciliation: "failed",
     });
   });
 

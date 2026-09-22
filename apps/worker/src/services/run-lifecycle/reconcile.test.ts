@@ -278,6 +278,100 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(onReleased).not.toHaveBeenCalled();
   });
 
+  // No board: no tracker connected, its settings unreadable, or the column read
+  // failed. The poller used to skip this whole function then, so no claim of
+  // any kind was released on such a deployment. Now it runs, and the one thing
+  // it cannot decide without a board is anything about a ticket's column.
+  describe("without a board", () => {
+    const failedLongAgo: FailedTicketMeta = {
+      runId: "run-failed",
+      error: "boom",
+      failedAt: new Date(Date.now() - 24 * 60 * 60_000).toISOString(),
+    };
+
+    it("retains a ticket claim the orphan path would cancel with one", async () => {
+      const onCancelled = vi.fn();
+      const { reconcileRuns } = await import("./reconcile.js");
+      mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
+
+      // The control: with a board that no longer lists the ticket, it goes.
+      const withBoard = registry([entry()]);
+      expect(
+        await reconcileRuns(new Set(), withBoard, issueTracker("Done"), onCancelled),
+      ).toEqual({ cancelled: 1, cleaned: 0 });
+
+      mockCancelRunDetailed.mockClear();
+      onCancelled.mockClear();
+      const withoutBoard = registry([entry(), entry({ kind: "manual_ticket", subjectKey: "ticket:jira:PROJ-2", ticketKey: "PROJ-2" })]);
+      expect(
+        await reconcileRuns(null, withoutBoard, issueTracker("Done"), onCancelled),
+      ).toEqual({ cancelled: 0, cleaned: 0 });
+      expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+      expect(withoutBoard.release).not.toHaveBeenCalled();
+      expect(onCancelled).not.toHaveBeenCalled();
+    });
+
+    it("retains ticket claims when the tracker cannot be resolved for the pass", async () => {
+      const runtime = await import("../../engine/support/issue-tracker-runtime.js");
+      vi.mocked(runtime.resolveActiveIssueTracker).mockResolvedValueOnce({
+        ok: false,
+        unreadable: true,
+        reason: "settings unreadable",
+      });
+      const runRegistry = registry([entry()]);
+      const { reconcileRuns } = await import("./reconcile.js");
+
+      expect(
+        await reconcileRuns(new Set(), runRegistry, issueTracker("Done")),
+      ).toEqual({ cancelled: 0, cleaned: 0 });
+      expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+    });
+
+    it("still releases a stale reservation and a finished pull request run", async () => {
+      const reserved = entry({
+        state: "reserved",
+        runId: null,
+        updatedAt: Date.now() - 10 * 60_000,
+      });
+      const pr = entry({
+        subjectKey: "pr:github:acme/app#7",
+        ticketKey: null,
+        kind: "pr_trigger",
+        ownerToken: "owner-pr",
+        runId: "run-pr",
+      });
+      const runRegistry = registry([reserved, pr]);
+      mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+      const onReleased = vi.fn().mockResolvedValue(undefined);
+      const { reconcileRuns } = await import("./reconcile.js");
+
+      expect(
+        await reconcileRuns(null, runRegistry, undefined, undefined, onReleased),
+      ).toEqual({ cancelled: 0, cleaned: 2 });
+      expect(runRegistry.releaseReservation).toHaveBeenCalledWith(
+        reserved.subjectKey,
+        reserved.ownerToken,
+      );
+      expect(runRegistry.release).toHaveBeenCalledWith(pr.subjectKey, pr.ownerToken, pr.runId);
+      expect(onReleased).toHaveBeenCalledWith(reserved.subjectKey);
+      expect(onReleased).toHaveBeenCalledWith(pr.subjectKey);
+    });
+
+    it("leaves failed marks alone, which only a board can tell apart", async () => {
+      const { reconcileRuns } = await import("./reconcile.js");
+
+      // The control: with a board that does not list the ticket, its old mark
+      // is cleared.
+      const withBoard = registry([], [{ ticketKey: "PROJ-9", meta: failedLongAgo }]);
+      await reconcileRuns(new Set(), withBoard);
+      expect(withBoard.clearFailedMark).toHaveBeenCalledWith("PROJ-9");
+
+      const withoutBoard = registry([], [{ ticketKey: "PROJ-9", meta: failedLongAgo }]);
+      await reconcileRuns(null, withoutBoard);
+      expect(withoutBoard.clearFailedMark).not.toHaveBeenCalled();
+    });
+  });
+
   it("owner-releases a terminal synthetic PR run and drains its pending event", async () => {
     const bound = entry({
       subjectKey: "pr:github:acme/app#7",

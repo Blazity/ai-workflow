@@ -9,6 +9,7 @@
  * module per case.
  */
 import type { SettingsSnapshot } from "@shared/contracts";
+import type { ResolvedIssueTracker } from "../../engine/support/issue-tracker-runtime.js";
 import { env } from "../../infra/vcs-config.js";
 
 /** Provider ids that carry a signed webhook core itself verifies. The issue
@@ -39,11 +40,24 @@ export type WebhookProviderId = "email";
 export async function ticketBoardSettings(
   settings: SettingsSnapshot,
 ): Promise<TicketBoardSettings> {
-  const { resolveActiveIssueTracker, trackerIdentityOf } = await import(
+  const { resolveActiveIssueTracker } = await import(
     "../../engine/support/issue-tracker-runtime.js"
   );
   const tracker = await resolveActiveIssueTracker();
   if (!tracker.ok) throw new Error(tracker.reason);
+  return ticketBoardOf(tracker, settings);
+}
+
+/**
+ * The same board, from a tracker resolution the caller already holds. The
+ * poller resolves the tracker once per tick for everything it does with it,
+ * and a second read here could answer differently from the first.
+ */
+export async function ticketBoardOf(
+  tracker: Extract<ResolvedIssueTracker, { ok: true }>,
+  settings: SettingsSnapshot,
+): Promise<TicketBoardSettings> {
+  const { trackerIdentityOf } = await import("../../engine/support/issue-tracker-runtime.js");
   return {
     trackerName: tracker.name,
     trackerIdentity: trackerIdentityOf(tracker.id, tracker.wiring.baseUrl),

@@ -21,10 +21,12 @@ export {
   outboundEmailSettings,
   providerWebhookSecret,
   resendWebhookSecret,
+  ticketBoardOf,
   ticketBoardSettings,
   webhookTriggerEncryptionKey,
 } from "./integration-settings.js";
 export type {
+  TicketBoardSettings,
   WebhookProviderId,
 } from "./integration-settings.js";
 export {
