@@ -51,6 +51,8 @@ export type { IntegrationRunStart, IntegrationRunState } from "./run-state";
 
 export {
   INTEGRATION_CAPABILITIES,
+  NESTED_ADAPTER_MEMBERS,
+  type NestedAdapterRole,
   type IntegrationCapabilityAccess,
   type IntegrationCapabilityId,
   type IntegrationCapabilityPorts,
@@ -61,8 +63,10 @@ export {
 } from "./capabilities";
 
 export {
+  connectionValueProblem,
   defineIntegration,
   defineIntegrationBlock,
+  type ConnectionValueProblem,
   type ConnectionField,
   type IntegrationBlockManifest,
   type IntegrationBlockOutput,
@@ -103,7 +107,13 @@ export {
   type IntegrationRuntimeDefinition,
 } from "./runtime";
 
-export { FatalError } from "./errors";
+export { ConnectionValueError, FatalError } from "./errors";
+
+export {
+  readProviderFailure,
+  refusedOrThrow,
+  type ProviderFailure,
+} from "./provider-failure";
 
 export {
   boundRepositoryProfileBundle,

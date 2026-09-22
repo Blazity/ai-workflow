@@ -19,6 +19,7 @@ import type {
   StoredIntegrationVersion,
 } from "../../db/repositories/integrations.js";
 import { readIntegrationSecretEnvelope } from "../../infra/secrets-crypto.js";
+import { malformedValueFailure } from "./value-problems.js";
 
 /**
  * The one place a status comes from.
@@ -113,6 +114,8 @@ export function resolveIntegrationState(input: ResolveIntegrationInput): Integra
       ? environmentReadiness(environmentPresence)
       : storedReadiness(storedPresence, secretFailure);
 
+  const malformed = malformedValueInUse({ fields, source, environment, active });
+
   const verification = resolveVerification({
     source,
     active,
@@ -135,7 +138,10 @@ export function resolveIntegrationState(input: ResolveIntegrationInput): Integra
     verification.state === "failed" && verification.failure.reason !== "provider_unreachable"
       ? verification.failure
       : null;
-  const failure = readiness.failure ?? testFailure;
+  // A value that cannot be what its field is fails the connection before any
+  // test does: no provider needs to be asked about a site address without
+  // `https://`, and one that was would be filed as an outage.
+  const failure = readiness.failure ?? malformed ?? testFailure;
   const connection: IntegrationConnectionStatus = failure
     ? "failing"
     : readiness.connection;
@@ -422,6 +428,34 @@ function preparedFrom(
   };
 }
 
+/**
+ * The first value in use that cannot be what its field is, as the failure that
+ * names it. Every value of an environment source is read, secrets included,
+ * since the environment holds them as text; of a stored source only the plain
+ * config, because a stored secret is ciphertext here. Reading a stored secret
+ * is `readConnectionValues`' job, and it refuses the same value with the same
+ * sentence, so a run and a test never send one.
+ */
+function malformedValueInUse(input: {
+  readonly fields: readonly ConnectionField[];
+  readonly source: IntegrationSource;
+  readonly environment: IntegrationEnvironmentReader;
+  readonly active: StoredIntegrationVersion | null;
+}): IntegrationFailure | null {
+  for (const field of input.fields) {
+    const raw =
+      input.source === "environment"
+        ? input.environment.value(field.env)
+        : field.secret
+          ? undefined
+          : input.active?.config[field.key];
+    if (!isSet(raw)) continue;
+    const failure = malformedValueFailure(field, normalizeConnectionValue(raw, field), input.source);
+    if (failure) return failure;
+  }
+  return null;
+}
+
 interface Readiness {
   readonly connection: IntegrationConnectionStatus;
   readonly failure: IntegrationFailure | null;
@@ -475,28 +509,45 @@ function resolveVerification(input: {
   readonly currentFingerprint: string;
 }): IntegrationVerification {
   const { source, active, lastTest, currentFingerprint } = input;
-  // Stored values carry their own verdict, because a save tests before it
-  // activates: the version IS the record of what the provider said about it.
-  if (source === "stored" && active) {
-    if (active.testStatus === "failed") {
-      return {
-        state: "failed",
-        at: active.testedAt ?? active.createdAt,
-        failure: {
-          reason: active.testReason ?? "credential_rejected",
-          message: active.testMessage ?? "The connection test failed",
-        },
-      };
-    }
-    if (active.testedAt) return { state: "passed", at: active.testedAt };
-  }
-  if (!lastTest) return { state: "never_tested" };
   // A verdict about values that have since changed says nothing about the ones
   // in use. It goes stale rather than failing the integration, or an admin who
   // fixed a variable by redeploying would still read the old refusal.
-  if (lastTest.fingerprint !== currentFingerprint) {
-    return { state: "stale", at: lastTest.at };
+  const tested =
+    lastTest && lastTest.fingerprint === currentFingerprint ? lastTestVerdict(lastTest) : null;
+  // Stored values carry their own verdict, because a save tests before it
+  // activates: the version IS the record of what the provider said about it
+  // then. A Test pressed later, about exactly these values, is newer news and
+  // wins, the same as for the environment source: a token revoked after the
+  // save reads Failing the moment Test says so, instead of Connected forever.
+  //
+  // A tie goes to the Test: the only way to tie is the save itself, which
+  // writes both records in one statement with the same verdict.
+  if (source === "stored" && active) {
+    const saved = savedVerdict(active);
+    if (saved) return tested && Date.parse(tested.at) >= Date.parse(saved.at) ? tested : saved;
   }
+  if (!lastTest) return { state: "never_tested" };
+  return tested ?? { state: "stale", at: lastTest.at };
+}
+
+/** A verdict somebody recorded, with the moment it was recorded. */
+type RecordedVerdict = Extract<IntegrationVerification, { readonly state: "passed" | "failed" }>;
+
+function savedVerdict(active: StoredIntegrationVersion): RecordedVerdict | null {
+  if (active.testStatus === "failed") {
+    return {
+      state: "failed",
+      at: active.testedAt ?? active.createdAt,
+      failure: {
+        reason: active.testReason ?? "credential_rejected",
+        message: active.testMessage ?? "The connection test failed",
+      },
+    };
+  }
+  return active.testedAt ? { state: "passed", at: active.testedAt } : null;
+}
+
+function lastTestVerdict(lastTest: StoredIntegrationTest): RecordedVerdict {
   if (lastTest.status === "passed") {
     return { state: "passed", at: lastTest.at, ...(lastTest.message ? { message: lastTest.message } : {}) };
   }

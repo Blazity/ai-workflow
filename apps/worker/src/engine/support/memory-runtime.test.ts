@@ -13,7 +13,11 @@
  * fake does, it does through the published `MemoryAdapter` type.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { IntegrationManifest, MemoryAdapter } from "@integrations/sdk";
+import type {
+  ErasedIntegrationRuntime,
+  IntegrationManifest,
+  MemoryAdapter,
+} from "@integrations/sdk";
 import type { IntegrationState } from "@shared/contracts";
 
 const resolveUsableIntegrations = vi.fn();
@@ -47,6 +51,7 @@ vi.mock("../../memory/builtin/adapter.js", () => ({
 }));
 
 import { redactedError } from "../../services/integrations/context.js";
+import { redactingRuntime } from "../../services/integrations/usable.js";
 import { activeMemory, MEMORY_CALL_BUDGET_MS } from "./memory-runtime.js";
 
 const SUBJECT = { key: "repo:github:acme/api", label: "acme/api" };
@@ -68,18 +73,22 @@ function manifestOf(name: string): IntegrationManifest {
 
 /**
  * One usable integration, as `resolveUsableIntegrations` hands it over: its
- * context carries the lifetime the caller asked for, and core's redactor
- * takes this connection's key out of what it says.
+ * context carries the lifetime the caller asked for, its runtime is behind the
+ * real redaction boundary, and core's redactor takes this connection's key out
+ * of what it says.
  */
 function provider(name: string, adapter: Partial<MemoryAdapter> | null) {
+  const redactError = (error: unknown) => redactedError(error, withoutKey);
   return (lifetime: AbortSignal | undefined) => ({
     manifest: manifestOf(name),
-    runtime: { capabilities: adapter === null ? {} : { memory: () => adapter } },
+    runtime: redactingRuntime(
+      {
+        capabilities: adapter === null ? {} : { memory: () => adapter },
+      } as unknown as ErasedIntegrationRuntime,
+      redactError,
+    ),
     ctx: { signal: lifetime },
-    redaction: {
-      text: withoutKey,
-      error: (error: unknown) => redactedError(error, withoutKey),
-    },
+    redaction: { text: withoutKey, error: redactError },
   });
 }
 

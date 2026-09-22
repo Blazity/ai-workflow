@@ -20,3 +20,24 @@ export class FatalError extends Error {
     this.name = "FatalError";
   }
 }
+
+/**
+ * A connection value that no request can carry, raised before anything is
+ * sent: a header value with a line break in it, a URL that does not parse.
+ * Core's `ctx.http` throws it; an integration never needs to.
+ *
+ * It is a verdict about the VALUES, not an outage and not a refusal by the
+ * provider, which never saw the request: `readProviderFailure` reads it as a
+ * refusal and core files it as `value_malformed`. `field` is the key of the
+ * connection field the value came from, and the message names that field's
+ * label and never repeats the value, because the value is usually a secret.
+ */
+export class ConnectionValueError extends Error {
+  readonly field: string;
+
+  constructor(field: string, message: string) {
+    super(message);
+    this.name = "ConnectionValueError";
+    this.field = field;
+  }
+}

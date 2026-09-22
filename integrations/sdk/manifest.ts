@@ -133,9 +133,58 @@ export interface ConnectionField {
   /**
    * How the value is checked and entered. `integer` reaches `ctx.connection`
    * as a number and everything else as a string. `multiline` is text such as a
-   * PEM key, entered in a text area.
+   * PEM key, entered in a text area; the others are entered on one line. What
+   * each accepts is `connectionValueProblem`'s to say.
    */
   readonly format?: "text" | "multiline" | "url" | "integer";
+}
+
+/** Why a value cannot be what its field's `format` says it is. */
+export type ConnectionValueProblem = "line_break" | "not_a_url" | "not_an_integer";
+
+/**
+ * What is wrong with a value for its field, or null when nothing is: the one
+ * definition of what a field's `format` (and being secret) allows. Core applies
+ * it to every value it resolves or saves, and conformance to a manifest's
+ * defaults.
+ *
+ * It refuses ONLY WHAT COULD NEVER HAVE WORKED. A value that works today is
+ * running on some deployment, and a rule that refuses it turns that
+ * integration Failing on the deploy that brings the rule, with nobody having
+ * changed anything. So:
+ *
+ * - `url`: an address a request can go to, http or https. The URL parser drops
+ *   tabs and line breaks inside an address, as `fetch` does, so those pass.
+ * - `integer`: whatever `Number()` reads as a whole number that is not
+ *   negative ("123", "+123", "123.0", "1e3", "0x7b"), which is exactly what
+ *   core hands the integration, and what `z.coerce.number()` accepted before
+ *   this rule existed. A GitHub client id where the App id belongs is not.
+ * - a secret that is one line (anything but `multiline`) holds no line break
+ *   inside it: it goes into a header, which cannot carry one, or it is a
+ *   signing key the provider shows on one line.
+ * - anything else, nothing. A setting that is never sent (an allowlist read as
+ *   comma separated, a project key) may hold a line break and still work, and
+ *   the one that does end up in a header is refused by `ctx.http` when sent.
+ */
+export function connectionValueProblem(
+  value: string,
+  field: Pick<ConnectionField, "format" | "secret">,
+): ConnectionValueProblem | null {
+  if (field.format === "url") return isWebAddress(value) ? null : "not_a_url";
+  if (field.format === "integer") return isWholeNumber(value) ? null : "not_an_integer";
+  if (field.secret && field.format !== "multiline" && /[\r\n]/u.test(value)) return "line_break";
+  return null;
+}
+
+function isWebAddress(value: string): boolean {
+  if (!URL.canParse(value)) return false;
+  const { protocol } = new URL(value);
+  return protocol === "https:" || protocol === "http:";
+}
+
+function isWholeNumber(value: string): boolean {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0;
 }
 
 /** A probe the health page runs against the active connection. */
