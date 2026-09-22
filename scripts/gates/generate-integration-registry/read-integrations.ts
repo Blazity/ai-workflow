@@ -10,7 +10,7 @@ import {
 import { readManifests } from "../generate-block-catalog/read-manifests.js";
 import { compareCodePoints } from "../generate-block-catalog/types.js";
 import {
-  assertDashboardReadsNoEnvironment,
+  assertDashboardUsesBrowserGlobals,
   assertManifestIsPureData,
 } from "./manifest-imports.js";
 import { INTEGRATION_BLOCK_TYPE, INTEGRATION_ID } from "../../../packages/contracts/integration-id.js";
@@ -251,7 +251,7 @@ function readManifest(
         "Declare the pages in manifest.pages, or delete the entry.",
     );
   }
-  if (hasDashboard) assertDashboardReadsNoEnvironment(directory, dashboardPath, root);
+  if (hasDashboard) assertDashboardUsesBrowserGlobals(directory, dashboardPath, root);
 
   return {
     directory: localPath(root, directory),

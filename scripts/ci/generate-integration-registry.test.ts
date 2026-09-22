@@ -409,16 +409,26 @@ export const manifest = defineIntegration({
 
 /**
  * The flow bundle evaluates manifests inside the Workflow DevKit's VM, which
- * hands them `process` as `{ env }` and no `Buffer`, timers, `fetch` or
- * `AbortSignal` (@workflow/core 4.8.0, dist/vm/index.js). Conformance runs in
- * Node and the typecheck sees @types/node, so both pass; the deployed workflow
- * throws a ReferenceError. The generator is the one reader that could say so.
+ * hands them the language, a few web APIs and `process` as `{ env }`, and no
+ * `Buffer`, `EventTarget`, working timers or `fetch` (@workflow/core 4.8.0,
+ * dist/vm/index.js and dist/workflow.js). Conformance runs in Node and the
+ * typecheck sees @types/node, so both pass; the deployed workflow throws a
+ * ReferenceError. The generator is the one reader that could say so. Each case
+ * below was evaluated in the real VM and fails there.
  */
-test("a manifest that uses a Node global is refused, because the flow bundle's VM has none", async (t) => {
+test("a manifest that uses a global the flow bundle's VM lacks is refused, however it reaches it", async (t) => {
   for (const [label, expression, file] of [
     ["Buffer", 'Buffer.from("abc").toString("base64")', "manifest"],
     ["process", "process.cwd()", "manifest"],
-    ["performance one file away", "String(performance.now())", "helper"],
+    ["process", "(() => { const { env } = process; return String(env); })()", "manifest"],
+    ["performance", "String(performance.now())", "helper"],
+    ["globalThis", "String(globalThis.process.cwd())", "manifest"],
+    ["globalThis", 'String((globalThis as any)["Buffer"])', "manifest"],
+    ["EventTarget", "String(new EventTarget())", "manifest"],
+    ["self", "String(self.location)", "manifest"],
+    ["setTimeout", "String(setTimeout)", "helper"],
+    ["Date", "String(Date.now())", "manifest"],
+    ["Math.random", "String(Math.random())", "manifest"],
   ] as const) {
     const root = await fixtureRoot("gen-integrations-global");
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -442,10 +452,12 @@ export const manifest = defineIntegration({
     if (file === "helper") {
       await writeFile(join(root, "integrations/alpha/helper.ts"), `export const helperValue = ${expression};\n`);
     }
+    const where = file === "helper" ? "integrations/alpha/helper.ts:1" : "integrations/alpha/manifest.ts:";
     assert.throws(
       () => readIntegrations({ root }),
-      (error: Error) => error.message.includes(label.split(" ")[0]!) && /flow bundle/u.test(error.message),
-      label,
+      (error: Error) =>
+        error.message.includes(`${where}`) && error.message.includes(` uses ${label}.`) && /flow bundle/u.test(error.message),
+      `${label} in ${expression}`,
     );
   }
 });
@@ -457,15 +469,15 @@ test("a manifest may name what the VM does give it, and may bind a Node global's
     id: "alpha",
     manifest: `import { defineIntegration } from "@integrations/sdk";
 
-type Payload = { buffer: Buffer };
+type Payload = { buffer: Buffer; timer: ReturnType<typeof setTimeout> };
 const process = (value: string) => value.trim();
 const docs = new URL("https://alpha.test/docs").toString();
-const encoded = btoa(JSON.stringify({ at: Math.max(1, 2) }));
+const encoded = btoa(JSON.stringify({ at: Math.max(1, 2), headers: [...new Headers({ a: "b" }).keys()] }));
 
 export const manifest = defineIntegration({
   id: "alpha",
   name: "Alpha",
-  description: process(docs + encoded),
+  description: process(docs + encoded + new TextEncoder().encode("x").length),
   connection: { fields: [] },
   capabilities: [],
   blocks: [],
@@ -566,18 +578,31 @@ test("a dashboard entry for an integration with no pages is refused", async (t) 
   assert.throws(() => readIntegrations({ root }), /declares no pages/u);
 });
 
-test("a dashboard entry that reads the deployment's environment is refused", async (t) => {
+test("a dashboard entry that reads the deployment's environment is refused, however it spells the read", async (t) => {
   // Not an import, so no specifier rule can see it, and the one reach that
   // needs no dependency at all: a Server Component in our process would get
   // WORKER_BASE_URL and every other variable this deployment runs with.
-  const root = await fixtureRoot("gen-integrations-dashboard-env");
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await writeIntegration(root, "alpha", {
-    id: "alpha",
-    pages: [{ id: "overview", label: "Overview" }],
-    dashboard: 'export const dashboard = { pages: { overview: () => process.env.WORKER_BASE_URL } };\n',
-  });
-  assert.throws(() => readIntegrations({ root }), /may not read process\.env/u);
+  for (const [label, read] of [
+    ["process", "process.env.WORKER_BASE_URL"],
+    ["process", "(() => { const { env } = process; return env.WORKER_BASE_URL; })()"],
+    ["process", 'process["env"].WORKER_BASE_URL'],
+    ["globalThis", "(globalThis as any).process.env.WORKER_BASE_URL"],
+    ["Buffer", 'Buffer.from("x").toString()'],
+  ] as const) {
+    const root = await fixtureRoot("gen-integrations-dashboard-env");
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await writeIntegration(root, "alpha", {
+      id: "alpha",
+      pages: [{ id: "overview", label: "Overview" }],
+      dashboard: `export const dashboard = { pages: { overview: () => ${read} } };\n`,
+    });
+    assert.throws(
+      () => readIntegrations({ root }),
+      (error: Error) =>
+        error.message.includes(`integrations/alpha/dashboard.tsx:1 uses ${label}.`) && /cockpit's own server/u.test(error.message),
+      read,
+    );
+  }
 });
 
 test("a helper one file away cannot read it either", async (t) => {
@@ -592,7 +617,24 @@ test("a helper one file away cannot read it either", async (t) => {
     join(root, "integrations/alpha/where.ts"),
     "export const where = () => process.env.WORKER_BASE_URL;\n",
   );
-  assert.throws(() => readIntegrations({ root }), /where\.ts: a dashboard entry may not read process\.env/u);
+  assert.throws(() => readIntegrations({ root }), /integrations\/alpha\/where\.ts:1 uses process\./u);
+});
+
+test("a dashboard entry may use what a browser gives it, and a local named process", async (t) => {
+  const root = await fixtureRoot("gen-integrations-dashboard-browser");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeIntegration(root, "alpha", {
+    id: "alpha",
+    pages: [{ id: "overview", label: "Overview" }],
+    dashboard: `const process = (value: string) => value;
+export const dashboard = {
+  pages: {
+    overview: () => [window.location.href, document.title, setTimeout, new EventTarget(), Date.now(), process("x")],
+  },
+};
+`,
+  });
+  assert.deepEqual(readIntegrations({ root }).map((record) => record.id), ["alpha"]);
 });
 
 test("the host UI package is not read as an integration", async (t) => {
