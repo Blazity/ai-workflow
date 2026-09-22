@@ -782,11 +782,15 @@ export class GitHubAdapter
         name: check.name,
         conclusion: check.conclusion!,
       }));
+    // A completed failure is final for that check run: `filter: "latest"`
+    // already drops one a re-run superseded. So a failure is red even while
+    // other check runs on the head (our own gate check among them) are still
+    // going, which is the meaning `PullRequestHeadChecks` gives the word.
     const checks = {
-      state: latest.some((check) => check.status !== "completed")
-        ? "running" as const
-        : failed.length > 0
-          ? "red" as const
+      state: failed.length > 0
+        ? "red" as const
+        : latest.some((check) => check.status !== "completed")
+          ? "running" as const
           : "green" as const,
       failed,
     };

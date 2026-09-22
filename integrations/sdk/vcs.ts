@@ -38,6 +38,22 @@ export interface PullRequestFailedCheck {
   conclusion: string;
 }
 
+/**
+ * What the provider says about the checks on this exact head, in terms core
+ * can act on without knowing the provider's CI model.
+ *
+ * `failed` is every check on this head that FINISHED failed and has not been
+ * superseded by a re-run, each under the handle a trigger event for it carries.
+ * A provider that reports both a whole run and its parts (a pipeline and its
+ * jobs) lists both, because a delivery may name either. A finished failure is
+ * final for that check, so it stays here while other checks on the head are
+ * still running: core binds a "checks failed" event by finding its handle in
+ * this list, and a failure that waited for every other check to finish would
+ * never start the run it reported.
+ *
+ * `state` summarises the same facts: `red` whenever `failed` is not empty,
+ * otherwise `running` while any check has not finished, otherwise `green`.
+ */
 export interface PullRequestHeadChecks {
   state: "green" | "red" | "running";
   failed: PullRequestFailedCheck[];

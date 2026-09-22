@@ -116,6 +116,36 @@ describe("a failed GitHub check binds to the pull request it was reported on", (
     ]);
   });
 
+  it("binds a failed check while another check run on the same head is still running", async () => {
+    // The ordinary case, not an edge: CI jobs finish at different times, and
+    // our own gate check is usually still in progress when a job fails. A
+    // finished failure is final for that check run, so the event has to bind
+    // whatever the other check runs on the head are doing.
+    const [event] = normalizeGitHubEvents("check_run", delivery, { deliveryId: "d-running" });
+
+    const vcs = adapter();
+    mockOctokit.pulls.get.mockResolvedValue(pullRequest());
+    mockOctokit.paginate.mockResolvedValue([
+      ...checkRunsForHead({ slug: "github-actions" }),
+      {
+        id: delivery.check_run.id + 7,
+        name: "AI Workflow / code-hygiene",
+        status: "in_progress",
+        conclusion: null,
+        app: { slug: "ai-workflow" },
+      },
+    ]);
+    const current = await vcs.getPRHead(2);
+
+    const bound = bindCurrentPullRequest(event!, current, (left, right) =>
+      vcs.sameHandle(left, right),
+    );
+
+    expect(bound?.pr.failedChecks?.map((check) => check.name)).toEqual([
+      delivery.check_run.name,
+    ]);
+  });
+
   it("still binds when GitHub reports the check run without an app slug", async () => {
     // The published `completed` delivery is exactly this: an `app` object with
     // no `slug` on it. The webhook used to fall back to the sender's login for
