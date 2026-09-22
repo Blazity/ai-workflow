@@ -77,6 +77,44 @@ const RENAMED_WORKFLOW_SOURCE_VALUES: Readonly<Record<string, string>> = {
   slack: "chat",
 };
 
+/**
+ * The two per-provider producer filters `trigger_pr_checks_failed` carried
+ * until S10, each with the value that block read when the key was absent.
+ *
+ * S10 folded them into one `trustedProducers` list (ADR-010). A definition
+ * published before that still carries them, and its row is deliberately not
+ * rewritten, so it is upgraded wherever a graph enters this build: dispatch,
+ * the editor, validation and a replaying run then all read one list, and a
+ * custom list an operator saved keeps meaning what it meant. The default is
+ * part of that meaning: a node that narrowed one provider's list and never
+ * touched the other's still trusted the other provider's default, so the
+ * upgrade writes that default out instead of dropping it.
+ *
+ * Removed with the other renames once every stored graph carries the new key.
+ */
+const RETIRED_CHECK_PRODUCER_FILTERS: Readonly<Record<string, readonly string[]>> = {
+  githubAppSlugs: ["github-actions"],
+  gitlabPipelineSources: ["merge_request_event"],
+};
+
+function upgradeRetiredCheckProducerFilters(
+  configuration: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const retired = Object.keys(RETIRED_CHECK_PRODUCER_FILTERS);
+  if (!retired.some((key) => key in configuration)) return null;
+  const upgraded: Record<string, unknown> = { ...configuration };
+  const trusted: unknown[] = Array.isArray(configuration.trustedProducers)
+    ? [...configuration.trustedProducers]
+    : [];
+  for (const key of retired) {
+    const stored = configuration[key];
+    trusted.push(...(Array.isArray(stored) ? stored : RETIRED_CHECK_PRODUCER_FILTERS[key]!));
+    delete upgraded[key];
+  }
+  upgraded.trustedProducers = [...new Set(trusted)];
+  return upgraded;
+}
+
 /** The name this build knows a block type by. Unchanged for every other type. */
 export function canonicalWorkflowBlockType<T>(type: T): T {
   return typeof type === "string"
@@ -86,7 +124,9 @@ export function canonicalWorkflowBlockType<T>(type: T): T {
 
 /**
  * A node's `configuration` object with renamed keys replaced by their new
- * names and, for `investigate`'s `sources`, renamed values too. Returns the
+ * names and, for `investigate`'s `sources`, renamed values too; for
+ * `trigger_pr_checks_failed`, the retired producer filters folded into
+ * `trustedProducers`. Returns the
  * same reference when nothing needed changing, so a node that needs no
  * change keeps its identity and `changed` stays accurate for its caller.
  */
@@ -94,6 +134,19 @@ function canonicalizeWorkflowBlockConfiguration(
   canonicalType: string,
   configuration: unknown,
 ): { value: unknown; changed: boolean } {
+  if (
+    canonicalType === "trigger_pr_checks_failed" &&
+    configuration &&
+    typeof configuration === "object" &&
+    !Array.isArray(configuration)
+  ) {
+    const upgraded = upgradeRetiredCheckProducerFilters(
+      configuration as Record<string, unknown>,
+    );
+    return upgraded
+      ? { value: upgraded, changed: true }
+      : { value: configuration, changed: false };
+  }
   const paramRenames = RENAMED_WORKFLOW_BLOCK_PARAMS[canonicalType];
   if (!paramRenames || !configuration || typeof configuration !== "object") {
     return { value: configuration, changed: false };

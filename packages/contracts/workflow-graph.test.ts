@@ -97,3 +97,43 @@ describe("canonicalizeWorkflowBlockTypes: investigate parameter rename", () => {
     expect(result).toBe(raw);
   });
 });
+
+describe("canonicalizeWorkflowBlockTypes: check trigger producer filters", () => {
+  function checksNode(configuration: Record<string, unknown>) {
+    return {
+      schemaVersion: 2,
+      nodes: [
+        {
+          id: "checks",
+          type: "trigger_pr_checks_failed",
+          x: 0,
+          y: 0,
+          configuration,
+          inputs: {},
+          additionalInputs: [],
+        },
+      ],
+      edges: [],
+    };
+  }
+
+  it("folds both retired lists into the one it already has, without repeats", () => {
+    const raw = checksNode({
+      trustedProducers: ["buildkite", "github-actions"],
+      githubAppSlugs: ["github-actions", "circleci"],
+      gitlabPipelineSources: ["push"],
+    });
+
+    const result = canonicalizeWorkflowBlockTypes(raw) as typeof raw;
+
+    expect(result.nodes[0]!.configuration).toEqual({
+      trustedProducers: ["buildkite", "github-actions", "circleci", "push"],
+    });
+  });
+
+  it("leaves a node that already carries only the new list unchanged, by reference", () => {
+    const raw = checksNode({ trustedProducers: ["circleci"] });
+
+    expect(canonicalizeWorkflowBlockTypes(raw)).toBe(raw);
+  });
+});

@@ -2362,7 +2362,10 @@ and generic failed checks. Each integration maps its native CI model onto it.
 Gate status references are opaque records minted and interpreted by the same
 provider. Core stores and returns them without parsing. Stored check-trigger
 definitions are upgraded on read from the two former producer filters into
-`trustedProducers`; their rows are not rewritten.
+`trustedProducers`; their rows are not rewritten. The upgrade lives in
+`canonicalizeWorkflowBlockTypes`, the reader every stored graph goes through,
+so dispatch, validation, the editor and a replaying run see the same list, and
+a filter a node never set keeps the default it had.
 
 The GitLab package owns its adapter, repository listing and profile read,
 health checks, webhook verification and normalization. The generic route keeps

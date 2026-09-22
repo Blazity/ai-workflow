@@ -707,27 +707,49 @@ describe("provider trigger dispatch", () => {
     await expect(db.select().from(triggerDeliveries)).resolves.toEqual([]);
   });
 
-  it("filters untrusted CI producers before accepting a delivery", async () => {
-    mockGetEnabled.mockResolvedValue(
-      enabled(
-        { scope: "any", checkNames: ["ci / build"], githubAppSlugs: ["github-actions"] },
-        "trigger_pr_checks_failed",
-      ),
+  it("honours a custom trust list a check trigger was published with before S10", async () => {
+    // The deployed graph reaches dispatch through the one reader of a stored
+    // row, exactly as trigger routing hands it over, so the per-provider list
+    // this node was saved with is what decides trust: a non-default app is
+    // trusted and the provider's default runner, which the list left out, is
+    // not.
+    const { parseStoredWorkflowDefinition } = await import(
+      "../../engine/definition/stored-definition.js"
     );
-    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-    const untrusted = event({
-      delivery: { provider: "github", producer: "unknown-app", deliveryId: "ci-1" },
-      triggerType: "trigger_pr_checks_failed",
-      pr: {
-        ...event().pr,
-        failedChecks: [{ name: "ci / build", conclusion: "failure" }],
+    const stored = enabled(
+      {
+        scope: "any",
+        checkNames: ["ci / build"],
+        githubAppSlugs: ["circleci"],
+        gitlabPipelineSources: ["merge_request_event"],
+      },
+      "trigger_pr_checks_failed",
+    );
+    mockGetEnabled.mockResolvedValue({
+      ...stored,
+      current: {
+        ...stored.current,
+        ...parseStoredWorkflowDefinition(stored.current.definition),
       },
     });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    const failedCheck = (producer: string, deliveryId: string) =>
+      event({
+        delivery: { provider: "github", producer, deliveryId },
+        triggerType: "trigger_pr_checks_failed",
+        pr: {
+          ...event().pr,
+          failedChecks: [{ name: "ci / build", conclusion: "failure" }],
+        },
+      });
 
-    await expect(dispatchTriggerEvent(untrusted, deps())).resolves.toEqual({
-      result: "ignored_untrusted_event",
-    });
-    await expect(getTriggerDelivery(db, "github", "ci-1")).resolves.toBeNull();
+    await expect(
+      dispatchTriggerEvent(failedCheck("github-actions", "ci-default"), deps()),
+    ).resolves.toEqual({ result: "ignored_untrusted_event" });
+    await expect(getTriggerDelivery(db, "github", "ci-default")).resolves.toBeNull();
+    await expect(
+      dispatchTriggerEvent(failedCheck("circleci", "ci-custom"), deps()),
+    ).resolves.toEqual({ result: "started", runId: "run-pr" });
   });
 });
 
