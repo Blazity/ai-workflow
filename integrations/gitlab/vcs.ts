@@ -223,6 +223,9 @@ type GitLabCommitStatusState =
 
 const COMMIT_STATUS_409_RETRY_DELAYS_MS = [500, 1_000, 2_000];
 
+/** One page of the projects listing, inside the catalog import's own budget. */
+const PROJECTS_LIST_TIMEOUT_MS = 18_000;
+
 export interface GitLabConfig {
   token: string;
   projectId: string;
@@ -305,6 +308,11 @@ export class GitLabAdapter implements
     return a.kind === b.kind && a.id === b.id && a.container === b.container;
   }
 
+  /**
+   * Every project the token is a member of. A failure carries `status` or
+   * `timedOut`, because core's listing retry reads exactly those to tell a
+   * GitLab outage it can wait out from a credential it would replay unchanged.
+   */
   async listRepositories(): Promise<VcsRepositoryMetadata[]> {
     const projects: any[] = [];
     const baseUrl = (this.config.host ?? "https://gitlab.com").replace(/\/$/u, "");
@@ -314,11 +322,22 @@ export class GitLabAdapter implements
         `${baseUrl}/api/v4/projects?membership=true&per_page=100&page=${page}`,
         {
           headers: { "PRIVATE-TOKEN": this.config.token },
-          signal: AbortSignal.timeout(18_000),
+          signal: AbortSignal.timeout(PROJECTS_LIST_TIMEOUT_MS),
         },
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+          throw Object.assign(
+            new Error(`GitLab projects list timed out after ${PROJECTS_LIST_TIMEOUT_MS}ms`),
+            { timedOut: true },
+          );
+        }
+        throw error;
+      });
       if (!response.ok) {
-        throw new Error(`GitLab projects list failed: ${response.status} ${response.statusText}`);
+        throw Object.assign(
+          new Error(`GitLab projects list failed: ${response.status} ${response.statusText}`),
+          { status: response.status },
+        );
       }
       projects.push(...((await response.json()) as any[]));
       page = response.headers.get("x-next-page") ?? "";
