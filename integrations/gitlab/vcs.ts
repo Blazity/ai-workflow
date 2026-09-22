@@ -21,6 +21,12 @@ import {
   type VcsRepositoryMetadata,
   type VcsOpaqueHandle,
 } from "@integrations/sdk";
+import {
+  failedPipelineChecks,
+  GITLAB_CI_PRODUCER,
+  jobCheck,
+  pipelineCheck,
+} from "./pipeline-checks";
 import { createGitLabProfileSource } from "./profile-source";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
@@ -586,6 +592,20 @@ export class GitLabAdapter implements
   }
 
   async getPRHead(prId: number): Promise<PullRequestHead> {
+    return (await this.readMergeRequestHead(prId)).head;
+  }
+
+  /**
+   * One read of the merge request and its head pipeline, for the two answers
+   * built from it: the head core binds a delivery against, and the manual
+   * dispatch snapshot. Both used to read the merge request on their own.
+   */
+  private async readMergeRequestHead(prId: number): Promise<{
+    mr: GitLabMRHead;
+    head: PullRequestHead;
+    /** The head pipeline when it failed, with the jobs that failed in it. */
+    failedPipeline: { id: number; failedJobs: GitLabJob[] } | null;
+  }> {
     const mr = (await this.gl.MergeRequests.show(
       this.projectId,
       prId,
@@ -605,32 +625,26 @@ export class GitLabAdapter implements
     }
     const headPipelineId = mr.head_pipeline?.id;
     const headPipelineStatus = mr.head_pipeline?.status;
-    const headPipelineFailedChecks =
+    const failedPipeline =
       typeof headPipelineId === "number" && headPipelineStatus === "failed"
-        ? ((await this.gl.Jobs.all(this.projectId, {
-            pipelineId: headPipelineId,
-          })) as unknown as GitLabJob[])
-            .filter((job) => job.status === "failed")
-            .map((job) => ({
-              handle: gitLabHandle({ kind: "job", container: headPipelineId, id: job.id }),
-              name: job.name,
-              conclusion: "failed",
-            }))
-        : [];
-    const failed =
-      headPipelineStatus === "failed" && typeof headPipelineId === "number"
-        ? [
-            {
-              handle: gitLabHandle({ kind: "aggregate", id: headPipelineId }),
-              name: "pipeline",
-              conclusion: "failed",
-            },
-            ...headPipelineFailedChecks,
-          ]
-        : [];
+        ? {
+            id: headPipelineId,
+            failedJobs: ((await this.gl.Jobs.all(this.projectId, {
+              pipelineId: headPipelineId,
+            })) as unknown as GitLabJob[]).filter((job) => job.status === "failed"),
+          }
+        : null;
+    // The pipeline and every failed job in it, because a delivery names either:
+    // the jobs when its hook carried them, the pipeline when it did not.
+    const failed = failedPipeline
+      ? [
+          pipelineCheck(failedPipeline.id),
+          ...failedPipeline.failedJobs.map((job) => jobCheck(failedPipeline.id, job)),
+        ]
+      : [];
     const checks = {
       state:
-        headPipelineStatus === "failed"
+        failed.length > 0
           ? "red" as const
           : headPipelineStatus === "running" || headPipelineStatus === "pending"
             ? "running" as const
@@ -638,29 +652,29 @@ export class GitLabAdapter implements
       failed,
     };
     return {
-      headSha,
-      ...(mr.source_branch ? { headRef: mr.source_branch } : {}),
-      baseRef,
-      state,
-      checks,
+      mr,
+      head: {
+        headSha,
+        ...(mr.source_branch ? { headRef: mr.source_branch } : {}),
+        baseRef,
+        state,
+        checks,
+      },
+      failedPipeline,
     };
   }
 
   async getManualDispatchPullRequest(
     prId: number,
   ): Promise<ManualDispatchPullRequestSnapshot> {
-    const mr = (await this.gl.MergeRequests.show(
-      this.projectId,
-      prId,
-    )) as unknown as GitLabMRHead;
-    const current = await this.getPRHead(prId);
-    const headPipelineId = mr.head_pipeline?.id;
+    const { mr, head: current, failedPipeline } = await this.readMergeRequestHead(prId);
     const [comments, pipeline] = await Promise.all([
       this.getPRComments(prId),
-      typeof headPipelineId === "number"
-        ? this.gl.Pipelines.show(this.projectId, headPipelineId)
+      failedPipeline
+        ? this.gl.Pipelines.show(this.projectId, failedPipeline.id)
         : Promise.resolve(null),
     ]);
+    const source = (pipeline as { source?: unknown } | null)?.source;
     return {
       prNumber: prId,
       prUrl:
@@ -679,17 +693,16 @@ export class GitLabAdapter implements
       ...(current.state === "merged" && mr.merged_at
         ? { mergedAt: mr.merged_at }
         : {}),
-      failedChecks: (current.checks?.failed ?? []).map((check) => {
-        const source = (pipeline as { source?: unknown } | null)?.source;
-        const failedCheck: ManualDispatchPullRequestSnapshot["failedChecks"][number] = {
-          name: check.name,
-          conclusion: check.conclusion,
-          producer: "",
-        };
-        if (check.handle) failedCheck.handle = check.handle;
-        if (typeof source === "string") failedCheck.source = source;
-        return failedCheck;
-      }),
+      // What the Pipeline Hook would have reported for this pipeline, under
+      // the producer it reports it as: a check without a producer is one core
+      // cannot trust, so manual dispatch of a failed pipeline found nothing.
+      failedChecks: failedPipeline
+        ? failedPipelineChecks(failedPipeline.id, failedPipeline.failedJobs).map((check) => ({
+            ...check,
+            producer: GITLAB_CI_PRODUCER,
+            ...(typeof source === "string" ? { source } : {}),
+          }))
+        : [],
       reviews: comments
         .filter((comment) => comment.body.trim().length > 0)
         .map((comment) => ({

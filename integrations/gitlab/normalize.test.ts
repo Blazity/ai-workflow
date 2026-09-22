@@ -371,7 +371,10 @@ describe("normalizeGitLabEvent", () => {
     expect(evt?.triggerType).toBe("trigger_pr_checks_failed");
     expect(evt?.delivery.producer).toBe("gitlab-ci");
     expect(evt?.pr.headRef).toBe("blazebot/aiw-3");
-    expect(evt?.pr.headSha).toBe("temporary-merged-results-sha");
+    // Never the pipeline's own sha: on a merged-results pipeline that is a
+    // temporary merge commit, and binding it against the merge request's head
+    // would drop every such failure as stale.
+    expect(evt?.pr.headSha).toBe("");
     expect(evt?.pr.failedChecks?.[0]?.handle).toEqual({
       kind: "job",
       container: 901,

@@ -211,3 +211,94 @@ describe("a failed GitHub check binds to the pull request it was reported on", (
     ).toBeNull();
   });
 });
+
+const { GitLabAdapter } = await import("../../../../../integrations/gitlab/vcs.js");
+const { normalizeGitLabEvents } = await import("../../../../../integrations/gitlab/webhook.js");
+
+const gitLabPipeline = JSON.parse(
+  readFileSync(
+    new URL("../../../../../integrations/gitlab/test-fixtures/pipeline-hook.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+/**
+ * GitLab's half of the same question, on a merged-results pipeline: the one
+ * kind of pipeline whose own sha is NOT the merge request's head. GitLab runs
+ * it on a temporary commit that merges the source into the target, so a
+ * delivery that reported that commit as the head could never match what the
+ * merge request says its head is, and every failure on such a pipeline would
+ * be dropped as stale.
+ */
+describe("a failed GitLab pipeline binds to the merge request it ran for", () => {
+  const sourceHead = "5f2d4c1e9a7b3d6f8e0c2a4b6d8f0e1c3a5b7d9f";
+
+  function failedMergedResultsDelivery() {
+    const body = JSON.parse(JSON.stringify(gitLabPipeline));
+    body.object_attributes.status = "failed";
+    body.object_attributes.sha = "0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a69788766";
+    return body;
+  }
+
+  function gitLabClient(headPipeline: { id: number; status: string }) {
+    return {
+      MergeRequests: {
+        show: vi.fn().mockResolvedValue({
+          diff_refs: { head_sha: sourceHead },
+          source_branch: "test",
+          target_branch: "master",
+          state: "opened",
+          head_pipeline: headPipeline,
+        }),
+      },
+      Jobs: {
+        all: vi.fn().mockResolvedValue(
+          gitLabPipeline.builds.map((build: { id: number; name: string }) => ({
+            id: build.id,
+            name: build.name,
+            status: build.name === "test-build" ? "failed" : "success",
+          })),
+        ),
+      },
+    };
+  }
+
+  function gitLabAdapter(client: ReturnType<typeof gitLabClient>) {
+    return new GitLabAdapter(
+      { token: "t", projectId: "gitlab-org/gitlab-test", baseBranch: "master" },
+      client as never,
+    );
+  }
+
+  it("adopts the merge request's head once the failed job is still failed on it", async () => {
+    const [event] = normalizeGitLabEvents("Pipeline Hook", failedMergedResultsDelivery(), {
+      deliveryId: "gl-1",
+    });
+    expect(event?.triggerType).toBe("trigger_pr_checks_failed");
+
+    const vcs = gitLabAdapter(gitLabClient({ id: 31, status: "failed" }));
+    const current = await vcs.getPRHead(1);
+    const bound = bindCurrentPullRequest(event!, current, (left, right) =>
+      vcs.sameHandle(left, right),
+    );
+
+    expect(bound?.pr.headSha).toBe(sourceHead);
+    expect(bound?.pr.failedChecks?.map((check) => check.name)).toEqual(["test-build"]);
+  });
+
+  it("drops the delivery once a newer pipeline is the merge request's head pipeline", async () => {
+    // The control: the same delivery against a head whose pipeline is another
+    // one. The pipeline id in the handle is what proves identity now that the
+    // delivery names no head, so it must be able to say no.
+    const [event] = normalizeGitLabEvents("Pipeline Hook", failedMergedResultsDelivery(), {
+      deliveryId: "gl-2",
+    });
+
+    const vcs = gitLabAdapter(gitLabClient({ id: 32, status: "failed" }));
+    const current = await vcs.getPRHead(1);
+
+    expect(
+      bindCurrentPullRequest(event!, current, (left, right) => vcs.sameHandle(left, right)),
+    ).toBeNull();
+  });
+});

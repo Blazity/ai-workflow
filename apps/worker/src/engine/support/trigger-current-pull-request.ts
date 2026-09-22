@@ -51,7 +51,13 @@ export function bindCurrentPullRequest<T extends TriggerEvent>(
       pr: { ...pr, headRef, headSha: current.headSha, baseRef: current.baseRef },
     };
   }
-  if (current.headSha !== pr.headSha) return null;
+  // A checks event may not know the head: the delivery names the commit its
+  // checks ran on, which is not always the pull request's head (a merged-results
+  // pipeline runs on a temporary merge commit). Its failed-check handles are
+  // what prove it is about this head, below, so an empty head is "unknown,
+  // adopt the provider's" there and stale for every other trigger.
+  const headUnknown = pr.headSha === "" && event.triggerType === "trigger_pr_checks_failed";
+  if (!headUnknown && current.headSha !== pr.headSha) return null;
   if (event.triggerType !== "trigger_pr_checks_failed") return event;
   if (!current.checks || current.checks.state !== "red") return null;
   const currentChecks = current.checks;

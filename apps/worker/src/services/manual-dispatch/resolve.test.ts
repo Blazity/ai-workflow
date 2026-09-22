@@ -212,6 +212,55 @@ describe("manual pull request input", () => {
     ).toBeNull();
   });
 
+  it("finds a failed GitLab pipeline eligible from the adapter's own snapshot", async () => {
+    // Built by the real GitLab adapter, not by hand: the defect was in what the
+    // adapter reported (checks with no producer), which a hand-made snapshot
+    // would have papered over.
+    const { GitLabAdapter } = await import("../../../../../integrations/gitlab/vcs.js");
+    const client = {
+      MergeRequests: {
+        show: vi.fn().mockResolvedValue({
+          web_url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+          source_branch: "feature/manual",
+          target_branch: "main",
+          title: "Manual dispatch",
+          author: { username: "alice" },
+          state: "opened",
+          diff_refs: { head_sha: "head-sha" },
+          head_pipeline: { id: 901, status: "failed" },
+        }),
+      },
+      Jobs: { all: vi.fn().mockResolvedValue([{ id: 11, name: "lint", status: "failed" }]) },
+      Pipelines: { show: vi.fn().mockResolvedValue({ id: 901, source: "merge_request_event" }) },
+      MergeRequestNotes: { all: vi.fn().mockResolvedValue([]) },
+      MergeRequestDiscussions: { all: vi.fn().mockResolvedValue([]) },
+    };
+    const gitLabSnapshot = await new GitLabAdapter(
+      { token: "t", projectId: "platform/api", baseBranch: "main" },
+      client as never,
+    ).getManualDispatchPullRequest(17);
+    const gitLabPr: PrTriggerPayload = {
+      ...pr,
+      provider: "gitlab",
+      repoPath: "platform/api",
+      prNumber: 17,
+      prUrl: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+    };
+
+    const selected = selectManualTriggerEvent(
+      "trigger_pr_checks_failed",
+      gitLabPr,
+      gitLabSnapshot,
+      {},
+    );
+
+    expect(selected?.delivery).toMatchObject({
+      producer: "gitlab-ci",
+      source: "merge_request_event",
+    });
+    expect(selected?.pr.failedChecks?.map((check) => check.name)).toEqual(["lint"]);
+  });
+
   it("uses the latest eligible non-bot review matching configured states", () => {
     const reviews = snapshot({
       reviews: [

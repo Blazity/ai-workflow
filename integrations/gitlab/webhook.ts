@@ -6,10 +6,10 @@ import type {
   IntegrationWebhookReception,
   PrTriggerPayload,
   TriggerEvent,
-  VcsOpaqueHandle,
 } from "@integrations/sdk";
 import { isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
+import { failedPipelineChecks, GITLAB_CI_PRODUCER } from "./pipeline-checks";
 
 type GitLabContext = IntegrationContext<typeof manifest>;
 
@@ -215,36 +215,29 @@ export function normalizeGitLabEvent(
         !name.startsWith("blazebot / ");
     });
     if (failed.length > 0 && external.length === 0) return null;
-    const checks = external.length > 0
-      ? external.map((build: any) => ({
-          handle: gitLabHandle({ kind: "job", container: attrs.id ?? null, id: build.id ?? null }),
-          name: String(build.name ?? "job"),
-          conclusion: String(build.status),
-        }))
-      : [{
-          handle: gitLabHandle({ kind: "aggregate", id: attrs.id ?? null }),
-          name: "pipeline",
-          conclusion: "failed",
-        }];
+    const checks = failedPipelineChecks(attrs.id ?? null, external);
     return {
       delivery: {
-        ...delivery(options.deliveryId, "gitlab-ci"),
+        ...delivery(options.deliveryId, GITLAB_CI_PRODUCER),
         trustedByDefault: attrs.source === "merge_request_event",
         ...(typeof attrs.source === "string" ? { source: attrs.source } : {}),
       },
       triggerType: "trigger_pr_checks_failed",
       pr: {
         ...mapMergeRequest(mr, project, body?.user),
-        headSha: attrs.sha ?? mr.last_commit?.id ?? mr.diff_head_sha ?? "",
+        // Unknown, and said so. A Pipeline Hook's `merge_request` carries no
+        // commit at all, and `object_attributes.sha` is the commit the
+        // pipeline ran on: on a merged-results or merge-train pipeline that is
+        // GitLab's temporary merge commit, never the merge request's head, so
+        // binding would call every such failure stale. The check handles below
+        // carry the pipeline id, and core adopts the provider's head once one
+        // of them is still failed on it.
+        headSha: "",
         failedChecks: checks,
       },
     };
   }
   return null;
-}
-
-function gitLabHandle(value: Readonly<Record<string, string | number | null>>): VcsOpaqueHandle {
-  return value as unknown as VcsOpaqueHandle;
 }
 
 function event(

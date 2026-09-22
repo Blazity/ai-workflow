@@ -452,27 +452,25 @@ describe("GitLabAdapter", () => {
   });
 
   describe("getManualDispatchPullRequest", () => {
+    function failedMergeRequest() {
+      return {
+        web_url: "https://gitlab.com/blazity/demo-app/-/merge_requests/42",
+        source_branch: "feature/manual",
+        target_branch: "main",
+        title: "Manual dispatch",
+        author: { username: "alice" },
+        draft: false,
+        state: "opened",
+        diff_refs: { head_sha: "head-sha" },
+        head_pipeline: { id: 901, status: "failed" },
+      };
+    }
+
     it("returns current MR pipeline failures and human review comments", async () => {
-      mockMergeRequests.show
-        .mockResolvedValueOnce({
-          web_url: "https://gitlab.com/blazity/demo-app/-/merge_requests/42",
-          source_branch: "feature/manual",
-          target_branch: "main",
-          title: "Manual dispatch",
-          author: { username: "alice" },
-          draft: false,
-          state: "opened",
-          diff_refs: { head_sha: "head-sha" },
-          head_pipeline: { id: 901, status: "failed" },
-        })
-        .mockResolvedValueOnce({
-          target_branch: "main",
-          state: "opened",
-          diff_refs: { head_sha: "head-sha" },
-          head_pipeline: { id: 901, status: "failed" },
-        });
+      mockMergeRequests.show.mockResolvedValueOnce(failedMergeRequest());
       mockJobs.all.mockResolvedValueOnce([
         { id: 11, name: "lint", status: "failed" },
+        { id: 12, name: "test", status: "success" },
       ]);
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
       mockMergeRequestNotes.all.mockResolvedValueOnce([
@@ -488,17 +486,14 @@ describe("GitLabAdapter", () => {
         source: "merge_request_event",
       });
 
-      await expect(
-        glAdapter().getManualDispatchPullRequest(42),
-      ).resolves.toMatchObject({
+      const snapshot = await glAdapter().getManualDispatchPullRequest(42);
+
+      expect(snapshot).toMatchObject({
         prNumber: 42,
         headRef: "feature/manual",
         headSha: "head-sha",
         baseRef: "main",
         state: "open",
-        failedChecks: expect.arrayContaining([
-          expect.objectContaining({ name: "lint", conclusion: "failed" }),
-        ]),
         reviews: [
           {
             state: "commented",
@@ -507,6 +502,40 @@ describe("GitLabAdapter", () => {
           },
         ],
       });
+      // Exactly what the Pipeline Hook reports for the same pipeline: the
+      // failed job, under GitLab CI as its producer and the pipeline's source,
+      // and not the pipeline itself beside it. A check with no producer is one
+      // core can never trust, so manual dispatch of a failed pipeline used to
+      // find nothing eligible.
+      expect(snapshot.failedChecks).toEqual([
+        {
+          handle: { kind: "job", container: 901, id: 11 },
+          name: "lint",
+          conclusion: "failed",
+          producer: "gitlab-ci",
+          source: "merge_request_event",
+        },
+      ]);
+    });
+
+    it("reports the pipeline itself when it failed without a failed job", async () => {
+      mockMergeRequests.show.mockResolvedValueOnce(failedMergeRequest());
+      mockJobs.all.mockResolvedValueOnce([{ id: 11, name: "lint", status: "success" }]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockPipelines.show.mockResolvedValueOnce({ id: 901, source: "push" });
+
+      const snapshot = await glAdapter().getManualDispatchPullRequest(42);
+
+      expect(snapshot.failedChecks).toEqual([
+        {
+          handle: { kind: "aggregate", id: 901 },
+          name: "pipeline",
+          conclusion: "failed",
+          producer: "gitlab-ci",
+          source: "push",
+        },
+      ]);
     });
   });
 

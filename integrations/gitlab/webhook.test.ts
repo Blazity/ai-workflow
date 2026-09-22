@@ -97,15 +97,16 @@ describe("GitLab published webhook payload bytes", () => {
     });
   });
 
-  it("maps a failed variant to the exact head and handle returned by the adapter", async () => {
+  it("maps a failed variant to an unknown head and the handle the adapter mints", async () => {
     const pipeline = JSON.parse(recorded.pipeline);
     pipeline.object_attributes.status = "failed";
     const result = await receive("Pipeline Hook", JSON.stringify(pipeline));
     expect(result.kind).toBe("trigger_events");
     if (result.kind !== "trigger_events") return;
-    expect(result.events[0]?.pr.headSha).toBe(
-      "bcbb5ec396a2c0f828686f14fac9b80b780504f2",
-    );
+    // The pipeline's own sha is the commit it ran on, which on a merged-results
+    // pipeline is a temporary merge commit. The handle proves which pipeline
+    // this is, and binding adopts the merge request's head from the provider.
+    expect(result.events[0]?.pr.headSha).toBe("");
     expect(result.events[0]?.pr.failedChecks?.[0]).toMatchObject({
       handle: { kind: "job", container: 31, id: 378 },
       name: "test-build",
