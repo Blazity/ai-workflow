@@ -876,7 +876,7 @@ test("the source build covers worker and dashboard without deployment side effec
   ]);
   assert.equal(
     dashboardPackage.scripts.build,
-    "tsx ../../scripts/gates/generate-block-catalog.ts --check && next build",
+    "tsx ../../scripts/gates/generate-block-catalog.ts --check && tsx ../../scripts/gates/generate-integration-registry.ts --check && next build",
   );
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /db:migrate/);
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /seed:auth-user/);
@@ -903,17 +903,30 @@ test("the source build uses the validator entrypoints and preserves deployment s
     workerPackage.scripts["mcp:contract:check"],
     "tsx scripts/generate-mcp-contract.ts --check",
   );
-  assert.deepEqual(commands(workerPackage.scripts.build), [
+  // The production build writes to the database before it compiles, so every
+  // check that can refuse the commit has to run first: a check that fails after
+  // `db:migrate` leaves production on a new schema with the old code serving.
+  // The order among the checks is free; the order against the writes is not.
+  const build = commands(workerPackage.scripts.build);
+  const writes = ["pnpm db:migrate", "pnpm seed:auth-user"].map((write) => build.indexOf(write));
+  assert.ok(writes.every((index) => index > 0), "the worker build migrates and seeds");
+  const checks = build.filter((command) => /--check\b|validate:|check-retired-env/u.test(command));
+  for (const command of [
     "tsx scripts/check-retired-env.ts",
     "pnpm validate:pre-sandbox",
     "pnpm validate:local-skills",
-    "pnpm db:migrate",
-    "pnpm seed:auth-user",
     "pnpm --dir ../.. run gen:blocks -- --check",
     "pnpm --dir ../.. run gen:integrations -- --check",
-    "rm -rf .nitro/workflow",
-    "NODE_OPTIONS=--max-old-space-size=8192 nitro build",
-  ]);
+  ]) {
+    assert.ok(checks.includes(command), `the worker build runs ${command}`);
+  }
+  for (const command of checks) {
+    assert.ok(
+      build.indexOf(command) < Math.min(...writes),
+      `${command} runs after the build has written to the database`,
+    );
+  }
+  assert.equal(build.at(-1), "NODE_OPTIONS=--max-old-space-size=8192 nitro build");
 });
 
 test("all setup-node workflow jobs use Node 24", async () => {

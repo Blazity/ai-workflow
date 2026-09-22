@@ -32,6 +32,8 @@ export function main(args = process.argv.slice(2)): void {
     return;
   }
   if (args.includes("--check")) {
+    // Against the committed form, which is the generation without fixtures by
+    // definition, whatever this shell or build exports.
     process.exitCode = checkIntegrationRegistry(options) ? 0 : 1;
     return;
   }

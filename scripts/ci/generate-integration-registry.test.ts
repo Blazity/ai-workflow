@@ -256,6 +256,35 @@ test("the build flag is the only difference between the two registries", async (
   assert.equal(await registry(), shipped);
 });
 
+/**
+ * The committed registry is the one generated without fixtures, by definition,
+ * so that is what `--check` compares against whatever the environment says. A
+ * build or a shell that still exports the flag would otherwise report every
+ * committed registry stale and advise generating the one CI refuses.
+ */
+test("--check compares the registry without fixtures, whatever the fixture flag says", async (t) => {
+  const root = await fixtureRoot("gen-integrations-check-flag");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeIntegration(root, "alpha", { id: "alpha" });
+  await writeIntegration(root, "_fixtures/demo", { id: "demo" });
+  generateIntegrationRegistry({ root });
+
+  const check = (env: NodeJS.ProcessEnv) =>
+    execFileAsync(process.execPath, ["--import", "tsx", generatorPath, "--root", root, "--check"], {
+      env: { ...process.env, ...env },
+    }).then(
+      () => ({ code: 0, stderr: "" }),
+      (error: { code: number; stderr: string }) => error,
+    );
+  assert.equal((await check({ INTEGRATION_FIXTURES: "1" })).code, 0);
+
+  generateIntegrationRegistry({ root, includeFixtures: true });
+  const stale = await check({ INTEGRATION_FIXTURES: "1" });
+  assert.equal(stale.code, 1, "a committed registry that carries a fixture is stale");
+  assert.match(stale.stderr, /Run pnpm run gen:integrations\./u);
+  assert.doesNotMatch(stale.stderr, /INTEGRATION_FIXTURES=1 pnpm/u);
+});
+
 test("the template is never registered, so copying it does not ship it", async (t) => {
   const root = await fixtureRoot("gen-integrations-template");
   t.after(() => rm(root, { recursive: true, force: true }));
