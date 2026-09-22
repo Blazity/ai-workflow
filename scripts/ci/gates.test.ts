@@ -1298,6 +1298,104 @@ test("a provider name only a comment carries is not coupling", () => {
 });
 
 /**
+ * A comment is prose only where the language says it is. A `//` inside a URL,
+ * a `/*` inside a glob and a slash inside a regular expression are code, and a
+ * gate that read them as the start of a comment would stop looking for the
+ * provider name at exactly the line that spells it.
+ */
+test("a provider name after comment-like text inside a string or a regex is still a mention", () => {
+  for (const [label, source] of [
+    ["a URL", 'export const docs = "https://docs.acme.test/jira/setup";\n'],
+    ["a glob", 'export const glob = "src/*";\nexport const kind = "jira";\n'],
+    ["a regex", 'export const slashes = /\\/\\//u; export const kind = "jira";\n'],
+    ["a template", "export const url = `https://${host}/`; export const kind = \"jira\";\n"],
+  ] as const) {
+    const root = coreReferenceRoot("core-references-literal-", {
+      "apps/worker/src/services/dispatch/route.ts": source,
+    }, {});
+    const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+    assert.equal(result.status, gateFailure, `${label}: ${result.stdout}`);
+    assert.match(result.stdout, /route\.ts names "jira"/u, label);
+  }
+});
+
+/**
+ * What a browser's style engine reads is not a provider: `ease-linear`,
+ * `linear-gradient(...)` and an animation's `linear` timing would otherwise
+ * refuse an integration called linear over a CSS keyword. The exemption is the
+ * text of a `className` or `style` attribute and nothing else, so a comparison
+ * written inside one still counts.
+ */
+test("text a className or style attribute carries is presentation, not a mention", () => {
+  const presentation = coreReferenceRoot("core-references-presentation-", {
+    "apps/worker/src/ui/bar.tsx": [
+      "export const Bar = ({ ms }: { ms: number }) => (",
+      '  <div className="ease-jira bg-jira-to-r" style={{ animation: `drain ${ms}ms jira forwards`, background: "jira-gradient(90deg)" }}>',
+      "    <span className={ms > 1 ? \"jira-a\" : `jira-${ms}`} />",
+      "  </div>",
+      ");",
+      "",
+    ].join("\n"),
+  }, {});
+  const passes = gate("core-references.mjs", ["--root", presentation, "--config", join(presentation, "core-references.json")]);
+  assert.equal(passes.status, gateSuccess, passes.stdout);
+
+  const branched = coreReferenceRoot("core-references-branched-", {
+    "apps/worker/src/ui/bar.tsx":
+      'export const Bar = ({ kind }: { kind: string }) => <div className={kind === "jira" ? "a" : "b"} />;\n',
+  }, {});
+  const fails = gate("core-references.mjs", ["--root", branched, "--config", join(branched, "core-references.json")]);
+  assert.equal(fails.status, gateFailure, fails.stdout);
+  assert.match(fails.stdout, /bar\.tsx names "jira"/u);
+
+  const visible = coreReferenceRoot("core-references-visible-", {
+    "apps/worker/src/ui/bar.tsx": 'export const Bar = () => <div className="x">Connect Jira</div>;\n',
+  }, {});
+  assert.equal(
+    gate("core-references.mjs", ["--root", visible, "--config", join(visible, "core-references.json")]).status,
+    gateFailure,
+    "words a person reads on the page are core naming the provider",
+  );
+});
+
+/**
+ * A config file at an app's root is core as much as a screen is: the
+ * dashboard's redirects, its middleware and the worker's bundler config all
+ * ship. Core is each app minus the directories the allowlist names as not
+ * core, so a config file added tomorrow is read without anybody listing it.
+ */
+test("the real allowlist reads the files at each app's root as core", async () => {
+  const { coreFiles } = (await import("../gates/core-references.mjs")) as {
+    coreFiles: (root: string, config: unknown) => string[];
+  };
+  const config = JSON.parse(readFileSync(join(repoRoot, "scripts/gates/core-references.json"), "utf8"));
+  const files = new Set(coreFiles(repoRoot, config));
+  for (const path of [
+    "apps/dashboard/next.config.ts",
+    "apps/dashboard/middleware.ts",
+    "apps/worker/nitro.config.ts",
+    "apps/worker/src/infra/runtime-env.ts",
+    "apps/dashboard/lib/cockpit/navigation.ts",
+  ]) {
+    assert.ok(files.has(path), `${path} is core and the gate does not read it`);
+  }
+  assert.ok(!files.has("apps/dashboard/next.config.test.ts"), "a test file is never core");
+  assert.ok(
+    [...files].every((path) => !/^apps\/worker\/(?:drizzle|e2e|scripts)\//u.test(path)),
+    "applied migrations, end-to-end suites and operations scripts are not core",
+  );
+});
+
+test("no gate source carries a NUL byte, so git and ripgrep read the gates as text", () => {
+  const directory = join(repoRoot, "scripts/gates");
+  const binary = readdirSync(directory, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .filter((path) => readFileSync(path).includes(0));
+  assert.deepEqual(binary, []);
+});
+
+/**
  * What S8 to S12 lean on: the day a provider ships as an integration, its
  * planned entry and its allowlist rows are dead weight that would go on
  * excusing core. The gate says so instead of passing.
@@ -1551,6 +1649,23 @@ test("a dashboard entry cannot reach our runtime through an import", () => {
   assert.equal(forbiddenSpecifier("integrations/jira/dashboard.tsx", "@integrations/host-ui"), null);
   assert.equal(forbiddenSpecifier("integrations/jira/worker.ts", "node:crypto"), null);
   assert.equal(forbiddenSpecifier("apps/dashboard/app/(cockpit)/layout.tsx", "next/headers"), null);
+});
+
+test("page code under a dashboard/ directory is held to the dashboard entry's rules", () => {
+  // ADR-010 and the cockpit's stylesheet sanction page code in `dashboard.tsx`
+  // or anywhere under `dashboard/` beside it; a rule that named only the entry
+  // file let the page one directory down import what the entry may not.
+  for (const page of [
+    "integrations/jira/dashboard/page.tsx",
+    "integrations/jira/dashboard/rows/table.ts",
+    "integrations/_fixtures/demo/dashboard/overview.tsx",
+  ]) {
+    assert.notEqual(forbiddenSpecifier(page, "node:fs"), null, page);
+    assert.notEqual(forbiddenSpecifier(page, "next/headers"), null, page);
+    assert.notEqual(forbiddenImport(page, "integrations/jira/worker.ts"), null, page);
+  }
+  // Only page code: a file whose name merely ends in "dashboard" is not.
+  assert.equal(forbiddenSpecifier("integrations/jira/webhook-dashboard.ts", "node:crypto"), null);
 });
 
 test("the dashboard registry stays out of every bundle that has no React", () => {

@@ -709,6 +709,10 @@ describe("work scope subject key", () => {
     // the sentence this replaces.
     const message = refused.success === false ? refused.error.issues[0].message : "";
     expect(message.includes("ticket:") && message.includes("pr:")).toBe(true);
+    // The same rule as the repository key's refusal: this package may not read
+    // the registry, so an example key would name a provider by guess, and a
+    // reader copies an example back verbatim.
+    expect(/\b(?:ticket|pr|repo|org):[a-z]+:/u.test(message)).toBe(false);
   });
 
   it("refuses a bare pull request path, which is the other shape people write", () => {
