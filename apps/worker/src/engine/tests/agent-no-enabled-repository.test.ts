@@ -135,12 +135,12 @@ vi.mock("../steps/workflow-ticket.js", () => ({
 }));
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
-    issueTracker: {
+    issueTrackerResolution: { ok: true, adapter: {
       postComment: jira.postComment,
       fetchTicket: jira.fetchTicket,
       moveTicket: jira.moveTicket,
       updateLabels: jira.updateLabels,
-    },
+    } },
     messaging: { notifyForTicket: jira.notifyForTicket },
   }),
 }));

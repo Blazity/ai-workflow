@@ -109,7 +109,7 @@ vi.mock("../steps/workflow-ticket.js", () => ({
   })),
 }));
 vi.mock("../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({ issueTracker: { postComment: jira.postComment } }),
+  createAdapters: () => ({ issueTrackerResolution: { ok: true, adapter: { postComment: jira.postComment }  }}),
 }));
 vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: vi.fn(async () => {}),

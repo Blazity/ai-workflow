@@ -18,7 +18,7 @@
  */
 import { vi } from "vitest";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
-import type { ResolvedAdapters } from "../engine/support/adapters.js";
+import type { Adapters } from "../engine/support/adapters.js";
 import type { ResolvedIssueTracker } from "../engine/support/issue-tracker-runtime.js";
 import { ticketSubjectKey } from "../engine/support/subject-key.js";
 
@@ -124,15 +124,14 @@ export function noIssueTrackerConnected(
  *
  * `tracker` is the deployment's answer: an adapter when one is connected,
  * `"not_connected"` when none is, `"unreadable"` when the integration settings
- * could not be read. The getter and `issueTrackerResolution` read that one
- * answer, as they do in the real function, so a subject that reaches the
- * tracker either way sees the same deployment. The rest is whatever the suite's
- * subject uses; a suite that passes none gets none.
+ * could not be read, carried in `issueTrackerResolution` exactly as the real
+ * function carries it. The rest is whatever the suite's subject uses; a suite
+ * that passes none gets none.
  */
 export function adaptersFor(
   tracker: IssueTrackerAdapter | "not_connected" | "unreadable",
   rest: Partial<Record<"vcs" | "messaging" | "runRegistry", unknown>> = {},
-): ResolvedAdapters {
+): Adapters {
   const issueTrackerResolution: ResolvedIssueTracker =
     tracker === "not_connected"
       ? {
@@ -155,12 +154,5 @@ export function adaptersFor(
             adapter: tracker,
             wiring: { projectKey: "PROJ", baseUrl: "https://tracker.example" },
           };
-  return {
-    ...rest,
-    get issueTracker(): IssueTrackerAdapter {
-      if (!issueTrackerResolution.ok) throw new Error(issueTrackerResolution.reason);
-      return issueTrackerResolution.adapter;
-    },
-    issueTrackerResolution,
-  } as ResolvedAdapters;
+  return { ...rest, issueTrackerResolution } as Adapters;
 }

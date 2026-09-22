@@ -485,6 +485,31 @@ describe("workflows.dispatch", () => {
     expect(await auditedErrorCodes()).toEqual(["CONFLICT"]);
   });
 
+  it("gives the key back when no issue tracker is usable for a ticket dispatch", async () => {
+    // What the dispatch service answers for a ticket input on a deployment with
+    // no tracker (issueTrackerForDispatch): refused before anything was
+    // reserved or moved, so the agent may ask again once an admin connects one.
+    const noTracker =
+      "No issue tracker is connected on this deployment, so there is no ticket to work from. Connect one on the Integrations page.";
+    service.dispatchManualWorkflow
+      .mockRejectedValueOnce(new ManualDispatchError(409, "integration_unavailable", noTracker))
+      .mockImplementationOnce(async (arg: { request: { requestId: string } }) => ({
+        requestId: arg.request.requestId,
+        status: "started",
+        runId: "wrun_after_connect",
+      }));
+    const client = await connectedClient();
+
+    const first = await client.callTool({ name: "workflows.dispatch", arguments: DISPATCH_ARGS });
+    const second = await client.callTool({ name: "workflows.dispatch", arguments: DISPATCH_ARGS });
+
+    expect(first.isError).toBe(true);
+    expect(errorPayload(first).code).toBe("VALIDATION_FAILED");
+    expect(errorText(first)).toBe(noTracker);
+    expect(second.isError).not.toBe(true);
+    expect(service.dispatchManualWorkflow).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the key when the provider could not be reached, because the ticket may already have moved", async () => {
     service.dispatchManualWorkflow.mockRejectedValue(
       new ManualDispatchError(

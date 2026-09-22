@@ -19,7 +19,7 @@ import {
   readConnectedDeployedWorkflowDefinitionVersion,
   readDeployedWorkflowDefinitionVersion,
 } from "../../engine/stored-definition-reads.js";
-import { ManualDispatchError } from "./errors.js";
+import { issueTrackerForDispatch, ManualDispatchError } from "./errors.js";
 import {
   acknowledgeManualDispatchStarted,
   acknowledgeConnectedManualDispatchStarted,
@@ -128,7 +128,7 @@ export async function preflightManualDispatch(input: {
 }): Promise<ManualDispatchPreflightResponse> {
   const resolved = await resolveManualDispatch({
     db: input.db,
-    issueTracker: input.adapters.issueTracker,
+    issueTrackerResolution: input.adapters.issueTrackerResolution,
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.dispatchInput,
@@ -194,7 +194,7 @@ export async function preflightConnectedManualDispatch(
   input: Omit<Parameters<typeof preflightManualDispatch>[0], "db">,
 ): Promise<ManualDispatchPreflightResponse> {
   const resolved = await resolveConnectedManualDispatch({
-    issueTracker: input.adapters.issueTracker,
+    issueTrackerResolution: input.adapters.issueTrackerResolution,
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.dispatchInput,
@@ -247,7 +247,7 @@ export async function dispatchManualWorkflow(input: {
 }): Promise<ManualDispatchResponse> {
   const resolved = await resolveManualDispatch({
     db: input.db,
-    issueTracker: input.adapters.issueTracker,
+    issueTrackerResolution: input.adapters.issueTrackerResolution,
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.request.input,
@@ -303,7 +303,7 @@ export async function dispatchConnectedManualWorkflow(
   input: Omit<Parameters<typeof dispatchManualWorkflow>[0], "db">,
 ): Promise<ManualDispatchResponse> {
   const resolved = await resolveConnectedManualDispatch({
-    issueTracker: input.adapters.issueTracker,
+    issueTrackerResolution: input.adapters.issueTrackerResolution,
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.request.input,
@@ -397,7 +397,7 @@ export async function recoverManualDispatches(input: {
       }
       const dispatchInput = storedInput(row);
       const resolveInput = {
-        issueTracker: input.adapters.issueTracker,
+        issueTrackerResolution: input.adapters.issueTrackerResolution,
         definitionId: row.definitionId,
         triggerNodeId: row.triggerNodeId,
         dispatchInput,
@@ -521,7 +521,7 @@ async function processManualDispatch(input: {
   let resolved: ResolvedManualDispatch;
   try {
     resolved = await input.store.resolve({
-      issueTracker: input.adapters.issueTracker,
+      issueTrackerResolution: input.adapters.issueTrackerResolution,
       definitionId: input.row.definitionId,
       triggerNodeId: input.row.triggerNodeId,
       dispatchInput: storedInput(input.row),
@@ -556,7 +556,9 @@ async function processManualDispatch(input: {
   if (resolved.inputKind === "ticket") {
     try {
       await input.store.transitionTicket({
-        issueTracker: input.adapters.issueTracker,
+        // A resolved ticket input read its ticket a moment ago, so this
+        // refuses only if the tracker went away in between.
+        issueTracker: issueTrackerForDispatch(input.adapters.issueTrackerResolution),
         ticketKey: resolved.ticketKey,
         target: aiColumnMoveTarget({
           COLUMN_AI: resolved.aiColumn,

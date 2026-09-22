@@ -175,12 +175,14 @@ export async function repairClarificationLabelStep(
 ): Promise<void> {
   "use step";
   const { createAdapters } = await import("../../engine/support/adapters.js");
+  const { issueTrackerIfConnected } = await import("../../engine/support/connected-issue-tracker.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../../engine/support/ticket-labels.js");
   const { updateConnectedTicketLabelsForRun } = await import(
     "../../engine/support/ticket-label-mutation.js"
   );
-  const { issueTracker } = await createAdapters();
-  if (typeof issueTracker.updateLabels !== "function") return;
+  // A repair of a label nobody can see without a tracker has nothing to do.
+  const issueTracker = issueTrackerIfConnected(await createAdapters());
+  if (typeof issueTracker?.updateLabels !== "function") return;
   await updateConnectedTicketLabelsForRun({
     issueTracker,
     ticketKey,

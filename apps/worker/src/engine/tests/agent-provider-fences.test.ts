@@ -37,12 +37,12 @@ vi.mock("../../db/repositories/active-runs.js", () => ({
 }));
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
-    issueTracker: {
+    issueTrackerResolution: { ok: true, adapter: {
       fetchTicket: mocks.fetchTicket,
       findCommentByMarker: mocks.findCommentByMarker,
       postComment: mocks.postComment,
       updateLabels: mocks.updateLabels,
-    },
+    } },
     messaging: { notifyForTicket: mocks.notifyForTicket },
   }),
 }));

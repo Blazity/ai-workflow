@@ -25,8 +25,10 @@ export async function postPrLinksComment(
     "../internal/ports.js"
   );
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
-  const { createAdapters } = await loadAdaptersPort();
-  const { issueTracker } = await createAdapters();
+  const { createAdapters, issueTrackerIfConnected } = await loadAdaptersPort();
+  // Best-effort like the post itself: no tracker leaves the links on the run.
+  const issueTracker = issueTrackerIfConnected(await createAdapters());
+  if (!issueTracker) return;
   const lines = prs.map((pr) => `- ${pr.provider}:${pr.repoPath}: #${pr.id} ${pr.url}`);
   try {
     await assertConnectedActiveRunOwner(owner);
@@ -137,9 +139,10 @@ export async function postRunAnalysisCommentStep(
   const { loadActiveRunOwnerPort, loadAdaptersPort, loadEnvironmentPort } =
     await import("../internal/ports.js");
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
-  const { createAdapters } = await loadAdaptersPort();
+  const { createAdapters, issueTrackerOrThrow } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
-  const { issueTracker } = await createAdapters();
+  // A throw is this comment's failure, recorded as such by every caller.
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
   await assertConnectedActiveRunOwner(owner);
   const attemptedAt = new Date().toISOString();
   const marker = analysisCommentMarker(report.runId, stage);
@@ -231,8 +234,8 @@ export async function postTicketComment(
     "../internal/ports.js"
   );
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
-  const { createAdapters } = await loadAdaptersPort();
-  const { issueTracker } = await createAdapters();
+  const { createAdapters, issueTrackerOrThrow } = await loadAdaptersPort();
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
   await assertConnectedActiveRunOwner(owner);
   return issueTracker.postComment(ticketId, comment);
 }
@@ -316,8 +319,11 @@ async function postFailureReasonCommentStep(
     "../internal/ports.js"
   );
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
-  const { createAdapters } = await loadAdaptersPort();
-  const { issueTracker } = await createAdapters();
+  const { createAdapters, issueTrackerIfConnected } = await loadAdaptersPort();
+  const issueTracker = issueTrackerIfConnected(await createAdapters());
+  // Best-effort: with no tracker there is no ticket to explain the failure on,
+  // and the run's own record still carries the reason.
+  if (!issueTracker) return;
   try {
     // Composed in workflow scope, which cannot see a secret stored in the
     // dashboard; a set that cannot be read posts nothing (the catch below).

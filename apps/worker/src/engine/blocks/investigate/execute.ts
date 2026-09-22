@@ -302,11 +302,12 @@ async function searchTrackerSource(adapters: Adapters, input: {
   maxResults: number;
 }): Promise<ProviderOutcome<TicketSummary[]>> {
   try {
-    const { issueTracker } = adapters;
-    if (typeof issueTracker.findTickets !== "function") {
-      // The configured tracker cannot serve keyword search at all, which is a
-      // capability gap rather than an outage, but reads the same to the
-      // caller: no tracker evidence this run.
+    const { issueTrackerIfConnected } = await import("../../support/connected-issue-tracker.js");
+    const issueTracker = issueTrackerIfConnected(adapters);
+    if (!issueTracker || typeof issueTracker.findTickets !== "function") {
+      // No usable tracker, or one that cannot serve keyword search at all:
+      // a capability gap rather than an outage, but it reads the same to the
+      // caller, no tracker evidence this run.
       return { status: "failed", reason: "unavailable" };
     }
     const value = await issueTracker.findTickets({

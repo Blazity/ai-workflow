@@ -32,6 +32,7 @@ import {
 } from "../overview/index.js";
 import { issueTrackerBaseUrl } from "../settings/index.js";
 import { createAdapters } from "../../engine/support/adapters.js";
+import { issueTrackerIfConnected } from "../../engine/support/connected-issue-tracker.js";
 
 /** The runs list as the wire carries it, minus the timestamp the route stamps. */
 export type DashboardRunsPage = Omit<RunsResponse, "generatedAt">;
@@ -112,7 +113,9 @@ export async function listLiveRuns(): Promise<LiveRunsResponse> {
   const [running, awaiting] = await Promise.all([
     collectLiveRuns({
       registry: adapters.runRegistry,
-      issueTracker: adapters.issueTracker,
+      // Only a title lookup, so no tracker titles a row by its subject key
+      // rather than taking the whole live board down with it.
+      issueTracker: issueTrackerIfConnected(adapters),
       ticketOrigin,
       resolveModels: resolveRunModels,
     }),

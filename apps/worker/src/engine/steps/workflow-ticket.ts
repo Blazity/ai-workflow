@@ -119,7 +119,10 @@ export async function resolveWorkflowTicketStep(
   const ticketKey = entry.ticketKey;
   if (!ticketKey) throw new Error("ticket-correlated workflow input is missing ticketKey");
   const { createAdapters } = await import("../support/adapters.js");
-  const issueTracker = (await createAdapters()).issueTracker;
+  const { issueTrackerOrThrow } = await import("../support/connected-issue-tracker.js");
+  // A ticket-correlated run starts from its ticket, and there is no ticket to
+  // read without a tracker: the run fails at its start, saying why.
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
   const ticket = await issueTracker.fetchTicket(ticketKey);
   if (entry.kind === "ticket" && ticket.trackerStatus.toLowerCase() !== columnAi.toLowerCase()) {
     return null;

@@ -27,6 +27,7 @@ import { BUILTIN_FALLBACK_DEFINITION_VERSION } from "../../engine/agent-input.js
 import { agentWorkflow } from "../../engine/index.js";
 import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import type { Adapters } from "../../engine/support/adapters.js";
+import { issueTrackerOrThrow } from "../../engine/support/connected-issue-tracker.js";
 import { logger } from "../../infra/logger.js";
 import { issueTrackerWiring, ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
 
@@ -78,7 +79,10 @@ export async function dispatchTicket(
 ): Promise<DispatchResult> {
   const expectedProjectKey = (await issueTrackerWiring()).projectKey.trim().toUpperCase();
   const expectedAiStatus = settings.COLUMN_AI.trim().toLowerCase();
-  const { issueTracker, runRegistry } = adapters;
+  // Dispatching a ticket reads it, so no tracker is this dispatch's failure;
+  // the wiring read above already refuses the same way.
+  const issueTracker = issueTrackerOrThrow(adapters);
+  const { runRegistry } = adapters;
 
   try {
     if (await runRegistry.isTicketFailed(ticketKey)) {

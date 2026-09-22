@@ -7,11 +7,11 @@
  * INTERNAL_ERROR, told it nothing it could act on, and spent the idempotency
  * key of every mutation that tried.
  */
-import type { ResolvedAdapters } from "../services/vcs/adapters.js";
+import type { Adapters } from "../services/vcs/adapters.js";
 import { McpPublicError } from "./contracts.js";
 
 export type ConnectedIssueTracker = Extract<
-  ResolvedAdapters["issueTrackerResolution"],
+  Adapters["issueTrackerResolution"],
   { ok: true }
 >;
 
@@ -32,7 +32,7 @@ const SETTINGS_UNREADABLE =
  * key back (`effectNotApplied`), the same terms a dispatch refused for an
  * unusable integration gets (`integration_unavailable` in tools/workflows.ts).
  */
-export function requireIssueTracker(adapters: ResolvedAdapters): ConnectedIssueTracker {
+export function requireIssueTracker(adapters: Adapters): ConnectedIssueTracker {
   const tracker = adapters.issueTrackerResolution;
   if (tracker.ok) return tracker;
   if (tracker.unreadable) {

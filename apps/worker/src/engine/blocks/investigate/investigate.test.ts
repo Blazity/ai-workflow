@@ -15,7 +15,7 @@ vi.mock("../../llm.js", () => ({
 }));
 vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
-    issueTracker: { findTickets: mocks.findTickets },
+    issueTrackerResolution: { ok: true, adapter: { findTickets: mocks.findTickets } },
     messaging: { searchMessages: mocks.searchMessages },
   }),
 }));

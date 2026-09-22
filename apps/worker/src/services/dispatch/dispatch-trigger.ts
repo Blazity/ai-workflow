@@ -30,6 +30,7 @@ import {
   getEnabledWorkflowDefinitionForTrigger,
 } from "../../engine/definition-trigger-routing.js";
 import { createAdapters } from "../../engine/support/adapters.js";
+import { issueTrackerOrThrow } from "../../engine/support/connected-issue-tracker.js";
 import { claimSubjectRun, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "../../infra/logger.js";
@@ -1103,7 +1104,9 @@ async function resolveTicketIdentity(
   | { status: "retryable_error"; diagnosticId: string }
 > {
   try {
-    const issueTracker = deps.issueTracker ?? (await createAdapters()).issueTracker;
+    // No tracker lands in the catch below like any other failed lookup: the
+    // ticket behind this pull request cannot be confirmed, so it is retried.
+    const issueTracker = deps.issueTracker ?? issueTrackerOrThrow(await createAdapters());
     const ticket = await issueTracker.fetchTicket(ticketKey);
     if (ticket.identifier.trim().toUpperCase() !== ticketKey.trim().toUpperCase()) {
       return { status: "ignored" };

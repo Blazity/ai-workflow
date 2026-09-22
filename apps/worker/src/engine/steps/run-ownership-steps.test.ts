@@ -37,7 +37,7 @@ vi.mock("../../engine/support/adapters.js", () => ({
       get: getRunOwner,
       listSandboxes,
     },
-    issueTracker: { updateLabels, fetchTicket },
+    issueTrackerResolution: { ok: true, adapter: { updateLabels, fetchTicket } },
   }),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));

@@ -14,7 +14,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 
-import type { ResolvedAdapters } from "../../engine/support/adapters.js";
+import type { Adapters } from "../../engine/support/adapters.js";
 import type {
   IssueTrackerAdapter,
   TicketContent,
@@ -103,7 +103,7 @@ async function seedRun(
   });
 }
 
-async function connectedClient(adapters: ResolvedAdapters) {
+async function connectedClient(adapters: Adapters) {
   const server = new McpServer({ name: "tickets-test", version: "0.1.0" });
   registerTicketTools(server, depsFor(db, () => new Date("2026-08-11T12:00:00.000Z"), { adapters }));
   const client = new Client({ name: "tickets-test-client", version: "1.0.0" });

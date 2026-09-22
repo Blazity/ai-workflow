@@ -5,7 +5,6 @@ import {
   type ResolvedIssueTracker,
 } from "./issue-tracker-runtime.js";
 import { createRepositoryVCS } from "./vcs-runtime.js";
-import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../../adapters/vcs/types.js";
 import type { MessagingSender } from "../../adapters/messaging/types.js";
 import type { IntegrationConnectionPin } from "@shared/contracts";
@@ -16,35 +15,24 @@ import type {
 } from "../../adapters/run-registry/types.js";
 
 export interface Adapters {
-  /** The tracker, or a throw carrying the sentence a person reads when there
-   *  is none. For a caller that cannot do its work without one. */
-  issueTracker: IssueTrackerAdapter;
+  /**
+   * The deployment's issue tracker, or the refusal (nothing connected, two
+   * connected and none selected, settings unreadable) with its reason.
+   *
+   * Data rather than a getter that throws, because no tracker is a state a
+   * deployment is allowed to be in (D9), and what it means depends on the
+   * caller: a manual dispatch of a ticket refuses, a pull request dispatch
+   * never needed one, the live run list titles its rows by subject key instead.
+   * A getter made every caller "cannot work without one" by default, and the
+   * ones that could were found one incident at a time. The type makes each
+   * caller say which it is: `issueTrackerIfConnected` for work that is
+   * optional, `issueTrackerOrThrow` for work that is not
+   * (`connected-issue-tracker.ts`).
+   */
+  issueTrackerResolution: ResolvedIssueTracker;
   vcs: VCSAdapter;
   messaging: MessagingSender;
   runRegistry: RunRegistryAdapter & ThreadStore;
-}
-
-/**
- * The adapters as `createAdapters` built them, with the tracker resolution
- * they were built from.
- *
- * `issueTrackerResolution` is the same answer `issueTracker` reads, as data
- * instead of a throw: the tracker, or the refusal (nothing connected, two
- * connected, settings unreadable) with its reason. It is for a caller that has
- * work to do either way (the poller's claim reconciliation, a cancel that moves
- * a ticket only when there is one) or that turns the refusal into an answer of
- * its own (an MCP tool). One resolution behind both fields, so they cannot
- * disagree the way two separate reads can when a tracker is connected between
- * them.
- */
-export interface ResolvedAdapters extends Adapters {
-  readonly issueTrackerResolution: ResolvedIssueTracker;
-}
-
-/** The tracker when there is one, and nothing when there is not: for a caller
- *  whose tracker work is optional and which has nothing to say about why. */
-export function issueTrackerIfConnected(adapters: ResolvedAdapters): IssueTrackerAdapter | undefined {
-  return adapters.issueTrackerResolution.ok ? adapters.issueTrackerResolution.adapter : undefined;
 }
 
 export interface VcsAdapterTarget {
@@ -105,15 +93,14 @@ export { coreServesIssueTracker } from "./issue-tracker-runtime.js";
  * cost of making the eighteen "can this tracker do X" checks in core answer
  * yes for a tracker that cannot: see `issue-tracker-runtime.ts`.
  *
- * The refusal is raised on `adapters.issueTracker`, not here, and that matters
- * on a deployment with no tracker connected, which is a legitimate state now.
- * Most callers of this function want the run registry, the VCS adapter or the
- * messaging sender and never touch the tracker; throwing here would take the
- * run list, the capacity snapshot and every notification down with the
- * tracker. This is NOT the proxy the paragraph above rejects: there is no
- * object to inspect, so `typeof adapters.issueTracker.updateLabels` never
- * answers for a tracker that cannot do it. Reaching for the tracker at all is
- * what fails, with the sentence a person reads.
+ * A deployment with no usable tracker gets adapters all the same, with the
+ * refusal in `issueTrackerResolution`, and that matters because no tracker is
+ * a legitimate state now. Most callers of this function want the run registry,
+ * the VCS adapter or the messaging sender and never touch the tracker; throwing
+ * here would take the run list, the capacity snapshot and every notification
+ * down with the tracker. This is NOT the proxy the paragraph above rejects:
+ * there is no tracker object to inspect until a caller has one, so a "can this
+ * tracker do X" check never answers for a tracker that cannot do it.
  */
 export async function createAdapters(
   vcsTarget?: VcsAdapterTarget,
@@ -124,7 +111,7 @@ export async function createAdapters(
    * notification wants.
    */
   integrationPins?: readonly IntegrationConnectionPin[],
-): Promise<ResolvedAdapters> {
+): Promise<Adapters> {
   const runRegistry = createConnectedPostgresRunRegistry();
   let vcs: VCSAdapter | undefined;
   // Which provider carries a message is the deployment's answer, read at each
@@ -137,9 +124,9 @@ export async function createAdapters(
   // different thing, and before this it left `createAdapters` entirely: the
   // poller calls this before its first phase, so a module that failed to load
   // inside the resolution killed the whole tick rather than the ticket phases.
-  // It lands on the same answer as every other refusal now (the getter and
-  // `issueTrackerResolution`), carrying what threw, so a caller that never
-  // touches the tracker is unaffected and one that does is told.
+  // It lands on the same answer as every other refusal now, carrying what
+  // threw, so a caller that never touches the tracker is unaffected and one
+  // that does is told.
   const tracker = await resolveActiveIssueTracker(integrationPins).catch(
     (error): ResolvedIssueTracker => ({
       ok: false,
@@ -150,10 +137,6 @@ export async function createAdapters(
     }),
   );
   const adapters = {
-    get issueTracker(): IssueTrackerAdapter {
-      if (!tracker.ok) throw new Error(tracker.reason);
-      return tracker.adapter;
-    },
     issueTrackerResolution: tracker,
     get vcs() {
       // No target, no adapter. Every production reader of this getter builds

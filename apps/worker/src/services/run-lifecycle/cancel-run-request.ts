@@ -9,7 +9,8 @@
  */
 import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import type { SettingsSnapshot } from "@shared/contracts";
-import { createAdapters, issueTrackerIfConnected } from "../../engine/support/adapters.js";
+import { createAdapters } from "../../engine/support/adapters.js";
+import { issueTrackerIfConnected } from "../../engine/support/connected-issue-tracker.js";
 import {
   cancelConnectedRunForOperator,
   type CancelRunForOperatorResult,

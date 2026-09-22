@@ -65,6 +65,7 @@ vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
 const { dispatchTicket, STALE_CLAIM_MS, capacityConsumerCount } = await import(
   "./dispatch.js"
 );
+const issueTrackerSupport = await import("../../test-support/issue-tracker.js");
 const { NO_DEFINITION_BLOCKED_REASON } = await import("../run-lifecycle/run-start-lifecycle.js");
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -155,19 +156,22 @@ function ticket(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function adapters(runRegistry = registry(), ticketValue = ticket()): Adapters {
-  return {
-    runRegistry,
-    issueTracker: {
-      fetchTicket: vi.fn().mockResolvedValue(ticketValue),
-      moveTicket: vi.fn(),
-      postComment: vi.fn(),
-      ticketsInStatus: vi.fn(),
-      getCurrentUserAccountId: vi.fn().mockResolvedValue("bot-not-the-actor"),
-    },
-    messaging: {} as never,
-    vcs: {} as never,
+function adapters(runRegistry = registry(), ticketValue = ticket()) {
+  const issueTracker = {
+    fetchTicket: vi.fn().mockResolvedValue(ticketValue),
+    moveTicket: vi.fn(),
+    postComment: vi.fn(),
+    ticketsInStatus: vi.fn(),
+    getCurrentUserAccountId: vi.fn().mockResolvedValue("bot-not-the-actor"),
   };
+  const { adaptersFor } = issueTrackerSupport;
+  // `issueTracker` rides alongside so a test can reach the mock it configured.
+  const built: Adapters = adaptersFor(issueTracker as never, {
+    runRegistry,
+    messaging: {},
+    vcs: {},
+  });
+  return Object.assign(built, { issueTracker });
 }
 
 describe("dispatchTicket owner reservation", () => {

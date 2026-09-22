@@ -151,6 +151,19 @@ describe("collectLiveRuns", () => {
     });
   });
 
+  it("titles each row by its ticket key when the deployment has no tracker", async () => {
+    const registry = makeRegistry([{ ticketKey: "AWT-101", runId: "run_a" }]);
+
+    const rows = await collectLiveRuns({
+      registry,
+      ticketOrigin: "",
+      resolveModels: attributeAll("claude-opus-4-7"),
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: "run_a", ticket: "AWT-101", ticketTitle: "AWT-101" });
+  });
+
   it("returns an empty array when the registry is empty", async () => {
     const rows = await collectLiveRuns({
       registry: makeRegistry([]),

@@ -19,6 +19,7 @@ import { repositoryCatalogProviderSchema, type VcsProviderKind } from "@shared/c
 import { env } from "../../infra/vcs-config.js";
 import type { LlmProvider } from "../../infra/llm-provider.js";
 import { createAdapters } from "./adapters.js";
+import { issueTrackerOrThrow } from "./connected-issue-tracker.js";
 import { createRepositoryVCS } from "./vcs-runtime.js";
 
 /** Exactly the capabilities a block declared, each as the SDK types it. */
@@ -34,7 +35,9 @@ export async function integrationCapabilityAccess(
       : null;
   for (const capability of capabilities) {
     if (capability === "issue_tracker" && adapters) {
-      access.issue_tracker = adapters.issueTracker;
+      // The block declared it cannot work without one, so none is its failure,
+      // with the sentence that says which of the refusals it is.
+      access.issue_tracker = issueTrackerOrThrow(adapters);
       continue;
     }
     if (capability === "messaging" && adapters) {

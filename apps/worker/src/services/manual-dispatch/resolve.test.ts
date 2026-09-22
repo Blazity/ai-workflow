@@ -250,7 +250,14 @@ describe("manual dispatch against a definition repository pin", () => {
 
   const issueTracker = {
     fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }),
-  } as unknown as Parameters<typeof resolveManualDispatch>[0]["issueTracker"];
+  };
+  const issueTrackerResolution = {
+    ok: true,
+    id: "jira",
+    name: "Jira",
+    adapter: issueTracker,
+    wiring: { projectKey: "AIW", baseUrl: "https://tracker.example" },
+  } as unknown as Parameters<typeof resolveManualDispatch>[0]["issueTrackerResolution"];
 
   function deployed(
     scope: "any" | "workflow_owned",
@@ -339,7 +346,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -356,7 +363,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -380,7 +387,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -400,7 +407,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -420,7 +427,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -443,7 +450,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -460,7 +467,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -479,7 +486,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -502,7 +509,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -519,7 +526,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -528,6 +535,99 @@ describe("manual dispatch against a definition repository pin", () => {
     ).resolves.toMatchObject({
       subjectKey: "pr:github:acme/api#42",
       ticketKey: "AIW-1",
+    });
+  });
+
+  describe("on a deployment with no usable issue tracker", () => {
+    const NOTHING_CONNECTED =
+      "No issue tracker is connected on this deployment, so there is no ticket to work from. Connect one on the Integrations page.";
+    const nothingConnected = {
+      ok: false,
+      unreadable: false,
+      reason: NOTHING_CONNECTED,
+    } as Parameters<typeof resolveManualDispatch>[0]["issueTrackerResolution"];
+    const unreadable = {
+      ok: false,
+      unreadable: true,
+      reason:
+        "This deployment's integration settings could not be read (neon: connection reset), so its issue tracker was not used.",
+    } as Parameters<typeof resolveManualDispatch>[0]["issueTrackerResolution"];
+
+    it("resolves a pull request whose trigger accepts any pull request", async () => {
+      // The subject is the pull request alone, so a GitHub-only deployment has
+      // everything this dispatch needs.
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTrackerResolution: nothingConnected,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "pull_request", url: pr.prUrl },
+          repositoryCatalog,
+        }),
+      ).resolves.toMatchObject({ subjectKey: "pr:github:acme/api#42", ticketKey: null });
+    });
+
+    it("refuses a workflow-owned pull request, whose ticket it cannot verify, as a refusal and not an outage", async () => {
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+        deployed("workflow_owned", {}),
+      );
+
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTrackerResolution: nothingConnected,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "pull_request", url: pr.prUrl },
+          repositoryCatalog,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "integration_unavailable",
+        message: NOTHING_CONNECTED,
+      });
+    });
+
+    it("refuses a ticket input with the sentence that says where to fix it", async () => {
+      const ticketTrigger = deployed("any", {});
+      ticketTrigger.definition.nodes[0]!.type = "trigger_ticket_ai";
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(ticketTrigger);
+
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTrackerResolution: nothingConnected,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "ticket", ticketKey: "AIW-1" },
+          repositoryCatalog,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "integration_unavailable",
+        message: NOTHING_CONNECTED,
+      });
+    });
+
+    it("answers settings it could not read as retryable, without the database's words", async () => {
+      const ticketTrigger = deployed("any", {});
+      ticketTrigger.definition.nodes[0]!.type = "trigger_ticket_ai";
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(ticketTrigger);
+
+      const refusal = await resolveManualDispatch({
+        db: definitionDb,
+        issueTrackerResolution: unreadable,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "ticket", ticketKey: "AIW-1" },
+        repositoryCatalog,
+      }).catch((error: unknown) => error);
+
+      expect(refusal).toMatchObject({ statusCode: 503, code: "integration_unavailable" });
+      expect((refusal as Error).message).not.toContain("neon");
     });
   });
 });

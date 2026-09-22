@@ -42,6 +42,7 @@ const {
   trackerMoveTarget,
 } = await import("./issue-tracker-runtime.js");
 const { createAdapters } = await import("./adapters.js");
+const { issueTrackerIfConnected, issueTrackerOrThrow } = await import("./connected-issue-tracker.js");
 
 const NO_PROVIDER =
   "No issue tracker is connected on this deployment, so there is no ticket to work from. Connect one on the Integrations page.";
@@ -265,7 +266,7 @@ describe("what core asks of the resolution", () => {
     const adapter = { ...adapterThatKnowsItself(), listStatuses: async () => [] };
     readable(provider("Test Tracker", { adapter }));
 
-    const { issueTracker } = await createAdapters();
+    const issueTracker = issueTrackerOrThrow(await createAdapters());
 
     expect(issueTracker.getCurrentUserAccountId).toBeTypeOf("function");
     expect((issueTracker as unknown as Record<string, unknown>).updateLabels).toBeUndefined();
@@ -276,14 +277,20 @@ describe("what core asks of the resolution", () => {
     // legitimate state now, and most callers of `createAdapters` want the run
     // registry or the sender. Refusing when the set is built would take the
     // run list, the capacity snapshot and every notification down with the
-    // tracker, so the refusal waits until something reaches for the tracker.
+    // tracker, so the refusal is carried as data for the caller to decide on.
     readable();
 
     const adapters = await createAdapters();
 
     expect(adapters.runRegistry).toBeDefined();
     expect(adapters.messaging).toBeDefined();
-    expect(() => adapters.issueTracker).toThrow(NO_PROVIDER);
+    expect(adapters.issueTrackerResolution).toEqual({
+      ok: false,
+      unreadable: false,
+      reason: NO_PROVIDER,
+    });
+    expect(issueTrackerIfConnected(adapters)).toBeUndefined();
+    expect(() => issueTrackerOrThrow(adapters)).toThrow(NO_PROVIDER);
   });
 
   it("turns an unexpected throw into the same refusal, not into a dead caller", async () => {
@@ -291,14 +298,14 @@ describe("what core asks of the resolution", () => {
     // is a different thing: a module that failed to load, a driver that gave
     // up. The poller builds its adapters BEFORE its first phase, so a throw
     // escaping here killed the whole tick, housekeeping included, rather than
-    // the ticket half. It lands on the getter now, carrying what threw.
+    // the ticket half. It lands on the resolution now, carrying what threw.
     resolveUsableIntegrations.mockRejectedValue(new Error("module load failed"));
 
     const adapters = await createAdapters();
 
     expect(adapters.runRegistry).toBeDefined();
     expect(adapters.messaging).toBeDefined();
-    expect(() => adapters.issueTracker).toThrow("module load failed");
+    expect(() => issueTrackerOrThrow(adapters)).toThrow("module load failed");
   });
 
   it("throws the refusal, in the words a person reads, when there is no tracker", async () => {

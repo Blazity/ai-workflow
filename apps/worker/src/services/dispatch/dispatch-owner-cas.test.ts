@@ -127,13 +127,16 @@ describe("claimSubjectRun", () => {
     const runRegistry = registry();
     hostedStart.mockResolvedValueOnce({ runId: "run-hosted" });
     const adapters = {
-      issueTracker: {
-        fetchTicket: vi.fn(() => Promise.resolve({
-          id: "1",
-          identifier: "PROJ-1",
-          title: "Move engine",
-          trackerStatus: "AI",
-        })),
+      issueTrackerResolution: {
+        ok: true,
+        adapter: {
+          fetchTicket: vi.fn(() => Promise.resolve({
+            id: "1",
+            identifier: "PROJ-1",
+            title: "Move engine",
+            trackerStatus: "AI",
+          })),
+        },
       },
       runRegistry,
     } as never;

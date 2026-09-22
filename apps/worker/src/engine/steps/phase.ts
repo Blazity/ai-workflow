@@ -393,11 +393,14 @@ async function fetchAttachments(
     return [];
   }
 
-  const { createAdapters } = await loadAdaptersPort();
+  const { createAdapters, issueTrackerOrThrow } = await loadAdaptersPort();
   const { fetchAttachmentsWithRetry } = await import("../../sandbox/attachments.js");
-  const { issueTracker } = await createAdapters();
+  // The attachments are the ticket's, so a run working from a ticket with no
+  // tracker to download them from fails here rather than working without
+  // what the ticket told it.
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
 
-  // downloadAttachment is optional on IssueTrackerAdapter — not all trackers
+  // downloadAttachment is optional on IssueTrackerAdapter; not all trackers
   // support it. If absent, skip attachments cleanly.
   if (typeof issueTracker.downloadAttachment !== "function") {
     log.warn(

@@ -156,9 +156,9 @@ async function trackerFetch(target: string | URL): Promise<Response> {
   if (url.includes("/myself")) {
     try {
       const tracker = state.createAdapters() as {
-        issueTracker: { getCurrentUserAccountId: () => Promise<string> };
+        issueTrackerResolution: { adapter: { getCurrentUserAccountId: () => Promise<string> } };
       };
-      return new Response(JSON.stringify({ accountId: await tracker.issueTracker.getCurrentUserAccountId() }), {
+      return new Response(JSON.stringify({ accountId: await tracker.issueTrackerResolution.adapter.getCurrentUserAccountId() }), {
         status: 200,
       });
     } catch {
@@ -297,7 +297,7 @@ function adapters(options: {
         updatedAt: Date.now(),
       };
   return {
-    issueTracker: {
+    issueTrackerResolution: { ok: true, adapter: {
       getCurrentUserAccountId: vi
         .fn()
         .mockResolvedValue(options.accountId ?? "99:the-workflow-account"),
@@ -308,7 +308,7 @@ function adapters(options: {
         ...(options.liveStatusId ? { trackerStatusId: options.liveStatusId } : {}),
       }),
       resolveMoveTargetStatus: vi.fn().mockResolvedValue(null),
-    },
+    } },
     runRegistry: { get: vi.fn().mockResolvedValue(active) },
     messaging: { notifyForTicket: vi.fn().mockResolvedValue(undefined) },
   };
@@ -431,7 +431,7 @@ describe("POST /webhooks/jira, against recorded Jira deliveries", () => {
 
     it("treats a tracker that cannot say who acted as somebody else acting", async () => {
       const connected = adapters();
-      connected.issueTracker.getCurrentUserAccountId.mockRejectedValue(
+      connected.issueTrackerResolution.adapter.getCurrentUserAccountId.mockRejectedValue(
         new Error("Jira unavailable"),
       );
       state.createAdapters.mockReturnValue(connected);
@@ -589,7 +589,7 @@ describe("POST /webhooks/jira, against recorded Jira deliveries", () => {
         ticketKey: "TEST-1",
         target: { ownerToken: "owner-1", runId: "run-1" },
         runRegistry: connected.runRegistry,
-        issueTracker: connected.issueTracker,
+        issueTracker: connected.issueTrackerResolution.adapter,
         reason: "Ticket left the AI column (AI → In Progress) via Jira webhook",
         clarificationNotice: { aiColumnName: "AI" },
       });
@@ -826,7 +826,7 @@ describe("POST /webhooks/jira, against recorded Jira deliveries", () => {
       // person pulling the ticket out.
       board({ projectKey: "ABC", ai: "AI", review: "Weryfikacja" });
       const connected = adapters({ liveStatus: "Weryfikacja", liveStatusId: "3" });
-      connected.issueTracker.resolveMoveTargetStatus.mockResolvedValue({
+      connected.issueTrackerResolution.adapter.resolveMoveTargetStatus.mockResolvedValue({
         id: "3",
         name: "Weryfikacja",
       });
@@ -842,7 +842,7 @@ describe("POST /webhooks/jira, against recorded Jira deliveries", () => {
     it("still cancels a genuine pull-out when the resolved destination differs", async () => {
       board({ projectKey: "ABC", ai: "AI", review: "Weryfikacja" });
       const connected = adapters({ liveStatus: "Gotowe", liveStatusId: "10002" });
-      connected.issueTracker.resolveMoveTargetStatus.mockResolvedValue({
+      connected.issueTrackerResolution.adapter.resolveMoveTargetStatus.mockResolvedValue({
         id: "11418",
         name: "Weryfikacja",
       });

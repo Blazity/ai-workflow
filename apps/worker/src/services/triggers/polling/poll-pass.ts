@@ -57,11 +57,8 @@ import {
   sweepConnectedOrphanedRunningRuns,
   upsertConnectedRunSnapshots,
 } from "../../../db/repositories/runs/telemetry.js";
-import {
-  createAdapters,
-  issueTrackerIfConnected,
-  type ResolvedAdapters,
-} from "../../../engine/support/adapters.js";
+import { createAdapters, type Adapters } from "../../../engine/support/adapters.js";
+import { issueTrackerIfConnected } from "../../../engine/support/connected-issue-tracker.js";
 import {
   redispatchPendingWebhookDeliveries,
   sweepConnectedWebhookRateLimits,
@@ -574,7 +571,7 @@ export async function runPollPass(
 }
 
 async function evaluateScheduleTriggers(
-  adapters: ResolvedAdapters,
+  adapters: Adapters,
   settings: SettingsSnapshot,
 ): Promise<ReturnType<typeof runScheduleTriggerPass>> {
   return await runScheduleTriggerPass(
@@ -613,7 +610,7 @@ async function evaluateScheduleTriggers(
 }
 
 async function recoverPendingWebhookDeliveries(
-  adapters: ResolvedAdapters,
+  adapters: Adapters,
   settings: SettingsSnapshot,
 ): Promise<{ attempted: number; started: number; errors: number }> {
   try {
@@ -635,7 +632,7 @@ async function recoverPendingWebhookDeliveries(
 }
 
 async function recoverPendingTriggers(
-  adapters: ResolvedAdapters,
+  adapters: Adapters,
   releasedSubjects: ReadonlySet<string>,
   mayStart: boolean,
   settings: SettingsSnapshot,
@@ -728,7 +725,7 @@ function logTicketPhasesSkipped(
  * by skipping the ticket phases and nothing else.
  */
 async function readTicketBoard(
-  adapters: ResolvedAdapters,
+  adapters: Adapters,
   settings: SettingsSnapshot,
 ): Promise<BoardRead> {
   const tracker = adapters.issueTrackerResolution;
@@ -752,7 +749,7 @@ async function readTicketBoard(
 }
 
 async function recoverManualDispatchRequests(
-  adapters: ResolvedAdapters,
+  adapters: Adapters,
   settings: SettingsSnapshot,
   readCatalog: (phase: string) => Promise<RepositoryCatalogSnapshot | null>,
 ): Promise<Awaited<ReturnType<typeof recoverManualDispatches>>> {
@@ -775,7 +772,7 @@ async function recoverManualDispatchRequests(
  * the rest; see "no board" in `reconcileRuns`.
  */
 async function reconcileClaims(input: {
-  adapters: ResolvedAdapters;
+  adapters: Adapters;
   settings: SettingsSnapshot;
   protection: DispatchProtection;
   aiColumnTickets: readonly string[] | null;
@@ -820,7 +817,7 @@ async function reconcileClaims(input: {
 async function runTicketPhases(input: {
   board: Extract<BoardRead, { ok: true }>;
   protection: DispatchProtection;
-  adapters: ResolvedAdapters;
+  adapters: Adapters;
   settings: SettingsSnapshot;
   readCatalog: (phase: string) => Promise<RepositoryCatalogSnapshot | null>;
 }): Promise<TicketPhases> {
@@ -876,7 +873,7 @@ async function runTicketPhases(input: {
 
 async function recoverApprovedPlanDispatches(
   blockingApprovals: ApprovalRow[],
-  adapters: ResolvedAdapters,
+  adapters: Adapters,
   issueTracker: IssueTrackerAdapter,
   settings: SettingsSnapshot,
 ): Promise<{ scanned: number; started: number; blocked: number; errors: number }> {
@@ -965,7 +962,7 @@ interface DispatchOutcome {
 
 async function dispatchDiscoveredTickets(
   board: Extract<BoardRead, { ok: true }>,
-  adapters: ResolvedAdapters,
+  adapters: Adapters,
   protectedSubjects: ReadonlySet<string>,
   settings: SettingsSnapshot,
 ): Promise<DispatchOutcome> {
