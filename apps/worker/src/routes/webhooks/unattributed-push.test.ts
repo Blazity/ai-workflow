@@ -118,7 +118,7 @@ vi.mock("../../services/system/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock("../../services/system/observations.js", () => ({
-  recordSystemHealthObservation: async () => {},
+  recordWebhookDelivery: async () => {},
 }));
 
 const deferred: Promise<unknown>[] = [];

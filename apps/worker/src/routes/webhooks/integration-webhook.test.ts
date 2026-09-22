@@ -109,7 +109,7 @@ vi.mock("../../services/system/logger.js", () => ({
 }));
 
 vi.mock("../../services/system/observations.js", () => ({
-  recordSystemHealthObservation: async (observation: {
+  recordWebhookDelivery: async (observation: {
     integrationId: string;
     outcome: string;
     reason: string;
@@ -949,7 +949,7 @@ describe("the verdict on a pull request delivery", () => {
     expect(await response.json()).toEqual({ status: "dispatched", runId: "run-created" });
     expect(state.legacyGate).not.toHaveBeenCalled();
     expect(state.observations).toEqual([
-      { integrationId: "gitlab", checkId: "webhook-delivery", outcome: "accepted", reason: "request_accepted" },
+      { integrationId: "gitlab", outcome: "accepted", reason: "request_accepted" },
     ]);
   });
 
@@ -1002,7 +1002,7 @@ describe("the verdict on a pull request delivery", () => {
 
     expect(response.status).toBe(503);
     expect(state.observations).toEqual([
-      { integrationId: "gitlab", checkId: "webhook-delivery", outcome: "rejected", reason: "trigger_error" },
+      { integrationId: "gitlab", outcome: "rejected", reason: "trigger_error" },
     ]);
   });
 
@@ -1013,7 +1013,7 @@ describe("the verdict on a pull request delivery", () => {
 
     expect(response.status).toBe(500);
     expect(state.observations).toEqual([
-      { integrationId: "gitlab", checkId: "webhook-delivery", outcome: "rejected", reason: "handler_failed" },
+      { integrationId: "gitlab", outcome: "rejected", reason: "handler_failed" },
     ]);
   });
 
@@ -1026,7 +1026,7 @@ describe("the verdict on a pull request delivery", () => {
 
     expect(response.status).toBe(500);
     expect(state.observations).toEqual([
-      { integrationId: "gitlab", checkId: "webhook-delivery", outcome: "rejected", reason: "handler_failed" },
+      { integrationId: "gitlab", outcome: "rejected", reason: "handler_failed" },
     ]);
   });
 

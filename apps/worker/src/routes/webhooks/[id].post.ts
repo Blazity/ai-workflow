@@ -501,11 +501,9 @@ function stringValues(query: Record<string, unknown>): Record<string, string> {
 }
 
 /**
- * Record ingress without making a provider wait on the database.
- *
- * The scope is deliberately the deployment default. Core neither reads nor
- * hashes the integration's signing secret, so every integration webhook can
- * use the same observation check without widening its secret boundary.
+ * Record ingress without making a provider wait on the database, under this
+ * deployment's own scope (see `recordWebhookDelivery`), which is the one the
+ * health page reads back.
  */
 function observeWebhook(
   integrationId: string,
@@ -513,15 +511,8 @@ function observeWebhook(
   reason: string,
 ): void {
   const write = (async () => {
-    const { recordSystemHealthObservation } = await import(
-      "../../services/system/observations.js"
-    );
-    await recordSystemHealthObservation({
-      integrationId,
-      checkId: "webhook-delivery",
-      outcome,
-      reason,
-    });
+    const { recordWebhookDelivery } = await import("../../services/system/observations.js");
+    await recordWebhookDelivery({ integrationId, outcome, reason });
   })().catch(async (error: unknown) => {
     const { logger } = await import("../../services/system/logger.js");
     logger.warn(

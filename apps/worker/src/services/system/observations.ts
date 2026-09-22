@@ -6,12 +6,57 @@ import {
   type SystemHealthObservation,
   type SystemHealthObservationOutcome,
 } from "../../db/repositories/system-health.js";
+import { deploymentPublicBaseUrl } from "../../infra/public-base-url.js";
 
 export type { SystemHealthObservation, SystemHealthObservationOutcome };
 
-export function systemHealthObservationScope(secret: string | undefined): string {
-  if (!secret) return "deployment:unconfigured";
-  return `deployment:${createHash("sha256").update(secret).digest("hex")}`;
+/**
+ * A one-way scope for evidence this deployment records, from a value that
+ * tells it apart from another deployment writing to the same database: a
+ * provider's signing secret, or the deployment's public address.
+ */
+export function systemHealthObservationScope(identity: string | undefined): string {
+  if (!identity) return "deployment:unconfigured";
+  return `deployment:${createHash("sha256").update(identity).digest("hex")}`;
+}
+
+/** The check an integration webhook's deliveries are recorded and reported under. */
+export const WEBHOOK_DELIVERY_CHECK_ID = "webhook-delivery";
+
+/**
+ * Integration webhook deliveries as THIS deployment saw them.
+ *
+ * The generic route writes them and the health page reads them, both through
+ * the pair below, so the two cannot disagree about which deployment's record
+ * they mean. The scope is the deployment's public address, hashed: demo shares
+ * production's database, and a delivery demo accepted must not paint
+ * production's webhook Live. Core never reads an integration's signing secret
+ * to tell the two apart, which is what the scope used to be derived from.
+ */
+function webhookDeliveryScope(): string {
+  return systemHealthObservationScope(deploymentPublicBaseUrl());
+}
+
+export function recordWebhookDelivery(
+  input: {
+    integrationId: string;
+    outcome: SystemHealthObservationOutcome;
+    reason: string;
+  },
+  now: Date = new Date(),
+): Promise<void> {
+  return recordConnectedSystemHealthObservation(
+    { ...input, checkId: WEBHOOK_DELIVERY_CHECK_ID, scope: webhookDeliveryScope() },
+    now,
+  );
+}
+
+export function latestWebhookDeliveries(integrationId: string): Promise<SystemHealthObservation[]> {
+  return getConnectedLatestSystemHealthObservations(
+    integrationId,
+    WEBHOOK_DELIVERY_CHECK_ID,
+    webhookDeliveryScope(),
+  );
 }
 
 export function recordSystemHealthObservation(

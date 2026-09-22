@@ -89,19 +89,16 @@ vi.mock("../../services/system/provider-webhook-observation.js", () => ({
   },
 }));
 vi.mock("../../services/system/observations.js", () => ({
-  recordSystemHealthObservation: async (observation: {
+  recordWebhookDelivery: async (observation: {
     integrationId: string;
-    checkId: string;
     outcome: string;
     reason: string;
   }) => {
-    if (observation.checkId === "webhook-delivery") {
-      state.observations.push({
-        integrationId: observation.integrationId,
-        outcome: observation.outcome,
-        reason: observation.reason,
-      });
-    }
+    state.observations.push({
+      integrationId: observation.integrationId,
+      outcome: observation.outcome,
+      reason: observation.reason,
+    });
   },
   systemHealthObservationScope: () => "deployment:test",
 }));
