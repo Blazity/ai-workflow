@@ -58,9 +58,16 @@ export async function readIntegrationPageData(
     };
   }
 
-  const { redactIntegrationText, secretValuesOf } = await import("./connection-values.js");
+  // The usable runtime's reader, not the registry's: what it throws arrives
+  // with this connection's secrets already taken out, and a provider that
+  // echoes a credential in an error body is normal, while that body is what a
+  // person reads on a screen.
+  const read = usable.runtime.api?.[pageId] as
+    | ((context: typeof usable.ctx) => Promise<JsonValue>)
+    | undefined;
+  if (typeof read !== "function") return { status: "none" };
   try {
-    const value = await (reader as (context: typeof usable.ctx) => Promise<JsonValue>)(usable.ctx);
+    const value = await read(usable.ctx);
     return { status: "ok", value };
   } catch (error) {
     const { logger } = await import("../../infra/logger.js");
@@ -68,14 +75,7 @@ export async function readIntegrationPageData(
       { integration: integrationId, page: pageId },
       "integration_page_data_failed",
     );
-    // A provider that echoes a credential in an error body is normal, and that
-    // body is what a person reads on a screen.
-    const secrets = secretValuesOf(manifest, usable.ctx.connection as never);
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      status: "unavailable",
-      cause: "provider",
-      reason: redactIntegrationText(message, secrets).slice(0, 300),
-    };
+    return { status: "unavailable", cause: "provider", reason: message.slice(0, 300) };
   }
 }

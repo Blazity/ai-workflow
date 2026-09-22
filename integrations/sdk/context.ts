@@ -142,17 +142,20 @@ type LlmAccess<B extends IntegrationBlockManifest> = B extends {
  *
  * Core applies a per-attempt timeout and retries a read (GET, HEAD, OPTIONS)
  * after a network error, a 429 or a 5xx, honouring `Retry-After` up to
- * `maxRetryAfterMs`. Nothing else is retried unless `retries` says so: a PUT
- * or a DELETE is a write at these providers (a merge, a rebase, a file
- * commit), and repeating one after an ambiguous 5xx reports a conflict for
- * work that landed. A `signal` in `init` ends the request as a whole, retries
- * included, alongside `ctx.signal`. A non-2xx response is returned, not
- * thrown.
+ * `maxRetryAfterMs`. A write is retried after a 429 and nothing else: a 429
+ * is the provider saying it did nothing, so sending it again once the wait has
+ * passed cannot do the work twice, while a PUT or a DELETE repeated after an
+ * ambiguous 5xx reports a conflict for a merge, a rebase or a file commit
+ * that landed. (A write whose body is a stream, or a `Request` object, is
+ * sent once, because its body cannot be sent twice.) `retries` overrides all
+ * of it. A `signal` in `init` ends the request as a whole, retries included,
+ * alongside `ctx.signal`. A non-2xx response is returned, not thrown.
  *
  * What a failed request throws has every connection secret taken out of its
- * message and its causes, and keeps its `name`: a deadline is still a
- * `TimeoutError` or an `AbortError`, and "never reached the server" is still a
- * `TypeError` with a cause.
+ * message, its stack, its fields and its causes, and is otherwise the error it
+ * was: the same class and `name` (a deadline is still a `TimeoutError` or an
+ * `AbortError`, "never reached the server" is still a `TypeError` with a
+ * cause), and the same `code` and `status`.
  */
 export interface IntegrationHttp {
   fetch(input: string | URL | Request, init?: IntegrationRequestInit): Promise<Response>;
@@ -162,9 +165,11 @@ export interface IntegrationRequestInit extends RequestInit {
   /** Per attempt. Defaults to `INTEGRATION_HTTP_DEFAULTS.timeoutMs`. */
   timeoutMs?: number;
   /**
-   * Extra attempts. Defaults to `INTEGRATION_HTTP_DEFAULTS.retries` for a read
-   * and 0 for everything else. Set it on a write only where the provider makes
-   * the request idempotent (an idempotency key, a conditional header).
+   * Extra attempts. Defaults to `INTEGRATION_HTTP_DEFAULTS.retries` for a read,
+   * and for a write only after a 429; 0 for a write after anything else. Set
+   * it on a write only where the provider makes the request idempotent (an
+   * idempotency key, a conditional header); set it to 0 for a request that
+   * must be sent exactly once whatever comes back.
    */
   retries?: number;
 }
@@ -172,7 +177,7 @@ export interface IntegrationRequestInit extends RequestInit {
 export const INTEGRATION_HTTP_DEFAULTS = {
   timeoutMs: 30_000,
   retries: 2,
-  /** The methods core retries on its own. */
+  /** The methods core retries on its own after any failure; other methods only after a 429. */
   retriedMethods: ["GET", "HEAD", "OPTIONS"],
   /** A longer `Retry-After` is treated as a refusal rather than a wait. */
   maxRetryAfterMs: 30_000,

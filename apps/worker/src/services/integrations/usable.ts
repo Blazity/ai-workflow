@@ -23,14 +23,22 @@ import type { IntegrationState } from "@shared/contracts";
 /** One integration this deployment can actually use right now. */
 export interface UsableIntegration {
   readonly manifest: IntegrationManifest;
+  /**
+   * The integration's runtime as core calls it: every capability adapter a
+   * factory here builds, `beginRun` and each page reader throw with this
+   * connection's secrets already taken out (see `redactingRuntime`). An
+   * adapter's own client (Octokit, a provider SDK, a `fetch` of its own) does
+   * not go through `ctx.http`, and nobody calling a port should have to
+   * remember that.
+   */
   readonly runtime: ErasedIntegrationRuntime;
   readonly ctx: IntegrationContext<IntegrationManifest>;
   /**
    * This connection's secrets taken out of what its adapter hands back, for
-   * core and never for the integration: a refusal's words (`text`) and a
-   * thrown error (`error`, a copy that keeps its name). `ctx` already does
-   * this for its own log and its own requests; this is the same redaction,
-   * with the same secrets, for what reaches core through a capability port.
+   * core and never for the integration: a refusal's words (`text`), and a
+   * thrown error (`error`, the copy `redactedError` makes, which keeps its
+   * class, name, code and status). What `runtime` throws already went through
+   * `error`; `text` is for what a port RETURNS in words of the provider's.
    */
   readonly redaction: IntegrationRedaction;
 }
@@ -99,7 +107,7 @@ export async function resolveUsableIntegrations(input: ContextLifetime & {
   // Imported from where each one is defined rather than through `runtime.ts`,
   // which re-exports this file: the boundaries gate reads that round trip as a
   // cycle, and it would be one.
-  const { readIntegrationStates, secretsKeyMaterial } = await import("./authoring.js");
+  const { readIntegrationStatesFrom, secretsKeyMaterial } = await import("./authoring.js");
   const { readConnectionValues, redactIntegrationText, secretValuesOf } = await import(
     "./connection-values.js"
   );
@@ -117,11 +125,15 @@ export async function resolveUsableIntegrations(input: ContextLifetime & {
   // every caller here is doing something alongside it (tracing a run, naming a
   // bucket, drawing a page). It is reported as unreadable rather than as
   // "nothing usable", and each caller decides what that means where it is.
-  let states: Awaited<ReturnType<typeof readIntegrationStates>>;
+  //
+  // Read once: the states and the values they gate come from the same rows,
+  // so a save landing between two reads cannot pair one version's state with
+  // another version's values.
+  let states: ReturnType<typeof readIntegrationStatesFrom>;
   let stored: Awaited<ReturnType<typeof readConnectedIntegrationConnections>>;
   try {
-    states = await readIntegrationStates();
     stored = await readConnectedIntegrationConnections();
+    states = readIntegrationStatesFrom(stored);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     logger.warn({ err: reason }, "integration_states_unreadable");
@@ -153,9 +165,13 @@ export async function resolveUsableIntegrations(input: ContextLifetime & {
       continue;
     }
     const secrets = secretValuesOf(manifest, values.values);
+    const redaction: IntegrationRedaction = {
+      text: (text) => redactIntegrationText(text, secrets),
+      error: (error) => redactedError(error, (text) => redactIntegrationText(text, secrets)),
+    };
     usable.push({
       manifest,
-      runtime,
+      runtime: redactingRuntime(runtime, redaction),
       ctx: buildIntegrationContext({
         manifest,
         values: values.values,
@@ -164,11 +180,124 @@ export async function resolveUsableIntegrations(input: ContextLifetime & {
         // whatever a request joins onto it goes away with the context.
         lifetime: input.lifetime ?? new AbortController().signal,
       }),
-      redaction: {
-        text: (text) => redactIntegrationText(text, secrets),
-        error: (error) => redactedError(error, (text) => redactIntegrationText(text, secrets)),
-      },
+      redaction,
     });
   }
   return { readable: true, usable, states };
+}
+
+/**
+ * The one place what an integration throws is redacted on its way into core.
+ *
+ * `ctx.http` redacts the errors of the requests that go through it, and that
+ * covers only those: Octokit, GitLab's own `fetch` and anything else an
+ * adapter builds reach core with whatever the provider or Node put in the
+ * message (a token quoted in an invalid header, an echoing error body). Every
+ * caller of a port catching and redacting on its own is the pattern that was
+ * already forgotten once, so the runtime core's callers hold does it for them.
+ *
+ * What is wrapped: each capability factory, the adapter it returns (every
+ * method, sync or async, and a nested adapter such as memory's `store`),
+ * `beginRun` and each page reader. What is not: the integration's code runs
+ * against the original objects, so nothing it does to itself changes.
+ */
+function redactingRuntime(
+  runtime: ErasedIntegrationRuntime,
+  redaction: IntegrationRedaction,
+): ErasedIntegrationRuntime {
+  const wrapped = new WeakMap<object, unknown>();
+  return {
+    ...runtime,
+    capabilities: Object.fromEntries(
+      Object.entries(runtime.capabilities).map(([id, factory]) => [
+        id,
+        (...args: never[]) => redactingAdapter(redacting(factory, undefined, redaction)(...args)),
+      ]),
+    ),
+    ...(runtime.beginRun ? { beginRun: redacting(runtime.beginRun, runtime, redaction) } : {}),
+    ...(runtime.api
+      ? {
+          api: Object.fromEntries(
+            Object.entries(runtime.api).map(([page, reader]) => [
+              page,
+              redacting(reader, runtime.api, redaction),
+            ]),
+          ),
+        }
+      : {}),
+  };
+
+  /** A view of an adapter whose methods throw redacted, and nothing else changed. */
+  function redactingAdapter<T>(adapter: T): T {
+    if (!isAdapter(adapter)) return adapter;
+    const known = wrapped.get(adapter);
+    if (known) return known as T;
+    const members = new Map<PropertyKey, unknown>();
+    const view = new Proxy(adapter, {
+      get(target, property) {
+        const value: unknown = redacting(() => Reflect.get(target, property, target), undefined, redaction)();
+        if (typeof value === "function") {
+          if (!members.has(property)) {
+            members.set(
+              property,
+              redacting(value as (...args: unknown[]) => unknown, target, redaction),
+            );
+          }
+          return members.get(property);
+        }
+        return isAdapter(value) ? redactingAdapter(value) : value;
+      },
+    });
+    wrapped.set(adapter, view);
+    return view;
+  }
+}
+
+/**
+ * `fn` called on `self`, with what it throws (or its promise rejects with)
+ * passed through `redaction.error` first. A value it returns is its own.
+ */
+function redacting<A extends unknown[], R>(
+  fn: (...args: A) => R,
+  self: unknown,
+  redaction: IntegrationRedaction,
+): (...args: A) => R {
+  return (...args: A): R => {
+    let result: R;
+    try {
+      result = fn.apply(self, args);
+    } catch (error) {
+      throw redaction.error(error);
+    }
+    if (isThenable(result)) {
+      return Promise.resolve(result).catch((error: unknown) => {
+        throw redaction.error(error);
+      }) as R;
+    }
+    return result;
+  };
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
+/**
+ * What a port hands core that has behaviour: a class instance (every
+ * adapter), or a plain object holding at least one function (memory's
+ * `store`). Plain data (a string, an array, a record of values) is handed over
+ * as it is, because a proxy is not what a caller that clones or serialises it
+ * expects.
+ */
+function isAdapter(value: unknown): value is object {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || isThenable(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return true;
+  return Object.values(value).some((member) => typeof member === "function");
 }

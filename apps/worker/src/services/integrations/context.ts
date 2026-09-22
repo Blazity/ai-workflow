@@ -102,13 +102,17 @@ function redactFields(
 }
 
 /**
- * The HTTP policy the SDK documents: a per-attempt timeout, retries for reads
- * only, `Retry-After` honoured up to a ceiling, a non-2xx returned rather than
- * thrown.
+ * The HTTP policy the SDK documents: a per-attempt timeout, retries for reads,
+ * a rate limit waited out for every method, `Retry-After` honoured up to a
+ * ceiling, a non-2xx returned rather than thrown.
  *
- * Writes are not retried by default because a PUT or a DELETE at these providers
- * is a merge, a rebase or a file commit, and repeating one after an ambiguous
- * 5xx reports a conflict for work that landed.
+ * Writes are not retried after a failure because a PUT or a DELETE at these
+ * providers is a merge, a rebase or a file commit, and repeating one after an
+ * ambiguous 5xx reports a conflict for work that landed. A 429 is not
+ * ambiguous: the provider says it did nothing, so a write is sent again once
+ * the wait it asked for has passed. That is what a Slack notification relied
+ * on when it went through Slack's own client, which waited out every rate
+ * limit; this policy is the one place that decision lives now.
  *
  * THREE THINGS END A REQUEST, and each has one owner:
  *
@@ -126,12 +130,12 @@ function redactFields(
  * request material: an invalid header value is quoted whole (`Headers.append:
  * "Token <the key>" is an invalid header value.`, which is what a key pasted
  * from a wrapped terminal produces), and a URL that did not parse is quoted
- * with its query string. The copy that leaves here has the connection's
- * secrets taken out of its message and out of every cause, keeps each `name`
- * (`TimeoutError` and `AbortError` are how callers tell a deadline from a
- * failure) and keeps the class where a caller reads it (`TypeError` with a
- * cause is how Node spells "never reached the server"). The original is not
- * reachable from the copy.
+ * with its query string. The copy that leaves here is `redactedError`'s:
+ * the connection's secrets out of its message, its stack and every cause, its
+ * `name` kept (`TimeoutError` and `AbortError` are how callers tell a deadline
+ * from a failure) and its class kept (`TypeError` with a cause is how Node
+ * spells "never reached the server"). The original is not reachable from the
+ * copy.
  */
 async function fetchWithPolicy(
   target: string | URL | Request,
@@ -156,7 +160,14 @@ async function fetchWithRetries(
   const retriable = INTEGRATION_HTTP_DEFAULTS.retriedMethods.includes(
     method as (typeof INTEGRATION_HTTP_DEFAULTS.retriedMethods)[number],
   );
-  const retries = requestedRetries ?? (retriable ? INTEGRATION_HTTP_DEFAULTS.retries : 0);
+  // A body that is read as it is sent cannot be sent twice.
+  const replayable = !(target instanceof Request) && !(request.body instanceof ReadableStream);
+  // A read may be repeated after anything. A write only after a 429, the
+  // provider saying it did nothing, and only when its body can be sent again.
+  // An explicit `retries` is the caller's word for every case.
+  const retriesAfter = (rateLimited: boolean): number =>
+    requestedRetries ??
+    (retriable || (rateLimited && replayable) ? INTEGRATION_HTTP_DEFAULTS.retries : 0);
   const attemptDeadlineMs = timeoutMs ?? INTEGRATION_HTTP_DEFAULTS.timeoutMs;
 
   // Retries and the waits between them included.
@@ -172,14 +183,14 @@ async function fetchWithRetries(
     try {
       response = await fetch(target, { ...request, signal: thisAttempt });
     } catch (error) {
-      if (wholeRequest.aborted || attempt >= retries) throw error;
-      await delay(250 * (attempt + 1), wholeRequest);
+      if (wholeRequest.aborted || attempt >= retriesAfter(false)) throw error;
+      await delay(backoffMs(attempt), wholeRequest);
       continue;
     }
-    if (attempt >= retries || (response.status !== 429 && response.status < 500)) {
-      return response;
-    }
-    const wait = retryAfterMs(response);
+    const rateLimited = response.status === 429;
+    if (!rateLimited && response.status < 500) return response;
+    if (attempt >= retriesAfter(rateLimited)) return response;
+    const wait = waitBeforeRetry(response, attempt);
     if (wait === null) return response;
     // Released before the next attempt rather than left to the collector: an
     // unread body holds its connection, and a provider having a bad minute is
@@ -198,10 +209,23 @@ async function fetchWithRetries(
 const MAX_CAUSE_DEPTH = 4;
 
 /**
- * A copy of anything integration code threw, safe to log and show: the
- * connection's secrets out of its message and out of every cause, its `name`
- * and class kept (see `fetchWithPolicy`). The one way core turns a provider's
- * failure into an error it passes on.
+ * A copy of anything integration code threw, safe to log and show, and still
+ * the error it was to whoever catches it. The one way core turns a provider's
+ * failure into an error it passes on, for `ctx.http` and for every capability
+ * adapter (`usable.ts`).
+ *
+ * Taken out: the connection's secrets, from the message, the stack, every
+ * string field and every cause.
+ *
+ * Kept: the class, because core decides by it (`IssueTrackerNotFoundError` is
+ * a ticket that is gone, not an outage; `TypeError` with a cause is Node's
+ * "never reached the server"); the `name` (`TimeoutError`, `AbortError`,
+ * `FatalError`, which the Workflow DevKit reads); and every string, number and
+ * boolean field (`code`, `status`), because core reads those too.
+ *
+ * Left behind: fields that hold objects. A provider's request and response
+ * ride on its errors (Octokit's carries the request's headers), nothing core
+ * decides reads them, and copying them would make the original reachable.
  */
 export function redactedError(
   error: unknown,
@@ -219,23 +243,47 @@ export function redactedError(
     error.cause !== undefined && depth < MAX_CAUSE_DEPTH
       ? { cause: redactedError(error.cause, redact, depth + 1) }
       : undefined;
-  const copy = error instanceof TypeError ? new TypeError(message, cause) : new Error(message, cause);
-  if (copy.name !== error.name) copy.name = error.name;
-  // `ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`: what a retry decision reads.
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === "string") Object.assign(copy, { code: redact(code) });
+  // A real error (so anything asking "is this an Error" still says yes) with
+  // the original's prototype, so every class check holds. The class's own
+  // constructor is not run: it may do work, take other arguments or throw.
+  const copy = new Error(message, cause);
+  Object.setPrototypeOf(copy, Object.getPrototypeOf(error));
+  for (const key of Object.getOwnPropertyNames(error)) {
+    if (key === "message" || key === "stack" || key === "cause") continue;
+    const descriptor = Object.getOwnPropertyDescriptor(error, key);
+    if (!descriptor || !("value" in descriptor)) continue;
+    const value: unknown = descriptor.value;
+    if (typeof value === "string") {
+      Object.defineProperty(copy, key, { ...descriptor, value: redact(value) });
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      Object.defineProperty(copy, key, descriptor);
+    }
+  }
+  if (typeof error.stack === "string") copy.stack = redact(error.stack);
   return copy;
 }
 
-/** A wait longer than the ceiling is a refusal, not a wait: the invocation has
- *  its own deadline and sleeping through it helps nobody. */
-function retryAfterMs(response: Response): number | null {
+/** The wait before the next attempt after a network error, or after a 429 or
+ *  a 5xx that did not say how long to wait. */
+function backoffMs(attempt: number): number {
+  return 250 * (attempt + 1);
+}
+
+/**
+ * How long the provider asked us to wait, in either of the forms `Retry-After`
+ * takes (seconds, or an HTTP date), or the backoff when it did not say.
+ *
+ * `null` for a wait longer than the ceiling: that is a refusal, not a wait,
+ * because the invocation has its own deadline and sleeping through it helps
+ * nobody.
+ */
+function waitBeforeRetry(response: Response, attempt: number): number | null {
   const header = response.headers.get("retry-after");
-  if (!header) return 0;
+  if (!header) return backoffMs(attempt);
   const seconds = Number(header);
-  if (!Number.isFinite(seconds)) return 0;
-  const ms = seconds * 1000;
-  return ms > INTEGRATION_HTTP_DEFAULTS.maxRetryAfterMs ? null : ms;
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now();
+  if (!Number.isFinite(ms)) return backoffMs(attempt);
+  return ms > INTEGRATION_HTTP_DEFAULTS.maxRetryAfterMs ? null : Math.max(0, ms);
 }
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {

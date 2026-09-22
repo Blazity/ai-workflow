@@ -12,10 +12,11 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { integrationManifest } from "@integrations/registry";
-import type { IntegrationManifest } from "@integrations/sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { integrationRuntime } from "@integrations/registry/worker";
+import { IssueTrackerNotFoundError, type IntegrationManifest } from "@integrations/sdk";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildIntegrationContext } from "./context.js";
+import { buildIntegrationContext, redactedError } from "./context.js";
 
 const manifest = integrationManifest("jira") as IntegrationManifest;
 
@@ -150,6 +151,46 @@ describe("retries", () => {
     expect(server.hits).toEqual(["POST"]);
   });
 
+  it("sends a POST again after a 429, once the wait the provider asked for has passed", async () => {
+    // A 429 is the provider saying it did nothing. Slack answers one whenever a
+    // channel gets more than about a message a second, and Slack's own client
+    // used to wait it out; sending the write once and giving up lost the
+    // notification.
+    let answered = 0;
+    const server = await serve((_req, res) => {
+      answered += 1;
+      if (answered === 1) {
+        res.statusCode = 429;
+        res.setHeader("retry-after", "0");
+        res.end("slow down");
+        return;
+      }
+      res.end("ok");
+    });
+
+    const response = await context().http.fetch(server.url, { method: "POST", body: "text=hi" });
+
+    expect(response.status).toBe(200);
+    expect(server.hits).toEqual(["POST", "POST"]);
+  });
+
+  it("sends a rate-limited POST once when the caller said once", async () => {
+    const server = await serve((_req, res) => {
+      res.statusCode = 429;
+      res.setHeader("retry-after", "0");
+      res.end("slow down");
+    });
+
+    const response = await context().http.fetch(server.url, {
+      method: "POST",
+      body: "{}",
+      retries: 0,
+    });
+
+    expect(response.status).toBe(429);
+    expect(server.hits).toEqual(["POST"]);
+  });
+
   it("repeats a GET after a 503, which is what makes the POST case meaningful", async () => {
     const server = await serve((_req, res) => {
       res.statusCode = 503;
@@ -210,5 +251,91 @@ describe("what a failed request throws", () => {
 
     expect(error.name).toBe("TimeoutError");
     expect(server.hits).toEqual(["GET"]);
+  });
+});
+
+describe("a Slack notification that hit a rate limit", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is delivered once Slack's wait has passed, as Slack's own client used to do", async () => {
+    // The real Slack package, the real context, and Slack's documented answer
+    // to a burst: HTTP 429 with Retry-After. Only `fetch` is replaced, at the
+    // edge of the process.
+    const answers = [
+      new Response("", { status: 429, headers: { "retry-after": "0" } }),
+      Response.json({ ok: true, ts: "1758300000.000900" }),
+    ];
+    const fetch = vi.fn(async () => answers.shift() ?? Response.json({ ok: false, error: "unexpected" }));
+    vi.stubGlobal("fetch", fetch);
+
+    const slack = integrationManifest("slack") as IntegrationManifest;
+    const messaging = (
+      integrationRuntime("slack")!.capabilities.messaging as (ctx: unknown) => {
+        notifyForTicket(
+          ticket: { key: string; url?: string },
+          event: { kind: "note"; text: string },
+          conversation: { handle: string | null; remember(): Promise<void>; forget(): Promise<void> },
+        ): Promise<unknown>;
+      }
+    )(
+      buildIntegrationContext({
+        manifest: slack,
+        values: { botToken: "xoxb-token", channelId: "C1" },
+        secrets: ["xoxb-token"],
+        lifetime: new AbortController().signal,
+      }),
+    );
+
+    const delivery = await messaging.notifyForTicket(
+      { key: "AWT-42" },
+      { kind: "note", text: "deploying now" },
+      { handle: "1758300000.000100", remember: async () => {}, forget: async () => {} },
+    );
+
+    expect(delivery).toEqual({ delivered: true });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the copy core passes on of what a provider threw", () => {
+  const SECRET = "atl-4f9a2c1e8b7d3e";
+
+  it("is still the class core decides by, with the secret gone from everything", () => {
+    // Core reads a ticket that no longer exists from `instanceof
+    // IssueTrackerNotFoundError`. A copy that was a plain Error turned every
+    // missing ticket into an outage.
+    const original = new IssueTrackerNotFoundError("Ticket", `AWT-42 (token ${SECRET})`);
+
+    const copy = redactedError(original, (text) => text.replaceAll(SECRET, "[redacted]"));
+
+    expect(copy).toBeInstanceOf(IssueTrackerNotFoundError);
+    expect(copy.name).toBe("IssueTrackerNotFoundError");
+    expect((copy as { code?: string }).code).toBe("NOT_FOUND");
+    expect(everythingIn(copy)).not.toContain(SECRET);
+    expect(copy.message).toContain("[redacted]");
+  });
+
+  it("keeps the status and code a caller reads, and leaves the request behind", () => {
+    const original = Object.assign(new Error(`GitLab refused ${SECRET}`), {
+      status: 403,
+      code: `E_${SECRET}`,
+      fatal: true,
+      request: { headers: { authorization: `Bearer ${SECRET}` } },
+    });
+
+    const copy = redactedError(original, (text) => text.replaceAll(SECRET, "[redacted]")) as Error & {
+      status?: number;
+      code?: string;
+      fatal?: boolean;
+      request?: unknown;
+    };
+
+    expect(copy.status).toBe(403);
+    expect(copy.code).toBe("E_[redacted]");
+    expect(copy.fatal).toBe(true);
+    expect(copy.request).toBeUndefined();
+    expect(everythingIn(copy)).not.toContain(SECRET);
   });
 });

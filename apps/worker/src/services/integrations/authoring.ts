@@ -194,7 +194,7 @@ export async function readIntegrationStatesOn(db: Db): Promise<Map<string, Integ
  * `resolve.ts` exists to prevent, and it would drift the day a rule changes in
  * one of them.
  */
-function readIntegrationStatesFrom(
+export function readIntegrationStatesFrom(
   stored: Map<string, StoredIntegrationConnection>,
 ): Map<string, IntegrationState> {
   const material = secretsKeyMaterial();
