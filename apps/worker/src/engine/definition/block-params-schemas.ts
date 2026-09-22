@@ -45,6 +45,8 @@ import {
   vcsProviderSelection,
 } from "@shared/workflow-graph";
 import type { DeploymentIntegrations } from "./integration-availability.js";
+import { MAX_TRUSTED_PRODUCERS } from "../blocks/trigger-pr-checks-failed/manifest.js";
+import { DEFAULT_REVIEW_TRIGGER_STATES } from "../blocks/trigger-pr-review/manifest.js";
 
 const emptyParams = z.object({}).strict();
 const agentParams = z
@@ -90,47 +92,29 @@ const v2TriggerPrReadyConfiguration = z
   })
   .strict();
 const v2TriggerPrUpdatedConfiguration = v2TriggerPrReadyConfiguration;
-const legacyProducerKeys = [
-  ["git", "hub", "AppSlugs"].join(""),
-  ["git", "lab", "PipelineSources"].join(""),
-] as const;
-
-function upgradeChecksProducerParams(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const input = value as Record<string, unknown>;
-  const trustedProducers = [
-    ...(Array.isArray(input.trustedProducers) ? input.trustedProducers : []),
-    ...legacyProducerKeys.flatMap((key) => Array.isArray(input[key]) ? input[key] : []),
-  ];
-  const upgraded: Record<string, unknown> = {
-    ...input,
-    trustedProducers: [...new Set(trustedProducers)],
-  };
-  for (const key of legacyProducerKeys) delete upgraded[key];
-  return upgraded;
-}
-
-const v2TriggerPrChecksFailedConfiguration = z.preprocess(
-  upgradeChecksProducerParams,
-  z.object({
+// Definitions saved before S10 carry two per-provider producer filters instead
+// of `trustedProducers`. They are upgraded where a graph enters this build
+// (`canonicalizeWorkflowBlockTypes` in `@shared/contracts`), so this schema only
+// ever sees the one list, whichever path read the graph.
+const v2TriggerPrChecksFailedConfiguration = z
+  .object({
     providers: vcsProviderSelection.default([]),
     scope: prTriggerScope.default("workflow_owned"),
     checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
     ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
     trustedProducers: z
       .array(z.string().trim().min(1).max(100))
-      .max(20)
+      .max(MAX_TRUSTED_PRODUCERS)
       .default([]),
     maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
     ...triggerRateLimitParams,
     ...triggerRepositoryPolicyParams,
   })
-  .strict(),
-);
+  .strict();
 const v2TriggerPrReviewConfiguration = z
   .object({
     providers: vcsProviderSelection.default([]),
-    on: z.array(reviewStates).min(1).default(["changes_requested"]),
+    on: z.array(reviewStates).min(1).default([...DEFAULT_REVIEW_TRIGGER_STATES]),
     scope: prTriggerScope.default("workflow_owned"),
     maxRunsPerPr: z.number().int().min(1).max(30).default(10),
     ...triggerRateLimitParams,

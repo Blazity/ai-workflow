@@ -6,6 +6,7 @@ import {
   type IntegrationRuntimeDefinition,
 } from "@integrations/sdk";
 import { buildOctokit, readPrivateKey, type GitHubAppCredential } from "./auth";
+import { githubHandleIdentity } from "./handles";
 import { manifest } from "./manifest";
 import { GitHubAdapter } from "./vcs";
 import { webhook } from "./webhook";
@@ -39,7 +40,6 @@ function adapter(ctx: GitHubContext, repository?: { repoPath: string; baseBranch
     owner,
     repo,
     baseBranch: target.baseBranch,
-    ...(ctx.connection.botLogin ? { botLogin: ctx.connection.botLogin } : {}),
     log: ctx.log,
   });
 }
@@ -232,6 +232,7 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
   capabilities: {
     vcs: (ctx, repository) => adapter(ctx, repository),
   },
+  vcsHandles: githubHandleIdentity,
   blocks: {},
   health: {
     app: async (ctx) => {

@@ -20,8 +20,8 @@ import type {
   SystemHealthMode,
 } from "@shared/contracts";
 
-import { PublicHealthProbeError } from "./collect.js";
-import { getLatestSystemHealthObservations } from "./observations.js";
+import { PublicHealthProbeError, WEBHOOK_DELIVERY_CHECK_ID } from "./collect.js";
+import { latestWebhookDeliveries } from "./observations.js";
 import { failureReason, redactIntegrationText } from "../integrations/index.js";
 
 import type {
@@ -54,7 +54,6 @@ export interface IntegrationHealthContributions {
 
 /** The id of the check core adds to every integration, before its own. */
 const CONNECTION_CHECK_ID = "connection";
-const WEBHOOK_DELIVERY_CHECK_ID = "webhook-delivery";
 const WEBHOOK_OBSERVATION_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
@@ -138,10 +137,7 @@ function webhookDeliveryCheck(entry: IntegrationHealthEntry): CheckBase {
 }
 
 async function webhookDeliveryResult(integrationId: string): Promise<SystemHealthProbeResult> {
-  const observations = await getLatestSystemHealthObservations(
-    integrationId,
-    WEBHOOK_DELIVERY_CHECK_ID,
-  );
+  const observations = await latestWebhookDeliveries(integrationId);
   const latest = observations[0];
   if (
     !latest ||

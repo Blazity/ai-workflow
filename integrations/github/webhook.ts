@@ -6,10 +6,11 @@ import type {
   IntegrationWebhookReception,
   PrTriggerPayload,
   TriggerEvent,
-  VcsOpaqueHandle,
 } from "@integrations/sdk";
-import { isOurOwnVcsComment } from "@integrations/sdk";
+import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
+import { checkRunHandle, isTrustedByDefaultCheckProducer } from "./handles";
+import { vcsLoginsMatch } from "./review-markers";
 
 type GitHubContext = IntegrationContext<typeof manifest>;
 
@@ -31,17 +32,6 @@ type GitHubContext = IntegrationContext<typeof manifest>;
  *   knows on its own, that the sender is the automation account, stays here.
  * - **Whether the repository is enabled.** The catalog is core's.
  */
-
-
-/**
- * Names the post-PR gate creates its own checks under, in both generations.
- *
- * Core used to hand the configured step names in as well. It no longer does and
- * nothing is lost: every configured name is built by `gateCheckNameAliases`
- * from these two prefixes (`engine/support/workflow-naming.ts:46`), so the
- * prefix test already covers the list it was paired with.
- */
-const MANAGED_CHECK_PREFIXES = ["AI Workflow / ", "blazebot / "] as const;
 
 const FAILED_CONCLUSIONS: ReadonlySet<string> = new Set(["failure", "timed_out"]);
 
@@ -271,7 +261,10 @@ export function normalizeGitHubEvent(
     const check = body?.check_run;
     if (!check) return null;
     if (!FAILED_CONCLUSIONS.has(check.conclusion)) return null;
-    if (isManagedCheckName(check.name)) return null;
+    // Our own gate's check. Every configured gate name is built from the
+    // SDK's two prefixes (`gateCheckNameAliases` in core), so the prefix rule
+    // covers the configured list as well.
+    if (isManagedGateCheckName(check.name)) return null;
     if (typeof check.id !== "number") return null;
     const prs = check.pull_requests;
     if (!Array.isArray(prs) || prs.length === 0) return null;
@@ -283,10 +276,7 @@ export function normalizeGitHubEvent(
     return {
       delivery: {
         ...delivery(options.deliveryId, appSlug),
-        // Only GitHub's own runner is trusted without a merge request behind
-        // it. Widening this to every producer would start runs from check runs
-        // an outside app reported.
-        trustedByDefault: appSlug === "github-actions",
+        trustedByDefault: isTrustedByDefaultCheckProducer(appSlug),
         // GitHub sends one check_run delivery per failing job, so a commit with
         // five failing jobs fans out into five deliveries. Keying on the
         // commit's verdict rather than the job coalesces that fan-out into one
@@ -315,15 +305,13 @@ export function normalizeGitHubEvent(
             name: check.name,
             conclusion: check.conclusion,
             ...(check.details_url ? { detailsUrl: check.details_url } : {}),
-            // `check.app?.slug ?? ""`, and not `appSlug`, because this handle is
-            // compared against the one the adapter mints off
-            // `GET /commits/{ref}/check-runs`, which falls back to the empty
-            // string. `appSlug` falls back to the sender's login, which is right
-            // for the producer and the trust decision above and wrong here: a
+            // The app's own slug, and not `appSlug`: that falls back to the
+            // sender's login, which is right for the producer and the trust
+            // decision above and wrong here. The head read mints this handle
+            // from `GET /commits/{ref}/check-runs`, which knows no sender, so a
             // check run whose `app` carries no slug would mint two handles that
-            // never compare equal, and the autofix path would go silent on it
-            // with the trigger recorded only as a stale head.
-            handle: handle({ id: check.id, owner: check.app?.slug ?? "" }),
+            // never compare equal, and the autofix path would go silent on it.
+            handle: checkRunHandle({ id: check.id, appSlug: check.app?.slug }),
           },
         ],
       },
@@ -337,7 +325,7 @@ export function normalizeGitHubEvent(
     if (!review || !pr) return null;
     const allowed = options.reviewStates ?? DEFAULT_REVIEW_STATES;
     if (!allowed.includes(review.state)) return null;
-    if (sameLogin(review.user?.login, options.botLogin)) return null;
+    if (vcsLoginsMatch(review.user?.login, options.botLogin)) return null;
     return {
       delivery: {
         ...delivery(options.deliveryId, review.user?.login),
@@ -361,7 +349,7 @@ export function normalizeGitHubEvent(
     const pr = body?.pull_request;
     if (!comment || !pr) return null;
     if (!(options.reviewStates ?? DEFAULT_REVIEW_STATES).includes("commented")) return null;
-    if (sameLogin(comment.user?.login, options.botLogin)) return null;
+    if (vcsLoginsMatch(comment.user?.login, options.botLogin)) return null;
     if (comment.user?.type === "Bot") return null;
     if (isOurComment(comment.body)) return null;
     // GitHub wraps inline comments in a review container, so N sibling comments
@@ -401,7 +389,7 @@ export function normalizeGitHubEvent(
     // conversation; a plain issue comment is not ours to act on.
     if (!comment || !issue?.pull_request) return null;
     if (!(options.reviewStates ?? DEFAULT_REVIEW_STATES).includes("commented")) return null;
-    if (sameLogin(comment.user?.login, options.botLogin)) return null;
+    if (vcsLoginsMatch(comment.user?.login, options.botLogin)) return null;
     if (comment.user?.type === "Bot") return null;
     if (isOurComment(comment.body)) return null;
     return {
@@ -499,10 +487,6 @@ function legacyGate(
   };
 }
 
-function handle(value: { id: number; owner: string }): VcsOpaqueHandle {
-  return value as unknown as VcsOpaqueHandle;
-}
-
 function delivery(deliveryId: string | undefined, producer: string | undefined) {
   return {
     provider: "github",
@@ -530,15 +514,6 @@ function mapPullRequest(pr: any, repo: any): PrTriggerPayload {
   };
 }
 
-function isManagedCheckName(name: unknown): boolean {
-  return (
-    typeof name === "string" &&
-    MANAGED_CHECK_PREFIXES.some(
-      (prefix) => name.startsWith(prefix) && name.length > prefix.length,
-    )
-  );
-}
-
 /**
  * Ours by what the author wrote, not by a marker anywhere in the body.
  *
@@ -550,28 +525,4 @@ function isManagedCheckName(name: unknown): boolean {
  */
 function isOurComment(body: unknown): boolean {
   return isOurOwnVcsComment(body);
-}
-
-/**
- * The same comparison core made in `vcsLoginsMatch`, and the `[bot]` suffix is
- * the reason it is not a plain lowercase compare: GitHub sends an App's own
- * pushes and comments as `<app-slug>[bot]`, while the configured value is
- * written either way. Dropping the suffix here is what made the automation
- * account recognise itself, and losing it would let every push of ours trigger
- * a run against the run that made it.
- */
-function sameLogin(left: string | undefined, right: string | undefined): boolean {
-  const normalized = normalizeLogin(left);
-  return normalized !== undefined && normalized === normalizeLogin(right);
-}
-
-const BOT_LOGIN_SUFFIX = "[bot]";
-
-function normalizeLogin(login: string | null | undefined): string | undefined {
-  const lowercased = login?.trim().toLowerCase();
-  if (!lowercased) return undefined;
-  const stripped = lowercased.endsWith(BOT_LOGIN_SUFFIX)
-    ? lowercased.slice(0, -BOT_LOGIN_SUFFIX.length)
-    : lowercased;
-  return stripped ? stripped : undefined;
 }

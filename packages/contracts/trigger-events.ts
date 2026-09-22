@@ -16,6 +16,21 @@ export interface PrTriggerPayload {
   prNumber: number;
   prUrl: string;
   headRef: string;
+  /**
+   * The commit the event is about. Core rereads the pull request before it
+   * acts, and what this field says decides how the two are reconciled:
+   *
+   * - A review (`trigger_pr_review`) is about the pull request, not a commit:
+   *   empty means "unknown", and core adopts the provider's current head. A
+   *   head that is given must still be the current one.
+   * - A failed check (`trigger_pr_checks_failed`) may not know it either: the
+   *   commit its checks ran on is not always the head (a merged-results
+   *   pipeline runs on a temporary merge commit). Empty is allowed, and core
+   *   adopts the current head only when a failed check the event names is,
+   *   by its handle, still failed on that head.
+   * - Every other trigger names the head it saw, and empty or different from
+   *   the current head means the event is stale.
+   */
   headSha: string;
   baseRef: string;
   title: string;

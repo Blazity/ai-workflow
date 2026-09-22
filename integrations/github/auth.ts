@@ -53,9 +53,10 @@ const PEM_BLOCK =
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/u;
 
 /** Only for choosing the sentence: whether the value at least looks like
- *  base64, once the line breaks a wrapped value has and the quotes a `.env`
- *  file adds are gone. A space inside it means words, not base64. */
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/u;
+ *  base64 (either alphabet: `Buffer.from(value, "base64")` below decodes the
+ *  URL-safe one too), once the line breaks a wrapped value has and the quotes a
+ *  `.env` file adds are gone. A space inside it means words, not base64. */
+const BASE64 = /^[A-Za-z0-9+/_-]+={0,2}$/u;
 
 const EXPECTED =
   "Paste the .pem file GitHub downloaded, starting with -----BEGIN RSA PRIVATE KEY-----, or the base64 encoding of that whole file.";

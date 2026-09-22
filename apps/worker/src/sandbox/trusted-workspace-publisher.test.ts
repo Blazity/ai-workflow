@@ -299,6 +299,32 @@ describe("trusted workspace publisher", () => {
       expect(result.repositories[1]).toMatchObject({ pushed: true, pushedHead: "after" });
     });
 
+    // Gone, or no longer readable by this connection: asking again cannot
+    // change that, and a retry of this step redoes the sandbox, the clone and
+    // the bundle import. So the step returns, which the DevKit does not retry.
+    it("fails the pending repository as a preflight, once, when the source pull request cannot be read", async () => {
+      const { PullRequestUnreadableError } = await import("@integrations/sdk");
+      mocks.getPrHead.mockRejectedValue(new PullRequestUnreadableError("GitHub PR #7 cannot be read"));
+
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: twoRepos,
+        sourcePullRequest,
+        ...owner,
+      });
+
+      expect(mocks.getPrHead).toHaveBeenCalledOnce();
+      expect(result.repositories[1]).toMatchObject({
+        pushed: false,
+        failureKind: "preflight_failed",
+        error: "GitHub PR #7 cannot be read",
+      });
+      const pushes = mocks.publisherCommand.mock.calls.filter(([, args]) =>
+        (args as string[]).includes("push"),
+      );
+      expect(pushes).toEqual([]);
+    });
+
     it("still refuses to publish when somebody else pushed to it", async () => {
       mocks.getPrHead.mockResolvedValue({ headSha: "foreign", baseRef: "main", state: "open" });
 

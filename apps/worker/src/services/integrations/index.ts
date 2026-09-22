@@ -49,14 +49,7 @@ export { buildIntegrationContext } from "./context.js";
 
 export { failureReason } from "./failure-reason.js";
 
-export async function getVcsBotLogin(
-  kind: import("@shared/contracts").VcsProviderKind,
-): Promise<string | undefined> {
-  const resolver = await import("./vcs-bot-login.js");
-  return resolver.getVcsBotLogin(kind);
-}
-
-/** The same read, saying whether it could be made at all. */
+/** The automation account, saying whether it could be read at all. */
 export async function readVcsBotLogin(
   kind: import("@shared/contracts").VcsProviderKind,
 ): Promise<

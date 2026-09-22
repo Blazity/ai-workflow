@@ -9,6 +9,7 @@ import {
   NON_DISPATCHABLE_TRIGGER_TYPES,
   TRIGGER_BLOCK_TYPES,
   triggerCarriesAuthoredSubjectText,
+  type IntegrationState,
   type WorkflowBlockType,
 } from "@shared/contracts";
 import {
@@ -23,7 +24,8 @@ import {
   type WorkflowBlockRegistryContext,
 } from "./block-contract-resolver.js";
 import { LEGACY_BLOCK_METADATA } from "./legacy-block-metadata.fixture.js";
-import { NO_INTEGRATIONS } from "./integration-availability.js";
+import { deploymentIntegrations, NO_INTEGRATIONS } from "./integration-availability.js";
+import { manifest as gitlabManifest } from "../../../../../integrations/gitlab/manifest.js";
 import { MESSAGING_CONNECTED, MESSAGING_DISABLED } from "./messaging-deployment.fixture.js";
 
 const VCS_AVAILABLE = {
@@ -893,10 +895,16 @@ describe("workflow block registry", () => {
   });
 
   it("authors a usable PR review trigger by default in a GitLab-only deployment", () => {
+    // What GitLab reports is its manifest's declaration, so the deployment
+    // carries the real one: a comment is the only review GitLab delivers.
     const review = buildWorkflowBlockRegistry({
       ...context,
       vcsProviders: ["gitlab"],
       vcsBotIdentities: ["gitlab"],
+      integrations: deploymentIntegrations({
+        manifests: [gitlabManifest],
+        states: new Map([["gitlab", { usable: true } as IntegrationState]]),
+      }),
     }).trigger_pr_review;
 
     expect(review.defaults).toMatchObject({

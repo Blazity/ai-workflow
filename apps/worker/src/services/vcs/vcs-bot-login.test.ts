@@ -27,7 +27,14 @@ vi.mock("../integrations/usable.js", () => ({
   }),
 }));
 
-const { getVcsBotLogin } = await import("./vcs-bot-login.js");
+const { readVcsBotLogin } = await import("./vcs-bot-login.js");
+
+/** The login when the settings could be read, which every case here is about. */
+async function loginOf(provider: string): Promise<string | undefined> {
+  const reading = await readVcsBotLogin(provider);
+  if (!reading.readable) throw new Error(`unexpectedly unreadable: ${reading.reason}`);
+  return reading.login;
+}
 
 function connect(
   id: string,
@@ -42,7 +49,7 @@ function connect(
   });
 }
 
-describe("getVcsBotLogin", () => {
+describe("readVcsBotLogin", () => {
   beforeEach(() => {
     state.integrations = [];
     state.integrationStates = new Map();
@@ -56,14 +63,14 @@ describe("getVcsBotLogin", () => {
     // comparison against a delivery's author uses: GitHub writes an App's own
     // actions as `<slug>[bot]` while an admin types the slug, and a value that
     // kept the suffix would only ever match one of the two.
-    await expect(getVcsBotLogin("github")).resolves.toBe("ai-workflow");
-    await expect(getVcsBotLogin("gitlab")).resolves.toBe("ai-workflow-gitlab");
+    await expect(loginOf("github")).resolves.toBe("ai-workflow");
+    await expect(loginOf("gitlab")).resolves.toBe("ai-workflow-gitlab");
   });
 
   it("applies the legacy login to the sole connected provider", async () => {
     connect("github", { legacyBotLogin: "legacy-bot" });
 
-    await expect(getVcsBotLogin("github")).resolves.toBe("legacy-bot");
+    await expect(loginOf("github")).resolves.toBe("legacy-bot");
   });
 
   it("drops the legacy login the moment a second provider is connected", async () => {
@@ -74,20 +81,20 @@ describe("getVcsBotLogin", () => {
     connect("github", { legacyBotLogin: "legacy-bot" });
     connect("gitlab", { botLogin: "ai-workflow-gitlab" });
 
-    await expect(getVcsBotLogin("github")).resolves.toBeUndefined();
-    await expect(getVcsBotLogin("gitlab")).resolves.toBe("ai-workflow-gitlab");
+    await expect(loginOf("github")).resolves.toBeUndefined();
+    await expect(loginOf("gitlab")).resolves.toBe("ai-workflow-gitlab");
   });
 
   it("prefers the provider's own account over the legacy one", async () => {
     connect("github", { botLogin: "ai-workflow[bot]", legacyBotLogin: "legacy-bot" });
 
-    await expect(getVcsBotLogin("github")).resolves.toBe("ai-workflow");
+    await expect(loginOf("github")).resolves.toBe("ai-workflow");
   });
 
   it("answers nothing for a provider that is not connected", async () => {
     connect("gitlab", { botLogin: "ai-workflow-gitlab" });
 
-    await expect(getVcsBotLogin("github")).resolves.toBeUndefined();
+    await expect(loginOf("github")).resolves.toBeUndefined();
   });
 
   it("ignores a value the connection holds but does not use", async () => {
@@ -99,6 +106,6 @@ describe("getVcsBotLogin", () => {
     });
     state.integrationStates.set("github", { configuredFields: [] });
 
-    await expect(getVcsBotLogin("github")).resolves.toBeUndefined();
+    await expect(loginOf("github")).resolves.toBeUndefined();
   });
 });

@@ -46,7 +46,6 @@ function refuseWithoutRepository(): never {
 }
 
 const vcsWithoutRepository: VCSAdapter = {
-  sameHandle: (left, right) => left === right,
   createBranchIfMissing: refuseWithoutRepository,
   resetOwnedBranch: refuseWithoutRepository,
   createPR: refuseWithoutRepository,

@@ -65,8 +65,13 @@ describe("the GitHub App private key, in every form it arrives in", () => {
     expect(readPrivateKey(`"${base64}"`)).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
   });
 
+  it("accepts the URL-safe base64 alphabet, which the same decoder read", () => {
+    const reading = readPrivateKey(Buffer.from(pem, "utf8").toString("base64url"));
+    expect(reading).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
+  });
+
   it("refuses a value that is neither, and says which two forms it wanted", () => {
-    const reading = readPrivateKey("my github app key");
+    const reading = readPrivateKey("my github app key (the one from settings)");
     expect(reading.ok).toBe(false);
     if (reading.ok) return;
     expect(reading.reason).toContain("neither a PEM block nor base64");
@@ -110,7 +115,7 @@ describe("the GitHub App private key, in every form it arrives in", () => {
   });
 
   it("throws the same sentence where a caller cannot carry on without a key", () => {
-    expect(() => requirePrivateKey("my github app key")).toThrow(
+    expect(() => requirePrivateKey("my github app key (the one from settings)")).toThrow(
       /neither a PEM block nor base64/u,
     );
     expect(requirePrivateKey(base64).trimEnd()).toBe(pem.trimEnd());

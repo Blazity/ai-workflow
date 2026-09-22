@@ -8,6 +8,7 @@ import { ConnectionValueError, INTEGRATION_HTTP_DEFAULTS } from "@integrations/s
 import type { IntegrationManifest } from "@integrations/sdk";
 
 import { logger } from "../../infra/logger.js";
+import { deploymentPublicBaseUrl } from "../../infra/public-base-url.js";
 import { type ConnectionValue, redactIntegrationText } from "./connection-values.js";
 import { valueProblemSentence } from "./value-problems.js";
 
@@ -64,12 +65,10 @@ export function buildIntegrationContext(input: {
  * on every provider.
  */
 function integrationWebhookUrl(id: string): string | undefined {
-  // Read off `process.env` rather than the validated environment module, which
-  // this file may not import: it is reached from the integrations barrel, and
-  // pulling environment validation in there makes importing the barrel fail
-  // wherever the variables are not set. The value is a URL a person typed, and
-  // nothing here depends on its shape beyond being non-empty.
-  const base = process.env.BETTER_AUTH_URL?.trim().replace(/\/+$/u, "");
+  // The same base the health page scopes webhook deliveries by, from its one
+  // reader, so where deliveries arrive and whose deliveries are counted
+  // describe the same deployment.
+  const base = deploymentPublicBaseUrl();
   return base ? `${base}/webhooks/${id}` : undefined;
 }
 

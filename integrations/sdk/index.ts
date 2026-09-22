@@ -63,6 +63,13 @@ export {
 } from "./capabilities";
 
 export {
+  isPullRequestRefusal,
+  isPullRequestUnreadableError,
+  providerAnswerOf,
+  PullRequestUnreadableError,
+} from "./pull-request-unreadable";
+
+export {
   connectionValueProblem,
   defineIntegration,
   defineIntegrationBlock,
@@ -76,6 +83,8 @@ export {
   type IntegrationManifest,
   type IntegrationPage,
   type IntegrationRepositoryShape,
+  type IntegrationWebhookManifest,
+  type VcsReviewState,
 } from "./manifest";
 
 export {
@@ -178,6 +187,9 @@ export {
 
 export {
   AI_WORKFLOW_MARKER_PATTERN,
+  GATE_CHECK_NAME_PREFIX,
+  LEGACY_GATE_CHECK_NAME_PREFIX,
+  isManagedGateCheckName,
   isOurOwnVcsComment,
   isReviewLedgerWorkItem,
   selectReviewLedgerWorkItems,
@@ -204,6 +216,7 @@ export {
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
   type VCSAdapter,
+  type VcsHandleIdentity,
   type VcsIntegrationAdapter,
   type VcsOpaqueHandle,
   type VcsRepositoryMetadata,

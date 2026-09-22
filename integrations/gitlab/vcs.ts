@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { Gitlab } from "@gitbeaker/rest";
 import {
   FatalError,
+  isPullRequestRefusal,
+  providerAnswerOf,
+  readProviderFailure,
+  isReviewLedgerWorkItem,
+  PullRequestUnreadableError,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
@@ -21,13 +26,19 @@ import {
   type VcsRepositoryMetadata,
   type VcsOpaqueHandle,
 } from "@integrations/sdk";
+import {
+  failedPipelineChecks,
+  GITLAB_CI_PRODUCER,
+  isTrustedByDefaultPipeline,
+  jobCheck,
+  pipelineCheck,
+} from "./pipeline-checks";
 import { createGitLabProfileSource } from "./profile-source";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasReviewLedgerFailureMarker,
   isReopenedLedgerThread,
   isReviewLedgerNote,
-  isReviewLedgerWorkItem,
   markReviewLedgerReplyResolved,
   markReviewLedgerReplyStale,
   readAnyReviewLedgerMarker,
@@ -80,6 +91,7 @@ interface ManualDispatchPullRequestSnapshot {
     handle?: VcsOpaqueHandle;
     producer: string;
     source?: string;
+    trustedByDefault?: boolean;
   }>;
   reviews: Array<{
     state: "changes_requested" | "commented";
@@ -121,8 +133,9 @@ function clampBothEnds(value: string, maxLength: number): string {
  * a thread is to mark it resolved, and that word on its own would tell a reader the
  * defect was fixed. This note is what makes the strip mean what actually happened.
  *
- * Carries the bot marker so trigger-events.ts drops the note event instead of
- * treating it as a human comment and starting another round.
+ * Carries the bot marker so the GitLab webhook (`integrations/gitlab/webhook.ts`)
+ * drops the note event instead of treating it as a human comment and starting
+ * another round.
  */
 const SUPERSEDED_DISCUSSION_NOTE = [
   "This thread was opened by an earlier review round and the current round no " +
@@ -181,19 +194,13 @@ interface GitLabJob {
   status: string;
 }
 
-type GitLabHandle = {
-  kind?: string;
-  id?: string | number | null;
-  container?: number | null;
-};
-
 type GitLabGateStatusHandle = {
   kind: "commit_status";
   name: string;
   headSha: string;
 };
 
-function gitLabHandle(value: GitLabHandle | GitLabGateStatusHandle): VcsOpaqueHandle {
+function gitLabHandle(value: GitLabGateStatusHandle): VcsOpaqueHandle {
   return value as unknown as VcsOpaqueHandle;
 }
 interface GitLabMRDiff {
@@ -217,6 +224,9 @@ type GitLabCommitStatusState =
 
 const COMMIT_STATUS_409_RETRY_DELAYS_MS = [500, 1_000, 2_000];
 
+/** One page of the projects listing, inside the catalog import's own budget. */
+const PROJECTS_LIST_TIMEOUT_MS = 18_000;
+
 export interface GitLabConfig {
   token: string;
   projectId: string;
@@ -224,7 +234,6 @@ export interface GitLabConfig {
   /** Base URL for GitLab instance. Defaults to "https://gitlab.com". */
   host?: string;
   log?: IntegrationLogger;
-  botLogin?: string;
   legacyProjectId?: string;
 }
 
@@ -261,6 +270,27 @@ interface OwnedReviewDiscussion {
   hasSupersededNote: boolean;
 }
 
+/**
+ * The error Gitbeaker threw, with the status GitLab answered put on it.
+ *
+ * Gitbeaker keeps GitLab's answer on `cause.response` and no status on the
+ * error. Core reads a copy of what an adapter throws (it redacts it), and the
+ * copy keeps an error's own `status` but not its cause's response, so without
+ * this a refused token reads in core as a provider that gave no answer.
+ */
+function withProviderStatus(err: unknown): unknown {
+  const answer = providerAnswerOf(err);
+  if (err instanceof Error && answer instanceof Response) {
+    Object.defineProperty(err, "status", {
+      value: answer.status,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return err;
+}
+
 export class GitLabAdapter implements
   VCSAdapter,
   GateStatusCapableVCS,
@@ -288,17 +318,12 @@ export class GitLabAdapter implements
     this.baseBranch = config.baseBranch;
   }
 
-  get botLogin(): string | undefined {
-    return this.config.botLogin;
-  }
 
-  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean {
-    if (!left || !right) return left === right;
-    const a = left as unknown as GitLabHandle;
-    const b = right as unknown as GitLabHandle;
-    return a.kind === b.kind && a.id === b.id && a.container === b.container;
-  }
-
+  /**
+   * Every project the token is a member of. A failure carries `status` or
+   * `timedOut`, because core's listing retry reads exactly those to tell a
+   * GitLab outage it can wait out from a credential it would replay unchanged.
+   */
   async listRepositories(): Promise<VcsRepositoryMetadata[]> {
     const projects: any[] = [];
     const baseUrl = (this.config.host ?? "https://gitlab.com").replace(/\/$/u, "");
@@ -308,11 +333,22 @@ export class GitLabAdapter implements
         `${baseUrl}/api/v4/projects?membership=true&per_page=100&page=${page}`,
         {
           headers: { "PRIVATE-TOKEN": this.config.token },
-          signal: AbortSignal.timeout(18_000),
+          signal: AbortSignal.timeout(PROJECTS_LIST_TIMEOUT_MS),
         },
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+          throw Object.assign(
+            new Error(`GitLab projects list timed out after ${PROJECTS_LIST_TIMEOUT_MS}ms`),
+            { timedOut: true },
+          );
+        }
+        throw error;
+      });
       if (!response.ok) {
-        throw new Error(`GitLab projects list failed: ${response.status} ${response.statusText}`);
+        throw Object.assign(
+          new Error(`GitLab projects list failed: ${response.status} ${response.statusText}`),
+          { status: response.status },
+        );
       }
       projects.push(...((await response.json()) as any[]));
       page = response.headers.get("x-next-page") ?? "";
@@ -412,15 +448,10 @@ export class GitLabAdapter implements
     );
   }
 
+  /** A refusal of the values sent is final for this call; anything else,
+   *  including a rate limit or GitLab failing on its own side, is retried. */
   private throwWithProviderRetrySemantics(err: any): never {
-    const status = this.getStatusCode(err);
-    const retryableClientStatuses = new Set([408, 425, 429]);
-    if (
-      status !== undefined &&
-      status >= 400 &&
-      status < 500 &&
-      !retryableClientStatuses.has(status)
-    ) {
+    if (readProviderFailure(providerAnswerOf(err)).kind === "refused") {
       throw new FatalError(err instanceof Error ? err.message : String(err));
     }
     throw err;
@@ -586,10 +617,38 @@ export class GitLabAdapter implements
   }
 
   async getPRHead(prId: number): Promise<PullRequestHead> {
-    const mr = (await this.gl.MergeRequests.show(
-      this.projectId,
-      prId,
-    )) as unknown as GitLabMRHead;
+    return (await this.readMergeRequestHead(prId)).head;
+  }
+
+  /**
+   * One read of the merge request and its head pipeline, for the two answers
+   * built from it: the head core binds a delivery against, and the manual
+   * dispatch snapshot. Both used to read the merge request on their own.
+   */
+  private async readMergeRequestHead(prId: number): Promise<{
+    mr: GitLabMRHead;
+    head: PullRequestHead;
+    /** The head pipeline when it failed, with the jobs that failed in it. */
+    failedPipeline: { id: number; failedJobs: GitLabJob[] } | null;
+  }> {
+    let mr: GitLabMRHead;
+    try {
+      mr = (await this.gl.MergeRequests.show(this.projectId, prId)) as unknown as GitLabMRHead;
+    } catch (err) {
+      // A merge request this token may not read answers the same way every
+      // time, and a group webhook reports every project in the group, readable
+      // or not. That, and one that no longer exists, is closed for good. A
+      // token GitLab no longer accepts (401) or one without the scope to read
+      // at all (403 `insufficient_scope`) refuses every merge request: that is
+      // the connection's fault and is thrown as it came, with its status.
+      if (isPullRequestRefusal(err)) {
+        throw new PullRequestUnreadableError(
+          `GitLab merge request !${prId} in ${this.projectId} cannot be read with this token`,
+          { cause: err },
+        );
+      }
+      throw withProviderStatus(err);
+    }
     const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
     if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);
     const baseRef = mr.target_branch?.trim();
@@ -605,32 +664,26 @@ export class GitLabAdapter implements
     }
     const headPipelineId = mr.head_pipeline?.id;
     const headPipelineStatus = mr.head_pipeline?.status;
-    const headPipelineFailedChecks =
+    const failedPipeline =
       typeof headPipelineId === "number" && headPipelineStatus === "failed"
-        ? ((await this.gl.Jobs.all(this.projectId, {
-            pipelineId: headPipelineId,
-          })) as unknown as GitLabJob[])
-            .filter((job) => job.status === "failed")
-            .map((job) => ({
-              handle: gitLabHandle({ kind: "job", container: headPipelineId, id: job.id }),
-              name: job.name,
-              conclusion: "failed",
-            }))
-        : [];
-    const failed =
-      headPipelineStatus === "failed" && typeof headPipelineId === "number"
-        ? [
-            {
-              handle: gitLabHandle({ kind: "aggregate", id: headPipelineId }),
-              name: "pipeline",
-              conclusion: "failed",
-            },
-            ...headPipelineFailedChecks,
-          ]
-        : [];
+        ? {
+            id: headPipelineId,
+            failedJobs: ((await this.gl.Jobs.all(this.projectId, {
+              pipelineId: headPipelineId,
+            })) as unknown as GitLabJob[]).filter((job) => job.status === "failed"),
+          }
+        : null;
+    // The pipeline and every failed job in it, because a delivery names either:
+    // the jobs when its hook carried them, the pipeline when it did not.
+    const failed = failedPipeline
+      ? [
+          pipelineCheck(failedPipeline.id),
+          ...failedPipeline.failedJobs.map((job) => jobCheck(failedPipeline.id, job)),
+        ]
+      : [];
     const checks = {
       state:
-        headPipelineStatus === "failed"
+        failed.length > 0
           ? "red" as const
           : headPipelineStatus === "running" || headPipelineStatus === "pending"
             ? "running" as const
@@ -638,29 +691,29 @@ export class GitLabAdapter implements
       failed,
     };
     return {
-      headSha,
-      ...(mr.source_branch ? { headRef: mr.source_branch } : {}),
-      baseRef,
-      state,
-      checks,
+      mr,
+      head: {
+        headSha,
+        ...(mr.source_branch ? { headRef: mr.source_branch } : {}),
+        baseRef,
+        state,
+        checks,
+      },
+      failedPipeline,
     };
   }
 
   async getManualDispatchPullRequest(
     prId: number,
   ): Promise<ManualDispatchPullRequestSnapshot> {
-    const mr = (await this.gl.MergeRequests.show(
-      this.projectId,
-      prId,
-    )) as unknown as GitLabMRHead;
-    const current = await this.getPRHead(prId);
-    const headPipelineId = mr.head_pipeline?.id;
+    const { mr, head: current, failedPipeline } = await this.readMergeRequestHead(prId);
     const [comments, pipeline] = await Promise.all([
       this.getPRComments(prId),
-      typeof headPipelineId === "number"
-        ? this.gl.Pipelines.show(this.projectId, headPipelineId)
+      failedPipeline
+        ? this.gl.Pipelines.show(this.projectId, failedPipeline.id)
         : Promise.resolve(null),
     ]);
+    const source = (pipeline as { source?: unknown } | null)?.source;
     return {
       prNumber: prId,
       prUrl:
@@ -679,17 +732,18 @@ export class GitLabAdapter implements
       ...(current.state === "merged" && mr.merged_at
         ? { mergedAt: mr.merged_at }
         : {}),
-      failedChecks: (current.checks?.failed ?? []).map((check) => {
-        const source = (pipeline as { source?: unknown } | null)?.source;
-        const failedCheck: ManualDispatchPullRequestSnapshot["failedChecks"][number] = {
-          name: check.name,
-          conclusion: check.conclusion,
-          producer: "",
-        };
-        if (check.handle) failedCheck.handle = check.handle;
-        if (typeof source === "string") failedCheck.source = source;
-        return failedCheck;
-      }),
+      // What the Pipeline Hook would have reported for this pipeline, under
+      // the producer it reports it as: a check without a producer is one core
+      // cannot trust, so manual dispatch of a failed pipeline found nothing.
+      failedChecks: failedPipeline
+        ? failedPipelineChecks(failedPipeline.id, failedPipeline.failedJobs).map((check) =>
+            Object.assign(check, {
+              producer: GITLAB_CI_PRODUCER,
+              ...(typeof source === "string" ? { source } : {}),
+              trustedByDefault: isTrustedByDefaultPipeline(source),
+            }),
+          )
+        : [],
       reviews: comments
         .filter((comment) => comment.body.trim().length > 0)
         .map((comment) => ({
@@ -701,9 +755,14 @@ export class GitLabAdapter implements
   }
 
   parsePullRequestUrl(url: URL): { repoPath: string; prNumber: number } | null {
-    const host = new URL(this.config.host ?? "https://gitlab.com").host.toLowerCase();
-    if (url.host.toLowerCase() !== host) return null;
-    const segments = url.pathname.split("/").filter(Boolean);
+    const base = new URL(this.config.host ?? "https://gitlab.com");
+    if (url.host.toLowerCase() !== base.host.toLowerCase()) return null;
+    // GitLab may be installed under a relative URL root
+    // (`https://example.com/gitlab`). That root is the instance's, not part of
+    // any project's path, so it is removed before the path is read.
+    const root = base.pathname.replace(/\/+$/u, "");
+    if (root && url.pathname !== root && !url.pathname.startsWith(`${root}/`)) return null;
+    const segments = url.pathname.slice(root.length).split("/").filter(Boolean);
     const marker = segments.findIndex(
       (segment, index) => segment === "-" && segments[index + 1] === "merge_requests",
     );
@@ -1017,7 +1076,8 @@ export class GitLabAdapter implements
           ]),
       marker,
       headMarker,
-      // Read by trigger-events.ts to drop a note this workflow produced. An
+      // Read by the GitLab webhook (`integrations/gitlab/webhook.ts`) to drop a
+      // note this workflow produced. An
       // installation without a matchable bot login would otherwise fire a fresh
       // review trigger off its own summary on the first round of every merge
       // request.

@@ -139,3 +139,16 @@ test("the field disappears when no repository scope provider is mounted", () => 
   assert.doesNotMatch(html, /Configure repositories/);
   assert.match(html, />Providers</);
 });
+
+// A review trigger saved without states waits for "request changes" only: a
+// plain comment is opt-in (it needs the automation account known). The editor
+// shows what the worker applies, so its fallback is the block's default.
+test("a review trigger that names no states shows the request-changes default", () => {
+  const html = render(node("trigger_pr_review", "any"));
+  // The checkbox input written right before its label.
+  const checkedOf = (label: string) =>
+    new RegExp(`<input([^>]*)/>${label}`).exec(html)?.[1].match(/aria-checked="(\w+)"/)?.[1];
+
+  assert.equal(checkedOf("Changes requested"), "true");
+  assert.equal(checkedOf("Commented \\(untrusted body, opt-in\\)"), "false");
+});

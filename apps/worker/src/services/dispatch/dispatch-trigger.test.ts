@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PullRequestUnreadableError } from "@integrations/sdk";
 import type { PrTriggerPayload } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import {
@@ -28,7 +29,6 @@ import {
 } from "./trigger-delivery-store.js";
 
 const testEnv = vi.hoisted(() => ({
-  GITLAB_PROJECT_ID: undefined as string | undefined,
   GITHUB_BOT_LOGIN: "github-app[bot]" as string | undefined,
   GITLAB_BOT_LOGIN: "gitlab-bot" as string | undefined,
 }));
@@ -40,9 +40,15 @@ vi.mock("../../infra/vcs-config.js", () => ({
 // reason this file needs a client mock: every other query here takes `db`.
 const dbState = vi.hoisted(() => ({ db: undefined as unknown }));
 vi.mock("../../db/client.js", () => ({ getDb: () => dbState.db }));
+const botLoginReadable = vi.hoisted(() => ({ value: true }));
 vi.mock("../vcs/index.js", () => ({
-  getVcsBotLogin: vi.fn((provider: "github" | "gitlab") =>
-    provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN),
+  readVcsBotLogin: vi.fn(async (provider: "github" | "gitlab") =>
+    botLoginReadable.value
+      ? {
+          readable: true,
+          login: provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN,
+        }
+      : { readable: false, reason: "settings unreadable" }),
 }));
 // The pin predicate is a pure helper in the same module and stays real; only the
 // network-backed directory is stubbed.
@@ -50,6 +56,52 @@ vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => 
   ...(await importOriginal<typeof import("../../adapters/vcs/repository-directory.js")>()),
   createRepositoryDirectoryForProviders: vi.fn(() => ({ listRepositories: vi.fn(() => []) })),
 }));
+/**
+ * The provider behind the production version control path: the real GitLab
+ * integration reached through the lazy repository runtime, with only GitLab's
+ * HTTP answers (below) and the connection store standing in. Off unless a case
+ * turns it on, so every other case keeps reading the store it always read.
+ */
+const gitlabProvider = vi.hoisted(() => ({
+  connected: false,
+  mergeRequest: undefined as unknown,
+  jobs: [] as unknown[],
+  /** GitLab refusing the merge request read, with the JSON body its REST API
+   *  answers (`{ message }`, or `{ error, error_description }` for a scope). */
+  refusal: undefined as { status: number; body: Record<string, unknown> } | undefined,
+}));
+vi.mock("../integrations/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../integrations/runtime.js")>();
+  return {
+    ...actual,
+    resolveUsableIntegrations: async (input: Parameters<typeof actual.resolveUsableIntegrations>[0]) => {
+      if (!gitlabProvider.connected) return actual.resolveUsableIntegrations(input);
+      const { integrationRuntime } = await import("@integrations/registry/worker");
+      const { redactingRuntime } = await import("../integrations/usable.js");
+      const { redactedError } = await import("../integrations/context.js");
+      // Behind core's own boundary, as the resolver hands it out: what the
+      // adapter throws reaches dispatch as core's redacted copy.
+      const runtime = redactingRuntime(integrationRuntime("gitlab")!, (error) =>
+        redactedError(error, (text) => text),
+      );
+      const entry = {
+        manifest: runtime.manifest,
+        runtime,
+        ctx: {
+          connection: { token: "token", host: "https://gitlab.example.com" },
+          http: { fetch: (...args: Parameters<typeof fetch>) => fetch(...args) },
+          log: { debug() {}, info() {}, warn() {}, error() {} },
+          signal: new AbortController().signal,
+        },
+      };
+      return {
+        readable: true as const,
+        usable: input.filter?.(runtime.manifest) === false ? [] : [entry],
+        states: new Map([["gitlab", { integrationId: "gitlab", usable: true }]]),
+      } as never;
+    },
+  };
+});
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
@@ -117,6 +169,7 @@ beforeEach(async () => {
   announceMock.mockReset().mockResolvedValue(undefined);
   testEnv.GITHUB_BOT_LOGIN = "github-app[bot]";
   testEnv.GITLAB_BOT_LOGIN = "gitlab-bot";
+  botLoginReadable.value = true;
 });
 
 function enabled(
@@ -201,20 +254,22 @@ function deps(overrides: Record<string, unknown> = {}) {
     repositoryCatalog,
     ...(!("getCurrentHead" in overrides) && !("getCurrentPullRequest" in overrides)
       ? {
+          // The provider still reports every check the event names as failed,
+          // each read back as a fresh object, the way a provider re-reading a
+          // check from its API mints a new handle. The provider's own
+          // comparison decides whether the two name the same check.
           getCurrentPullRequest: vi.fn(async (pr: PrTriggerPayload) => ({
             headSha: pr.headSha,
             headRef: pr.headRef,
             baseRef: pr.baseRef,
             state: "open" as const,
             checks: pr.failedChecks
-              ? { state: "red" as const, failed: pr.failedChecks }
+              ? { state: "red" as const, failed: structuredClone(pr.failedChecks) }
               : { state: "green" as const, failed: [] },
           })),
         }
       : {}),
-    getLatestCheckRuns: vi.fn().mockResolvedValue([]),
     issueTracker: { fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }) },
-    isRepositoryConfigured: vi.fn().mockResolvedValue(true),
     ...overrides,
   } as any;
 }
@@ -265,6 +320,42 @@ describe("provider trigger dispatch", () => {
     await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
       pending: false,
       result: { result: "ignored_stale_head" },
+    });
+  });
+
+  // What the adapters throw when the provider refuses for good (see
+  // `getPRHead` in both VCS integrations): a GitLab group webhook reports every
+  // project in the group, including ones the token may not read. Answering that
+  // as a failure would have the provider redeliver it, and GitLab switch the
+  // webhook off after a few.
+  it("ignores for good a pull request the provider says this connection cannot read", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        event(),
+        deps({ getCurrentHead: vi.fn().mockRejectedValue(new PullRequestUnreadableError("403 Forbidden")) }),
+      ),
+    ).resolves.toEqual({ result: "ignored_pull_request_unreadable" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("closes an accepted delivery whose pull request stopped being readable", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
+    const getCurrentHead = vi
+      .fn()
+      .mockResolvedValueOnce("abc123")
+      .mockRejectedValue(new PullRequestUnreadableError("404 Not Found"));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps({ getCurrentHead }))).resolves.toEqual({
+      result: "ignored_pull_request_unreadable",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      pending: false,
+      result: { result: "ignored_pull_request_unreadable" },
     });
   });
 
@@ -391,6 +482,34 @@ describe("provider trigger dispatch", () => {
       ticketKey: "AIW-1",
       scope: "workflow_owned",
     });
+  });
+
+  it("answers a workflow-owned delivery terminally when no issue tracker is connected", async () => {
+    // Disconnecting or disabling the tracker is an admin's choice, not a
+    // fault. A retryable answer would have the provider redeliver every such
+    // delivery, and GitLab turn the webhook off after a few, so every other
+    // trigger on it would stop too. The tracker is resolved for real here, on
+    // a deployment whose settings are readable and connect none.
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+      targetBranch: "main",
+      pr: { id: 7, url: "https://github.com/acme/app/pull/7", branch: "feature/owned" },
+    });
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "workflow_owned" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(event(), deps({ issueTracker: undefined })),
+    ).resolves.toEqual({
+      result: "ignored_issue_tracker_unavailable",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toBeNull();
   });
 
   it("keys every pull request of one ticket on its own subject", async () => {
@@ -707,83 +826,150 @@ describe("provider trigger dispatch", () => {
     await expect(db.select().from(triggerDeliveries)).resolves.toEqual([]);
   });
 
-  it("filters untrusted CI producers before accepting a delivery", async () => {
-    mockGetEnabled.mockResolvedValue(
-      enabled(
-        { scope: "any", checkNames: ["ci / build"], githubAppSlugs: ["github-actions"] },
-        "trigger_pr_checks_failed",
-      ),
+  it("honours a custom trust list a check trigger was published with before S10", async () => {
+    // The deployed graph reaches dispatch through the one reader of a stored
+    // row, as trigger routing hands it over (that routing does upgrade it is
+    // proved in `engine/definition-trigger-routing.test.ts`). Here: the
+    // per-provider list this node was saved with is what decides trust, so a
+    // non-default app is trusted and the provider's default runner, which the
+    // list left out, is not.
+    const { parseStoredWorkflowDefinition } = await import(
+      "../../engine/definition/stored-definition.js"
     );
-    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-    const untrusted = event({
-      delivery: { provider: "github", producer: "unknown-app", deliveryId: "ci-1" },
-      triggerType: "trigger_pr_checks_failed",
-      pr: {
-        ...event().pr,
-        failedChecks: [{ name: "ci / build", conclusion: "failure" }],
+    const stored = enabled(
+      {
+        scope: "any",
+        checkNames: ["ci / build"],
+        githubAppSlugs: ["circleci"],
+        gitlabPipelineSources: ["merge_request_event"],
+      },
+      "trigger_pr_checks_failed",
+    );
+    mockGetEnabled.mockResolvedValue({
+      ...stored,
+      current: {
+        ...stored.current,
+        ...parseStoredWorkflowDefinition(stored.current.definition),
       },
     });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    const failedCheck = (producer: string, deliveryId: string) =>
+      event({
+        delivery: { provider: "github", producer, deliveryId },
+        triggerType: "trigger_pr_checks_failed",
+        pr: {
+          ...event().pr,
+          failedChecks: [
+            { name: "ci / build", conclusion: "failure", handle: { id: 101, owner: "ci" } },
+          ],
+        },
+      });
 
-    await expect(dispatchTriggerEvent(untrusted, deps())).resolves.toEqual({
-      result: "ignored_untrusted_event",
-    });
-    await expect(getTriggerDelivery(db, "github", "ci-1")).resolves.toBeNull();
+    await expect(
+      dispatchTriggerEvent(failedCheck("github-actions", "ci-default"), deps()),
+    ).resolves.toEqual({ result: "ignored_untrusted_event" });
+    await expect(getTriggerDelivery(db, "github", "ci-default")).resolves.toBeNull();
+    await expect(
+      dispatchTriggerEvent(failedCheck("circleci", "ci-custom"), deps()),
+    ).resolves.toEqual({ result: "started", runId: "run-pr" });
   });
 });
 
-describe("resolveEnabledReviewStates", () => {
-  it("allows comments only when the provider bot identity is known", async () => {
-    mockGetEnabled.mockResolvedValue(
-      enabled(
-        { providers: ["github", "gitlab"], on: ["changes_requested", "commented"] },
-        "trigger_pr_review",
-      ),
-    );
-    const { resolveEnabledReviewStates } = await import("./dispatch-trigger.js");
-
-    await expect(resolveEnabledReviewStates(db, "github", undefined)).resolves.toEqual([
-      "changes_requested",
-    ]);
-    await expect(resolveEnabledReviewStates(db, "gitlab", "gitlab-bot")).resolves.toEqual([
-      "changes_requested",
-      "commented",
-    ]);
-  });
-
-  it("reads trigger configuration from a v2 definition without v1 params", async () => {
-    mockGetEnabled.mockResolvedValue({
-      definition: { id: 5, name: "PR flow" },
-      current: {
-        definitionId: 5,
-        version: 12,
-        schema: "v2",
-        definition: {
-          schemaVersion: 2,
-          nodes: [
-            {
-              id: "review-trigger",
-              type: "trigger_pr_review",
-              x: 0,
-              y: 0,
-              configuration: {
-                providers: ["gitlab"],
-                on: ["commented"],
-                scope: "workflow_owned",
-              },
-              inputs: {},
-              additionalInputs: [],
-            },
-          ],
-          edges: [],
-        },
+/**
+ * A "commented" review may start a run only while the automation account is
+ * known. The workflow comments on every pull request it works on, and without
+ * its login those comments read as a person's, so it would start a run off its
+ * own comment and answer itself.
+ */
+describe("a commented review and the automation account", () => {
+  function commentedReview(deliveryId: string): TriggerEvent {
+    return event({
+      delivery: { provider: "github", producer: "carol", deliveryId },
+      triggerType: "trigger_pr_review",
+      pr: {
+        ...event().pr,
+        review: { state: "commented", author: "carol", body: "please rename this" },
       },
     });
-    const { resolveEnabledReviewStates } = await import("./dispatch-trigger.js");
+  }
 
-    await expect(resolveEnabledReviewStates(db, "gitlab", "gitlab-bot")).resolves.toEqual([
-      "commented",
-    ]);
-    await expect(resolveEnabledReviewStates(db, "github", "github-app[bot]")).resolves.toEqual([]);
+  it("is dropped when the provider's bot login is not configured, saying so", async () => {
+    // Its own word rather than the untrusted-producer one: naming the bot
+    // login is what the operator reading the provider's log has to do.
+    testEnv.GITHUB_BOT_LOGIN = undefined;
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any", on: ["changes_requested", "commented"] }, "trigger_pr_review"),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(commentedReview("rv-no-bot"), deps())).resolves.toEqual({
+      result: "ignored_bot_login_unknown",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("starts a run once the bot login is known", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any", on: ["changes_requested", "commented"] }, "trigger_pr_review"),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(commentedReview("rv-bot"), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+  });
+
+  it("answers retryably when the bot login could not be read at all", async () => {
+    botLoginReadable.value = false;
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any", on: ["changes_requested", "commented"] }, "trigger_pr_review"),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(commentedReview("rv-unreadable"), deps()),
+    ).resolves.toMatchObject({ result: "error", diagnosticId: expect.any(String) });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(getTriggerDelivery(db, "github", "rv-unreadable")).resolves.toBeNull();
+  });
+
+  // The webhook route reads the account once per delivery and hands that
+  // reading down; dispatch reading its own again would cost a second settings
+  // read per event and could disagree with the first.
+  it("decides on the reading its caller hands it instead of reading its own", async () => {
+    botLoginReadable.value = false;
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any", on: ["changes_requested", "commented"] }, "trigger_pr_review"),
+    );
+    const { readVcsBotLogin } = await import("../vcs/index.js");
+    vi.mocked(readVcsBotLogin).mockClear();
+    const readBotLogin = vi.fn(async () => ({ readable: true as const, login: "github-app[bot]" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(commentedReview("rv-handed"), deps({ readBotLogin })),
+    ).resolves.toEqual({ result: "started", runId: "run-pr" });
+    expect(readBotLogin).toHaveBeenCalledExactlyOnceWith("github");
+    expect(readVcsBotLogin).not.toHaveBeenCalled();
+  });
+
+  it("keeps a changes-requested review eligible without a bot login", async () => {
+    const { selectEligibleEvent } = await import("./dispatch-trigger.js");
+    const review = event({
+      triggerType: "trigger_pr_review",
+      pr: {
+        ...event().pr,
+        review: { state: "changes_requested", author: "carol", body: "blocking" },
+      },
+    });
+
+    expect(
+      selectEligibleEvent(review, { on: ["changes_requested", "commented"] }, undefined),
+    ).not.toBeNull();
+    expect(
+      selectEligibleEvent(commentedReview("unit"), { on: ["commented"] }, undefined),
+    ).toBeNull();
   });
 });
 
@@ -836,13 +1022,13 @@ describe("PR trigger rate limit", () => {
     // A refused start is a terminal drop, not a queued retry: the delivery is
     // settled and the refusal tallied.
     await expect(dispatchTriggerEvent(secondEvent(), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "rate_limited",
     });
 
     expect(mockStart).toHaveBeenCalledOnce();
     await expect(getTriggerDelivery(db, "github", "delivery-2")).resolves.toMatchObject({
       pending: false,
-      result: { result: "coalesced" },
+      result: { result: "rate_limited" },
     });
     expect(await db.select().from(triggerRateLimits)).toEqual([
       expect.objectContaining({ definitionId: "5", nodeId: "trigger", count: 2 }),
@@ -899,7 +1085,7 @@ describe("PR trigger rate limit", () => {
 
     await dispatchTriggerEvent(event(), deps());
     await expect(dispatchTriggerEvent(secondEvent(), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "rate_limited",
     });
   });
 });
@@ -1008,7 +1194,9 @@ describe("pull request auto-fix cap", () => {
         ...event().pr,
         provider: "gitlab",
         prUrl: "https://gitlab.com/acme/app/-/merge_requests/7",
-        failedChecks: [{ name: "pipeline", conclusion: "failed" }],
+        failedChecks: [
+          { name: "pipeline", conclusion: "failed", handle: { kind: "aggregate", id: 31 } },
+        ],
       },
     });
   }
@@ -1063,7 +1251,7 @@ describe("pull request auto-fix cap", () => {
     });
     await finishRun("run-1");
     await expect(dispatchTriggerEvent(checksEvent("ci-2"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledOnce();
@@ -1085,7 +1273,7 @@ describe("pull request auto-fix cap", () => {
     // pending snapshot is gone, so the drain cannot retry it into a run.
     await expect(getTriggerDelivery(db, "gitlab", "ci-2")).resolves.toMatchObject({
       pending: false,
-      result: { result: "coalesced" },
+      result: { result: "autofix_cap_reached" },
     });
     await expect(pendingDeliveryIds()).resolves.not.toContain("ci-2");
   });
@@ -1134,7 +1322,7 @@ describe("pull request auto-fix cap", () => {
     });
     await finishRun("run-1");
     await expect(dispatchTriggerEvent(checksEvent("ci-2"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledOnce();
@@ -1224,7 +1412,7 @@ describe("pull request auto-fix cap", () => {
     // No maxFixAttemptsPerPr stored either: the third dispatch crosses the
     // registry default of 2.
     await expect(dispatchTriggerEvent(checksEvent("ci-3"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledTimes(2);
@@ -1253,7 +1441,7 @@ describe("pull request auto-fix cap", () => {
     });
     await finishRun("run-2");
     await expect(dispatchTriggerEvent(checksEvent("ci-3"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledTimes(2);
@@ -1322,7 +1510,7 @@ describe("pull request auto-fix cap", () => {
       await finishRun(`run-${i}`);
     }
     await expect(dispatchTriggerEvent(reviewEvent("rv-11"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledTimes(10);
@@ -1356,7 +1544,7 @@ describe("pull request auto-fix cap", () => {
     });
     await finishRun("run-2");
     await expect(dispatchTriggerEvent(reviewEvent("rv-3"), deps())).resolves.toEqual({
-      result: "coalesced",
+      result: "autofix_cap_reached",
     });
 
     expect(mockStart).toHaveBeenCalledTimes(2);
@@ -1426,5 +1614,266 @@ describe("pull request auto-fix cap", () => {
         expect.objectContaining({ nodeId: "checks", attempts: 1 }),
       ]),
     );
+  });
+});
+
+/**
+ * Binding a failed check through the path production takes: dispatch asks the
+ * lazy repository runtime for the merge request's head and the provider for
+ * how its handles compare, and the real GitLab integration answers both. The
+ * other cases here hand dispatch a provider state and a comparison of their
+ * own, which is how a comparison that answered "same" for everything stayed
+ * invisible to them.
+ */
+describe("binding a failed pipeline through the production version control path", () => {
+  const sourceHead = "5f2d4c1e9a7b3d6f8e0c2a4b6d8f0e1c3a5b7d9f";
+
+  beforeEach(() => {
+    gitlabProvider.connected = true;
+    // GitLab's REST API as the real client calls it: the merge request, then
+    // the jobs of its head pipeline. Anything else is a request this path was
+    // not expected to make.
+    vi.stubGlobal("fetch", async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      const refusal = gitlabProvider.refusal;
+      if (refusal && path.endsWith("/merge_requests/7")) {
+        return new Response(JSON.stringify(refusal.body), {
+          status: refusal.status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const body = path.endsWith("/merge_requests/7")
+        ? gitlabProvider.mergeRequest
+        : /\/pipelines\/\d+\/jobs$/u.test(path)
+          ? gitlabProvider.jobs
+          : undefined;
+      if (body === undefined) return new Response("unexpected request", { status: 500 });
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    let starts = 0;
+    mockStart.mockImplementation(async () => ({ runId: `run-${++starts}` }));
+    const definition = enabled({ scope: "any" }, "trigger_pr_checks_failed");
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+  });
+
+  afterEach(() => {
+    gitlabProvider.connected = false;
+    gitlabProvider.refusal = undefined;
+    vi.unstubAllGlobals();
+  });
+
+  /** The merge request as GitLab reports it now: its head pipeline, failed,
+   *  with a job of the same name as the one the delivery named. */
+  function headPipeline(id: number, failedJobId: number) {
+    gitlabProvider.mergeRequest = {
+      diff_refs: { head_sha: sourceHead },
+      source_branch: "feature/owned",
+      target_branch: "main",
+      state: "opened",
+      head_pipeline: { id, status: "failed" },
+    };
+    gitlabProvider.jobs = [{ id: failedJobId, name: "test-build", status: "failed" }];
+  }
+
+  function failedPipeline(
+    deliveryId: string,
+    pr: Partial<TriggerEvent["pr"]> & Record<string, unknown>,
+  ): TriggerEvent {
+    return event({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId,
+        trustedByDefault: true,
+      },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        prUrl: "https://gitlab.com/acme/app/-/merge_requests/7",
+        headSha: "",
+        ...pr,
+      } as TriggerEvent["pr"],
+    });
+  }
+
+  /** As the webhook writes it today: the job's handle names its pipeline. */
+  const deliveredFromPipeline31 = (deliveryId: string) =>
+    failedPipeline(deliveryId, {
+      failedChecks: [
+        {
+          name: "test-build",
+          conclusion: "failed",
+          handle: { kind: "job", container: 31, id: 378 } as never,
+        },
+      ],
+    });
+
+  /** As main's webhook wrote it, still stored when this build deploys. */
+  const recordedByMainFromPipeline31 = (deliveryId: string) =>
+    failedPipeline(deliveryId, {
+      pipelineId: 31,
+      failedChecks: [{ name: "test-build", conclusion: "failed" }],
+    });
+
+  const provider = () => deps({ getCurrentPullRequest: undefined });
+
+  it("starts a fix for the pipeline that is still the merge request's failed head", async () => {
+    headPipeline(31, 378);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-current"), provider()),
+    ).resolves.toEqual({ result: "started", runId: "run-1" });
+  });
+
+  it("drops a failed pipeline once a newer pipeline is the merge request's head", async () => {
+    // Pipeline 32 failed a job of the same name. Without the pipeline in the
+    // handle deciding it, the fix would start for a failure nobody delivered.
+    headPipeline(32, 400);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-superseded"), provider()),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("starts a fix from an envelope main recorded, while its pipeline is the head", async () => {
+    headPipeline(31, 378);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(recordedByMainFromPipeline31("gl-legacy-current"), provider()),
+    ).resolves.toEqual({ result: "started", runId: "run-1" });
+  });
+
+  /** A fix running for the merge request, and a second failure queued behind
+   *  it, waiting for the subject to be free. */
+  async function queueBehindARunningFix(queuedDeliveryId: string) {
+    headPipeline(31, 378);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    const subjectKey = prSubjectKey("gitlab", "acme/app", 7);
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-running"), provider()),
+    ).resolves.toEqual({ result: "started", runId: "run-1" });
+    const running = (await listPendingTriggersForSubject(db, subjectKey))[0]!;
+    expect(await acknowledgeStartedTriggerDelivery(db, running, "run-1")).toBe(true);
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31(queuedDeliveryId), provider()),
+    ).resolves.toEqual({ result: "coalesced" });
+    const owner = await registry.get(subjectKey);
+    expect(await registry.release(subjectKey, owner!.ownerToken, "run-1")).toBe(true);
+    return subjectKey;
+  }
+
+  // A token GitLab stopped accepting refuses every merge request. Fixing the
+  // connection makes the same work possible again, so the queued failure has
+  // to survive the refusal rather than be closed as unreadable.
+  it("keeps a queued failure through a refused token and starts it once the token works", async () => {
+    const subjectKey = await queueBehindARunningFix("gl-queued");
+    const { drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+
+    gitlabProvider.refusal = { status: 401, body: { message: "401 Unauthorized" } };
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toMatchObject({
+      result: "error",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    expect(await listPendingTriggersForSubject(db, subjectKey)).toHaveLength(1);
+    await expect(getTriggerDelivery(db, "gitlab", "gl-queued")).resolves.toMatchObject({
+      pending: true,
+      result: { result: "error" },
+    });
+
+    gitlabProvider.refusal = undefined;
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toEqual({
+      result: "started",
+      runId: "run-2",
+    });
+  });
+
+  // GitLab's documented answer for a token without the scope (REST
+  // authentication docs): refuses every merge request, so the queued failure
+  // waits for the connection rather than being closed.
+  it("keeps a queued failure through a token without the scope, as GitLab answers it", async () => {
+    const subjectKey = await queueBehindARunningFix("gl-queued-scope");
+    const { drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+
+    gitlabProvider.refusal = {
+      status: 403,
+      body: {
+        error: "insufficient_scope",
+        error_description: "The request requires higher privileges than provided by the access token.",
+        scope: "api read_api",
+      },
+    };
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toMatchObject({
+      result: "error",
+    });
+    expect(await listPendingTriggersForSubject(db, subjectKey)).toHaveLength(1);
+
+    gitlabProvider.refusal = undefined;
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toEqual({
+      result: "started",
+      runId: "run-2",
+    });
+  });
+
+  // A delivery not yet accepted, whose read the token was refused on. The
+  // refusal lasts until somebody rotates the token, so it is answered as a
+  // fault the health row shows, never as a failure GitLab would count towards
+  // switching the webhook off. Nothing is written for it.
+  it("answers a delivery read with a refused token as a credential fault", async () => {
+    headPipeline(31, 378);
+    gitlabProvider.refusal = { status: 401, body: { message: "401 Unauthorized" } };
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-refused-token"), provider()),
+    ).resolves.toEqual({
+      result: "vcs_credential_refused",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    await expect(getTriggerDelivery(db, "gitlab", "gl-refused-token")).resolves.toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("answers a GitLab that did not answer as a failure to redeliver", async () => {
+    headPipeline(31, 378);
+    gitlabProvider.refusal = { status: 502, body: { message: "502 Bad Gateway" } };
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-outage"), provider()),
+    ).resolves.toMatchObject({ result: "error" });
+  });
+
+  it("closes a queued failure whose merge request this token can no longer read", async () => {
+    const subjectKey = await queueBehindARunningFix("gl-queued-gone");
+    const { drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+
+    gitlabProvider.refusal = { status: 404, body: { message: "404 Not found" } };
+    await expect(drainOldestPendingTrigger(subjectKey, provider())).resolves.toBeNull();
+    expect(await listPendingTriggersForSubject(db, subjectKey)).toHaveLength(0);
+    await expect(getTriggerDelivery(db, "gitlab", "gl-queued-gone")).resolves.toMatchObject({
+      pending: false,
+      result: { result: "ignored_pull_request_unreadable" },
+    });
+    expect(mockStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops an envelope main recorded once a newer pipeline is the head", async () => {
+    headPipeline(32, 400);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(recordedByMainFromPipeline31("gl-legacy-superseded"), provider()),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
   });
 });

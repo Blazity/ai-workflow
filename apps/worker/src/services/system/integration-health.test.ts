@@ -19,7 +19,7 @@ const observations = vi.hoisted(() => ({
 }));
 
 vi.mock("./observations.js", () => ({
-  getLatestSystemHealthObservations: async () => observations.latest,
+  latestWebhookDeliveries: async () => observations.latest,
 }));
 
 /**

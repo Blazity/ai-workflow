@@ -46,6 +46,39 @@ export class SkillSourceError extends Error {
   }
 }
 
+/**
+ * One GitHub call, with GitHub's refusal turned into a sentence.
+ *
+ * Octokit rejects with a `RequestError` carrying the HTTP status, and core
+ * takes any error with a 4xx `status` as one that already chose its answer, so
+ * GitHub's own "Not Found" and "Resource not accessible by integration" used
+ * to reach the dashboard verbatim. What a person can act on is which of two
+ * things went wrong: the repository is not there for this installation, or the
+ * installation may not read it. Anything else, a GitHub outage included, loses
+ * its status and gets core's generic answer.
+ */
+async function gitHubCall<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof SkillSourceError) throw error;
+    const status = (error as { status?: unknown } | null)?.status;
+    if (status === 404) {
+      throw new SkillSourceError(
+        "GitHub repository not found, or not part of this App installation",
+        404,
+      );
+    }
+    if (typeof status === "number" && status >= 400 && status < 500) {
+      throw new SkillSourceError(
+        "The GitHub App installation cannot read this repository",
+        422,
+      );
+    }
+    throw new Error("GitHub could not be reached to read this repository", { cause: error });
+  }
+}
+
 const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/i;
 
 /**
@@ -75,21 +108,25 @@ export function createGitHubSkillSource(
   const octokit = buildOctokit(credential);
   return {
     async getDefaultBranch(input) {
-      const response = await octokit.repos.get({
-        owner: input.owner,
-        repo: input.repository,
-      });
+      const response = await gitHubCall(() =>
+        octokit.repos.get({
+          owner: input.owner,
+          repo: input.repository,
+        }),
+      );
       if (!response.data.default_branch) {
         throw new SkillSourceError("GitHub repository has no default branch", 422);
       }
       return response.data.default_branch;
     },
     async resolveCommit(input) {
-      const response = await octokit.repos.getCommit({
-        owner: input.owner,
-        repo: input.repository,
-        ref: input.ref,
-      });
+      const response = await gitHubCall(() =>
+        octokit.repos.getCommit({
+          owner: input.owner,
+          repo: input.repository,
+          ref: input.ref,
+        }),
+      );
       const treeSha = response.data.commit.tree.sha;
       if (!COMMIT_SHA_PATTERN.test(response.data.sha) || !treeSha) {
         throw new SkillSourceError("GitHub returned an invalid commit", 422);
@@ -97,12 +134,14 @@ export function createGitHubSkillSource(
       return { commitSha: response.data.sha, treeSha };
     },
     async getTree(input) {
-      const response = await octokit.git.getTree({
-        owner: input.owner,
-        repo: input.repository,
-        tree_sha: input.treeSha,
-        recursive: "true",
-      });
+      const response = await gitHubCall(() =>
+        octokit.git.getTree({
+          owner: input.owner,
+          repo: input.repository,
+          tree_sha: input.treeSha,
+          recursive: "true",
+        }),
+      );
       const entries: RepositorySkillTreeEntry[] = [];
       for (const entry of response.data.tree) {
         if (
@@ -131,11 +170,13 @@ export function createGitHubSkillSource(
       };
     },
     async getFiles(input) {
-      const response = await octokit.repos.downloadTarballArchive({
-        owner: input.owner,
-        repo: input.repository,
-        ref: input.commitSha,
-      });
+      const response = await gitHubCall(() =>
+        octokit.repos.downloadTarballArchive({
+          owner: input.owner,
+          repo: input.repository,
+          ref: input.commitSha,
+        }),
+      );
       const archive = toArchiveBuffer(response.data);
       if (archive.byteLength > MAX_REPOSITORY_ARCHIVE_BYTES) {
         throw new SkillSourceError(

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { IntegrationContext } from "@integrations/sdk";
 import type { manifest } from "./manifest";
+import { manifest as declared } from "./manifest";
 import { receiveGitHubWebhook } from "./webhook";
 
 /**
@@ -458,5 +459,32 @@ describe("a deployment that still names one repository", () => {
     expect(result.kind).toBe("trigger_events");
     if (result.kind !== "trigger_events") return;
     expect(result.legacyGate?.workflowInput.ownerRepo).toBe("Codertocat/Hello-World");
+  });
+});
+
+describe("the review states the manifest declares", () => {
+  it("are exactly the states a delivery reports a review in", async () => {
+    // Core refuses a review trigger whose states none of its providers report,
+    // from this declaration alone. A state reported but not declared would be
+    // refused though it works; one declared but never reported would be
+    // accepted and never start a run.
+    const changesRequested = JSON.parse(payload.reviewSubmitted);
+    changesRequested.review.state = "changes_requested";
+    const deliveries: Array<[string, string]> = [
+      ["pull_request_review", payload.reviewSubmitted],
+      ["pull_request_review", JSON.stringify(changesRequested)],
+      ["pull_request_review_comment", payload.reviewComment],
+      ["issue_comment", payload.issueComment],
+    ];
+    const reported = new Set<string>();
+    for (const [eventName, body] of deliveries) {
+      const result = await receive(eventName, body);
+      if (result.kind !== "trigger_events") continue;
+      for (const event of result.events) {
+        if (event.pr.review) reported.add(event.pr.review.state);
+      }
+    }
+
+    expect([...reported].sort()).toEqual([...declared.webhook.reviewStates].sort());
   });
 });

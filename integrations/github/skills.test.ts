@@ -192,3 +192,53 @@ describe("GitHub skill source", () => {
     ).rejects.toMatchObject({ status: 422 });
   });
 });
+
+/**
+ * What reaches the dashboard when GitHub refuses. Core takes any error with a
+ * 4xx `status` as one that already chose its answer, and Octokit's own errors
+ * carry one, so GitHub's raw "Not Found" used to be the sentence a person read.
+ */
+describe("GitHub refusing a skill import", () => {
+  function requestError(status: number, message: string) {
+    return Object.assign(new Error(message), { name: "HttpError", status });
+  }
+
+  it("says the repository is missing or outside the installation on a 404", async () => {
+    octokit.repos.get.mockRejectedValueOnce(requestError(404, "Not Found"));
+
+    const failure = await createGitHubSkillSource(CREDENTIAL)
+      .getDefaultBranch({ owner: "acme", repository: "skills" })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(SkillSourceError);
+    expect(failure).toMatchObject({
+      status: 404,
+      message: "GitHub repository not found, or not part of this App installation",
+    });
+  });
+
+  it("says the installation cannot read the repository on a 403", async () => {
+    octokit.repos.getCommit.mockRejectedValueOnce(
+      requestError(403, "Resource not accessible by integration"),
+    );
+
+    const failure = await createGitHubSkillSource(CREDENTIAL)
+      .resolveCommit({ owner: "acme", repository: "skills", ref: "main" })
+      .catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      status: 422,
+      message: "The GitHub App installation cannot read this repository",
+    });
+  });
+
+  it("leaves a GitHub outage without a status of its own", async () => {
+    octokit.git.getTree.mockRejectedValueOnce(requestError(502, "Bad Gateway"));
+
+    const failure = await createGitHubSkillSource(CREDENTIAL)
+      .getTree({ owner: "acme", repository: "skills", treeSha: TREE })
+      .catch((error: unknown) => error);
+
+    expect(failure).not.toHaveProperty("status");
+  });
+});

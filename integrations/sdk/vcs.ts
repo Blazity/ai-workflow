@@ -32,12 +32,70 @@ export interface PullRequestHead {
 declare const handle: unique symbol;
 export type VcsOpaqueHandle = { readonly [handle]: true };
 
+/**
+ * How a version control provider tells its own handles apart: pure functions
+ * of their arguments, the same for every connection and every repository.
+ *
+ * Not a method of the adapter, on purpose. An adapter is per connection, and
+ * core reaches one lazily: it resolves the connection on the first call and
+ * forwards every call as a Promise. A synchronous answer cannot survive that
+ * (the Promise it came back as read as `true`, and every failed check compared
+ * equal to every other), and it never needed a connection in the first place.
+ * The integration runtime carries this as `vcsHandles`, next to the adapter
+ * factory, and core calls it directly.
+ */
+export interface VcsHandleIdentity {
+  /**
+   * Whether two handles this provider minted name the same thing.
+   *
+   * Compare by value, never by reference. A handle is stored as JSON in a
+   * trigger envelope and read back parsed, and the handle it is compared with
+   * is parsed from a fresh provider answer, so two handles naming the same
+   * check are always different objects. `sameHandle(h, structuredClone(h))`
+   * must hold.
+   */
+  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean;
+  /**
+   * Only for GitHub and GitLab, which recorded failed checks before checks
+   * carried a handle: the handle rebuilt from the fields the provider wrote
+   * then (a check run id, a pipeline id), or `null` when those fields name
+   * nothing it recognises. `check` and `pullRequest` are the stored records
+   * exactly as they were written. A provider that never wrote that shape
+   * leaves it out, and core treats such a check as matching nothing.
+   *
+   * A migration shim with a removal point: it goes once no queued or failed
+   * trigger delivery of the pre-handle shape is left and no run started before
+   * the handle deploy is still in flight. The query that counts those
+   * deliveries is in the S11 drain note of `docs/plans/2026-09-18-integrations.md`.
+   */
+  recordedCheckHandle?(
+    check: Readonly<Record<string, unknown>>,
+    pullRequest: Readonly<Record<string, unknown>>,
+  ): VcsOpaqueHandle | null;
+}
+
 export interface PullRequestFailedCheck {
   handle?: VcsOpaqueHandle;
   name: string;
   conclusion: string;
 }
 
+/**
+ * What the provider says about the checks on this exact head, in terms core
+ * can act on without knowing the provider's CI model.
+ *
+ * `failed` is every check on this head that FINISHED failed and has not been
+ * superseded by a re-run, each under the handle a trigger event for it carries.
+ * A provider that reports both a whole run and its parts (a pipeline and its
+ * jobs) lists both, because a delivery may name either. A finished failure is
+ * final for that check, so it stays here while other checks on the head are
+ * still running: core binds a "checks failed" event by finding its handle in
+ * this list, and a failure that waited for every other check to finish would
+ * never start the run it reported.
+ *
+ * `state` summarises the same facts: `red` whenever `failed` is not empty,
+ * otherwise `running` while any check has not finished, otherwise `green`.
+ */
 export interface PullRequestHeadChecks {
   state: "green" | "red" | "running";
   failed: PullRequestFailedCheck[];
@@ -175,9 +233,12 @@ export interface GateStatusUpdate {
   summary?: string;
 }
 
+/**
+ * Every member returns a Promise: core may reach an adapter before its
+ * connection resolves and forwards each call once it has. Anything answerable
+ * without a connection belongs to the provider instead (`VcsHandleIdentity`).
+ */
 export interface VCSAdapter {
-  /** Compare identities minted by this provider without exposing their shape to core. */
-  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean;
   /** Create without mutating a same-named branch owned by somebody else. */
   createBranchIfMissing(
     name: string,
@@ -204,6 +265,20 @@ export interface VCSAdapter {
   getBranchSha(branch: string): Promise<string>;
   /** Return null only when the provider authoritatively reports no such branch. */
   getBranchShaIfExists(branch: string): Promise<string | null>;
+  /**
+   * The pull request as the provider reports it now.
+   *
+   * Throws `PullRequestUnreadableError` exactly when this connection can never
+   * read it: it does not exist for this connection (404), or it is forbidden
+   * to it alone (a 403 that is neither a rate limit nor a missing scope or
+   * permission); `isPullRequestRefusal` decides that from the provider's
+   * answer. A refused credential (401, an installation token that cannot be
+   * minted, a token without the scope or the permission to read pull
+   * requests) is the connection's fault and is thrown as it came, with the
+   * provider's HTTP status on it as `status` (core reads a copy of the error
+   * that keeps an own `status` and nothing the client hid elsewhere), so the
+   * delivery stays retryable. So is everything else.
+   */
   getPRHead(prId: number): Promise<PullRequestHead>;
   listReviewThreads(prId: number): Promise<ReviewThreadFeed>;
   settleReviewThread(input: SettleReviewThreadInput): Promise<SettleReviewThreadResult>;
@@ -258,7 +333,6 @@ export interface VcsIntegrationAdapter extends VCSAdapter {
   parsePullRequestUrl?(url: URL): { repoPath: string; prNumber: number } | null;
   /** Present when this provider can serve a skill import; see the port above. */
   skillSource?(): RepositorySkillSource;
-  readonly botLogin?: string;
 }
 
 /**
@@ -280,6 +354,29 @@ function unquoted(body: string): string {
     .split("\n")
     .filter((line) => !line.trimStart().startsWith(">"))
     .join("\n");
+}
+
+/**
+ * The prefixes the post-PR gate names its own checks with: the current
+ * product's, and the one checks created before the rename still carry.
+ *
+ * One home for both sides of the rule. Core creates checks under these names
+ * (`gateCheckName` in the worker), and every VCS integration drops a failed
+ * check carrying one before it becomes a trigger: acting on our own check
+ * would have the gate chase its own tail, and two copies of the list had
+ * already started to disagree about the bare prefix.
+ */
+export const GATE_CHECK_NAME_PREFIX = "AI Workflow / ";
+export const LEGACY_GATE_CHECK_NAME_PREFIX = "blazebot / ";
+
+/** A check this product's post-PR gate created, in either generation. */
+export function isManagedGateCheckName(name: unknown): name is string {
+  return (
+    typeof name === "string" &&
+    [GATE_CHECK_NAME_PREFIX, LEGACY_GATE_CHECK_NAME_PREFIX].some(
+      (prefix) => name.startsWith(prefix) && name.length > prefix.length,
+    )
+  );
 }
 
 /**

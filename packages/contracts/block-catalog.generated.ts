@@ -1012,7 +1012,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     defaults: {
       "providers": [],
       "on": [
-        "commented"
+        "changes_requested"
       ],
       "scope": "workflow_owned",
       "maxRunsPerPr": 10

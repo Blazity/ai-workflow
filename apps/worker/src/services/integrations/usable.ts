@@ -215,10 +215,10 @@ export async function resolveUsableIntegrations(input: ContextLifetime & {
  * - health probes: `services/system/integration-health.ts` redacts the probe's
  *   message and what it throws;
  * - blocks: `engine/steps/integration-block-step.ts` redacts the outcome and
- *   what the block throws;
- * - the webhook route (`routes/webhooks/[id].post.ts`) calls the registry's
- *   runtime rather than this one, so `webhook` here is covered and unused until
- *   the route reads `usable.runtime.webhook`.
+ *   what the block throws.
+ *
+ * The webhook route (`routes/webhooks/[id].post.ts`) calls `webhook` on this
+ * runtime, so it is covered here rather than there.
  */
 export function redactingRuntime(
   runtime: ErasedIntegrationRuntime,
