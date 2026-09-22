@@ -1,3 +1,4 @@
+import type { VcsHandleIdentity } from "@integrations/sdk";
 import { FatalError } from "workflow";
 import { start } from "workflow/api";
 import type {
@@ -11,7 +12,7 @@ import {
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
-import type { PullRequestHead, VcsOpaqueHandle } from "../../adapters/vcs/types.js";
+import type { PullRequestHead } from "../../adapters/vcs/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
 import { agentWorkflow } from "../../engine/index.js";
 import { DEFAULT_REVIEW_TRIGGER_STATES } from "../../engine/blocks/trigger-pr-review/manifest.js";
@@ -77,6 +78,7 @@ import {
   bindCurrentPullRequest,
   readProviderCurrentPullRequest,
 } from "../../engine/support/trigger-current-pull-request.js";
+import { vcsHandleIdentity } from "../../engine/support/vcs-runtime.js";
 import { normalizeVcsLogin, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
 import {
   readConnectedWorkflowDefinitionVersion,
@@ -118,10 +120,6 @@ export interface DispatchTriggerDeps {
   issueTracker?: IssueTrackerAdapter;
   getCurrentHead?: (pr: PrTriggerPayload) => Promise<string>;
   getCurrentPullRequest?: (pr: PrTriggerPayload) => Promise<PullRequestHead>;
-  sameHandle?: (
-    left: VcsOpaqueHandle | undefined,
-    right: VcsOpaqueHandle | undefined,
-  ) => boolean;
   /** Failure-injection seam; production uses deletePendingTrigger. */
   deletePending?: typeof deletePendingTrigger;
   /**
@@ -1139,7 +1137,7 @@ async function bindToCurrentPullRequest<T extends TriggerEvent>(
 > {
   const read = await readCurrentPullRequest(event, deps, existingDiagnosticId);
   if (read.status !== "ok") return read;
-  const bound = bindCurrentPullRequest(event, read.current, read.sameHandle);
+  const bound = bindCurrentPullRequest(event, read.current, read.handles);
   return bound
     ? { status: "bound", event: bound }
     : { status: "ignored", result: "ignored_stale_head" };
@@ -1153,35 +1151,31 @@ async function readCurrentPullRequest(
   | {
       status: "ok";
       current: PullRequestHead;
-      sameHandle: (
-        left: VcsOpaqueHandle | undefined,
-        right: VcsOpaqueHandle | undefined,
-      ) => boolean;
+      handles: VcsHandleIdentity;
     }
   | { status: "ignored"; result: "ignored_pull_request_unreadable" }
   | { status: "unreachable"; diagnosticId: string }
 > {
   const { pr } = event;
   try {
-    let current: PullRequestHead;
-    let sameHandle = deps.sameHandle ?? ((left, right) => left === right);
+    // The seams below stand in for the provider's STATE only. How its handles
+    // compare is the provider's own code whichever way the state was read.
     if (deps.getCurrentPullRequest) {
-      current = await deps.getCurrentPullRequest(pr);
-    } else if (deps.getCurrentHead) {
+      const current = await deps.getCurrentPullRequest(pr);
+      return { status: "ok", current, handles: await vcsHandleIdentity(pr.provider) };
+    }
+    if (deps.getCurrentHead) {
       // Legacy test seam: production always uses getPRHead below, which reads
       // target and lifecycle from the provider together with the head SHA.
-      current = {
+      const current: PullRequestHead = {
         headSha: await deps.getCurrentHead(pr),
         baseRef: pr.baseRef,
         state: event.triggerType === "trigger_pr_merged" ? "merged" : "open",
         checks: { state: "green", failed: [] },
       };
-    } else {
-      const providerRead = await readProviderCurrentPullRequest(event);
-      current = providerRead.current;
-      sameHandle = providerRead.sameHandle;
+      return { status: "ok", current, handles: await vcsHandleIdentity(pr.provider) };
     }
-    return { status: "ok", current, sameHandle };
+    return { status: "ok", ...(await readProviderCurrentPullRequest(event)) };
   } catch (error) {
     // The provider's own verdict that asking again cannot help (see
     // `FatalError` in the SDK): answered as an ignore the provider's delivery

@@ -49,12 +49,14 @@ vi.mock("../../db/repositories/active-runs.js", () => ({
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: (...args: any[]) => {
     createRepositoryVcsRuntime(...args);
-    return { getPRHead, sameHandle };
+    return { getPRHead };
   },
   createRepositoryVcsRuntime: (...args: any[]) => {
     createRepositoryVcsRuntime(...args);
-    return { vcs: { getPRHead, sameHandle } };
+    return { vcs: { getPRHead } };
   },
+  // The provider's handle comparison, which the step asks for beside the head.
+  vcsHandleIdentity: async () => ({ sameHandle, recordedCheckHandle: () => null }),
 }));
 vi.mock("../../db/repositories/clarifications.js", () => ({
   assertClarificationCheckpointAvailable: (...args: unknown[]) =>

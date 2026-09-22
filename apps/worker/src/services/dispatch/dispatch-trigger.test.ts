@@ -1,5 +1,4 @@
-import { isDeepStrictEqual } from "node:util";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FatalError } from "@integrations/sdk";
 import type { PrTriggerPayload } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
@@ -57,6 +56,45 @@ vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => 
   ...(await importOriginal<typeof import("../../adapters/vcs/repository-directory.js")>()),
   createRepositoryDirectoryForProviders: vi.fn(() => ({ listRepositories: vi.fn(() => []) })),
 }));
+/**
+ * The provider behind the production version control path: the real GitLab
+ * integration reached through the lazy repository runtime, with only GitLab's
+ * HTTP answers (below) and the connection store standing in. Off unless a case
+ * turns it on, so every other case keeps reading the store it always read.
+ */
+const gitlabProvider = vi.hoisted(() => ({
+  connected: false,
+  mergeRequest: undefined as unknown,
+  jobs: [] as unknown[],
+}));
+vi.mock("../integrations/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../integrations/runtime.js")>();
+  return {
+    ...actual,
+    resolveUsableIntegrations: async (input: Parameters<typeof actual.resolveUsableIntegrations>[0]) => {
+      if (!gitlabProvider.connected) return actual.resolveUsableIntegrations(input);
+      const { integrationRuntime } = await import("@integrations/registry/worker");
+      const runtime = integrationRuntime("gitlab")!;
+      const entry = {
+        manifest: runtime.manifest,
+        runtime,
+        ctx: {
+          connection: { token: "token", host: "https://gitlab.example.com" },
+          http: { fetch: (...args: Parameters<typeof fetch>) => fetch(...args) },
+          log: { debug() {}, info() {}, warn() {}, error() {} },
+          signal: new AbortController().signal,
+        },
+      };
+      return {
+        readable: true as const,
+        usable: input.filter?.(runtime.manifest) === false ? [] : [entry],
+        states: new Map([["gitlab", { integrationId: "gitlab", usable: true }]]),
+      } as never;
+    },
+    getVcsBotLogin: async (provider: string) =>
+      gitlabProvider.connected ? "gitlab-bot" : actual.getVcsBotLogin(provider as never),
+  };
+});
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
@@ -210,8 +248,9 @@ function deps(overrides: Record<string, unknown> = {}) {
     ...(!("getCurrentHead" in overrides) && !("getCurrentPullRequest" in overrides)
       ? {
           // The provider still reports every check the event names as failed,
-          // each read back as a fresh object and compared by value, the way a
-          // provider re-reading a check from its API compares it.
+          // each read back as a fresh object, the way a provider re-reading a
+          // check from its API mints a new handle. The provider's own
+          // comparison decides whether the two name the same check.
           getCurrentPullRequest: vi.fn(async (pr: PrTriggerPayload) => ({
             headSha: pr.headSha,
             headRef: pr.headRef,
@@ -221,7 +260,6 @@ function deps(overrides: Record<string, unknown> = {}) {
               ? { state: "red" as const, failed: structuredClone(pr.failedChecks) }
               : { state: "green" as const, failed: [] },
           })),
-          sameHandle: (left: unknown, right: unknown) => isDeepStrictEqual(left, right),
         }
       : {}),
     issueTracker: { fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }) },
@@ -1546,5 +1584,144 @@ describe("pull request auto-fix cap", () => {
         expect.objectContaining({ nodeId: "checks", attempts: 1 }),
       ]),
     );
+  });
+});
+
+/**
+ * Binding a failed check through the path production takes: dispatch asks the
+ * lazy repository runtime for the merge request's head and the provider for
+ * how its handles compare, and the real GitLab integration answers both. The
+ * other cases here hand dispatch a provider state and a comparison of their
+ * own, which is how a comparison that answered "same" for everything stayed
+ * invisible to them.
+ */
+describe("binding a failed pipeline through the production version control path", () => {
+  const sourceHead = "5f2d4c1e9a7b3d6f8e0c2a4b6d8f0e1c3a5b7d9f";
+
+  beforeEach(() => {
+    gitlabProvider.connected = true;
+    // GitLab's REST API as the real client calls it: the merge request, then
+    // the jobs of its head pipeline. Anything else is a request this path was
+    // not expected to make.
+    vi.stubGlobal("fetch", async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      const body = path.endsWith("/merge_requests/7")
+        ? gitlabProvider.mergeRequest
+        : /\/pipelines\/\d+\/jobs$/u.test(path)
+          ? gitlabProvider.jobs
+          : undefined;
+      if (body === undefined) return new Response("unexpected request", { status: 500 });
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    let starts = 0;
+    mockStart.mockImplementation(async () => ({ runId: `run-${++starts}` }));
+    const definition = enabled({ scope: "any" }, "trigger_pr_checks_failed");
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+  });
+
+  afterEach(() => {
+    gitlabProvider.connected = false;
+    vi.unstubAllGlobals();
+  });
+
+  /** The merge request as GitLab reports it now: its head pipeline, failed,
+   *  with a job of the same name as the one the delivery named. */
+  function headPipeline(id: number, failedJobId: number) {
+    gitlabProvider.mergeRequest = {
+      diff_refs: { head_sha: sourceHead },
+      source_branch: "feature/owned",
+      target_branch: "main",
+      state: "opened",
+      head_pipeline: { id, status: "failed" },
+    };
+    gitlabProvider.jobs = [{ id: failedJobId, name: "test-build", status: "failed" }];
+  }
+
+  function failedPipeline(
+    deliveryId: string,
+    pr: Partial<TriggerEvent["pr"]> & Record<string, unknown>,
+  ): TriggerEvent {
+    return event({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId,
+        trustedByDefault: true,
+      },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        prUrl: "https://gitlab.com/acme/app/-/merge_requests/7",
+        headSha: "",
+        ...pr,
+      } as TriggerEvent["pr"],
+    });
+  }
+
+  /** As the webhook writes it today: the job's handle names its pipeline. */
+  const deliveredFromPipeline31 = (deliveryId: string) =>
+    failedPipeline(deliveryId, {
+      failedChecks: [
+        {
+          name: "test-build",
+          conclusion: "failed",
+          handle: { kind: "job", container: 31, id: 378 } as never,
+        },
+      ],
+    });
+
+  /** As main's webhook wrote it, still stored when this build deploys. */
+  const recordedByMainFromPipeline31 = (deliveryId: string) =>
+    failedPipeline(deliveryId, {
+      pipelineId: 31,
+      failedChecks: [{ name: "test-build", conclusion: "failed" }],
+    });
+
+  const provider = () => deps({ getCurrentPullRequest: undefined });
+
+  it("starts a fix for the pipeline that is still the merge request's failed head", async () => {
+    headPipeline(31, 378);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-current"), provider()),
+    ).resolves.toEqual({ result: "started", runId: "run-1" });
+  });
+
+  it("drops a failed pipeline once a newer pipeline is the merge request's head", async () => {
+    // Pipeline 32 failed a job of the same name. Without the pipeline in the
+    // handle deciding it, the fix would start for a failure nobody delivered.
+    headPipeline(32, 400);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(deliveredFromPipeline31("gl-superseded"), provider()),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("starts a fix from an envelope main recorded, while its pipeline is the head", async () => {
+    headPipeline(31, 378);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(recordedByMainFromPipeline31("gl-legacy-current"), provider()),
+    ).resolves.toEqual({ result: "started", runId: "run-1" });
+  });
+
+  it("drops an envelope main recorded once a newer pipeline is the head", async () => {
+    headPipeline(32, 400);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(recordedByMainFromPipeline31("gl-legacy-superseded"), provider()),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
   });
 });

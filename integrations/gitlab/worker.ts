@@ -3,6 +3,7 @@ import {
   type IntegrationContext,
   type IntegrationRuntimeDefinition,
 } from "@integrations/sdk";
+import { gitlabHandleIdentity } from "./pipeline-checks";
 import { manifest } from "./manifest";
 import { GitLabAdapter } from "./vcs";
 import { webhook } from "./webhook";
@@ -52,6 +53,7 @@ const definition: IntegrationRuntimeDefinition<GitLabManifest> = {
   capabilities: {
     vcs: (ctx, repository) => adapter(ctx, repository),
   },
+  vcsHandles: gitlabHandleIdentity,
   blocks: {},
   health: {
     api: async (ctx) => {

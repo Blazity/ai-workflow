@@ -843,14 +843,16 @@ removed, moved or renamed. One recorded shape and one recorded value change:
   `acknowledgePrTriggerDispatchStep`, `blockPrTriggerRepositoriesWithSiblingsStep`
   and `blockFetchPrContextsStep` in a run that started before it. The one
   place that compares checks, `bindCurrentPullRequest`, therefore reads both
-  shapes: a check without a handle reaches the provider as
-  `recordedCheckIdentity(check, pr)`, and each provider's `sameHandle` rebuilds
-  the identity it once wrote (GitHub by check run id and app slug, GitLab by
-  pipeline id, the sentinel as the pipeline and a job by its pipeline and
-  name). That is what main compared, blind spot included: a GitHub check whose
-  app had no slug was recorded under the sender's login and never matched on
-  main either. Main-shape envelopes in
-  `engine/support/trigger-handle-binding.test.ts` prove it. Every other reader
+  shapes: for a check without a handle, the provider's
+  `vcsHandles.recordedCheckHandle(check, pr)` rebuilds the handle it once
+  implied (GitHub by check run id and app slug, GitLab by pipeline id, the
+  sentinel as the pipeline and a job by its pipeline and name), and
+  `vcsHandles.sameHandle` compares it. That is what main compared, blind spot
+  included: a GitHub check whose app had no slug was recorded under the
+  sender's login and never matched on main either. Main-shape envelopes prove
+  it in `engine/support/trigger-handle-binding.test.ts`, and through the
+  production path (dispatch, the lazy repository runtime, the real GitLab
+  integration) in `services/dispatch/dispatch-trigger.test.ts`. Every other reader
   takes only a check's name, conclusion and link, which kept their shape.
   A delivery without `trustedByDefault` is read the same way, by the legacy
   default in `dispatch-trigger.ts`.

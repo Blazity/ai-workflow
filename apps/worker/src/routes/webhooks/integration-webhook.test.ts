@@ -576,6 +576,9 @@ describe("POST /webhooks/:id", () => {
     const { GitLabAdapter } = await import(
       "../../../../../integrations/gitlab/vcs.js"
     );
+    const { gitlabHandleIdentity } = await import(
+      "../../../../../integrations/gitlab/pipeline-checks.js"
+    );
     const adapter = new GitLabAdapter(
       {
         token: "glpat-test",
@@ -600,11 +603,7 @@ describe("POST /webhooks/:id", () => {
     );
     const current = await adapter.getPRHead(1);
     state.dispatch.mockImplementation(async (candidate) => {
-      state.boundPipeline = bindCurrentPullRequest(
-        candidate,
-        current,
-        (left, right) => adapter.sameHandle(left, right),
-      );
+      state.boundPipeline = bindCurrentPullRequest(candidate, current, gitlabHandleIdentity);
       return state.boundPipeline ? { result: "started" } : { result: "ignored_stale_head" };
     });
 
@@ -628,7 +627,7 @@ describe("POST /webhooks/:id", () => {
     const currentHandle = current.checks?.failed.find(
       (check) => check.name === "test-build",
     )?.handle;
-    expect(adapter.sameHandle(boundHandle, currentHandle)).toBe(true);
+    expect(gitlabHandleIdentity.sameHandle(boundHandle, currentHandle)).toBe(true);
   });
 
   it.each([

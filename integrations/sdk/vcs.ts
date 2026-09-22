@@ -33,45 +33,36 @@ declare const handle: unique symbol;
 export type VcsOpaqueHandle = { readonly [handle]: true };
 
 /**
- * What a trigger envelope recorded about a failed check before checks carried
- * a handle: the check and the pull request it was recorded on, exactly as they
- * were stored.
+ * How a version control provider tells its own handles apart: pure functions
+ * of their arguments, the same for every connection and every repository.
  *
- * Envelopes outlive deploys (a pending trigger waiting for capacity, a
- * delivery waiting to be retried, a run replaying its start), so every shape
- * this product ever wrote must still bind. The fields that identified a check
- * then were the provider's (a check run id, a pipeline id), which core cannot
- * read, so core hands the whole record to the provider's `sameHandle` wrapped
- * in this, and the provider recognises the shape it once wrote. A provider
- * that never wrote one answers "not the same", which is what a missing handle
- * answered before.
+ * Not a method of the adapter, on purpose. An adapter is per connection, and
+ * core reaches one lazily: it resolves the connection on the first call and
+ * forwards every call as a Promise. A synchronous answer cannot survive that
+ * (the Promise it came back as read as `true`, and every failed check compared
+ * equal to every other), and it never needed a connection in the first place.
+ * The integration runtime carries this as `vcsHandles`, next to the adapter
+ * factory, and core calls it directly.
  */
-const RECORDED_BEFORE_HANDLES = "recordedBeforeHandles";
-
-export interface RecordedCheckIdentity {
-  readonly check: Readonly<Record<string, unknown>>;
-  readonly pullRequest: Readonly<Record<string, unknown>>;
-}
-
-export function recordedCheckIdentity(
-  check: object,
-  pullRequest: object,
-): VcsOpaqueHandle {
-  return { [RECORDED_BEFORE_HANDLES]: { check, pullRequest } } as unknown as VcsOpaqueHandle;
-}
-
-/** The record inside {@link recordedCheckIdentity}, or null for a handle a
- *  provider minted itself. */
-export function readRecordedCheckIdentity(
-  value: VcsOpaqueHandle | undefined,
-): RecordedCheckIdentity | null {
-  const recorded =
-    value && typeof value === "object"
-      ? (value as unknown as Record<string, unknown>)[RECORDED_BEFORE_HANDLES]
-      : undefined;
-  if (!recorded || typeof recorded !== "object") return null;
-  const { check, pullRequest } = recorded as Partial<RecordedCheckIdentity>;
-  return check && pullRequest ? { check, pullRequest } : null;
+export interface VcsHandleIdentity {
+  /** Whether two handles this provider minted name the same thing. */
+  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean;
+  /**
+   * The handle of a failed check recorded before checks carried one, rebuilt
+   * from the fields this provider wrote then; `null` when those fields name
+   * nothing it recognises.
+   *
+   * Envelopes outlive deploys (a trigger waiting for capacity, a delivery
+   * waiting to be retried, a run replaying its start), so every shape this
+   * product ever wrote must still bind, and only the provider can read the
+   * fields that identified its checks then (a check run id, a pipeline id).
+   * `check` and `pullRequest` are the stored records exactly as they were
+   * written.
+   */
+  recordedCheckHandle(
+    check: Readonly<Record<string, unknown>>,
+    pullRequest: Readonly<Record<string, unknown>>,
+  ): VcsOpaqueHandle | null;
 }
 
 export interface PullRequestFailedCheck {
@@ -233,9 +224,12 @@ export interface GateStatusUpdate {
   summary?: string;
 }
 
+/**
+ * Every member returns a Promise: core may reach an adapter before its
+ * connection resolves and forwards each call once it has. Anything answerable
+ * without a connection belongs to the provider instead (`VcsHandleIdentity`).
+ */
 export interface VCSAdapter {
-  /** Compare identities minted by this provider without exposing their shape to core. */
-  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean;
   /** Create without mutating a same-named branch owned by somebody else. */
   createBranchIfMissing(
     name: string,

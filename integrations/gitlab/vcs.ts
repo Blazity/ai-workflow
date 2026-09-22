@@ -3,7 +3,6 @@ import { Gitlab } from "@gitbeaker/rest";
 import {
   FatalError,
   isReviewLedgerWorkItem,
-  readRecordedCheckIdentity,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
@@ -191,37 +190,13 @@ interface GitLabJob {
   status: string;
 }
 
-type GitLabHandle = {
-  kind?: string;
-  id?: string | number | null;
-  container?: number | null;
-  /** Only on an identity rebuilt from an envelope recorded before handles. */
-  jobIdUnrecorded?: true;
-};
-
-/**
- * The identity a handle names, including one an envelope recorded before
- * handles existed. Such an envelope put the pipeline id on the merge request
- * (`pipelineId`) and named each failed job, or the whole pipeline as
- * `"pipeline"`, without an id of its own.
- */
-function gitLabIdentity(value: VcsOpaqueHandle): GitLabHandle {
-  const recorded = readRecordedCheckIdentity(value);
-  if (!recorded) return value as unknown as GitLabHandle;
-  const pipelineId = recorded.pullRequest.pipelineId;
-  if (typeof pipelineId !== "number") return {};
-  return recorded.check.name === "pipeline"
-    ? { kind: "aggregate", id: pipelineId }
-    : { kind: "job", container: pipelineId, jobIdUnrecorded: true };
-}
-
 type GitLabGateStatusHandle = {
   kind: "commit_status";
   name: string;
   headSha: string;
 };
 
-function gitLabHandle(value: GitLabHandle | GitLabGateStatusHandle): VcsOpaqueHandle {
+function gitLabHandle(value: GitLabGateStatusHandle): VcsOpaqueHandle {
   return value as unknown as VcsOpaqueHandle;
 }
 interface GitLabMRDiff {
@@ -318,15 +293,6 @@ export class GitLabAdapter implements
     this.baseBranch = config.baseBranch;
   }
 
-  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean {
-    if (!left || !right) return left === right;
-    const a = gitLabIdentity(left);
-    const b = gitLabIdentity(right);
-    if (a.kind !== b.kind || a.container !== b.container) return false;
-    // A job recorded before handles existed carries its pipeline and its name
-    // but no job id, which is how it was matched then; core compares the name.
-    return a.id === b.id || (a.kind === "job" && (a.jobIdUnrecorded === true || b.jobIdUnrecorded === true));
-  }
 
   /**
    * Every project the token is a member of. A failure carries `status` or

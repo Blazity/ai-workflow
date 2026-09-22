@@ -6,9 +6,15 @@ import type { PullRequestHead } from "../../adapters/vcs/types.js";
 // validates environment variables during this unit test.
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: vi.fn(),
+  vcsHandleIdentity: vi.fn(),
 }));
 
-const { bindCurrentPullRequest } = await import("./trigger-current-pull-request.js");
+const { bindCurrentPullRequest: bindWith } = await import("./trigger-current-pull-request.js");
+const { githubHandleIdentity } = await import("../../../../../integrations/github/handles.js");
+// Every event here is GitHub's, so GitHub's own comparison, although none of
+// these cases reaches a handle.
+const bindCurrentPullRequest = (event: TriggerEvent, current: PullRequestHead) =>
+  bindWith(event, current, githubHandleIdentity);
 type TriggerEvent = import("./trigger-events.js").TriggerEvent;
 
 function reviewEvent(overrides: Partial<TriggerEvent["pr"]> = {}): TriggerEvent {

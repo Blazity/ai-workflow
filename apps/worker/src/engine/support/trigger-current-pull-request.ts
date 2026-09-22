@@ -1,26 +1,27 @@
-import type { PullRequestHead, VcsOpaqueHandle } from "../../adapters/vcs/types.js";
+import type { VcsHandleIdentity } from "@integrations/sdk";
 import type { TriggerEvent } from "@shared/contracts";
-import { recordedCheckIdentity } from "@integrations/sdk";
-import { createRepositoryVCS } from "./vcs-runtime.js";
+import type { PullRequestHead, VcsOpaqueHandle } from "../../adapters/vcs/types.js";
+import { createRepositoryVCS, vcsHandleIdentity } from "./vcs-runtime.js";
 
-/** Re-read the provider facts needed to prove that a queued/bound trigger is
- * still the exact event that was accepted. */
+/**
+ * What the provider says about the pull request now, and how its handles
+ * compare. The head needs this repository's connection; the comparison needs
+ * none and comes from the provider itself.
+ */
 export async function readProviderCurrentPullRequest(
   event: Pick<TriggerEvent, "triggerType" | "pr">,
-): Promise<{
-  current: PullRequestHead;
-  sameHandle: (left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined) => boolean;
-}> {
+): Promise<{ current: PullRequestHead; handles: VcsHandleIdentity }> {
   const { pr } = event;
   const vcs = createRepositoryVCS({
     provider: pr.provider,
     repoPath: pr.repoPath,
     baseBranch: pr.baseRef,
   });
-  return {
-    current: await vcs.getPRHead(pr.prNumber),
-    sameHandle: (left, right) => vcs.sameHandle(left, right),
-  };
+  const [current, handles] = await Promise.all([
+    vcs.getPRHead(pr.prNumber),
+    vcsHandleIdentity(pr.provider),
+  ]);
+  return { current, handles };
 }
 
 /** Bind a saved trigger envelope to current provider state. A null result is a
@@ -28,10 +29,7 @@ export async function readProviderCurrentPullRequest(
 export function bindCurrentPullRequest<T extends TriggerEvent>(
   event: T,
   current: PullRequestHead | null,
-  sameHandle: (
-    left: VcsOpaqueHandle | undefined,
-    right: VcsOpaqueHandle | undefined,
-  ) => boolean = (left, right) => left === right,
+  handles: VcsHandleIdentity,
 ): T | null {
   if (!current) return null;
   const { pr } = event;
@@ -64,14 +62,18 @@ export function bindCurrentPullRequest<T extends TriggerEvent>(
   const currentChecks = current.checks;
   const failedChecks = (pr.failedChecks ?? []).filter((failed) => {
     // An envelope recorded before checks carried a handle still binds: the
-    // provider that wrote it reads its own old fields back in `sameHandle`.
+    // provider that wrote it rebuilds the handle from its own old fields.
     const recorded =
-      (failed.handle as VcsOpaqueHandle | undefined) ?? recordedCheckIdentity(failed, pr);
-    return currentChecks.failed.some(
-      (currentFailed) =>
-        currentFailed.name === failed.name &&
-        currentFailed.conclusion === failed.conclusion &&
-        sameHandle(currentFailed.handle, recorded),
+      (failed.handle as VcsOpaqueHandle | undefined) ??
+      handles.recordedCheckHandle(failed, pr as unknown as Readonly<Record<string, unknown>>);
+    return (
+      recorded !== null &&
+      currentChecks.failed.some(
+        (currentFailed) =>
+          currentFailed.name === failed.name &&
+          currentFailed.conclusion === failed.conclusion &&
+          handles.sameHandle(currentFailed.handle, recorded),
+      )
     );
   });
   if (failedChecks.length === 0) return null;

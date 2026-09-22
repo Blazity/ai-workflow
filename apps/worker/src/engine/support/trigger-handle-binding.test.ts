@@ -35,9 +35,10 @@ vi.mock("@octokit/auth-app", () => ({ createAppAuth: vi.fn(() => vi.fn()) }));
 // resolves an adapter through the capability, which would drag this deployment's
 // environment in. This test builds the adapter itself, on purpose, so the
 // resolution path is not what is under test here.
-vi.mock("./vcs-runtime.js", () => ({ createRepositoryVCS: vi.fn() }));
+vi.mock("./vcs-runtime.js", () => ({ createRepositoryVCS: vi.fn(), vcsHandleIdentity: vi.fn() }));
 
 const { GitHubAdapter } = await import("../../../../../integrations/github/vcs.js");
+const { githubHandleIdentity } = await import("../../../../../integrations/github/handles.js");
 const { normalizeGitHubEvents } = await import("../../../../../integrations/github/webhook.js");
 const { bindCurrentPullRequest } = await import("./trigger-current-pull-request.js");
 
@@ -107,8 +108,7 @@ describe("a failed GitHub check binds to the pull request it was reported on", (
     mockOctokit.paginate.mockResolvedValue(checkRunsForHead({ slug: "github-actions" }));
     const current = await vcs.getPRHead(2);
 
-    const bound = bindCurrentPullRequest(event!, current, (left, right) =>
-      vcs.sameHandle(left, right),
+    const bound = bindCurrentPullRequest(event!, current, githubHandleIdentity,
     );
 
     expect(bound).not.toBeNull();
@@ -138,8 +138,7 @@ describe("a failed GitHub check binds to the pull request it was reported on", (
     ]);
     const current = await vcs.getPRHead(2);
 
-    const bound = bindCurrentPullRequest(event!, current, (left, right) =>
-      vcs.sameHandle(left, right),
+    const bound = bindCurrentPullRequest(event!, current, githubHandleIdentity,
     );
 
     expect(bound?.pr.failedChecks?.map((check) => check.name)).toEqual([
@@ -163,7 +162,7 @@ describe("a failed GitHub check binds to the pull request it was reported on", (
     const current = await vcs.getPRHead(2);
 
     expect(
-      bindCurrentPullRequest(event!, current, (left, right) => vcs.sameHandle(left, right)),
+      bindCurrentPullRequest(event!, current, githubHandleIdentity),
     ).not.toBeNull();
   });
 
@@ -187,7 +186,7 @@ describe("a failed GitHub check binds to the pull request it was reported on", (
     const current = await vcs.getPRHead(2);
 
     expect(
-      bindCurrentPullRequest(event!, current, (left, right) => vcs.sameHandle(left, right)),
+      bindCurrentPullRequest(event!, current, githubHandleIdentity),
     ).toBeNull();
   });
 
@@ -208,12 +207,13 @@ describe("a failed GitHub check binds to the pull request it was reported on", (
     const current = await vcs.getPRHead(2);
 
     expect(
-      bindCurrentPullRequest(event!, current, (left, right) => vcs.sameHandle(left, right)),
+      bindCurrentPullRequest(event!, current, githubHandleIdentity),
     ).toBeNull();
   });
 });
 
 const { GitLabAdapter } = await import("../../../../../integrations/gitlab/vcs.js");
+const { gitlabHandleIdentity } = await import("../../../../../integrations/gitlab/pipeline-checks.js");
 const { normalizeGitLabEvents } = await import("../../../../../integrations/gitlab/webhook.js");
 
 const gitLabPipeline = JSON.parse(
@@ -279,8 +279,7 @@ describe("a failed GitLab pipeline binds to the merge request it ran for", () =>
 
     const vcs = gitLabAdapter(gitLabClient({ id: 31, status: "failed" }));
     const current = await vcs.getPRHead(1);
-    const bound = bindCurrentPullRequest(event!, current, (left, right) =>
-      vcs.sameHandle(left, right),
+    const bound = bindCurrentPullRequest(event!, current, gitlabHandleIdentity,
     );
 
     expect(bound?.pr.headSha).toBe(sourceHead);
@@ -299,7 +298,7 @@ describe("a failed GitLab pipeline binds to the merge request it ran for", () =>
     const current = await vcs.getPRHead(1);
 
     expect(
-      bindCurrentPullRequest(event!, current, (left, right) => vcs.sameHandle(left, right)),
+      bindCurrentPullRequest(event!, current, gitlabHandleIdentity),
     ).toBeNull();
   });
 });
@@ -356,7 +355,7 @@ describe("an envelope recorded before checks carried a handle still binds", () =
     const bound = bindCurrentPullRequest(
       recordedGitHubEnvelope(delivery.check_run.id) as unknown as TriggerEvent,
       current,
-      (left, right) => vcs.sameHandle(left, right),
+      githubHandleIdentity,
     );
 
     expect(bound?.pr.failedChecks?.map((check) => check.name)).toEqual([
@@ -374,7 +373,7 @@ describe("an envelope recorded before checks carried a handle still binds", () =
       bindCurrentPullRequest(
         recordedGitHubEnvelope(delivery.check_run.id + 1) as unknown as TriggerEvent,
         current,
-        (left, right) => vcs.sameHandle(left, right),
+        githubHandleIdentity,
       ),
     ).toBeNull();
   });
@@ -437,7 +436,7 @@ describe("an envelope recorded before checks carried a handle still binds", () =
     const bound = bindCurrentPullRequest(
       recordedGitLabEnvelope([{ name: "test-build", conclusion: "failed" }]) as unknown as TriggerEvent,
       current,
-      (left, right) => vcs.sameHandle(left, right),
+      gitlabHandleIdentity,
     );
 
     expect(bound?.pr.headSha).toBe("5f2d4c1e9a7b3d6f8e0c2a4b6d8f0e1c3a5b7d9f");
@@ -451,7 +450,7 @@ describe("an envelope recorded before checks carried a handle still binds", () =
     const bound = bindCurrentPullRequest(
       recordedGitLabEnvelope([{ name: "pipeline", conclusion: "failed" }]) as unknown as TriggerEvent,
       current,
-      (left, right) => vcs.sameHandle(left, right),
+      gitlabHandleIdentity,
     );
 
     expect(bound?.pr.failedChecks?.map((check) => check.name)).toEqual(["pipeline"]);
@@ -466,8 +465,7 @@ describe("an envelope recorded before checks carried a handle still binds", () =
       [{ name: "pipeline", conclusion: "failed" }],
     ]) {
       expect(
-        bindCurrentPullRequest(recordedGitLabEnvelope(failedChecks) as unknown as TriggerEvent, current, (left, right) =>
-          vcs.sameHandle(left, right),
+        bindCurrentPullRequest(recordedGitLabEnvelope(failedChecks) as unknown as TriggerEvent, current, gitlabHandleIdentity,
         ),
       ).toBeNull();
     }

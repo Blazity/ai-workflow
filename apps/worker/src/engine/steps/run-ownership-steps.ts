@@ -78,8 +78,8 @@ export async function acknowledgePrTriggerDispatchStep(
     triggerType: entry.triggerType,
     pr: entry.pr,
   };
-  const { current, sameHandle } = await readProviderCurrentPullRequest(triggerEvent);
-  if (!bindCurrentPullRequest(triggerEvent, current, sameHandle)) {
+  const { current, handles } = await readProviderCurrentPullRequest(triggerEvent);
+  if (!bindCurrentPullRequest(triggerEvent, current, handles)) {
     await completeConnectedTriggerDelivery(
       entry.delivery.provider,
       entry.delivery.deliveryId,

@@ -6,10 +6,10 @@ import type {
   IntegrationWebhookReception,
   PrTriggerPayload,
   TriggerEvent,
-  VcsOpaqueHandle,
 } from "@integrations/sdk";
 import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
+import { checkRunHandle } from "./handles";
 import { vcsLoginsMatch } from "./review-markers";
 
 type GitHubContext = IntegrationContext<typeof manifest>;
@@ -315,15 +315,13 @@ export function normalizeGitHubEvent(
             name: check.name,
             conclusion: check.conclusion,
             ...(check.details_url ? { detailsUrl: check.details_url } : {}),
-            // `check.app?.slug ?? ""`, and not `appSlug`, because this handle is
-            // compared against the one the adapter mints off
-            // `GET /commits/{ref}/check-runs`, which falls back to the empty
-            // string. `appSlug` falls back to the sender's login, which is right
-            // for the producer and the trust decision above and wrong here: a
+            // The app's own slug, and not `appSlug`: that falls back to the
+            // sender's login, which is right for the producer and the trust
+            // decision above and wrong here. The head read mints this handle
+            // from `GET /commits/{ref}/check-runs`, which knows no sender, so a
             // check run whose `app` carries no slug would mint two handles that
-            // never compare equal, and the autofix path would go silent on it
-            // with the trigger recorded only as a stale head.
-            handle: handle({ id: check.id, owner: check.app?.slug ?? "" }),
+            // never compare equal, and the autofix path would go silent on it.
+            handle: checkRunHandle({ id: check.id, appSlug: check.app?.slug }),
           },
         ],
       },
@@ -497,10 +495,6 @@ function legacyGate(
       provider: "github" as const,
     },
   };
-}
-
-function handle(value: { id: number; owner: string }): VcsOpaqueHandle {
-  return value as unknown as VcsOpaqueHandle;
 }
 
 function delivery(deliveryId: string | undefined, producer: string | undefined) {

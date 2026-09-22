@@ -2,7 +2,6 @@ import type { Octokit } from "@octokit/rest";
 import {
   FatalError,
   isReviewLedgerWorkItem,
-  readRecordedCheckIdentity,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
@@ -25,6 +24,7 @@ import {
   type VcsRepositoryMetadata,
   type VcsSandboxCredentials,
 } from "@integrations/sdk";
+import { checkRunHandle, githubHandle, type GitHubHandle } from "./handles";
 import {
   buildOctokit,
   getBotIdentity,
@@ -163,16 +163,6 @@ export interface GitHubConfig {
   log?: IntegrationLogger;
 }
 
-type GitHubHandle = {
-  provider?: "github";
-  id?: number;
-  owner?: string;
-};
-
-function githubHandle(value: GitHubHandle): VcsOpaqueHandle {
-  return value as unknown as VcsOpaqueHandle;
-}
-
 /**
  * Whether GitHub refused a request in a way that asking again will not change:
  * the resource does not exist for this installation (404), or it is forbidden
@@ -194,19 +184,6 @@ function isPermanentRefusal(err: unknown): boolean {
     headers["retry-after"] === undefined &&
     !/rate limit/iu.test(failure.message ?? "")
   );
-}
-
-/**
- * The identity a handle names, including one an envelope recorded before
- * handles existed: such an envelope stored the check run's id as `checkRunId`
- * and its app beside it as `appSlug`, which is the pair a handle holds now.
- */
-function gitHubIdentity(value: VcsOpaqueHandle): Partial<GitHubHandle> {
-  const recorded = readRecordedCheckIdentity(value);
-  if (!recorded) return value as unknown as Partial<GitHubHandle>;
-  const { checkRunId, appSlug } = recorded.check;
-  if (typeof checkRunId !== "number") return {};
-  return { id: checkRunId, owner: typeof appSlug === "string" ? appSlug : "" };
 }
 
 function isSelfAuthoredReviewError(error: unknown): boolean {
@@ -569,13 +546,6 @@ export class GitHubAdapter
     return { owner: this.config.owner, repo: this.config.repo };
   }
 
-  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean {
-    if (!left || !right) return left === right;
-    const a = gitHubIdentity(left);
-    const b = gitHubIdentity(right);
-    return a.provider === b.provider && a.id === b.id && a.owner === b.owner;
-  }
-
   /** Every repository this App installation can see, one page of 100 at a time.
    * Typed loosely because the listing's shape is Octokit's, and the nine fields
    * read here are the only ones this answer carries. */
@@ -828,7 +798,7 @@ export class GitHubAdapter
           (check.conclusion === "failure" || check.conclusion === "timed_out"),
       )
       .map((check) => ({
-        handle: githubHandle({ id: check.id, owner: check.appSlug }),
+        handle: checkRunHandle(check),
         name: check.name,
         conclusion: check.conclusion!,
       }));
@@ -883,7 +853,7 @@ export class GitHubAdapter
       .map((check) => ({
         name: check.name,
         conclusion: check.conclusion!,
-        handle: githubHandle({ id: check.id, owner: check.appSlug }),
+        handle: checkRunHandle(check),
         producer: check.appSlug,
         trustedByDefault: isTrustedByDefaultCheckProducer(check.appSlug),
       }));

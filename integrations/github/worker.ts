@@ -4,6 +4,7 @@ import {
   type IntegrationRuntimeDefinition,
 } from "@integrations/sdk";
 import { buildOctokit, readPrivateKey, type GitHubAppCredential } from "./auth";
+import { githubHandleIdentity } from "./handles";
 import { manifest } from "./manifest";
 import { GitHubAdapter } from "./vcs";
 import { webhook } from "./webhook";
@@ -199,6 +200,7 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
   capabilities: {
     vcs: (ctx, repository) => adapter(ctx, repository),
   },
+  vcsHandles: githubHandleIdentity,
   blocks: {},
   health: {
     app: async (ctx) => {

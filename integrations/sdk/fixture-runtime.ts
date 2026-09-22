@@ -124,10 +124,6 @@ class FixtureRepository implements VCSAdapter {
     return `/repos/${this.repository.repoPath}${suffix}`;
   }
 
-  sameHandle(left: import("./vcs").VcsOpaqueHandle | undefined, right: import("./vcs").VcsOpaqueHandle | undefined): boolean {
-    return left === right;
-  }
-
   async createBranchIfMissing(name: string, base: string): Promise<"created" | "existing"> {
     const body = (await readJson(this.ctx, this.path("/branches"), {
       method: "POST",
@@ -301,6 +297,12 @@ const definition: IntegrationRuntimeDefinition<FixtureManifest> = {
     issue_tracker: (ctx) => new FixtureTracker(ctx),
     vcs: (ctx, repository) => new FixtureRepository(ctx, repository),
     messaging: fixtureMessaging,
+  },
+  // The fixture mints no handle of its own, so the one comparison it can make
+  // is identity, and nothing it recorded predates handles.
+  vcsHandles: {
+    sameHandle: (left, right) => left === right,
+    recordedCheckHandle: () => null,
   },
   blocks: {
     sdkfixture_research: async ({ params, inputs }, ctx) => {
@@ -517,6 +519,14 @@ const _refusedRuntimes = {
   runStateWithoutBeginRun: (): IntegrationRuntimeDefinition<FixtureManifest> =>
     // @ts-expect-error the manifest declares runState, so beginRun is required
     ({ ...definition, beginRun: undefined }),
+  vcsWithoutHandleIdentity: (): IntegrationRuntimeDefinition<FixtureManifest> =>
+    // @ts-expect-error the manifest declares vcs, so how its handles compare is required
+    ({ ...definition, vcsHandles: undefined }),
+  handleIdentityWithoutVcs: (): IntegrationRuntimeDefinition<typeof otelFixtureManifest> => ({
+    ...otelDefinition,
+    // @ts-expect-error only a vcs integration mints handles to compare
+    vcsHandles: definition.vcsHandles,
+  }),
   readerForUndeclaredPage: (): IntegrationRuntimeDefinition<FixtureManifest> => ({
     ...definition,
     api: {

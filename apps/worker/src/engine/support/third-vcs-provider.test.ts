@@ -97,7 +97,7 @@ function usable(manifest: IntegrationManifest, botLogin: string) {
             repoPath: repository.repoPath,
             baseBranch: repository.baseBranch,
           });
-          return { getPRHead, sameHandle: () => true };
+          return { getPRHead };
         },
       },
     },
