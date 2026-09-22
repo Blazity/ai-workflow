@@ -870,6 +870,7 @@ test("the source build covers worker and dashboard without deployment side effec
     "pnpm validate:local-skills",
     "pnpm mcp:contract:check",
     "pnpm --dir ../.. run gen:blocks -- --check",
+    "pnpm --dir ../.. run gen:integrations -- --check",
     "rm -rf .nitro/workflow",
     "NODE_OPTIONS=--max-old-space-size=8192 nitro build",
   ]);
@@ -909,6 +910,7 @@ test("the source build uses the validator entrypoints and preserves deployment s
     "pnpm db:migrate",
     "pnpm seed:auth-user",
     "pnpm --dir ../.. run gen:blocks -- --check",
+    "pnpm --dir ../.. run gen:integrations -- --check",
     "rm -rf .nitro/workflow",
     "NODE_OPTIONS=--max-old-space-size=8192 nitro build",
   ]);
