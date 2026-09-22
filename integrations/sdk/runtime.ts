@@ -68,7 +68,7 @@ interface IntegrationRuntimeBase<M extends IntegrationManifest> {
    * Proves that `ctx.connection` works, cheaply. Core runs it before stored
    * values become active and when an admin presses Test. A refusal reports
    * the provider's own reason; core redacts secrets from it before anyone
-   * sees it.
+   * sees it. When to refuse and when to throw: `ConnectionTestResult`.
    */
   readonly testConnection: (ctx: IntegrationContext<M>) => Promise<ConnectionTestResult>;
   readonly capabilities: {
@@ -158,6 +158,29 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
   agent_tracing: (ctx: IntegrationContext<M>) => AgentTracingAdapter;
 }
 
+/**
+ * What a connection test answers, and the difference between answering and
+ * throwing is the whole contract.
+ *
+ * `{ ok: false, reason }` means the provider ANSWERED and refused this
+ * configuration: a rejected token, a project that does not exist, a scope the
+ * key lacks. Core files it as `credential_rejected` and the card goes
+ * Failing, which stops every run that needs this integration. Return it only
+ * for a verdict.
+ *
+ * A throw means there was no verdict: the provider could not be reached, or it
+ * answered something that is not an answer about these values (a 429, a 5xx,
+ * an HTML error page from a proxy, a body that does not parse). Core files it
+ * as `provider_unreachable` and keeps the connection as it was, because an
+ * outage during a Test says nothing about the credential. Catching every error
+ * and returning `{ ok: false }` turns a thirty second outage into a Failing
+ * card that only a person pressing Test again can clear.
+ *
+ * Either way, values being saved do not become active: only a pass does that.
+ *
+ * Core redacts the connection's secrets from `reason`, `message` and a thrown
+ * message before anyone sees them.
+ */
 export type ConnectionTestResult =
   | { readonly ok: true; readonly message?: string }
   | { readonly ok: false; readonly reason: string };

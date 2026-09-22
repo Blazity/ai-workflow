@@ -62,11 +62,11 @@ vi.mock("../../services/integrations/runtime.js", async () => {
   const connectionValues = await import("../../services/integrations/connection-values.js");
   const resolve = await import("../../services/integrations/resolve.js");
   return {
-    buildIntegrationContext: (input: { signal: AbortSignal }) => ({
+    buildIntegrationContext: (input: { lifetime: AbortSignal }) => ({
       connection: { baseUrl: "https://acme.example", apiToken: "tok-secret-value" },
       http: { fetch: () => Promise.reject(new Error("no network in this test")) },
       log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-      signal: input.signal,
+      signal: input.lifetime,
     }),
     readConnectionValues: () => ({
       ok: true,

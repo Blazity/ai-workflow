@@ -45,7 +45,7 @@ export async function readIntegrationPageData(
 
   const { usableIntegrations } = await import("./usable.js");
   const [usable] = await usableIntegrations({
-    signal: AbortSignal.timeout(PAGE_READ_TIMEOUT_MS),
+    lifetime: AbortSignal.timeout(PAGE_READ_TIMEOUT_MS),
     filter: (candidate) => candidate.id === integrationId,
   });
   if (!usable) {

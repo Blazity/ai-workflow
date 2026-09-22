@@ -41,9 +41,10 @@ export default defineEventHandler(async (event) => {
   }
 
   const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
-  const signal = AbortSignal.timeout(WEBHOOK_TIMEOUT_MS);
+  // A request has one deadline for everything it does with the contexts, so
+  // it is their lifetime.
   const resolved = await resolveUsableIntegrations({
-    signal,
+    lifetime: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     filter: (candidate) => candidate.id === id,
   });
   if (!resolved.readable) {

@@ -269,7 +269,7 @@ async function runConnectionTest(
       manifest,
       values,
       secrets,
-      signal: controller.signal,
+      lifetime: controller.signal,
     });
     const result = await (runtime.testConnection as (ctx: unknown) => Promise<
       { ok: true; message?: string } | { ok: false; reason: string }

@@ -42,14 +42,19 @@ export interface IntegrationContext<M extends IntegrationManifest> {
    */
   readonly webhookUrl?: string;
   /**
-   * Aborts when core gives up on this work: the run was cancelled or ran out
-   * of budget, the invocation is near its time ceiling, or a connection test
-   * or a webhook request took too long. Every request through `http` and every
-   * `llm` call is already bound to it; pass it to anything else that waits.
+   * Aborts when core gives up on this work: a connection test, a health
+   * probe, a block or a webhook request ran past its deadline, or a memory
+   * provider used up the time core gives it. (A run being cancelled does not
+   * abort it today.) Every request through `http` and every `llm` call is
+   * already bound to it; pass it to anything else that waits.
    *
-   * An adapter gets the signal of whatever core is doing when it builds the
-   * adapter, so a capability called from a webhook route cannot wait past the
-   * route's own deadline.
+   * It is the context's LIFETIME, not a deadline for any one call. An adapter
+   * core holds for a stretch of work (a poll pass, a run's attachment
+   * downloads, a step's memory reads and writes) gets a signal that does not
+   * abort on its own, and each request is bounded by its own timeout instead
+   * (`IntegrationRequestInit.timeoutMs`). An adapter built for a request with
+   * a deadline of its own (a webhook route) gets that deadline, so it cannot
+   * wait past it. A signal you pass in `init` is honoured alongside this one.
    *
    * Integration code never has to recognise core's run-control errors (a
    * cancelled run, an exhausted budget). Core records one when it raises it
@@ -140,8 +145,14 @@ type LlmAccess<B extends IntegrationBlockManifest> = B extends {
  * `maxRetryAfterMs`. Nothing else is retried unless `retries` says so: a PUT
  * or a DELETE is a write at these providers (a merge, a rebase, a file
  * commit), and repeating one after an ambiguous 5xx reports a conflict for
- * work that landed. Every connection secret is redacted from whatever core
- * records about a request. A non-2xx response is returned, not thrown.
+ * work that landed. A `signal` in `init` ends the request as a whole, retries
+ * included, alongside `ctx.signal`. A non-2xx response is returned, not
+ * thrown.
+ *
+ * What a failed request throws has every connection secret taken out of its
+ * message and its causes, and keeps its `name`: a deadline is still a
+ * `TimeoutError` or an `AbortError`, and "never reached the server" is still a
+ * `TypeError` with a cause.
  */
 export interface IntegrationHttp {
   fetch(input: string | URL | Request, init?: IntegrationRequestInit): Promise<Response>;

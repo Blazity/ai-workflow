@@ -1,10 +1,12 @@
 /**
  * Reaching a usable integration's own code, with the context it receives.
  *
- * Three callers need this and none of them is running a block: the step that
- * creates an integration's per-run state, the sandbox steps that ask every
- * tracing provider what a harness needs, and the route behind a contributed
- * page. Each runs server side, which is where a connection may be read at all.
+ * Every capability runtime reaches its provider through this (the tracker,
+ * version control, memory, messaging), and so do the step that creates an
+ * integration's per-run state, the sandbox steps that ask every tracing
+ * provider what a harness needs, the route behind a contributed page and the
+ * webhook route. Each runs server side, which is where a connection may be
+ * read at all.
  *
  * It resolves nothing of its own: the state comes from `resolve.ts`, the one
  * place a status is decided, and the context from `context.ts`. A second
@@ -23,7 +25,35 @@ export interface UsableIntegration {
   readonly manifest: IntegrationManifest;
   readonly runtime: ErasedIntegrationRuntime;
   readonly ctx: IntegrationContext<IntegrationManifest>;
+  /**
+   * This connection's secrets taken out of what its adapter hands back, for
+   * core and never for the integration: a refusal's words (`text`) and a
+   * thrown error (`error`, a copy that keeps its name). `ctx` already does
+   * this for its own log and its own requests; this is the same redaction,
+   * with the same secrets, for what reaches core through a capability port.
+   */
+  readonly redaction: IntegrationRedaction;
 }
+
+export interface IntegrationRedaction {
+  text(text: string): string;
+  error(error: unknown): Error;
+}
+
+/**
+ * How long the contexts a resolution builds live.
+ *
+ * Absent, which is right for a caller that HOLDS what it resolved and makes
+ * calls through it for as long as it holds it (a step, a poll pass, a resume):
+ * the contexts never abort on their own, and every request is still bounded by
+ * its own per-attempt timer. Pass a signal when the caller has a total deadline
+ * for everything it does with them (a webhook request, a page read) or owns a
+ * budget it may have to end early (memory). What it must never be is a timer
+ * started at resolution by a caller that then holds the result: nothing bounds
+ * the resolution with it, and once it fires every request through the context
+ * fails at once, looking exactly like the provider timing out.
+ */
+type ContextLifetime = { readonly lifetime?: AbortSignal };
 
 /**
  * Every connected, enabled integration whose connection values can be read,
@@ -34,8 +64,7 @@ export interface UsableIntegration {
  * deployment with five integrations does not decrypt five connections to find
  * the one that traces.
  */
-export async function usableIntegrations(input: {
-  readonly signal: AbortSignal;
+export async function usableIntegrations(input: ContextLifetime & {
   readonly filter?: (manifest: IntegrationManifest) => boolean;
 }): Promise<UsableIntegration[]> {
   const resolved = await resolveUsableIntegrations(input);
@@ -55,8 +84,7 @@ export async function usableIntegrations(input: {
  * otherwise decide that a second time, which is the one thing `resolve.ts`
  * exists to prevent. It carries no secret and no ciphertext.
  */
-export async function resolveUsableIntegrations(input: {
-  readonly signal: AbortSignal;
+export async function resolveUsableIntegrations(input: ContextLifetime & {
   readonly filter?: (manifest: IntegrationManifest) => boolean;
 }): Promise<
   | {
@@ -72,9 +100,11 @@ export async function resolveUsableIntegrations(input: {
   // which re-exports this file: the boundaries gate reads that round trip as a
   // cycle, and it would be one.
   const { readIntegrationStates, secretsKeyMaterial } = await import("./authoring.js");
-  const { readConnectionValues, secretValuesOf } = await import("./connection-values.js");
+  const { readConnectionValues, redactIntegrationText, secretValuesOf } = await import(
+    "./connection-values.js"
+  );
   const { environmentReaderFrom } = await import("./resolve.js");
-  const { buildIntegrationContext } = await import("./context.js");
+  const { buildIntegrationContext, redactedError } = await import("./context.js");
   const { readConnectedIntegrationConnections } = await import(
     "../../db/repositories/integrations.js"
   );
@@ -122,15 +152,22 @@ export async function resolveUsableIntegrations(input: {
       );
       continue;
     }
+    const secrets = secretValuesOf(manifest, values.values);
     usable.push({
       manifest,
       runtime,
       ctx: buildIntegrationContext({
         manifest,
         values: values.values,
-        secrets: secretValuesOf(manifest, values.values),
-        signal: input.signal,
+        secrets,
+        // One per context rather than one shared never-aborting signal, so
+        // whatever a request joins onto it goes away with the context.
+        lifetime: input.lifetime ?? new AbortController().signal,
       }),
+      redaction: {
+        text: (text) => redactIntegrationText(text, secrets),
+        error: (error) => redactedError(error, (text) => redactIntegrationText(text, secrets)),
+      },
     });
   }
   return { readable: true, usable, states };
