@@ -9,7 +9,6 @@
  */
 import type { ResolvedAdapters } from "../services/vcs/adapters.js";
 import { McpPublicError } from "./contracts.js";
-import { redactIntegrationVariableNames } from "./integration-redaction.js";
 
 export type ConnectedIssueTracker = Extract<
   ResolvedAdapters["issueTrackerResolution"],
@@ -39,13 +38,10 @@ export function requireIssueTracker(adapters: ResolvedAdapters): ConnectedIssueT
   if (tracker.unreadable) {
     throw new McpPublicError("DEPENDENCY_UNAVAILABLE", SETTINGS_UNREADABLE, true, undefined, true);
   }
-  throw new McpPublicError(
-    "VALIDATION_FAILED",
-    redactIntegrationVariableNames(tracker.reason),
-    false,
-    undefined,
-    true,
-  );
+  // The resolution's own sentence, which names the provider and the page to
+  // fix it on. It leaves through the floor every refusal passes
+  // (`auditFailure` in execute-tool.ts), like any other tool's words.
+  throw new McpPublicError("VALIDATION_FAILED", tracker.reason, false, undefined, true);
 }
 
 /** The tracker when there is one, for a tool whose tracker work is optional

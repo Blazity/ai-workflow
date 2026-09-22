@@ -16,6 +16,7 @@ import {
   MCP_CONTRACT_HASH,
   hashCanonicalJson,
   sanitizeMcpData,
+  sanitizeMcpText,
 } from "./sanitize-result.js";
 
 // What a running mutation holds is a lease, not the lifetime of its answer: the
@@ -284,8 +285,29 @@ function sanitize<T>(context: ExecutionContext, data: T): McpEnvelope<T> {
   });
 }
 
+/**
+ * Every refusal leaves through here, so this is where its words pass the floor
+ * the data passes (`sanitizeMcpText`). A tool that composed its own sentence
+ * loses nothing; one that forwarded a provider's reason no longer forwards the
+ * secrets or the variable names in it.
+ */
+function withSafeWords(error: McpPublicErrorType, secrets: readonly string[]): McpPublicErrorType {
+  const message = sanitizeMcpText(error.message, secrets);
+  const failureReason =
+    error.failureReason === undefined ? undefined : sanitizeMcpText(error.failureReason, secrets);
+  if (message === error.message && failureReason === error.failureReason) return error;
+  return new McpPublicError(
+    error.code,
+    message,
+    error.retryable,
+    error.retryAfterMs,
+    error.effectNotApplied,
+    failureReason,
+  );
+}
+
 async function auditFailure(context: ExecutionContext, error: unknown): Promise<never> {
-  const safeError = publicError(error);
+  const safeError = withSafeWords(publicError(error), context.secrets);
   await auditResult(context, auditOutcome(safeError.code), null, safeError.code);
   throw safeError;
 }

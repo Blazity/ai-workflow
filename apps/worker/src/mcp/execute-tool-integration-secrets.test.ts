@@ -129,3 +129,38 @@ describe("an MCP result carrying a connected integration's secret", () => {
     await expect(call()).resolves.toMatchObject({ data: { started: true } });
   });
 });
+
+// F108. A refusal's message never travels in an envelope: the SDK forwards
+// `error.message` as it is. The memory tools refuse with the provider's own
+// reason, and a provider that quotes its credential back handed it to the
+// agent. Every refusal now leaves through the same floor the data passes.
+describe("an MCP refusal carrying a connected integration's secret", () => {
+  it("leaves with the value redacted, the code and the retry advice kept", async () => {
+    const { McpPublicError } = await import("./contracts.js");
+
+    const refusal = executeMcpRead({
+      deps: depsFor(db, () => new Date("2026-09-19T10:00:00.000Z"), {
+        settings,
+        loadKnownSecrets: () => secretValues(),
+      }),
+      toolName: "memory.list",
+      targetRefs: [],
+      operation: async () => {
+        throw new McpPublicError(
+          "DEPENDENCY_UNAVAILABLE",
+          `The memory provider refused the key ${SECRET}.`,
+          true,
+          undefined,
+          true,
+        );
+      },
+    });
+
+    await expect(refusal).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      retryable: true,
+      effectNotApplied: true,
+      message: "The memory provider refused the key [REDACTED].",
+    });
+  });
+});
