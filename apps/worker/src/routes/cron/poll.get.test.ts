@@ -410,11 +410,14 @@ describe("cron clarification recovery ordering", () => {
   // is the deployment's configuration and says so at info; the second is a
   // failure and says so at error.
   it.each([
-    ["nothing is connected", false, "no_usable_issue_tracker", "info"],
-    ["its settings cannot be read", true, "issue_tracker_unreadable", "error"],
+    ["nothing is connected", "not_connected", "no_issue_tracker_connected", "info"],
+    // Two trackers and nobody chose: every ticket stops until an admin picks
+    // one, so it is said as loudly as a failure, not as a quiet state.
+    ["two are connected and none is selected", "ambiguous", "issue_tracker_ambiguous", "error"],
+    ["its settings cannot be read", "unreadable", "issue_tracker_unreadable", "error"],
   ] as const)(
     "settles claims, manual dispatches and pull request triggers without a board when %s",
-    async (_shape, unreadable, reason, level) => {
+    async (_shape, refusal, reason, level) => {
       const { resolveActiveIssueTracker } = await import(
         "../../engine/support/issue-tracker-runtime.js"
       );
@@ -423,7 +426,7 @@ describe("cron clarification recovery ordering", () => {
         async () =>
           ({
             ok: false,
-            unreadable,
+            refusal,
             reason: "No issue tracker is connected on this deployment.",
           }) as never,
       );

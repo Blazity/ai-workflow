@@ -78,10 +78,10 @@ export async function answerClarificationRequest(input: {
   if (row.ticketKey && !tracker.ok) {
     return {
       kind: "issue_tracker_unavailable",
-      message: tracker.unreadable
+      message: tracker.refusal === "unreadable"
         ? "This deployment's integration settings could not be read, so the ticket this question was asked on could not be reached and nothing was recorded. Try again shortly."
         : tracker.reason,
-      retryable: tracker.unreadable,
+      retryable: tracker.refusal === "unreadable",
     };
   }
   const issueTracker = issueTrackerIfConnected(adapters);

@@ -35,7 +35,7 @@ const SETTINGS_UNREADABLE =
 export function requireIssueTracker(adapters: Adapters): ConnectedIssueTracker {
   const tracker = adapters.issueTrackerResolution;
   if (tracker.ok) return tracker;
-  if (tracker.unreadable) {
+  if (tracker.refusal === "unreadable") {
     throw new McpPublicError("DEPENDENCY_UNAVAILABLE", SETTINGS_UNREADABLE, true, undefined, true);
   }
   // The resolution's own sentence, which names the provider and the page to

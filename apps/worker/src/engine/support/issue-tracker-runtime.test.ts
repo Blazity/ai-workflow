@@ -151,7 +151,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(await resolveActiveIssueTracker()).toEqual({
       ok: false,
-      unreadable: false,
+      refusal: "not_connected",
       reason: NO_PROVIDER,
     });
   });
@@ -163,7 +163,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(await resolveActiveIssueTracker()).toEqual({
       ok: false,
-      unreadable: false,
+      refusal: "ambiguous",
       reason:
         "Tracker One and Tracker Two both provide issue tracking on this deployment and no active provider is selected, so no ticket was read.",
     });
@@ -180,7 +180,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(resolved).toEqual({
       ok: false,
-      unreadable: true,
+      refusal: "unreadable",
       reason:
         "This deployment's integration settings could not be read (database unavailable), so its issue tracker was not used.",
     });
@@ -191,7 +191,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(await resolveActiveIssueTracker()).toEqual({
       ok: false,
-      unreadable: false,
+      refusal: "unusable",
       reason: "Test Tracker declares issue tracking and ships no code for it.",
     });
   });
@@ -211,7 +211,7 @@ describe("resolveActiveIssueTracker", () => {
 
     expect(await resolveActiveIssueTracker()).toEqual({
       ok: false,
-      unreadable: false,
+      refusal: "unusable",
       reason:
         "Test Tracker cannot say which account it acts as, so this deployment could not tell its own ticket moves from a person's. An issue tracker has to answer that.",
     });
@@ -227,7 +227,7 @@ describe("resolveActiveIssueTracker", () => {
       { integrationId: "test tracker", configFingerprint: "fp-1" },
     ]);
 
-    expect(resolved).toMatchObject({ ok: false, unreadable: false });
+    expect(resolved).toMatchObject({ ok: false, refusal: "unusable" });
     expect(resolved.ok === false && resolved.reason).toBe(
       "The issue tracker Test Tracker moved after this run started (reconfigured). Start a new run.",
     );
@@ -286,7 +286,7 @@ describe("what core asks of the resolution", () => {
     expect(adapters.messaging).toBeDefined();
     expect(adapters.issueTrackerResolution).toEqual({
       ok: false,
-      unreadable: false,
+      refusal: "not_connected",
       reason: NO_PROVIDER,
     });
     expect(issueTrackerIfConnected(adapters)).toBeUndefined();

@@ -45,11 +45,8 @@ import {
   reconcileStalledRun,
 } from "./run-stall-watchdog.js";
 import {
-  issueTrackerName,
-  issueTrackerWiring,
-  resolveActiveIssueTracker,
   trackerIdentityOf,
-  trackerMoveTarget,
+  type ConnectedIssueTracker,
 } from "../../engine/support/issue-tracker-runtime.js";
 import { ticketSubjectKey } from "../../engine/support/subject-key.js";
 
@@ -148,15 +145,34 @@ function followsTicketColumnOf(entry: ActiveRunEntry): boolean {
   return (entry.kind === "ticket" || entry.kind === "manual_ticket") && entry.ticketKey !== null;
 }
 
+/** What a pass knows about the board, built once from its tracker resolution. */
+interface ReconcileBoard {
+  readonly aiColumnTickets: ReadonlySet<string>;
+  readonly adapter: IssueTrackerAdapter;
+  readonly trackerId: string;
+  readonly trackerName: string;
+  /** Upper-cased, as a ticket's project key is compared. */
+  readonly projectKey: string;
+  readonly aiReviewTransitionId: string | undefined;
+  readonly backlogTarget: IssueTrackerMoveTarget;
+  readonly identity: string;
+}
+
 /**
  * @param aiColumnTickets The tickets in the AI column this pass, or `null` when
  *   the caller has no snapshot of the board (no tracker connected, its settings
  *   unreadable, or the column read failed). See "no board" below.
+ * @param tracker The tracker resolution the caller's column snapshot came
+ *   from, the poller's one resolution for its tick. The pass reads its
+ *   adapter, its id and its wiring from this one value and never resolves the
+ *   tracker again: a second read could answer from a tracker switched or
+ *   reconnected in between, and pair one tracker's adapter with another's
+ *   board.
  */
 export async function reconcileRuns(
   aiColumnTickets: ReadonlySet<string> | null,
   runRegistry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
+  tracker?: ConnectedIssueTracker,
   onTicketCancelled?: TicketCancellationCallback,
   onSubjectReleased?: SubjectReleasedCallback,
   parkedSubjects?: ReadonlySet<string>,
@@ -197,7 +213,7 @@ export async function reconcileRuns(
    * NO BOARD IS AN ANSWER, NOT A FAILURE. There is none when the caller has
    * no snapshot of the AI column (`aiColumnTickets === null`: no tracker is
    * connected, its settings could not be read, or reading the column failed)
-   * or when the tracker cannot be resolved here. Then every claim that follows
+   * or no tracker to read it through. Then every claim that follows
    * a ticket's column is RETAINED untouched, because each decision about one
    * needs the board: an absent column reads as "every ticket left AI" and
    * would cancel runs that are working, and releasing a finished run without
@@ -213,12 +229,15 @@ export async function reconcileRuns(
    * names, and the miss reads as "the ticket left the AI column" on a run that
    * is in fact finishing.
    */
-  const tracker = aiColumnTickets === null ? null : await resolveActiveIssueTracker();
-  const board =
-    aiColumnTickets !== null && tracker?.ok
+  const issueTracker = tracker?.adapter;
+  const board: ReconcileBoard | null =
+    aiColumnTickets !== null && tracker
       ? {
           aiColumnTickets,
+          adapter: tracker.adapter,
           trackerId: tracker.id,
+          trackerName: tracker.name,
+          projectKey: tracker.wiring.projectKey.trim().toUpperCase(),
           aiReviewTransitionId: tracker.wiring.aiReviewTransitionId,
           backlogTarget: (tracker.wiring.backlogTransitionId
             ? { name: settings.COLUMN_BACKLOG, transitionId: tracker.wiring.backlogTransitionId }
@@ -246,7 +265,7 @@ export async function reconcileRuns(
     if (entry.state === "cancelling") {
       const result = await retryCancellingClaim(
         entry,
-        board?.trackerId ?? null,
+        board,
         runRegistry,
         issueTracker,
         onSubjectReleased,
@@ -393,7 +412,7 @@ export async function reconcileRuns(
         ? await cleanFinishedManualTicket(
             boundEntry,
             runRegistry,
-            issueTracker,
+            board,
             onSubjectReleased,
             persistence,
             settings,
@@ -402,7 +421,7 @@ export async function reconcileRuns(
             boundEntry,
             entry.ticketKey as string,
             runRegistry,
-            issueTracker,
+            board,
             onSubjectReleased,
             settings,
           );
@@ -421,6 +440,7 @@ export async function reconcileRuns(
       ticketKey,
       issueTracker,
       settings.COLUMN_AI,
+      board?.projectKey,
     );
     if (!departure.left) {
       // The Jira poll is capped, so a manual claim can be absent from its
@@ -430,7 +450,7 @@ export async function reconcileRuns(
         cleaned += await cleanFinishedManualTicket(
           boundEntry,
           runRegistry,
-          issueTracker,
+          board,
           onSubjectReleased,
           persistence,
           settings,
@@ -476,9 +496,10 @@ export async function reconcileRuns(
       runRegistry,
       ...(issueTracker ? { issueTracker } : {}),
       ...(onSubjectReleased ? { onReleased: onSubjectReleased } : {}),
-      reason: reviewDestination
-        ? prematureAiReviewCancellationReason(await issueTrackerName())
-        : "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      reason:
+        reviewDestination && board
+          ? prematureAiReviewCancellationReason(board.trackerName)
+          : "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
       clarificationNotice: { aiColumnName: settings.COLUMN_AI },
     });
     if (
@@ -726,9 +747,10 @@ function isExactParkedClaim(
 
 async function retryCancellingClaim(
   entry: ActiveRunEntry,
-  /** The tracker this pass resolved, or null with no board. Without one only
-   *  claims that do not follow a ticket's column reach here. */
-  trackerId: string | null,
+  /** The board this pass built from its one tracker resolution, or null with
+   *  none. Without one only claims that do not follow a ticket's column reach
+   *  here. */
+  board: Pick<ReconcileBoard, "trackerId" | "projectKey" | "backlogTarget"> | null,
   runRegistry: RunRegistryAdapter,
   issueTracker: IssueTrackerAdapter | undefined,
   onSubjectReleased: SubjectReleasedCallback | undefined,
@@ -744,9 +766,9 @@ async function retryCancellingClaim(
   // carries a ticket key but claims a pull request subject, and cancelling the
   // ticket subject would cancel nothing and leave the claim closing forever.
   if (
-    trackerId === null ||
+    board === null ||
     !entry.ticketKey ||
-    entry.subjectKey !== ticketSubjectKey(trackerId, entry.ticketKey)
+    entry.subjectKey !== ticketSubjectKey(board.trackerId, entry.ticketKey)
   ) {
     return cancelSubjectRunDetailed(
       entry.subjectKey,
@@ -761,6 +783,7 @@ async function retryCancellingClaim(
     entry.ticketKey,
     issueTracker,
     settings.COLUMN_AI,
+    board.projectKey,
   );
   if (inAiColumn === null) {
     logger.warn(
@@ -770,7 +793,7 @@ async function retryCancellingClaim(
     return { cancelled: false, released: false };
   }
   const ticketKey = entry.ticketKey;
-  const backlogTarget = await trackerMoveTarget(settings.COLUMN_BACKLOG, "backlog");
+  const backlogTarget = board.backlogTarget;
   const finalFence = async (owner: {
     subjectKey: string;
     ownerToken: string;
@@ -803,15 +826,17 @@ async function retryCancellingClaim(
 
 async function readLiveTicketInAiColumn(
   ticketKey: string,
-  issueTracker?: IssueTrackerAdapter,
-  aiColumn = "AI",
+  issueTracker: IssueTrackerAdapter | undefined,
+  aiColumn: string,
+  /** The board's project key, upper-cased, from the pass's one resolution. */
+  projectKey: string,
 ): Promise<boolean | null> {
   if (!issueTracker) return null;
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
     return (
       ticket.trackerStatus.trim().toLowerCase() === aiColumn.trim().toLowerCase() &&
-      resolveTicketProjectKey(ticket) === (await issueTrackerWiring()).projectKey.trim().toUpperCase()
+      resolveTicketProjectKey(ticket) === projectKey
     );
   } catch (error) {
     if (error instanceof IssueTrackerNotFoundError || getErrorCode(error) === "NOT_FOUND") {
@@ -903,7 +928,7 @@ async function cleanFinishedRun(
 async function cleanFinishedManualTicket(
   entry: ActiveRunEntry & { runId: string },
   runRegistry: RunRegistryAdapter,
-  issueTracker: IssueTrackerAdapter | undefined,
+  board: Pick<ReconcileBoard, "adapter" | "backlogTarget"> | null,
   onSubjectReleased: SubjectReleasedCallback | undefined,
   persistence: ReconcilePersistence,
   settings: SettingsSnapshot = defaultSettingsSnapshot(),
@@ -912,13 +937,13 @@ async function cleanFinishedManualTicket(
     const status = await getRun(entry.runId).status;
     if (!TERMINAL_STATUSES.has(status)) return 0;
     if (!(await confirmWorkflowStepsDrained(entry.subjectKey, entry.runId))) return 0;
-    if (!entry.ticketKey || !issueTracker) return 0;
+    if (!entry.ticketKey || !board) return 0;
 
     await persistence.withdrawTicket({
-      issueTracker,
+      issueTracker: board.adapter,
       ticketKey: entry.ticketKey,
       aiColumn: settings.COLUMN_AI,
-      target: await trackerMoveTarget(settings.COLUMN_BACKLOG, "backlog"),
+      target: board.backlogTarget,
       owner: entry,
       requiredOwnerState: "bound",
     });
@@ -963,7 +988,7 @@ async function cleanStuckTicketRun(
   entry: ActiveRunEntry & { runId: string },
   ticketKey: string,
   runRegistry: RunRegistryAdapter,
-  issueTracker: IssueTrackerAdapter | undefined,
+  board: Pick<ReconcileBoard, "adapter" | "backlogTarget"> | null,
   onSubjectReleased?: SubjectReleasedCallback,
   settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<number> {
@@ -982,19 +1007,14 @@ async function cleanStuckTicketRun(
     return 0;
   }
 
-  if (!issueTracker) return 0;
-
-  const backlogTarget: IssueTrackerMoveTarget = await trackerMoveTarget(
-    settings.COLUMN_BACKLOG,
-    "backlog",
-  );
+  if (!board) return 0;
 
   const result = await cancelRunDetailed({
     ticketKey,
     target: entry.runId,
     runRegistry,
-    issueTracker,
-    targetColumn: backlogTarget,
+    issueTracker: board.adapter,
+    targetColumn: board.backlogTarget,
     ...(onSubjectReleased ? { onReleased: onSubjectReleased } : {}),
     reason: STUCK_TICKET_EVICTION_REASON,
     clarificationNotice: { aiColumnName: settings.COLUMN_AI },
@@ -1042,21 +1062,25 @@ async function stopOwnedSandboxes(
 
 async function verifyTicketLeftAiColumn(
   ticketKey: string,
-  issueTracker?: IssueTrackerAdapter,
-  aiColumn = "AI",
+  issueTracker: IssueTrackerAdapter | undefined,
+  aiColumn: string,
+  /** The board's project key, upper-cased, from the pass's one resolution;
+   *  absent exactly when the tracker is. */
+  expectedProjectKey: string | undefined,
 ): Promise<{
   left: boolean;
   trackerStatus: string | null;
   trackerStatusId: string | null;
 }> {
-  if (!issueTracker) return { left: true, trackerStatus: null, trackerStatusId: null };
+  if (!issueTracker || expectedProjectKey === undefined) {
+    return { left: true, trackerStatus: null, trackerStatusId: null };
+  }
 
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
     const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
     const expectedStatus = aiColumn.trim().toLowerCase();
     const ticketProjectKey = resolveTicketProjectKey(ticket);
-    const expectedProjectKey = (await issueTrackerWiring()).projectKey.trim().toUpperCase();
     const trackerStatusId = ticket.trackerStatusId ?? null;
     if (ticketStatus === expectedStatus && ticketProjectKey === expectedProjectKey) {
       logger.info(

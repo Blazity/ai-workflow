@@ -32,7 +32,7 @@ export class ManualDispatchError extends Error {
  */
 export function issueTrackerForDispatch(resolution: ResolvedIssueTracker): IssueTrackerAdapter {
   if (resolution.ok) return resolution.adapter;
-  if (resolution.unreadable) {
+  if (resolution.refusal === "unreadable") {
     throw new ManualDispatchError(
       503,
       "integration_unavailable",

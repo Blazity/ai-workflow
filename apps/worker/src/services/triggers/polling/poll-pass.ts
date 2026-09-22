@@ -36,7 +36,10 @@ import {
   sweepConnectedMcpRateLimits,
 } from "../../mcp/index.js";
 import type { RunsLister } from "../../overview/index.js";
-import type { ResolvedIssueTracker } from "../../../engine/support/issue-tracker-runtime.js";
+import type {
+  ConnectedIssueTracker,
+  IssueTrackerRefusal,
+} from "../../../engine/support/issue-tracker-runtime.js";
 import { ticketSubjectKey } from "../../../engine/support/subject-key.js";
 import type { IssueTrackerAdapter } from "../../../adapters/issue-tracker/types.js";
 import { reconcileRuns } from "../../run-lifecycle/index.js";
@@ -58,7 +61,6 @@ import {
   upsertConnectedRunSnapshots,
 } from "../../../db/repositories/runs/telemetry.js";
 import { createAdapters, type Adapters } from "../../../engine/support/adapters.js";
-import { issueTrackerIfConnected } from "../../../engine/support/connected-issue-tracker.js";
 import {
   redispatchPendingWebhookDeliveries,
   sweepConnectedWebhookRateLimits,
@@ -176,10 +178,14 @@ export function createRepositoryCatalogReader(
  * infer from the counts: a quiet tick and a tick with no board both report
  * zero everything, and only one of them is a deployment not watching a board.
  *
- * - `no_usable_issue_tracker`: nothing serves issue tracking here, or two
- *   trackers do and none is selected. An answer about the deployment, not a
- *   failure, so it is logged at info: on a deployment that never connected a
- *   tracker it is the shape of every tick.
+ * - `no_issue_tracker_connected`: nothing serves issue tracking here. An answer
+ *   about the deployment, not a failure, so it is logged at info: on a
+ *   deployment that never connected a tracker it is the shape of every tick.
+ * - `issue_tracker_ambiguous`: two trackers serve it and none is selected. A
+ *   misconfiguration that silently stops all ticket discovery and dispatch
+ *   until an admin picks one, logged with the sentence that says so.
+ * - `issue_tracker_unusable`: the one tracker cannot serve (it ships no code,
+ *   or cannot say which account it acts as), with its sentence.
  * - `issue_tracker_unreadable`: the integration settings could not be read, so
  *   nobody knows whether a tracker is connected.
  * - `board_read_failed`: a tracker is connected and reading its AI column
@@ -191,7 +197,9 @@ export function createRepositoryCatalogReader(
  * Every reason but the first is logged at error with what threw.
  */
 type TicketPhasesSkipReason =
-  | "no_usable_issue_tracker"
+  | "no_issue_tracker_connected"
+  | "issue_tracker_ambiguous"
+  | "issue_tracker_unusable"
   | "issue_tracker_unreadable"
   | "board_read_failed"
   | "dispatch_protection_unreadable"
@@ -206,7 +214,7 @@ type TicketPhasesSkipReason =
 type BoardRead =
   | {
       readonly ok: true;
-      readonly tracker: Extract<ResolvedIssueTracker, { ok: true }>;
+      readonly tracker: ConnectedIssueTracker;
       readonly settings: TicketBoardSettings;
       readonly ticketKeys: string[];
     }
@@ -711,12 +719,19 @@ function logTicketPhasesSkipped(
   reason: TicketPhasesSkipReason,
   fields: Record<string, unknown>,
 ): void {
-  if (reason === "no_usable_issue_tracker") {
+  if (reason === "no_issue_tracker_connected") {
     logger.info({ reason, ...fields }, "poll_ticket_phases_skipped");
   } else {
     logger.error({ reason, ...fields }, "poll_ticket_phases_skipped");
   }
 }
+
+const TRACKER_SKIP_REASONS: Record<IssueTrackerRefusal, TicketPhasesSkipReason> = {
+  not_connected: "no_issue_tracker_connected",
+  ambiguous: "issue_tracker_ambiguous",
+  unusable: "issue_tracker_unusable",
+  unreadable: "issue_tracker_unreadable",
+};
 
 /**
  * The board and the tickets in its AI column, or why there are none. Never
@@ -730,7 +745,7 @@ async function readTicketBoard(
 ): Promise<BoardRead> {
   const tracker = adapters.issueTrackerResolution;
   if (!tracker.ok) {
-    const reason = tracker.unreadable ? "issue_tracker_unreadable" : "no_usable_issue_tracker";
+    const reason = TRACKER_SKIP_REASONS[tracker.refusal];
     logTicketPhasesSkipped(reason, { detail: tracker.reason });
     return { ok: false, reason };
   }
@@ -786,10 +801,13 @@ async function reconcileClaims(input: {
   for (const request of await listConnectedRecoverableManualDispatches()) {
     protectedRunSubjects.add(request.subjectKey);
   }
+  // The tick's one resolution, the same value `readTicketBoard` read the
+  // column through, so the reconciler's adapter and board come from one tracker.
+  const tracker = adapters.issueTrackerResolution;
   return await reconcileRuns(
     input.aiColumnTickets === null ? null : new Set(input.aiColumnTickets),
     adapters.runRegistry,
-    issueTrackerIfConnected(adapters),
+    tracker.ok ? tracker : undefined,
     async (ticketKey, reason) => {
       const detail =
         reason === "inflight_claim"

@@ -130,7 +130,7 @@ export async function createAdapters(
   const tracker = await resolveActiveIssueTracker(integrationPins).catch(
     (error): ResolvedIssueTracker => ({
       ok: false,
-      unreadable: true,
+      refusal: "unreadable",
       reason: `This deployment's issue tracker could not be resolved (${
         error instanceof Error ? error.message : String(error)
       }).`,

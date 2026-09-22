@@ -33,7 +33,7 @@ function trackerConnected(wiring: Record<string, string>) {
 }
 
 function noTrackerConnected(reason = "No issue tracker is connected on this deployment.") {
-  resolveActiveIssueTracker.mockResolvedValue({ ok: false, unreadable: false, reason });
+  resolveActiveIssueTracker.mockResolvedValue({ ok: false, refusal: "not_connected", reason });
 }
 
 import {

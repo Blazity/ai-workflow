@@ -543,12 +543,12 @@ describe("manual dispatch against a definition repository pin", () => {
       "No issue tracker is connected on this deployment, so there is no ticket to work from. Connect one on the Integrations page.";
     const nothingConnected = {
       ok: false,
-      unreadable: false,
+      refusal: "not_connected",
       reason: NOTHING_CONNECTED,
     } as Parameters<typeof resolveManualDispatch>[0]["issueTrackerResolution"];
     const unreadable = {
       ok: false,
-      unreadable: true,
+      refusal: "unreadable",
       reason:
         "This deployment's integration settings could not be read (neon: connection reset), so its issue tracker was not used.",
     } as Parameters<typeof resolveManualDispatch>[0]["issueTrackerResolution"];

@@ -83,10 +83,10 @@ export async function approveApproval(
   if (!tracker.ok) {
     return {
       kind: "issue_tracker_unavailable",
-      message: tracker.unreadable
+      message: tracker.refusal === "unreadable"
         ? "This deployment's integration settings could not be read, so the plan's ticket could not be reached and nothing was decided. Try again shortly."
         : tracker.reason,
-      retryable: tracker.unreadable,
+      retryable: tracker.refusal === "unreadable",
     };
   }
   const issueTracker = tracker.adapter;
