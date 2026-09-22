@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { coreFiles, MENTION_RULE } from "../gates/core-references.mjs";
+import { coreFiles, describeCore, MENTION_RULE } from "../gates/core-references.mjs";
 import {
   allowed,
   classify,
@@ -1420,6 +1420,29 @@ test("an id is mentioned where a word starts with it, not as letters that run ac
 });
 
 /**
+ * Words join into an id only when the join ends where a word ends. Letters that
+ * run on into the next word are ordinary prose meeting by accident: until
+ * 2026-09-23 `Team settings` spelled teams, `Plan empty` plane and `as an
+ * alternative` asana, and the scaffold refused those ids by pointing at prose.
+ */
+test("consecutive words spell an id only when they join to exactly the id", () => {
+  const cases: ReadonlyArray<readonly [string, string, "spells" | "does not spell"]> = [
+    ["teams", 'export const label = "Team settings";\n', "does not spell"],
+    ["plane", 'export const hint = "Plan empty";\n', "does not spell"],
+    ["asana", 'export const hint = "as an alternative";\n', "does not spell"],
+    ["github", 'export const label = "git hub App";\n', "spells"],
+    ["mem0", 'export const pkg = "mem0ai";\n', "spells"],
+  ];
+  for (const [id, source, verdict] of cases) {
+    const root = coreReferenceRoot("core-references-join-", {
+      "apps/worker/src/ui/list.ts": source,
+    }, { plannedIntegrations: { [id]: { stage: "S99", reason: "a planned provider" } } });
+    const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+    assert.equal(result.status, verdict === "spells" ? gateFailure : gateSuccess, `${source.trim()} ${verdict} ${id}: ${result.stdout}`);
+  }
+});
+
+/**
  * A provider's own package and the identifiers built from its name are the
  * most direct coupling there is. Each form below is split into words first,
  * and the id counts where a word starts with it, so a package that runs the id
@@ -1453,12 +1476,6 @@ test("a provider's package names and joined identifiers are mentions in every fo
 });
 
 /**
- * Core is the source a commit carries, so git decides what is in it. A local
- * `nitro build` writes `apps/worker/.vercel/output`, bundled code that names
- * every provider the build ships; read as core it failed the gate, and every
- * push through it, on any machine that had built the worker once.
- */
-/**
  * What a file that does not parse spells is whatever the parser's recovery
  * kept, so a gate that read it anyway could pass a provider name it dropped.
  * Every failure also carries the rule it applied, in the words the scaffold
@@ -1488,12 +1505,20 @@ test("a failing gate states the mention rule it applied", () => {
  * the rule changed (it still said "any spelling" after the rule became whole
  * words, and whole words after it became word starts).
  */
-test("the integration guide quotes the gate's mention rule word for word", () => {
+test("the integration guide quotes the gate's mention rule and its reading of core word for word", () => {
   const guide = readFileSync(join(repoRoot, "docs/architecture/integrations.md"), "utf8");
   const prose = guide.replace(/^\s*>\s?/gmu, "").replace(/\s+/gu, " ");
   assert.ok(prose.includes(MENTION_RULE), "docs/architecture/integrations.md no longer quotes MENTION_RULE from scripts/gates/core-references.mjs");
+  const config = JSON.parse(readFileSync(join(repoRoot, "scripts/gates/core-references.json"), "utf8"));
+  assert.ok(prose.includes(describeCore(config)), "docs/architecture/integrations.md no longer quotes describeCore from scripts/gates/core-references.mjs");
 });
 
+/**
+ * Core is the source a commit carries, so git decides what is in it. A local
+ * `nitro build` writes `apps/worker/.vercel/output`, bundled code that names
+ * every provider the build ships; read as core it failed the gate, and every
+ * push through it, on any machine that had built the worker once.
+ */
 test("ignored build output in a git checkout is not core", () => {
   const root = coreReferenceRoot("core-references-ignored-", {
     ".gitignore": ".vercel/\n",

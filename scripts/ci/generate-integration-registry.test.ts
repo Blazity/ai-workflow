@@ -429,6 +429,12 @@ test("a manifest that uses a global the flow bundle's VM lacks is refused, howev
     ["setTimeout", "String(setTimeout)", "helper"],
     ["Date", "String(Date.now())", "manifest"],
     ["Math.random", "String(Math.random())", "manifest"],
+    ["Math.random", 'String(Math["random"]())', "manifest"],
+    ["Math.random", "(() => { const { random } = Math; return String(random()); })()", "manifest"],
+    ["crypto", "crypto.randomUUID()", "manifest"],
+    ["crypto", "String(crypto.getRandomValues(new Uint8Array(4)))", "helper"],
+    ["eval", 'String(eval("process"))', "manifest"],
+    ["Function", 'String(Function("return process")())', "manifest"],
   ] as const) {
     const root = await fixtureRoot("gen-integrations-global");
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -462,6 +468,48 @@ export const manifest = defineIntegration({
   }
 });
 
+/**
+ * A declare statement describes a runtime the file is not given, so the check
+ * would take its word for a global that is not there: `declare const process`
+ * makes `process` local, and `declare global` declares it for the whole
+ * graph. Both are refused for what they are, in a manifest and in a page.
+ */
+test("a declare statement in a manifest or a page is refused for what it is", async (t) => {
+  for (const [label, source] of [
+    ["declare const", "declare const process: { env: Record<string, string> };\nexport const read = process.env.X;\n"],
+    ["declare global", "declare global { var Buffer: any; }\nexport const read = String(Buffer);\n"],
+  ] as const) {
+    const manifestRoot = await fixtureRoot("gen-integrations-declare");
+    t.after(() => rm(manifestRoot, { recursive: true, force: true }));
+    await writeIntegration(manifestRoot, "alpha", { id: "alpha" });
+    await writeFile(join(manifestRoot, "integrations/alpha/helper.ts"), source);
+    const manifest = await readFile(join(manifestRoot, "integrations/alpha/manifest.ts"), "utf8");
+    await writeFile(
+      join(manifestRoot, "integrations/alpha/manifest.ts"),
+      `import { read } from "./helper";\nvoid read;\n${manifest}`,
+    );
+    assert.throws(
+      () => readIntegrations({ root: manifestRoot }),
+      /integrations\/alpha\/helper\.ts:1 uses a declare statement\./u,
+      `${label} in a manifest's graph`,
+    );
+
+    const pageRoot = await fixtureRoot("gen-integrations-declare-page");
+    t.after(() => rm(pageRoot, { recursive: true, force: true }));
+    await writeIntegration(pageRoot, "alpha", {
+      id: "alpha",
+      pages: [{ id: "overview", label: "Overview" }],
+      dashboard: 'import { read } from "./where";\nexport const dashboard = { pages: { overview: () => read } };\n',
+    });
+    await writeFile(join(pageRoot, "integrations/alpha/where.ts"), source);
+    assert.throws(
+      () => readIntegrations({ root: pageRoot }),
+      /integrations\/alpha\/where\.ts:1 uses a declare statement\./u,
+      `${label} in a page's graph`,
+    );
+  }
+});
+
 test("a manifest may name what the VM does give it, and may bind a Node global's name locally", async (t) => {
   const root = await fixtureRoot("gen-integrations-global-ok");
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -473,11 +521,13 @@ type Payload = { buffer: Buffer; timer: ReturnType<typeof setTimeout> };
 const process = (value: string) => value.trim();
 const docs = new URL("https://alpha.test/docs").toString();
 const encoded = btoa(JSON.stringify({ at: Math.max(1, 2), headers: [...new Headers({ a: "b" }).keys()] }));
+// A member or a key is not the global it shares a name with.
+const members = (1234).toLocaleString("en") + String({ Date: 1, eval: 2, globalThis: 3 }.Date);
 
 export const manifest = defineIntegration({
   id: "alpha",
   name: "Alpha",
-  description: process(docs + encoded + new TextEncoder().encode("x").length),
+  description: process(docs + encoded + members + new TextEncoder().encode("x").length),
   connection: { fields: [] },
   capabilities: [],
   blocks: [],
@@ -588,6 +638,8 @@ test("a dashboard entry that reads the deployment's environment is refused, howe
     ["process", 'process["env"].WORKER_BASE_URL'],
     ["globalThis", "(globalThis as any).process.env.WORKER_BASE_URL"],
     ["Buffer", 'Buffer.from("x").toString()'],
+    ["eval", 'String(eval("process.env.WORKER_BASE_URL"))'],
+    ["Function", 'String(Function("return process.env.WORKER_BASE_URL")())'],
   ] as const) {
     const root = await fixtureRoot("gen-integrations-dashboard-env");
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -601,6 +653,30 @@ test("a dashboard entry that reads the deployment's environment is refused, howe
       (error: Error) =>
         error.message.includes(`integrations/alpha/dashboard.tsx:1 uses ${label}.`) && /cockpit's own server/u.test(error.message),
       read,
+    );
+  }
+});
+
+test("a dashboard entry may not import one of Node's own modules, prefixed or bare", async (t) => {
+  // `import process from "process"` binds a local the globals check rightly
+  // accepts as local, and the boundaries gate matched only the node: prefix,
+  // so a page could read the cockpit's environment through it.
+  for (const specifier of ["process", "fs", "fs/promises", "node:child_process"]) {
+    const root = await fixtureRoot("gen-integrations-dashboard-builtin");
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await writeIntegration(root, "alpha", {
+      id: "alpha",
+      pages: [{ id: "overview", label: "Overview" }],
+      dashboard: 'import { where } from "./where";\nexport const dashboard = { pages: { overview: where } };\n',
+    });
+    await writeFile(
+      join(root, "integrations/alpha/where.ts"),
+      `import * as builtin from "${specifier}";\nexport const where = () => String(builtin);\n`,
+    );
+    assert.throws(
+      () => readIntegrations({ root }),
+      new RegExp(`integrations/alpha/where\\.ts: a dashboard entry may not import "${specifier}", which is Node's own module`, "u"),
+      specifier,
     );
   }
 });
@@ -629,7 +705,7 @@ test("a dashboard entry may use what a browser gives it, and a local named proce
     dashboard: `const process = (value: string) => value;
 export const dashboard = {
   pages: {
-    overview: () => [window.location.href, document.title, setTimeout, new EventTarget(), Date.now(), process("x")],
+    overview: () => [window.location.href, document.title, setTimeout, new EventTarget(), Date.now(), process("x"), (1).toLocaleString(), { eval: 1 }.eval],
   },
 };
 `,

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { builtinModules } from "node:module";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import { sourceFile } from "../generate-block-catalog/manifest-ast.js";
@@ -41,6 +42,17 @@ function specifiers(file: ts.SourceFile): string[] {
   };
   visit(file);
   return found;
+}
+
+/**
+ * Whether a specifier names one of Node's own modules, with or without the
+ * `node:` prefix. The boundaries gate refuses `node:*` in a dashboard entry,
+ * but `"process"` or `"fs"` bare is the same module, and an import binds a
+ * local name the globals check rightly accepts as local.
+ */
+function isNodeBuiltin(specifier: string): boolean {
+  const name = specifier.startsWith("node:") ? specifier.slice("node:".length) : specifier;
+  return builtinModules.includes(name) || specifier.startsWith("node:");
 }
 
 /** One line per use, then the fix, so a refusal names every place at once. */
@@ -110,9 +122,10 @@ export function assertManifestIsPureData(
  * A dashboard entry may use only what a browser gives it.
  *
  * The specifier rules in `tiers.json` shut the doors that are imports:
- * `next/headers`, `node:*`, `server-only`. A global is not an import, so
- * nothing there can see it, and `process` is the one reach that needs no
- * dependency at all: a Server Component in our process would get
+ * `next/headers`, `node:*`, `server-only`. Node's modules imported bare
+ * (`"process"`, `"fs"`) are shut here, in every file of the graph. A global is
+ * not an import, so nothing there can see it, and `process` is the one reach
+ * that needs no dependency at all: a Server Component in our process would get
  * `WORKER_BASE_URL` and every other variable this deployment runs with. An
  * integration's own credentials reach it through the context the SDK
  * describes, on the worker side, where they are resolved once.
@@ -132,6 +145,14 @@ export function assertDashboardUsesBrowserGlobals(
     seen.add(filePath);
     const file = sourceFile(filePath);
     for (const specifier of specifiers(file)) {
+      if (isNodeBuiltin(specifier)) {
+        const local = relative(repositoryRoot, filePath).replaceAll("\\", "/");
+        throw new Error(
+          `${local}: a dashboard entry may not import "${specifier}", which is Node's own module. ` +
+            "It renders inside the cockpit's own server, where Node's modules reach this deployment's files and environment, not the integration's. " +
+            "What an integration needs reaches it through the context the SDK describes, on the worker side.",
+        );
+      }
       if (!specifier.startsWith(".")) continue;
       const target = resolveLocal(filePath, specifier);
       if (!target) continue;

@@ -153,30 +153,34 @@ function wordsOf(piece) {
  * person is told is the rule `mentions` applies.
  */
 export const MENTION_RULE =
-  "Core spells a provider id where a word starts with it, in any case, in a file's path or in one identifier, string, template, regular expression or piece of JSX text; words split at punctuation and at case changes, so GITHUB_TOKEN, githubClient, GitHub, jira-client and mem0ai each spell their id, while the letters sEntry inside scriptsEntry spell nothing. Comments and the text of a className or style attribute are not read.";
+  "Core spells a provider id where one word starts with it, or where consecutive words join to exactly the id, in any case, in a file's path or in one identifier, string, template, regular expression or piece of JSX text; words split at punctuation and at case changes, so GITHUB_TOKEN, githubClient, GitHub, jira-client and mem0ai each spell their id, while scriptsEntry does not spell sentry and Team settings does not spell teams. Comments and the text of a className or style attribute are not read.";
 
 /**
- * Whether a word of one piece starts with the id, the id possibly running
- * across consecutive words (`git hub App`) and into the letters that follow
- * (`mem0ai`, `notionhq`, `githubusercontent`): a provider's own package and the
- * names built from it are the most direct coupling there is. A word that
- * merely contains the id (`scriptsEntry` holds `sentry` across its two words
- * only by accident) is not a mention, and a gate that failed on it would
- * refuse an integration over a word core never wrote. Words never join across
- * two pieces, so an identifier and the string beside it cannot spell an id
+ * Whether one piece spells the id, in the two ways `MENTION_RULE` states.
+ *
+ * - One word starts with it. A provider's own package and the names built
+ *   from it run the id into more letters (`mem0ai`, `notionhq`,
+ *   `githubusercontent`), and they are the most direct coupling there is.
+ * - Consecutive words join to exactly the id (`git hub App` spells github).
+ *   The join has to end where a word ends: letters that run on into the next
+ *   word are two words meeting by accident, so `Team settings` does not spell
+ *   teams and `Plan empty` does not spell plane.
+ *
+ * A word that merely contains the id (`scriptsEntry` holds `sentry` across its
+ * two words) is not a mention, and a gate that failed on it would refuse an
+ * integration over a word core never wrote. Words never join across two
+ * pieces, so an identifier and the string beside it cannot spell an id
  * between them.
  */
 export function mentions(pieces, id) {
   return pieces.some((piece) => {
     const words = wordsOf(piece);
     for (let start = 0; start < words.length; start += 1) {
-      let joined = "";
-      for (let end = start; end < words.length; end += 1) {
-        joined += words[end];
-        if (joined.length >= id.length) {
-          if (joined.startsWith(id)) return true;
-          break;
-        }
+      if (words[start].startsWith(id)) return true;
+      let joined = words[start];
+      for (let next = start + 1; next < words.length && id.startsWith(joined); next += 1) {
+        joined += words[next];
+        if (joined === id) return true;
       }
     }
     return false;

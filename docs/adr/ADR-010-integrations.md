@@ -415,17 +415,20 @@ These were open to the S1 executor. Each is a two-way door.
   operations scripts, end-to-end suites, static files).
   `scripts/` is release and gate tooling, where the Arthur tenant repository
   is not the Arthur provider, and `changelog/` and `docs/` are prose. A
-  mention is a word, or a run of consecutive words, that starts with the id,
-  in any case, in the path or in one piece of what the source spells: an
-  identifier, a string, template or regular expression literal, or the text
-  of its JSX. Words split at punctuation and at case changes, so `"github"`,
-  `GITHUB_TOKEN`, `githubClient` and `GitHub` are one coupling written four
-  ways, and a provider's own package that runs the id into more letters
-  (`mem0ai`, `@notionhq/client`, `jira-client`) is a mention too, while the
-  letters `sEntry` inside `scriptsEntry` are not (until 2026-09-22 the rule
-  was a plain substring, which refused an integration called sentry over 32
-  files that never named it; for one day after that it was whole words only,
-  which let `mem0ai` through). The rule is one sentence, `MENTION_RULE` in
+  mention is one word that starts with the id, or consecutive words that
+  join to exactly the id, in any case, in the path or in one piece of what
+  the source spells: an identifier, a string, template or regular expression
+  literal, or the text of its JSX. Words split at punctuation and at case
+  changes, so `"github"`, `GITHUB_TOKEN`, `githubClient`, `GitHub` and
+  `git hub` are one coupling written five ways, and a provider's own package
+  that runs the id into more letters (`mem0ai`, `@notionhq/client`,
+  `jira-client`) is a mention too, while the letters `sEntry` inside
+  `scriptsEntry` and the words `Team settings` are not (until 2026-09-22 the
+  rule was a plain substring, which refused an integration called sentry
+  over 32 files that never named it; for one day after that it was whole
+  words only, which let `mem0ai` through; for one more day a join could end
+  inside a word, so `Team settings` spelled teams and `as an alternative`
+  asana). The rule is one sentence, `MENTION_RULE` in
   the gate, which the gate prints with every failure, the scaffold with every
   refusal and the integration guide quotes. A core file that does not parse
   fails the gate rather than being read by the parser's error recovery.
@@ -2783,7 +2786,7 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
-| 2026-09-22 | S12 | `IssueTrackerQueryRule`, carried by a tracker's runtime as `issueTrackerQueries`, required exactly when the manifest declares `issue_tracker`; conformance codes `issue_tracker_queries_missing` and `issue_tracker_queries_undeclared` | The investigate block's query template is written in the tracker's own language, and core kept a copy of JQL's quoting to check it at save time. The copy knew only double quotes, so it refused valid JQL (`summary ~ 'fix)'`) and saved templates Jira's adapter then dropped at run time, when the block searched without them and nobody was told. The rule is the tracker's: a pure function of the text, reached without a connection (the shape `VcsHandleIdentity` set), which the adapter applies before it sends a query and core asks when a definition is saved, and only when exactly one usable tracker is connected. Not additive for a tracker, whose runtime must now carry it: Jira and the SDK fixture do in the same change, and no manifest field changes. |
+| 2026-09-22 | S12 | `IssueTrackerQueryRule`, carried by a tracker's runtime as `issueTrackerQueryRule`, required exactly when the manifest declares `issue_tracker`; conformance codes `issue_tracker_query_rule_missing` and `issue_tracker_query_rule_undeclared` | The investigate block's query template is written in the tracker's own language, and core kept a copy of JQL's quoting to check it at save time. The copy knew only double quotes, so it refused valid JQL (`summary ~ 'fix)'`) and saved templates Jira's adapter then dropped at run time, when the block searched without them and nobody was told. The rule is the tracker's: a pure function of the text, reached without a connection (the shape `VcsHandleIdentity` set), which the adapter applies before it sends a query and core asks when a definition is saved, and only when exactly one usable tracker is connected. Not additive for a tracker, whose runtime must now carry it: Jira and the SDK fixture do in the same change, and no manifest field changes. |
 | 2026-09-22 | S13 | `memory` designed and unreserved: `MemoryAdapter` with `recall` and `observe`, the optional `MemoryStoreAdapter` behind `adapter.store`, and `MemorySubject`, `MemoryScope`, `MemoryEntry`, `MemoryRecall`, `MemoryObservation`, `MemoryObserveRequest`, `MemoryWrite`, `MemoryFailure`, `MemoryStoreListing` and the stored-document types | The capability's port, reserved in S0 for this stage. Additive: a reserved id becoming providable makes nothing that compiled stop compiling. THE RUN-FACING HALF IS OBSERVATIONS IN, RENDERING OUT. "Read the document, merge it and write it back with the version you read" is a shape only our own store can implement, because a hosted engine does the merging itself and that merging is the product: Mem0 runs supersede and merge over what is added, Zep invalidates the edge a new fact contradicts. "Add, update by id, delete by id" is the opposite failure, where two runs both add and nobody reconciles. So core says what a run learned and asks what is known, and today's pure functions (parse, dedup, retract, stamp, evict, compare and swap) moved into the built-in provider. THE ADMIN HALF IS A SECOND INTERFACE, because listing, reading and erasing a stored document is a different caller with a different need, and conflating them is how the id-shaped port returns. It is optional: an engine that can search but not enumerate serves runs perfectly well, and core then says the store cannot be listed here rather than showing an empty one. `MemoryWrite.stored` is acceptance, not read-after-write: Mem0 answers an add with an event id to poll and Zep with 202 and a task id. Two decisions a provider may ignore and stay correct: `derived` marks an observation nothing can re-derive once its run is over, and `exclude` asks the provider to leave out what the caller already holds, so "the same thing said twice" stays one judgement. |
 | 2026-09-21 | S11 | `IntegrationManifest.repositories`, with `host` and `nestedPaths`, and the type `IntegrationRepositoryShape` | Core branched on the name `github` in three places that decide nothing about credentials: which provider a pasted link belongs to, where a repository path ends inside that link, and whether `owner/name` is well formed. A fourth provider would have had to be added to each. Optional and absent by default, and a provider that declares nothing gets the general case (any host, paths may nest), so every manifest written before this is unchanged. |
 | 2026-09-21 | S11 | `RepositorySkillSource` and `RepositorySkillTreeEntry`, and the optional `skillSource()` on `VcsIntegrationAdapter` | The harness skill importer held a second GitHub API client inside core, with the four provider calls it needs already behind an interface. Those four are the port now; everything a skill import decides (which paths are containers, what a valid `SKILL.md` is, how an artifact is hashed, what is persisted) stays core's. `getFiles` answers `Uint8Array` rather than Node's `Buffer` because this entry is bundled for a browser. Optional: an adapter without it simply cannot serve a skill import, and core says so naming the provider. |

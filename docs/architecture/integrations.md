@@ -70,18 +70,22 @@ from the repository root.
    before writing anything, an id the SDK reserves, one an integration
    already has, and one that core source already spells where no allowlist
    row covers it, because the core-reference gate would fail your first run
-   on every such file. Core is `apps/worker`, `apps/dashboard` and
-   `packages`, as git lists them, minus what `scripts/gates/core-references.json`
-   excludes (tests, generated files, applied migrations, end-to-end suites,
-   operations scripts). The gate's rule, which it prints with every failure
-   and the scaffold with every refusal:
+   on every such file. What the gate reads as core, and what it counts as
+   spelling an id, in the words it prints with every failure and the
+   scaffold with every refusal:
 
-   > Core spells a provider id where a word starts with it, in any case, in a
-   > file's path or in one identifier, string, template, regular expression
-   > or piece of JSX text; words split at punctuation and at case changes, so
+   > Core is apps/worker, apps/dashboard, packages, as git lists them, minus
+   > every path matching an `exclude` pattern in
+   > scripts/gates/core-references.json.
+   >
+   > Core spells a provider id where one word starts with it, or where
+   > consecutive words join to exactly the id, in any case, in a file's path
+   > or in one identifier, string, template, regular expression or piece of
+   > JSX text; words split at punctuation and at case changes, so
    > GITHUB_TOKEN, githubClient, GitHub, jira-client and mem0ai each spell
-   > their id, while the letters sEntry inside scriptsEntry spell nothing.
-   > Comments and the text of a className or style attribute are not read.
+   > their id, while scriptsEntry does not spell sentry and Team settings
+   > does not spell teams. Comments and the text of a className or style
+   > attribute are not read.
 
    The refusal names the files. Where one is not about your provider (sample
    data, a URL on a host that merely starts with the word), add the id to an
@@ -178,7 +182,7 @@ context and returns the port's adapter.
 
 | Capability | Port (in `integrations/sdk`) | Providers at once | Served today by | Read first |
 |---|---|---|---|---|
-| `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueries` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. |
+| `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueryRule` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. |
 | `vcs` | `VCSAdapter` (`vcs.ts`) | many, chosen per repository | GitHub, GitLab | `integrations/gitlab`: a provider chosen per repository, self-hosted, with nested paths. `integrations/github`: a credential that is not a token (an App id, an installation id and a private key, read in `auth.ts`). A `vcs` manifest also declares `repositories` (host and whether paths nest). |
 | `messaging` | `MessagingAdapter` (`messaging.ts`) | one | Slack | `integrations/slack`: one active provider, run notifications in one thread per ticket, a slash command. |
 | `memory` | `MemoryAdapter` (`memory.ts`) | one | built-in, in core | `apps/worker/src/memory/builtin/adapter.ts`, and "Memory" below. |
@@ -193,7 +197,7 @@ admin disables the one they do not want.
 
 **A tracker also says how it reads a query an author typed.** The investigate
 block's query template is written in the tracker's own language, so a runtime
-that serves `issue_tracker` carries `issueTrackerQueries: { problem(query) }`
+that serves `issue_tracker` carries `issueTrackerQueryRule: { problem(query) }`
 (`IssueTrackerQueryRule`), required by the type and by conformance: why the
 tracker would not run the query, in a sentence for the author, or `null`.
 Core asks it when a definition is saved, without a connection, and only while

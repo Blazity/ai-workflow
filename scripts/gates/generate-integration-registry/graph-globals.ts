@@ -14,8 +14,9 @@ import ts from "typescript";
  * - A manifest runs in the browser (the dashboard), in the cockpit's server
  *   and inside the Workflow DevKit's VM (the flow bundle). The VM is the
  *   narrowest, so its environment is the language (`lib.es2023`) plus exactly
- *   what the DevKit puts on the VM's global, less the names that are there
- *   only as a stub that throws or as a shim for the bundle.
+ *   what the DevKit puts on the VM's global, less what is there only as a
+ *   stub that throws, a shim for the bundle or a seeded stand-in
+ *   (`REFUSED_IN_THE_VM`).
  * - A dashboard entry runs in the browser and in the cockpit's server, so its
  *   environment is the browser's (`lib.es2023` with the DOM). `process` is not
  *   in it: in the server it is this deployment's environment, `WORKER_BASE_URL`
@@ -45,7 +46,6 @@ export const WORKFLOW_VM_GLOBALS = [
   "atob",
   "btoa",
   "console",
-  "crypto",
   "structuredClone",
 ] as const;
 
@@ -65,6 +65,8 @@ export const REFUSED_IN_THE_VM: Readonly<Record<string, string>> = {
   clearTimeout: THROWS_IN_THE_VM,
   clearInterval: THROWS_IN_THE_VM,
   clearImmediate: THROWS_IN_THE_VM,
+  crypto:
+    "The Workflow DevKit's VM answers its randomUUID and getRandomValues from a generator seeded per run, so a value a manifest drew from it would be one thing in the flow bundle and another in the dashboard. A manifest is data.",
 };
 
 /**
@@ -78,6 +80,19 @@ const DIFFERS_IN_THE_VM: Readonly<Record<string, string>> = {
   "Math.random":
     "The Workflow DevKit's VM seeds it per run, so the value differs between the flow bundle and the dashboard.",
 };
+
+/**
+ * Globals every graph is refused, because through them a file reaches what the
+ * check cannot see: a global named by a string, or text run as code.
+ */
+const REACHES_PAST_THE_CHECK: Readonly<Record<string, string>> = {
+  globalThis: "It reaches any global by a name the check cannot follow; use the global by its own name.",
+  eval: "It runs text the check cannot read, which is a way to reach a global this file may not use.",
+  Function: "It builds code from text the check cannot read, which is a way to reach a global this file may not use.",
+};
+
+const DECLARE_REASON =
+  "A declare statement describes a runtime this file is not given: the check would take its word for a global that is not there. Import what you need, or write it out.";
 
 export const ENVIRONMENT_LIBS: Readonly<Record<GraphEnvironment, readonly string[]>> = {
   manifest: ["lib.es2023.d.ts"],
@@ -109,7 +124,17 @@ export type GlobalUse = {
  */
 const VM_DECLARATIONS = "/__integration-graph-globals__/workflow-vm-globals.d.ts";
 const CONTROL = "/__integration-graph-globals__/control.ts";
-const CONTROL_NAMES = ["process", "Buffer", "require"];
+/**
+ * Names the control must fail to resolve, one per family of diagnostic the
+ * check relies on: Node's own globals (a hint to install `@types/node`), a
+ * name nothing declares (the plain one) and, where the DOM is not in the
+ * library, `document` (a hint to add it). A TypeScript upgrade that renamed a
+ * family would turn the check blind; the control makes it fail instead.
+ */
+const CONTROL_NAMES: Readonly<Record<GraphEnvironment, readonly string[]>> = {
+  manifest: ["process", "Buffer", "require", "undeclaredGraphControl", "document"],
+  dashboard: ["process", "Buffer", "require", "undeclaredGraphControl"],
+};
 
 const libraryFiles = new Map<string, ts.SourceFile | undefined>();
 
@@ -128,7 +153,7 @@ function compilerOptions(environment: GraphEnvironment): ts.CompilerOptions {
 }
 
 function virtualSources(environment: GraphEnvironment): Map<string, string> {
-  const sources = new Map([[CONTROL, `export {};\n${CONTROL_NAMES.map((name) => `void ${name};`).join("\n")}\n`]]);
+  const sources = new Map([[CONTROL, `export {};\n${CONTROL_NAMES[environment].map((name) => `void ${name};`).join("\n")}\n`]]);
   if (environment === "manifest") {
     sources.set(VM_DECLARATIONS, WORKFLOW_VM_GLOBALS.map((name) => `declare var ${name}: any;`).join("\n"));
   }
@@ -197,14 +222,59 @@ function lineOf(file: ts.SourceFile, position: number): number {
   return file.getLineAndCharacterOfPosition(position).line + 1;
 }
 
+/** Whether a statement only describes a runtime: `declare const`, `declare global` and the like. */
+function isAmbient(node: ts.Node): boolean {
+  return ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword);
+}
+
+/** The member names read off `object`: `object.x`, `object["x"]` and `const { x } = object`. */
+function membersRead(object: ts.Identifier): string[] {
+  const parent = object.parent;
+  if (ts.isPropertyAccessExpression(parent) && parent.expression === object) return [parent.name.text];
+  if (ts.isElementAccessExpression(parent) && parent.expression === object && ts.isStringLiteralLike(parent.argumentExpression)) {
+    return [parent.argumentExpression.text];
+  }
+  if (ts.isVariableDeclaration(parent) && parent.initializer === object && ts.isObjectBindingPattern(parent.name)) {
+    return parent.name.elements.map((element) => {
+      const key = element.propertyName ?? element.name;
+      return ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : "";
+    });
+  }
+  return [];
+}
+
+/**
+ * A record's own entry, never one it inherits. `n.toLocaleString()` resolves
+ * into the library like a global does, and a plain lookup would find
+ * Object.prototype's `toLocaleString` in any of these lists.
+ */
+function own(record: Readonly<Record<string, string>>, key: string): string | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
+/** Every declare statement in a file, reported once each, without looking inside. */
+function ambientUses(file: ts.SourceFile, local: string): GlobalUse[] {
+  const uses: GlobalUse[] = [];
+  const visit = (node: ts.Node): void => {
+    if (isAmbient(node)) {
+      uses.push({ file: local, line: lineOf(file, node.getStart(file)), name: "a declare statement", reason: DECLARE_REASON });
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return uses;
+}
+
 /**
  * Every use, in the given files, of a global the environment does not give
- * them, plus every use of `globalThis`, which reaches any global by a string
- * the compiler cannot follow, and in a manifest every use of what the VM makes
+ * them, plus what reaches past the check in every graph (`globalThis`, `eval`,
+ * `Function`, a `declare` statement) and, in a manifest, what the VM makes
  * differ (`Date`, `Math.random`).
  *
- * Throws when the control file resolves a Node global: then something put
- * Node's declarations in the program and the answer would be wrong.
+ * Throws when the control file resolves a name it must not and no declare
+ * statement in the graph explains it: then something put declarations in the
+ * program that the answer does not account for.
  */
 export function unavailableGlobals(
   files: readonly string[],
@@ -213,7 +283,16 @@ export function unavailableGlobals(
 ): GlobalUse[] {
   const program = createGraphProgram(files, environment);
   const checker = program.getTypeChecker();
+  const sources = files.map((path) => {
+    const file = program.getSourceFile(path);
+    if (!file) throw new Error(`The globals check could not read ${path}.`);
+    return { file, local: relative(repositoryRoot, path).replaceAll("\\", "/") };
+  });
 
+  // A `declare global` in the graph is the one way the graph itself can
+  // declare a Node global, so it is reported for what it is before the
+  // control could blame Node's declarations for it.
+  const ambient = sources.flatMap(({ file, local }) => ambientUses(file, local));
   const control = program.getSourceFile(CONTROL)!;
   const controlMissing = new Set(
     program
@@ -221,41 +300,33 @@ export function unavailableGlobals(
       .filter((diagnostic) => UNRESOLVED_NAME.has(diagnostic.code) && diagnostic.start !== undefined)
       .map((diagnostic) => identifierAt(control, diagnostic.start!)?.text),
   );
-  const leaked = CONTROL_NAMES.filter((name) => !controlMissing.has(name));
+  const leaked = CONTROL_NAMES[environment].filter((name) => !controlMissing.has(name));
   if (leaked.length > 0) {
+    if (ambient.length > 0) return ambient;
     throw new Error(
-      `The globals check resolved ${leaked.join(", ")} in a program that declares no Node globals, so Node's declarations reached it and it cannot tell what the ${environment} environment lacks.`,
+      `The globals check resolved ${leaked.join(", ")}, which nothing in the ${environment} environment declares, so declarations it does not account for reached its program and it cannot tell what that environment lacks.`,
     );
   }
 
-  const uses: GlobalUse[] = [];
-  for (const path of files) {
-    const file = program.getSourceFile(path);
-    if (!file) throw new Error(`The globals check could not read ${path}.`);
-    const local = relative(repositoryRoot, path).replaceAll("\\", "/");
+  const uses: GlobalUse[] = [...ambient];
+  for (const { file, local } of sources) {
     for (const diagnostic of program.getSemanticDiagnostics(file)) {
       if (!UNRESOLVED_NAME.has(diagnostic.code) || diagnostic.start === undefined) continue;
       const identifier = identifierAt(file, diagnostic.start);
       if (!identifier || isTypeOnly(identifier)) continue;
-      const reason = environment === "manifest" ? REFUSED_IN_THE_VM[identifier.text] : undefined;
+      const reason = environment === "manifest" ? own(REFUSED_IN_THE_VM, identifier.text) : undefined;
       uses.push({ file: local, line: lineOf(file, diagnostic.start), name: identifier.text, ...(reason ? { reason } : {}) });
     }
     const visit = (node: ts.Node): void => {
+      if (isAmbient(node)) return;
       if (ts.isIdentifier(node) && !isTypeOnly(node) && isGlobal(checker, program, node)) {
-        if (node.text === "globalThis") {
-          uses.push({
-            file: local,
-            line: lineOf(file, node.getStart(file)),
-            name: "globalThis",
-            reason: "It reaches any global by a name the check cannot follow; use the global by its own name.",
-          });
-        } else if (environment === "manifest") {
-          const name =
-            node.text === "Math" && ts.isPropertyAccessExpression(node.parent) && node.parent.name.text === "random"
-              ? "Math.random"
-              : node.text;
-          const reason = DIFFERS_IN_THE_VM[name];
-          if (reason) uses.push({ file: local, line: lineOf(file, node.getStart(file)), name, reason });
+        const line = lineOf(file, node.getStart(file));
+        const past = own(REACHES_PAST_THE_CHECK, node.text);
+        if (past) uses.push({ file: local, line, name: node.text, reason: past });
+        else if (environment === "manifest") {
+          const name = node.text === "Math" && membersRead(node).includes("random") ? "Math.random" : node.text;
+          const reason = own(DIFFERS_IN_THE_VM, name);
+          if (reason) uses.push({ file: local, line, name, reason });
         }
       }
       ts.forEachChild(node, visit);
