@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-21
+Last-verified: 2026-09-22
 
 # ADR-010: Integrations
 
@@ -80,11 +80,17 @@ What constrains the answer, all true today:
    a package moved. The migration itself changes step files, so every stage
    that adds, moves, renames or deletes a `"use step"` or `"use workflow"`
    file drains the runs in flight through it first.
-6. **The context is the only thing an integration receives**: its resolved
+6. **The context is the only thing core hands an integration**: its resolved
    connection, an HTTP client with timeout, retry and redaction, a logger, the
    run and node identity while a block executes, the capabilities it declared,
-   and a core-owned `llm`. No database, no process environment, no worker
-   import. Reason: anything more couples integrations to worker internals and
+   and a core-owned `llm`. No database handle, no process environment, no
+   worker import is handed to it. That is a rule about what is handed, not a
+   boundary on what integration code can reach: it runs in the worker's and
+   the dashboard's processes, where global `fetch`, `process.env` and its own
+   dependencies need no import from us, and nothing is sandboxed. Integration
+   code is trusted build-time code we review; the gates are against coupling,
+   not against a hostile package (corrected in S14, see "The guide, decided
+   in S14"). Reason: anything more couples integrations to worker internals and
    every internal change becomes a change to every integration. The context
    was designed from the inventory in Appendix A, not from first principles;
    after S0 it changes only additively, recorded in the change log below. The
@@ -131,7 +137,7 @@ What constrains the answer, all true today:
    a preview disabling production, a site mixed with another site's token).
 10. **Built-ins live in core.** An implementation that needs core storage,
     such as built-in memory, is a core module registered as a provider, not an
-    `integrations/*` package. Reason: an integration gets no database.
+    `integrations/*` package. Reason: an integration is handed no database.
 11. **Availability comes from the catalog.** The block contract resolver keeps
     its pure shape; its context becomes integration states and capability
     providers, and "this block needs integration X or capability Y" comes from
@@ -299,6 +305,14 @@ integration package depends on it.
   cannot turn a cancellation into a success or an ordinary failure. This is a
   requirement on S4's generic step. `ctx.signal` aborts on cancellation, on
   budget and near the invocation ceiling; `http` and `llm` are bound to it.
+  **Correction, 2026-09-22 (S14): the last two sentences describe a
+  requirement that was not delivered.** Every context core builds carries a
+  plain deadline (`AbortSignal.timeout`: 240 s for a block, 20 s for a
+  connection test and a page reader, 120 s for a webhook, 30 s for a
+  capability resolution), tied to neither a cancellation nor a budget;
+  `ctx.llm` is not bound to it; and nothing in the context raises a run-control
+  error, so the generic step can only let through one an executor throws. The
+  SDK's comments say so now.
 - **An integration whose fields are all optional must not read Connected by
   itself.** A manifest may declare only optional fields, and a complete
   environment would then be vacuously complete on every deployment, so a card
@@ -440,6 +454,12 @@ DSN, private key, API key, signing key, connection string) without
 format; an unknown or reserved capability, declared or required; a declared
 capability without an adapter; an implementation for something the manifest
 does not declare; and a reserved runtime slot that is filled.
+
+The registry's conformance suite (`integrations/registry/conformance.test.ts`)
+adds what a manifest and a runtime object cannot show: the four files an
+integration needs, the dependencies it may declare, variable names long
+enough for MCP to redact, and, since S14, no `"use step"` or `"use workflow"`
+directive in any source file of the package.
 
 ## Consequences
 
@@ -1676,14 +1696,15 @@ dashboard pages are built from, and the boundaries gate holds them to it.
 | No router, internal link or redirect | Where somebody is in the product is the product's to decide. `ExternalLink` leaves to the provider, in a new tab, with `noreferrer noopener`. |
 | No inputs, selects or submitting buttons | A page has no write seam in this build, and a control that does nothing when clicked is worse than no control. The stage that gives pages a write seam brings the controls with it. |
 | No `className` on any primitive | The look of a primitive is the product's. A page composes primitives with its own elements and writes Tailwind classes, arbitrary values included, on those. |
-| A page is handed `{ integrationId }` and nothing else | Its props are the contract, and a narrow one is what keeps the next five stages from each inventing a different way in. What that is NOT is a sandbox: see below. |
+| A page is handed `{ integrationId }` and nothing else (S8 added `data`, what its own reader returned) | Its props are the contract, and a narrow one is what keeps the next five stages from each inventing a different way in. What that is NOT is a sandbox: see below. |
 
 ### What a contributed page can actually reach
 
 Say this plainly, because S14 hands it to an author outside this team.
 
 A contributed page is a Server Component compiled into the dashboard and run in
-its process. Its props carry the integration id and nothing else, and there is
+its process. Its props carry the integration id and, since S8, `data`, what
+its own reader returned (see "What a contributed page can read"), and there is
 no session, no database handle and no worker client in them. It could still
 reach `process.env`, call global `fetch`, or use any dependency it declares:
 nothing here is a sandbox, and building one would mean a separate process or an
@@ -2670,6 +2691,57 @@ lookup against it, with a second unknown provider connected at the same time so
 that "the repository's provider" and "the only provider" are different
 sentences. A registry holding exactly the two we ship proves nothing here,
 because a surviving branch on a known name passes that.
+
+## The guide, decided in S14
+
+The guide for an author outside this team is
+[docs/architecture/integrations.md](../architecture/integrations.md). Its
+reader has our source and nobody to ask, so everything it promises is either
+held by code or corrected here.
+
+- **The template is a working integration, and the scaffold copies it.**
+  `pnpm run new:integration -- <id>` (`scripts/gates/new-integration.ts`)
+  copies `integrations/_template` with the template's names replaced. It
+  refuses, before writing, an id the generator cannot register, one the SDK
+  reserves, one an integration has, and one core source already spells: the
+  core-reference gate matches an id as a substring of core's code, and `acme`
+  or `zep` would fail the author's first run on files they cannot touch. It
+  installs and regenerates nothing and prints the commands that do, because
+  both write outside the new package. `scripts/ci/new-integration.test.ts`
+  holds that what it writes passes the generator, the typecheck and
+  conformance untouched.
+- **The template was changed where it taught the wrong thing.** Its
+  `dashboard.tsx` named the environment expression in a comment, which the
+  generator matches as text, so a copy made as the old README described was
+  refused by `gen:integrations`. Its block took a required parameter with no
+  default, which the editor cannot set, so the block could not be published
+  from the editor; it takes an input now. Its connection test answered every
+  non-2xx with a refusal, which turns a provider outage during Test into a
+  Failing connection; it throws for anything that is not about the
+  credential now. Its page reads what its own reader returned.
+- **The guide's code is compiled.** Every TypeScript sample in it names its
+  file, and `scripts/ci/integration-guide-samples.test.ts` compiles them
+  against this commit's SDK and runs conformance on the ones that form an
+  integration, so an SDK change that breaks a sample fails CI (ADR-008).
+- **A workflow directive in an integration is refused.** The template's README
+  said so and nothing held it: the worker's discovery test scans
+  `apps/worker` only. The registry's conformance suite now scans every source
+  file of every integration package.
+- **What was corrected in this record**: decision 6 (what is handed is not
+  what is reachable), the `ctx.signal` requirement of S0 (never delivered),
+  and the S7 page props (S8 added `data`). The SDK's comments on the context,
+  `FatalError`, the health check's `critical`, a page and a webhook refusal's
+  `reason` were corrected in the same change.
+
+Left open, each found while writing the guide and each said in it as it is:
+
+| What | Where |
+|---|---|
+| No control chooses between two providers of a `one` capability; the refusal tells an admin to disable one | `engine/definition/integration-availability.ts` |
+| The `issue_tracker` and `memory` capabilities compare no run pin: the check exists and no caller passes one | `engine/support/issue-tracker-runtime.ts`, `engine/support/memory-runtime.ts` |
+| `ctx.llm` records no usage against the block and is not bound to `ctx.signal` | `engine/support/integration-capabilities.ts` |
+| The GitHub, GitLab and Jira connection tests return a refusal for a network failure, and Arthur's for a 429, which demotes a working connection on a blip | `integrations/{github,gitlab,jira,arthur}/worker.ts` |
+| The webhook route removes `legacyBotLogin` and overwrites `botLogin` in every integration's connection, by key name | `routes/webhooks/[id].post.ts` |
 
 ## Change log
 

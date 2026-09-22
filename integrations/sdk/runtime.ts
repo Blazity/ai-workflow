@@ -95,8 +95,9 @@ interface IntegrationRuntimeBase<M extends IntegrationManifest> {
    * What each of this integration's pages reads, keyed by the page id its
    * manifest declares. A page is a component in the dashboard's process with
    * no session, no database and no client of ours in its props, so this is the
-   * only way it sees anything: core resolves the connection, calls the reader
-   * on the server, and hands the page what it returned.
+   * only way it sees anything of ours or of its connection: core resolves the
+   * connection, calls the reader on the server, and hands the page what it
+   * returned.
    *
    * Read-only and optional per page. A reader receives the ordinary context
    * and returns JSON, which is what reaches the browser, so nothing it returns

@@ -139,8 +139,9 @@ export type IntegrationWebhookReception =
     }
   /**
    * Refused. `status` is the provider's language for it: a bad or stale
-   * signature is 401, a configuration that is missing is 503. `reason` is for
-   * our log, not for the sender.
+   * signature is 401, a configuration that is missing is 503. The route
+   * answers with `reason` as the status message, so it reaches the sender:
+   * keep it to what you would tell them.
    */
   | { readonly kind: "refused"; readonly status: number; readonly reason: string };
 

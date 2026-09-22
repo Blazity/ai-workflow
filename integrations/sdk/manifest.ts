@@ -144,15 +144,20 @@ export interface IntegrationHealthCheck {
   readonly id: string;
   readonly label: string;
   readonly description: string;
-  /** A failing critical check turns the whole integration Failing. */
+  /**
+   * A failing critical check makes the integration's section on the health
+   * page Down; a failing check that is not critical makes it Degraded. Neither
+   * changes whether the integration is usable: that is the connection's status
+   * alone, so a probe never stops a run.
+   */
   readonly critical: boolean;
 }
 
 /**
- * A screen of the integration's own: one horizontal tab in its sidebar
- * section, at `/integrations/<integration id>/<page id>`. The React side of a
- * page is designed in S7; a manifest declares the tab now so the card and the
- * sidebar can say what connecting unlocks.
+ * A screen of the integration's own: one horizontal tab in its area, at
+ * `/integrations/<integration id>/<page id>`. The component is the one
+ * `dashboard.tsx` declares under the same id (`@integrations/host-ui`), and
+ * what it shows comes from the runtime's `api[<page id>]`.
  */
 export interface IntegrationPage {
   /** Lowercase words joined by hyphens. `connection` is the core tab and is refused. */

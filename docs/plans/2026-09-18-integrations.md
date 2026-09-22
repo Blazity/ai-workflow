@@ -729,6 +729,52 @@ one's fate:
 | 10 | The fixture integration would ship to production and the tenant | Plan corrected: decision 20, fixtures behind a build flag |
 | A5 | Tools visible only when connected leave MCP sessions stale | Plan corrected: always listed, typed failure when unavailable |
 
+## Verification happens on production, after the merge
+
+Decided on 2026-09-22. The "on demo" halves of the S10 to S15 definitions of
+done move to production, after the merge, because demo is not an isolated
+environment: its `/health` reports `databaseEnv: production` and the same
+`databaseFingerprint` (`d1995828824d`) as production. A deploy of this branch to
+demo would run its migration on the production database and write connection
+rows production reads the moment it runs this code, so demo would be a
+production change without the review a merge gets.
+
+The order is therefore: S15, the whole-branch review, a total drain of running,
+awaiting and parked runs on production, the merge (which deploys production and
+runs the migration), and then, on production, one pass through every "on demo"
+item of S10 to S15: every integration Connected with its source shown, a ticket
+run end to end, a pull request review triggered by a real webhook, a check
+failure that starts and one that does not, memory on the built-in provider, and
+Mem0 connected by the operator's own key in the connection form, used by a run,
+and disconnected again with the built-in store unchanged.
+
+## Every stage starts from current documentation
+
+Added on 2026-09-22, and binding on every stage still open (S14, S15, R1) and on
+every agent that works on one: executor, worker, reviewer and skeptic alike.
+
+- **Before writing or judging code against a library, SDK, API or CLI, read its
+  current documentation**: `ctx7 library <name> "<question>"` for the library
+  id, then `ctx7 docs <id> "<question>"`, one query per concept, and as many as
+  the stage needs. Check the version this repository pins, because the answer
+  is version-shaped. Keep reading while working: a flag, a config key, a method
+  signature or a status code not read today is read before it is used.
+- **For a provider integration that includes the provider's own reference**:
+  authentication, webhook payloads and their signatures, rate limits, error
+  codes, and what an add or a delete actually returns. The adapter is written
+  against that page, and a fixture is only as true as the page it was recorded
+  from. When `ctx7` has no entry, the provider's published docs are read
+  directly, and the report says which source was used.
+- **The report lists what was looked up and what changed because of it.** "No
+  lookup, this stage touched no external API" is an answer; silence is not.
+- **Why this is a rule and not advice.** Every defect on this branch that cost a
+  review round and came from outside our own code was knowable from a
+  documentation page: production running zod 4 while tests pin zod 3, the
+  Workflow DevKit refusing Node modules in workflow scope, whether GitHub
+  redelivers a failed webhook. An agent that feels sure about an API is exactly
+  the agent whose memory of it is stale, so the lookup happens by default, not
+  when doubt arrives.
+
 ## Stages
 
 Jira: epic [AIW-405](https://blazity.atlassian.net/browse/AIW-405). Stage
@@ -740,7 +786,7 @@ Order and concurrency: S0, S1, S2 in sequence. S4 and S5 run in parallel after
 S2. S3 and S6 run in parallel after S4 (their files are disjoint: MCP against
 the dashboard). S7 after S6. Then S8, S9, S10, S11, S12 in sequence, because
 each of them edits the engine's agent workflow or regenerates the same
-catalogs. S14 after S12, R1 after S14.
+catalogs. S14 after S12, S15 after S14. R1 was dropped on 2026-09-22 (see its row).
 
 Later phase (Jakub, 2026-09-18: Arthur and the existing providers first,
 memory engines after): S13 after R1, S15 after S13.
@@ -780,7 +826,7 @@ S9 impact completion, 2026-09-21: disconnect and a save that would move the conn
 | S12 | Jira is an integration and the ticket lifecycle runs on the capability | issue tracker port | `integrations/jira/**`; `apps/worker/src/adapters/issue-tracker/**`; `apps/worker/src/services/triggers/jira/**`, `services/triggers/polling/**`, `services/dispatch/**`, `services/clarifications/**`, `services/approvals/**`, `services/tickets/**`, `services/run-lifecycle/**`, `services/manual-dispatch/**`, `services/mcp/**`; Jira references in `apps/worker/src/engine/**`; `apps/worker/src/routes/webhooks/jira.post.ts`; the issue tracker group in `packages/contracts/settings-registry.ts` | opus | tight | yes | yes | no | Drain; guard tests green; recorded-payload tests for the webhook and tests for the poll path; the stored column values on production are unchanged before and after the deploy; on production: a ticket moved into the AI column starts a run by webhook and by poll, a clarification answered in a comment resumes it, a failure posts its comment, plan approval works; the columns are edited as issue tracker settings; core-reference gate green for `jira` |
 | S14 | A developer can add an integration from the guide alone | documentation and template | `docs/architecture/integrations.md`, `integrations/README.md`, `integrations/_template/**`, the scaffold script, `CONTEXT.md`, `docs/index.md`, the `AGENTS.md` routing row, a changelog entry | opus | open | yes | no | no | The docs status gate passes; the scaffold produces a package that passes conformance and typecheck untouched; a reader with no repository knowledge can name every step from manifest to connected integration; the guide covers the capability table, the one-step rule, the context, sources and secrets, dashboard pages with the host UI package, and MCP tools |
 | S15 | An external memory engine written from the guide alone proves the guide | the guide as an interface | `integrations/<engine>/**` (Mem0 is the first candidate because it has a hosted API with an API key and an open source server; Zep/Graphiti is equally valid), guide corrections | opus | open | yes | yes | no | The executor receives only the guide and the SDK; every question they had to ask elsewhere becomes a guide fix in the same stage; on demo with the engine's key: memory switched to it, an agent run writes and reads memory there, switching back to built-in finds built-in memory unchanged (INT-061 to INT-064, INT-130) |
-| R1 | The Arthur tenant runs on the new shape | release | release artefacts only | opus | tight | no | no | no | The tenant's operator is warned with the date; its parked and in-flight runs are listed and drained; the upgrade preflight passes; its workflow definitions are re-authored; its integrations show the environment as their source and Connected; one real ticket run completes end to end in the tenant |
+| R1 | ~~The Arthur tenant runs on the new shape~~ | release | none | none | none | no | no | no | **Dropped on 2026-09-22.** The Arthur pilot has ended and no release to the tenant is planned. `integrations/arthur` (the Arthur Engine tracing provider) stays in the product like any other integration; only the tenant release is gone. |
 
 S10 implementation audit, 2026-09-21: GitLab ships from
 `integrations/gitlab` and core resolves VCS by repository through the

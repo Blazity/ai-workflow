@@ -13,6 +13,7 @@
     "typecheck:ci": "tsc -p scripts/ci/tsconfig.json",
     "gen:blocks": "tsx scripts/gates/generate-block-catalog.ts",
     "gen:integrations": "tsx scripts/gates/generate-integration-registry.ts",
+    "new:integration": "tsx scripts/gates/new-integration.ts",
     "test": "pnpm -r test",
     "test:workflow-sdk": "pnpm --filter worker test:workflow-sdk",
     "test:e2e": "pnpm --filter worker test:e2e",

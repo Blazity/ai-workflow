@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-20
+Last-verified: 2026-09-22
 
 # AGENTS.md
 
@@ -7,7 +7,7 @@ AI Workflow turns engineering events (a Jira ticket entering a column, a pull
 request event, a webhook, a schedule) into inspectable agent runs. A stored,
 versioned workflow definition decides what a run does; the worker
 (`apps/worker`, Nitro plus the Vercel Workflow DevKit) executes it and talks to
-Jira, GitHub, GitLab, Slack and the sandboxed coding agents; the dashboard
+the integrations under `integrations/` and the sandboxed agents; the dashboard
 (`apps/dashboard`, Next.js) authors definitions and shows runs.
 
 This file is a routing table. It says which document to open, and carries only
@@ -23,6 +23,7 @@ to `docs/archive/agent-notes/`; size ceilings: `.claude/context-budget.tsv`.
 | Dashboard visual language, tokens, shared primitives | [DESIGN.md](DESIGN.md) |
 | Evidence, closing a ticket, a release | [docs/delivery-gates.md](docs/delivery-gates.md), the `gate-ladder` skill |
 | Workflow definitions, blocks, bindings, triggers, loops, validation | [docs/architecture/workflow-definition.md](docs/architecture/workflow-definition.md) |
+| Writing or changing an integration | [docs/architecture/integrations.md](docs/architecture/integrations.md) |
 | Repository script groups and the checks blocks run | [docs/architecture/repository-scripts.md](docs/architecture/repository-scripts.md) |
 | Telling users what changed | [changelog/README.md](changelog/README.md) |
 | Why the code is shaped this way | [docs/adr/README.md](docs/adr/README.md) |
@@ -53,6 +54,9 @@ it on a matching read, other agents open it themselves.
 
 ## How to work here
 
+- Read current docs before writing or judging code against a library, SDK,
+  API or CLI, for the pinned version: `ctx7 library <name> "<q>"`, then
+  `ctx7 docs <id> "<q>"`. Feeling sure is no reason to skip it.
 - State assumptions before implementing. If two readings are possible, name
   both instead of silently picking one.
 - Write the minimum that solves the problem. No speculative abstraction, no

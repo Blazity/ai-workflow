@@ -8,9 +8,15 @@ import type {
 import type { IntegrationRunState } from "./run-state";
 
 /**
- * What an integration receives from core. It is the only thing it receives:
- * no database, no process environment, no worker module. Core builds it for
- * every call, so a value here is always current (a rotated secret included).
+ * What core hands an integration, and the only thing it hands it: no database
+ * handle, no reading of the process environment on its behalf, no worker
+ * module. That is a statement about what is handed, not about what integration
+ * code can reach: it runs in the worker's process, where global `fetch`,
+ * `process.env` and its own dependencies need no import from us. It is trusted
+ * code we review, and everything it needs from an operator comes through
+ * `connection`, which is what makes the value follow the source an admin
+ * chose, the run's pin and the redaction. Core builds the context for every
+ * call, so a value here is always current (a rotated secret included).
  *
  * Two shapes:
  * - `IntegrationContext`: what a capability adapter, a connection test and a
@@ -42,20 +48,19 @@ export interface IntegrationContext<M extends IntegrationManifest> {
    */
   readonly webhookUrl?: string;
   /**
-   * Aborts when core gives up on this work: the run was cancelled or ran out
-   * of budget, the invocation is near its time ceiling, or a connection test
-   * or a webhook request took too long. Every request through `http` and every
-   * `llm` call is already bound to it; pass it to anything else that waits.
-   *
-   * An adapter gets the signal of whatever core is doing when it builds the
-   * adapter, so a capability called from a webhook route cannot wait past the
-   * route's own deadline.
+   * A deadline, set by whatever core is doing when it builds this context: a
+   * block has 240 seconds, a connection test and a page reader 20, a webhook
+   * request 120, `beginRun` 60, a health probe about 4, and a capability
+   * adapter 30 from the moment core resolved it (for memory, shared by every
+   * call in that step). It is not tied to a run being cancelled or running out
+   * of budget. Every request through `http` is bound to it, and a `signal`
+   * passed in a request's options is replaced by this one; `llm` is not bound
+   * to it. Pass it to anything else that waits.
    *
    * Integration code never has to recognise core's run-control errors (a
-   * cancelled run, an exhausted budget). Core records one when it raises it
-   * through this context and raises it again after the executor settles, so
-   * an executor that catches every error cannot turn a cancellation into a
-   * success or an ordinary failure.
+   * cancelled run, an exhausted budget). Nothing in this context raises one
+   * today, and one thrown out of an executor is let through by the generic
+   * step rather than reported as the block's own failure.
    */
   readonly signal: AbortSignal;
 }
@@ -74,7 +79,10 @@ export interface IntegrationRunIdentity {
   readonly runId: string;
   /** The node id in the workflow definition. */
   readonly nodeId: string;
-  /** 1 on the first attempt; higher when core retries the block. */
+  /**
+   * 1 the first time the graph runs this node; higher when it runs it again,
+   * inside a Loop. Core never retries an executor that started.
+   */
   readonly attempt: number;
   /**
    * What the run is about, the same value `beginRun` was given: the ticket
@@ -187,9 +195,9 @@ export type IntegrationLogFields = Readonly<Record<string, unknown>>;
 
 /**
  * Structured generation with a model core chooses (the run's default model)
- * and pays for (usage is recorded against the block). Each call is bounded
- * under the function's invocation ceiling and by `signal`, so a block that
- * makes several calls shares one budget and a late call gets less time.
+ * and pays for. Each call is bounded under the function's invocation ceiling
+ * (`apps/worker/src/infra/llm.ts`); it is not bound to `signal`, and its usage
+ * is not yet recorded against the block.
  */
 export interface IntegrationLlm {
   /** Resolves with output the schema accepted; rejects when the model's output does not parse. */
