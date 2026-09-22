@@ -227,8 +227,11 @@ integration package depends on it.
   `run`, `llm` and `capabilities` exist only in the block context. Everything
   else (a capability adapter, a connection test, a health probe) receives the
   same `IntegrationContext`: the connection, `http`, `log` and a `signal`. The
-  adapter gets the signal too, so a capability called from a webhook route
-  cannot outlive the route's own deadline.
+  signal is the context's lifetime, not a per-call deadline: an adapter built
+  for a webhook request gets the request's deadline, so a capability called
+  from the route cannot outlive it, while an adapter core holds for a stretch
+  of work (a poll pass, a run's attachment downloads) gets one that never
+  aborts on its own, and each request is bounded by its own timeout instead.
 - **Widening a name is refused at the manifest.** Every later check rests on
   literal types, so a manifest that annotated a block `: IntegrationBlockManifest`
   or built its fields elsewhere would silently switch them off: `blocks: {}`
@@ -297,8 +300,15 @@ integration package depends on it.
   run-control error when it raises one through the context and raises it
   again after the executor settles, so an executor that catches everything
   cannot turn a cancellation into a success or an ordinary failure. This is a
-  requirement on S4's generic step. `ctx.signal` aborts on cancellation, on
-  budget and near the invocation ceiling; `http` and `llm` are bound to it.
+  requirement on S4's generic step. `ctx.signal` is the context's lifetime and
+  aborts when core stops waiting on the work: a connection test, a health
+  probe, a block (a fixed deadline under the invocation ceiling) or a webhook
+  request past its deadline, or a memory provider past the budget core gives
+  it. It does NOT abort when a run is cancelled or its run budget is spent:
+  nothing wires those to it today, and integration code learns of either only
+  when core rethrows after the executor settles. `http` and `llm` are bound to
+  it. (Corrected 2026-09-22: this line used to promise cancellation and budget,
+  which no code ever delivered.)
 - **An integration whose fields are all optional must not read Connected by
   itself.** A manifest may declare only optional fields, and a complete
   environment would then be vacuously complete on every deployment, so a card
@@ -2678,6 +2688,8 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-22 | review fixes | `readProviderFailure`, `refusedOrThrow` and `ProviderFailure` (`provider-failure.ts`) | Which failure is a refused configuration and which is a provider that gave no verdict was decided by each integration, and GitHub, GitLab, Jira and Slack all caught every error and returned `{ ok: false }`, so an outage during a Test turned a working card Failing; the template taught a 5xx as a refusal. The rule now has one home: a 4xx other than 408 and 429 (and other than a 403 that says to retry, which is GitHub's spent rate limit) refuses, `FatalError` and `IssueTrackerNotFoundError` refuse, and everything else is no verdict and throws. Provider vocabulary on top of HTTP (a Slack error code) stays the integration's to translate into those two meanings. Additive. |
+| 2026-09-22 | review fixes | `ctx.http` retries a write after a 429, and a thrown error keeps its class and its string, number and boolean fields | A 429 is the provider saying it did nothing, so repeating a write after the wait cannot do it twice; Slack's own client used to wait out every rate limit and the move to `ctx.http` lost that, so a burst dropped notifications. A write whose body is a stream is still sent once. The redacted copy of an error used to be a plain `Error`, which was harmless while only `ctx.http` made one; core now redacts every capability adapter's errors at one boundary (`services/integrations/usable.ts`), and core decides by `instanceof IssueTrackerNotFoundError`, `status` and `code`. Behavioural, not a type change: a caller that relied on a write never being repeated after a 429 sets `retries: 0`. |
 | 2026-09-22 | S13 | `memory` designed and unreserved: `MemoryAdapter` with `recall` and `observe`, the optional `MemoryStoreAdapter` behind `adapter.store`, and `MemorySubject`, `MemoryScope`, `MemoryEntry`, `MemoryRecall`, `MemoryObservation`, `MemoryObserveRequest`, `MemoryWrite`, `MemoryFailure`, `MemoryStoreListing` and the stored-document types | The capability's port, reserved in S0 for this stage. Additive: a reserved id becoming providable makes nothing that compiled stop compiling. THE RUN-FACING HALF IS OBSERVATIONS IN, RENDERING OUT. "Read the document, merge it and write it back with the version you read" is a shape only our own store can implement, because a hosted engine does the merging itself and that merging is the product: Mem0 runs supersede and merge over what is added, Zep invalidates the edge a new fact contradicts. "Add, update by id, delete by id" is the opposite failure, where two runs both add and nobody reconciles. So core says what a run learned and asks what is known, and today's pure functions (parse, dedup, retract, stamp, evict, compare and swap) moved into the built-in provider. THE ADMIN HALF IS A SECOND INTERFACE, because listing, reading and erasing a stored document is a different caller with a different need, and conflating them is how the id-shaped port returns. It is optional: an engine that can search but not enumerate serves runs perfectly well, and core then says the store cannot be listed here rather than showing an empty one. `MemoryWrite.stored` is acceptance, not read-after-write: Mem0 answers an add with an event id to poll and Zep with 202 and a task id. Two decisions a provider may ignore and stay correct: `derived` marks an observation nothing can re-derive once its run is over, and `exclude` asks the provider to leave out what the caller already holds, so "the same thing said twice" stays one judgement. |
 | 2026-09-21 | S11 | `IntegrationManifest.repositories`, with `host` and `nestedPaths`, and the type `IntegrationRepositoryShape` | Core branched on the name `github` in three places that decide nothing about credentials: which provider a pasted link belongs to, where a repository path ends inside that link, and whether `owner/name` is well formed. A fourth provider would have had to be added to each. Optional and absent by default, and a provider that declares nothing gets the general case (any host, paths may nest), so every manifest written before this is unchanged. |
 | 2026-09-21 | S11 | `RepositorySkillSource` and `RepositorySkillTreeEntry`, and the optional `skillSource()` on `VcsIntegrationAdapter` | The harness skill importer held a second GitHub API client inside core, with the four provider calls it needs already behind an interface. Those four are the port now; everything a skill import decides (which paths are containers, what a valid `SKILL.md` is, how an artifact is hashed, what is persisted) stays core's. `getFiles` answers `Uint8Array` rather than Node's `Buffer` because this entry is bundled for a browser. Optional: an adapter without it simply cannot serve a skill import, and core says so naming the provider. |
