@@ -21,6 +21,8 @@ import type {
   IntegrationState,
 } from "@shared/contracts";
 
+import { CockpitCtx } from "@/components/cockpit/context";
+
 import { ConnectionScreen } from "./[id]/connection/connection-screen";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -835,6 +837,73 @@ test("another tab changing an integration makes this screen read the server agai
   });
 
   assert.ok(refreshes > 0, "the screen asks the server what is true now");
+});
+
+test("a reload or a closed tab asks before it takes a half-typed value", (t) => {
+  // The shell's own guard covers a move inside the cockpit; leaving the
+  // document is the browser's, and only a beforeunload listener makes it ask.
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    writable: true,
+    value: new EventTarget(),
+  });
+  t.after(() => {
+    if (previous) Object.defineProperty(globalThis, "window", previous);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+  const leave = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    (globalThis as unknown as { window: EventTarget }).window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+
+  const root = render(t);
+  assert.equal(leave(), false, "nothing typed, nothing to lose, no prompt");
+
+  const url = inputs(root).find((node) => node.props.type === "url");
+  assert.ok(url);
+  type(url, "https://half.example");
+  assert.equal(leave(), true, "the browser asks before the typed value is lost");
+});
+
+test("the way back to the list goes through the cockpit's guard, not around it", async (t) => {
+  // A plain link is a full document navigation, which the shell never sees.
+  const moves: string[] = [];
+  let renderer!: ReturnType<typeof create>;
+  act(() => {
+    renderer = create(
+      <AppRouterContext.Provider value={ROUTER as never}>
+        <CockpitCtx.Provider
+          value={{ navigate: (href: string) => (moves.push(href), false) } as never}
+        >
+          <ConnectionScreen integration={integration()} writes={{ allowed: true }} canManage />
+        </CockpitCtx.Provider>
+      </AppRouterContext.Provider>,
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+  const back = renderer.root.find(
+    (node) => node.type === "a" && text(node).includes("Integrations"),
+  );
+  let prevented = false;
+  await act(async () => {
+    back.props.onClick?.({
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      preventDefault() {
+        prevented = true;
+      },
+      stopPropagation() {},
+    });
+  });
+
+  assert.deepEqual(moves, ["/integrations"]);
+  assert.ok(prevented, "the browser's own navigation was handed to the guard");
+  assert.equal(back.props.href, "/integrations", "still a real link for cmd-click and a new tab");
 });
 
 test("a change in another tab while the admin is typing keeps what was typed", async (t) => {

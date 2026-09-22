@@ -15,9 +15,11 @@ import type {
   IntegrationWriteAccess,
 } from "@shared/contracts";
 
+import { useCockpit } from "@/components/cockpit/context";
 import { Button, CkChip, Field, Input, Switch, Textarea, Modal } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
-import { trackUnsavedSettings } from "@/lib/settings/unsaved";
+import { browserHandlesClick } from "@/lib/cockpit/navigation";
+import { useUnsavedWork } from "@/lib/settings/use-unsaved-work";
 import {
   publishIntegrationChange,
   useIntegrationChangeRefresh,
@@ -103,17 +105,29 @@ function isConflict(
   return "error" in body && body.error === "integration_version_conflict";
 }
 
+const INTEGRATIONS_HREF = "/integrations";
+
 /**
  * The way back, in the shape the run trace already uses for the same job
  * (`screens/trace.tsx`): an arrow, the name of the list, and no chrome. A link
  * rather than that screen's button, because this one changes the URL and so has
  * to survive a middle click and a bookmark.
+ *
+ * A plain click goes through the cockpit's `navigate`, the way a sidebar entry
+ * does: the anchor alone is a full document navigation, which walked past the
+ * guard that asks before a half-typed token is thrown away.
  */
 function BackToIntegrations() {
+  const { navigate } = useCockpit();
   return (
     <Button
       variant="text"
-      href="/integrations"
+      href={INTEGRATIONS_HREF}
+      onClick={(event) => {
+        if (browserHandlesClick(event)) return;
+        event.preventDefault();
+        navigate(INTEGRATIONS_HREF);
+      }}
       className="self-start border-0 bg-transparent p-0 font-mono text-[11px] uppercase tracking-[0.04em] text-mariner no-underline hover:underline"
     >
       ← Integrations
@@ -242,15 +256,10 @@ export function ConnectionScreen({
     enabled: !dirty,
     onSuppressed: () => setChangedElsewhere(true),
   });
-  // The cockpit's own guard: leaving this screen with a half-typed token, by a
-  // sidebar entry, a tab of this area or a spotlight jump, asks first. The form
-  // did not register when this screen stood alone, because nothing but a
-  // sidebar entry could take somebody off it; S7 put a tab strip directly above
-  // it, which is one click away from the field.
-  useEffect(
-    () => trackUnsavedSettings(`integration:${integration.id}`, dirty),
-    [integration.id, dirty],
-  );
+  // Leaving with a half-typed token asks first: by a sidebar entry, a tab of
+  // this area, a spotlight jump or the link back (the cockpit's guard), and by
+  // a reload or a closed tab (the browser's).
+  useUnsavedWork(`integration:${integration.id}`, dirty);
 
   function typeInto(key: string, value: string) {
     touched.current.add(key);

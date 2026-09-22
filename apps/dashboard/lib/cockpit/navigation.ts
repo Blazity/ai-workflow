@@ -14,6 +14,22 @@
  * cockpit's refresh loop may touch this screen.
  */
 
+/**
+ * Whether a click on an in-cockpit link belongs to the browser: a modified or
+ * non-primary click opens a tab or a window, and the link is a real anchor so
+ * that it can. A plain click is the cockpit's, and goes through its guarded
+ * `navigate` instead of leaving the document.
+ */
+export function browserHandlesClick(event: {
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+  readonly button: number;
+}): boolean {
+  return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
+}
+
 /** One integration as the chrome needs it: name, pages, and whether it is in use. */
 export interface CockpitIntegration {
   readonly id: string;
