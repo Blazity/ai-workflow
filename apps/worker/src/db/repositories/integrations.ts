@@ -272,8 +272,11 @@ export function saveIntegrationVersionStatement(input: SaveIntegrationVersionInp
         },
         source = ${takesOver ? sql`'stored'` : sql`${integrationConnections}.source`},
         last_test_status = ${activates ? sql`${input.test.status}` : sql`${integrationConnections}.last_test_status`},
-        last_test_reason = ${activates && input.test.reason ? sql`${input.test.reason}` : sql`${integrationConnections}.last_test_reason`},
-        last_test_message = ${activates && input.test.message ? sql`${input.test.message}` : sql`${integrationConnections}.last_test_message`},
+        -- An activating save writes its verdict whole, nulls included: a passing
+        -- test carries no reason and often no message, and keeping the old ones
+        -- put a previous failure's words beside a "passed" status.
+        last_test_reason = ${activates ? sql`${input.test.reason}::text` : sql`${integrationConnections}.last_test_reason`},
+        last_test_message = ${activates ? sql`${input.test.message}::text` : sql`${integrationConnections}.last_test_message`},
         last_test_at = ${activates ? sql`now()` : sql`${integrationConnections}.last_test_at`},
         last_test_fingerprint = ${activates ? sql`${input.test.fingerprint}` : sql`${integrationConnections}.last_test_fingerprint`},
         updated_by = ${input.actorId},
