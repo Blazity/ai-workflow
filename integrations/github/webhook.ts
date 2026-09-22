@@ -8,7 +8,7 @@ import type {
   TriggerEvent,
   VcsOpaqueHandle,
 } from "@integrations/sdk";
-import { isOurOwnVcsComment } from "@integrations/sdk";
+import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
 
 type GitHubContext = IntegrationContext<typeof manifest>;
@@ -31,17 +31,6 @@ type GitHubContext = IntegrationContext<typeof manifest>;
  *   knows on its own, that the sender is the automation account, stays here.
  * - **Whether the repository is enabled.** The catalog is core's.
  */
-
-
-/**
- * Names the post-PR gate creates its own checks under, in both generations.
- *
- * Core used to hand the configured step names in as well. It no longer does and
- * nothing is lost: every configured name is built by `gateCheckNameAliases`
- * from these two prefixes (`engine/support/workflow-naming.ts:46`), so the
- * prefix test already covers the list it was paired with.
- */
-const MANAGED_CHECK_PREFIXES = ["AI Workflow / ", "blazebot / "] as const;
 
 const FAILED_CONCLUSIONS: ReadonlySet<string> = new Set(["failure", "timed_out"]);
 
@@ -271,7 +260,10 @@ export function normalizeGitHubEvent(
     const check = body?.check_run;
     if (!check) return null;
     if (!FAILED_CONCLUSIONS.has(check.conclusion)) return null;
-    if (isManagedCheckName(check.name)) return null;
+    // Our own gate's check. Every configured gate name is built from the
+    // SDK's two prefixes (`gateCheckNameAliases` in core), so the prefix rule
+    // covers the configured list as well.
+    if (isManagedGateCheckName(check.name)) return null;
     if (typeof check.id !== "number") return null;
     const prs = check.pull_requests;
     if (!Array.isArray(prs) || prs.length === 0) return null;
@@ -528,15 +520,6 @@ function mapPullRequest(pr: any, repo: any): PrTriggerPayload {
     author: pr.user?.login ?? "unknown",
     isDraft: !!pr.draft,
   };
-}
-
-function isManagedCheckName(name: unknown): boolean {
-  return (
-    typeof name === "string" &&
-    MANAGED_CHECK_PREFIXES.some(
-      (prefix) => name.startsWith(prefix) && name.length > prefix.length,
-    )
-  );
 }
 
 /**

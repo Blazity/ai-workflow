@@ -164,6 +164,9 @@ export {
 
 export {
   AI_WORKFLOW_MARKER_PATTERN,
+  GATE_CHECK_NAME_PREFIX,
+  LEGACY_GATE_CHECK_NAME_PREFIX,
+  isManagedGateCheckName,
   isOurOwnVcsComment,
   isReviewLedgerWorkItem,
   selectReviewLedgerWorkItems,

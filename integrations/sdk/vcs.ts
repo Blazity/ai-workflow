@@ -299,6 +299,29 @@ function unquoted(body: string): string {
 }
 
 /**
+ * The prefixes the post-PR gate names its own checks with: the current
+ * product's, and the one checks created before the rename still carry.
+ *
+ * One home for both sides of the rule. Core creates checks under these names
+ * (`gateCheckName` in the worker), and every VCS integration drops a failed
+ * check carrying one before it becomes a trigger: acting on our own check
+ * would have the gate chase its own tail, and two copies of the list had
+ * already started to disagree about the bare prefix.
+ */
+export const GATE_CHECK_NAME_PREFIX = "AI Workflow / ";
+export const LEGACY_GATE_CHECK_NAME_PREFIX = "blazebot / ";
+
+/** A check this product's post-PR gate created, in either generation. */
+export function isManagedGateCheckName(name: unknown): name is string {
+  return (
+    typeof name === "string" &&
+    [GATE_CHECK_NAME_PREFIX, LEGACY_GATE_CHECK_NAME_PREFIX].some(
+      (prefix) => name.startsWith(prefix) && name.length > prefix.length,
+    )
+  );
+}
+
+/**
  * Did this workflow write this comment, judged from its body alone?
  *
  * WHOSE LINE, not just which marker. "Quote reply" copies the body it answers

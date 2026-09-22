@@ -7,7 +7,7 @@ import type {
   PrTriggerPayload,
   TriggerEvent,
 } from "@integrations/sdk";
-import { isOurOwnVcsComment } from "@integrations/sdk";
+import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
 import { failedPipelineChecks, GITLAB_CI_PRODUCER } from "./pipeline-checks";
 
@@ -137,9 +137,6 @@ export function normalizeGitLabEvents(
 export interface NormalizeGitLabOptions {
   deliveryId?: string;
   botLogin?: string;
-  botUsername?: string;
-  reviewStates?: readonly string[];
-  gateCheckNames?: readonly string[];
 }
 
 export function normalizeGitLabEvent(
@@ -193,13 +190,13 @@ export function normalizeGitLabEvent(
 
   if (eventName === "Note Hook") {
     const attrs = body?.object_attributes;
-    const reviewStates = options.reviewStates ?? ["commented"];
+    // Always "commented": a note is the only review GitLab delivers. Whether a
+    // workflow wants one is core's question, asked of the deployed trigger.
     if (
       body?.object_kind !== "note" || !attrs || !body?.merge_request || !body?.project ||
       attrs.action !== "create" || attrs.noteable_type !== "MergeRequest" ||
       attrs.system === true || attrs.internal === true || attrs.confidential === true ||
-      !reviewStates.includes("commented") ||
-      sameLogin(producer, options.botLogin ?? options.botUsername) ||
+      sameLogin(producer, options.botLogin) ||
       // Ours only when the author wrote the marker, not when they quoted one of
       // ours back at us: the same rule the GitHub comment paths use, and the
       // reason a reviewer's "this still does not work" reply is not silently
@@ -226,13 +223,7 @@ export function normalizeGitLabEvent(
     const failed = Array.isArray(body?.builds)
       ? body.builds.filter((build: any) => build?.status === "failed")
       : [];
-    const configuredGateNames = new Set(options.gateCheckNames ?? []);
-    const external = failed.filter((build: any) => {
-      const name = String(build?.name ?? "");
-      return !configuredGateNames.has(name) &&
-        !name.startsWith("AI Workflow / ") &&
-        !name.startsWith("blazebot / ");
-    });
+    const external = failed.filter((build: any) => !isManagedGateCheckName(build?.name));
     if (failed.length > 0 && external.length === 0) return null;
     const checks = failedPipelineChecks(attrs.id ?? null, external);
     return {
