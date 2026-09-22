@@ -479,6 +479,19 @@ test("run state is declared and served together", () => {
   hasIssue(servedOnly.manifest, servedOnly.runtime, "run_state_undeclared", "runtime.beginRun");
 });
 
+test("a tracker says how it reads an authored query, and only a tracker does", () => {
+  const tracker = validIntegration();
+  tracker.manifest.capabilities = ["messaging", "issue_tracker"];
+  tracker.runtime.capabilities = { ...tracker.runtime.capabilities, issue_tracker: () => ({}) };
+  hasIssue(tracker.manifest, tracker.runtime, "issue_tracker_queries_missing", "runtime.issueTrackerQueries");
+  tracker.runtime.issueTrackerQueries = { problem: () => null };
+  assert.ok(!codes(tracker.manifest, tracker.runtime).includes("issue_tracker_queries_missing"));
+
+  const notATracker = validIntegration();
+  notATracker.runtime.issueTrackerQueries = { problem: () => null };
+  hasIssue(notATracker.manifest, notATracker.runtime, "issue_tracker_queries_undeclared", "runtime.issueTrackerQueries");
+});
+
 test("a field a graph must read is one the block's output declares", () => {
   const fine = validIntegration();
   fine.manifest.blocks[0].output.mustRead = ["status", "count"];

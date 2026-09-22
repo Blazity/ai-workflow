@@ -46,6 +46,8 @@ export type ConformanceCode =
   | "page_reader_undeclared"
   | "run_state_missing"
   | "run_state_undeclared"
+  | "issue_tracker_queries_missing"
+  | "issue_tracker_queries_undeclared"
   | "implementation_undeclared"
   | "webhook_receive_missing"
   | "reserved_slot_used";
@@ -327,6 +329,7 @@ export function checkIntegrationConformance(
   checkHealth(declared, implemented, report);
   checkPages(declared, implemented, report);
   checkRunState(declared, implemented, report);
+  checkIssueTrackerQueries(declared, implemented, report);
   checkRuntimeSlots(implemented, report);
   return issues;
 }
@@ -693,6 +696,32 @@ function checkRunState(manifest: ParsedManifest, runtime: Runtime, report: Repor
       "run_state_undeclared",
       "runtime.beginRun",
       "The runtime has beginRun, which core calls only for a manifest that declares runState: true. Declare it, or delete the function.",
+    );
+  }
+}
+
+/**
+ * A tracker says how it reads an authored query exactly when it is a tracker.
+ * Without the rule, core saves a query the adapter will drop at run time and
+ * the author never hears; with one on an integration that is no tracker,
+ * nothing ever asks it.
+ */
+function checkIssueTrackerQueries(manifest: ParsedManifest, runtime: Runtime, report: Report) {
+  const declared = manifest.capabilities.includes("issue_tracker");
+  const rule = runtime.issueTrackerQueries;
+  const implemented = isRecord(rule) && typeof rule.problem === "function";
+  if (declared && !implemented) {
+    report(
+      "issue_tracker_queries_missing",
+      "runtime.issueTrackerQueries",
+      "The manifest declares issue_tracker, so the runtime needs issueTrackerQueries: { problem(query) } saying why the tracker would not run a query an author typed. Without it core saves a query the adapter drops at run time, and the author never hears.",
+    );
+  }
+  if (!declared && rule !== undefined) {
+    report(
+      "issue_tracker_queries_undeclared",
+      "runtime.issueTrackerQueries",
+      "The runtime has issueTrackerQueries, which core asks only of an integration that declares the issue_tracker capability. Declare it, or delete the rule.",
     );
   }
 }

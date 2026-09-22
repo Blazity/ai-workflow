@@ -158,6 +158,7 @@ export {
 export {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
+  type IssueTrackerQueryRule,
   type IssueTrackerMoveTarget,
   type IssueTrackerTransitionTarget,
   type TicketAttachment,
