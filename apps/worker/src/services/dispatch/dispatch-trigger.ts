@@ -13,6 +13,7 @@ import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { PullRequestHead, VcsOpaqueHandle } from "../../adapters/vcs/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
 import { agentWorkflow } from "../../engine/index.js";
+import { DEFAULT_REVIEW_TRIGGER_STATES } from "../../engine/blocks/trigger-pr-review/manifest.js";
 import {
   bindWorkflowOwnedPullRequestIntent,
   bindConnectedWorkflowOwnedPullRequestIntent,
@@ -487,7 +488,7 @@ function reviewStatesThatMayStartARun(
   botLogin: string | undefined,
 ): string[] {
   const configuredStates =
-    Array.isArray(params.on) && params.on.length > 0 ? params.on : ["changes_requested"];
+    Array.isArray(params.on) && params.on.length > 0 ? params.on : DEFAULT_REVIEW_TRIGGER_STATES;
   const knowsItself = normalizeVcsLogin(botLogin) !== undefined;
   return configuredStates.filter(
     (state): state is string =>

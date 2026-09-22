@@ -26,6 +26,7 @@ describe("integration bot identity deployment facts", () => {
       description: "test",
       connection: { fields: [] },
       capabilities: ["vcs"],
+      webhook: { reviewStates: ["commented"] },
       blocks: [],
       pages: [],
       health: [],
@@ -59,9 +60,9 @@ describe("integration bot identity deployment facts", () => {
     const context = workflowBlockRegistryContext(undefined, integrations);
     expect(context.vcsProviders).toEqual(["gitlab"]);
     expect(context.vcsBotIdentities).toEqual([]);
-    expect(
-      buildWorkflowBlockRegistry(context).trigger_pr_review.availability.available,
-    ).toBe(false);
+    const availability = buildWorkflowBlockRegistry(context).trigger_pr_review.availability;
+    expect(availability.available).toBe(false);
+    expect(availability.unavailableReason).toContain("require a bot username for gitlab");
   });
 
   it("accepts a dashboard legacy login only for the sole active VCS integration", () => {

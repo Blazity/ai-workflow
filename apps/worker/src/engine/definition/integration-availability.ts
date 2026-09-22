@@ -39,6 +39,8 @@ export interface IntegrationPresence {
   /** What a run pins at its start and compares at every later use. */
   readonly pin: IntegrationConnectionPin;
   readonly capabilities: readonly string[];
+  /** The states its webhook reports a review in, as its manifest declares them. */
+  readonly reviewStates: readonly string[];
 }
 
 /** One block an integration contributes, and what it needs to run. */
@@ -112,6 +114,7 @@ export function deploymentIntegrations(
       failure: state?.failure ?? null,
       pin: state?.pin ?? { integrationId: manifest.id, configFingerprint: "" },
       capabilities: [...manifest.capabilities],
+      reviewStates: [...(manifest.webhook?.reviewStates ?? [])],
     };
     byId.set(manifest.id, presence);
     for (const block of manifest.blocks) {

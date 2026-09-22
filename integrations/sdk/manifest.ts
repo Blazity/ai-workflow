@@ -33,6 +33,11 @@ export interface IntegrationManifest {
   readonly capabilities: readonly ProvidedCapabilityId[];
   /** How this provider's repository paths and links are shaped, for a `vcs` integration. */
   readonly repositories?: IntegrationRepositoryShape;
+  /**
+   * What this integration's webhook reports, as data, so core can check a
+   * workflow against it without running the integration.
+   */
+  readonly webhook?: IntegrationWebhookManifest;
   readonly blocks: readonly IntegrationBlockManifest[];
   /** Screens of its own, shown as tabs next to the core Connection tab. */
   readonly pages: readonly IntegrationPage[];
@@ -80,6 +85,20 @@ export interface IntegrationRepositoryShape {
    * path is exactly the first two segments whatever follows them.
    */
   readonly nestedPaths?: boolean;
+}
+
+/** How a version-control provider reports a review. */
+export type VcsReviewState = "changes_requested" | "commented";
+
+export interface IntegrationWebhookManifest {
+  /**
+   * For a `vcs` integration: the states its webhook reports a review in. A
+   * review trigger that waits only for states none of its providers report
+   * would never start a run, so core refuses it and quotes this list. GitLab
+   * delivers a merge request note and nothing else, so it reports only
+   * `commented`. Omitted means the webhook reports no review at all.
+   */
+  readonly reviewStates?: readonly VcsReviewState[];
 }
 
 /**

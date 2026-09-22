@@ -45,6 +45,7 @@ import {
   vcsProviderSelection,
 } from "@shared/workflow-graph";
 import type { DeploymentIntegrations } from "./integration-availability.js";
+import { DEFAULT_REVIEW_TRIGGER_STATES } from "../blocks/trigger-pr-review/manifest.js";
 
 const emptyParams = z.object({}).strict();
 const agentParams = z
@@ -112,7 +113,7 @@ const v2TriggerPrChecksFailedConfiguration = z
 const v2TriggerPrReviewConfiguration = z
   .object({
     providers: vcsProviderSelection.default([]),
-    on: z.array(reviewStates).min(1).default(["changes_requested"]),
+    on: z.array(reviewStates).min(1).default([...DEFAULT_REVIEW_TRIGGER_STATES]),
     scope: prTriggerScope.default("workflow_owned"),
     maxRunsPerPr: z.number().int().min(1).max(30).default(10),
     ...triggerRateLimitParams,

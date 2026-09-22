@@ -68,6 +68,8 @@ export {
   type IntegrationManifest,
   type IntegrationPage,
   type IntegrationRepositoryShape,
+  type IntegrationWebhookManifest,
+  type VcsReviewState,
 } from "./manifest";
 
 export {

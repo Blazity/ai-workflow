@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { IntegrationContext } from "@integrations/sdk";
 import { receiveGitLabWebhook } from "./webhook";
 import type { manifest } from "./manifest";
+import { manifest as declared } from "./manifest";
 
 const recorded = {
   mergeRequest: readFileSync(
@@ -187,5 +188,20 @@ describe("a deployment that still names one legacy GitLab project", () => {
     if (result.kind !== "trigger_events") return;
     expect(result.events.length).toBeGreaterThan(0);
     expect(result.legacyGate?.workflowInput.ownerRepo).toBe("flightjs/flight-management");
+  });
+});
+
+describe("the review states the manifest declares", () => {
+  it("are exactly the states a delivery reports a review in", async () => {
+    // Core refuses a review trigger whose states none of its providers report,
+    // from this declaration alone, so it has to match what a note becomes.
+    const result = await receive("Note Hook", recorded.note);
+    expect(result.kind).toBe("trigger_events");
+    if (result.kind !== "trigger_events") return;
+    const reported = new Set(
+      result.events.flatMap((event) => (event.pr.review ? [event.pr.review.state] : [])),
+    );
+
+    expect([...reported]).toEqual([...declared.webhook.reviewStates]);
   });
 });

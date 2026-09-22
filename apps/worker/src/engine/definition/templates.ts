@@ -196,7 +196,9 @@ function reviewFixAfterPrDefinition(
         // made the template useless on a deployment that ships another, and the
         // scope below is what actually narrows this trigger.
         providers: [],
-        on: ["changes_requested"],
+        // Both states, because GitLab reports a review only as a comment: a
+        // template waiting for "request changes" alone never fires there.
+        on: ["changes_requested", "commented"],
         scope: "workflow_owned",
       },
     },
