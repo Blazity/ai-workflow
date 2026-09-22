@@ -48,7 +48,7 @@ const definition: IntegrationRuntimeDefinition<JiraManifest> = {
   },
   // The adapter's own rule for an authored query, which core asks when a
   // definition is saved, so an author hears about a query findTickets would drop.
-  issueTrackerQueries: jqlQueryRule,
+  issueTrackerQueryRule: jqlQueryRule,
   capabilities: {
     issue_tracker: (ctx) =>
       new JiraAdapter({
