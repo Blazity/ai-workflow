@@ -28,7 +28,6 @@ import {
 } from "./trigger-delivery-store.js";
 
 const testEnv = vi.hoisted(() => ({
-  GITLAB_PROJECT_ID: undefined as string | undefined,
   GITHUB_BOT_LOGIN: "github-app[bot]" as string | undefined,
   GITLAB_BOT_LOGIN: "gitlab-bot" as string | undefined,
 }));
@@ -40,9 +39,15 @@ vi.mock("../../infra/vcs-config.js", () => ({
 // reason this file needs a client mock: every other query here takes `db`.
 const dbState = vi.hoisted(() => ({ db: undefined as unknown }));
 vi.mock("../../db/client.js", () => ({ getDb: () => dbState.db }));
+const botLoginReadable = vi.hoisted(() => ({ value: true }));
 vi.mock("../vcs/index.js", () => ({
-  getVcsBotLogin: vi.fn((provider: "github" | "gitlab") =>
-    provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN),
+  readVcsBotLogin: vi.fn(async (provider: "github" | "gitlab") =>
+    botLoginReadable.value
+      ? {
+          readable: true,
+          login: provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN,
+        }
+      : { readable: false, reason: "settings unreadable" }),
 }));
 // The pin predicate is a pure helper in the same module and stays real; only the
 // network-backed directory is stubbed.
@@ -117,6 +122,7 @@ beforeEach(async () => {
   announceMock.mockReset().mockResolvedValue(undefined);
   testEnv.GITHUB_BOT_LOGIN = "github-app[bot]";
   testEnv.GITLAB_BOT_LOGIN = "gitlab-bot";
+  botLoginReadable.value = true;
 });
 
 function enabled(
@@ -212,9 +218,7 @@ function deps(overrides: Record<string, unknown> = {}) {
           })),
         }
       : {}),
-    getLatestCheckRuns: vi.fn().mockResolvedValue([]),
     issueTracker: { fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }) },
-    isRepositoryConfigured: vi.fn().mockResolvedValue(true),
     ...overrides,
   } as any;
 }
@@ -753,59 +757,79 @@ describe("provider trigger dispatch", () => {
   });
 });
 
-describe("resolveEnabledReviewStates", () => {
-  it("allows comments only when the provider bot identity is known", async () => {
-    mockGetEnabled.mockResolvedValue(
-      enabled(
-        { providers: ["github", "gitlab"], on: ["changes_requested", "commented"] },
-        "trigger_pr_review",
-      ),
-    );
-    const { resolveEnabledReviewStates } = await import("./dispatch-trigger.js");
-
-    await expect(resolveEnabledReviewStates(db, "github", undefined)).resolves.toEqual([
-      "changes_requested",
-    ]);
-    await expect(resolveEnabledReviewStates(db, "gitlab", "gitlab-bot")).resolves.toEqual([
-      "changes_requested",
-      "commented",
-    ]);
-  });
-
-  it("reads trigger configuration from a v2 definition without v1 params", async () => {
-    mockGetEnabled.mockResolvedValue({
-      definition: { id: 5, name: "PR flow" },
-      current: {
-        definitionId: 5,
-        version: 12,
-        schema: "v2",
-        definition: {
-          schemaVersion: 2,
-          nodes: [
-            {
-              id: "review-trigger",
-              type: "trigger_pr_review",
-              x: 0,
-              y: 0,
-              configuration: {
-                providers: ["gitlab"],
-                on: ["commented"],
-                scope: "workflow_owned",
-              },
-              inputs: {},
-              additionalInputs: [],
-            },
-          ],
-          edges: [],
-        },
+/**
+ * A "commented" review may start a run only while the automation account is
+ * known. The workflow comments on every pull request it works on, and without
+ * its login those comments read as a person's, so it would start a run off its
+ * own comment and answer itself.
+ */
+describe("a commented review and the automation account", () => {
+  function commentedReview(deliveryId: string): TriggerEvent {
+    return event({
+      delivery: { provider: "github", producer: "carol", deliveryId },
+      triggerType: "trigger_pr_review",
+      pr: {
+        ...event().pr,
+        review: { state: "commented", author: "carol", body: "please rename this" },
       },
     });
-    const { resolveEnabledReviewStates } = await import("./dispatch-trigger.js");
+  }
 
-    await expect(resolveEnabledReviewStates(db, "gitlab", "gitlab-bot")).resolves.toEqual([
-      "commented",
-    ]);
-    await expect(resolveEnabledReviewStates(db, "github", "github-app[bot]")).resolves.toEqual([]);
+  it("is dropped when the provider's bot login is not configured", async () => {
+    testEnv.GITHUB_BOT_LOGIN = undefined;
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any", on: ["changes_requested", "commented"] }, "trigger_pr_review"),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(commentedReview("rv-no-bot"), deps())).resolves.toEqual({
+      result: "ignored_untrusted_event",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("starts a run once the bot login is known", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any", on: ["changes_requested", "commented"] }, "trigger_pr_review"),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(commentedReview("rv-bot"), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+  });
+
+  it("answers retryably when the bot login could not be read at all", async () => {
+    botLoginReadable.value = false;
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any", on: ["changes_requested", "commented"] }, "trigger_pr_review"),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(commentedReview("rv-unreadable"), deps()),
+    ).resolves.toMatchObject({ result: "error", diagnosticId: expect.any(String) });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(getTriggerDelivery(db, "github", "rv-unreadable")).resolves.toBeNull();
+  });
+
+  it("keeps a changes-requested review eligible without a bot login", async () => {
+    const { selectEligibleEvent } = await import("./dispatch-trigger.js");
+    const review = event({
+      triggerType: "trigger_pr_review",
+      pr: {
+        ...event().pr,
+        review: { state: "changes_requested", author: "carol", body: "blocking" },
+      },
+    });
+
+    expect(
+      selectEligibleEvent(review, { on: ["changes_requested", "commented"] }, undefined),
+    ).not.toBeNull();
+    expect(
+      selectEligibleEvent(commentedReview("unit"), { on: ["commented"] }, undefined),
+    ).toBeNull();
   });
 });
 

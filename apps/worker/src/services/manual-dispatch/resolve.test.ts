@@ -39,7 +39,6 @@ vi.mock("../vcs/index.js", () => ({
 const mocks = vi.hoisted(() => ({
   getDeployedWorkflowDefinitionVersion: vi.fn(),
   getManualDispatchPullRequest: vi.fn(),
-  isConfiguredTriggerRepository: vi.fn(),
   findWorkflowOwnedPullRequest: vi.fn(),
   hasDispatchBlockingApprovalForTicket: vi.fn(),
 }));
@@ -73,7 +72,6 @@ vi.mock("../../engine/support/vcs-runtime.js", () => ({
 // helpers this module shares with automatic dispatch stay real.
 vi.mock("../dispatch/dispatch-trigger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../dispatch/dispatch-trigger.js")>()),
-  isConfiguredTriggerRepository: mocks.isConfiguredTriggerRepository,
 }));
 vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequest: mocks.findWorkflowOwnedPullRequest,
@@ -345,7 +343,6 @@ describe("manual dispatch against a definition repository pin", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mocks.getManualDispatchPullRequest.mockResolvedValue(snapshot());
-    mocks.isConfiguredTriggerRepository.mockResolvedValue(true);
     mocks.hasDispatchBlockingApprovalForTicket.mockResolvedValue(false);
     mocks.findWorkflowOwnedPullRequest.mockResolvedValue({ ticketKey: "AIW-1" });
     catalogDb = await createTestDb();

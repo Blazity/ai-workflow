@@ -14,7 +14,6 @@ export {
 export {
   dispatchTriggerEvent,
   drainOldestPendingTrigger,
-  isConfiguredTriggerRepository,
   selectEligibleEvent,
   triggerNodeParams,
 } from "./dispatch-trigger.js";

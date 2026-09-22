@@ -1,10 +1,9 @@
 import { start } from "workflow/api";
 import type {
-  VcsProviderKind,
   WorkflowBlockType,
   WorkflowDefinition,
 } from "@shared/contracts";
-import { getVcsBotLogin } from "../vcs/index.js";
+import { readVcsBotLogin } from "../vcs/index.js";
 import type { Db } from "../../db/types.js";
 import {
   IssueTrackerNotFoundError,
@@ -76,7 +75,7 @@ import {
   bindCurrentPullRequest,
   readProviderCurrentPullRequest,
 } from "../../engine/support/trigger-current-pull-request.js";
-import { vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
+import { normalizeVcsLogin, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
 import {
   readConnectedWorkflowDefinitionVersion,
   readWorkflowDefinitionVersion,
@@ -111,7 +110,6 @@ export interface DispatchTriggerDeps {
     left: VcsOpaqueHandle | undefined,
     right: VcsOpaqueHandle | undefined,
   ) => boolean;
-  isRepositoryConfigured?: (pr: PrTriggerPayload) => Promise<boolean>;
   /** Failure-injection seam; production uses deletePendingTrigger. */
   deletePending?: typeof deletePendingTrigger;
 }
@@ -198,24 +196,6 @@ export function triggerNodeParams(
 ): Record<string, unknown> {
   if (!definition) return {};
   return definition.nodes.find((node) => node.type === triggerType)?.configuration ?? {};
-}
-
-export async function resolveEnabledReviewStates(
-  db: Db | undefined,
-  provider: VcsProviderKind,
-  botLogin: string | undefined,
-): Promise<string[]> {
-  const enabled = await readEnabledDefinition(db, "trigger_pr_review");
-  if (!enabled?.current) return ["changes_requested"];
-  const params = triggerNodeParams(
-    runnableDefinitionOf(enabled.current),
-    "trigger_pr_review",
-  );
-  const providers = Array.isArray(params.providers) ? params.providers : [];
-  if (providers.length > 0 && !providers.includes(provider)) return [];
-  return selectedReviewStates(params).filter(
-    (state) => state !== "commented" || Boolean(botLogin),
-  );
 }
 
 export async function dispatchTriggerEvent(
@@ -315,20 +295,26 @@ export async function dispatchTriggerEvent(
       }
     }
 
-    const eligibleEvent = selectEligibleEvent(
-      event,
-      params,
-      event.triggerType === "trigger_pr_review"
-        ? await getVcsBotLogin(event.pr.provider)
-        : undefined,
-    );
-    if (!eligibleEvent) return { result: "ignored_untrusted_event" };
-
-    const repositoryScope = await readRepositoryScope(eligibleEvent.pr, deps);
-    if (repositoryScope.status === "unreachable") {
-      return { result: "error", diagnosticId: repositoryScope.diagnosticId };
+    let botLogin: string | undefined;
+    if (event.triggerType === "trigger_pr_review") {
+      // FAILS CLOSED. Not knowing the automation account is not the same as
+      // it having none: every review it wrote would read as a person's, so a
+      // settings read that failed answers retryably instead of guessing.
+      const reading = await readVcsBotLogin(event.pr.provider);
+      if (!reading.readable) {
+        return {
+          result: "error",
+          diagnosticId: recordIngestionFailure(
+            "trigger_bot_login_unreadable",
+            new Error(reading.reason),
+            { delivery: event.delivery, provider: event.pr.provider },
+          ),
+        };
+      }
+      botLogin = reading.login;
     }
-    if (!repositoryScope.configured) return { result: "ignored_provider" };
+    const eligibleEvent = selectEligibleEvent(event, params, botLogin);
+    if (!eligibleEvent) return { result: "ignored_untrusted_event" };
 
     const currentResult = await readCurrentPullRequest(eligibleEvent, deps);
     if (currentResult.status === "unreachable") {
@@ -425,33 +411,6 @@ async function supersedePreviousPrRun(
   };
 }
 
-async function readRepositoryScope(
-  pr: PrTriggerPayload,
-  deps: DispatchTriggerDeps,
-): Promise<
-  | { status: "ok"; configured: boolean }
-  | { status: "unreachable"; diagnosticId: string }
-> {
-  try {
-    const configured = deps.isRepositoryConfigured
-      ? await deps.isRepositoryConfigured(pr)
-      : await isConfiguredTriggerRepository(pr);
-    return { status: "ok", configured };
-  } catch (error) {
-    const diagnosticId = recordIngestionFailure(
-      "trigger_repository_scope_lookup_failed_closed",
-      error,
-      { provider: pr.provider, repoPath: pr.repoPath },
-    );
-    return { status: "unreachable", diagnosticId };
-  }
-}
-
-export async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<boolean> {
-  return Boolean(pr.provider && pr.repoPath);
-}
-
-
 export function selectEligibleEvent(
   event: TriggerEvent,
   params: Record<string, unknown>,
@@ -461,7 +420,7 @@ export function selectEligibleEvent(
     const review = event.pr.review;
     if (!review) return null;
     if (
-      !selectedReviewStates(params).includes(review.state) ||
+      !reviewStatesThatMayStartARun(params, botLogin).includes(review.state) ||
       vcsLoginsMatch(review.author, botLogin) ||
       vcsLoginsMatch(event.delivery.producer, botLogin)
     ) {
@@ -504,14 +463,26 @@ export function selectEligibleEvent(
   };
 }
 
-function selectedReviewStates(
+/**
+ * The review states the node asked for, less "commented" while the automation
+ * account is unknown.
+ *
+ * A comment is what this workflow itself writes on a pull request, and a
+ * comment body is untrusted text handed to a full-permission agent. Without
+ * the account's login ours cannot be told from a person's, so the workflow
+ * would start a run off its own comment and answer itself. A deployment that
+ * never names its bot login therefore gets changes-requested reviews only.
+ */
+function reviewStatesThatMayStartARun(
   params: Record<string, unknown>,
+  botLogin: string | undefined,
 ): string[] {
   const configuredStates =
     Array.isArray(params.on) && params.on.length > 0 ? params.on : ["changes_requested"];
+  const knowsItself = normalizeVcsLogin(botLogin) !== undefined;
   return configuredStates.filter(
     (state): state is string =>
-      state === "changes_requested" || state === "commented",
+      state === "changes_requested" || (state === "commented" && knowsItself),
   );
 }
 

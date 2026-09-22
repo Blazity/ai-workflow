@@ -20,7 +20,6 @@ import { findWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import { findConnectedWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import {
   isGateCheckName,
-  isConfiguredTriggerRepository,
   isRepositoryDispatchable,
   REPOSITORY_NOT_IN_CATALOG_REASON,
   selectEligibleEvent,
@@ -416,13 +415,6 @@ async function resolvePullRequestDispatch(
     );
   }
   const pr = snapshotToPayload(parsed.provider, parsed.repoPath, snapshot);
-  if (!(await isConfiguredTriggerRepository(pr))) {
-    throw new ManualDispatchError(
-      422,
-      "not_eligible",
-      "This repository is not accessible to the configured provider.",
-    );
-  }
   const gateCheckNames = loadPostPrGateConfig().postPrGate.steps.map(
     (step) => `blazebot / ${step.name ?? step.uses}`,
   );
