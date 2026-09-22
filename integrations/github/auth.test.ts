@@ -42,6 +42,29 @@ describe("the GitHub App private key, in every form it arrives in", () => {
     expect(reading).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
   });
 
+  // What main ran with: origin/main apps/worker/src/adapters/vcs/github-auth.ts:20-21
+  // decoded GITHUB_APP_PRIVATE_KEY with Buffer.from(value, "base64"), which
+  // skips anything outside the alphabet and needs no padding, and
+  // universal-github-app-jwt 2.2.2 (index.js:17) turned a written backslash-n
+  // back into a line break before signing. Each of these signed on main.
+  it("accepts the base64 of a .pem whose newlines were written as backslash n", () => {
+    const escaped = pem.trimEnd().split("\n").join("\\n");
+    const reading = readPrivateKey(Buffer.from(escaped, "utf8").toString("base64"));
+    expect(reading).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
+  });
+
+  it("accepts base64 whose padding was dropped", () => {
+    // A trailing line changes the length until the encoding needs padding.
+    let padded = pem;
+    while (!Buffer.from(padded, "utf8").toString("base64").endsWith("=")) padded += "\n";
+    const unpadded = Buffer.from(padded, "utf8").toString("base64").replace(/=+$/u, "");
+    expect(readPrivateKey(unpadded)).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
+  });
+
+  it("accepts base64 wrapped in the quotes a .env file puts around it", () => {
+    expect(readPrivateKey(`"${base64}"`)).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
+  });
+
   it("refuses a value that is neither, and says which two forms it wanted", () => {
     const reading = readPrivateKey("my github app key");
     expect(reading.ok).toBe(false);

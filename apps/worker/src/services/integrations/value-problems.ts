@@ -18,9 +18,12 @@ import type { IntegrationFailure, IntegrationSource } from "@shared/contracts";
  * the secret.
  */
 
-/** The SDK's problems, plus the one only a header has: a character above
- *  U+00FF, which a text field may legitimately hold until it is sent. */
-export type ValueProblem = ConnectionValueProblem | "not_header_safe";
+/**
+ * The SDK's problems, plus the two only a header has, which `ctx.http` finds
+ * when a value is sent: a line break, and a character above U+00FF. A setting
+ * may hold either until it ends up in a header.
+ */
+export type ValueProblem = ConnectionValueProblem | "header_line_break" | "header_character";
 
 export function valueProblemSentence(
   field: Pick<ConnectionField, "label" | "env">,
@@ -28,10 +31,11 @@ export function valueProblemSentence(
   source?: IntegrationSource,
 ): string {
   const what = {
-    line_break: `The ${field.label} has a line break in it, which no request can carry`,
-    not_a_url: `The ${field.label} is not a web address a request can go to; it has to start with https://`,
+    line_break: `The ${field.label} has a line break inside it, and it has to be a single line`,
+    not_a_url: `The ${field.label} is not a web address a request can go to; it has to start with https:// (or http://)`,
     not_an_integer: `The ${field.label} has to be a whole number`,
-    not_header_safe: `The ${field.label} has a character in it that no request header can carry, usually a curly quote or an invisible character pasted from a document`,
+    header_line_break: `The ${field.label} has a line break in it, which no request header can carry`,
+    header_character: `The ${field.label} has a character in it that no request header can carry, usually a curly quote or an invisible character pasted from a document`,
   }[problem];
   const fix =
     source === "environment"
@@ -49,7 +53,7 @@ export function malformedValueFailure(
   value: string,
   source: IntegrationSource,
 ): IntegrationFailure | null {
-  const problem = connectionValueProblem(value, field.format);
+  const problem = connectionValueProblem(value, field);
   return problem === null
     ? null
     : { reason: "value_malformed", message: valueProblemSentence(field, problem, source) };

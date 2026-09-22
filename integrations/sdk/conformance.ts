@@ -388,7 +388,7 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
         `${path}.default`,
         `Secret field "${field.key}" has a default; a secret in source code is a leaked secret.`,
       );
-    } else if (connectionValueProblem(field.default, field.format) !== null) {
+    } else if (connectionValueProblem(field.default, field) !== null) {
       report(
         "connection_default_invalid",
         `${path}.default`,

@@ -209,7 +209,7 @@ describe("a value that cannot be what its field is", () => {
       ok: false,
       failure: {
         reason: "value_malformed",
-        message: "The API token has a line break in it, which no request can carry. Enter it again.",
+        message: "The API token has a line break inside it, and it has to be a single line. Enter it again.",
       },
     });
   });

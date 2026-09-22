@@ -268,9 +268,10 @@ function sendableFieldsOf(
  *
  * The message names the field's label and never the value; the words are
  * `value-problems.ts`'s, so this and a card's status say the same thing. A
- * one-line value with a line break never gets here from a run or a test,
- * because reading the values already refused it; this is the platform's
- * header rule, which also holds for a value the integration composed.
+ * secret with a line break never gets here from a run or a test, because
+ * reading the values already refused it; this is the platform's header rule,
+ * and it holds for any value that ends up in a header, a setting the resolver
+ * rightly let through included.
  */
 function unsendableValue(
   target: string | URL | Request,
@@ -287,10 +288,10 @@ function unsendableValue(
     for (const field of fields) {
       if (!value.includes(field.value)) continue;
       if (["\r", "\n", "\0"].some((character) => field.value.includes(character))) {
-        return new ConnectionValueError(field.key, valueProblemSentence(field, "line_break"));
+        return new ConnectionValueError(field.key, valueProblemSentence(field, "header_line_break"));
       }
       if ([...field.value].some((character) => (character.codePointAt(0) ?? 0) > 0xff)) {
-        return new ConnectionValueError(field.key, valueProblemSentence(field, "not_header_safe"));
+        return new ConnectionValueError(field.key, valueProblemSentence(field, "header_character"));
       }
     }
   }

@@ -66,7 +66,9 @@ async function probeChannelDelivery(ctx: SlackContext): Promise<DeliveryProbe> {
     text: "System health delivery probe. If you are reading this, deleting it failed; it is safe to ignore.",
   });
   if (!scheduled.ok) {
-    return scheduled.error === null
+    // A token no request can carry is a reason the bot cannot deliver, not
+    // Slack being silent.
+    return scheduled.error === null && scheduled.kind !== "malformed"
       ? { kind: "no_verdict", cause: scheduled.cause }
       : { kind: "refused", reason: reasonOf(scheduled) };
   }
@@ -117,6 +119,12 @@ async function deleteProbeMessage(
   };
 }
 
+/** A cause as the end of a sentence: one full stop, whether or not it came
+ *  with its own. */
+function sentence(cause: string): string {
+  return /[.!?]$/u.test(cause) ? cause : `${cause}.`;
+}
+
 const definition: IntegrationRuntimeDefinition<SlackManifest> = {
   /**
    * `auth.test` is the cheapest call Slack offers, and it answers the one
@@ -131,18 +139,23 @@ const definition: IntegrationRuntimeDefinition<SlackManifest> = {
     // while an admin presses Test is not recorded as a bad token.
     const auth = await api(ctx).post<{ team?: unknown }>("auth.test", {});
     if (!auth.ok) {
-      if (auth.error === null) throw new Error(`Slack did not answer: ${auth.cause}.`);
+      // A token no request can carry is a verdict about that value, and says
+      // which field; Slack never saw it.
+      if (auth.error === null && auth.kind === "malformed") {
+        return { ok: false, reason: auth.cause, malformed: true };
+      }
+      if (auth.error === null) throw new Error(`Slack did not answer: ${sentence(auth.cause)}`);
       return { ok: false, reason: `Slack refused the bot token (${auth.error}).` };
     }
     const team = typeof auth.body.team === "string" ? auth.body.team : "your workspace";
     const delivery = await probeChannelDelivery(ctx);
     if (delivery.kind === "no_verdict") {
-      throw new Error(`Slack did not answer the delivery check: ${delivery.cause}.`);
+      throw new Error(`Slack did not answer the delivery check: ${sentence(delivery.cause)}`);
     }
     if (delivery.kind === "refused") {
       return {
         ok: false,
-        reason: `The bot cannot deliver to the configured channel: ${delivery.reason}.`,
+        reason: `The bot cannot deliver to the configured channel: ${sentence(delivery.reason)}`,
       };
     }
     return {
@@ -172,8 +185,12 @@ const definition: IntegrationRuntimeDefinition<SlackManifest> = {
         const team = typeof auth.body.team === "string" ? auth.body.team : "the workspace";
         return { status: "live", message: `Slack accepts the bot token for ${team}.` };
       }
+      if (auth.error === null && auth.kind === "malformed") return { status: "down", message: auth.cause };
       return auth.error === null
-        ? { status: "down", message: `Slack did not answer, so the token could not be checked: ${auth.cause}.` }
+        ? {
+            status: "down",
+            message: `Slack did not answer, so the token could not be checked: ${sentence(auth.cause)}`,
+          }
         : { status: "down", message: `Slack refused the bot token (${auth.error}).` };
     },
     channel: async (ctx) => {
@@ -184,12 +201,12 @@ const definition: IntegrationRuntimeDefinition<SlackManifest> = {
         case "refused":
           return {
             status: "down",
-            message: `The bot cannot deliver to the configured channel: ${delivery.reason}.`,
+            message: `The bot cannot deliver to the configured channel: ${sentence(delivery.reason)}`,
           };
         case "no_verdict":
           return {
             status: "down",
-            message: `Slack did not answer, so delivery could not be checked: ${delivery.cause}.`,
+            message: `Slack did not answer, so delivery could not be checked: ${sentence(delivery.cause)}`,
           };
       }
     },

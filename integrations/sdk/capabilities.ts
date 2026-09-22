@@ -76,6 +76,18 @@ type AdapterSurface = Omit<IntegrationCapabilityPorts, "vcs"> & { vcs: VcsIntegr
  * member lists it here in the same change, or what that adapter throws
  * reaches core unredacted. Every provided capability has an entry, so a new
  * port cannot be added without deciding.
+ *
+ * Three shapes the boundary does NOT follow, none of which a port has today;
+ * a port that grows one changes the boundary in the same change:
+ *
+ * - a member that returns an async iterator or a stream (or is an async
+ *   generator): the iterator is handed out as it is, so an error thrown while
+ *   it is read arrives unredacted. Listing it as `returns` does not help,
+ *   because the view wraps methods and not the iteration protocol.
+ * - a method that returns `this`: the caller gets the adapter itself, not its
+ *   view, and every later call through it is unwrapped.
+ * - a view handed back into an adapter method that reads a private field of
+ *   its argument: the view is not the adapter, so that read throws.
  */
 export const NESTED_ADAPTER_MEMBERS: {
   readonly [C in ProvidedCapabilityId]: NestedMembers<AdapterSurface[C]>;

@@ -209,7 +209,7 @@ describe("a value in use that cannot be what its field is", () => {
     expect(state.failure).toEqual({
       reason: "value_malformed",
       message:
-        "The API token has a line break in it, which no request can carry. Set FIXTURE_API_TOKEN again on this deployment.",
+        "The API token has a line break inside it, and it has to be a single line. Set FIXTURE_API_TOKEN again on this deployment.",
     });
     expect(JSON.stringify(state)).not.toContain("77c1");
   });
@@ -222,7 +222,7 @@ describe("a value in use that cannot be what its field is", () => {
     expect(state.failure).toEqual({
       reason: "value_malformed",
       message:
-        "The Site URL is not a web address a request can go to; it has to start with https://. Enter it again.",
+        "The Site URL is not a web address a request can go to; it has to start with https:// (or http://). Enter it again.",
     });
   });
 

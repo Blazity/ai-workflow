@@ -189,3 +189,27 @@ describe("a Jira value no request can carry", () => {
     for (const [input] of fetch.mock.calls) expect(String(input)).toContain("/_edge/tenant_info");
   });
 });
+
+describe("a Slack bot token no request header can carry", () => {
+  it("is filed as a malformed value through the real context, not as Slack being down", async () => {
+    // A curly quote pasted with the token: the resolver lets a one-line secret
+    // with no line break through, and `ctx.http` refuses it when it is sent.
+    vi.stubEnv("CHAT_SDK_SLACK_TOKEN", "xoxb-1-2-\u2019abc");
+    vi.stubEnv("CHAT_SDK_CHANNEL_ID", "C0123");
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+
+    const tested = await testIntegrationConnection({ actor: ADMIN, integrationId: "slack" });
+
+    expect(tested.test).toEqual({
+      ok: false,
+      failure: {
+        reason: "value_malformed",
+        message:
+          "The Bot token has a character in it that no request header can carry, usually a curly quote or an invisible character pasted from a document.",
+      },
+    });
+    expect(tested.integration.state.status).toBe("failing");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});

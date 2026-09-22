@@ -4,8 +4,9 @@
  * Slack answers 200 with `{ ok: false, error: "..." }` for almost everything
  * that goes wrong, so a caller that only looked at the HTTP status would read
  * "not_in_channel" as a success. One place unwraps that, and everything above
- * it sees either a body, Slack's word for what it refused, or the fact that
- * Slack gave no verdict at all.
+ * it sees either a body, Slack's word for what it refused, the fact that
+ * Slack gave no verdict at all, or that the request could not be made from
+ * the connection's values.
  *
  * Whether a failure is a verdict at all is decided here: the HTTP status by
  * the SDK's rule (`readProviderFailure`: 429 and 5xx are no verdict), and
@@ -54,7 +55,13 @@ export type SlackCall<T> =
       readonly error: null;
       readonly kind: SlackNoVerdict;
       readonly cause: string;
-    };
+    }
+  /**
+   * The request could not be made from the connection's values (core refused
+   * to send a token no header can carry): a verdict about those values that
+   * Slack never saw. `cause` names the field and never the value.
+   */
+  | { readonly ok: false; readonly error: null; readonly kind: "malformed"; readonly cause: string };
 
 /**
  * - `timeout`: no answer in time.
@@ -130,6 +137,10 @@ async function send<T>(
   try {
     response = await http.fetch(url, init);
   } catch (error) {
+    const read = readProviderFailure(error);
+    if (read.kind === "refused" && read.malformed) {
+      return { ok: false, error: null, kind: "malformed", cause: read.message };
+    }
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
       return noVerdict("timeout", "Slack did not answer in time");
     }

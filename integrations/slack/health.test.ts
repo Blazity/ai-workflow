@@ -12,7 +12,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { IntegrationContext } from "@integrations/sdk";
+import { ConnectionValueError, type IntegrationContext } from "@integrations/sdk";
 import { manifest } from "./manifest";
 import { runtime } from "./worker";
 
@@ -204,4 +204,39 @@ test("the health rows say Slack did not answer rather than blaming the token or 
   const delivery = await channel()(ctx);
   assert.equal(delivery.status, "down");
   assert.match(delivery.message!, /Slack did not answer, so delivery could not be checked/u);
+});
+
+test("a cause that ends its own sentence is not given a second full stop", async () => {
+  const { ctx } = contextWith(() => {
+    throw new Error("The connection was reset by the peer.");
+  });
+
+  await assert.rejects(runtime.testConnection(ctx), {
+    message: "Slack did not answer: The connection was reset by the peer.",
+  });
+  assert.equal(
+    (await botAuth()(ctx)).message,
+    "Slack did not answer, so the token could not be checked: The connection was reset by the peer.",
+  );
+});
+
+test("a token core would not send is a verdict about the token, not Slack being silent", async () => {
+  // What `ctx.http` throws for a token no header can carry, before anything
+  // is sent: a curly quote pasted with it, here.
+  const refusal =
+    "The Bot token has a character in it that no request header can carry, usually a curly quote or an invisible character pasted from a document.";
+  const { ctx } = contextWith(() => {
+    throw new ConnectionValueError("botToken", refusal);
+  });
+
+  assert.deepEqual(await runtime.testConnection(ctx), {
+    ok: false,
+    reason: refusal,
+    malformed: true,
+  });
+  assert.deepEqual(await botAuth()(ctx), { status: "down", message: refusal });
+  assert.deepEqual(await channel()(ctx), {
+    status: "down",
+    message: `The bot cannot deliver to the configured channel: ${refusal}`,
+  });
 });
