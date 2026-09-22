@@ -80,7 +80,7 @@ export default defineEventHandler(async (event) => {
   // connection, whose bot login field is at most a first filter; core filters
   // review authors and producers again against the resolved account (the
   // legacy single-provider login included) in `selectEligibleEvent`.
-  const botLoginFor = memoizedVcsBotLogin();
+  const readBotLogin = memoizedVcsBotLogin();
   const { legacyBotLogin: _legacyBotLogin, ...connection } = usable.ctx.connection;
   let reception;
   try {
@@ -164,7 +164,7 @@ export default defineEventHandler(async (event) => {
     // failed to act on never reads as accepted.
     let verdict: TriggerDeliveryVerdict;
     try {
-      verdict = await actOnTriggerEvents(event, id, reception, botLoginFor);
+      verdict = await actOnTriggerEvents(event, id, reception, readBotLogin);
     } catch (error) {
       observeWebhook(id, "rejected", "handler_failed");
       throw error;
@@ -254,7 +254,7 @@ async function actOnTriggerEvents(
     import("@integrations/sdk").IntegrationWebhookReception,
     { kind: "trigger_events" }
   >,
-  botLoginFor: (provider: string) => Promise<string | undefined>,
+  readBotLogin: VcsBotLoginReader,
 ): Promise<TriggerDeliveryVerdict> {
   const { getRequestSettingsSnapshot, maxConcurrentAgents } = await import(
     "../../services/settings/index.js"
@@ -288,7 +288,7 @@ async function actOnTriggerEvents(
     isWorkflowGeneratedPush({
       currentHeadSha: push.headSha,
       producer: push.pusher,
-      botIdentity: await botLoginFor(push.provider),
+      botIdentity: await knownBotLogin(readBotLogin, push.provider),
       ...(await connectedWorkflowPushNormalizationOptions({
         provider: push.provider,
         repoPath: push.repoPath,
@@ -315,6 +315,7 @@ async function actOnTriggerEvents(
       runRegistry: createConnectedTriggerRunRegistry(),
       maxConcurrentAgents: maxConcurrentAgents(settings),
       repositoryCatalog,
+      readBotLogin,
     });
     if (result.result === "error") {
       return { kind: "retry", reason: "trigger_error", diagnosticId: result.diagnosticId };
@@ -447,41 +448,53 @@ function respond(
   return response.body ?? "";
 }
 
+type VcsBotLoginReader = (
+  provider: string,
+) => Promise<{ readable: true; login: string | undefined } | { readable: false; reason: string }>;
+
 /**
  * One automation-account lookup per provider, per delivery.
  *
- * `getVcsBotLogin` resolves every connected version control integration to
+ * `readVcsBotLogin` resolves every connected version control integration to
  * decide whether a legacy single-provider login still applies, so each call is
  * a settings read. One delivery asks for the same provider once per candidate
- * event and again for the legacy gate, which was the same answer bought several
- * times inside a deadline of about three seconds. The promise is cached rather
- * than the value, so two questions in one tick share the read instead of
- * starting two.
+ * event, again inside dispatch for a review, and again for the legacy gate,
+ * which was the same answer bought several times inside a deadline of about
+ * three seconds. The promise is cached rather than the value, so two questions
+ * in one tick share the read instead of starting two.
  */
-function memoizedVcsBotLogin(): (provider: string) => Promise<string | undefined> {
-  const byProvider = new Map<string, Promise<string | undefined>>();
+function memoizedVcsBotLogin(): VcsBotLoginReader {
+  const byProvider = new Map<string, ReturnType<VcsBotLoginReader>>();
   return (provider) => {
     const pending = byProvider.get(provider);
     if (pending) return pending;
     const started = (async () => {
       const { readVcsBotLogin } = await import("../../services/vcs/index.js");
-      const reading = await readVcsBotLogin(provider);
-      // FAILS CLOSED, like the first settings read one screen up. This is a
-      // SECOND read and it can fail on its own, and a delivery acted on with
-      // an unknown automation account is how the workflow answers its own
-      // review and starts a run off its own push: every comment it made reads
-      // as somebody else's.
-      if (!reading.readable) {
-        throw createError({
-          statusCode: 503,
-          statusMessage: `The automation account for ${provider} could not be read on this deployment (${reading.reason}), so the delivery was not acted on.`,
-        });
-      }
-      return reading.login;
+      return readVcsBotLogin(provider);
     })();
     byProvider.set(provider, started);
     return started;
   };
+}
+
+/**
+ * The login, for a caller that must not act without it. FAILS CLOSED, like the
+ * first settings read one screen up: a delivery acted on with an unknown
+ * automation account is how the workflow starts a run off its own push, since
+ * every commit it made reads as somebody else's.
+ */
+async function knownBotLogin(
+  readBotLogin: VcsBotLoginReader,
+  provider: string,
+): Promise<string | undefined> {
+  const reading = await readBotLogin(provider);
+  if (!reading.readable) {
+    throw createError({
+      statusCode: 503,
+      statusMessage: `The automation account for ${provider} could not be read on this deployment (${reading.reason}), so the delivery was not acted on.`,
+    });
+  }
+  return reading.login;
 }
 
 function lowercased(headers: Record<string, string | undefined>): Record<string, string> {

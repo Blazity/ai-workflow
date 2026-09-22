@@ -725,6 +725,31 @@ describe("POST /webhooks/:id", () => {
     expect(state.botLogin.mock.calls.map(([provider]) => provider)).toEqual(["gitlab"]);
   });
 
+  it("hands dispatch the automation-account reading it already holds", async () => {
+    // A review needs the account inside dispatch as well. Reading it there on
+    // its own was one more settings read for the same answer in the same
+    // delivery, once per candidate event.
+    state.usable = [connectedGitLab()];
+    state.states = new Map([["gitlab", { enabled: true }]]);
+    state.workflowPush = { workflowOwnedPullRequest: true };
+    state.dispatch.mockImplementation(
+      async (
+        candidate: { pr: { provider: string } },
+        deps: { readBotLogin: (provider: string) => Promise<unknown> },
+      ) => {
+        await deps.readBotLogin(candidate.pr.provider);
+        return { result: "no_definition" };
+      },
+    );
+
+    const response = await app()(gitlabUpdateRequest());
+    await Promise.all(deferred);
+
+    expect(response.status).toBeLessThan(300);
+    expect(state.dispatch).toHaveBeenCalled();
+    expect(state.botLogin.mock.calls.map(([provider]) => provider)).toEqual(["gitlab"]);
+  });
+
   it("dispatches the push the predicate calls foreign", async () => {
     state.usable = [connectedGitLab()];
     state.states = new Map([["gitlab", { enabled: true }]]);

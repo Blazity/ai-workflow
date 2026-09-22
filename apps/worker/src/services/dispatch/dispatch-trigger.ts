@@ -124,6 +124,12 @@ export interface DispatchTriggerDeps {
   ) => boolean;
   /** Failure-injection seam; production uses deletePendingTrigger. */
   deletePending?: typeof deletePendingTrigger;
+  /**
+   * The automation account's login, read once for a whole delivery by the
+   * caller that holds it (the webhook route asks for pushes too). Absent, each
+   * dispatch reads it itself.
+   */
+  readBotLogin?: typeof readVcsBotLogin;
 }
 
 async function readEnabledDefinition(db: Db | undefined, triggerType: WorkflowBlockType) {
@@ -312,7 +318,7 @@ export async function dispatchTriggerEvent(
       // FAILS CLOSED. Not knowing the automation account is not the same as
       // it having none: every review it wrote would read as a person's, so a
       // settings read that failed answers retryably instead of guessing.
-      const reading = await readVcsBotLogin(event.pr.provider);
+      const reading = await (deps.readBotLogin ?? readVcsBotLogin)(event.pr.provider);
       if (!reading.readable) {
         return {
           result: "error",
