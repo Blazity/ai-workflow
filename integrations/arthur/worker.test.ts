@@ -242,10 +242,24 @@ test("the tracer's key is for its hooks, and never in the agent's own environmen
   // The agent runs customer code and whatever that code starts; before this
   // was an integration the key sat in a file only the tracer read.
   assert.ok(!JSON.stringify(setup.environment ?? {}).includes(API_KEY));
-  // A task can be found from its run, and two sandboxes of one run told apart.
-  assert.equal(setup.hookEnvironment?.AIW_RUN_ID, "run_1");
-  assert.equal(setup.hookEnvironment?.AIW_NODE_ID, "implement");
-  assert.equal(setup.hookEnvironment?.AIW_ATTEMPT, "2");
+  // A span can be traced to its run, and two sandboxes of one run told apart:
+  // OpenTelemetry's own variable, which the tracer's `Resource.create` merges.
+  // Variables of our own naming reached no span, because the tracer never
+  // read them.
+  assert.equal(
+    setup.hookEnvironment?.OTEL_RESOURCE_ATTRIBUTES,
+    "aiw.run_id=run_1,aiw.node_id=implement,aiw.attempt=2",
+  );
+  const odd = adapter.setup({
+    harness: "claude",
+    run: { runId: "run_1", subjectKey: "AWT-42" },
+    state: TASK,
+    invocation: { nodeId: "review,final=1", attempt: 1 },
+  });
+  assert.equal(
+    odd?.hookEnvironment?.OTEL_RESOURCE_ATTRIBUTES,
+    "aiw.run_id=run_1,aiw.node_id=review%2Cfinal%3D1,aiw.attempt=1",
+  );
   assert.equal(setup.files?.length, 1);
   assert.equal(setup.files?.[0]?.path, "claude_code_tracer.py");
   assert.ok((setup.files?.[0]?.contentBase64.length ?? 0) > 1000);
@@ -328,6 +342,21 @@ test("the connection test separates a refused key from an engine that is down", 
 
   const down = contextWith(() => ({ status: 503, text: "gateway" }));
   await assert.rejects(runtime.testConnection(down.ctx), /503/);
+
+  // Rate limited and timed out are the engine not answering, not the key being
+  // wrong: read as a refusal they turned a working card Failing and told the
+  // admin to check the trace endpoint.
+  for (const status of [408, 429]) {
+    const busy = contextWith(() => ({ status, text: "slow down" }));
+    await assert.rejects(runtime.testConnection(busy.ctx), new RegExp(String(status)));
+  }
+
+  const wrongPath = contextWith(() => ({ status: 404, text: "not found" }));
+  assert.deepEqual(await runtime.testConnection(wrongPath.ctx), {
+    ok: false,
+    reason:
+      "The engine answered 404 for the task API. Check that the trace endpoint ends in /api/v1/traces.",
+  });
 });
 
 test("the evals reader reports a pass rate, and zero graded as itself", async () => {

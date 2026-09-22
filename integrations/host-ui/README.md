@@ -40,22 +40,29 @@ cockpit is the Connection screen alone.
 
 ## What a page is handed
 
-`{ integrationId }`. A page shows what its own package knows: there is no
-session, no database handle and no worker client in its props, and nothing here
-writes anything.
+`{ integrationId, data }`. `data` is what your package's own reader
+(`api[<page id>]` in `worker.ts`) returned, fetched by the host on the server
+before the page rendered: `ok` with a value, `none` when the page has no
+reader, or `unavailable` with a `cause` (`worker`, `not_connected`,
+`provider`) and a reason. Read the value defensively, because the dashboard
+and the worker can be one deploy apart. There is no session, no database
+handle and no worker client in the props, and nothing here writes anything.
 
 Be clear about what that is. Your page is a Server Component compiled into the
-cockpit and run in its process, not code in a sandbox. It could reach
-`process.env`, call `fetch`, or pull in any dependency it declares. We treat an
-integration as trusted code and review it like our own, and these rules exist so
-a page does not end up coupled to our runtime by accident:
+cockpit and run in its process, not code in a sandbox. Its props are narrow;
+its reach is not: global `fetch`, the process environment and any dependency
+it declares are there without an import from us. We treat an integration as
+trusted code and review it like our own, and these rules exist so a page does
+not end up coupled to our runtime by accident:
 
-- No `next/*`, no `node:*`, no `server-only`, no `@/...`. The boundaries gate
-  refuses all four.
-- No `process.env`. The registry generator refuses it, in your entry and in
-  anything it imports from your package.
-- Bound your own fetches. Your page is what the cockpit waits on, and a
-  provider that never answers is a tab that never finishes.
+- No `next/*`, no `node:*`, no `server-only` in `dashboard.tsx`, and no `@/...`
+  anywhere in the package. The boundaries gate refuses all four.
+- No read of the process environment. The registry generator refuses the
+  expression in your entry and in anything it imports from your package. It
+  matches the source text, comments included.
+- Bound your own fetches, or better, fetch nothing and read `data`. Your page
+  is what the cockpit waits on, and a provider that never answers is a tab
+  that never finishes.
 
 If your page needs something this does not give it, that is a contract change.
 Say so rather than reaching for it; ADR-010 records where the decision belongs.

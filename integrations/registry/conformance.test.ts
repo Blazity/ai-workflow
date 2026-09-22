@@ -99,6 +99,49 @@ for (const directory of directories) {
   });
 }
 
+/**
+ * A workflow directive on its own line, matched the way the Workflow DevKit's
+ * detector and `apps/worker/src/engine/discovery-root.test.ts` match it.
+ */
+const WORKFLOW_DIRECTIVE = /^[ \t]*(['"])use (?:step|workflow)\1;?[ \t]*$/mu;
+
+function sourceFiles(directory: string): string[] {
+  const found: string[] = [];
+  const walk = (current: string) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (entry.name === "node_modules") continue;
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/\.[cm]?[jt]sx?$/u.test(entry.name)) found.push(path);
+    }
+  };
+  walk(directory);
+  return found.sort();
+}
+
+/**
+ * Core runs every integration block inside one step it owns, and nothing an
+ * integration writes may be a step or a workflow of its own. A step's identity
+ * is its module path plus its function name, so a directive in a package would
+ * tie every run suspended in it to where the package sits today: moving or
+ * renaming the integration would strand them. The worker's discovery test
+ * scans `apps/worker` only, so without this nothing would say so.
+ */
+for (const directory of directories) {
+  const name = relative(repositoryRoot, directory).replaceAll("\\", "/");
+
+  test(`${name} carries no workflow directive`, () => {
+    const offending = sourceFiles(directory)
+      .filter((path) => WORKFLOW_DIRECTIVE.test(readFileSync(path, "utf8")))
+      .map((path) => relative(repositoryRoot, path).replaceAll("\\", "/"));
+    assert.deepEqual(
+      offending,
+      [],
+      `${name} carries a "use step" or "use workflow" directive. Core runs every integration block in its own generic step, and a step's identity is its module path plus its function name, so a directive here would strand every run suspended in it the day this package moved or was renamed. Write a plain async function; long or multi-phase work belongs to core, reached through a capability.`,
+    );
+  });
+}
+
 test("the reserved environment variables hold no name an integration owns", () => {
   const owned = RESERVED_ENVIRONMENT_VARIABLES.filter((variable) =>
     variable !== "VCS_BOT_LOGIN" &&

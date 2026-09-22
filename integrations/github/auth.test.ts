@@ -42,12 +42,30 @@ describe("the GitHub App private key, in every form it arrives in", () => {
     expect(reading).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
   });
 
-  it("accepts base64 without its padding, as the environment always has", () => {
-    const reading = readPrivateKey(base64.replace(/=+$/u, ""));
+  // What main ran with: origin/main apps/worker/src/adapters/vcs/github-auth.ts:20-21
+  // decoded GITHUB_APP_PRIVATE_KEY with Buffer.from(value, "base64"), which
+  // skips anything outside the alphabet and needs no padding, and
+  // universal-github-app-jwt 2.2.2 (index.js:17) turned a written backslash-n
+  // back into a line break before signing. Each of these signed on main.
+  it("accepts the base64 of a .pem whose newlines were written as backslash n", () => {
+    const escaped = pem.trimEnd().split("\n").join("\\n");
+    const reading = readPrivateKey(Buffer.from(escaped, "utf8").toString("base64"));
     expect(reading).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
   });
 
-  it("accepts the URL-safe base64 alphabet, as the environment always has", () => {
+  it("accepts base64 whose padding was dropped", () => {
+    // A trailing line changes the length until the encoding needs padding.
+    let padded = pem;
+    while (!Buffer.from(padded, "utf8").toString("base64").endsWith("=")) padded += "\n";
+    const unpadded = Buffer.from(padded, "utf8").toString("base64").replace(/=+$/u, "");
+    expect(readPrivateKey(unpadded)).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
+  });
+
+  it("accepts base64 wrapped in the quotes a .env file puts around it", () => {
+    expect(readPrivateKey(`"${base64}"`)).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
+  });
+
+  it("accepts the URL-safe base64 alphabet, which the same decoder read", () => {
     const reading = readPrivateKey(Buffer.from(pem, "utf8").toString("base64url"));
     expect(reading).toEqual({ ok: true, pem: `${pem.trimEnd()}\n` });
   });
@@ -58,6 +76,29 @@ describe("the GitHub App private key, in every form it arrives in", () => {
     if (reading.ok) return;
     expect(reading.reason).toContain("neither a PEM block nor base64");
     expect(reading.reason).toContain("-----BEGIN RSA PRIVATE KEY-----");
+  });
+
+  it("refuses a PEM block with a line missing, which only reading it as a key catches", () => {
+    const lines = pem.trimEnd().split("\n");
+    lines.splice(5, 1);
+    const reading = readPrivateKey(lines.join("\n"));
+    expect(reading.ok).toBe(false);
+    if (reading.ok) return;
+    expect(reading.reason).toContain("does not read as a key");
+    // The key itself is never quoted back.
+    expect(reading.reason).not.toContain(lines[3]!);
+  });
+
+  it("refuses a key GitHub cannot sign App tokens with", () => {
+    const ec = generateKeyPairSync("ec", {
+      namedCurve: "P-256",
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    }).privateKey as unknown as string;
+    const reading = readPrivateKey(ec);
+    expect(reading.ok).toBe(false);
+    if (reading.ok) return;
+    expect(reading.reason).toContain("not an RSA key (it reads as ec)");
   });
 
   it("refuses base64 that decodes to something that is not a key", () => {

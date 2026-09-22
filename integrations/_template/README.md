@@ -1,55 +1,44 @@
-# Example integration
+<!--
+Written from the template: `pnpm run new:integration -- <id>` copied
+integrations/_template here with the template's names replaced. Fill in every
+section before the integration ships; the guide is
+docs/architecture/integrations.md.
+-->
 
-This directory is copied, not edited in place. It is the skeleton for a new
-integration under `integrations/<id>`.
+# Example
 
-## Files
+One paragraph: what Example is, and what a deployment gets by connecting it.
 
-- `manifest.ts`: plain data. Identity, connection fields, capabilities,
-  blocks, pages, health checks. Read by core, the dashboard and the Workflow
-  DevKit's flow bundle without running any of your code, so it imports only
-  `@integrations/sdk`.
-- `worker.ts`: the code behind the manifest. A connection test, one adapter
-  per declared capability, one executor per declared block, one probe per
-  declared health check. Server only; it may import `@integrations/sdk` and
-  `./manifest`.
-- `dashboard.tsx`: the screens this integration contributes to the cockpit,
-  one component per page the manifest declares, built from
-  `@integrations/host-ui`. Delete it and empty `manifest.pages` if your
-  integration brings no screens of its own.
-- `README.md`: this file. Replace it with your own integration's README. The
-  generator refuses a package without one.
+## Connecting it
 
-## Making it yours
+| Field | Variable | Required | What it is |
+|---|---|---|---|
+| API URL | `EXAMPLE_BASE_URL` | yes | Where the Example API answers. |
+| API token | `EXAMPLE_API_TOKEN` | yes | A token for the account this deployment acts as. |
 
-1. Copy this directory to `integrations/<id>`.
-2. Rename the package to `@integrations/<id>` in `package.json`.
-3. Change the manifest `id` to `<id>`.
-4. Rename the block types from `example_*` to `<id>_*`.
-5. Rename the connection fields' environment variables from `EXAMPLE_*` to
-   `<ID>_*`.
-6. Keep `manifest.pages` and `dashboard.tsx` in step, or delete both.
-7. Run `pnpm install`.
-8. Run `pnpm gen:integrations`.
+Where an admin finds each value, and which permissions the token needs. An
+admin can set the variables on the deployment, or type the values on the
+Integrations page, where saving tests them before they are used.
 
-## What will get your package refused
+## What connecting it unlocks
 
-- `manifest.ts` may import only `@integrations/sdk`. No Node module, no
-  relative import outside the package.
-- No `"use step"` directive anywhere in an integration.
-- An id core already uses (see `RESERVED_INTEGRATION_IDS` in
-  `@integrations/sdk`) is refused.
-- Every block the manifest declares needs an executor in `worker.ts`, and
-  every capability the manifest declares needs an adapter factory.
-- A block type another integration or a core block already owns is refused; a
-  block type must start with `<id>_`.
-- The package name must be `@integrations/<id>`, matching the manifest id.
-- Every page in `manifest.pages` needs a component of the same id in
-  `dashboard.tsx`, and a `dashboard.tsx` with no declared pages is refused.
-- `dashboard.tsx` may import `@integrations/host-ui` and your own files. Not
-  `@/...`, not `next/*`, not `node:*`, not `server-only`, and it may not read
-  `process.env`.
-- Keep the `IntegrationRuntimeDefinition<...>` annotation in `worker.ts`.
-  Written inline as the second argument of `defineIntegrationRuntime`,
-  TypeScript stops typing the health probes' arguments from the manifest and
-  they arrive as `any`.
+- The **Example lookup** block: searches Example for the text bound to its
+  `query` input and reports `found` or `nothing_found`.
+- The **Overview** tab: the account the token belongs to.
+- The **API access** row on the System health page.
+
+## What lives here
+
+| File | What it is |
+|---|---|
+| `manifest.ts` | Identity, connection fields, capabilities, blocks, pages, health checks. Plain data. |
+| `worker.ts` | The connection test, the block, the health probe, what the Overview page reads. |
+| `dashboard.tsx` | The Overview page, built on `@integrations/host-ui`. |
+
+## Provider documentation this is written against
+
+| What | Where | Read on |
+|---|---|---|
+| Authentication | the provider's page | YYYY-MM-DD |
+| The calls this package makes, and what each returns | the provider's page | YYYY-MM-DD |
+| Rate limits and error codes | the provider's page | YYYY-MM-DD |

@@ -451,6 +451,24 @@ describe("POST /webhooks/:id", () => {
     expect(posted[0]!.url).toBe("https://hooks.slack.com/commands/T0001/1/abc");
   });
 
+  // The runtime the resolver hands out is the one behind the redaction
+  // boundary (`redactingRuntime`), so what an integration's webhook throws
+  // reaches this route with the connection's secrets already out of it. The
+  // registry's copy of the same runtime has no such boundary.
+  it("calls the webhook of the runtime the resolver handed out", async () => {
+    const receive = vi.fn(async () => ({
+      kind: "answered" as const,
+      response: { status: 200, body: { through: "resolved runtime" } },
+    }));
+    const slack = connectedSlack() as { runtime: object };
+    state.usable = [{ ...slack, runtime: { ...slack.runtime, webhook: { receive } } }];
+
+    const response = await app()(request("slack", "list"));
+
+    expect(receive).toHaveBeenCalledOnce();
+    expect(await response.json()).toEqual({ through: "resolved runtime" });
+  });
+
   it("delivers a failure instead of leaving the person reading \"Working on ...\"", async () => {
     executeRunControlCommand.mockRejectedValue(new Error("the database refused"));
 

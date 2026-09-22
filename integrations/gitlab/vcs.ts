@@ -3,6 +3,7 @@ import { Gitlab } from "@gitbeaker/rest";
 import {
   FatalError,
   isPullRequestRefusal,
+  readProviderFailure,
   isReviewLedgerWorkItem,
   PullRequestUnreadableError,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
@@ -268,6 +269,16 @@ interface OwnedReviewDiscussion {
   hasSupersededNote: boolean;
 }
 
+/**
+ * What GitLab answered, for `readProviderFailure`. Gitbeaker keeps the answer
+ * (its status and headers) on `cause.response` rather than on the error, and
+ * this adapter's own REST calls put `status` on the error they throw.
+ */
+function providerAnswerOf(err: unknown): unknown {
+  const response = (err as { cause?: { response?: unknown } } | null)?.cause?.response;
+  return response instanceof Response ? response : err;
+}
+
 export class GitLabAdapter implements
   VCSAdapter,
   GateStatusCapableVCS,
@@ -425,15 +436,10 @@ export class GitLabAdapter implements
     );
   }
 
+  /** A refusal of the values sent is final for this call; anything else,
+   *  including a rate limit or GitLab failing on its own side, is retried. */
   private throwWithProviderRetrySemantics(err: any): never {
-    const status = this.getStatusCode(err);
-    const retryableClientStatuses = new Set([408, 425, 429]);
-    if (
-      status !== undefined &&
-      status >= 400 &&
-      status < 500 &&
-      !retryableClientStatuses.has(status)
-    ) {
+    if (readProviderFailure(providerAnswerOf(err)).kind === "refused") {
       throw new FatalError(err instanceof Error ? err.message : String(err));
     }
     throw err;
@@ -623,12 +629,11 @@ export class GitLabAdapter implements
       // token GitLab no longer accepts (401) or one without the scope to read
       // at all (403 `insufficient_scope`) refuses every merge request: that is
       // the connection's fault and is thrown as it came.
-      const refusal = {
-        status: this.getStatusCode(err),
-        message: err instanceof Error ? err.message : "",
-        response: { headers: (err as { cause?: { response?: { headers?: unknown } } })?.cause?.response?.headers },
-      };
-      if (err instanceof Error && err.message !== "insufficient_scope" && isPullRequestRefusal(refusal)) {
+      if (
+        err instanceof Error &&
+        err.message !== "insufficient_scope" &&
+        isPullRequestRefusal(providerAnswerOf(err))
+      ) {
         throw new PullRequestUnreadableError(
           `GitLab merge request !${prId} in ${this.projectId} cannot be read with this token`,
           { cause: err },

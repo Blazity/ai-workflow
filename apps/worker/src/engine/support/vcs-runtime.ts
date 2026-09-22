@@ -109,8 +109,13 @@ export async function vcsHandleIdentity(provider: string): Promise<VcsHandleIden
   return identity;
 }
 
-const VCS_TIMEOUT_MS = 30_000;
-
+/**
+ * Resolves with no lifetime, as every resolution in this file does, on
+ * purpose: a VCS adapter is held for the work it was resolved for (a listing
+ * across pages, a skill import, a repository's whole prepare), every request
+ * it makes is already bounded on its own, and a timer started here would
+ * expire the context under whoever still holds it.
+ */
 async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<VCSAdapter> {
   const manifest = integrationManifest(target.provider);
   if (!manifest?.capabilities.includes("vcs")) {
@@ -123,7 +128,6 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
     "../../services/integrations/runtime.js"
   );
   const resolved = await resolveUsableIntegrations({
-    signal: AbortSignal.timeout(VCS_TIMEOUT_MS),
     filter: (candidate) => candidate.id === target.provider,
   });
   if (!resolved.readable) {
@@ -259,7 +263,6 @@ export async function resolveConfiguredPullRequestUrl(
   const providerIds = new Set<string>();
   const { usableIntegrations } = await import("../../services/integrations/runtime.js");
   for (const entry of await usableIntegrations({
-    signal: AbortSignal.timeout(VCS_TIMEOUT_MS),
     filter: (manifest) => manifest.capabilities.includes("vcs"),
   })) providerIds.add(entry.manifest.id);
 
@@ -282,7 +285,6 @@ export async function buildSandboxProviderConfigs(
   const providerIds = new Set<string>();
   const { usableIntegrations } = await import("../../services/integrations/runtime.js");
   for (const entry of await usableIntegrations({
-    signal: AbortSignal.timeout(VCS_TIMEOUT_MS),
     filter: (manifest) => manifest.capabilities.includes("vcs"),
   })) providerIds.add(entry.manifest.id);
 
@@ -388,7 +390,6 @@ export async function listVcsRepositories(options: {
   );
   const needed = options.neededProviders ? new Set(options.neededProviders) : null;
   const resolved = await resolveUsableIntegrations({
-    signal: AbortSignal.timeout(VCS_TIMEOUT_MS),
     filter: (manifest) =>
       manifest.capabilities.includes("vcs") && (!needed || needed.has(manifest.id)),
   });
@@ -470,7 +471,6 @@ export async function resolveRepositorySkillSource(
     "../../services/integrations/runtime.js"
   );
   const resolved = await resolveUsableIntegrations({
-    signal: AbortSignal.timeout(VCS_TIMEOUT_MS),
     filter: (manifest) => manifest.capabilities.includes("vcs"),
   });
   if (!resolved.readable) {

@@ -57,6 +57,8 @@ function context(
       ...overrides,
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    // Handed to Octokit, which is replaced here, so nothing calls it.
+    http: { fetch: vi.fn() },
     ...(webhookUrl ? { webhookUrl } : {}),
   } as never;
 }
@@ -200,18 +202,23 @@ describe("the GitHub connection's health checks", () => {
     ).resolves.toMatchObject({ status: "live" });
   });
 
-  it("reads a 5xx this deployment answered as busy, not as a broken App", async () => {
-    // The worker answers 5xx when a dispatch failed on its side. Painting the
+  it("reads a 5xx this deployment answered as its own failure, not as a broken App", async () => {
+    // The worker answers 5xx when it failed to act on a delivery. Painting the
     // App down for a week over our own answer sends an operator to GitHub to
-    // fix something that is not broken there.
+    // fix something that is not broken there. And it is not "busy" either:
+    // at capacity is answered 202, so sending the operator to the run
+    // capacity setting sends them to the one thing that is not the cause.
     appAnswers({
       deliveries: [{ delivered_at: new Date().toISOString(), status_code: 503 }],
     });
 
-    await expect(runtime.health.webhook?.(context())).resolves.toMatchObject({
+    const result = await runtime.health.webhook?.(context());
+    expect(result).toMatchObject({
       status: "degraded",
       message: expect.stringContaining("answered 503 by this deployment"),
     });
+    expect(result?.message).toContain("failed to act on the delivery");
+    expect(result?.message).not.toMatch(/capacity/iu);
   });
 
   it("switched-off TLS verification is down, whatever the deliveries say", async () => {
@@ -223,6 +230,62 @@ describe("the GitHub connection's health checks", () => {
     await expect(runtime.health.webhook?.(context())).resolves.toMatchObject({
       status: "down",
       message: expect.stringContaining("TLS verification switched off"),
+    });
+  });
+});
+
+/** What Octokit throws for an answer: its `RequestError` carries the status and
+ *  the answer's headers, which is what the SDK's rule reads. */
+function requestError(status: number, message: string, headers: Record<string, string> = {}) {
+  return Object.assign(new Error(message), { name: "HttpError", status, response: { status, headers } });
+}
+
+describe("a GitHub health check that failed", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appAnswers({});
+  });
+
+  it("sends the admin to the App's values when GitHub refused them", async () => {
+    octokit.apps.getAuthenticated.mockRejectedValue(
+      requestError(401, "A JSON web token could not be decoded"),
+    );
+
+    await expect(runtime.health.app?.(context())).resolves.toEqual({
+      status: "down",
+      message:
+        "GitHub did not accept the App (A JSON web token could not be decoded). Check the App id and the private key.",
+    });
+  });
+
+  it("says GitHub did not answer, rather than blaming a value, on a secondary rate limit", async () => {
+    // GitHub's secondary limit: a 403 with requests left in the primary one,
+    // marked only by its message.
+    octokit.apps.listReposAccessibleToInstallation.mockRejectedValue(
+      requestError(
+        403,
+        "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+        { "x-ratelimit-remaining": "4870" },
+      ),
+    );
+
+    const result = await runtime.health.installation?.(context());
+
+    expect(result?.status).toBe("down");
+    expect(result?.message).toMatch(/^GitHub did not answer, so installation 22 could not be checked/u);
+  });
+
+  it("says GitHub did not answer when it could not be reached", async () => {
+    octokit.request.mockRejectedValue(
+      new TypeError("fetch failed", {
+        cause: Object.assign(new Error("connect ETIMEDOUT 140.82.112.6:443"), { code: "ETIMEDOUT" }),
+      }),
+    );
+
+    await expect(runtime.health.webhook?.(context())).resolves.toEqual({
+      status: "down",
+      message:
+        "GitHub did not answer, so the App's webhook settings could not be checked (fetch failed).",
     });
   });
 });

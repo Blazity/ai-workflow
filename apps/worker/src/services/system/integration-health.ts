@@ -22,7 +22,7 @@ import type {
 
 import { PublicHealthProbeError, WEBHOOK_DELIVERY_CHECK_ID } from "./collect.js";
 import { latestWebhookDeliveries } from "./observations.js";
-import { redactIntegrationText } from "../integrations/index.js";
+import { failureReason, redactIntegrationText } from "../integrations/index.js";
 
 import type {
   CheckBase,
@@ -203,22 +203,8 @@ async function runIntegrationProbe(
     // anywhere. The reason is redacted and bounded first, because a provider
     // that echoes a token in an error body is normal and this text is read on
     // a screen.
-    throw new PublicHealthProbeError(safe(reasonOf(error)));
+    throw new PublicHealthProbeError(safe(failureReason(error)));
   }
-}
-
-/**
- * What an error says, including what it hides in its cause: `fetch` throws a
- * flat "fetch failed" and keeps "connect ECONNREFUSED" underneath, and the
- * second half is the one somebody can act on.
- */
-function reasonOf(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
-  const cause = error.cause;
-  const detail = cause instanceof Error ? cause.message : undefined;
-  return detail && !error.message.includes(detail)
-    ? `${error.message}: ${detail}`
-    : error.message;
 }
 
 /** The only answers a probe may give. Anything else is not a measurement. */

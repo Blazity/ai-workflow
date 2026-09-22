@@ -1,5 +1,6 @@
 import {
   IssueTrackerNotFoundError,
+  type IntegrationHttp,
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
   type IssueTrackerTransitionTarget,
@@ -18,12 +19,22 @@ export interface JiraConfig {
    * How this adapter reaches Jira. The integration runtime passes
    * `ctx.http.fetch`, which carries the SDK's timeout, its retry policy for
    * reads and its secret redaction; the default is the global one, for the
-   * health probe that runs before a context exists.
+   * health probe that runs before a context exists, and it ignores the SDK's
+   * own options (`timeoutMs`, `retries`).
    */
-  fetch?: typeof fetch;
+  fetch?: IntegrationHttp["fetch"];
 }
 
 const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
+
+/**
+ * An answer from Jira that was not a success, with the status on the error.
+ * Whoever catches it reads what Jira said from `status` (the SDK's
+ * `readProviderFailure` among them) rather than parsing the sentence.
+ */
+function answered(message: string, res: Response): Error {
+  return Object.assign(new Error(message), { status: res.status });
+}
 
 type JiraTransition = {
   id: string;
@@ -89,7 +100,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
   private cloudId: string | null;
   private selfAccountIdPromise: Promise<string> | null = null;
   private projectKey: string;
-  private fetch: typeof fetch;
+  private fetch: IntegrationHttp["fetch"];
 
   constructor(config: JiraConfig) {
     const trimmed = config.baseUrl.replace(/\/$/, "");
@@ -116,9 +127,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     const url = `${this.tenantOrigin}/_edge/tenant_info`;
     const res = await this.fetch(url, { signal });
     if (!res.ok) {
-      throw new Error(
-        `Jira cloudId discovery failed: ${res.status} ${res.statusText} on ${url}`,
-      );
+      throw answered(`Jira cloudId discovery failed: ${res.status} ${res.statusText} on ${url}`, res);
     }
     const data = (await res.json()) as { cloudId?: unknown };
     if (typeof data?.cloudId !== "string" || data.cloudId === "") {
@@ -148,7 +157,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
       if (res.status === 404) {
         throw new IssueTrackerNotFoundError("Jira resource", path);
       }
-      throw new Error(`Jira API error: ${res.status} ${res.statusText} on ${path}`);
+      throw answered(`Jira API error: ${res.status} ${res.statusText} on ${path}`, res);
     }
     if (res.status === 204) return null;
     try {
@@ -459,6 +468,10 @@ export class JiraAdapter implements IssueTrackerAdapter {
     url: string,
     opts: { timeoutMs?: number } = {},
   ): Promise<Buffer> {
+    // The operator's per-attachment setting is the deadline for the whole
+    // download, every redirect included, so it is a signal. It is also each
+    // request's own timeout: the SDK's default of 30 s would otherwise cut a
+    // download an operator allowed longer for, and retry it from the start.
     const timeoutMs = opts.timeoutMs ?? 30_000;
     const signal = AbortSignal.timeout(timeoutMs);
     const redirectStatuses = new Set([301, 302, 303, 307, 308]);
@@ -476,6 +489,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
         headers: this.buildAttachmentHeaders(currentUrl),
         redirect: "manual",
         signal,
+        timeoutMs,
       });
 
       if (redirectStatuses.has(res.status)) {
@@ -495,8 +509,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
 
       if (!res.ok) {
         await res.body?.cancel?.();
-        throw new Error(
+        throw answered(
           `Jira attachment error: status ${res.status} ${res.statusText} on ${currentUrl}`,
+          res,
         );
       }
       return Buffer.from(await res.arrayBuffer());
@@ -535,7 +550,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     });
     if (res.status === 401 || res.status === 403 || res.status === 404) return null;
     if (!res.ok) {
-      throw new Error(`Jira API error: ${res.status} ${res.statusText} on ${path}`);
+      throw answered(`Jira API error: ${res.status} ${res.statusText} on ${path}`, res);
     }
     const body = (await res.json().catch(() => null)) as Array<{
       url?: unknown;

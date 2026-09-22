@@ -47,6 +47,8 @@ export {
 
 export { buildIntegrationContext } from "./context.js";
 
+export { failureReason } from "./failure-reason.js";
+
 /** The automation account, saying whether it could be read at all. */
 export async function readVcsBotLogin(
   kind: import("@shared/contracts").VcsProviderKind,

@@ -1,6 +1,7 @@
+import { createPrivateKey } from "node:crypto";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
-import { FatalError } from "@integrations/sdk";
+import { FatalError, type IntegrationHttp } from "@integrations/sdk";
 
 /**
  * The App credential, as this integration holds it.
@@ -21,18 +22,25 @@ export interface GitHubAppCredential {
  * The private key in the only form `@octokit/auth-app` can sign with, or a
  * sentence saying what was expected.
  *
- * This is the trap S11 exists to close. `Buffer.from(value, "base64")` does not
- * throw on input that is not base64: it drops every character outside the
- * alphabet and returns whatever bytes it can salvage. A `.pem` file pasted into
- * a field that wanted base64 therefore used to decode to a few hundred bytes of
- * rubbish, save cleanly, and fail hours later at the first API call with a
- * message about a bad key rather than about what was pasted.
+ * Two forms are accepted: the `.pem` file GitHub downloads, pasted whole, and
+ * the base64 of it, which is what the environment has carried since before
+ * this integration existed. An admin holding the file has no reason to know we
+ * ever wanted base64, and the two cannot be confused: a PEM says so on its
+ * first line.
  *
- * So both forms are accepted, and anything that is neither is refused with a
- * sentence naming them. Accepting both rather than refusing one is deliberate:
- * an admin holding the file GitHub downloaded has no reason to know we ever
- * wanted base64, and the two forms cannot be confused for one another, because
- * a PEM says so on its first line and `-` is not in the base64 alphabet.
+ * Base64 is decoded exactly as main decoded it (`Buffer.from(value, "base64")`,
+ * in `apps/worker/src/adapters/vcs/github-auth.ts` before S11), because values
+ * set against that decoder are in production: it skips anything outside the
+ * alphabet (the quotes a `.env` file adds, a wrapped line), needs no padding,
+ * and the signing library then read a written backslash-n as a line break.
+ * The same leniency is what once let a pasted PEM decode to a few hundred
+ * bytes of rubbish and fail hours later (S11's trap), so it is only safe with
+ * what follows: whatever is decoded has to hold a PEM block, and the block is
+ * READ as a key before it is accepted. The shape says nothing about the bytes
+ * (a key pasted with a line missing passes every pattern here, and used to
+ * fail at the first request with a decoder error that read as GitHub being
+ * unreachable), and GitHub signs App tokens with RS256, so an RSA key Node can
+ * read is the only kind accepted.
  *
  * Silence is the one outcome that is never returned: either a key that will
  * sign, or a reason.
@@ -44,13 +52,10 @@ export type PrivateKeyReading =
 const PEM_BLOCK =
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/u;
 
-/**
- * Either base64 alphabet, padded or not. The environment variable has always
- * been decoded with `Buffer.from(value, "base64")`, which Node documents as
- * accepting the URL-safe alphabet too and which decodes an unpadded value, so a
- * key stored in either form works today and must keep working. The alphabet
- * check stays: it is what tells a pasted sentence from an encoded key.
- */
+/** Only for choosing the sentence: whether the value at least looks like
+ *  base64 (either alphabet: `Buffer.from(value, "base64")` below decodes the
+ *  URL-safe one too), once the line breaks a wrapped value has and the quotes a
+ *  `.env` file adds are gone. A space inside it means words, not base64. */
 const BASE64 = /^[A-Za-z0-9+/_-]+={0,2}$/u;
 
 const EXPECTED =
@@ -62,27 +67,47 @@ export function readPrivateKey(value: string | undefined): PrivateKeyReading {
     return { ok: false, reason: `No GitHub App private key is set. ${EXPECTED}` };
   }
 
-  // A PEM pasted into an environment variable often arrives with its newlines
-  // written as the two characters backslash-n, because that is what survives a
-  // shell or a deployment UI. That is the same key, so it is read as one.
-  const direct = raw.includes("-----BEGIN") ? raw.replace(/\\r\\n|\\n/gu, "\n") : raw;
-  const pem = PEM_BLOCK.exec(direct)?.[0];
-  if (pem) return { ok: true, pem: `${pem}\n` };
+  const pem = PEM_BLOCK.exec(withLineBreaks(raw))?.[0];
+  if (pem) return readable(`${pem}\n`);
 
-  const packed = raw.replace(/\s+/gu, "");
-  if (!BASE64.test(packed)) {
-    return {
-      ok: false,
-      reason: `The GitHub App private key is neither a PEM block nor base64. ${EXPECTED}`,
-    };
-  }
-  const decoded = Buffer.from(packed, "base64").toString("utf8");
-  const decodedPem = PEM_BLOCK.exec(decoded)?.[0];
-  if (decodedPem) return { ok: true, pem: `${decodedPem}\n` };
+  const decodedPem = PEM_BLOCK.exec(withLineBreaks(Buffer.from(raw, "base64").toString("utf8")))?.[0];
+  if (decodedPem) return readable(`${decodedPem}\n`);
+
+  const packed = raw.trim().replace(/^"(.*)"$/su, "$1").replace(/[\r\n]+/gu, "");
   return {
     ok: false,
-    reason: `The GitHub App private key is base64, but it does not decode to a PEM private key. ${EXPECTED}`,
+    reason: BASE64.test(packed)
+      ? `The GitHub App private key is base64, but it does not decode to a PEM private key. ${EXPECTED}`
+      : `The GitHub App private key is neither a PEM block nor base64. ${EXPECTED}`,
   };
+}
+
+/** A PEM that went through a shell or a deployment UI often has its line
+ *  breaks written as the two characters backslash-n; it is the same key, and
+ *  the signing library main used read it as one. */
+function withLineBreaks(text: string): string {
+  return text.replace(/\\r\\n|\\n/gu, "\n");
+}
+
+/** A PEM block that Node can read as an RSA private key, or why not. Node's own
+ *  message is left out: it names a decoder routine, not what to do. */
+function readable(pem: string): PrivateKeyReading {
+  let type: string | undefined;
+  try {
+    type = createPrivateKey(pem).asymmetricKeyType;
+  } catch {
+    return {
+      ok: false,
+      reason: `The GitHub App private key has the shape of a PEM block but does not read as a key; a line may be missing or changed. ${EXPECTED}`,
+    };
+  }
+  if (type !== "rsa") {
+    return {
+      ok: false,
+      reason: `The GitHub App private key is not an RSA key (it reads as ${type ?? "an unknown type"}), and GitHub signs App tokens with RSA. ${EXPECTED}`,
+    };
+  }
+  return { ok: true, pem };
 }
 
 /**
@@ -99,8 +124,18 @@ export function requirePrivateKey(value: string | undefined): string {
  * Octokit pre-wired with the App auth strategy. Octokit mints and refreshes the
  * installation token internally per request, so every REST call from the
  * adapter goes through one of these.
+ *
+ * `fetch` is the context's (`ctx.http.fetch`), and a caller that has a context
+ * passes it: every request then has core's timeout, is bound to the context's
+ * lifetime (a connection test that runs out of time stops waiting on GitHub)
+ * and throws with the connection's secrets redacted. Octokit hands the same
+ * fetch to the App auth strategy, so minting the installation token goes
+ * through it too.
  */
-export function buildOctokit(credential: GitHubAppCredential): Octokit {
+export function buildOctokit(
+  credential: GitHubAppCredential,
+  options: { readonly fetch?: IntegrationHttp["fetch"] } = {},
+): Octokit {
   return new Octokit({
     authStrategy: createAppAuth,
     auth: {
@@ -108,6 +143,7 @@ export function buildOctokit(credential: GitHubAppCredential): Octokit {
       privateKey: requirePrivateKey(credential.privateKey),
       installationId: credential.installationId,
     },
+    ...(options.fetch ? { request: { fetch: options.fetch } } : {}),
   });
 }
 

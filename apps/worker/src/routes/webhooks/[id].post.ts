@@ -41,9 +41,10 @@ export default defineEventHandler(async (event) => {
   }
 
   const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
-  const signal = AbortSignal.timeout(WEBHOOK_TIMEOUT_MS);
+  // A request has one deadline for everything it does with the contexts, so
+  // it is their lifetime.
   const resolved = await resolveUsableIntegrations({
-    signal,
+    lifetime: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     filter: (candidate) => candidate.id === id,
   });
   if (!resolved.readable) {
@@ -73,6 +74,10 @@ export default defineEventHandler(async (event) => {
       statusMessage: `${manifest.name} is not connected on this deployment.`,
     });
   }
+  // The resolved runtime's webhook, not the registry's: it throws with this
+  // connection's secrets already redacted (`redactingRuntime` in
+  // `services/integrations/usable.ts`), so nothing below has to remember to.
+  const calls = usable.runtime.webhook ?? webhook;
 
   // One automation-account read per delivery, and only after the integration
   // has verified the request: a delivery with a bad signature or token costs
@@ -84,7 +89,7 @@ export default defineEventHandler(async (event) => {
   const { legacyBotLogin: _legacyBotLogin, ...connection } = usable.ctx.connection;
   let reception;
   try {
-    reception = await webhook.receive(
+    reception = await calls.receive(
       {
         method: event.method,
         rawBody,
@@ -197,14 +202,14 @@ export default defineEventHandler(async (event) => {
 
   observeWebhook(id, "accepted", "request_accepted");
   const { logger } = await import("../../services/system/logger.js");
-  if (!webhook.deliver) {
+  if (!calls.deliver) {
     // The command still runs: it is what the person asked for. That the answer
     // cannot come back is a defect of the integration, and it is said here
     // rather than swallowed.
     logger.warn({ integration: id }, "integration_webhook_reply_undeliverable");
   }
   waitUntil(
-    runAndDeliver(id, reception, usable, webhook.deliver).catch((error: unknown) =>
+    runAndDeliver(id, reception, usable, calls.deliver).catch((error: unknown) =>
       logger.error(
         { integration: id, error: error instanceof Error ? error.message : String(error) },
         "integration_webhook_delivery_failed",

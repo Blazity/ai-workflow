@@ -27,7 +27,7 @@ export async function readVcsBotLogin(
   const legacyByProvider: Record<string, string | undefined> = {};
   const providers: string[] = [];
   const resolved = await resolveUsableIntegrations({
-    signal: AbortSignal.timeout(30_000),
+    lifetime: AbortSignal.timeout(30_000),
     filter: (manifest) => manifest.capabilities.includes("vcs"),
   });
   if (!resolved.readable) return { readable: false, reason: resolved.reason };

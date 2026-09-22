@@ -287,3 +287,109 @@ describe("the Jira integration's connection test", () => {
     expect((result as { reason: string }).reason).toContain("project AIW has no statuses");
   });
 });
+
+/**
+ * `{ ok: false }` makes the card Failing and stops every run that needs Jira;
+ * a throw is filed as Jira being unreachable and leaves the card as it was.
+ * Jira's own reference: 401 for credentials it does not accept, 404 for a
+ * project the account cannot see, 429 for its rate limit. The test used to
+ * catch every error and call it a refusal, so a slow Jira while an admin
+ * pressed Test stopped every run.
+ */
+describe("the Jira connection test tells a refusal from an outage", () => {
+  const account = (url: string) =>
+    url.includes("/rest/api/3/myself") ? Response.json({ accountId: "99:acct" }) : undefined;
+
+  it("refuses credentials Jira does not accept, naming both values", async () => {
+    const result = await runtime.testConnection!(
+      context(
+        (url) =>
+          tenantInfo(url) ??
+          (url.includes("/rest/api/3/myself") ? new Response(null, { status: 401 }) : undefined),
+      ),
+    );
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { reason: string }).reason).toContain("Site URL and API token");
+  });
+
+  it("refuses a project the account cannot see, naming the project", async () => {
+    const result = await runtime.testConnection!(
+      context(
+        (url) =>
+          tenantInfo(url) ??
+          account(url) ??
+          (url.includes("/statuses") ? new Response(null, { status: 404 }) : undefined),
+      ),
+    );
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { reason: string }).reason).toContain("project AIW is not visible");
+  });
+
+  it("throws when Jira is failing on its side", async () => {
+    await expect(
+      runtime.testConnection!(
+        context(
+          (url) =>
+            tenantInfo(url) ??
+            (url.includes("/rest/api/3/myself") ? new Response(null, { status: 503 }) : undefined),
+        ),
+      ),
+    ).rejects.toThrow(/503/u);
+  });
+
+  it("throws when Jira rate limits the project read", async () => {
+    await expect(
+      runtime.testConnection!(
+        context(
+          (url) =>
+            tenantInfo(url) ??
+            account(url) ??
+            (url.includes("/statuses")
+              ? new Response(null, { status: 429, headers: { "retry-after": "5" } })
+              : undefined),
+        ),
+      ),
+    ).rejects.toThrow(/429/u);
+  });
+
+  it("throws when Jira cannot be reached at all", async () => {
+    await expect(
+      runtime.testConnection!(
+        context(() => {
+          throw new TypeError("fetch failed");
+        }),
+      ),
+    ).rejects.toThrow("fetch failed");
+  });
+});
+
+describe("the Jira health rows do not blame a value for an outage", () => {
+  it("says Jira did not answer instead of calling the token rejected", async () => {
+    const result = await probe("api")(
+      context(
+        (url) =>
+          tenantInfo(url) ??
+          (url.includes("/rest/api/3/myself") ? new Response(null, { status: 503 }) : undefined),
+      ),
+    );
+
+    expect(result).toMatchObject({ status: "down" });
+    expect((result as { message: string }).message).toContain("Jira did not answer");
+    expect((result as { message: string }).message).not.toContain("not accepted");
+  });
+
+  it("says Jira did not answer instead of calling the project inaccessible", async () => {
+    const result = await probe("project")(
+      context(() => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "down" });
+    expect((result as { message: string }).message).toContain(
+      "Jira did not answer, so project AIW could not be checked",
+    );
+  });
+});

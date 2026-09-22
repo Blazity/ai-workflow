@@ -2,7 +2,7 @@ import type { AgentTracingAdapter } from "./agent-tracing";
 import type { IssueTrackerAdapter } from "./issue-tracker";
 import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter, MessagingSender } from "./messaging";
-import type { VCSAdapter } from "./vcs";
+import type { VCSAdapter, VcsIntegrationAdapter } from "./vcs";
 
 /**
  * Integration capabilities: the seams in core that an integration can fill.
@@ -53,6 +53,53 @@ export interface IntegrationCapabilityPorts {
 
 /** A capability an integration may declare and implement today. */
 export type ProvidedCapabilityId = keyof IntegrationCapabilityPorts;
+
+/**
+ * How a port member reaches another adapter: a method that `returns` one, or
+ * a property that `holds` one.
+ */
+export type NestedAdapterRole = "returns" | "holds";
+
+type NestedMembers<Port> = { readonly [Member in keyof Port]?: NestedAdapterRole };
+
+/** Each port with the optional surfaces its providers may add (`vcs` has some). */
+type AdapterSurface = Omit<IntegrationCapabilityPorts, "vcs"> & { vcs: VcsIntegrationAdapter };
+
+/**
+ * Every member of a port that returns or holds another adapter, meaning an
+ * object whose methods are integration code of their own.
+ *
+ * Core redacts what an integration's adapter throws at one boundary
+ * (`apps/worker/src/services/integrations/usable.ts`) and follows exactly the
+ * members named here to reach the adapters inside; every other value a port
+ * hands over is data and is passed on untouched. A port that grows such a
+ * member lists it here in the same change, or what that adapter throws
+ * reaches core unredacted. Every provided capability has an entry, so a new
+ * port cannot be added without deciding.
+ *
+ * Three shapes the boundary does NOT follow, none of which a port has today;
+ * a port that grows one changes the boundary in the same change:
+ *
+ * - a member that returns an async iterator or a stream (or is an async
+ *   generator): the iterator is handed out as it is, so an error thrown while
+ *   it is read arrives unredacted. Listing it as `returns` does not help,
+ *   because the view wraps methods and not the iteration protocol.
+ * - a method that returns `this`: the caller gets the adapter itself, not its
+ *   view, and every later call through it is unwrapped.
+ * - a view handed back into an adapter method that reads a private field of
+ *   its argument: the view is not the adapter, so that read throws.
+ */
+export const NESTED_ADAPTER_MEMBERS: {
+  readonly [C in ProvidedCapabilityId]: NestedMembers<AdapterSurface[C]>;
+} = {
+  issue_tracker: {},
+  /** A skill import's four provider calls (`RepositorySkillSource`). */
+  vcs: { skillSource: "returns" },
+  messaging: {},
+  /** The admin half (`MemoryStoreAdapter`). */
+  memory: { store: "holds" },
+  agent_tracing: {},
+};
 
 /** Capability ids with no port yet. See `INTEGRATION_CAPABILITIES[id].reservedFor`. */
 export type ReservedCapabilityId = Exclude<IntegrationCapabilityId, ProvidedCapabilityId>;

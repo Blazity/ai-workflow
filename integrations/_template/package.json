@@ -1,6 +1,6 @@
 {
   "name": "@integrations/example",
-  "description": "The skeleton a developer copies to add a new integration.",
+  "description": "The package pnpm run new:integration copies into integrations/<id>. Never registered, never shipped.",
   "version": "0.0.0",
   "private": true,
   "type": "module",

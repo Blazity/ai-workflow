@@ -1,3 +1,5 @@
+import { readProviderFailure } from "./provider-failure";
+
 /**
  * The one failure of a head read that core answers for good: this connection
  * can never read the pull request it was asked about.
@@ -31,54 +33,20 @@ export function isPullRequestUnreadableError(error: unknown): error is Error {
  * connection can never read it: exactly a 404, or a 403 that is not a rate
  * limit. A 401, a 429, a 5xx, a timeout and a 403 that is a rate limit are not.
  *
- * `failure` is a `Response`, or a thrown error carrying the HTTP `status` and,
- * where the provider's client keeps them, the answer's headers on
- * `response.headers` (Octokit's `RequestError` does). Rate-limit signs:
- * `retry-after`, `x-ratelimit-remaining: 0` or `ratelimit-remaining: 0`, or a
- * message naming a secondary rate limit, which is how GitHub marks one.
+ * `failure` is what `readProviderFailure` reads: a `Response`, or a thrown
+ * error carrying the HTTP `status` and, where the provider's client keeps
+ * them, the answer's headers on `response.headers` (Octokit's `RequestError`
+ * does). Which answers are refusals, and which 403 is a rate limit, is decided
+ * there; the one thing this adds is that of every refusal only a 404 or a 403
+ * can be about one pull request rather than about the values sent.
  *
  * The caller still decides whether the refused request WAS about the pull
  * request: a GitHub App whose installation token cannot be minted surfaces that
  * refusal as the pull request read's error, and it is a credential fault.
- *
- * Once `provider-failure.ts` is in this package this body becomes one call,
- * `readProviderFailure(failure)` refusing with status 403 or 404, which reads
- * the same statuses and the same rate-limit signs.
  */
 export function isPullRequestRefusal(failure: unknown): boolean {
-  const status = statusOf(failure);
-  if (status === 404) return true;
-  if (status !== 403) return false;
-  const header = headerReaderOf(failure);
-  const said = (failure as { message?: unknown } | null)?.message;
-  const message = typeof said === "string" ? said : "";
-  const rateLimited =
-    Boolean(header("retry-after")) ||
-    header("x-ratelimit-remaining") === "0" ||
-    header("ratelimit-remaining") === "0" ||
-    /\bsecondary rate\b/iu.test(message);
-  return !rateLimited;
-}
-
-function statusOf(failure: unknown): number | null {
-  if (failure instanceof Response) return failure.status;
-  const status =
-    failure && typeof failure === "object" ? (failure as { status?: unknown }).status : undefined;
-  return typeof status === "number" && Number.isInteger(status) ? status : null;
-}
-
-function headerReaderOf(failure: unknown): (name: string) => string | null {
-  const headers =
-    failure instanceof Response
-      ? failure.headers
-      : (failure as { response?: { headers?: unknown } } | null)?.response?.headers;
-  if (headers instanceof Headers) return (name) => headers.get(name);
-  if (headers && typeof headers === "object") {
-    const record = headers as Record<string, unknown>;
-    return (name) => {
-      const value = record[name];
-      return value === undefined || value === null ? null : String(value);
-    };
-  }
-  return () => null;
+  const read = readProviderFailure(failure);
+  return (
+    read.kind === "refused" && !read.malformed && (read.status === 404 || read.status === 403)
+  );
 }

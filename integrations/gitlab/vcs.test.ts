@@ -167,7 +167,7 @@ describe("GitLabAdapter", () => {
 
     it("seeds empty repo on 404 then creates branch", async () => {
       const error = new Error("404 Branch Not Found") as any;
-      error.cause = { response: { status: 404 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 404 }) };
       mockBranches.create.mockRejectedValueOnce(error);
       mockRepositoryFiles.create.mockResolvedValueOnce({
         branch: "main",
@@ -191,7 +191,7 @@ describe("GitLabAdapter", () => {
 
     it("reports an existing branch without deleting it on 400", async () => {
       const error = new Error("Branch already exists") as any;
-      error.cause = { response: { status: 400 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 400 }) };
       mockBranches.create.mockRejectedValueOnce(error);
 
       const adapter = glAdapter();
@@ -219,7 +219,7 @@ describe("GitLabAdapter", () => {
 
     it("rethrows other 400 errors (invalid ref, invalid name) without deleting branch", async () => {
       const error = new Error("Invalid branch name") as any;
-      error.cause = { response: { status: 400 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 400 }) };
       mockBranches.create.mockRejectedValueOnce(error);
 
       const adapter = glAdapter();
@@ -267,7 +267,7 @@ describe("GitLabAdapter", () => {
 
     it("throws FatalError on 409", async () => {
       const error = new Error("MR already exists") as any;
-      error.cause = { response: { status: 409 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 409 }) };
       mockMergeRequests.create.mockRejectedValueOnce(error);
 
       const adapter = glAdapter();
@@ -278,7 +278,7 @@ describe("GitLabAdapter", () => {
 
     it("throws FatalError on 404", async () => {
       const error = new Error("Project not found") as any;
-      error.cause = { response: { status: 404 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 404 }) };
       mockMergeRequests.create.mockRejectedValueOnce(error);
 
       const adapter = glAdapter();
@@ -289,7 +289,7 @@ describe("GitLabAdapter", () => {
 
     it.each([400, 422])("throws FatalError on deterministic %i validation failures", async (status) => {
       const error = new Error("Merge request policy rejected the request") as any;
-      error.cause = { response: { status } };
+      error.cause = { description: error.message, response: new Response(null, { status }) };
       mockMergeRequests.create.mockRejectedValueOnce(error);
 
       const caught = await glAdapter()
@@ -309,7 +309,7 @@ describe("GitLabAdapter", () => {
       mockRepositoryFiles.show.mockImplementation((_pid: string, path: string) => {
         if (path === "src/new.ts") {
           const err = new Error("404") as any;
-          err.cause = { response: { status: 404 } };
+          err.cause = { description: err.message, response: new Response(null, { status: 404 }) };
           return Promise.reject(err);
         }
         return Promise.resolve({ file_path: path });
@@ -354,7 +354,7 @@ describe("GitLabAdapter", () => {
 
     it("rethrows non-404 errors from file existence probe", async () => {
       const err = new Error("500 Internal Server Error") as any;
-      err.cause = { response: { status: 500 } };
+      err.cause = { description: err.message, response: new Response(null, { status: 500 }) };
       mockRepositoryFiles.show.mockRejectedValueOnce(err);
 
       const adapter = glAdapter();
@@ -662,7 +662,7 @@ describe("GitLabAdapter", () => {
 
     it("throws FatalError when the merge request is deterministically unavailable", async () => {
       const error = new Error("Merge request not found") as any;
-      error.cause = { response: { status: 404 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 404 }) };
       mockMergeRequests.show.mockRejectedValueOnce(error);
 
       const caught = await glAdapter().getPRHeadSha(42).catch((failure) => failure as Error);

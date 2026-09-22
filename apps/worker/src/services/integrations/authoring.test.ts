@@ -1,4 +1,4 @@
-import { defineIntegration } from "@integrations/sdk";
+import { defineIntegration, refusedOrThrow } from "@integrations/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "../../db/client.js";
@@ -205,6 +205,50 @@ describe("a provider that does not answer at all (INT-012)", () => {
 
     const refused = await save({ ...GOOD, apiToken: BAD_TOKEN }, 1);
     expect(refused.test?.ok === false && refused.test.failure.reason).toBe("credential_rejected");
+  });
+});
+
+describe("a value no request header can carry", () => {
+  // A token pasted out of a document, with a curly quote in it: a text field
+  // may hold one, a header may not.
+  const QUOTED_TOKEN = "demo-token-\u2019good-0123456789";
+
+  async function sendsTheToken(ctx: {
+    connection: Record<string, unknown>;
+    http: { fetch: (url: string, init: RequestInit) => Promise<Response> };
+  }) {
+    await ctx.http.fetch("https://demo.example/me", {
+      headers: { authorization: `Bearer ${String(ctx.connection.apiToken)}` },
+    });
+    return { ok: true as const, message: "Demo reachable" };
+  }
+
+  it("is a verdict about that value when the provider passes it through refusedOrThrow", async () => {
+    testConnection.mockImplementationOnce(async (ctx) => {
+      try {
+        return await sendsTheToken(ctx as never);
+      } catch (error) {
+        // The provider's contract returns this shape; the fixture's mock
+        // was typed from the plain refusal it returns elsewhere.
+        return refusedOrThrow(error, "Demo did not accept the token.") as never;
+      }
+    });
+    const result = await save({ ...GOOD, apiToken: QUOTED_TOKEN });
+    expect(result.test).toEqual({
+      ok: false,
+      failure: {
+        reason: "value_malformed",
+        message:
+          "The API token has a character in it that no request header can carry, usually a curly quote or an invisible character pasted from a document.",
+      },
+    });
+  });
+
+  it("is still that verdict when the provider lets the refusal escape", async () => {
+    testConnection.mockImplementationOnce(async (ctx) => sendsTheToken(ctx as never));
+    const result = await save({ ...GOOD, apiToken: QUOTED_TOKEN });
+    expect(result.test?.ok === false && result.test.failure.reason).toBe("value_malformed");
+    expect(result.integration.state.status).not.toBe("connected");
   });
 });
 
@@ -426,6 +470,56 @@ describe("testing an environment-configured integration (INT-002)", () => {
     const state = (await listIntegrations()).integrations[0]?.state;
     expect(state?.status).toBe("connected");
     expect(state?.verification.state).toBe("stale");
+  });
+});
+
+describe("testing stored values again later", () => {
+  // The save's own test is the version's record, and it is always a pass,
+  // because only a pass activates. A token revoked since then is exactly what
+  // an admin presses Test to find out about; when the answer was ignored the
+  // card, the health screen and every run kept calling it Connected.
+  it("reads Failing once the provider refuses what it accepted at the save", async () => {
+    const saved = await save(GOOD);
+    expect(saved.integration.state.status).toBe("connected");
+    testConnection.mockImplementationOnce(async () => ({
+      ok: false as const,
+      reason: "401 Unauthorized: token revoked",
+    }));
+
+    const tested = await testIntegrationConnection({ actor: ADMIN, integrationId: "demo" });
+
+    expect(tested.integration.state.status).toBe("failing");
+    expect(tested.integration.state.failure?.reason).toBe("credential_rejected");
+    expect((await listIntegrations()).integrations[0]?.state.usable).toBe(false);
+  });
+
+  it("reads Connected again once a later Test passes", async () => {
+    await save(GOOD);
+    testConnection.mockImplementationOnce(async () => ({
+      ok: false as const,
+      reason: "401 Unauthorized: token revoked",
+    }));
+    await testIntegrationConnection({ actor: ADMIN, integrationId: "demo" });
+
+    const tested = await testIntegrationConnection({ actor: ADMIN, integrationId: "demo" });
+
+    expect(tested.integration.state.status).toBe("connected");
+    expect(tested.integration.state.verification.state).toBe("passed");
+  });
+
+  it("stays Connected when the provider could not be reached", async () => {
+    await save(GOOD);
+    testConnection.mockImplementationOnce(async () => {
+      throw new Error("fetch failed: ECONNREFUSED");
+    });
+
+    const tested = await testIntegrationConnection({ actor: ADMIN, integrationId: "demo" });
+
+    expect(tested.integration.state.status).toBe("connected");
+    expect(tested.integration.state.verification).toMatchObject({
+      state: "failed",
+      failure: { reason: "provider_unreachable" },
+    });
   });
 });
 

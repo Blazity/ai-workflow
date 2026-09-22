@@ -80,6 +80,9 @@ vi.mock("../../services/integrations/runtime.js", () => ({
     usable: [
       {
         manifest: MANIFEST,
+        // The resolved runtime is the registry's, as in production, where it
+        // is the same runtime behind the redaction boundary.
+        runtime: (await import("@integrations/registry/worker")).integrationRuntime(MANIFEST.id),
         ctx: { connection: {}, signal: new AbortController().signal },
       },
     ],
