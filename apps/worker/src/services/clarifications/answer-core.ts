@@ -46,8 +46,7 @@ import {
   type TicketComment,
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
-import { aiColumnMoveTarget } from "../tickets/index.js";
-import { issueTrackerWiring } from "../../engine/support/issue-tracker-runtime.js";
+import { trackerMoveTarget } from "../../engine/support/issue-tracker-runtime.js";
 import {
   markConnectedRunResumed,
   markRunResumed,
@@ -166,7 +165,7 @@ interface AnswerPersistence extends RepositoryAnswerPersistence {
   transitionTicket(input: {
     issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
     ticketKey: string;
-    target: ReturnType<typeof aiColumnMoveTarget>;
+    target: IssueTrackerMoveTarget;
     owner: { subjectKey: string; ownerToken: string; runId: string };
   }): Promise<void>;
   /** Move the ticket out of the AI column only if a fresh read still finds it
@@ -275,10 +274,7 @@ async function moveTicketToAiColumn(input: {
   await input.persistence.transitionTicket({
     issueTracker: input.issueTracker,
     ticketKey: input.ticketKey,
-    target: aiColumnMoveTarget({
-      COLUMN_AI: input.aiColumn,
-      aiTransitionId: (await issueTrackerWiring()).aiTransitionId,
-    }),
+    target: await trackerMoveTarget(input.aiColumn, "ai"),
     owner: {
       subjectKey: input.row.subjectKey,
       ownerToken: owner.ownerToken,
@@ -331,9 +327,7 @@ async function withdrawTicketWhileQuestionWaits(input: {
       issueTracker: input.issueTracker,
       ticketKey,
       aiColumn: columns.COLUMN_AI,
-      target: (await issueTrackerWiring()).backlogTransitionId
-        ? { name: columns.COLUMN_BACKLOG, transitionId: (await issueTrackerWiring()).backlogTransitionId }
-        : columns.COLUMN_BACKLOG,
+      target: await trackerMoveTarget(columns.COLUMN_BACKLOG, "backlog"),
       owner: { subjectKey: row.subjectKey, ownerToken: owner.ownerToken, runId: row.runId },
       requiredOwnerState: "bound",
     });

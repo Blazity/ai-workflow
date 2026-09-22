@@ -13,16 +13,12 @@ import type { IntegrationHealthResult, IntegrationManifest } from "@integrations
 
 import type { StoredIntegrationConnection } from "../integrations/index.js";
 import {
-  integrationSecretsKeyId,
-  isValidIntegrationSecretsKey,
-} from "../../infra/secrets-crypto.js";
-import {
   type ConnectionValue,
-  type IntegrationSecretsKeyMaterial,
   buildIntegrationContext,
   environmentReaderFrom,
   readConnectionValues,
   resolveIntegrationState,
+  secretsKeyMaterial,
   secretValuesOf,
 } from "../integrations/index.js";
 import type { IntegrationHealthEntry } from "./integration-health.js";
@@ -90,12 +86,4 @@ function runProbe(
   }
   const context = buildIntegrationContext({ manifest, values, secrets, signal });
   return (probe as (ctx: unknown) => Promise<IntegrationHealthResult>)(context);
-}
-
-/** The key this deployment holds. Mirrors the one the integrations service uses;
- *  both read the same variable and neither caches it. */
-function secretsKeyMaterial(): IntegrationSecretsKeyMaterial {
-  const key = process.env.INTEGRATION_SECRETS_KEY;
-  if (!key || !isValidIntegrationSecretsKey(key)) return { present: false };
-  return { present: true, keyId: integrationSecretsKeyId(key), key };
 }
