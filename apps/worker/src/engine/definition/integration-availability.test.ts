@@ -414,7 +414,32 @@ describe("what a graph reaches beyond the blocks the palette gates", () => {
   });
 
   it("traces a generic agent's sandbox without claiming it prepares a workspace", () => {
-    expect(coreBlockCapabilities("generic_agent", {}).reached).toEqual(["agent_tracing"]);
+    expect(coreBlockCapabilities("generic_agent", { workspaceMode: "none" }).reached).toEqual([
+      "agent_tracing",
+    ]);
+  });
+
+  // The same answer the scheduler and the block give (workflowWorkspaceAccessOf,
+  // generic-agent/execute.ts): a workspace mode other than "none", including
+  // none at all on a definition saved before the field existed, works in the
+  // shared checkout, so the run reaches what preparing it reaches.
+  it.each([{ workspaceMode: "read_write" }, {}])(
+    "counts a generic agent that works in the checkout (%o) as touching the workspace",
+    (params) => {
+      expect(coreBlockCapabilities("generic_agent", params).reached).toEqual([
+        "vcs",
+        "memory",
+        "agent_tracing",
+      ]);
+    },
+  );
+
+  it("counts a block that only reads a prepared workspace as reaching what preparing it does", () => {
+    expect(coreBlockCapabilities("run_checks", {}).reached).toEqual([
+      "vcs",
+      "memory",
+      "agent_tracing",
+    ]);
   });
 
   // The palette's question is narrower on purpose: an agent runs untraced

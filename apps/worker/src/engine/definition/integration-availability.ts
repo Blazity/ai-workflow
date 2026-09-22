@@ -25,7 +25,9 @@ import type {
   IntegrationStatus,
   IntegrationUnavailableReason,
   WorkflowBlockAvailability,
+  WorkflowDefinitionV2Node,
 } from "@shared/contracts";
+import { workflowWorkspaceAccessOf } from "@shared/workflow-graph";
 
 /** One integration as the engine needs it. Carries no connection value. */
 export interface IntegrationPresence {
@@ -333,30 +335,11 @@ const VCS_BLOCKS = new Set([
 ]);
 
 /**
- * Blocks that prepare the run's workspace, explicitly or on their first use,
- * through `ensureWorkspace` in `blocks/prepare-workspace/execute.ts`:
- * prepare_workspace (agent-workflow.ts:2918), planning_agent (:3034, through
- * `ensureCodeWorkspace`), implementation_agent (:3654), review_agent (:3876)
- * and fix_agent (blocks/fix-agent/execute.ts:661).
- *
- * Preparing reaches three capabilities: version control, to resolve and clone
- * the repositories; agent tracing, because the sandbox is configured with every
- * tracing provider (`agentTracingRun`, prepare-workspace/execute.ts:1322); and
- * memory, hydrated into the workspace (:1394, seeded at :1437) and captured
- * back when the run tears it down (agent-workflow.ts:5044).
- */
-const WORKSPACE_PREPARING_BLOCKS = new Set([
-  "prepare_workspace",
-  "planning_agent",
-  "implementation_agent",
-  "review_agent",
-  "fix_agent",
-]);
-
-/**
- * Blocks that run an agent in a sandbox without preparing a workspace
- * themselves. Every agent sandbox is configured with every tracing provider
- * (generic_agent through `ensureAgentSandbox`, blocks/agent-sandbox.ts:276).
+ * Blocks that run an agent in a sandbox without touching the workspace. Every
+ * agent sandbox is configured with every tracing provider (`agentTracingRun`,
+ * called by `ensureAgentSandbox` in `blocks/agent-sandbox.ts`), so a
+ * generic_agent whose workspace mode is "none" still reaches tracing. With a
+ * workspace mode it touches the workspace and is covered by the rule below.
  */
 const AGENT_SANDBOX_BLOCKS = new Set(["generic_agent"]);
 
@@ -365,13 +348,12 @@ const AGENT_SANDBOX_BLOCKS = new Set(["generic_agent"]);
  *
  * The ticket triggers make the whole run about a ticket, so they stand for
  * what every run they start reaches whatever its blocks are: the ticket is
- * read at dispatch (services/dispatch/dispatch.ts:109), moved back to the
- * backlog when the run fails (agent-workflow.ts:686) and on to AI Review when
- * it finishes (:1373). A plan approval continues a ticket's run
- * (services/approvals/dispatch.ts:46). The rest call it themselves:
- * post_ticket_comment (blocks/post-ticket-comment/execute.ts:14),
- * send_plan_approval (blocks/send-plan-approval/execute.ts:72) and
- * update_ticket_status (agent-workflow.ts:4472).
+ * read at dispatch (`dispatchTicket` in services/dispatch/dispatch.ts), moved
+ * back to the backlog when the run fails and on to AI Review when it finishes
+ * (`moveTicketStep`, through the run's `moveTargets` in agent-workflow.ts). A
+ * plan approval continues a ticket's run (`dispatchPlanApproved` in
+ * services/approvals/dispatch.ts). The rest call it themselves:
+ * post_ticket_comment, send_plan_approval and update_ticket_status.
  */
 const ISSUE_TRACKER_BLOCKS = new Set([
   "trigger_ticket_ai",
@@ -380,6 +362,29 @@ const ISSUE_TRACKER_BLOCKS = new Set([
   "send_plan_approval",
   "update_ticket_status",
 ]);
+
+/**
+ * Whether a block touches the run's workspace, from the rule the scheduler
+ * already runs on (`workflowWorkspaceAccessOf` in @shared/workflow-graph), not
+ * from a second list here: a block that starts touching the workspace is
+ * counted the day it does, where a hand-kept list would silently lose its pins.
+ *
+ * Touching the workspace reaches three capabilities, because the workspace is
+ * prepared on first use (`ensureWorkspace` in blocks/prepare-workspace, which
+ * the agent blocks reach through `ensureCodeWorkspace`): version control, to
+ * resolve and clone the repositories; agent tracing, because the sandbox is
+ * configured with every tracing provider (`agentTracingRun`); and memory,
+ * hydrated into the workspace (`hydrateWorkspaceMemoryStep`, seeded by
+ * `seedRepoMemoryStep`) and captured back when the run tears it down
+ * (`persistWorkspaceMemoryStep`). The set it answers for is wider than the
+ * blocks that prepare it (a check or a leak review reads a workspace an
+ * earlier block prepared), and that is harmless: such a block cannot run
+ * without a prepared workspace, so its run reaches the same three anyway.
+ */
+function touchesWorkspace(type: string, params: Readonly<Record<string, unknown>> | undefined): boolean {
+  const node = { type, configuration: params ?? {} } as unknown as WorkflowDefinitionV2Node;
+  return workflowWorkspaceAccessOf(node) !== "none";
+}
 
 /** What a core block needs from the deployment's capabilities. */
 export interface CoreBlockCapabilities {
@@ -428,7 +433,7 @@ export function coreBlockCapabilities(
 
   if (ISSUE_TRACKER_BLOCKS.has(type)) use(ISSUE_TRACKER);
   if (VCS_BLOCKS.has(type)) need(VCS);
-  if (WORKSPACE_PREPARING_BLOCKS.has(type)) {
+  if (touchesWorkspace(type, params)) {
     use(VCS);
     use(MEMORY);
     use(AGENT_TRACING);
