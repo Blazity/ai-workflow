@@ -45,6 +45,7 @@ import {
   vcsProviderSelection,
 } from "@shared/workflow-graph";
 import type { DeploymentIntegrations } from "./integration-availability.js";
+import { MAX_TRUSTED_PRODUCERS } from "../blocks/trigger-pr-checks-failed/manifest.js";
 import { DEFAULT_REVIEW_TRIGGER_STATES } from "../blocks/trigger-pr-review/manifest.js";
 
 const emptyParams = z.object({}).strict();
@@ -103,7 +104,7 @@ const v2TriggerPrChecksFailedConfiguration = z
     ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
     trustedProducers: z
       .array(z.string().trim().min(1).max(100))
-      .max(20)
+      .max(MAX_TRUSTED_PRODUCERS)
       .default([]),
     maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
     ...triggerRateLimitParams,

@@ -209,4 +209,29 @@ describe("a check trigger stored before S10", () => {
 
     expect(issues.filter((issue) => issue.nodeId === "trigger-checks-failed")).toEqual([]);
   });
+
+  it("validates a node that filled both lists to the most they could hold", () => {
+    // Each retired list took up to 20 entries, so the one list they fold into
+    // can carry 40. A graph published at that limit has to keep validating, or
+    // the upgrade would refuse a trigger that worked the day before.
+    const full = (prefix: string) => Array.from({ length: 20 }, (_, index) => `${prefix}-${index}`);
+    const issues = validateWorkflowDefinitionCandidate(
+      storedGraph({
+        ...templateNode,
+        githubAppSlugs: full("app"),
+        gitlabPipelineSources: full("source"),
+      }),
+      ...testBlockData({
+        agentProviders: { claude: true, codex: true },
+        llmProviders: { claude: true, codex: true },
+        defaultAgent: { provider: "claude", model: "claude-test" },
+        vcsProviders: ["github", "gitlab"],
+        vcsBotIdentities: ["github", "gitlab"],
+        webhookTriggerConfigured: true,
+        integrations: MESSAGING_CONNECTED,
+      }),
+    ).response.issues;
+
+    expect(issues.filter((issue) => issue.nodeId === "trigger-checks-failed")).toEqual([]);
+  });
 });
