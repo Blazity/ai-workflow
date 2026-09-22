@@ -9,6 +9,7 @@ import {
   type TicketComment,
   type TicketSummary,
 } from "@integrations/sdk";
+import { jqlFragmentProblem } from "./jql";
 
 export interface JiraConfig {
   baseUrl: string;
@@ -596,8 +597,8 @@ export class JiraAdapter implements IssueTrackerAdapter {
    * nothing rather than that project's tickets.
    *
    * `providerQuery` is a JQL fragment a workflow author typed. It is used only
-   * when it stays inside the parentheses it is wrapped in
-   * (`staysInsideItsParentheses`), which is what makes the promise above hold
+   * when it stays inside the parentheses it is wrapped in (`jqlFragmentProblem`
+   * finds nothing wrong with it), which is what makes the promise above hold
    * for text nobody here wrote.
    */
   async findTickets(input: {
@@ -607,7 +608,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
   }): Promise<TicketSummary[]> {
     const clauses = [`project = "${jqlLiteral(this.projectKey)}"`];
     const authored = input.providerQuery?.trim() ?? "";
-    if (authored !== "" && staysInsideItsParentheses(authored)) clauses.push(authored);
+    if (authored !== "" && jqlFragmentProblem(authored) === null) clauses.push(authored);
     const keywordClause = input.keywords
       .map(jqlLiteral)
       .filter((keyword) => keyword !== "")
@@ -782,44 +783,4 @@ function sanitizeAttachmentSize(size: unknown): number {
  *  escape that can. */
 function jqlLiteral(value: string): string {
   return value.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-/**
- * Whether an authored JQL fragment, once wrapped in parentheses, stays inside
- * them. That is what keeps the project clause ANDed in front of it binding:
- * a fragment that closed the wrapper could OR its way into every project the
- * token can see.
- *
- * It reads the fragment the way Jira's lexer does, as far as a parenthesis can
- * be hidden: a value is a string in single OR double quotation marks, closed
- * only by the quote that opened it, and a backslash inside one escapes the
- * next character. Outside a value a backslash is refused rather than
- * interpreted, because there it escapes a character in Jira's lexer (`\'` is a
- * literal quote, not the start of a string) and any disagreement about one
- * character is where a `)` hides. Every string must close, and every
- * parenthesis must close one the fragment opened.
- *
- * A fragment that fails is dropped rather than repaired: the whole query would
- * otherwise fail at Jira, which reads to the person who wrote it as "there was
- * no evidence" rather than "your query does not parse".
- */
-function staysInsideItsParentheses(clause: string): boolean {
-  let depth = 0;
-  let quote: "'" | '"' | null = null;
-  for (let index = 0; index < clause.length; index += 1) {
-    const char = clause[index];
-    if (quote !== null) {
-      if (char === "\\") index += 1;
-      else if (char === quote) quote = null;
-      continue;
-    }
-    if (char === "'" || char === '"') quote = char;
-    else if (char === "\\") return false;
-    else if (char === "(") depth += 1;
-    else if (char === ")") {
-      depth -= 1;
-      if (depth < 0) return false;
-    }
-  }
-  return depth === 0 && quote === null;
 }
