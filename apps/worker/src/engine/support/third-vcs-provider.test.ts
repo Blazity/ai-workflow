@@ -147,7 +147,7 @@ vi.mock("../../infra/logger.js", () => ({
 // repository, and reading it would only make the test need a database URL.
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
-const { assertVcsProviderAvailable } = await import(
+const { assertVcsProviderShipped } = await import(
   "../../services/repository-catalog/provider-validation.js"
 );
 const { buildRepositoryCatalog } = await import("../repository-discovery/catalog.js");
@@ -176,15 +176,15 @@ function repository(repoPath: string) {
 describe("a version control provider core has never heard of", () => {
   it("is refused before persistence while it is not registered", () => {
     shipped.manifests = [];
-    expect(() => assertVcsProviderAvailable("forgejo", "import")).toThrow(/forgejo/u);
+    expect(() => assertVcsProviderShipped("forgejo", "import")).toThrow(/forgejo/u);
   });
 
   it("is accepted by the catalog the moment its manifest is in the registry", () => {
     shipped.manifests = [forgejo];
-    expect(() => assertVcsProviderAvailable("forgejo", "import")).not.toThrow();
+    expect(() => assertVcsProviderShipped("forgejo", "import")).not.toThrow();
     // And an id nobody registered is still refused, so the check above is not
     // passing because the guard stopped guarding.
-    expect(() => assertVcsProviderAvailable("subversion", "import")).toThrow(/subversion/u);
+    expect(() => assertVcsProviderShipped("subversion", "import")).toThrow(/subversion/u);
   });
 
   it("carries its repositories through the catalog under its own provider id", () => {

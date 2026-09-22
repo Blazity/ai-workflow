@@ -29,7 +29,7 @@ import {
 import { listCachedRepositoryDirectory } from "../repository-discovery/index.js";
 import { requireCatalogManager, type RepositoryCatalogActor } from "./authoring.js";
 import { loadRepositoryCatalogEntries } from "./store.js";
-import { assertVcsProviderAvailable } from "./provider-validation.js";
+import { assertVcsProviderShipped } from "./provider-validation.js";
 
 /**
  * What the installation exposes, marked with what the catalog already holds.
@@ -109,7 +109,7 @@ export async function commitRepositoryImport(input: {
     requested.push(normalized);
   }
   for (const provider of new Set(requested.map((key) => key.split(":", 1)[0]!))) {
-    assertVcsProviderAvailable(provider, "import");
+    assertVcsProviderShipped(provider, "import");
   }
 
   const [directory, before] = await Promise.all([
