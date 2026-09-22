@@ -184,6 +184,9 @@ const PUBLISHED = [
   "settings.reset",
   "work_scope.get",
   "work_scope.edit",
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ];
 
 const READ_ANNOTATIONS = {
@@ -345,6 +348,17 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   // takes a repository away from every later run on the subject: destructive,
   // and closed world because no run is started and no ticket moved.
   "work_scope.edit": DEPLOYMENT_CONFIG_ANNOTATIONS,
+  // Reading what the agent remembered changes nothing.
+  "memory.list": READ_ANNOTATIONS,
+  "memory.get": READ_ANNOTATIONS,
+  // A hard delete of one document, reaching whichever provider keeps this
+  // deployment's memory, which may not be this deployment's own database.
+  "memory.forget": {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
 };
 
 const DOMAINS = [
@@ -357,6 +371,7 @@ const DOMAINS = [
   "repositories",
   "settings",
   "work_scope",
+  "memory",
 ];
 
 // The committed artifact, read as a file. This is the independent source for the

@@ -190,7 +190,7 @@ _Avoid_: Plugin in code and docs (fine in conversation), adapter, provider when 
 
 **Integration Capability**:
 A seam in core that an integration can fill: `issue_tracker`, `vcs`,
-`messaging`, and the reserved `memory`, `agent_tracing` and `agent_tools`. Each
+`messaging`, `memory`, `agent_tracing`, and the reserved `agent_tools`. Each
 has a port the provider implements and a cardinality: one active provider per
 deployment, or many at once. It is not a Harness Capability, which is what a
 model harness advertises in the model catalog (reasoning efforts, service

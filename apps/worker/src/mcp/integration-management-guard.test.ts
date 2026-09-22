@@ -92,6 +92,12 @@ const REVIEWED_TOOLS: readonly string[] = [
   "settings.reset",
   "work_scope.get",
   "work_scope.edit",
+  // Reads and erasure of what the agent remembered. None of the three connects,
+  // tests, enables, disables, switches a source or chooses a provider: they
+  // address a stored document by subject and path and never name a provider.
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ];
 
 /**

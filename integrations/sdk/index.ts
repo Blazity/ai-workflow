@@ -21,8 +21,8 @@
  * step directive anywhere in integration code.
  *
  * What it implements for a capability is a port: `IssueTrackerAdapter`,
- * `VCSAdapter`, `MessagingAdapter`, `AgentTracingAdapter`. The ports of
- * `memory` and `agent_tools` are reserved (see `INTEGRATION_CAPABILITIES`).
+ * `VCSAdapter`, `MessagingAdapter`, `MemoryAdapter`, `AgentTracingAdapter`.
+ * The port of `agent_tools` is reserved (see `INTEGRATION_CAPABILITIES`).
  *
  * `checkIntegrationConformance` is what CI runs over every integration.
  * ADR-010 records why the contract has this shape and every later change.
@@ -191,6 +191,25 @@ export {
   type VcsRepositoryMetadata,
   type VcsSandboxCredentials,
 } from "./vcs";
+
+export type {
+  MemoryAdapter,
+  MemoryEntry,
+  MemoryFailure,
+  MemoryObservation,
+  MemoryObserveRequest,
+  MemoryRecall,
+  MemoryRecallRequest,
+  MemoryScope,
+  MemoryScopeKind,
+  MemoryStoreAdapter,
+  MemoryStoreListing,
+  MemoryStoredDocument,
+  MemoryStoredDocumentRef,
+  MemoryStoredSummary,
+  MemorySubject,
+  MemoryWrite,
+} from "./memory";
 
 export type {
   MessageRetrievalFailure,

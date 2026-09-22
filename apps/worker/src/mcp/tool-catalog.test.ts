@@ -79,6 +79,9 @@ const CATALOGUED = [
   "settings.reset",
   "work_scope.get",
   "work_scope.edit",
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

@@ -1355,7 +1355,7 @@ export async function ensureWorkspace(
     // this guard keeps even a step-boundary error from failing the block, which
     // is already fully provisioned at this point.
     try {
-      await hydrateWorkspaceMemoryStep({
+      const hydrated = await hydrateWorkspaceMemoryStep({
         sandboxId,
         subjectKey: ctx.entry.subjectKey,
         ticketKey: ctx.entry.ticketKey ?? null,
@@ -1363,6 +1363,16 @@ export async function ensureWorkspace(
         workspaceManifest,
         runId: ctx.runId,
       });
+      // Recorded on the run, not only in the log: a workspace that started
+      // without the notebook an earlier run left is indistinguishable, from
+      // the run view, from the first run on a ticket.
+      if (hydrated.unavailable !== undefined) {
+        await emitRepositoryWorkflowObservation(execution?.observations, {
+          event: "memory_unavailable",
+          where: "hydrate",
+          reason: hydrated.unavailable,
+        });
+      }
     } catch (err) {
       if (isRunControlError(err)) throw err;
       // Memory is an optimization; the workspace is ready either way.
@@ -1388,11 +1398,18 @@ export async function ensureWorkspace(
         workflowOwnedBranch: repository.workflowOwnedBranch?.branchName ?? null,
       }));
       try {
-        await seedRepoMemoryStep({
+        const seeded = await seedRepoMemoryStep({
           sandboxId,
           runId: ctx.runId,
           repositories: memoryRepositories,
         });
+        if (seeded.unavailable !== undefined) {
+          await emitRepositoryWorkflowObservation(execution?.observations, {
+            event: "memory_unavailable",
+            where: "seed",
+            reason: seeded.unavailable,
+          });
+        }
       } catch (err) {
         if (isRunControlError(err)) throw err;
         // Memory is an optimization; the workspace is ready either way.

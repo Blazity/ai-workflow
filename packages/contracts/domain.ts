@@ -945,5 +945,12 @@ export const FIRST_SLICE_TOOLS = [
   // to it, which is what makes an exclusion recoverable.
   "work_scope.get",
   "work_scope.edit",
+  // Appended for the same reason again. What the agent remembered was readable
+  // and erasable from the dashboard and from nowhere else, which left an agent
+  // that had learned something false with no way to say so. These three are the
+  // memory screen's own three actions.
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];

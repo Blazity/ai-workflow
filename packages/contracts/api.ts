@@ -950,6 +950,17 @@ export interface PromptLibraryUsageResponse {
   prompts: PromptLibraryPromptUsageRow[];
 }
 
+/**
+ * The longest a memory address part may be.
+ *
+ * Subject keys and doc paths the agent writes are short identifiers, so a
+ * longer value is a malformed or hostile request and is refused before it
+ * reaches any provider. One derivation, because the HTTP routes and the MCP
+ * tools both bound the same two strings and a second number here would let one
+ * of them accept what the other rejects.
+ */
+export const MEMORY_KEY_MAX_LENGTH = 512;
+
 /** One stored agent memory document, without its body. */
 export interface MemoryDocumentSummaryDto {
   /** Canonical identity of the run subject the document belongs to. */
@@ -965,6 +976,19 @@ export interface MemoryDocumentSummaryDto {
 export interface MemoryDocumentsResponse {
   /** Newest first, capped by the store's list limit. */
   documents: MemoryDocumentSummaryDto[];
+  /**
+   * False when the provider that keeps this deployment's memory cannot promise
+   * the list is everything it holds, so a screen says so rather than letting a
+   * person read absence as proof.
+   *
+   * Optional, and absent reads as `true`: a response from a build before this
+   * field existed cannot answer either way, and `true` is how that build's
+   * screen already read it, so an older worker keeps its behaviour instead of
+   * gaining a notice nothing behind it can decide. A provider that cannot list
+   * AT ALL does not answer this shape; the request is refused with the reason
+   * instead.
+   */
+  complete?: boolean;
 }
 
 /** A single document with its body; `subjectKey` / `docPath` echo the request. */

@@ -1036,6 +1036,63 @@ configured now rather than refusing. Nothing about the merge may rest on that
 check. The branch still requires the total drain the protocol above states, for
 the reasons S10 and S11 recorded.
 
+S13 drain, 2026-09-22: no step identity is added, removed, moved or renamed.
+The 67 files carrying `"use step"` are the same 67 at `3c3bc7ca`, and the 106
+`(module path, function name)` pairs an extraction over those files finds are
+identical before and after. Five of those files changed, none in a way that
+moves an identity: `engine/steps/memory-steps.ts`,
+`engine/steps/repo-memory-steps.ts`, `engine/steps/repo-seed-steps.ts`,
+`engine/blocks/prepare-workspace/execute.ts` and `engine/agent-workflow.ts`.
+
+FOUR RECORDED RESULTS GAIN A FIELD, all optional, all absent on a result stored
+before this change, and absent means "memory answered" in every one of them.
+A run suspended inside any of these replays its stored result and behaves
+exactly as it did, because nothing downstream branches on the new field except
+to record it:
+
+- `hydrateWorkspaceMemoryStep` and `persistWorkspaceMemoryStep` gain
+  `unavailable`, the provider's reason. `source: "none"` and
+  `persisted: false` used to mean both "nothing was stored for this subject"
+  and "memory could not be reached"; they now mean only the first.
+- `seedRepoMemoryStep` gains `unavailable` for the same reason.
+- `distillRepoMemoryStep` gains `unavailable` and a new `skipped` value,
+  `memory_unavailable`. A replayed result carrying `store_failed` still reads
+  as it always did.
+
+ONE RECORDED RESULT CHANGES SHAPE: `loadRepoMemorySourcesStep` answered
+`EffectivePromptMemorySource[]` and now answers `{ sources, unavailable? }`. A
+run suspended inside it replays an ARRAY, and reading `.sources` off that would
+hand the prompt compiler `undefined` outside the catch that guards this call.
+The caller therefore accepts both shapes (`Array.isArray(loaded) ? loaded :
+loaded.sources` in `engine/agent-workflow.ts`) and reads the older one as
+"memory answered", which it did. It is still a drain reason and the branch
+requires the total drain the protocol above states, for the reasons S10 and S11
+recorded; the compatibility is what keeps a replay from failing before that
+drain happens.
+
+NOTHING PINS THE MEMORY PROVIDER TODAY. `activeMemory(pins)` can compare a
+recorded pin and no caller passes one, because threading pins into a memory
+call would change the recorded INPUT shape of a `"use step"` function, which is
+a strictly worse drain event than this stage otherwise needs. The comparison is
+therefore wired and unused in production, exactly as S12 recorded for the
+tracker, and nothing about the merge may rest on it operating. It is also why
+the built-in provider is resolved BEFORE any pin comparison: on a deployment
+with no memory integration a run's pins name other integrations, and comparing
+them would read as "memory moved" on every run of every default deployment.
+
+S13 scope not taken, 2026-09-22: routing memory
+(`engine/pre-sandbox/steps/repo-selection.ts`) still reads and writes
+`db/repositories/memory.ts` directly and is NOT on the port. Its document is a
+structured index of label-to-repository answers with corroborating ticket keys,
+which core parses and matches to decide whether to ask a human; putting it
+behind a prose port would either export the routing schema into the SDK or lose
+the compare-and-swap that keeps two runs from overwriting each other's answers.
+The cost is real and is written down rather than discovered: a deployment that
+connects a memory engine keeps its routing answers in the built-in store, so
+that one scope is split across two providers. Both switches that gate routing
+(`ENABLE_REPO_MEMORY` and `ENABLE_REPO_ROUTING_MEMORY`) default to false, so no
+default deployment is in that state.
+
 S12 connection shape, 2026-09-22: the pinned connection shape gains Jira's
 seven fields (`services/integrations/connection-shape.test.ts` snapshot, +68
 lines). No existing integration's fingerprint changes. `apiToken` is

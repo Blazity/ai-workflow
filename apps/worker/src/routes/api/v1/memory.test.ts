@@ -1,6 +1,7 @@
 import { createApp, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../db/client.js";
+import type { ActiveMemory } from "../../../engine/support/memory-runtime.js";
 import { agentMemoryDocuments, member, organization, user } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import { getMemoryDocument, upsertMemoryDocument } from "../../../memory/store.js";
@@ -9,9 +10,23 @@ const state = vi.hoisted(() => ({
   db: undefined as unknown,
   sessionUserId: "user_admin" as string | null,
   env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
+  /** Non-null puts a different memory provider behind all three routes. */
+  memory: null as unknown,
 }));
 
 vi.mock("../../../infra/vcs-config.js", () => ({ env: state.env }));
+// Every test below runs against the real built-in provider unless it puts
+// another one in `state.memory`, which is how the provider-shaped answers
+// (501 and 503) get exercised without a second database.
+vi.mock("../../../engine/support/memory-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../engine/support/memory-runtime.js")>();
+  return {
+    ...actual,
+    activeMemory: async (): Promise<ActiveMemory> =>
+      (state.memory as ActiveMemory | null) ?? (await actual.activeMemory()),
+  };
+});
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../../services/auth/auth-instance.js", () => ({
   auth: {
@@ -57,6 +72,7 @@ function documentQuery(subjectKey: string, docPath: string): string {
 beforeEach(async () => {
   vi.clearAllMocks();
   state.sessionUserId = "user_admin";
+  state.memory = null;
   db = await createTestDb();
   state.db = db;
   await db.insert(organization).values({ id: "org_aiw", name: "AI Workflow", slug: "ai-workflow" });
@@ -81,7 +97,10 @@ describe("GET /api/v1/memory", () => {
   it("returns an empty listing when nothing was remembered", async () => {
     const res = await get();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ documents: [] });
+    // `complete: true` is the provider saying this listing is everything it
+    // holds. An engine that cannot promise that answers false, and the screen
+    // says so rather than letting a person read absence as proof.
+    expect(await res.json()).toEqual({ documents: [], complete: true });
   });
 
   it("lists documents newest first and without content", async () => {
@@ -298,5 +317,69 @@ describe("DELETE /api/v1/memory", () => {
 
     expect((await del(documentQuery(SUBJECT_KEY, DOC_PATH))).status).toBe(403);
     expect(await countRows()).toBe(1);
+  });
+});
+
+/**
+ * A memory provider that is not the built-in one, which is the only way to
+ * reach the two answers these routes owe a client about the provider itself.
+ *
+ * `store: null` and "the store threw" are different facts and the routes must
+ * not collapse them: one says stop asking, the other says ask again.
+ */
+function provider(store: ActiveMemory["store"]): ActiveMemory {
+  return {
+    id: "acme-memory",
+    name: "Acme Memory",
+    refusal: null,
+    store,
+    recall: () => Promise.reject(new Error("these routes never recall")),
+    observe: () => Promise.reject(new Error("these routes never observe")),
+  };
+}
+
+const AWAY = {
+  list: () => Promise.reject(new Error("upstream timed out")),
+  read: () => Promise.reject(new Error("upstream timed out")),
+  forget: () => Promise.reject(new Error("upstream timed out")),
+};
+
+describe("memory routes answer for the provider, not for the store", () => {
+  async function statuses(): Promise<number[]> {
+    return [
+      (await get()).status,
+      (await get(documentQuery(SUBJECT_KEY, DOC_PATH))).status,
+      (await del(documentQuery(SUBJECT_KEY, DOC_PATH))).status,
+    ];
+  }
+
+  it("501s every route when the provider serves runs without an enumerable store", async () => {
+    state.memory = provider(null);
+
+    // 501 and not 503: this deployment's memory works, it just cannot be
+    // browsed from here, and no amount of retrying changes that. A single
+    // route answering 503 sends an admin to look for an outage that is not
+    // happening.
+    expect(await statuses()).toEqual([501, 501, 501]);
+  });
+
+  it("503s every route when the provider is away, and names it", async () => {
+    state.memory = provider(AWAY);
+
+    expect(await statuses()).toEqual([503, 503, 503]);
+    const body = await (await get(documentQuery(SUBJECT_KEY, DOC_PATH))).text();
+    expect(body).toContain("Acme Memory");
+  });
+
+  it("404s the document rather than 501 when the provider can enumerate", async () => {
+    state.memory = provider({
+      list: async () => ({ documents: [], complete: true }),
+      read: async () => null,
+      forget: async () => false,
+    });
+
+    // The guard on the fix above: a reachable provider that holds nothing
+    // still owes a person "no such document", not "this cannot be browsed".
+    expect(await statuses()).toEqual([200, 404, 404]);
   });
 });

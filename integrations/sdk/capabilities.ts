@@ -1,5 +1,6 @@
 import type { AgentTracingAdapter } from "./agent-tracing";
 import type { IssueTrackerAdapter } from "./issue-tracker";
+import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter, MessagingSender } from "./messaging";
 import type { VCSAdapter } from "./vcs";
 
@@ -20,8 +21,16 @@ export const INTEGRATION_CAPABILITIES = {
   issue_tracker: { cardinality: "one", reservedFor: null },
   vcs: { cardinality: "many", reservedFor: null },
   messaging: { cardinality: "one", reservedFor: null },
-  /** Designed in S13 against the built-in store and two external engines. */
-  memory: { cardinality: "one", reservedFor: "S13" },
+  /**
+   * Designed in S13 against the built-in store and two external engines.
+   *
+   * `one`, and the one is the built-in store on a deployment that connects
+   * nothing: memory is the only capability core can serve by itself, so
+   * connecting an integration REPLACES a provider rather than supplying the
+   * first one. A deployment that never opens the Integrations page keeps
+   * exactly the memory it has.
+   */
+  memory: { cardinality: "one", reservedFor: null },
   /** Every connected provider watches every agent sandbox; see `agent-tracing.ts`. */
   agent_tracing: { cardinality: "many", reservedFor: null },
   /** MCP servers handed to sandbox agents; waits for AIW-392, a later plan. */
@@ -38,6 +47,7 @@ export interface IntegrationCapabilityPorts {
   issue_tracker: IssueTrackerAdapter;
   vcs: VCSAdapter;
   messaging: MessagingAdapter;
+  memory: MemoryAdapter;
   agent_tracing: AgentTracingAdapter;
 }
 
@@ -79,4 +89,17 @@ export interface IntegrationCapabilityAccess {
    * a handle it could hand to the wrong ticket.
    */
   messaging: MessagingSender;
+  /**
+   * `memory` is absent here on purpose, the way `agent_tracing` is. Both are
+   * applied by core around a run rather than called from inside a block:
+   * hydrating a workspace, reading memory into a prompt and distilling at the
+   * end of a run are core's orchestration, and which subject a run may write
+   * to is core's answer. A block that could reach memory itself could write
+   * under a subject the run does not own.
+   *
+   * A block may still NAME it in `requires`, which decides whether the block is
+   * offered at all; it simply has no key on the context, so there is nothing to
+   * call. That is what `RequiredCapabilities` in `context.ts` already does for
+   * `agent_tracing`, and a fixture pins it.
+   */
 }

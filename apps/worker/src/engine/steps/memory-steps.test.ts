@@ -455,6 +455,11 @@ describe("persistWorkspaceMemoryStep", () => {
     };
     fakeSandbox({ files: { [ROOT_PATH]: "# notes" } });
 
-    expect(await persistWorkspaceMemoryStep(target)).toEqual({ persisted: false });
+    expect(await persistWorkspaceMemoryStep(target)).toEqual({
+      persisted: false,
+      // S13: a capture the provider could not take is reported rather than
+      // looking exactly like a run whose notebook was empty.
+      unavailable: expect.stringContaining("db down"),
+    });
   });
 });

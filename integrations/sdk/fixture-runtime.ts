@@ -462,8 +462,8 @@ const _refusedManifests = {
   reservedCapability: () =>
     defineIntegration({
       ...fixtureManifest,
-      // @ts-expect-error `memory` has no port until S13 designs it
-      capabilities: ["memory"],
+      // @ts-expect-error `agent_tools` has no port until a later plan designs it
+      capabilities: ["agent_tools"],
     }),
   widenedBlockType: () =>
     // @ts-expect-error a block annotated with the wide type would switch every later check off
@@ -475,7 +475,7 @@ const _refusedManifests = {
     defineIntegrationBlock({
       ...pingBlock,
       // @ts-expect-error a block may require only a capability that has a port
-      requires: { capabilities: ["memory"] },
+      requires: { capabilities: ["agent_tools"] },
     }),
 };
 
@@ -490,7 +490,7 @@ const _refusedRuntimes = {
     capabilities: {
       ...definition.capabilities,
       // @ts-expect-error an adapter for a reserved capability is not an object anything accepts
-      memory: { read: async () => [] },
+      agent_tools: { read: async () => [] },
     },
   }),
   webhookBeforeS9: (): IntegrationRuntimeDefinition<FixtureManifest> => ({

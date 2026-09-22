@@ -482,12 +482,18 @@ describe("seedRepoMemoryStep", () => {
       [`${LOCAL_PATH}/pnpm-lock.yaml`]: "lockfileVersion: '9.0'",
     });
 
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(await seedRepoMemoryStep(input)).toEqual({
+      seeded: 0,
+      pruned: 0,
+      // S13: the provider refused this text and the step reports why, instead
+      // of reading the same as a repository with nothing to derive.
+      unavailable: expect.stringContaining("could not be scrubbed"),
+    });
     expect(stepUpserts()).toEqual([]);
     expect(await repoRows()).toHaveLength(0);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api" }),
-      "repo_memory_seed_redaction_failed",
+      expect.objectContaining({ repo: "github:acme/api", code: "rejected" }),
+      "repo_memory_seed_refused",
     );
   });
 
@@ -976,12 +982,18 @@ describe("seedRepoMemoryStep pruning", () => {
     await storeFacts(["Run lint with: pnpm lint", ...bulky], "run_0");
     fakeSandbox(packageJson({ scripts: { test: "vitest run" } }));
 
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(await seedRepoMemoryStep(input)).toEqual({
+      seeded: 0,
+      pruned: 0,
+      // S13: the store refuses a document it cannot render inside its own cap
+      // and says so, rather than the step deciding that for it.
+      unavailable: expect.stringContaining("grew the document"),
+    });
     expect(stepUpserts()).toEqual([]);
     expect((await readFacts()) ?? []).toHaveLength(bulky.length + 1);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api" }),
-      "repo_memory_prune_truncated_skipped",
+      expect.objectContaining({ repo: "github:acme/api", code: "rejected" }),
+      "repo_memory_prune_refused",
     );
   });
 
@@ -1007,7 +1019,7 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([1, 2]);
     expect(mocks.logWarn).not.toHaveBeenCalledWith(
       expect.anything(),
-      "repo_memory_prune_contended",
+      "repo_memory_prune_refused",
     );
   });
 
@@ -1022,14 +1034,20 @@ describe("seedRepoMemoryStep pruning", () => {
       await competingWrite(["Run lint with: pnpm lint", `winner ${round}`], "run_9");
     };
 
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(await seedRepoMemoryStep(input)).toEqual({
+      seeded: 0,
+      pruned: 0,
+      // S13: a retraction lost to a racing writer is reported rather than
+      // being indistinguishable from a repository with nothing stale.
+      unavailable: expect.stringContaining("another writer won"),
+    });
     // Three attempts and no more: an unbounded loop would spin against a hot
     // repository for as long as the runs keep coming.
     expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([1, 2, 3]);
     expect(await factTexts()).toEqual(["Run lint with: pnpm lint", "winner 3"]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api", attempts: 3 }),
-      "repo_memory_prune_contended",
+      expect.objectContaining({ repo: "github:acme/api", code: "contended" }),
+      "repo_memory_prune_refused",
     );
   });
 
@@ -1055,12 +1073,16 @@ describe("seedRepoMemoryStep pruning", () => {
 
     // Fail closed: unscrubbed text never reaches the store, and the stored
     // document keeps the stale item rather than being rewritten from a null.
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(await seedRepoMemoryStep(input)).toEqual({
+      seeded: 0,
+      pruned: 0,
+      unavailable: expect.stringContaining("could not be scrubbed"),
+    });
     expect(stepUpserts()).toEqual([]);
     expect(await factTexts()).toEqual(["Run lint with: pnpm lint"]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.objectContaining({ repo: "github:acme/api" }),
-      "repo_memory_prune_redaction_failed",
+      "repo_memory_prune_refused",
     );
   });
 });

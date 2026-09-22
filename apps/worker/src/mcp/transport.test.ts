@@ -155,6 +155,9 @@ const PUBLISHED = [
   "settings.reset",
   "work_scope.get",
   "work_scope.edit",
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

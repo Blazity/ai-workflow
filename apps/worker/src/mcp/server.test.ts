@@ -77,6 +77,9 @@ const PUBLISHED: McpToolName[] = [
   "settings.reset",
   "work_scope.get",
   "work_scope.edit",
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ];
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -196,6 +199,7 @@ describe("createMcpServer", () => {
           "repositories",
           "settings",
           "work_scope",
+          "memory",
         ],
         // These deps carry no messaging adapter, which is the same answer a
         // deployment with no chat credentials gives: the authoring announcements

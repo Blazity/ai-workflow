@@ -327,8 +327,8 @@ test("a secret has no default, and a default satisfies its format", () => {
 
 test("a capability is one core knows and has a port; reserved ones are refused until designed", () => {
   const reserved = validIntegration();
-  reserved.manifest.capabilities = ["messaging", "memory"];
-  reserved.runtime.capabilities.memory = () => ({});
+  reserved.manifest.capabilities = ["messaging", "agent_tools"];
+  reserved.runtime.capabilities.agent_tools = () => ({});
   hasIssue(reserved.manifest, reserved.runtime, "capability_reserved", "capabilities[1]");
 
   const unknown = validIntegration();

@@ -11,6 +11,7 @@ import type { IntegrationRunStart, IntegrationRunState } from "./run-state";
 import type { IntegrationBlockContext, IntegrationContext } from "./context";
 import type { IssueTrackerAdapter } from "./issue-tracker";
 import type { IntegrationBlockManifest, IntegrationManifest } from "./manifest";
+import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter } from "./messaging";
 import type { VCSAdapter } from "./vcs";
 import type { IntegrationWebhook, IntegrationWebhookReception } from "./webhook";
@@ -153,6 +154,7 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
   issue_tracker: (ctx: IntegrationContext<M>) => IssueTrackerAdapter;
   vcs: (ctx: IntegrationContext<M>, repository: VcsRepositoryTarget) => VCSAdapter;
   messaging: (ctx: IntegrationContext<M>) => MessagingAdapter;
+  memory: (ctx: IntegrationContext<M>) => MemoryAdapter;
   agent_tracing: (ctx: IntegrationContext<M>) => AgentTracingAdapter;
 }
 

@@ -37,6 +37,7 @@ import { configuredReplaySecrets } from "../run-observability/configured-secrets
 import { emitAgentInvocationObservations, emitRepositoryWorkflowObservation, emitTimedOutAgentInvocationObservations } from "../run-observability/agent-observations.js";
 import { persistWorkspaceMemoryStep } from "./steps/memory-steps.js";
 import { distillRepoMemoryStep, loadRepoMemorySourcesStep } from "./steps/repo-memory-steps.js";
+import type { EffectivePromptMemorySource } from "./helpers/effective-prompt.js";
 import { resolveAgentInput } from "./helpers/resolve-agent-input.js";
 import { assembleReviewChangeSetAddition, pullRequestChangeSetTarget } from "./steps/review-change-set.js";
 import { sanitizeReplayAttemptOutcome, sanitizeReplayGraphSnapshot, sanitizeReplayValue } from "../run-observability/sanitizer.js";
@@ -4284,12 +4285,10 @@ async function agentWorkflowBody(
           // a "use step" invocation writes a durable step record even when its
           // body returns immediately, and with the flag off the compiled prompt
           // must be identical to a build without the feature.
-          let memorySources: Awaited<
-            ReturnType<typeof loadRepoMemorySourcesStep>
-          > = [];
+          let memorySources: EffectivePromptMemorySource[] = [];
           if (runSettings.ENABLE_REPO_MEMORY && ctx.workspaceManifest) {
             try {
-              memorySources = await loadRepoMemorySourcesStep({
+              const loaded = await loadRepoMemorySourcesStep({
                 repositories: ctx.workspaceManifest.repositories.map(
                   (repository) => ({
                     provider: repository.provider,
@@ -4297,6 +4296,23 @@ async function agentWorkflowBody(
                   }),
                 ),
               });
+              // A run suspended before S13 replays this step's STORED result,
+              // which was the array itself. Reading `.sources` off it would
+              // hand the prompt compiler `undefined` OUTSIDE the catch below,
+              // so both shapes are accepted here and the older one reads as
+              // "memory answered", which it did.
+              memorySources = Array.isArray(loaded) ? loaded : loaded.sources;
+              // On the run, not only in the log. A prompt compiled without what
+              // the repository knows produces an agent that behaves as if it
+              // had never seen the repository, and nothing else on the run
+              // separates that from a repository with nothing stored.
+              if (!Array.isArray(loaded) && loaded.unavailable !== undefined) {
+                await emitRepositoryWorkflowObservation(invocation.observations, {
+                  event: "memory_unavailable",
+                  where: "prompt",
+                  reason: loaded.unavailable,
+                });
+              }
             } catch (error) {
               if (isRunControlError(error)) throw error;
               // Unlike repository instructions, unreadable memory must not fail
@@ -4639,6 +4655,34 @@ async function agentWorkflowBody(
         runOutcome = walk.outcome === "ended" ? "awaiting" : "success";
       }
     } finally {
+      /**
+       * A memory refusal at teardown, on the run rather than only inside the
+       * step that hit it.
+       *
+       * NOT `emitRepositoryWorkflowObservation`, which is what the hydrate,
+       * seed and prompt refusals use. That channel is scoped to a block
+       * attempt, and by the time this runs the walk is over: `onNodeFinish`
+       * has deleted every capture (`run-observability/runtime-hooks.ts:506`)
+       * and `observationHooksFor` answers with an emit that returns without
+       * writing (`:592-598`). Emitting here would look exactly like recording
+       * it and would record nothing, which is the failure this whole area is
+       * about.
+       *
+       * So it goes to the run's log, keyed by the run id, which is what the
+       * two teardown refusals below had NO trace of before: the step logged
+       * under its own child logger and the caller threw the answer away.
+       * `console.error` and not the pino logger because this is workflow
+       * scope, which admits no Node builtin at module scope, and it is the
+       * same choice the pr-check cleanup below makes for the same reason.
+       *
+       * What this still does NOT do is put the sentence on the run row, where
+       * somebody opening the run tomorrow would find it. No column on
+       * `workflow_runs` can carry it today and inventing a use for one that
+       * means something else would be worse than a log line.
+       */
+      const reportMemoryRefusal = (event: string, detail: string): void => {
+        console.error(event, workflowRunId, entry.subjectKey, truncateError(detail));
+      };
       // Capture the memory document before the sandbox that holds it is gone.
       // Failed and canceled runs learn things too, so this is not gated on the
       // outcome; nothing here may prevent the teardown below. Only the latest
@@ -4646,7 +4690,7 @@ async function agentWorkflowBody(
       // its earlier iterations, which is the same thing that happens today.
       try {
         if (ctx.sandboxId && ctx.workspaceManifest) {
-          await persistWorkspaceMemoryStep({
+          const captured = await persistWorkspaceMemoryStep({
             sandboxId: ctx.sandboxId,
             subjectKey: ctx.entry.subjectKey,
             ticketKey: ctx.entry.ticketKey ?? null,
@@ -4654,6 +4698,9 @@ async function agentWorkflowBody(
             workspaceManifest: ctx.workspaceManifest,
             runId: ctx.runId,
           });
+          if (captured.unavailable !== undefined) {
+            reportMemoryRefusal("memory_capture_unavailable", captured.unavailable);
+          }
         }
       } catch {
         // Best effort: the step already logs, teardown must still run.
@@ -4728,6 +4775,9 @@ async function agentWorkflowBody(
                 Math.min(90_000, Math.floor(budget.remainingDurationMs)),
               ),
             });
+            if (distilled.unavailable !== undefined) {
+              reportMemoryRefusal("memory_distill_unavailable", distilled.unavailable);
+            }
             // Only a step that reached the provider costs anything. The step
             // says so directly rather than having the skip reasons enumerated
             // here, where every reason added later would silently drop the cost;

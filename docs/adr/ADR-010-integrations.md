@@ -182,6 +182,27 @@ What constrains the answer, all true today:
     `integrations/_fixtures/*` and is generated only under a build flag that
     CI and the demo set. Reason: a fixture must never appear to production or
     the Arthur tenant.
+21. **Memory is the capability core can serve itself.** The built-in store is
+    a core module registered as the provider of `memory` (decision 10), and a
+    deployment that has connected no memory integration gets it. Connecting
+    one REPLACES the provider rather than supplying the first one, so a
+    deployment that never opens the Integrations page keeps exactly the memory
+    it has, and `builtin` is never something an admin has to connect. Two
+    connected engines with none chosen is the refusal every other `one`
+    capability answers; settings that could not be read is a refusal too, and
+    deliberately NOT a fall back to the built-in store, which would split a
+    deployment's memory across two stores with nobody told, and would buy
+    nothing because the integration settings and the built-in store are rows in
+    the same database. Reason: memory is the one capability whose absence is
+    not a legitimate state, because this product has always had it.
+22. **A run that cannot reach memory says so on the run.** Decision 12 makes
+    memory the one capability a run continues without. That is only defensible
+    while somebody can find out afterwards, so the run records a
+    `memory_unavailable` observation naming the moment (the workspace it
+    started in, the facts it could not seed, the prompt it went in with) and
+    the provider's own reason. Reason: a run that started without the notebook
+    an earlier run left was indistinguishable from the first run on a subject,
+    and a best-effort catch that nobody can see is how an outage lasts weeks.
 
 ### What S0 decided inside that frame
 
@@ -2657,6 +2678,7 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-22 | S13 | `memory` designed and unreserved: `MemoryAdapter` with `recall` and `observe`, the optional `MemoryStoreAdapter` behind `adapter.store`, and `MemorySubject`, `MemoryScope`, `MemoryEntry`, `MemoryRecall`, `MemoryObservation`, `MemoryObserveRequest`, `MemoryWrite`, `MemoryFailure`, `MemoryStoreListing` and the stored-document types | The capability's port, reserved in S0 for this stage. Additive: a reserved id becoming providable makes nothing that compiled stop compiling. THE RUN-FACING HALF IS OBSERVATIONS IN, RENDERING OUT. "Read the document, merge it and write it back with the version you read" is a shape only our own store can implement, because a hosted engine does the merging itself and that merging is the product: Mem0 runs supersede and merge over what is added, Zep invalidates the edge a new fact contradicts. "Add, update by id, delete by id" is the opposite failure, where two runs both add and nobody reconciles. So core says what a run learned and asks what is known, and today's pure functions (parse, dedup, retract, stamp, evict, compare and swap) moved into the built-in provider. THE ADMIN HALF IS A SECOND INTERFACE, because listing, reading and erasing a stored document is a different caller with a different need, and conflating them is how the id-shaped port returns. It is optional: an engine that can search but not enumerate serves runs perfectly well, and core then says the store cannot be listed here rather than showing an empty one. `MemoryWrite.stored` is acceptance, not read-after-write: Mem0 answers an add with an event id to poll and Zep with 202 and a task id. Two decisions a provider may ignore and stay correct: `derived` marks an observation nothing can re-derive once its run is over, and `exclude` asks the provider to leave out what the caller already holds, so "the same thing said twice" stays one judgement. |
 | 2026-09-21 | S11 | `IntegrationManifest.repositories`, with `host` and `nestedPaths`, and the type `IntegrationRepositoryShape` | Core branched on the name `github` in three places that decide nothing about credentials: which provider a pasted link belongs to, where a repository path ends inside that link, and whether `owner/name` is well formed. A fourth provider would have had to be added to each. Optional and absent by default, and a provider that declares nothing gets the general case (any host, paths may nest), so every manifest written before this is unchanged. |
 | 2026-09-21 | S11 | `RepositorySkillSource` and `RepositorySkillTreeEntry`, and the optional `skillSource()` on `VcsIntegrationAdapter` | The harness skill importer held a second GitHub API client inside core, with the four provider calls it needs already behind an interface. Those four are the port now; everything a skill import decides (which paths are containers, what a valid `SKILL.md` is, how an artifact is hashed, what is persisted) stays core's. `getFiles` answers `Uint8Array` rather than Node's `Buffer` because this entry is bundled for a browser. Optional: an adapter without it simply cannot serve a skill import, and core says so naming the provider. |
 | 2026-09-21 | S11 | `headMoved` on the webhook reception's `legacyGate` | Core read `action === "update"`, which is GitLab's word for a push, to decide whether to ask its ownership record about a delivery before starting the legacy gate. Every other provider's push went unasked about. The flag says the fact rather than the spelling. Optional, so an integration that never reaches the legacy gate is unchanged. |
