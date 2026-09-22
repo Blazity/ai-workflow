@@ -44,7 +44,14 @@ export type PrivateKeyReading =
 const PEM_BLOCK =
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/u;
 
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/u;
+/**
+ * Either base64 alphabet, padded or not. The environment variable has always
+ * been decoded with `Buffer.from(value, "base64")`, which Node documents as
+ * accepting the URL-safe alphabet too and which decodes an unpadded value, so a
+ * key stored in either form works today and must keep working. The alphabet
+ * check stays: it is what tells a pasted sentence from an encoded key.
+ */
+const BASE64 = /^[A-Za-z0-9+/_-]+={0,2}$/u;
 
 const EXPECTED =
   "Paste the .pem file GitHub downloaded, starting with -----BEGIN RSA PRIVATE KEY-----, or the base64 encoding of that whole file.";
@@ -63,7 +70,7 @@ export function readPrivateKey(value: string | undefined): PrivateKeyReading {
   if (pem) return { ok: true, pem: `${pem}\n` };
 
   const packed = raw.replace(/\s+/gu, "");
-  if (packed.length % 4 !== 0 || !BASE64.test(packed)) {
+  if (!BASE64.test(packed)) {
     return {
       ok: false,
       reason: `The GitHub App private key is neither a PEM block nor base64. ${EXPECTED}`,
