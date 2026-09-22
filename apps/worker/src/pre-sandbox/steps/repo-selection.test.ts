@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => {
     getMemoryDocument: vi.fn(),
     upsertMemoryDocument: vi.fn(),
     logger: { info: vi.fn(), warn: vi.fn() },
+    /** Set by the one test about a deployment whose integration settings
+     *  cannot be read, so the secrets to redact a label with are unknown. */
+    secretsUnreadable: false,
   };
 });
 
@@ -61,6 +64,15 @@ vi.mock("../../services/integrations/runtime.js", () => ({
     states: new Map(),
   })),
   checkIntegrationPin: vi.fn(() => ({ ok: true })),
+  // The environment half is the whole set on a deployment with no stored
+  // connection, which is every deployment this suite declares.
+  knownSecretValues: async () => {
+    if (mocks.secretsUnreadable) throw new Error("integration settings could not be read");
+    const { environmentSecretValues } = await import(
+      "../../run-observability/configured-secrets.js"
+    );
+    return environmentSecretValues();
+  },
 }));
 
 vi.mock("../../db/client.js", () => ({
@@ -2650,6 +2662,30 @@ describe("repoSelectionStep remembered repository routing", () => {
 
       expect(mocks.getMemoryDocument).not.toHaveBeenCalled();
       expect(mocks.upsertMemoryDocument).not.toHaveBeenCalled();
+    });
+
+    // The label is redacted with every secret the deployment knows before it is
+    // stored. A set nobody could read cannot redact it, so nothing is written,
+    // and the run goes on: routing memory is a hint, not the selection.
+    it("writes nothing, and does not fail the run, when the secrets cannot be read", async () => {
+      mocks.secretsUnreadable = true;
+      try {
+        const result = await run({
+          identifier: "AIW-1",
+          title: "Invoices are wrong",
+          labels: ["billing"],
+          comments: [],
+        }, undefined, resolvesRepositories("acme/api"));
+
+        expect(result.status).toBe("continue");
+        expect(mocks.upsertMemoryDocument).not.toHaveBeenCalled();
+        expect(mocks.logger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ err: expect.stringContaining("could not be read") }),
+          "repo_routing_write_failed",
+        );
+      } finally {
+        mocks.secretsUnreadable = false;
+      }
     });
 
     it("does not fail the run when the write throws", async () => {
