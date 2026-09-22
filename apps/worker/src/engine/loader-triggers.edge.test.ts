@@ -31,9 +31,6 @@ vi.mock("./support/issue-tracker-runtime.js", () => connectedIssueTracker());
 vi.mock("../infra/vcs-config.js", () => ({
   env: H.env,
 }));
-vi.mock("../services/vcs/index.js", () => ({
-  getVcsBotLogin: () => H.env.VCS_BOT_LOGIN,
-}));
 
 const mockGetCurrentVersion = vi.fn();
 const mockGetDeployedVersion = vi.fn();

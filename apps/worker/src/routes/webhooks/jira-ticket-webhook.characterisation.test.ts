@@ -179,7 +179,6 @@ vi.mock("../../services/integrations/runtime.js", async () => ({
   },
   usableIntegrations: async () => [connectedJira()],
   checkIntegrationPin: () => ({ ok: true }),
-  getVcsBotLogin: async () => undefined,
 }));
 
 const registry = await import("@integrations/registry/worker");

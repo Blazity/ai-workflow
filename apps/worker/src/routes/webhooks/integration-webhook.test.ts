@@ -84,7 +84,6 @@ vi.mock("../../services/publication/index.js", () => ({
   }),
 }));
 vi.mock("../../services/vcs/index.js", () => ({
-  getVcsBotLogin: state.botLogin,
   // The route reads the automation account through the half that says whether
   // the settings could be read at all, because acting on a delivery without
   // knowing that account is how the workflow answers itself.
@@ -699,7 +698,7 @@ describe("POST /webhooks/:id", () => {
   });
 
   it("makes a chat delivery pay nothing for a version control lookup", async () => {
-    // `getVcsBotLogin` reads this deployment's integration settings again. Slack
+    // `readVcsBotLogin` reads this deployment's integration settings again. Slack
     // has no automation account in that sense and gets `undefined` however the
     // read turns out, so the read is pure latency against a deadline of about
     // three seconds.

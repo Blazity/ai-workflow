@@ -153,7 +153,7 @@ const { providerNestsRepositoryPaths } = await import(
   "../repository-discovery/provider-shape.js"
 );
 const { createRepositoryVcsRuntime } = await import("./vcs-runtime.js");
-const { getVcsBotLogin } = await import("../../services/integrations/vcs-bot-login.js");
+const { readVcsBotLogin } = await import("../../services/integrations/vcs-bot-login.js");
 
 function repository(repoPath: string) {
   return {
@@ -247,8 +247,8 @@ describe("a version control provider core has never heard of", () => {
 
   it("resolves its automation account, so its own comments cannot start a run", async () => {
     shipped.manifests = [forgejo, gitea];
-    await expect(getVcsBotLogin("forgejo")).resolves.toBe("forgejo-bot");
-    await expect(getVcsBotLogin("gitea")).resolves.toBe("gitea-bot");
+    await expect(readVcsBotLogin("forgejo")).resolves.toEqual({ readable: true, login: "forgejo-bot" });
+    await expect(readVcsBotLogin("gitea")).resolves.toEqual({ readable: true, login: "gitea-bot" });
   });
 
   it("refuses work for a provider that is not registered at all", async () => {
