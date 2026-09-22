@@ -429,6 +429,56 @@ describe("testing an environment-configured integration (INT-002)", () => {
   });
 });
 
+describe("testing stored values again later", () => {
+  // The save's own test is the version's record, and it is always a pass,
+  // because only a pass activates. A token revoked since then is exactly what
+  // an admin presses Test to find out about; when the answer was ignored the
+  // card, the health screen and every run kept calling it Connected.
+  it("reads Failing once the provider refuses what it accepted at the save", async () => {
+    const saved = await save(GOOD);
+    expect(saved.integration.state.status).toBe("connected");
+    testConnection.mockImplementationOnce(async () => ({
+      ok: false as const,
+      reason: "401 Unauthorized: token revoked",
+    }));
+
+    const tested = await testIntegrationConnection({ actor: ADMIN, integrationId: "demo" });
+
+    expect(tested.integration.state.status).toBe("failing");
+    expect(tested.integration.state.failure?.reason).toBe("credential_rejected");
+    expect((await listIntegrations()).integrations[0]?.state.usable).toBe(false);
+  });
+
+  it("reads Connected again once a later Test passes", async () => {
+    await save(GOOD);
+    testConnection.mockImplementationOnce(async () => ({
+      ok: false as const,
+      reason: "401 Unauthorized: token revoked",
+    }));
+    await testIntegrationConnection({ actor: ADMIN, integrationId: "demo" });
+
+    const tested = await testIntegrationConnection({ actor: ADMIN, integrationId: "demo" });
+
+    expect(tested.integration.state.status).toBe("connected");
+    expect(tested.integration.state.verification.state).toBe("passed");
+  });
+
+  it("stays Connected when the provider could not be reached", async () => {
+    await save(GOOD);
+    testConnection.mockImplementationOnce(async () => {
+      throw new Error("fetch failed: ECONNREFUSED");
+    });
+
+    const tested = await testIntegrationConnection({ actor: ADMIN, integrationId: "demo" });
+
+    expect(tested.integration.state.status).toBe("connected");
+    expect(tested.integration.state.verification).toMatchObject({
+      state: "failed",
+      failure: { reason: "provider_unreachable" },
+    });
+  });
+});
+
 describe("the disable switch", () => {
   it("changes the answer within one process, because it is read live and never cached", async () => {
     process.env.DEMO_BASE_URL = "https://demo.example/site";

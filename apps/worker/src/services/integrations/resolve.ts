@@ -475,28 +475,45 @@ function resolveVerification(input: {
   readonly currentFingerprint: string;
 }): IntegrationVerification {
   const { source, active, lastTest, currentFingerprint } = input;
-  // Stored values carry their own verdict, because a save tests before it
-  // activates: the version IS the record of what the provider said about it.
-  if (source === "stored" && active) {
-    if (active.testStatus === "failed") {
-      return {
-        state: "failed",
-        at: active.testedAt ?? active.createdAt,
-        failure: {
-          reason: active.testReason ?? "credential_rejected",
-          message: active.testMessage ?? "The connection test failed",
-        },
-      };
-    }
-    if (active.testedAt) return { state: "passed", at: active.testedAt };
-  }
-  if (!lastTest) return { state: "never_tested" };
   // A verdict about values that have since changed says nothing about the ones
   // in use. It goes stale rather than failing the integration, or an admin who
   // fixed a variable by redeploying would still read the old refusal.
-  if (lastTest.fingerprint !== currentFingerprint) {
-    return { state: "stale", at: lastTest.at };
+  const tested =
+    lastTest && lastTest.fingerprint === currentFingerprint ? lastTestVerdict(lastTest) : null;
+  // Stored values carry their own verdict, because a save tests before it
+  // activates: the version IS the record of what the provider said about it
+  // then. A Test pressed later, about exactly these values, is newer news and
+  // wins, the same as for the environment source: a token revoked after the
+  // save reads Failing the moment Test says so, instead of Connected forever.
+  //
+  // A tie goes to the Test: the only way to tie is the save itself, which
+  // writes both records in one statement with the same verdict.
+  if (source === "stored" && active) {
+    const saved = savedVerdict(active);
+    if (saved) return tested && Date.parse(tested.at) >= Date.parse(saved.at) ? tested : saved;
   }
+  if (!lastTest) return { state: "never_tested" };
+  return tested ?? { state: "stale", at: lastTest.at };
+}
+
+/** A verdict somebody recorded, with the moment it was recorded. */
+type RecordedVerdict = Extract<IntegrationVerification, { readonly state: "passed" | "failed" }>;
+
+function savedVerdict(active: StoredIntegrationVersion): RecordedVerdict | null {
+  if (active.testStatus === "failed") {
+    return {
+      state: "failed",
+      at: active.testedAt ?? active.createdAt,
+      failure: {
+        reason: active.testReason ?? "credential_rejected",
+        message: active.testMessage ?? "The connection test failed",
+      },
+    };
+  }
+  return active.testedAt ? { state: "passed", at: active.testedAt } : null;
+}
+
+function lastTestVerdict(lastTest: StoredIntegrationTest): RecordedVerdict {
   if (lastTest.status === "passed") {
     return { state: "passed", at: lastTest.at, ...(lastTest.message ? { message: lastTest.message } : {}) };
   }
