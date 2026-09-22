@@ -1,6 +1,17 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./vcs.js";
-import { reviewFindingDigest, AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+
+/**
+ * Core's thread identity for a finding (`reviewFindingDigest` in the worker),
+ * computed here from its definition: the adapter only reads digests back, so
+ * the test states the formula independently rather than borrowing the code.
+ */
+function reviewFindingDigest(comment: { path: string; body: string }): string {
+  return createHash("sha256").update(`${comment.path} ${comment.body}`).digest("hex").slice(0, 32);
+}
+
 import type { GateStatusRef, ReviewThread } from "@integrations/sdk";
 
 function gateHandle(value: object): GateStatusRef {

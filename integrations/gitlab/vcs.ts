@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Gitlab } from "@gitbeaker/rest";
 import {
   FatalError,
+  isReviewLedgerWorkItem,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
@@ -33,7 +34,6 @@ import {
   hasReviewLedgerFailureMarker,
   isReopenedLedgerThread,
   isReviewLedgerNote,
-  isReviewLedgerWorkItem,
   markReviewLedgerReplyResolved,
   markReviewLedgerReplyStale,
   readAnyReviewLedgerMarker,
@@ -127,8 +127,9 @@ function clampBothEnds(value: string, maxLength: number): string {
  * a thread is to mark it resolved, and that word on its own would tell a reader the
  * defect was fixed. This note is what makes the strip mean what actually happened.
  *
- * Carries the bot marker so trigger-events.ts drops the note event instead of
- * treating it as a human comment and starting another round.
+ * Carries the bot marker so the GitLab webhook (`integrations/gitlab/webhook.ts`)
+ * drops the note event instead of treating it as a human comment and starting
+ * another round.
  */
 const SUPERSEDED_DISCUSSION_NOTE = [
   "This thread was opened by an earlier review round and the current round no " +
@@ -233,7 +234,6 @@ export interface GitLabConfig {
   /** Base URL for GitLab instance. Defaults to "https://gitlab.com". */
   host?: string;
   log?: IntegrationLogger;
-  botLogin?: string;
   legacyProjectId?: string;
 }
 
@@ -295,10 +295,6 @@ export class GitLabAdapter implements
       });
     this.projectId = config.projectId;
     this.baseBranch = config.baseBranch;
-  }
-
-  get botLogin(): string | undefined {
-    return this.config.botLogin;
   }
 
   sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean {
@@ -1049,7 +1045,8 @@ export class GitLabAdapter implements
           ]),
       marker,
       headMarker,
-      // Read by trigger-events.ts to drop a note this workflow produced. An
+      // Read by the GitLab webhook (`integrations/gitlab/webhook.ts`) to drop a
+      // note this workflow produced. An
       // installation without a matchable bot login would otherwise fire a fresh
       // review trigger off its own summary on the first round of every merge
       // request.

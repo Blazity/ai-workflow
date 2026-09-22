@@ -10,6 +10,7 @@ import type {
 } from "@integrations/sdk";
 import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
+import { vcsLoginsMatch } from "./review-markers";
 
 type GitHubContext = IntegrationContext<typeof manifest>;
 
@@ -329,7 +330,7 @@ export function normalizeGitHubEvent(
     if (!review || !pr) return null;
     const allowed = options.reviewStates ?? DEFAULT_REVIEW_STATES;
     if (!allowed.includes(review.state)) return null;
-    if (sameLogin(review.user?.login, options.botLogin)) return null;
+    if (vcsLoginsMatch(review.user?.login, options.botLogin)) return null;
     return {
       delivery: {
         ...delivery(options.deliveryId, review.user?.login),
@@ -353,7 +354,7 @@ export function normalizeGitHubEvent(
     const pr = body?.pull_request;
     if (!comment || !pr) return null;
     if (!(options.reviewStates ?? DEFAULT_REVIEW_STATES).includes("commented")) return null;
-    if (sameLogin(comment.user?.login, options.botLogin)) return null;
+    if (vcsLoginsMatch(comment.user?.login, options.botLogin)) return null;
     if (comment.user?.type === "Bot") return null;
     if (isOurComment(comment.body)) return null;
     // GitHub wraps inline comments in a review container, so N sibling comments
@@ -393,7 +394,7 @@ export function normalizeGitHubEvent(
     // conversation; a plain issue comment is not ours to act on.
     if (!comment || !issue?.pull_request) return null;
     if (!(options.reviewStates ?? DEFAULT_REVIEW_STATES).includes("commented")) return null;
-    if (sameLogin(comment.user?.login, options.botLogin)) return null;
+    if (vcsLoginsMatch(comment.user?.login, options.botLogin)) return null;
     if (comment.user?.type === "Bot") return null;
     if (isOurComment(comment.body)) return null;
     return {
@@ -533,28 +534,4 @@ function mapPullRequest(pr: any, repo: any): PrTriggerPayload {
  */
 function isOurComment(body: unknown): boolean {
   return isOurOwnVcsComment(body);
-}
-
-/**
- * The same comparison core made in `vcsLoginsMatch`, and the `[bot]` suffix is
- * the reason it is not a plain lowercase compare: GitHub sends an App's own
- * pushes and comments as `<app-slug>[bot]`, while the configured value is
- * written either way. Dropping the suffix here is what made the automation
- * account recognise itself, and losing it would let every push of ours trigger
- * a run against the run that made it.
- */
-function sameLogin(left: string | undefined, right: string | undefined): boolean {
-  const normalized = normalizeLogin(left);
-  return normalized !== undefined && normalized === normalizeLogin(right);
-}
-
-const BOT_LOGIN_SUFFIX = "[bot]";
-
-function normalizeLogin(login: string | null | undefined): string | undefined {
-  const lowercased = login?.trim().toLowerCase();
-  if (!lowercased) return undefined;
-  const stripped = lowercased.endsWith(BOT_LOGIN_SUFFIX)
-    ? lowercased.slice(0, -BOT_LOGIN_SUFFIX.length)
-    : lowercased;
-  return stripped ? stripped : undefined;
 }

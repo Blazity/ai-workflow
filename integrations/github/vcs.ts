@@ -1,6 +1,7 @@
 import type { Octokit } from "@octokit/rest";
 import {
   FatalError,
+  isReviewLedgerWorkItem,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
@@ -36,7 +37,6 @@ import {
   hasReviewLedgerFailureMarker,
   isReopenedLedgerThread,
   isReviewLedgerNote,
-  isReviewLedgerWorkItem,
   markReviewLedgerReplyResolved,
   markReviewLedgerReplyStale,
   readAnyReviewLedgerMarker,

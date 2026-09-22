@@ -20,7 +20,6 @@ function adapter(
     host: ctx.connection.host,
     projectId: target.repoPath,
     baseBranch: target.baseBranch,
-    botLogin: ctx.connection.botLogin,
     legacyProjectId: ctx.connection.legacyProjectId,
     log: ctx.log,
   });

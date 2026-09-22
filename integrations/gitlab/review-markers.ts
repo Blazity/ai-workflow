@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import type { ReviewThread } from "@integrations/sdk";
 
 export interface PRReviewInlineComment {
   path: string;
@@ -30,13 +28,6 @@ export function readAnyReviewLedgerMarker(body: string): string | null {
 
 export function isReviewLedgerNote(body: string): boolean {
   return /<!-- ai-workflow:ledger(?:-stale|-resolved|-failure)?:[^\s]+ -->/.test(body);
-}
-
-export function isReviewLedgerWorkItem(
-  thread: Pick<ReviewThread, "awaitingHuman" | "source" | "filePath">,
-): boolean {
-  if (thread.awaitingHuman || thread.source === "third_party") return false;
-  return !(thread.source === "bot" && thread.filePath === undefined);
 }
 
 export function isReopenedLedgerThread<T extends { body: string; createdAt: string }>(
@@ -74,15 +65,6 @@ function swapMarker(body: string, threadId: string, replacement: string): string
 
 export function readReviewFindingDigest(body: string): string | null {
   return /<!-- ai-workflow-review-finding:([0-9a-f]+) -->/.exec(body)?.[1] ?? null;
-}
-
-export function reviewFindingDigest(
-  comment: Pick<PRReviewInlineComment, "path" | "body">,
-): string {
-  return createHash("sha256")
-    .update(`${comment.path} ${comment.body}`)
-    .digest("hex")
-    .slice(0, 32);
 }
 
 export function reviewFallbackBullet(comment: PRReviewInlineComment): string {
