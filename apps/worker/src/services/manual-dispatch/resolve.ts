@@ -557,9 +557,19 @@ export function selectManualTriggerEvent(
   }
   for (const [producer, failedChecks] of byProducer) {
     const event = baseEvent(triggerType, { ...pr, failedChecks }, producer);
-    const source = snapshot.failedChecks.find((check) => check.producer === producer)?.source;
+    const first = snapshot.failedChecks.find((check) => check.producer === producer);
     const eligible = selectEligibleEvent(
-      source ? { ...event, delivery: { ...event.delivery, source } } : event,
+      {
+        ...event,
+        delivery: {
+          ...event.delivery,
+          ...(first?.source ? { source: first.source } : {}),
+          // The integration's own answer, exactly as its webhook gives it.
+          ...(first?.trustedByDefault !== undefined
+            ? { trustedByDefault: first.trustedByDefault }
+            : {}),
+        },
+      },
       params,
     );
     if (eligible) return eligible;

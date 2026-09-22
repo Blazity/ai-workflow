@@ -259,6 +259,34 @@ describe("manual pull request input", () => {
     expect(selected?.pr.failedChecks?.map((check) => check.name)).toEqual(["lint"]);
   });
 
+  it("trusts a producer by the integration's own rule, not core's list of old names", () => {
+    // An integration this build ships later reports its own default producer;
+    // core's list for envelopes recorded before the bit existed knows only two
+    // names and must not be what decides a manual dispatch.
+    const failed = snapshot({
+      failedChecks: [
+        {
+          name: "build",
+          conclusion: "failure",
+          producer: "acme-ci",
+          trustedByDefault: true,
+        },
+      ],
+    });
+
+    expect(selectManualTriggerEvent("trigger_pr_checks_failed", pr, failed, {})).not.toBeNull();
+    expect(
+      selectManualTriggerEvent(
+        "trigger_pr_checks_failed",
+        pr,
+        snapshot({
+          failedChecks: [{ ...failed.failedChecks[0]!, trustedByDefault: false }],
+        }),
+        {},
+      ),
+    ).toBeNull();
+  });
+
   it("uses the latest eligible non-bot review matching configured states", () => {
     const reviews = snapshot({
       reviews: [

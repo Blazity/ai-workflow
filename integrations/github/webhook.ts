@@ -164,6 +164,16 @@ function reviewStatesFor(eventName: string): readonly string[] | undefined {
   return undefined;
 }
 
+/**
+ * Whether a check run's app is trusted when a workflow names no producers.
+ * Only GitHub's own runner is: widening this to every app would start runs
+ * from check runs an outside app reported. The webhook and the manual dispatch
+ * snapshot both ask here, so the two ways a failed check arrives agree.
+ */
+export function isTrustedByDefaultCheckProducer(appSlug: string | undefined): boolean {
+  return appSlug === "github-actions";
+}
+
 export interface NormalizeGitHubOptions {
   deliveryId?: string;
   botLogin?: string;
@@ -276,10 +286,7 @@ export function normalizeGitHubEvent(
     return {
       delivery: {
         ...delivery(options.deliveryId, appSlug),
-        // Only GitHub's own runner is trusted without a merge request behind
-        // it. Widening this to every producer would start runs from check runs
-        // an outside app reported.
-        trustedByDefault: appSlug === "github-actions",
+        trustedByDefault: isTrustedByDefaultCheckProducer(appSlug),
         // GitHub sends one check_run delivery per failing job, so a commit with
         // five failing jobs fans out into five deliveries. Keying on the
         // commit's verdict rather than the job coalesces that fan-out into one

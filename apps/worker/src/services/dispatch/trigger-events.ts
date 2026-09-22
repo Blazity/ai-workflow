@@ -21,8 +21,9 @@ export type { TriggerEvent } from "@shared/contracts";
  * written: an envelope stored before `trustedByDefault` was part of the
  * contract carries no bit, and re-deciding it from nothing would either start
  * runs that could not start before or stop runs that could. New envelopes carry
- * the bit their integration set, so this answers only for the old ones and the
- * set can never grow.
+ * the bit their integration set, webhook and manual dispatch alike (the
+ * snapshot carries it per failed check), so this answers only for the old ones
+ * and the set can never grow.
  */
 export function isLegacyTrustedCheckDelivery(
   delivery: Pick<TriggerEvent["delivery"], "producer" | "source">,

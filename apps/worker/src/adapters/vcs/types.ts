@@ -55,6 +55,9 @@ export interface ManualDispatchPullRequestSnapshot {
     handle?: VcsOpaqueHandle;
     producer: string;
     source?: string;
+    /** Whether the integration trusts this producer when a workflow names
+     *  none, decided by the same rule its webhook applies. */
+    trustedByDefault?: boolean;
   }>;
   reviews: Array<{
     state: "changes_requested" | "commented";

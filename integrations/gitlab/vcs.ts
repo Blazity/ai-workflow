@@ -25,6 +25,7 @@ import {
 import {
   failedPipelineChecks,
   GITLAB_CI_PRODUCER,
+  isTrustedByDefaultPipeline,
   jobCheck,
   pipelineCheck,
 } from "./pipeline-checks";
@@ -86,6 +87,7 @@ interface ManualDispatchPullRequestSnapshot {
     handle?: VcsOpaqueHandle;
     producer: string;
     source?: string;
+    trustedByDefault?: boolean;
   }>;
   reviews: Array<{
     state: "changes_requested" | "commented";
@@ -716,6 +718,7 @@ export class GitLabAdapter implements
             ...check,
             producer: GITLAB_CI_PRODUCER,
             ...(typeof source === "string" ? { source } : {}),
+            trustedByDefault: isTrustedByDefaultPipeline(source),
           }))
         : [],
       reviews: comments

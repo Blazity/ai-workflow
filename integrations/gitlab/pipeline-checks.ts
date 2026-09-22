@@ -49,6 +49,15 @@ export function failedPipelineChecks(
 /** Every pipeline that fails is reported by GitLab CI itself. */
 export const GITLAB_CI_PRODUCER = "gitlab-ci";
 
+/**
+ * Whether a pipeline is trusted when a workflow names no producers: only one
+ * a merge request started. A pipeline from a push, a schedule or an API call
+ * can run code nobody reviewed as a merge request.
+ */
+export function isTrustedByDefaultPipeline(source: unknown): boolean {
+  return source === "merge_request_event";
+}
+
 function handle(value: Readonly<Record<string, string | number | null>>): VcsOpaqueHandle {
   return value as unknown as VcsOpaqueHandle;
 }

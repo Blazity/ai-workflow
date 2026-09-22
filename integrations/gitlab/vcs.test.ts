@@ -525,6 +525,7 @@ describe("GitLabAdapter", () => {
           conclusion: "failed",
           producer: "gitlab-ci",
           source: "merge_request_event",
+          trustedByDefault: true,
         },
       ]);
     });
@@ -545,6 +546,9 @@ describe("GitLabAdapter", () => {
           conclusion: "failed",
           producer: "gitlab-ci",
           source: "push",
+          // The rule the Pipeline Hook applies: a push pipeline is not trusted
+          // unless a workflow names it.
+          trustedByDefault: false,
         },
       ]);
     });

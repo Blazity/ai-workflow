@@ -9,7 +9,11 @@ import type {
 } from "@integrations/sdk";
 import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
 import type { manifest } from "./manifest";
-import { failedPipelineChecks, GITLAB_CI_PRODUCER } from "./pipeline-checks";
+import {
+  failedPipelineChecks,
+  GITLAB_CI_PRODUCER,
+  isTrustedByDefaultPipeline,
+} from "./pipeline-checks";
 
 type GitLabContext = IntegrationContext<typeof manifest>;
 
@@ -229,7 +233,7 @@ export function normalizeGitLabEvent(
     return {
       delivery: {
         ...delivery(options.deliveryId, GITLAB_CI_PRODUCER),
-        trustedByDefault: attrs.source === "merge_request_event",
+        trustedByDefault: isTrustedByDefaultPipeline(attrs.source),
         ...(typeof attrs.source === "string" ? { source: attrs.source } : {}),
       },
       triggerType: "trigger_pr_checks_failed",

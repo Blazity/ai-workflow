@@ -32,6 +32,7 @@ import {
 } from "./auth";
 import { createGitHubProfileSource } from "./profile-source";
 import { createGitHubSkillSource } from "./skills";
+import { isTrustedByDefaultCheckProducer } from "./webhook";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasReviewLedgerFailureMarker,
@@ -102,6 +103,7 @@ interface ManualDispatchPullRequestSnapshot {
     handle?: VcsOpaqueHandle;
     producer: string;
     source?: string;
+    trustedByDefault?: boolean;
   }>;
   reviews: Array<{
     state: "changes_requested" | "commented";
@@ -835,6 +837,7 @@ export class GitHubAdapter
         conclusion: check.conclusion!,
         handle: githubHandle({ id: check.id, owner: check.appSlug }),
         producer: check.appSlug,
+        trustedByDefault: isTrustedByDefaultCheckProducer(check.appSlug),
       }));
     return {
       prNumber: prId,
