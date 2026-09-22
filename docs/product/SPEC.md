@@ -236,9 +236,9 @@ validation includes cross-field rules for VCS provider completeness, commit auth
 provider credentials, SSO, and Resend dependencies. Missing or invalid required config fails
 startup with a clear error. The full reference lives in `SETUP.md`; the groups are:
 
-- **Issue tracker:** `ISSUE_TRACKER_KIND` (`jira`), `JIRA_BASE_URL`, `JIRA_API_TOKEN`,
-  `JIRA_PROJECT_KEY`, the three board column settings, optional
-  `JIRA_BACKLOG_TRANSITION_ID` / `JIRA_AI_REVIEW_TRANSITION_ID`, `JIRA_WEBHOOK_SECRET`.
+- **Issue tracker:** `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`, optional
+  `JIRA_BACKLOG_TRANSITION_ID` / `JIRA_AI_REVIEW_TRANSITION_ID` and `JIRA_WEBHOOK_SECRET`,
+  which seed the Jira integration's connection, plus the three board column settings.
 - **VCS:** GitHub App vars (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
   `GITHUB_INSTALLATION_ID`), GitLab vars (`GITLAB_TOKEN`, `GITLAB_HOST`) which
   seed the GitLab integration's connection, and per-provider webhook secrets.
@@ -531,7 +531,7 @@ not configured. Swapping platforms means wiring another `@chat-adapter/*`.
 
 ### 11.4 Adapter Registration
 
-Active adapters are chosen by `ISSUE_TRACKER_KIND`, by the credentials each version control provider has, and by the presence of Slack config.
+Active adapters are the integrations a deployment has connected and enabled (ADR-010): the one issue tracker, the version control provider each repository names, and the messaging integration.
 GitHub and GitLab can be active simultaneously; repository selection spans both providers.
 
 ## 12. Context Assembly

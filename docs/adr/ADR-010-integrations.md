@@ -68,7 +68,8 @@ What constrains the answer, all true today:
    (browser, workflow scope, server) tolerate different code.
 3. **Registration is generated.** The block catalog generator grows into an
    integration generator that writes committed registries, with `--check`
-   inside `build`. Reason: a hand-kept list is the drift this plan removes.
+   in CI and in the worker's `build` and `build:ci`. Reason: a hand-kept list
+   is the drift this plan removes.
 4. **No runtime code loading.** Integrations are compiled in; a deployment
    decides which are connected. Reason: the DevKit would not find step code
    installed at runtime, and loading third-party code at runtime is a security
@@ -185,9 +186,10 @@ What constrains the answer, all true today:
     integration written from the guide would otherwise pass conformance and
     fail on import.
 20. **Fixtures stay out of production**: the test integration lives in
-    `integrations/_fixtures/*` and is generated only under a build flag that
-    CI and the demo set. Reason: a fixture must never appear to production or
-    the Arthur tenant.
+    `integrations/_fixtures/*` and reaches a registry only when a developer
+    generates one locally with the fixture flag. No deployment sets it, and
+    neither does CI. Reason: a fixture must never appear to production or the
+    Arthur tenant.
 21. **Memory is the capability core can serve itself.** The built-in store is
     a core module registered as the provider of `memory` (decision 10), and a
     deployment that has connected no memory integration gets it. Connecting
@@ -377,13 +379,15 @@ These were open to the S1 executor. Each is a two-way door.
   to add to the registry's `package.json` and no lockfile change, so adding an
   integration is a folder and one command.
 - **The fixture flag is `INTEGRATION_FIXTURES`, read at generation time.** The
-  committed registry is the one generated without it, so a production build
-  carries no import of `integrations/_fixtures` at all; CI and demo regenerate
-  with it. A runtime branch would bundle the fixture as dead code, and a
-  package export condition would ask Nitro, Next and the DevKit bundler to
-  agree on a custom resolve condition. `gen:integrations --check` runs in CI
-  without the flag, so a fixture that reached the committed registry fails
-  there.
+  committed registry is the one generated without it, so a build carries no
+  import of `integrations/_fixtures` at all. No deployment and no CI job sets
+  it: it is a local option for a developer who wants the fixture in a local
+  registry, and the tests that need the fixture call the generator with
+  `includeFixtures` directly. A runtime branch would bundle the fixture as dead
+  code, and a package export condition would ask Nitro, Next and the DevKit
+  bundler to agree on a custom resolve condition. `gen:integrations --check`
+  runs without the flag in CI and in the worker's `build` and `build:ci`, so a
+  fixture that reached the committed registry fails there.
 - **A directory under `integrations/` without a manifest is refused, not
   skipped**, apart from `sdk` and `registry`, which the generator names. A
   half-written integration that quietly disappears from the registry is the
@@ -397,22 +401,35 @@ These were open to the S1 executor. Each is a two-way door.
   the same rule. A Node module hidden one file away would fail only the Vercel
   build.
 - **The core-reference gate is its own script**, `scripts/gates/core-references.mjs`,
-  with `scripts/gates/core-references.json` beside it. Core is
-  `apps/worker/src`, the dashboard's `app`, `components` and `lib`, and
-  `packages`; `scripts/` is release and gate tooling, where the Arthur tenant
-  repository is not the Arthur provider, and `changelog/` and `docs/` are
-  prose. A mention is a case-insensitive substring of the id in the path or in
-  the source with comments stripped: `"github"`, `GITHUB_TOKEN` and
+  with `scripts/gates/core-references.json` beside it. Core is `apps/worker`,
+  `apps/dashboard` and `packages`, each whole, so a config file at an app's
+  root (the dashboard's `next.config.ts`, its middleware) is read the day it
+  lands; the allowlist names what inside the apps is not core (applied
+  migrations, operations scripts, end-to-end suites, static files).
+  `scripts/` is release and gate tooling, where the Arthur tenant repository
+  is not the Arthur provider, and `changelog/` and `docs/` are prose. A
+  mention is a case-insensitive substring of the id in the path or in what
+  the source spells: every identifier, string, template and regular
+  expression literal, and the text of its JSX. `"github"`, `GITHUB_TOKEN` and
   `githubClient` are one coupling written three ways, and a boundary rule that
   caught those while sparing `githubusercontent` is a rule nobody could
-  predict. Comments are prose, so they do not count. Test files are not
-  scanned: a test cannot create production coupling, it exercises core code
-  that still names a provider, and it changes with its subject in S8 to S12;
-  listing several hundred of them would churn on every test edit and get the
-  gate switched off. A row may carry `incidental: true` when its files spell an
-  id by accident, such as a CSS keyword or a URL; the gate keeps it listed and
-  never reports it as stale, because such a hit comes and goes with ordinary
-  edits and a failure on one could not be acted on.
+  predict. Comments are prose, so they do not count, and the TypeScript parser
+  decides what a comment is, so a `//` inside a URL is still code (until
+  2026-09-22 a hand-written stripper read it as a comment and hid what
+  followed). The text of a `className` or `style` attribute does not count
+  either: `ease-linear` and `linear-gradient(...)` are CSS, not a dependency
+  on a provider called linear, while a comparison written inside such an
+  attribute still counts. Test files are not scanned: a test cannot create
+  production coupling, it exercises core code that still names a provider,
+  and it changes with its subject in S8 to S12; listing several hundred of
+  them would churn on every test edit and get the gate switched off. A row may
+  carry `incidental: true` when its files spell an id by accident, such as a
+  URL on the provider's host; the gate keeps it listed and never reports it as
+  stale, because such a hit comes and goes with ordinary edits and a failure
+  on one could not be acted on. The scaffold (`pnpm run new:integration`)
+  asks the gate's own question before it writes a package, so it refuses an
+  id exactly where the gate would fail once that id ships, and an id core
+  spells only under an allowlist row is accepted.
 - **Allowlist rows carry no counts, and a stale row fails.** The gate's job is
   to stop a new file, a new package or a new area of core learning a provider,
   and to make S8 to S12 shrink the list. A count per file would turn every

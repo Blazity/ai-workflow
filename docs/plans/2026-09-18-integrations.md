@@ -231,7 +231,9 @@ The block catalog generator grows into an integration generator. It scans
 `integrations/*` (skipping `sdk`, `_template`, and `_fixtures` unless the
 fixture flag of decision 20 is set) and writes committed
 registries: worker runtime, dashboard pages, block catalog (each entry carrying
-its `integration` id and what it requires), and health definitions. `--check` runs inside `build`, as `gen:blocks --check` does today.
+its `integration` id and what it requires), and health definitions. `--check`
+runs in CI and in the worker's `build` and `build:ci`, next to
+`gen:blocks --check`.
 Nobody maintains a list by hand.
 
 ### 4. No runtime code loading
@@ -590,9 +592,11 @@ that other providers are possible").
 ### 20. Fixtures stay out of production
 
 The test integration lives in `integrations/_fixtures/*`. The generator
-includes it only when a build flag is set, which CI and the demo deployment
-set and production and the Arthur tenant never do. Conformance covers it in CI
-either way.
+includes it only when the fixture flag is set at generation time, which no
+deployment and no CI job does: it is a local option for a developer who wants
+the fixture in a local registry, and tests reach the fixture by calling the
+generator with `includeFixtures` directly. Conformance covers it in CI either
+way.
 
 ### 17. No backward compatibility for development data
 
