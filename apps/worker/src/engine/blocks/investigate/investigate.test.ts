@@ -135,17 +135,17 @@ describe("investigate paramsSchema", () => {
     expect(manifest.paramsSchema.safeParse({ maxResults: 11 }).success).toBe(false);
   });
 
-  it("rejects a query template that could escape its scoped clause", () => {
+  it("leaves the query language to the tracker and checks only the template's length", () => {
+    // The template is written in the connected tracker's language, so core
+    // keeps no copy of its syntax: the tracker's own rule is asked when a
+    // definition is saved (services/workflow-definitions/block-contracts.test.ts),
+    // and its adapter drops at run time what it would not run.
     expect(
-      manifest.paramsSchema.safeParse({
-        issueTrackerQueryTemplate: 'labels = support) OR (project = OTHER',
-      }).success,
-    ).toBe(false);
-    expect(
-      manifest.paramsSchema.safeParse({
-        issueTrackerQueryTemplate: 'summary ~ "literal (value)"',
-      }).success,
+      manifest.paramsSchema.safeParse({ issueTrackerQueryTemplate: "summary ~ 'fix)'" }).success,
     ).toBe(true);
+    expect(
+      manifest.paramsSchema.safeParse({ issueTrackerQueryTemplate: "x".repeat(1001) }).success,
+    ).toBe(false);
   });
 
   it("defaults only the source selection, leaving the numbers to the executor", () => {

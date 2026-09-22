@@ -25,6 +25,8 @@ import type {
 import { isHarnessProfileReference } from "@shared/contracts";
 import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import { integrationManifests } from "@integrations/registry";
+import { integrationRuntime } from "@integrations/registry/worker";
+import { paramsSchemaForTracker } from "../../engine/blocks/investigate/manifest.js";
 import {
   builtinCapabilitiesOfDeployment,
   workflowBlockRegistryContext,
@@ -50,10 +52,10 @@ import {
 } from "../../engine/definition/block-contract-resolver.js";
 import {
   blockParamsSchemasFor,
-  type BlockParamsSchemas,
 } from "../../engine/definition/block-params-schemas.js";
 import {
   createWorkflowValueAnalyzer,
+  type WorkflowBlockParamsSchemas,
   type WorkflowValueAnalyzer,
 } from "@shared/workflow-graph";
 import { JSON_SCHEMA_SUPPORT } from "../../engine/definition/json-schema-support.js";
@@ -71,8 +73,9 @@ export interface RequestBlockContracts {
    * edited mid request is never answered from an earlier pass.
    */
   analyzeValues: WorkflowValueAnalyzer;
-  /** Every block type's parameter schema, composed in `engine/definition`. */
-  blockParamsSchemas: BlockParamsSchemas;
+  /** Every block type's parameter schema, composed in `engine/definition`,
+   *  with the query template checked by the tracker (`authoringParamsSchemas`). */
+  blockParamsSchemas: WorkflowBlockParamsSchemas;
   /**
    * Which VCS providers this deployment has credentials for. The definition's
    * repository pin belongs to no block, so its check cannot go through the
@@ -145,6 +148,30 @@ async function deploymentIntegrationsOn(db: Db): Promise<DeploymentIntegrations>
 }
 
 /**
+ * The parameter schemas a definition is saved against: the engine's
+ * composition, with the investigate block's query template checked by the
+ * issue tracker it will be sent to.
+ *
+ * The template is written in that tracker's query language, so only the
+ * tracker can say whether it would run it (`issueTrackerQueries` on its
+ * runtime, the same rule its adapter applies before sending one). Asked only
+ * when exactly one usable tracker is connected, which is the only case in
+ * which a run would send the query anywhere: with none or with two unchosen,
+ * the run refuses to read tickets at all, and guessing a tracker here would
+ * refuse a template in a language nobody chose.
+ */
+function authoringParamsSchemas(integrations: DeploymentIntegrations): WorkflowBlockParamsSchemas {
+  const schemas = blockParamsSchemasFor(integrations);
+  const trackers = integrations.providers.get("issue_tracker") ?? [];
+  if (trackers.length !== 1) return schemas;
+  const id = trackers[0]!;
+  const queries = integrationRuntime(id)?.issueTrackerQueries;
+  if (!queries) return schemas;
+  const name = integrations.byId.get(id)?.name ?? id;
+  return { ...schemas, investigate: paramsSchemaForTracker({ name, queries }) };
+}
+
+/**
  * The block data for a caller that knows which Harness Profile is in force.
  * Callers without one use the code-owned built-in default profile.
  *
@@ -165,7 +192,7 @@ export function blockContractsFor(
   return {
     resolveContract,
     analyzeValues: createWorkflowValueAnalyzer(resolveContract, JSON_SCHEMA_SUPPORT),
-    blockParamsSchemas: blockParamsSchemasFor(integrations),
+    blockParamsSchemas: authoringParamsSchemas(integrations),
     configuredVcsProviders: context.vcsProviders,
     blockRegistry: () => (registry ??= buildWorkflowBlockRegistry(context)),
   };

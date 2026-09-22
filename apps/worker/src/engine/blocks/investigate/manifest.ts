@@ -17,25 +17,6 @@ export const INVESTIGATE_CHAT_SOURCE = "chat";
  *  of this block. Same reasoning as `INVESTIGATE_CHAT_SOURCE`. */
 const INVESTIGATE_TRACKER_SOURCE = "issue_tracker";
 
-function hasBalancedJqlStructure(clause: string): boolean {
-  let depth = 0;
-  let quoted = false;
-  for (let index = 0; index < clause.length; index += 1) {
-    const char = clause[index];
-    if (quoted) {
-      if (char === "\\") index += 1;
-      else if (char === '"') quoted = false;
-      continue;
-    }
-    if (char === '"') quoted = true;
-    else if (char === "(") depth += 1;
-    else if (char === ")") {
-      depth -= 1;
-      if (depth < 0) return false;
-    }
-  }
-  return depth === 0 && !quoted;
-}
 const paramsSchema = z
   .object({
     sources: z
@@ -49,13 +30,42 @@ const paramsSchema = z
       .trim()
       .min(1)
       .max(1000)
-      .refine(hasBalancedJqlStructure, "Query template has unbalanced parentheses or quotes")
       .optional(),
     maxResults: z.number().int().min(1).max(MAX_RESULTS_CEILING).optional(),
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:/-]+$/u).optional(),
   })
   .strict();
 
+/** The tracker a saved template will be sent to, as far as saving needs it. */
+export interface InvestigateQueryTracker {
+  /** Its name, for the person reading the refusal. */
+  readonly name: string;
+  /** Its `issueTrackerQueries` (`IssueTrackerQueryRule` in @integrations/sdk,
+   *  written out because a core block manifest imports no package). */
+  readonly queries: { problem(query: string): string | null };
+}
+
+/**
+ * The params schema a definition is saved against when a tracker is there to
+ * ask: the query template checked by that tracker's own rule. The template is
+ * written in the tracker's query language, so only the tracker can say
+ * whether it would run it, and core keeps no copy of any tracker's syntax.
+ * Without a tracker only the length is checked, and at run time the adapter
+ * still drops a query it would not run.
+ */
+export function paramsSchemaForTracker(tracker: InvestigateQueryTracker) {
+  return paramsSchema.superRefine((params, ctx) => {
+    const template = params.issueTrackerQueryTemplate;
+    if (template === undefined) return;
+    const problem = tracker.queries.problem(template);
+    if (problem === null) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["issueTrackerQueryTemplate"],
+      message: `${tracker.name} would not run this query, so the block would search without it. ${problem}`,
+    });
+  });
+}
 
 export const manifest = {
   type: "investigate",
