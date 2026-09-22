@@ -857,6 +857,15 @@ for reads that completed. The screen lists five names before "and N more" and
 labels an action with unknown impact explicitly. A save whose candidate does
 not move the fingerprint continues without another confirmation.
 
+The review fix round extended the same preview to the other two changes
+decision 9 names, over the same transport: `{ preview: "source", source }`
+and `{ preview: "disable" }`. `previewedChange` answers two questions, because
+the kill switch separates them: whether the pin moves, and whether runs in
+flight stop. Disabling moves no pin (it is read live) yet stops every run that
+reaches the integration, so it always counts. A switch of source stops runs
+exactly when the two sources hold different connections; when they hold the
+same one the screen switches without asking, as it saves without asking.
+
 The active provider selection for a single-provider capability was assigned
 here to S4 and moved to S6 during it: choosing between two providers is a
 control on the Integrations page, and a stored selection with nothing to write
@@ -1437,12 +1446,10 @@ it renders from one read and nothing on it can be clicked into a refusal.
   only when something was typed. Emptying one is `clearSecrets`, an action, not
   a blank input. After a save the secret inputs are cleared, because characters
   left on screen would suggest the field holds the stored value.
-- **It never invents a number.** Disable and disconnect name their consequences
-  and count nothing: how many published workflows and runs in flight depend on
-  an integration is not in this API (see "What S2 does not decide"), and a count
-  guessed in the browser is worse than a sentence. Delivering the count needs a
-  worker endpoint S6 was scoped out of; it is the one part of decision 9's
-  "impact before change" that is still open.
+- **It never invents a number.** A count guessed in the browser is worse than
+  a sentence, so every number a confirmation shows is the worker's impact
+  preview (below, "Impact preview"), and one it could not read is labelled
+  unknown on the button itself.
 - **It never enforces a permission.** A member is shown no control because
   offering one that 403s is rude, not because the hiding is the rule. The worker
   refuses, and `canManageIntegrations(session.role)` on a server-verified role is
@@ -1573,7 +1580,6 @@ write this build does not have.
 
 | Question | Owner |
 |---|---|
-| The numeric impact preview before a disable, a disconnect or a reconfiguration | a worker read that counts published workflows and runs in flight |
 | A settings form built from an integration's parameter schema | the first stage that ships a real integration block |
 | Choosing the active provider of a capability two integrations serve | S13, which is the first stage with two |
 | A throw raised while building a request out of unconfigured values is reported as `provider_unreachable`, so a non-answer is recorded as a failed verification | S2, which owns the classifier; the dashboard only stops sending |

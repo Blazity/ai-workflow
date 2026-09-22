@@ -560,10 +560,9 @@ export function testOutcomeLines(
 }
 
 /**
- * What turning the kill switch does, said before it is thrown.
- *
- * The count of published workflows and runs in flight is not in this API, so
- * the sentence names the consequence rather than inventing a number.
+ * What turning the kill switch does, said before it is thrown, beside the
+ * measured cost (`integrationImpactLines` with `"disable"`): which enabled
+ * workflows reach the integration and how many runs in flight stop.
  */
 export function disableConsequence(integration: IntegrationDto): string[] {
   return [
@@ -605,6 +604,45 @@ export function disconnectConsequence(integration: IntegrationDto): string[] {
 
 const IMPACT_NAME_LIMIT = 5;
 
+/** Said in a confirmation while its impact is being read. */
+export const READING_IMPACT_LINE =
+  "Reading enabled workflows and runs in flight before anything changes.";
+
+/** The four changes decision 9 asks the impact of before they are made. */
+export type IntegrationImpactAction = "save" | "disconnect" | "source" | "disable";
+
+/**
+ * Why runs in flight stop, or do not, for one change. The first line of every
+ * confirmation, because it is the answer to "what does this break".
+ */
+function impactReasonLine(
+  integration: IntegrationDto,
+  impact: IntegrationImpactPreviewResponse | null,
+  action: IntegrationImpactAction,
+): string {
+  const name = integration.name;
+  switch (action) {
+    case "save":
+      return impact === null
+        ? `The worker could not determine whether these values move ${name}'s connection fingerprint. A moved fingerprint stops runs already in flight at their next use instead of letting them follow the edit.`
+        : `If ${name} accepts these values, its connection fingerprint changes. Runs already in flight keep the fingerprint they started with and stop at their next use instead of following this edit.`;
+    case "disconnect":
+      return impact === null
+        ? "The worker could not determine whether disconnecting changes the connection a run has pinned. A changed pin stops runs already in flight at their next use."
+        : impact.changesFingerprint
+          ? "Disconnecting changes the connection a run has pinned. Runs already in flight stop at their next use instead of following the new connection."
+          : "This deployment falls back to the same connection fingerprint, so disconnecting the stored values does not stop a run already in flight.";
+    case "source":
+      return impact === null
+        ? "The worker could not determine whether the two sources hold the same connection. If they differ, runs already in flight stop at their next use."
+        : impact.changesFingerprint
+          ? `The two sources hold different values for ${name}, so switching changes the connection a run has pinned. Runs already in flight stop at their next use instead of following the switch.`
+          : `Both sources hold the same connection for ${name}, so switching stops no run in flight.`;
+    case "disable":
+      return `Turning ${name} off is read at every use, so every run in flight that reaches it stops at its next use.`;
+  }
+}
+
 /**
  * The measured cost shown before a connection change. Null is an unread fact,
  * never an empty fact, so every unknown has its own sentence.
@@ -612,19 +650,9 @@ const IMPACT_NAME_LIMIT = 5;
 export function integrationImpactLines(
   integration: IntegrationDto,
   impact: IntegrationImpactPreviewResponse | null,
-  action: "save" | "disconnect",
+  action: IntegrationImpactAction,
 ): string[] {
-  const lines = [
-    impact === null
-      ? action === "save"
-        ? `The worker could not determine whether these values move ${integration.name}'s connection fingerprint. A moved fingerprint stops runs already in flight at their next use instead of letting them follow the edit.`
-        : `The worker could not determine whether disconnecting changes the connection a run has pinned. A changed pin stops runs already in flight at their next use.`
-      : action === "save"
-      ? `If ${integration.name} accepts these values, its connection fingerprint changes. Runs already in flight keep the fingerprint they started with and stop at their next use instead of following this edit.`
-      : impact.changesFingerprint
-        ? `Disconnecting changes the connection a run has pinned. Runs already in flight stop at their next use instead of following the new connection.`
-        : `This deployment falls back to the same connection fingerprint, so disconnecting the stored values does not stop a run already in flight.`,
-  ];
+  const lines = [impactReasonLine(integration, impact, action)];
   const definitions = impact?.enabledDefinitions ?? null;
   const repositories = impact?.repositories ?? null;
   if (repositories === null) {
@@ -666,24 +694,30 @@ export function integrationImpactLines(
   return lines;
 }
 
+const CONFIRM_LABELS: Record<
+  IntegrationImpactAction,
+  { readonly unknown: string; readonly none: string; readonly stopping: string }
+> = {
+  save: { unknown: "Save with unknown impact", none: "Save the configuration", stopping: "Save and stop" },
+  disconnect: {
+    unknown: "Erase values with unknown impact",
+    none: "Erase the stored values",
+    stopping: "Erase values and stop",
+  },
+  source: { unknown: "Switch with unknown impact", none: "Switch the source", stopping: "Switch and stop" },
+  disable: { unknown: "Turn it off with unknown impact", none: "Turn it off", stopping: "Turn it off and stop" },
+};
+
+/** The confirm button says what pressing it costs, or that nobody could tell. */
 export function integrationImpactConfirmLabel(
   impact: IntegrationImpactPreviewResponse | null,
-  action: "save" | "disconnect",
+  action: IntegrationImpactAction,
 ): string {
+  const labels = CONFIRM_LABELS[action];
   const runs = impact?.inFlightRuns ?? null;
-  if (runs === null) {
-    return action === "save"
-      ? "Save with unknown impact"
-      : "Erase values with unknown impact";
-  }
-  if (action === "save") {
-    return runs === 0
-      ? "Save the configuration"
-      : `Save and stop ${runs} ${runs === 1 ? "run" : "runs"}`;
-  }
-  return runs === 0
-    ? "Erase the stored values"
-    : `Erase values and stop ${runs} ${runs === 1 ? "run" : "runs"}`;
+  if (runs === null) return labels.unknown;
+  if (runs === 0) return labels.none;
+  return `${labels.stopping} ${runs} ${runs === 1 ? "run" : "runs"}`;
 }
 
 /**

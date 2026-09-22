@@ -111,9 +111,13 @@ interface Sent {
   body: unknown;
 }
 
+/** The impact read every change makes first, answered as "nothing stops"
+ *  unless a test says otherwise. A disconnect moves the pin; a save and a
+ *  switch of source, whose sources hold the same values, do not. */
 function previewReply(call: Sent): unknown | null {
   const body = call.body as { preview?: string } | null;
-  if (body?.preview !== "save" && body?.preview !== "disconnect") return null;
+  const kinds = ["save", "disconnect", "source", "disable"];
+  if (body?.preview === undefined || !kinds.includes(body.preview)) return null;
   return {
     changesFingerprint: body.preview === "disconnect",
     enabledDefinitions: [],
@@ -616,6 +620,103 @@ test("turning the integration off asks first, and says what it costs", async (t)
   assert.deepEqual(sent[0]!.body, { enabled: false });
 });
 
+test("turning it off names the workflows that use it and the runs that stop, though nothing is reconfigured", async (t) => {
+  // Decision 9: impact before Disable. The dialog used to carry three fixed
+  // sentences and no number, so an admin reaching for the kill switch
+  // mid-afternoon could not see that it would stop eleven runs.
+  const sent = stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    if (body?.preview === "disable") {
+      return {
+        status: 200,
+        body: {
+          changesFingerprint: false,
+          enabledDefinitions: [{ id: 7, name: "Deploy announcements" }],
+          inFlightRuns: 11,
+          repositories: [],
+        },
+      };
+    }
+    return {
+      status: 200,
+      body: { integration: integration({ state: state({ enabled: false, status: "disabled" }) }) },
+    };
+  }, false);
+  const root = render(t);
+  const toggle = root.find((node) => node.props?.role === "switch");
+  await act(async () => {
+    toggle.props.onClick?.({ stopPropagation() {}, preventDefault() {} });
+  });
+
+  assert.equal(sent.length, 1, "only the impact is read before the switch is thrown");
+  assert.deepEqual(sent[0]!.body, { preview: "disable" });
+  const rendered = text(root);
+  assert.match(rendered, /Enabled workflows using Demo: Deploy announcements/);
+  assert.match(rendered, /11 runs in flight will stop/);
+  assert.match(rendered, /fails naming Demo/);
+
+  await press(button(root, "Turn it off and stop 11 runs"));
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1]!.body, { enabled: false });
+});
+
+test("a kill switch whose impact could not be read says so on the button", async (t) => {
+  stubReplies(t, () => ({ status: 503, body: { error: "database unavailable" } }), false);
+  const root = render(t);
+  const toggle = root.find((node) => node.props?.role === "switch");
+  await act(async () => {
+    toggle.props.onClick?.({ stopPropagation() {}, preventDefault() {} });
+  });
+
+  assert.match(text(root), /Runs in flight that would stop: unknown/);
+  assert.ok(button(root, "Turn it off with unknown impact"));
+});
+
+test("switching to stored values that differ asks first and names the runs that stop", async (t) => {
+  // The switch moves the pin whenever the two sources hold different values,
+  // and it used to fire on one click.
+  const sent = stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    if (body?.preview === "source") {
+      return {
+        status: 200,
+        body: {
+          changesFingerprint: true,
+          enabledDefinitions: [{ id: 4, name: "Nightly triage" }],
+          inFlightRuns: 2,
+          repositories: [],
+        },
+      };
+    }
+    return { status: 200, body: { integration: integration() } };
+  }, false);
+  const root = render(t, {
+    integration: integration({
+      state: state({
+        source: "environment",
+        environment: {
+          setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"],
+          missingVariables: [],
+          complete: true,
+        },
+      }),
+    }),
+  });
+  await press(button(root, "Use the stored values"));
+
+  assert.equal(sent.length, 1, "nothing is switched before the impact is read and confirmed");
+  assert.deepEqual(sent[0]!.body, { preview: "source", source: "stored" });
+  const rendered = text(root);
+  assert.match(rendered, /The two sources hold different values for Demo/);
+  assert.match(rendered, /Nightly triage/);
+  assert.match(rendered, /2 runs in flight will stop/);
+
+  await press(button(root, "Switch and stop 2 runs"));
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1]!.method, "PATCH");
+  assert.deepEqual(sent[1]!.body, { source: "stored" });
+});
+
 test("disconnecting names affected repositories and what is erased", async (t) => {
   const sent = stubReplies(t, (call) => {
     const body = call.body as { preview?: string } | null;
@@ -784,6 +885,8 @@ test("stored values can be prepared while the environment is still the source", 
   });
   assert.match(text(root), /Environment variables\s+· in use/);
   await press(button(root, "Use the stored values"));
+  // The impact read found the same connection behind both sources, so the
+  // switch goes ahead without a question nobody needs to answer.
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0]!.body, { source: "stored" });
 });

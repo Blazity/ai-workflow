@@ -22,12 +22,14 @@ import {
   integrationsUsedBy,
   type DeploymentIntegrations,
 } from "../../engine/definition/integration-availability.js";
-import { integrationSecretDigest } from "./resolve.js";
 import {
   environmentReaderFrom,
   integrationConfigFingerprint,
+  integrationSecretDigest,
   normalizeConnectionValue,
   resolveIntegrationState,
+  type IntegrationEnvironmentReader,
+  type IntegrationSecretsKeyState,
 } from "./resolve.js";
 import { secretsKeyMaterial, type IntegrationActor } from "./authoring.js";
 
@@ -45,6 +47,9 @@ export interface ImpactDefinitionInput {
 export async function summarizeIntegrationImpact(input: {
   readonly integrationId: string;
   readonly changesFingerprint: boolean;
+  /** Whether a run in flight that reaches the integration stops at its next
+   *  use. The pin moving is one way; the kill switch is the other. */
+  readonly stopsRuns: boolean;
   readonly definitions: readonly ImpactDefinitionInput[];
   readonly integrations: DeploymentIntegrations;
   readonly countInFlightRuns: (definitionIds: number[]) => Promise<number>;
@@ -57,7 +62,7 @@ export async function summarizeIntegrationImpact(input: {
       ),
     )
     .map(({ id, name }) => ({ id, name }));
-  const inFlightRuns = input.changesFingerprint
+  const inFlightRuns = input.stopsRuns
     ? await input.countInFlightRuns(enabledDefinitions.map(({ id }) => id))
     : 0;
   return {
@@ -69,9 +74,10 @@ export async function summarizeIntegrationImpact(input: {
 }
 
 /**
- * Read the consequence of a save or disconnect without testing a provider or
- * writing anything. A save is modelled as successful because only a successful
- * provider test activates it; a failed test leaves the old pin in force.
+ * Read the consequence of a save, a disconnect, a switch of source or the kill
+ * switch, without testing a provider or writing anything. A save is modelled
+ * as successful because only a successful provider test activates it; a failed
+ * test leaves the old pin in force.
  */
 export async function previewIntegrationImpact(input: {
   readonly actor: IntegrationActor;
@@ -100,10 +106,14 @@ export async function previewIntegrationImpact(input: {
   }
   const current = states.get(manifest.id);
   if (!current) throw new DashboardAuthError(404, "Unknown integration");
-  const stored = storedConnections.get(manifest.id) ?? null;
-  const changesFingerprint = input.preview.preview === "disconnect"
-    ? disconnectChangesFingerprint(manifest, stored, current, environment, material)
-    : saveChangesFingerprint(manifest, stored, current, environment, input.preview);
+  const { changesFingerprint, stopsRuns } = previewedChange({
+    manifest,
+    stored: storedConnections.get(manifest.id) ?? null,
+    current,
+    environment,
+    secretsKey: material.present ? { present: true, keyId: material.keyId } : { present: false },
+    preview: input.preview,
+  });
 
   let definitions: ImpactDefinitionInput[];
   let integrations: DeploymentIntegrations;
@@ -125,6 +135,7 @@ export async function previewIntegrationImpact(input: {
     return await summarizeIntegrationImpact({
       integrationId: manifest.id,
       changesFingerprint,
+      stopsRuns,
       definitions,
       integrations,
       countInFlightRuns,
@@ -147,11 +158,78 @@ export async function previewIntegrationImpact(input: {
   }
 }
 
+/**
+ * What the change asked about does to a run in flight, from facts already read.
+ *
+ * Two answers, because the kill switch separates them: disabling moves no pin
+ * (the flag is read live, never pinned), yet every run in flight that reaches
+ * the integration stops at its next use, which is exactly what an admin
+ * reaching for it has to be told. A save, a disconnect and a switch of source
+ * stop runs when, and only when, they move the pin a run compares.
+ */
+export function previewedChange(input: {
+  readonly manifest: IntegrationManifest;
+  readonly stored: StoredIntegrationConnection | null;
+  readonly current: IntegrationState;
+  readonly environment: IntegrationEnvironmentReader;
+  readonly secretsKey: IntegrationSecretsKeyState;
+  readonly preview: IntegrationImpactPreviewRequest;
+}): { readonly changesFingerprint: boolean; readonly stopsRuns: boolean } {
+  const { manifest, stored, current, environment, secretsKey, preview } = input;
+  if (preview.preview === "disable") {
+    return { changesFingerprint: false, stopsRuns: current.enabled };
+  }
+  const moved =
+    preview.preview === "save"
+      ? saveChangesFingerprint(manifest, stored, current, environment, preview)
+      : pinMoves(
+          current,
+          resolveIntegrationState({
+            manifest,
+            environment,
+            stored:
+              preview.preview === "source"
+                ? { ...(stored ?? emptyStored()), source: preview.source }
+                : disconnected(stored),
+            secretsKey,
+          }),
+        );
+  return { changesFingerprint: moved, stopsRuns: moved };
+}
+
+/**
+ * Whether a run pinned to `current` stops after the change that yields `after`:
+ * the non-secret values it pinned moved, or the connection it was using is no
+ * longer usable. The same test the run makes at its next use.
+ */
+function pinMoves(current: IntegrationState, after: IntegrationState): boolean {
+  return (
+    after.pin.configFingerprint !== current.pin.configFingerprint
+    || (current.usable && !after.usable)
+  );
+}
+
+/** The stored half as a disconnect leaves it: values erased, environment the source. */
+function disconnected(
+  stored: StoredIntegrationConnection | null,
+): StoredIntegrationConnection | null {
+  return stored === null
+    ? null
+    : {
+        ...stored,
+        source: "environment",
+        activeVersion: null,
+        active: null,
+        latest: null,
+        lastTest: null,
+      };
+}
+
 function saveChangesFingerprint(
   manifest: IntegrationManifest,
   stored: StoredIntegrationConnection | null,
   current: IntegrationState,
-  environment: ReturnType<typeof environmentReaderFrom>,
+  environment: IntegrationEnvironmentReader,
   request: IntegrationConnectionSaveRequest,
 ): boolean {
   const candidate = previewCandidate(manifest, stored, request);
@@ -205,36 +283,6 @@ function previewCandidate(
     testedAt: new Date().toISOString(),
     createdAt: new Date().toISOString(),
   };
-}
-
-function disconnectChangesFingerprint(
-  manifest: IntegrationManifest,
-  stored: StoredIntegrationConnection | null,
-  current: IntegrationState,
-  environment: ReturnType<typeof environmentReaderFrom>,
-  material: ReturnType<typeof secretsKeyMaterial>,
-): boolean {
-  const after = resolveIntegrationState({
-    manifest,
-    environment,
-    stored: stored === null
-      ? null
-      : {
-          ...stored,
-          source: "environment",
-          activeVersion: null,
-          active: null,
-          latest: null,
-          lastTest: null,
-        },
-    secretsKey: material.present
-      ? { present: true, keyId: material.keyId }
-      : { present: false },
-  });
-  return (
-    after.pin.configFingerprint !== current.pin.configFingerprint
-    || (current.usable && !after.usable)
-  );
 }
 
 function emptyStored(): StoredIntegrationConnection {
