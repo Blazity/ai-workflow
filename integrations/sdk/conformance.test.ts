@@ -483,13 +483,13 @@ test("a tracker says how it reads an authored query, and only a tracker does", (
   const tracker = validIntegration();
   tracker.manifest.capabilities = ["messaging", "issue_tracker"];
   tracker.runtime.capabilities = { ...tracker.runtime.capabilities, issue_tracker: () => ({}) };
-  hasIssue(tracker.manifest, tracker.runtime, "issue_tracker_queries_missing", "runtime.issueTrackerQueries");
-  tracker.runtime.issueTrackerQueries = { problem: () => null };
-  assert.ok(!codes(tracker.manifest, tracker.runtime).includes("issue_tracker_queries_missing"));
+  hasIssue(tracker.manifest, tracker.runtime, "issue_tracker_query_rule_missing", "runtime.issueTrackerQueryRule");
+  tracker.runtime.issueTrackerQueryRule = { problem: () => null };
+  assert.ok(!codes(tracker.manifest, tracker.runtime).includes("issue_tracker_query_rule_missing"));
 
   const notATracker = validIntegration();
-  notATracker.runtime.issueTrackerQueries = { problem: () => null };
-  hasIssue(notATracker.manifest, notATracker.runtime, "issue_tracker_queries_undeclared", "runtime.issueTrackerQueries");
+  notATracker.runtime.issueTrackerQueryRule = { problem: () => null };
+  hasIssue(notATracker.manifest, notATracker.runtime, "issue_tracker_query_rule_undeclared", "runtime.issueTrackerQueryRule");
 });
 
 test("a field a graph must read is one the block's output declares", () => {

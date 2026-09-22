@@ -304,7 +304,7 @@ const definition: IntegrationRuntimeDefinition<FixtureManifest> = {
   },
   // The fixture tracker has no search, so it runs no query and says so rather
   // than accepting one it would ignore.
-  issueTrackerQueries: {
+  issueTrackerQueryRule: {
     problem: () => "The fixture tracker has no search, so it runs no query.",
   },
   blocks: {
@@ -524,11 +524,11 @@ const _refusedRuntimes = {
     ({ ...definition, beginRun: undefined }),
   trackerWithoutQueryRule: (): IntegrationRuntimeDefinition<FixtureManifest> =>
     // @ts-expect-error the manifest declares issue_tracker, so how it reads an authored query is required
-    ({ ...definition, issueTrackerQueries: undefined }),
+    ({ ...definition, issueTrackerQueryRule: undefined }),
   queryRuleWithoutTracker: (): IntegrationRuntimeDefinition<typeof otelFixtureManifest> => ({
     ...otelDefinition,
     // @ts-expect-error only a tracker reads authored queries
-    issueTrackerQueries: definition.issueTrackerQueries,
+    issueTrackerQueryRule: definition.issueTrackerQueryRule,
   }),
   readerForUndeclaredPage: (): IntegrationRuntimeDefinition<FixtureManifest> => ({
     ...definition,

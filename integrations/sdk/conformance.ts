@@ -46,8 +46,8 @@ export type ConformanceCode =
   | "page_reader_undeclared"
   | "run_state_missing"
   | "run_state_undeclared"
-  | "issue_tracker_queries_missing"
-  | "issue_tracker_queries_undeclared"
+  | "issue_tracker_query_rule_missing"
+  | "issue_tracker_query_rule_undeclared"
   | "implementation_undeclared"
   | "webhook_receive_missing"
   | "reserved_slot_used";
@@ -329,7 +329,7 @@ export function checkIntegrationConformance(
   checkHealth(declared, implemented, report);
   checkPages(declared, implemented, report);
   checkRunState(declared, implemented, report);
-  checkIssueTrackerQueries(declared, implemented, report);
+  checkIssueTrackerQueryRule(declared, implemented, report);
   checkRuntimeSlots(implemented, report);
   return issues;
 }
@@ -706,22 +706,22 @@ function checkRunState(manifest: ParsedManifest, runtime: Runtime, report: Repor
  * the author never hears; with one on an integration that is no tracker,
  * nothing ever asks it.
  */
-function checkIssueTrackerQueries(manifest: ParsedManifest, runtime: Runtime, report: Report) {
+function checkIssueTrackerQueryRule(manifest: ParsedManifest, runtime: Runtime, report: Report) {
   const declared = manifest.capabilities.includes("issue_tracker");
-  const rule = runtime.issueTrackerQueries;
+  const rule = runtime.issueTrackerQueryRule;
   const implemented = isRecord(rule) && typeof rule.problem === "function";
   if (declared && !implemented) {
     report(
-      "issue_tracker_queries_missing",
-      "runtime.issueTrackerQueries",
-      "The manifest declares issue_tracker, so the runtime needs issueTrackerQueries: { problem(query) } saying why the tracker would not run a query an author typed. Without it core saves a query the adapter drops at run time, and the author never hears.",
+      "issue_tracker_query_rule_missing",
+      "runtime.issueTrackerQueryRule",
+      "The manifest declares issue_tracker, so the runtime needs issueTrackerQueryRule: { problem(query) } saying why the tracker would not run a query an author typed. Without it core saves a query the adapter drops at run time, and the author never hears.",
     );
   }
   if (!declared && rule !== undefined) {
     report(
-      "issue_tracker_queries_undeclared",
-      "runtime.issueTrackerQueries",
-      "The runtime has issueTrackerQueries, which core asks only of an integration that declares the issue_tracker capability. Declare it, or delete the rule.",
+      "issue_tracker_query_rule_undeclared",
+      "runtime.issueTrackerQueryRule",
+      "The runtime has issueTrackerQueryRule, which core asks only of an integration that declares the issue_tracker capability. Declare it, or delete the rule.",
     );
   }
 }
