@@ -42,6 +42,19 @@ export async function receiveGitLabWebhook(
   if (!deliveryId) {
     return { kind: "answered", response: { status: 202, body: { status: "ignored", reason: "missing_delivery_id" } } };
   }
+  const legacyProjectId = ctx.connection.legacyProjectId?.trim();
+  if (legacyProjectId && !isProject(body?.project, legacyProjectId)) {
+    // A deployment that still names one project (`GITLAB_PROJECT_ID`) keeps
+    // meaning only that project, for the workflow triggers and the legacy gate
+    // alike, as it did before GitLab was an integration. A group webhook
+    // otherwise starts runs on every project in the group while the catalog
+    // is not yet switched on. ADR-010 keeps this until R1.
+    ctx.log.info(
+      { project: body?.project?.path_with_namespace ?? null, expected: legacyProjectId },
+      "gitlab_webhook_skipped_other_project",
+    );
+    return { kind: "answered", response: { status: 202, body: { status: "ignored", reason: "other_project" } } };
+  }
   const events = normalizeGitLabEvents(eventName, body, {
     deliveryId,
     botLogin: ctx.connection.botLogin,
@@ -65,6 +78,12 @@ export async function receiveGitLabWebhook(
     response: { status: 202, body: { status: events.length > 0 ? "accepted" : "ignored" } },
     ...(legacyGate ? { legacyGate } : {}),
   };
+}
+
+/** The configured value names a project by its numeric id or its full path. */
+function isProject(project: any, configured: string): boolean {
+  if (!project) return false;
+  return String(project.id ?? "") === configured || project.path_with_namespace === configured;
 }
 
 function sameSecret(received: string | undefined, expected: string): boolean {

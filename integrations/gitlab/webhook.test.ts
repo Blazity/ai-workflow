@@ -20,7 +20,9 @@ const recorded = {
   ),
 };
 
-function ctx(): IntegrationContext<typeof manifest> {
+function ctx(
+  connection: Partial<IntegrationContext<typeof manifest>["connection"]> = {},
+): IntegrationContext<typeof manifest> {
   return {
     connection: {
       token: "token",
@@ -29,6 +31,7 @@ function ctx(): IntegrationContext<typeof manifest> {
       webhookSecret: "secret",
       legacyProjectId: undefined,
       legacyBotLogin: undefined,
+      ...connection,
     },
     http: { fetch },
     log: { debug() {}, info() {}, warn() {}, error() {} },
@@ -36,7 +39,11 @@ function ctx(): IntegrationContext<typeof manifest> {
   };
 }
 
-async function receive(eventName: string, rawBody: string) {
+async function receive(
+  eventName: string,
+  rawBody: string,
+  connection: Partial<IntegrationContext<typeof manifest>["connection"]> = {},
+) {
   return receiveGitLabWebhook(
     {
       method: "POST",
@@ -48,7 +55,7 @@ async function receive(eventName: string, rawBody: string) {
       },
       query: {},
     },
-    ctx(),
+    ctx(connection),
   );
 }
 
@@ -125,5 +132,42 @@ describe("GitLab published webhook payload bytes", () => {
       ctx(),
     );
     expect(result).toEqual({ kind: "refused", status: 401, reason: "Invalid webhook token" });
+  });
+});
+
+/**
+ * `GITLAB_PROJECT_ID` still names the one project a deployment that predates
+ * the catalog meant, and a group webhook delivers every project in the group.
+ * Both the workflow triggers and the legacy post-PR gate stay inside it, as
+ * they did before GitLab was an integration (ADR-010, until R1).
+ */
+describe("a deployment that still names one legacy GitLab project", () => {
+  it("skips a merge request from another project, gate included", async () => {
+    const result = await receive("Merge Request Hook", recorded.mergeRequest, {
+      legacyProjectId: "platform/api",
+    });
+
+    expect(result).toEqual({
+      kind: "answered",
+      response: { status: 202, body: { status: "ignored", reason: "other_project" } },
+    });
+  });
+
+  it("skips a note from another project before it can start a review run", async () => {
+    const result = await receive("Note Hook", recorded.note, { legacyProjectId: "platform/api" });
+
+    expect(result).toMatchObject({ kind: "answered", response: { body: { reason: "other_project" } } });
+  });
+
+  it.each([
+    ["its full path", "flightjs/flight-management"],
+    ["its numeric id", "2"],
+  ])("keeps the project it names by %s", async (_label, legacyProjectId) => {
+    const result = await receive("Merge Request Hook", recorded.mergeRequest, { legacyProjectId });
+
+    expect(result.kind).toBe("trigger_events");
+    if (result.kind !== "trigger_events") return;
+    expect(result.events.length).toBeGreaterThan(0);
+    expect(result.legacyGate?.workflowInput.ownerRepo).toBe("flightjs/flight-management");
   });
 });

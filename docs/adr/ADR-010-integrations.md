@@ -2371,7 +2371,11 @@ The GitLab package owns its adapter, repository listing and profile read,
 health checks, webhook verification and normalization. The generic route keeps
 `/webhooks/gitlab` stable and core dispatches only normalized events. Existing
 environment variables remain connection fields. `GITLAB_PROJECT_ID` continues
-to select one legacy project. It may be removed only after R1 confirms every
+to select one legacy project: the GitLab webhook ignores a delivery from any
+other project, for the workflow triggers and the legacy post-PR gate alike. The
+fallback that applied when it was unset, admitting only projects the token
+could list, is retired: the repository catalog is the gate, and core no longer
+lists a provider's repositories on each delivery. It may be removed only after R1 confirms every
 deployment has activated the repository catalog and a separate compatibility
 change is approved. `VCS_BOT_LOGIN` applies only when exactly one VCS provider
 is configured and retires in S11, after the second provider moves into its
