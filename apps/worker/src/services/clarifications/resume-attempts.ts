@@ -114,7 +114,9 @@ type FailedResumeInput = {
   settings: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
   row: ResumeAttemptSubject;
   reservation: ResumeAttemptReservation;
-  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment">;
+  /** Absent for a question with no ticket: the run is still cancelled, and
+   *  there is no ticket to tell. */
+  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment"> | undefined;
   error: unknown;
 };
 
@@ -123,7 +125,7 @@ async function cancelExhaustedResume(input: FailedResumeInput): Promise<void> {
   const cancellation = await cancelRunForOperator(db, row.runId, {
     actorLabel: "clarification resume failure",
     runRegistry: new PostgresRunRegistry(db),
-    issueTracker: input.issueTracker as IssueTrackerAdapter,
+    issueTracker: input.issueTracker as IssueTrackerAdapter | undefined,
     settings: input.settings,
   }).catch((cancelError: unknown) => {
     logger.warn(
@@ -151,7 +153,7 @@ async function cancelConnectedExhaustedResume(input: ConnectedFailedResumeInput)
   const cancellation = await cancelConnectedRunForOperator(row.runId, {
     actorLabel: "clarification resume failure",
     runRegistry: createConnectedPostgresRunRegistry(),
-    issueTracker: input.issueTracker as IssueTrackerAdapter,
+    issueTracker: input.issueTracker as IssueTrackerAdapter | undefined,
     settings: input.settings,
   }).catch((cancelError: unknown) => {
     logger.warn(
@@ -176,7 +178,7 @@ async function postExhaustedResumeComment(
   input: Omit<FailedResumeInput, "db">,
   message: string,
 ): Promise<void> {
-  if (!input.row.ticketKey) return;
+  if (!input.row.ticketKey || !input.issueTracker) return;
   await input.issueTracker
     .postComment(
       input.row.ticketKey,

@@ -302,6 +302,14 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
             );
           }
 
+          // A question asked on a ticket is answered on it (read, moved back to
+          // AI, commented on), so without a usable tracker it is refused here,
+          // before any effect and with the key given back. A question with no
+          // ticket touches no tracker and is answered either way.
+          const issueTracker = row.ticketKey
+            ? requireIssueTracker(deps.adapters).adapter
+            : issueTrackerIfConnected(deps.adapters);
+
           const outcome = await deps.services.answerClarificationAndResume({
             row,
             rawAnswer: input.answer,
@@ -324,7 +332,7 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
               clientId: deps.actor.clientId,
               userId: deps.actor.userId,
             },
-            issueTracker: deps.adapters.issueTracker,
+            ...(issueTracker ? { issueTracker } : {}),
           });
           if (outcome.kind !== "answered") throwForOutcome(outcome);
 

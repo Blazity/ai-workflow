@@ -23,6 +23,9 @@ const state = vi.hoisted(() => ({
   db: undefined as unknown,
   session: { user: { id: "user_admin" }, session: { id: "session_test" } } as unknown,
   env: { DASHBOARD_ORG_SLUG: "ai-workflow", COLUMN_AI: "AI" },
+  /** The deployment's tracker: connected (the fakes below), or one of the two
+   *  ways of having none. */
+  tracker: "connected" as "connected" | "not_connected" | "unreadable",
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -38,15 +41,24 @@ vi.mock("../../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../../services/auth/auth-instance.js", () => ({
   auth: { api: { getSession: vi.fn(async () => state.session) } },
 }));
-vi.mock("../../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({
-    issueTracker: {
-      fetchTicket: mocks.fetchTicket,
-      moveTicket: mocks.moveTicket,
-      postComment: mocks.postComment,
-    },
-  }),
-}));
+// Built the way `createAdapters` builds them, so the route sees the tracker
+// through the same one answer the real function gives.
+vi.mock("../../../engine/support/adapters.js", async (importOriginal) => {
+  const { adaptersFor } = await import("../../../test-support/issue-tracker.js");
+  return {
+    ...(await importOriginal<typeof import("../../../engine/support/adapters.js")>()),
+    createAdapters: () =>
+      adaptersFor(
+        state.tracker === "connected"
+          ? ({
+              fetchTicket: mocks.fetchTicket,
+              moveTicket: mocks.moveTicket,
+              postComment: mocks.postComment,
+            } as never)
+          : state.tracker,
+      ),
+  };
+});
 vi.mock("workflow/api", () => ({
   resumeHook: (...args: unknown[]) => mocks.resumeHook(...args),
   getHookByToken: (...args: unknown[]) => mocks.getHookByToken(...args),
@@ -123,6 +135,7 @@ const runStatus = (runId: string) =>
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  state.tracker = "connected";
   state.session = { user: { id: "user_admin" }, session: { id: "session_test" } };
   // The question parked the ticket in the backlog, which is where every answer
   // starts from.
@@ -176,6 +189,35 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     expect(mocks.fetchTicket).not.toHaveBeenCalled();
     expect(mocks.moveTicket).not.toHaveBeenCalled();
     expect(mocks.postComment).not.toHaveBeenCalled();
+  });
+
+  // A deployment may have no usable tracker since S12. The route read the
+  // throwing getter for every answer, so each one was a server error, a
+  // question with no ticket included.
+  it.each([
+    ["nothing is connected", "not_connected", 409, "Integrations page"],
+    ["its settings cannot be read", "unreadable", 503, "could not be read"],
+  ] as const)(
+    "refuses a ticket question when %s and records nothing",
+    async (_shape, tracker, status, says) => {
+      state.tracker = tracker;
+      const row = await seedPending();
+
+      const response = await answer(row.id);
+
+      expect(response.status).toBe(status);
+      expect(((await response.json()) as { statusMessage: string }).statusMessage).toContain(says);
+      expect(mocks.resumeHook).not.toHaveBeenCalled();
+      expect((await getHookClarification(db, row.id))?.status).toBe("pending");
+    },
+  );
+
+  it("answers a question with no ticket on a deployment with no tracker", async () => {
+    state.tracker = "not_connected";
+    const row = await seedPending(null);
+
+    expect((await answer(row.id)).status).toBe(200);
+    expect((await getHookClarification(db, row.id))?.status).toBe("answered");
   });
 
   it("accepts an identical retry after the hook was already consumed", async () => {

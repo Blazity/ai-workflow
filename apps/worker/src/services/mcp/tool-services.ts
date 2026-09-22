@@ -98,7 +98,9 @@ export interface McpToolServices extends McpGateServices {
      *  ticket comment say "through an MCP client" rather than "in the
      *  dashboard". */
     surface: { kind: "mcp"; clientId: string; userId: string | null };
-    issueTracker: IssueTrackerAdapter;
+    /** The tracker the question's ticket lives in; absent for a question
+     *  with no ticket, which touches none. */
+    issueTracker?: IssueTrackerAdapter;
   }): Promise<AnswerClarificationOutcome>;
   cancelRunForOperator(
     runId: string,

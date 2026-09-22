@@ -173,6 +173,38 @@ async function seedParkedRun() {
   return publishHookClarification(db, row.id);
 }
 
+const PR_RUN_ID = "wrun_pr_parked";
+const PR_SUBJECT = "pr:github:acme/web#7";
+
+/** The same park for a pull request run, which has no ticket. */
+async function seedTicketlessParkedRun() {
+  const row = await prepareHookClarification(db, {
+    ticketKey: null,
+    subjectKey: PR_SUBJECT,
+    runId: PR_RUN_ID,
+    blockId: "human_question",
+    definitionId: 1,
+    definitionVersion: 4,
+    questions: ["Should this pull request ship today?"],
+    suggestedAnswers: [],
+  });
+  await db.insert(activeRuns).values({
+    subjectKey: PR_SUBJECT,
+    ticketKey: null,
+    ownerToken: "owner-pr",
+    runId: PR_RUN_ID,
+    state: "bound",
+    runKind: "pr_trigger",
+  });
+  await db.insert(workflowRuns).values({
+    runId: PR_RUN_ID,
+    subjectKey: PR_SUBJECT,
+    ticketKey: null,
+    status: "awaiting",
+  });
+  return publishHookClarification(db, row.id);
+}
+
 /**
  * A registry stub rather than the real adapter, which is built from env and talks to
  * the deployed store. What the cancel core needs from it is exactly these four calls
@@ -328,6 +360,43 @@ describe("runs.answer_clarification", () => {
     // The park marker is cleared by the core, so the run stops reading as awaiting
     // the moment the answer lands.
     expect(await runStatus()).toBe("running");
+  });
+
+  // A deployment may have no usable tracker since S12. The tool read the
+  // throwing getter for every answer, so each one was an INTERNAL_ERROR that
+  // spent its key, a question with no ticket included.
+  it.each([
+    ["nothing is connected", "not_connected", "VALIDATION_FAILED", false],
+    ["its settings cannot be read", "unreadable", "DEPENDENCY_UNAVAILABLE", true],
+  ] as const)(
+    "refuses a ticket question when %s, records nothing, and gives the key back",
+    async (_shape, tracker, code, retryable) => {
+      const refusing = await connectedClient({ scopes: DISPATCH_ONLY }, tracker);
+
+      const refused = await answer(refusing);
+
+      expect(errorPayload(refused)).toMatchObject({ code, retryable });
+      expect(hooks.resumeHook).not.toHaveBeenCalled();
+      expect((await getHookClarification(db, clarificationId))?.status).toBe("pending");
+
+      // The same key, once a tracker is there, answers.
+      const connected = await connectedClient();
+      expect(dataOf(await answer(connected))).toMatchObject({ status: "answered" });
+    },
+  );
+
+  it("answers a question with no ticket on a deployment with no tracker", async () => {
+    const parked = await seedTicketlessParkedRun();
+    hooks.resumeHook.mockResolvedValueOnce({ runId: PR_RUN_ID });
+    const client = await connectedClient({ scopes: DISPATCH_ONLY }, "not_connected");
+
+    const result = await answer(client, { runId: PR_RUN_ID, answer: "Ship it" });
+
+    expect(dataOf(result)).toMatchObject({ runId: PR_RUN_ID, status: "answered", ticketKey: null });
+    expect(hooks.resumeHook).toHaveBeenCalledWith(
+      parked.hookToken,
+      expect.objectContaining({ answer: "Ship it" }),
+    );
   });
 
   it("accepts an absent hook after a failed resume as a committed delivery", async () => {
