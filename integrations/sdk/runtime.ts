@@ -176,6 +176,12 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
  * and returning `{ ok: false }` turns a thirty second outage into a Failing
  * card that only a person pressing Test again can clear.
  *
+ * Which is which is not for each integration to decide:
+ * `refusedOrThrow(responseOrError, reason)` returns the refusal for a failure
+ * that is one and throws for every other, by the one rule in
+ * `provider-failure.ts`. Provider vocabulary on top of HTTP (a Slack error
+ * code, say) is the integration's to translate into those two meanings.
+ *
  * Either way, values being saved do not become active: only a pass does that.
  *
  * Core redacts the connection's secrets from `reason`, `message` and a thrown

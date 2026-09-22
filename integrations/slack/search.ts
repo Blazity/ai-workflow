@@ -97,7 +97,7 @@ export async function searchSlackChannels(
   // maxResults bounds them.
   const matches: MessageSearchMatch[] = [];
   for (const hit of hits.slice(0, query.maxResults)) {
-    const link = await api.call<{ permalink?: unknown }>("chat.getPermalink", {
+    const link = await api.get<{ permalink?: unknown }>("chat.getPermalink", {
       channel: hit.channel,
       message_ts: hit.ts,
     });
@@ -129,7 +129,7 @@ async function fetchChannelHistory(
   const messages: SlackHistoryMessage[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
-    const data = await api.call<{
+    const data = await api.get<{
       messages?: unknown;
       has_more?: unknown;
       response_metadata?: { next_cursor?: unknown };

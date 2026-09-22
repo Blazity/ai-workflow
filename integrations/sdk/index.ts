@@ -102,6 +102,12 @@ export {
 export { FatalError } from "./errors";
 
 export {
+  readProviderFailure,
+  refusedOrThrow,
+  type ProviderFailure,
+} from "./provider-failure";
+
+export {
   boundRepositoryProfileBundle,
   isRepositoryProfileLockfile,
   isRepositoryProfileManifest,

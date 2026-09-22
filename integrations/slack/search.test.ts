@@ -24,7 +24,9 @@ const OLDEST_10_DAYS = "1799136000.000000";
 
 interface Call {
   method: string;
+  /** The arguments, from the query string of a GET or the form body of a POST. */
   body: Record<string, string>;
+  httpMethod: string;
 }
 
 /** A Slack that answers from a script keyed by method, and records what it was asked. */
@@ -32,9 +34,12 @@ function fakeSlack(handler: (method: string, body: Record<string, string>) => un
   const calls: Call[] = [];
   const http = {
     async fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
-      const method = String(input).split("/").pop()!;
-      const body = Object.fromEntries(new URLSearchParams(String(init?.body)));
-      calls.push({ method, body });
+      const url = new URL(String(input));
+      const method = url.pathname.split("/").pop()!;
+      const body = Object.fromEntries(
+        init?.body === undefined ? url.searchParams : new URLSearchParams(String(init.body)),
+      );
+      calls.push({ method, body, httpMethod: init?.method ?? "GET" });
       return new Response(JSON.stringify(handler(method, body)), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -270,9 +275,10 @@ test("classifies an aborted history request as a timeout skip", async () => {
   const calls: Call[] = [];
   const http = {
     async fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
-      const method = String(input).split("/").pop()!;
-      const reqBody = Object.fromEntries(new URLSearchParams(String(init?.body)));
-      calls.push({ method, body: reqBody });
+      const url = new URL(String(input));
+      const method = url.pathname.split("/").pop()!;
+      const reqBody = Object.fromEntries(url.searchParams);
+      calls.push({ method, body: reqBody, httpMethod: init?.method ?? "GET" });
       if (method === "conversations.history" && reqBody.channel === "C_SLOW") {
         throw Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" });
       }
@@ -311,4 +317,22 @@ test("stops paginating when has_more arrives with an empty next_cursor", async (
 
   assert.equal(historyCalls(slack.calls).length, 1);
   assert.equal(found(result).matches.length, 1);
+});
+
+test("reads are sent as GET, which is what lets ctx.http retry a transient failure", async () => {
+  // Slack documents both methods as GET. Sent as POST, a 5xx or a timeout on a
+  // research read was final, because the context retries only reads.
+  const slack = fakeSlack((method) =>
+    method === "conversations.history"
+      ? { ok: true, messages: [{ ts: "1.000001", text: "login broken" }], has_more: false }
+      : { ok: true, permalink: "https://slack.example/p" },
+  );
+
+  await searchSlackChannels(slack.api, query({ channels: ["C_OPEN"] }), NOW);
+
+  assert.deepEqual(
+    slack.calls.map((call) => `${call.httpMethod} ${call.method}`),
+    ["GET conversations.history", "GET chat.getPermalink"],
+  );
+  assert.equal(slack.calls[0]!.body.channel, "C_OPEN");
 });

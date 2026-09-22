@@ -1,6 +1,6 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
-import { FatalError } from "@integrations/sdk";
+import { FatalError, type IntegrationHttp } from "@integrations/sdk";
 
 /**
  * The App credential, as this integration holds it.
@@ -92,8 +92,18 @@ export function requirePrivateKey(value: string | undefined): string {
  * Octokit pre-wired with the App auth strategy. Octokit mints and refreshes the
  * installation token internally per request, so every REST call from the
  * adapter goes through one of these.
+ *
+ * `fetch` is the context's (`ctx.http.fetch`), and a caller that has a context
+ * passes it: every request then has core's timeout, is bound to the context's
+ * lifetime (a connection test that runs out of time stops waiting on GitHub)
+ * and throws with the connection's secrets redacted. Octokit hands the same
+ * fetch to the App auth strategy, so minting the installation token goes
+ * through it too.
  */
-export function buildOctokit(credential: GitHubAppCredential): Octokit {
+export function buildOctokit(
+  credential: GitHubAppCredential,
+  options: { readonly fetch?: IntegrationHttp["fetch"] } = {},
+): Octokit {
   return new Octokit({
     authStrategy: createAppAuth,
     auth: {
@@ -101,6 +111,7 @@ export function buildOctokit(credential: GitHubAppCredential): Octokit {
       privateKey: requirePrivateKey(credential.privateKey),
       installationId: credential.installationId,
     },
+    ...(options.fetch ? { request: { fetch: options.fetch } } : {}),
   });
 }
 

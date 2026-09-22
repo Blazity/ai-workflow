@@ -203,3 +203,61 @@ test("a Slack that never answered reports the outage rather than a bad token", a
 
   assert.deepEqual(delivery, { delivered: false, reason: "Slack did not answer in time" });
 });
+
+/**
+ * `delivered` is whether the event's message went out, as the port defines it,
+ * and the status line is logged when it could not be updated. It used to mean
+ * two things: a status post Slack refused made the delivery `false` although
+ * the message was in the channel, while a status edit that was rate limited
+ * made it `true` for the same half-updated thread.
+ */
+function recordingLog() {
+  const warnings: { event: string; fields: Record<string, unknown> }[] = [];
+  return {
+    warnings,
+    log: {
+      info: () => {},
+      warn: (fields: Record<string, unknown>, event: string) => warnings.push({ event, fields }),
+    },
+  };
+}
+
+test("a status line Slack would not post leaves the message delivered, and says so in the log", async () => {
+  const slack = fakeSlack({
+    "chat.postMessage": [{ ok: false, error: "msg_too_long" }, { ok: true, ts: "1758300000.000700" }],
+  });
+  const audit = recordingLog();
+  const messaging = slackMessaging({ api: slack.api, channelId: "C1", log: audit.log });
+
+  const delivery = await messaging.notifyForTicket(TICKET, { kind: "started" }, conversation(null).value);
+
+  assert.deepEqual(delivery, { delivered: true });
+  // The detail went top-level, so the event still left its record.
+  assert.equal(slack.calls[1]!.body.thread_ts, undefined);
+  assert.deepEqual(
+    audit.warnings.map((warning) => [warning.event, warning.fields.reason]),
+    [["slack_status_line_failed", "Slack refused the message (msg_too_long)"]],
+  );
+});
+
+test("a status line Slack would not edit leaves the message delivered, and says so in the log", async () => {
+  const slack = fakeSlack({
+    "chat.update": [{ ok: false, error: "ratelimited" }],
+    "chat.postMessage": [{ ok: true, ts: "1758300000.000800" }],
+  });
+  const audit = recordingLog();
+  const messaging = slackMessaging({ api: slack.api, channelId: "C1", log: audit.log });
+
+  const delivery = await messaging.notifyForTicket(
+    TICKET,
+    { kind: "started" },
+    conversation("1758300000.000100").value,
+  );
+
+  assert.deepEqual(delivery, { delivered: true });
+  assert.equal(slack.calls[1]!.body.thread_ts, "1758300000.000100");
+  assert.deepEqual(
+    audit.warnings.map((warning) => warning.event),
+    ["slack_status_line_failed"],
+  );
+});

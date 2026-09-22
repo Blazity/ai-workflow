@@ -27,6 +27,15 @@ export interface JiraConfig {
 
 const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
 
+/**
+ * An answer from Jira that was not a success, with the status on the error.
+ * Whoever catches it reads what Jira said from `status` (the SDK's
+ * `readProviderFailure` among them) rather than parsing the sentence.
+ */
+function answered(message: string, res: Response): Error {
+  return Object.assign(new Error(message), { status: res.status });
+}
+
 type JiraTransition = {
   id: string;
   name?: string;
@@ -118,9 +127,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     const url = `${this.tenantOrigin}/_edge/tenant_info`;
     const res = await this.fetch(url, { signal });
     if (!res.ok) {
-      throw new Error(
-        `Jira cloudId discovery failed: ${res.status} ${res.statusText} on ${url}`,
-      );
+      throw answered(`Jira cloudId discovery failed: ${res.status} ${res.statusText} on ${url}`, res);
     }
     const data = (await res.json()) as { cloudId?: unknown };
     if (typeof data?.cloudId !== "string" || data.cloudId === "") {
@@ -150,7 +157,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
       if (res.status === 404) {
         throw new IssueTrackerNotFoundError("Jira resource", path);
       }
-      throw new Error(`Jira API error: ${res.status} ${res.statusText} on ${path}`);
+      throw answered(`Jira API error: ${res.status} ${res.statusText} on ${path}`, res);
     }
     if (res.status === 204) return null;
     try {
@@ -502,8 +509,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
 
       if (!res.ok) {
         await res.body?.cancel?.();
-        throw new Error(
+        throw answered(
           `Jira attachment error: status ${res.status} ${res.statusText} on ${currentUrl}`,
+          res,
         );
       }
       return Buffer.from(await res.arrayBuffer());
@@ -542,7 +550,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     });
     if (res.status === 401 || res.status === 403 || res.status === 404) return null;
     if (!res.ok) {
-      throw new Error(`Jira API error: ${res.status} ${res.statusText} on ${path}`);
+      throw answered(`Jira API error: ${res.status} ${res.statusText} on ${path}`, res);
     }
     const body = (await res.json().catch(() => null)) as Array<{
       url?: unknown;

@@ -1,5 +1,6 @@
 import {
   defineIntegrationRuntime,
+  refusedOrThrow,
   type IntegrationContext,
   type IntegrationRuntimeDefinition,
 } from "@integrations/sdk";
@@ -42,9 +43,14 @@ function adapter(ctx: GitHubContext, repository?: { repoPath: string; baseBranch
   });
 }
 
+/** The connection's own Octokit, on the context's HTTP (see `buildOctokit`). */
+function octokitOf(ctx: GitHubContext) {
+  return buildOctokit(credentialOf(ctx), { fetch: ctx.http.fetch });
+}
+
 /** The App itself, on the App JWT. Fails when the key or the App id is wrong. */
 async function authenticatedApp(ctx: GitHubContext): Promise<{ slug?: string; name?: string }> {
-  const { data } = await buildOctokit(credentialOf(ctx)).apps.getAuthenticated();
+  const { data } = await octokitOf(ctx).apps.getAuthenticated();
   return { slug: data?.slug ?? undefined, name: data?.name ?? undefined };
 }
 
@@ -58,7 +64,7 @@ async function authenticatedApp(ctx: GitHubContext): Promise<{ slug?: string; na
  * discover it when a run tries to open a pull request.
  */
 async function installationRepositories(ctx: GitHubContext): Promise<number> {
-  const { data } = await buildOctokit(credentialOf(ctx)).apps.listReposAccessibleToInstallation({
+  const { data } = await octokitOf(ctx).apps.listReposAccessibleToInstallation({
     per_page: 1,
   });
   return data.total_count ?? data.repositories?.length ?? 0;
@@ -107,7 +113,7 @@ async function appWebhookState(ctx: GitHubContext): Promise<{
   status: "live" | "degraded" | "down";
   message: string;
 }> {
-  const octokit = buildOctokit(credentialOf(ctx));
+  const octokit = octokitOf(ctx);
   const [app, hook, deliveries] = await Promise.all([
     octokit.apps.getAuthenticated(),
     octokit.request("GET /app/hook/config"),
@@ -160,13 +166,15 @@ async function appWebhookState(ctx: GitHubContext): Promise<{
       message: `The latest delivery to ${url} was rejected with 401: the App's webhook secret differs from the one this connection holds.`,
     };
   }
-  // A 5xx is this deployment's own answer, and the one it gives deliberately
-  // is "busy, nothing was started". That is worth seeing and it is not a
-  // broken App, so it is amber with the code rather than down.
+  // A 5xx is this deployment's own answer: the delivery arrived and was
+  // signed correctly, and the worker then failed to act on it (a dispatch
+  // error, settings it could not read, an integration switched off since).
+  // Being busy is not among them any more: that is answered 202. So it is
+  // amber with the code, pointing at this side rather than at the App.
   if (typeof code === "number" && code >= 500) {
     return {
       status: "degraded",
-      message: `The latest delivery to ${url} was answered ${code} by this deployment, so that event started nothing. The delivery itself is fine; check the run capacity and the worker's own rows.`,
+      message: `The latest delivery to ${url} was answered ${code} by this deployment, so that event started nothing. The App and its webhook are fine; the worker failed to act on the delivery, and its webhook delivery log and diagnostics say why.`,
     };
   }
   return {
@@ -193,7 +201,10 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
         } can see ${repositories} repositor${repositories === 1 ? "y" : "ies"}.`,
       };
     } catch (error) {
-      return { ok: false, reason: reason(error) };
+      // Octokit's error carries the status GitHub answered. A 401 on the App
+      // JWT or a 404 for the installation is a verdict on these values; a 5xx,
+      // a spent rate limit or a request that never got an answer is not.
+      return refusedOrThrow(error);
     }
   },
   capabilities: {

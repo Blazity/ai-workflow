@@ -57,6 +57,8 @@ function context(
       ...overrides,
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    // Handed to Octokit, which is replaced here, so nothing calls it.
+    http: { fetch: vi.fn() },
     ...(webhookUrl ? { webhookUrl } : {}),
   } as never;
 }
@@ -200,18 +202,23 @@ describe("the GitHub connection's health checks", () => {
     ).resolves.toMatchObject({ status: "live" });
   });
 
-  it("reads a 5xx this deployment answered as busy, not as a broken App", async () => {
-    // The worker answers 5xx when a dispatch failed on its side. Painting the
+  it("reads a 5xx this deployment answered as its own failure, not as a broken App", async () => {
+    // The worker answers 5xx when it failed to act on a delivery. Painting the
     // App down for a week over our own answer sends an operator to GitHub to
-    // fix something that is not broken there.
+    // fix something that is not broken there. And it is not "busy" either:
+    // at capacity is answered 202, so sending the operator to the run
+    // capacity setting sends them to the one thing that is not the cause.
     appAnswers({
       deliveries: [{ delivered_at: new Date().toISOString(), status_code: 503 }],
     });
 
-    await expect(runtime.health.webhook?.(context())).resolves.toMatchObject({
+    const result = await runtime.health.webhook?.(context());
+    expect(result).toMatchObject({
       status: "degraded",
       message: expect.stringContaining("answered 503 by this deployment"),
     });
+    expect(result?.message).toContain("failed to act on the delivery");
+    expect(result?.message).not.toMatch(/capacity/iu);
   });
 
   it("switched-off TLS verification is down, whatever the deliveries say", async () => {

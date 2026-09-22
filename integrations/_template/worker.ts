@@ -8,6 +8,8 @@
 import {
   defineIntegrationRuntime,
   FatalError,
+  readProviderFailure,
+  refusedOrThrow,
   type IntegrationRuntimeDefinition,
 } from "@integrations/sdk";
 import { manifest } from "./manifest";
@@ -28,7 +30,10 @@ const definition: IntegrationRuntimeDefinition<ExampleManifest> = {
       timeoutMs: 5_000,
     });
     if (response.ok) return { ok: true };
-    return { ok: false, reason: await response.text() };
+    // A 401 is the provider refusing the token; a 503 or a timeout says
+    // nothing about it. `refusedOrThrow` returns the first and throws the
+    // second, which is what keeps an outage from turning the card Failing.
+    return refusedOrThrow(response, `The provider refused the API token (${response.status}).`);
   },
   capabilities: {},
   blocks: {
@@ -62,10 +67,9 @@ const definition: IntegrationRuntimeDefinition<ExampleManifest> = {
         retries: 0,
       });
       if (response.ok) return { status: "live" };
-      return {
-        status: response.status === 401 ? "down" : "degraded",
-        message: `The provider answered ${response.status}.`,
-      };
+      return readProviderFailure(response).kind === "refused"
+        ? { status: "down", message: `The provider refused the API token (${response.status}).` }
+        : { status: "degraded", message: `The provider did not answer (${response.status}).` };
     },
   },
 };

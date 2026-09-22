@@ -34,6 +34,17 @@ function api(ctx: SlackContext): SlackApi {
 }
 
 /**
+ * What the delivery probe found: Slack refused to schedule into the channel,
+ * Slack gave no verdict, or delivery works (and how cleanly it was cleaned
+ * up). The connection test and the health row read the same probe and say
+ * different things about the first two.
+ */
+type DeliveryProbe =
+  | { readonly kind: "refused"; readonly reason: string }
+  | { readonly kind: "no_verdict"; readonly cause: string }
+  | { readonly kind: "delivers"; readonly health: IntegrationHealthResult };
+
+/**
  * Prove the bot can deliver to the configured channel the way a real
  * notification does: schedule a message far in the future, then delete it
  * before it can ever post. `conversations.info` asked the wrong question,
@@ -45,25 +56,31 @@ function api(ctx: SlackContext): SlackApi {
  * the date the message would arrive. Reporting "delivery verified" over a
  * message we left in the queue is how a probe becomes the thing it tests for.
  */
-async function probeChannelDelivery(ctx: SlackContext): Promise<IntegrationHealthResult> {
+async function probeChannelDelivery(ctx: SlackContext): Promise<DeliveryProbe> {
   const client = api(ctx);
   const channel = ctx.connection.channelId;
   const postAt = Math.floor(Date.now() / 1000) + PROBE_DELAY_SECONDS;
-  const scheduled = await client.call<{ scheduled_message_id?: unknown }>("chat.scheduleMessage", {
+  const scheduled = await client.post<{ scheduled_message_id?: unknown }>("chat.scheduleMessage", {
     channel,
     post_at: String(postAt),
     text: "System health delivery probe. If you are reading this, deleting it failed; it is safe to ignore.",
   });
   if (!scheduled.ok) {
-    return {
-      status: "down",
-      message: `The bot cannot deliver to the configured channel: ${reasonOf(scheduled)}.`,
-    };
+    return scheduled.error === null
+      ? { kind: "no_verdict", cause: scheduled.cause }
+      : { kind: "refused", reason: reasonOf(scheduled) };
   }
+  return { kind: "delivers", health: await deleteProbeMessage(client, channel, scheduled.body, postAt) };
+}
+
+async function deleteProbeMessage(
+  client: SlackApi,
+  channel: string,
+  scheduled: { scheduled_message_id?: unknown },
+  postAt: number,
+): Promise<IntegrationHealthResult> {
   const id =
-    typeof scheduled.body.scheduled_message_id === "string"
-      ? scheduled.body.scheduled_message_id
-      : null;
+    typeof scheduled.scheduled_message_id === "string" ? scheduled.scheduled_message_id : null;
   const postsOn = new Date(postAt * 1000).toISOString().slice(0, 10);
   if (!id) {
     return {
@@ -73,7 +90,7 @@ async function probeChannelDelivery(ctx: SlackContext): Promise<IntegrationHealt
   }
   let lastFailure = "";
   for (let attempt = 0; attempt < PROBE_DELETE_ATTEMPTS; attempt += 1) {
-    const deleted = await client.call("chat.deleteScheduledMessage", {
+    const deleted = await client.post("chat.deleteScheduledMessage", {
       channel,
       scheduled_message_id: id,
     });
@@ -109,21 +126,30 @@ const definition: IntegrationRuntimeDefinition<SlackManifest> = {
    * hear about both now rather than at 3am.
    */
   testConnection: async (ctx) => {
-    const auth = await api(ctx).call<{ team?: unknown }>("auth.test", {});
+    // Slack's refusals are a verdict on the token or the channel; no verdict
+    // (unreachable, rate limited, failing on its side) throws, so an outage
+    // while an admin presses Test is not recorded as a bad token.
+    const auth = await api(ctx).post<{ team?: unknown }>("auth.test", {});
     if (!auth.ok) {
-      if (auth.error === null) throw new Error(auth.cause);
+      if (auth.error === null) throw new Error(`Slack did not answer: ${auth.cause}.`);
       return { ok: false, reason: `Slack refused the bot token (${auth.error}).` };
     }
     const team = typeof auth.body.team === "string" ? auth.body.team : "your workspace";
     const delivery = await probeChannelDelivery(ctx);
-    if (delivery.status === "down") {
-      return { ok: false, reason: delivery.message ?? "The configured channel refused a message." };
+    if (delivery.kind === "no_verdict") {
+      throw new Error(`Slack did not answer the delivery check: ${delivery.cause}.`);
+    }
+    if (delivery.kind === "refused") {
+      return {
+        ok: false,
+        reason: `The bot cannot deliver to the configured channel: ${delivery.reason}.`,
+      };
     }
     return {
       ok: true,
       message:
-        delivery.status === "degraded"
-          ? `Connected to ${team}. ${delivery.message}`
+        delivery.health.status === "degraded"
+          ? `Connected to ${team}. ${delivery.health.message}`
           : `Connected to ${team}, and the configured channel accepts messages.`,
     };
   },
@@ -141,14 +167,32 @@ const definition: IntegrationRuntimeDefinition<SlackManifest> = {
 
   health: {
     "bot-auth": async (ctx) => {
-      const auth = await api(ctx).call<{ team?: unknown }>("auth.test", {});
+      const auth = await api(ctx).post<{ team?: unknown }>("auth.test", {});
       if (auth.ok) {
         const team = typeof auth.body.team === "string" ? auth.body.team : "the workspace";
         return { status: "live", message: `Slack accepts the bot token for ${team}.` };
       }
-      return { status: "down", message: `Slack refused the bot token: ${reasonOf(auth)}.` };
+      return auth.error === null
+        ? { status: "down", message: `Slack did not answer, so the token could not be checked: ${auth.cause}.` }
+        : { status: "down", message: `Slack refused the bot token (${auth.error}).` };
     },
-    channel: probeChannelDelivery,
+    channel: async (ctx) => {
+      const delivery = await probeChannelDelivery(ctx);
+      switch (delivery.kind) {
+        case "delivers":
+          return delivery.health;
+        case "refused":
+          return {
+            status: "down",
+            message: `The bot cannot deliver to the configured channel: ${delivery.reason}.`,
+          };
+        case "no_verdict":
+          return {
+            status: "down",
+            message: `Slack did not answer, so delivery could not be checked: ${delivery.cause}.`,
+          };
+      }
+    },
   },
 
   webhook: {
@@ -156,6 +200,7 @@ const definition: IntegrationRuntimeDefinition<SlackManifest> = {
       receiveSlashCommand(request, {
         signingSecret: ctx.connection.signingSecret,
         allowedUserIds: ctx.connection.allowedUserIds,
+        log: ctx.log,
       }),
     deliver: (delivery, ctx) =>
       deliverSlashCommandOutcome(delivery.to, delivery.outcome, ctx.log),
