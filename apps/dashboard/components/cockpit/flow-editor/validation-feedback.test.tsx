@@ -7,6 +7,7 @@ import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-c
 import {
   groupValidationIssues,
   NodeValidationErrors,
+  NodeValidationNotices,
   ValidationSummary,
 } from "./validation-feedback";
 
@@ -73,4 +74,67 @@ test("renders a selected block's validation errors expanded with its exact path"
   assert.match(html, /Required input &quot;plan&quot; is missing/);
   assert.match(html, /\/nodes\/2\/inputs\/plan/);
   assert.doesNotMatch(html, /<details/);
+});
+
+const notice = {
+  code: "tracker_query_not_run",
+  nodeId: "look",
+  path: "/nodes/1/configuration/issueTrackerQueryTemplate",
+  message: "Jira does not run this query, so the block searches without it.",
+};
+
+test("shows a notice on a valid workflow as its own amber summary that does not alert", () => {
+  const html = renderToStaticMarkup(
+    <ValidationSummary
+      validation={{
+        status: "valid",
+        issues: [],
+        notices: [notice],
+        nodeContracts: {},
+        availableValuesByNode: {},
+      }}
+      nodeNames={{ look: "Look for duplicates" }}
+      onSelectNode={() => undefined}
+    />,
+  );
+
+  assert.match(html, />1 notice</);
+  assert.match(html, /aria-label="Workflow validation notices"/);
+  assert.match(html, /do not stop saving or deploying/);
+  assert.match(html, /aria-label="Select block Look for duplicates"/);
+  assert.match(html, /Jira does not run this query/);
+  assert.match(html, /role="status"/);
+  assert.doesNotMatch(html, /role="alert"/);
+  assert.doesNotMatch(html, /validation issue/);
+  assert.match(html, /border-amber-300/);
+  assert.doesNotMatch(html, /text-red-/);
+});
+
+test("counts only the errors in the error summary when a workflow has both", () => {
+  const html = renderToStaticMarkup(
+    <ValidationSummary
+      validation={{
+        status: "invalid",
+        issues: issues.slice(0, 1),
+        notices: [notice],
+        nodeContracts: {},
+        availableValuesByNode: {},
+      }}
+      nodeNames={{}}
+      onSelectNode={() => undefined}
+    />,
+  );
+
+  assert.match(html, />1 validation issue</);
+  assert.match(html, />1 notice</);
+});
+
+test("renders a selected block's notices apart from its errors", () => {
+  const html = renderToStaticMarkup(<NodeValidationNotices notices={[notice]} />);
+
+  assert.match(html, /aria-label="Worth fixing"/);
+  assert.match(html, /Jira does not run this query/);
+  assert.match(html, /\/nodes\/1\/configuration\/issueTrackerQueryTemplate/);
+  assert.doesNotMatch(html, /Validation errors/);
+  assert.equal(renderToStaticMarkup(<NodeValidationNotices notices={[]} />), "");
 });
