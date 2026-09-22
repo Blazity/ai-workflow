@@ -397,6 +397,34 @@ describe("provider trigger dispatch", () => {
     });
   });
 
+  it("answers a workflow-owned delivery terminally when no issue tracker is connected", async () => {
+    // Disconnecting or disabling the tracker is an admin's choice, not a
+    // fault. A retryable answer would have the provider redeliver every such
+    // delivery, and GitLab turn the webhook off after a few, so every other
+    // trigger on it would stop too. The tracker is resolved for real here, on
+    // a deployment whose settings are readable and connect none.
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+      targetBranch: "main",
+      pr: { id: 7, url: "https://github.com/acme/app/pull/7", branch: "feature/owned" },
+    });
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "workflow_owned" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(event(), deps({ issueTracker: undefined })),
+    ).resolves.toEqual({
+      result: "ignored_issue_tracker_unavailable",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toBeNull();
+  });
+
   it("keys every pull request of one ticket on its own subject", async () => {
     for (const pr of [
       { id: 7, repoPath: "acme/app", branch: "feature/owned" },

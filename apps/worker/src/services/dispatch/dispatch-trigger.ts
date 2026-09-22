@@ -28,7 +28,7 @@ import {
   getConnectedEnabledWorkflowDefinitionForTrigger,
   getEnabledWorkflowDefinitionForTrigger,
 } from "../../engine/definition-trigger-routing.js";
-import { createAdapters } from "../../engine/support/adapters.js";
+import { resolveActiveIssueTracker } from "../../engine/support/issue-tracker-runtime.js";
 import { claimSubjectRun, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "../../infra/logger.js";
@@ -90,6 +90,12 @@ export type DispatchTriggerResult =
   | { result: "ignored_stale_head" }
   | { result: "ignored_untrusted_event" }
   | { result: "ignored_malformed_delivery" }
+  /** A workflow-owned pull request whose ticket cannot be confirmed because
+   *  this deployment has no usable issue tracker (none connected, disabled,
+   *  or two with nobody chosen). An admin's choice, not a fault: answering it
+   *  retryably would have the provider redeliver, and GitLab switch the
+   *  webhook off, until somebody reconnected the tracker. */
+  | { result: "ignored_issue_tracker_unavailable"; diagnosticId: string }
   | { result: "coalesced" }
   | { result: "at_capacity" }
   | { result: "error"; diagnosticId: string }
@@ -331,6 +337,9 @@ export async function dispatchTriggerEvent(
     if (identity.status === "ignored") return { result: "ignored_not_workflow_owned" };
     if (identity.status === "retryable_error") {
       return { result: "error", diagnosticId: identity.diagnosticId };
+    }
+    if (identity.status === "tracker_unavailable") {
+      return { result: "ignored_issue_tracker_unavailable", diagnosticId: identity.diagnosticId };
     }
     if (identity.status === "pending_correlation") {
       const diagnosticId = recordIngestionFailure(
@@ -981,6 +990,7 @@ async function resolveSubjectIdentity(
     }
   | { status: "ignored" }
   | { status: "retryable_error"; diagnosticId: string }
+  | { status: "tracker_unavailable"; diagnosticId: string }
 > {
   if (scope === "any") {
     return {
@@ -1072,9 +1082,30 @@ async function resolveTicketIdentity(
     }
   | { status: "ignored" }
   | { status: "retryable_error"; diagnosticId: string }
+  | { status: "tracker_unavailable"; diagnosticId: string }
 > {
   try {
-    const issueTracker = deps.issueTracker ?? (await createAdapters()).issueTracker;
+    let issueTracker = deps.issueTracker;
+    if (!issueTracker) {
+      const tracker = await resolveActiveIssueTracker();
+      if (!tracker.ok) {
+        // Settings that could not be read are a fault of this deployment and
+        // may clear on the next delivery. A tracker nobody connected, one an
+        // admin disabled, or two with none chosen is how the deployment is
+        // set up, and stays that way until a person changes it.
+        const diagnosticId = recordIngestionFailure(
+          tracker.unreadable
+            ? "trigger_ticket_identity_lookup_retryable_failure"
+            : "trigger_ticket_identity_tracker_unavailable",
+          new Error(tracker.reason),
+          { ticketKey },
+        );
+        return tracker.unreadable
+          ? { status: "retryable_error", diagnosticId }
+          : { status: "tracker_unavailable", diagnosticId };
+      }
+      issueTracker = tracker.adapter;
+    }
     const ticket = await issueTracker.fetchTicket(ticketKey);
     if (ticket.identifier.trim().toUpperCase() !== ticketKey.trim().toUpperCase()) {
       return { status: "ignored" };
