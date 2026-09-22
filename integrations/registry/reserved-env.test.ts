@@ -27,20 +27,28 @@ const RUNTIME_ENV = resolve(import.meta.dirname, "../../apps/worker/src/infra/ru
 const NAME = "apps/worker/src/infra/runtime-env.ts";
 
 /**
- * Names core reads that runtime-env.ts does not declare, each with where it is
- * read. A new entry needs the same: a reader, or the name leaves the reserved
- * list.
+ * Names the platform or the operating system sets and core reads without
+ * declaring. Nothing in this repository writes them, so each carries why core
+ * cares rather than a file.
  */
-const READ_WITHOUT_DECLARING: Readonly<Record<string, string>> = {
+const SET_BY_THE_PLATFORM: Readonly<Record<string, string>> = {
   HOME: "the process environment the sandbox and the agent CLIs inherit",
   PATH: "the process environment the sandbox and the agent CLIs inherit",
-  VERCEL: "set by the platform; read by the workflow world plugin to tell a deployment from a local run",
-  VERCEL_ENV: "set by the platform; which deployment environment this is",
-  VERCEL_GIT_COMMIT_SHA: "set by the platform; the commit /health reports",
-  SERVERLESS: "set by the platform runtime; read by the workflow world plugin",
+  VERCEL: "set by Vercel; read by the workflow world plugin to tell a deployment from a local run",
+  VERCEL_ENV: "set by Vercel; which deployment environment this is",
+  VERCEL_GIT_COMMIT_SHA: "set by Vercel; the commit /health reports",
+  SERVERLESS: "set by the serverless runtime; read by the workflow world plugin",
+};
+
+/**
+ * Names core reads that runtime-env.ts does not declare, each with the file
+ * that reads it. The test opens each file and looks for the name, so a row
+ * outlives its reader by one failing run, not silently.
+ */
+const READ_WITHOUT_DECLARING: Readonly<Record<string, string>> = {
   LOG_LEVEL: "apps/worker/src/infra/logger.ts",
   POST_PR_GATE_CONFIG_PATH: "apps/worker/src/post-pr-gate/config.ts",
-  WORKFLOW_SCHEDULING_GOLDEN_SINK: "the scheduling golden harness in apps/worker/src/workflow-graph-suites",
+  WORKFLOW_SCHEDULING_GOLDEN_SINK: "apps/worker/src/workflow-graph-suites/scenarios/harness.ts",
 };
 
 /** The keys of the `server` block, which is every variable the worker declares. */
@@ -67,12 +75,29 @@ test("every variable core declares for itself is reserved against integrations",
 test("every reserved variable is one core reads", async () => {
   const declared = new Set(await declaredVariables());
   const unread = RESERVED_ENVIRONMENT_VARIABLES.filter(
-    (variable) => !declared.has(variable) && !Object.hasOwn(READ_WITHOUT_DECLARING, variable),
+    (variable) =>
+      !declared.has(variable) &&
+      !Object.hasOwn(READ_WITHOUT_DECLARING, variable) &&
+      !Object.hasOwn(SET_BY_THE_PLATFORM, variable),
   );
   assert.deepEqual(
     unread,
     [],
     `RESERVED_ENVIRONMENT_VARIABLES holds ${unread.join(", ")}, which ${NAME} does not declare and nothing here says core reads. ` +
-      "Delete the name from the list, or add it to READ_WITHOUT_DECLARING with the place core reads it.",
+      "Delete the name from the list, or add it to READ_WITHOUT_DECLARING with the file that reads it.",
+  );
+});
+
+test("each variable read without declaring is still read by the file its row names", async () => {
+  const stale: string[] = [];
+  for (const [variable, path] of Object.entries(READ_WITHOUT_DECLARING)) {
+    const source = await readFile(resolve(import.meta.dirname, "../..", path), "utf8").catch(() => "");
+    if (!new RegExp(`\\b${variable}\\b`, "u").test(source)) stale.push(`${variable} (${path})`);
+  }
+  assert.deepEqual(
+    stale,
+    [],
+    `These rows name a reader that no longer reads the variable, or no longer exists: ${stale.join(", ")}. ` +
+      "Point the row at the file that reads it now, or delete the name from RESERVED_ENVIRONMENT_VARIABLES and this list.",
   );
 });

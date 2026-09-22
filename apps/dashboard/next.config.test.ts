@@ -4,6 +4,7 @@
 // messages the worker posted and in older block panels, and a 404 on either
 // teaches nobody where the screen went.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import test, { mock } from "node:test";
@@ -86,6 +87,35 @@ test("every path a page declares it moved from lands on that page", async () => 
     assert.equal(entry?.destination, page, `${source} must land on ${page}`);
     assert.equal(entry?.permanent, true);
   }
+});
+
+test("Next's own config loader reads the same redirects, /evals included", () => {
+  // The tests above import this file through tsx. `next build` and `next dev`
+  // load it differently: SWC compiles it to CommonJS and Node's own resolver
+  // requires what it imports, so a module in the registry graph written with
+  // an ESM habit tsx forgives (`./navigation.js` for navigation.ts) would pass
+  // every test above and fail the build. The loader runs in a child process,
+  // outside tsx, exactly as Next calls it.
+  const script = `
+    const load = require("next/dist/server/config").default;
+    const { PHASE_PRODUCTION_BUILD } = require("next/constants");
+    load(PHASE_PRODUCTION_BUILD, process.cwd(), { silent: true })
+      .then((config) => config.redirects())
+      .then((redirects) => process.stdout.write(JSON.stringify(redirects)))
+      .catch((error) => { process.stderr.write(String(error && error.stack || error)); process.exit(1); });
+  `;
+  const run = spawnSync(process.execPath, ["-e", script], {
+    cwd: import.meta.dirname,
+    encoding: "utf8",
+    env: { ...process.env, NODE_OPTIONS: "" },
+  });
+  assert.equal(run.status, 0, `Next could not load next.config.ts:\n${run.stderr}`);
+  const redirects = JSON.parse(run.stdout) as Array<{ source: string; destination: string; permanent: boolean }>;
+  assert.deepEqual(
+    redirects.find((entry) => entry.source === "/evals"),
+    { source: "/evals", destination: "/integrations/arthur/evals", permanent: true },
+  );
+  assert.ok(redirects.some((entry) => entry.source === "/scripts"), "the core redirects are there too");
 });
 
 /** Every first path segment the app serves, route groups looked through. */

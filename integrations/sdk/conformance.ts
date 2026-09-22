@@ -782,7 +782,7 @@ function recordIssues(schema: unknown, path: string, seen: Set<unknown>): Record
   const found: RecordIssue[] = [];
   const isRecordSchema = def.typeName === "ZodRecord" || def.type === "record";
   if (isRecordSchema && !isZodSchema(def.valueType)) found.push({ at: path, kind: "one_argument" });
-  else if (isRecordSchema && def.partial !== true && hasFiniteKeys(def.keyType)) {
+  else if (isRecordSchema && hasFiniteKeys(def.keyType)) {
     found.push({ at: path, kind: "finite_keys" });
   }
   const shape = typeof def.shape === "function" ? (def.shape as () => unknown)() : def.shape;
