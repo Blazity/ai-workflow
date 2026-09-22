@@ -28,7 +28,7 @@
  * there is nothing of it to leak from here.
  */
 import type { IntegrationManifest } from "@integrations/sdk";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
 
 export interface SecretSourceOptions {
