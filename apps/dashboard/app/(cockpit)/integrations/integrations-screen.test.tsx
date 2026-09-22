@@ -109,6 +109,10 @@ function text(root: ReactTestInstance): string {
     .join(" ");
 }
 
+function inputs(root: ReactTestInstance): ReactTestInstance[] {
+  return root.findAll((node) => node.type === "input" || node.type === "textarea");
+}
+
 function links(root: ReactTestInstance): string[] {
   return root
     .findAll((node) => node.type === "a")
@@ -343,4 +347,66 @@ test("the card promises the blocks this build can run, and says why about the re
   assert.match(rendered, /Adds the Demo echo block to the workflow editor\./);
   assert.doesNotMatch(rendered, /Adds the Demo echo and Demo lookup/);
   assert.match(rendered, /Demo lookup stays unavailable in the editor: This build cannot yet run/);
+});
+
+// ── Capabilities ─────────────────────────────────────────────────────────────
+
+const CAPABILITIES = [
+  {
+    id: "issue_tracker",
+    cardinality: "one",
+    declaredBy: ["demo", "other"],
+    serving: { kind: "ambiguous", ids: ["demo", "other"] },
+  },
+  { id: "vcs", cardinality: "many", declaredBy: ["demo"], serving: { kind: "none" } },
+  {
+    id: "memory",
+    cardinality: "one",
+    declaredBy: [],
+    serving: { kind: "builtin", name: "Built-in memory" },
+  },
+] as const;
+
+test("the page says which provider serves memory, and the built-in one needs no connection", (t) => {
+  // Decision 10: the built-in provider appears on this screen with no
+  // connection fields. It had no card at all, so an admin could not tell what
+  // memory runs on, or that anything did.
+  const root = render(t, {
+    integrations: [integration(), integration({ id: "other", name: "Other" })],
+    capabilities: CAPABILITIES,
+  });
+  const rendered = text(root);
+  assert.match(rendered, /Memory/);
+  assert.match(rendered, /Served by Built-in memory/);
+  assert.match(rendered, /nothing to connect/);
+  assert.match(rendered, /Connecting an integration that provides memory replaces it/);
+  assert.ok(links(root).includes("/memory"), "what the built-in store holds is one click away");
+  assert.equal(
+    inputs(root).length,
+    0,
+    "a built-in provider has no connection fields to fill in",
+  );
+});
+
+test("two providers of a one-provider capability read as a choice nobody made, not as the first", (t) => {
+  const root = render(t, {
+    integrations: [integration(), integration({ id: "other", name: "Other" })],
+    capabilities: CAPABILITIES,
+  });
+  const rendered = text(root);
+  assert.match(rendered, /Issue tracker/);
+  assert.match(rendered, /Demo and Other both provide it and none is chosen, so neither is used/);
+});
+
+test("a capability nothing serves names who could, by name", (t) => {
+  const root = render(t, { capabilities: CAPABILITIES });
+  assert.match(text(root), /Version control/);
+  assert.match(text(root), /Nothing serves it yet\. Demo can, once connected below/);
+});
+
+test("capabilities that could not be read say so and leave the cards standing", (t) => {
+  const root = render(t, { capabilities: null });
+  const rendered = text(root);
+  assert.match(rendered, /Which provider serves each capability could not be read/);
+  assert.ok(links(root).includes("/integrations/demo/connection"), "the cards are still there");
 });

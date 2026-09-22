@@ -1553,6 +1553,22 @@ to no fields. The last one is a gap rather than a fix: an integration block's
 parameters are declared by its own schema and this build has no form for them.
 The stage that ships the first real integration block owns that form.
 
+### Who serves each capability
+
+Added in the review fix round after S13. The page opens with a Capabilities
+section: every capability a provider can serve today, one row each, saying
+who answers it on this deployment. It reads `GET
+/api/v1/integrations/capabilities` (`services/capabilities/overview.ts`),
+which decides nothing of its own: usable providers come from the engine's
+`deploymentIntegrations` over the one state derivation, and memory from
+`activeMemory`, the call a run makes. That is how the built-in memory
+provider appears here with no connection fields (decision 10) without a
+second statement of decision 21's rule. Two usable providers of a `one`
+capability read as a choice nobody made, never as the first. It is its own
+endpoint because the list is read on every cockpit page for the sidebar and
+this answer is only wanted here. Choosing the active provider is still a
+write this build does not have.
+
 ### What is open
 
 | Question | Owner |

@@ -1,5 +1,8 @@
 import { canManageIntegrations } from "@shared/contracts";
-import type { WorkflowDefinitionsResponse } from "@shared/contracts";
+import type {
+  IntegrationCapabilitiesResponse,
+  WorkflowDefinitionsResponse,
+} from "@shared/contracts";
 
 import { authAwareFallback, getJSON } from "@/lib/api/server";
 import { requireSession } from "@/lib/auth/session";
@@ -22,14 +25,23 @@ import { IntegrationsScreen } from "./integrations-screen";
  * parallel with the integrations read, and a deployment that refuses it (a
  * role, a worker that did not answer) leaves the card describing the blocks
  * instead of promising them.
+ *
+ * The third read says which provider serves each capability, the built-in one
+ * included. It is its own endpoint rather than part of the list because the
+ * list is read on every cockpit page for the sidebar, and this answer is only
+ * wanted here. A worker that does not answer it (or one a deploy behind that
+ * does not have it yet) leaves the section saying so and the cards standing.
  */
 export async function IntegrationsData() {
   const session = await requireSession();
 
-  const [list, editor] = await Promise.all([
+  const [list, editor, capabilities] = await Promise.all([
     readIntegrationsList(),
     getJSON<WorkflowDefinitionsResponse>("/api/v1/workflow-definitions").catch((error) =>
       authAwareFallback(error, (): WorkflowDefinitionsResponse | null => null),
+    ),
+    getJSON<IntegrationCapabilitiesResponse>("/api/v1/integrations/capabilities").catch((error) =>
+      authAwareFallback(error, (): IntegrationCapabilitiesResponse | null => null),
     ),
   ]);
 
@@ -44,6 +56,7 @@ export async function IntegrationsData() {
       availability={
         editor ? blockAvailabilityOf(editor.options.blockRegistry, integrations) : undefined
       }
+      capabilities={capabilities?.capabilities ?? null}
     />
   );
 }

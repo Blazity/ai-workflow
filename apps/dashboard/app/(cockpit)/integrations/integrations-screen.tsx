@@ -1,11 +1,20 @@
-import type { IntegrationDto, IntegrationWriteAccess } from "@shared/contracts";
+import type {
+  IntegrationCapabilityDto,
+  IntegrationDto,
+  IntegrationWriteAccess,
+} from "@shared/contracts";
 
 import { IntegrationChangeRefresh } from "@/components/cockpit/integration-change-refresh";
 import { Button, CkChip } from "@/components/ui";
 import {
+  CAPABILITIES_UNREADABLE_LINE,
   CORE_CAPABILITIES_LINE,
   MEMBER_READ_ONLY_LINE,
   NO_INTEGRATIONS_LINE,
+  builtinProviderLines,
+  capabilityCardinalityLine,
+  capabilityLabel,
+  capabilityServingLine,
   statusChip,
   statusDetailLines,
   storesValues,
@@ -120,12 +129,120 @@ function IntegrationCard({
   );
 }
 
+/** Where what a built-in provider holds can be read, by capability. */
+const BUILTIN_SCREENS: Readonly<Record<string, { href: string; label: string }>> = {
+  memory: { href: "/memory", label: "Open Memory" },
+};
+
+/**
+ * The built-in provider of a capability, where an integration would have its
+ * card: named, said to be ours, and with no field, test or switch, because it
+ * has none.
+ */
+function BuiltinProviderCard({
+  capability,
+  name,
+}: {
+  capability: IntegrationCapabilityDto;
+  name: string;
+}) {
+  const screen = BUILTIN_SCREENS[capability.id];
+  return (
+    <div className="mt-2 rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-display text-[13px] font-medium text-coal">{name}</span>
+        <CkChip tone="neutral">Built in</CkChip>
+      </div>
+      {builtinProviderLines(capability).map((line, index) => (
+        <span key={index} className="font-body text-[11px] text-neutral-600 break-words">
+          {line}
+        </span>
+      ))}
+      {screen && (
+        <a
+          href={screen.href}
+          className="self-start font-mono text-[11px] font-medium tracking-[0.04em] text-mariner no-underline hover:underline"
+        >
+          {screen.label}
+        </a>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What core asks a provider for, and which one answers here.
+ *
+ * Above the cards, because it is the answer to the question the cards only
+ * imply: an admin looking for "what does memory run on" found a list of
+ * integrations, none of which serves memory, and no mention of the provider
+ * that does. Every sentence is the worker's decision put into words; nothing
+ * here works out who serves what from the cards.
+ */
+function CapabilitiesSection({
+  capabilities,
+  integrations,
+}: {
+  capabilities: readonly IntegrationCapabilityDto[] | null;
+  integrations: readonly IntegrationDto[];
+}) {
+  const nameOf = (id: string) =>
+    integrations.find((integration) => integration.id === id)?.name ?? id;
+  return (
+    <section aria-labelledby="integrations-capabilities" className="flex flex-col gap-2">
+      <div className="flex flex-col gap-[2px]">
+        <h3
+          id="integrations-capabilities"
+          className="m-0 font-display text-[16px] font-medium text-coal"
+        >
+          Capabilities
+        </h3>
+        <p className="m-0 font-body text-[12px] text-neutral-600">
+          What core asks a provider for, and which one answers on this deployment.
+        </p>
+      </div>
+      {capabilities === null ? (
+        <p className="m-0 rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[12px] text-neutral-600">
+          {CAPABILITIES_UNREADABLE_LINE}
+        </p>
+      ) : (
+        <ul className="list-none m-0 p-0 rounded-[4px] border border-neutral-200 bg-panel divide-y divide-neutral-200">
+          {capabilities.map((capability) => (
+            <li
+              key={capability.id}
+              className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-start sm:gap-4"
+            >
+              <div className="shrink-0 sm:w-[168px]">
+                <div className="font-display text-[14px] font-medium text-coal">
+                  {capabilityLabel(capability.id)}
+                </div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
+                  {capabilityCardinalityLine(capability)}
+                </div>
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="m-0 font-body text-[12px] text-neutral-700 break-words">
+                  {capabilityServingLine(capability, nameOf)}
+                </p>
+                {capability.serving.kind === "builtin" && (
+                  <BuiltinProviderCard capability={capability} name={capability.serving.name} />
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function IntegrationsScreen({
   integrations,
   writes,
   canManage,
   available,
   availability,
+  capabilities = null,
 }: {
   integrations: readonly IntegrationDto[];
   writes: IntegrationWriteAccess;
@@ -135,6 +252,8 @@ export function IntegrationsScreen({
   available: boolean;
   /** Which of the declared blocks this build can run, when that was readable. */
   availability?: BlockAvailability;
+  /** Who serves each capability; null when the worker did not say. */
+  capabilities?: readonly IntegrationCapabilityDto[] | null;
 }) {
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
@@ -173,6 +292,10 @@ export function IntegrationsScreen({
         <div className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[12px] text-neutral-600">
           {MEMBER_READ_ONLY_LINE}
         </div>
+      )}
+
+      {available && (
+        <CapabilitiesSection capabilities={capabilities} integrations={integrations} />
       )}
 
       {available && integrations.length === 0 && (

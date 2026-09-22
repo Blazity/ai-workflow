@@ -7,6 +7,7 @@
  * would need a fact the API does not carry, it does not get written.
  */
 import type {
+  IntegrationCapabilityDto,
   IntegrationConnectionFieldDto,
   IntegrationDto,
   IntegrationFailure,
@@ -239,7 +240,7 @@ export function unlocksLines(
   }
   if (integration.capabilities.length > 0) {
     lines.push(
-      `Serves the ${andList([...integration.capabilities])} ${
+      `Serves the ${andList(integration.capabilities.map((id) => capabilityLabel(id).toLowerCase()))} ${
         integration.capabilities.length === 1 ? "capability" : "capabilities"
       }.`,
     );
@@ -247,6 +248,78 @@ export function unlocksLines(
   if (lines.length === 0) lines.push("Adds no blocks, screens or capabilities.");
   return lines;
 }
+
+const CAPABILITY_LABELS: Readonly<Record<string, string>> = {
+  issue_tracker: "Issue tracker",
+  vcs: "Version control",
+  messaging: "Messaging",
+  memory: "Memory",
+  agent_tracing: "Agent tracing",
+};
+
+/** A capability id as a person reads it, including one a newer worker adds. */
+export function capabilityLabel(id: string): string {
+  const known = CAPABILITY_LABELS[id];
+  if (known) return known;
+  const words = id.replace(/_/g, " ");
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+/** How many providers a capability takes at once, in a few words. */
+export function capabilityCardinalityLine(capability: IntegrationCapabilityDto): string {
+  return capability.cardinality === "one"
+    ? "One provider at a time"
+    : "Every connected provider at once";
+}
+
+/**
+ * Who serves one capability, as the worker decided it.
+ *
+ * Two usable providers of a one-provider capability are said as a choice
+ * nobody made, because the engine uses neither: saying "served by the first"
+ * would describe a deployment that does not exist. Nothing serving it names
+ * who could, because "nothing provides messaging" in front of an admin who can
+ * see Slack below sends them looking for a provider they already have.
+ */
+export function capabilityServingLine(
+  capability: IntegrationCapabilityDto,
+  nameOf: (id: string) => string,
+): string {
+  const serving = capability.serving;
+  const names = (ids: readonly string[]) => andList(ids.map(nameOf));
+  switch (serving.kind) {
+    case "integrations":
+      return `Served by ${names(serving.ids)}.`;
+    case "builtin":
+      return `Served by ${serving.name}, which is part of AI Workflow.`;
+    case "ambiguous":
+      return serving.ids.length === 2
+        ? `${names(serving.ids)} both provide it and none is chosen, so neither is used. Until this page can choose, switch off the one you do not want.`
+        : `${names(serving.ids)} all provide it and none is chosen, so none of them is used. Until this page can choose, switch off the ones you do not want.`;
+    case "unknown":
+      return `Who serves it could not be worked out: ${readableProviderText(serving.reason)}`;
+    default:
+      return capability.declaredBy.length === 0
+        ? "Nothing in this build provides it."
+        : `Nothing serves it yet. ${names(capability.declaredBy)} can, once connected below.`;
+  }
+}
+
+/**
+ * What a built-in provider is, said where an integration would show its
+ * connection. It has no values, no test and no switch, so the card says why
+ * rather than showing an empty form.
+ */
+export function builtinProviderLines(capability: IntegrationCapabilityDto): string[] {
+  return [
+    "It ships with AI Workflow and keeps its data in this deployment's own database, so there is nothing to connect.",
+    `Connecting an integration that provides ${capabilityLabel(capability.id).toLowerCase()} replaces it.`,
+  ];
+}
+
+/** Said when the worker did not say who serves what. */
+export const CAPABILITIES_UNREADABLE_LINE =
+  "Which provider serves each capability could not be read just now. The integrations below are unaffected; reload in a moment.";
 
 /**
  * Whether anything is stored here for this integration right now.

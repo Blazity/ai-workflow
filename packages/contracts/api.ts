@@ -1299,6 +1299,41 @@ export interface IntegrationsListResponse {
 }
 
 /**
+ * Who serves one capability on this deployment right now, as a run would find
+ * out. Decided by the worker from the same resolvers the engine uses; a screen
+ * only puts it into words.
+ */
+export type IntegrationCapabilityServing =
+  /** The integrations serving it, in manifest order: exactly one for a `one`
+   *  capability, every usable provider for a `many` capability. */
+  | { readonly kind: "integrations"; readonly ids: readonly string[] }
+  /** Core's own provider. It needs no connection and has no card of its own;
+   *  connecting an integration that provides the capability replaces it. */
+  | { readonly kind: "builtin"; readonly name: string }
+  /** Nothing on this deployment serves it. */
+  | { readonly kind: "none" }
+  /** Several usable integrations serve a `one` capability and none is chosen,
+   *  so none of them is used. */
+  | { readonly kind: "ambiguous"; readonly ids: readonly string[] }
+  /** The deployment could not say; the resolver's own sentence says why. */
+  | { readonly kind: "unknown"; readonly reason: string };
+
+/** One capability core asks a provider for, and who answers it here. */
+export interface IntegrationCapabilityDto {
+  readonly id: string;
+  /** `one`: a single active provider. `many`: every usable provider at once. */
+  readonly cardinality: "one" | "many";
+  /** Every integration this build ships that declares it, usable or not. */
+  readonly declaredBy: readonly string[];
+  readonly serving: IntegrationCapabilityServing;
+}
+
+export interface IntegrationCapabilitiesResponse {
+  /** Every capability a provider can serve today, in the SDK's order. */
+  readonly capabilities: readonly IntegrationCapabilityDto[];
+}
+
+/**
  * How long the worker gives a provider while a person waits on the answer: a
  * connection test (Save and test, Test what is in use) and the read behind a
  * page an integration contributes.
