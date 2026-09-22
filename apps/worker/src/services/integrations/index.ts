@@ -47,6 +47,8 @@ export {
 
 export { buildIntegrationContext } from "./context.js";
 
+export { failureReason } from "./failure-reason.js";
+
 export async function getVcsBotLogin(
   kind: import("@shared/contracts").VcsProviderKind,
 ): Promise<string | undefined> {

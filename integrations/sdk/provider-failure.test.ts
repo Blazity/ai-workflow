@@ -13,7 +13,13 @@
  */
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { FatalError, IssueTrackerNotFoundError, readProviderFailure, refusedOrThrow } from "./index";
+import {
+  ConnectionValueError,
+  FatalError,
+  IssueTrackerNotFoundError,
+  readProviderFailure,
+  refusedOrThrow,
+} from "./index";
 
 function answered(status: number, headers: Record<string, string> = {}): Response {
   return new Response(null, { status, headers });
@@ -54,7 +60,8 @@ describe("an answer about the values is a refusal", () => {
 });
 
 describe("anything that is not an answer about the values is no verdict", () => {
-  for (const status of [408, 429, 500, 502, 503, 504]) {
+  // 425 is Too Early: RFC 8470 says a user agent "SHOULD retry automatically".
+  for (const status of [408, 425, 429, 500, 502, 503, 504]) {
     test(`${status}`, () => {
       assert.throws(() => refusedOrThrow(answered(status), "Check the token."), /says nothing/u);
       assert.equal(readProviderFailure(octokitError(status)).kind, "no_verdict");
@@ -76,6 +83,20 @@ describe("anything that is not an answer about the values is no verdict", () => 
       readProviderFailure(answered(403, { "x-ratelimit-remaining": "4999" })).kind,
       "refused",
     );
+  });
+
+  test("GitHub's secondary rate limit, which only its message marks", () => {
+    // GitHub: a secondary limit is a 403 or 429 "and an error message that
+    // indicates that you exceeded a secondary rate limit"; its own client
+    // (@octokit/plugin-throttling) recognises it by /\bsecondary rate\b/i.
+    const secondary = Object.assign(
+      new Error(
+        "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+      ),
+      { status: 403, response: { status: 403, headers: { "x-ratelimit-remaining": "4870" } } },
+    );
+    assert.equal(readProviderFailure(secondary).kind, "no_verdict");
+    assert.throws(() => refusedOrThrow(secondary), (thrown) => thrown === secondary);
   });
 
   test("a request that never got a status is rethrown as it was", () => {
@@ -101,3 +122,57 @@ describe("anything that is not an answer about the values is no verdict", () => 
     );
   });
 });
+
+describe("values that could not form a request are refused, not an outage", () => {
+  test("a value core refused before sending, in its own words", () => {
+    const refusal = new ConnectionValueError(
+      "apiToken",
+      "The API token has a line break in it, which no request can carry. Enter it again as one line.",
+    );
+    assert.deepEqual(refusedOrThrow(refusal, "Jira did not accept the token."), {
+      ok: false,
+      reason:
+        "The API token has a line break in it, which no request can carry. Enter it again as one line.",
+      malformed: true,
+    });
+  });
+
+  test("a URL the platform could not parse, on the error or on its cause", () => {
+    const invalid = thrownBy(() => new URL("acme.atlassian.net"));
+    assert.deepEqual(readProviderFailure(invalid), {
+      kind: "refused",
+      status: null,
+      malformed: true,
+      message: (invalid as Error).message,
+    });
+    const fromFetch = new TypeError("Failed to parse URL from gitlab.com/api/v4/user", {
+      cause: invalid,
+    });
+    assert.equal(refusedOrThrow(fromFetch).malformed, true);
+  });
+
+  test("key data WebCrypto could not import", () => {
+    const rejected = new DOMException("Invalid keyData", "DataError");
+    assert.equal(refusedOrThrow(rejected).malformed, true);
+  });
+
+  test("a network failure stays no verdict, a missing host included", () => {
+    // Deliberate: ENOTFOUND is also what a VPN that is down says about a host
+    // that exists. Core names the host and the field instead.
+    const notFound = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("getaddrinfo ENOTFOUND gitlab.acme.internal"), {
+        code: "ENOTFOUND",
+      }),
+    });
+    assert.equal(readProviderFailure(notFound).kind, "no_verdict");
+  });
+});
+
+function thrownBy(call: () => unknown): unknown {
+  try {
+    call();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the call to throw, and it returned");
+}

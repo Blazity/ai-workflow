@@ -154,8 +154,6 @@ async function fetchChannelHistory(
 /** Slack's own word for the refusal, read as something a person can act on. */
 function classify(call: SlackCall<unknown>): MessageRetrievalFailure {
   if (call.ok) return "unavailable";
-  if (call.error === null) {
-    return call.cause === "Slack did not answer in time" ? "timeout" : "unavailable";
-  }
+  if (call.error === null) return call.kind === "timeout" ? "timeout" : "unavailable";
   return PERMISSION_ERRORS.has(call.error) ? "permission" : "unavailable";
 }

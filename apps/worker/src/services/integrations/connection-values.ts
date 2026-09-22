@@ -12,6 +12,7 @@ import {
   type StoredIntegrationVersion,
   normalizeConnectionValue,
 } from "./resolve.js";
+import { malformedValueFailure } from "./value-problems.js";
 
 /**
  * The values an integration's own code receives, and the redaction that keeps
@@ -58,6 +59,12 @@ export function readConnectionValues(input: {
       typeof raw === "string" && raw.trim().length > 0
         ? normalizeConnectionValue(raw, field)
         : undefined;
+    // A value that cannot be what its field is stops here, named, rather than
+    // reaching a provider as a request that fails for a reason nobody can read
+    // (an integer field read as NaN, a URL `fetch` refuses to parse). The
+    // resolver says the same about the values it can see.
+    const malformed = text === undefined ? null : malformedValueFailure(field, text, input.source);
+    if (malformed) return { ok: false, failure: malformed };
     const resolved = text ?? field.default;
     if (resolved === undefined) {
       values[field.key] = undefined;

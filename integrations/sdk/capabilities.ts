@@ -2,7 +2,7 @@ import type { AgentTracingAdapter } from "./agent-tracing";
 import type { IssueTrackerAdapter } from "./issue-tracker";
 import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter, MessagingSender } from "./messaging";
-import type { VCSAdapter } from "./vcs";
+import type { VCSAdapter, VcsIntegrationAdapter } from "./vcs";
 
 /**
  * Integration capabilities: the seams in core that an integration can fill.
@@ -53,6 +53,41 @@ export interface IntegrationCapabilityPorts {
 
 /** A capability an integration may declare and implement today. */
 export type ProvidedCapabilityId = keyof IntegrationCapabilityPorts;
+
+/**
+ * How a port member reaches another adapter: a method that `returns` one, or
+ * a property that `holds` one.
+ */
+export type NestedAdapterRole = "returns" | "holds";
+
+type NestedMembers<Port> = { readonly [Member in keyof Port]?: NestedAdapterRole };
+
+/** Each port with the optional surfaces its providers may add (`vcs` has some). */
+type AdapterSurface = Omit<IntegrationCapabilityPorts, "vcs"> & { vcs: VcsIntegrationAdapter };
+
+/**
+ * Every member of a port that returns or holds another adapter, meaning an
+ * object whose methods are integration code of their own.
+ *
+ * Core redacts what an integration's adapter throws at one boundary
+ * (`apps/worker/src/services/integrations/usable.ts`) and follows exactly the
+ * members named here to reach the adapters inside; every other value a port
+ * hands over is data and is passed on untouched. A port that grows such a
+ * member lists it here in the same change, or what that adapter throws
+ * reaches core unredacted. Every provided capability has an entry, so a new
+ * port cannot be added without deciding.
+ */
+export const NESTED_ADAPTER_MEMBERS: {
+  readonly [C in ProvidedCapabilityId]: NestedMembers<AdapterSurface[C]>;
+} = {
+  issue_tracker: {},
+  /** A skill import's four provider calls (`RepositorySkillSource`). */
+  vcs: { skillSource: "returns" },
+  messaging: {},
+  /** The admin half (`MemoryStoreAdapter`). */
+  memory: { store: "holds" },
+  agent_tracing: {},
+};
 
 /** Capability ids with no port yet. See `INTEGRATION_CAPABILITIES[id].reservedFor`. */
 export type ReservedCapabilityId = Exclude<IntegrationCapabilityId, ProvidedCapabilityId>;

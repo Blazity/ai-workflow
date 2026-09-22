@@ -1,4 +1,4 @@
-import { defineIntegration } from "@integrations/sdk";
+import { defineIntegration, refusedOrThrow } from "@integrations/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "../../db/client.js";
@@ -205,6 +205,50 @@ describe("a provider that does not answer at all (INT-012)", () => {
 
     const refused = await save({ ...GOOD, apiToken: BAD_TOKEN }, 1);
     expect(refused.test?.ok === false && refused.test.failure.reason).toBe("credential_rejected");
+  });
+});
+
+describe("a value no request header can carry", () => {
+  // A token pasted out of a document, with a curly quote in it: a text field
+  // may hold one, a header may not.
+  const QUOTED_TOKEN = "demo-token-\u2019good-0123456789";
+
+  async function sendsTheToken(ctx: {
+    connection: Record<string, unknown>;
+    http: { fetch: (url: string, init: RequestInit) => Promise<Response> };
+  }) {
+    await ctx.http.fetch("https://demo.example/me", {
+      headers: { authorization: `Bearer ${String(ctx.connection.apiToken)}` },
+    });
+    return { ok: true as const, message: "Demo reachable" };
+  }
+
+  it("is a verdict about that value when the provider passes it through refusedOrThrow", async () => {
+    testConnection.mockImplementationOnce(async (ctx) => {
+      try {
+        return await sendsTheToken(ctx as never);
+      } catch (error) {
+        // The provider's contract returns this shape; the fixture's mock
+        // was typed from the plain refusal it returns elsewhere.
+        return refusedOrThrow(error, "Demo did not accept the token.") as never;
+      }
+    });
+    const result = await save({ ...GOOD, apiToken: QUOTED_TOKEN });
+    expect(result.test).toEqual({
+      ok: false,
+      failure: {
+        reason: "value_malformed",
+        message:
+          "The API token has a character in it that no request header can carry, usually a curly quote or an invisible character pasted from a document.",
+      },
+    });
+  });
+
+  it("is still that verdict when the provider lets the refusal escape", async () => {
+    testConnection.mockImplementationOnce(async (ctx) => sendsTheToken(ctx as never));
+    const result = await save({ ...GOOD, apiToken: QUOTED_TOKEN });
+    expect(result.test?.ok === false && result.test.failure.reason).toBe("value_malformed");
+    expect(result.integration.state.status).not.toBe("connected");
   });
 });
 

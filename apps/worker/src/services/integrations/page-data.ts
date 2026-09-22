@@ -39,9 +39,12 @@ export async function readIntegrationPageData(
   if (!manifest || !manifest.pages.some((page) => page.id === pageId)) {
     return { status: "unknown" };
   }
-  const runtime = integrationRuntime(integrationId);
-  const reader = runtime?.api?.[pageId];
-  if (typeof reader !== "function") return { status: "none" };
+  // Whether the page has a reader is a fact about the build, answered before
+  // any connection is opened: a page without one shows only what it ships,
+  // connected or not.
+  if (typeof integrationRuntime(integrationId)?.api?.[pageId] !== "function") {
+    return { status: "none" };
+  }
 
   const { usableIntegrations } = await import("./usable.js");
   const [usable] = await usableIntegrations({
@@ -61,11 +64,9 @@ export async function readIntegrationPageData(
   // The usable runtime's reader, not the registry's: what it throws arrives
   // with this connection's secrets already taken out, and a provider that
   // echoes a credential in an error body is normal, while that body is what a
-  // person reads on a screen.
-  const read = usable.runtime.api?.[pageId] as
-    | ((context: typeof usable.ctx) => Promise<JsonValue>)
-    | undefined;
-  if (typeof read !== "function") return { status: "none" };
+  // person reads on a screen. The boundary wraps every reader the registry's
+  // runtime has, so the one found above is here.
+  const read = usable.runtime.api?.[pageId] as (context: typeof usable.ctx) => Promise<JsonValue>;
   try {
     const value = await read(usable.ctx);
     return { status: "ok", value };

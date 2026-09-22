@@ -233,3 +233,59 @@ describe("the GitHub connection's health checks", () => {
     });
   });
 });
+
+/** What Octokit throws for an answer: its `RequestError` carries the status and
+ *  the answer's headers, which is what the SDK's rule reads. */
+function requestError(status: number, message: string, headers: Record<string, string> = {}) {
+  return Object.assign(new Error(message), { name: "HttpError", status, response: { status, headers } });
+}
+
+describe("a GitHub health check that failed", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appAnswers({});
+  });
+
+  it("sends the admin to the App's values when GitHub refused them", async () => {
+    octokit.apps.getAuthenticated.mockRejectedValue(
+      requestError(401, "A JSON web token could not be decoded"),
+    );
+
+    await expect(runtime.health.app?.(context())).resolves.toEqual({
+      status: "down",
+      message:
+        "GitHub did not accept the App (A JSON web token could not be decoded). Check the App id and the private key.",
+    });
+  });
+
+  it("says GitHub did not answer, rather than blaming a value, on a secondary rate limit", async () => {
+    // GitHub's secondary limit: a 403 with requests left in the primary one,
+    // marked only by its message.
+    octokit.apps.listReposAccessibleToInstallation.mockRejectedValue(
+      requestError(
+        403,
+        "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+        { "x-ratelimit-remaining": "4870" },
+      ),
+    );
+
+    const result = await runtime.health.installation?.(context());
+
+    expect(result?.status).toBe("down");
+    expect(result?.message).toMatch(/^GitHub did not answer, so installation 22 could not be checked/u);
+  });
+
+  it("says GitHub did not answer when it could not be reached", async () => {
+    octokit.request.mockRejectedValue(
+      new TypeError("fetch failed", {
+        cause: Object.assign(new Error("connect ETIMEDOUT 140.82.112.6:443"), { code: "ETIMEDOUT" }),
+      }),
+    );
+
+    await expect(runtime.health.webhook?.(context())).resolves.toEqual({
+      status: "down",
+      message:
+        "GitHub did not answer, so the App's webhook settings could not be checked (fetch failed).",
+    });
+  });
+});

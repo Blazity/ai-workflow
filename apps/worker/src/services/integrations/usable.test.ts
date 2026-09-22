@@ -13,17 +13,15 @@
  * `fetch`; only the database read is replaced, with the answer a deployment
  * configured through its environment gives.
  */
-import { IssueTrackerNotFoundError } from "@integrations/sdk";
+import { type ErasedIntegrationRuntime, IssueTrackerNotFoundError } from "@integrations/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../db/repositories/integrations.js", () => ({
   readConnectedIntegrationConnections: async () => new Map(),
 }));
 
-const { resolveUsableIntegrations } = await import("./usable.js");
-
-/** A token as it arrives from a terminal that wrapped it. */
-const WRAPPED_TOKEN = "glpat-4f9a2c\n1e8b7d99";
+const { redactingRuntime, resolveUsableIntegrations } = await import("./usable.js");
+const { redactedError } = await import("./context.js");
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -62,7 +60,17 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
 
 describe("an adapter's own failure, on its way into core", () => {
   it("carries no secret when the adapter went around ctx.http", async () => {
-    vi.stubEnv("GITLAB_TOKEN", WRAPPED_TOKEN);
+    // GitLab's adapter calls `fetch` itself. Node quotes a header value it
+    // refuses whole; a token with a line break no longer gets this far (the
+    // resolver fails the connection first), so the refusal is staged here.
+    const token = "glpat-4f9a2c1e8b7d99";
+    vi.stubEnv("GITLAB_TOKEN", token);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError(`Headers.append: "${token}" is an invalid header value.`);
+      }),
+    );
     const gitlab = await usable("gitlab");
     const vcs = (
       gitlab.runtime.capabilities.vcs as (
@@ -74,8 +82,7 @@ describe("an adapter's own failure, on its way into core", () => {
     const error = await rejection(vcs.listRepositories());
 
     expect(error.message).toContain("[redacted]");
-    expect(everythingIn(error)).not.toContain("1e8b7d99");
-    expect(everythingIn(error)).not.toContain("glpat-4f9a2c");
+    expect(everythingIn(error)).not.toContain(token);
     // Still what Node threw, to a caller that tells a bad request from an outage.
     expect(error).toBeInstanceOf(TypeError);
   });
@@ -107,5 +114,120 @@ describe("an adapter's own failure, on its way into core", () => {
 
     expect(error).toBeInstanceOf(IssueTrackerNotFoundError);
     expect((error as { code?: string }).code).toBe("NOT_FOUND");
+  });
+});
+
+/**
+ * The boundary itself, around runtimes shaped the way the ports allow: what
+ * reaches core from every member that can throw, and what an adapter keeps
+ * being to whoever holds it.
+ */
+describe("what the boundary covers", () => {
+  const SECRET = "sk-live-7d1e40c9aa";
+  const redact = (error: unknown) =>
+    redactedError(error, (text) => text.split(SECRET).join("[redacted]"));
+  const refuses = () => {
+    throw new Error(`401 for key ${SECRET}`);
+  };
+  const refusesLater = async () => refuses();
+
+  function runtimeWith(parts: Partial<ErasedIntegrationRuntime>): ErasedIntegrationRuntime {
+    return {
+      manifest: {} as ErasedIntegrationRuntime["manifest"],
+      testConnection: async () => ({ ok: true }),
+      capabilities: {},
+      blocks: {},
+      health: {},
+      ...parts,
+    };
+  }
+
+  async function expectRedacted(call: () => unknown) {
+    const error = await rejection(Promise.resolve().then(call));
+    expect(error.message).toBe("401 for key [redacted]");
+    expect(everythingIn(error)).not.toContain(SECRET);
+  }
+
+  it("follows vcs.skillSource() into the adapter it returns", async () => {
+    // GitHub's skill source runs on its own Octokit, off `ctx.http`.
+    const source = { getFiles: refusesLater, getTree: refusesLater };
+    const runtime = redactingRuntime(
+      runtimeWith({ capabilities: { vcs: () => ({ skillSource: () => source }) } }),
+      redact,
+    );
+    const vcs = (runtime.capabilities.vcs as () => { skillSource(): typeof source })();
+    await expectRedacted(() => vcs.skillSource().getFiles());
+  });
+
+  it("follows memory.store into the adapter it holds", async () => {
+    const runtime = redactingRuntime(
+      runtimeWith({
+        capabilities: { memory: () => ({ recall: refusesLater, store: { list: refusesLater } }) },
+      }),
+      redact,
+    );
+    const memory = (runtime.capabilities.memory as () => { store: { list(): Promise<unknown> } })();
+    await expectRedacted(() => memory.store.list());
+  });
+
+  it("covers beginRun, a page reader and both webhook calls", async () => {
+    const runtime = redactingRuntime(
+      runtimeWith({
+        beginRun: refusesLater,
+        api: { usage: refusesLater },
+        webhook: { receive: refusesLater, deliver: refusesLater },
+      }),
+      redact,
+    );
+    await expectRedacted(() => runtime.beginRun?.());
+    await expectRedacted(() => runtime.api?.usage?.());
+    await expectRedacted(() => runtime.webhook?.receive());
+    await expectRedacted(() => runtime.webhook?.deliver?.());
+  });
+
+  it("works around a frozen adapter", async () => {
+    // A proxy must report a frozen object's members exactly as they are, so a
+    // view built on the adapter itself throws on the first method read.
+    const frozen = Object.freeze({ recall: refusesLater });
+    const runtime = redactingRuntime(runtimeWith({ capabilities: { memory: () => frozen } }), redact);
+    const memory = (runtime.capabilities.memory as () => typeof frozen)();
+    await expectRedacted(() => memory.recall());
+  });
+
+  it("calls the method the adapter holds now, not the one it held first", async () => {
+    const adapter = { fetchTicket: async () => "first" };
+    const runtime = redactingRuntime(
+      runtimeWith({ capabilities: { issue_tracker: () => adapter } }),
+      redact,
+    );
+    const tracker = (runtime.capabilities.issue_tracker as () => typeof adapter)();
+    expect(await tracker.fetchTicket()).toBe("first");
+    adapter.fetchTicket = async () => "second";
+    expect(await tracker.fetchTicket()).toBe("second");
+  });
+
+  it("keeps a class adapter's identity, private state and data exactly as they are", async () => {
+    class Adapter {
+      readonly bytes = new TextEncoder().encode("hi");
+      readonly seen = new Map([["AIW-1", 1]]);
+      readonly #token = SECRET;
+      async fetchTicket() {
+        return { key: "AIW-1", tokenLength: this.#token.length };
+      }
+    }
+    const adapter = new Adapter();
+    const runtime = redactingRuntime(
+      runtimeWith({ capabilities: { issue_tracker: () => adapter } }),
+      redact,
+    );
+    const tracker = (runtime.capabilities.issue_tracker as () => Adapter)();
+
+    expect(tracker).toBeInstanceOf(Adapter);
+    expect(await tracker.fetchTicket()).toEqual({ key: "AIW-1", tokenLength: SECRET.length });
+    // Data is handed over as the adapter holds it: a proxied typed array
+    // fails every internal-slot check, and a proxied Map cannot be cloned.
+    expect(tracker.bytes).toBe(adapter.bytes);
+    expect(new TextDecoder().decode(tracker.bytes)).toBe("hi");
+    expect(structuredClone(tracker.seen)).toEqual(new Map([["AIW-1", 1]]));
   });
 });

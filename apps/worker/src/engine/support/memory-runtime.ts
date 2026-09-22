@@ -277,29 +277,30 @@ function ambiguousReason(chosen: readonly IntegrationManifest[]): string {
 }
 
 /**
- * What core puts around a provider: the redaction for anything copied out of
- * what it said, and the budget its calls spend.
+ * What core puts around a provider: the redaction for the words a refusal
+ * RETURNS, and the budget its calls spend. What a provider throws needs no
+ * redaction here: it comes from the runtime `usable.ts` built, which already
+ * took the connection's secrets out of every error its adapters (and the
+ * `store` inside them) throw.
  */
 interface ProviderGuard {
-  readonly redaction: IntegrationRedaction;
+  readonly redaction: Pick<IntegrationRedaction, "text">;
   readonly budget: MemoryBudget;
 }
 
 /** The built-in store's: it holds no connection, so it has no secret. */
-const NOTHING_TO_REDACT: IntegrationRedaction = {
-  text: (text) => text,
-  error: (error) => (error instanceof Error ? error : new Error(String(error))),
-};
+const NOTHING_TO_REDACT: ProviderGuard["redaction"] = { text: (text) => text };
 
 /**
  * The port promises `recall` and `observe` will not throw. A provider that does
  * anyway is a bug in that provider, not a reason to fail somebody's run, so it
  * is caught here and answered as `unavailable` with what it said.
  *
- * What it said is redacted with the connection's secrets before it goes into
- * the answer, and so is a refusal's own `detail`: both are logged by every
- * caller and shown on the run, and a provider quoting the header it was sent
- * is ordinary.
+ * What it said arrives redacted already (the runtime's boundary copies every
+ * error an adapter throws without the connection's secrets); a refusal's own
+ * `detail` is RETURNED, which no boundary sees, so it is redacted here. Both
+ * are logged by every caller and shown on the run, and a provider quoting the
+ * header it was sent is ordinary.
  *
  * `store` is handed through without CATCHING, and that is deliberate rather
  * than an omission. Its three methods have no failure shape to answer with, so
@@ -308,8 +309,8 @@ const NOTHING_TO_REDACT: IntegrationRedaction = {
  * all three (`listMemoryDocumentSummaries`, `readMemoryDocument`,
  * `eraseMemoryDocument`). Catching here as well would produce an empty listing
  * or an absent document, which is the one answer this whole area exists to
- * avoid. It is still guarded like the other two: what it throws is redacted,
- * and it spends the same budget.
+ * avoid. It spends the same budget as the other two, and what it throws was
+ * redacted at the same boundary.
  */
 function wrap(
   id: string,
@@ -317,13 +318,13 @@ function wrap(
   adapter: MemoryAdapter,
   { redaction, budget }: ProviderGuard,
 ): ActiveMemory {
-  const said = (error: unknown) => redaction.error(error).message;
+  const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
   const spent = () => ({ ok: false, code: "unavailable", detail: budget.spentReason }) as const;
   return {
     id,
     name,
     refusal: null,
-    store: adapter.store ? guardedStore(adapter.store, budget, redaction) : null,
+    store: adapter.store ? guardedStore(adapter.store, budget) : null,
     async recall(request) {
       try {
         const answer = await budget.spend(() => adapter.recall(request));
@@ -353,18 +354,9 @@ function wrap(
   };
 }
 
-function guardedStore(
-  store: MemoryStoreAdapter,
-  budget: MemoryBudget,
-  redaction: IntegrationRedaction,
-): MemoryStoreAdapter {
+function guardedStore(store: MemoryStoreAdapter, budget: MemoryBudget): MemoryStoreAdapter {
   const guarded = async <T>(call: () => Promise<T>): Promise<T> => {
-    let answer: T | typeof SPENT;
-    try {
-      answer = await budget.spend(call);
-    } catch (error) {
-      throw redaction.error(error);
-    }
+    const answer = await budget.spend(call);
     if (answer === SPENT) throw new Error(budget.spentReason);
     return answer;
   };

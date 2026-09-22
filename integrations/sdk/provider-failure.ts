@@ -4,14 +4,26 @@
  *
  * Two answers, and they mean opposite things to the person reading them:
  *
- * - REFUSED: the provider answered and said no to this configuration. A token
- *   it does not accept (401), a key without the permission (403), a project or
- *   an installation that does not exist (404), a request it calls invalid.
- *   Somebody has to change a value; waiting changes nothing.
+ * - REFUSED: the values are wrong, and waiting changes nothing. Either the
+ *   provider answered and said no (401 a token it does not accept, 403 a key
+ *   without the permission, 404 a project or an installation that does not
+ *   exist, a request it calls invalid), or the values could not even form a
+ *   request (`malformed`: a token with a line break, a URL that does not
+ *   parse, a key that does not read as one), which no provider needed to see.
  * - NO VERDICT: nothing was said about the values at all. The provider could
- *   not be reached, timed out, was rate limited (429, or GitHub's 403 that
- *   carries `retry-after` or `x-ratelimit-remaining: 0`), failed on its own side
- *   (5xx) or never produced a status. The same values may work in a minute.
+ *   not be reached, timed out, was rate limited, failed on its own side (5xx)
+ *   or never produced a status. The same values may work in a minute.
+ *
+ * Rate limits, from each provider's own documents: 429 everywhere (Slack,
+ * Jira, GitLab, GitHub); GitHub also answers a spent limit with 403, which it
+ * marks with `retry-after` or `x-ratelimit-remaining: 0`, or, for a secondary
+ * limit, only with its message, recognised the way GitHub's own client does
+ * (`@octokit/plugin-throttling`: `/\bsecondary rate\b/i`).
+ *
+ * A host that does not resolve (`getaddrinfo ENOTFOUND`) stays NO VERDICT,
+ * deliberately: a VPN that is down or a split DNS says the same for a host that
+ * exists. Core says which host could not be found and which field names it,
+ * so the person can tell a typo from an outage themselves.
  *
  * Every integration used to decide this for itself, and four of them made the
  * same mistake: they caught every error and called it a refusal, so a thirty
@@ -27,8 +39,10 @@ import { IssueTrackerNotFoundError } from "./issue-tracker";
 export type ProviderFailure =
   | {
       readonly kind: "refused";
-      /** The HTTP status the provider refused with; null when an SDK error said it. */
+      /** The HTTP status the provider refused with; null when no status said it. */
       readonly status: number | null;
+      /** The values could not form a request at all; the provider never saw one. */
+      readonly malformed: boolean;
       readonly message: string;
     }
   | { readonly kind: "no_verdict"; readonly message: string };
@@ -36,18 +50,28 @@ export type ProviderFailure =
 /**
  * Read a failure: a `Response` that was not a success, or anything thrown.
  *
- * A thrown error is a refusal only when it carries the provider's answer:
+ * A thrown error is a refusal only when it carries a verdict:
  *
  * - a numeric `status` with the HTTP status the provider answered, which is
  *   what Octokit's `RequestError` carries (its `response.headers` are read for
  *   the rate limit signs), and what an integration's own client should put on
  *   the errors it throws for a non-2xx answer;
- * - this SDK's own words for a verdict: `FatalError` (retrying cannot help) and
- *   `IssueTrackerNotFoundError` (the provider says the thing does not exist).
+ * - this SDK's own words for a verdict: `FatalError` (retrying cannot help),
+ *   `IssueTrackerNotFoundError` (the provider says the thing does not exist)
+ *   and `ConnectionValueError` (no request could carry a value);
+ * - a value the platform refused to turn into a request: a URL that does not
+ *   parse (`ERR_INVALID_URL`, on the error or on its cause) or key data
+ *   WebCrypto rejected (`DataError`).
  *
  * Any other error never reached the provider, or reached it and got nothing
  * back that is about these values (a timeout, a socket that died, a body that
  * does not parse), and is no verdict.
+ *
+ * READ IT ON THE ORIGINAL where headers matter. Core's copy of an error that
+ * crossed into core keeps its class, message and `status` but not the
+ * provider's `response`, so a GitHub 403 that is a rate limit only by its
+ * headers reads as a refusal there. A connection test and a health probe run
+ * inside the integration, before that copy is made.
  */
 export function readProviderFailure(failure: unknown): ProviderFailure {
   if (failure instanceof Response) {
@@ -58,14 +82,18 @@ export function readProviderFailure(failure: unknown): ProviderFailure {
     );
   }
   const message = failure instanceof Error ? failure.message : String(failure);
-  // By name, the way the Workflow DevKit recognises it, so a copy of the error
-  // (core redacts what it passes on) reads the same as the original.
-  if (failure instanceof Error && failure.name === "FatalError") {
-    return { kind: "refused", status: null, message };
-  }
-  if (failure instanceof IssueTrackerNotFoundError) {
-    return { kind: "refused", status: 404, message };
-  }
+  const refused = (malformed: boolean, status: number | null = null): ProviderFailure => ({
+    kind: "refused",
+    status,
+    malformed,
+    message,
+  });
+  // By name, the way the Workflow DevKit recognises `FatalError`, so core's
+  // copy of the error (it redacts what it passes on) reads the same.
+  if (failure instanceof Error && failure.name === "ConnectionValueError") return refused(true);
+  if (isMalformedByPlatform(failure)) return refused(true);
+  if (failure instanceof Error && failure.name === "FatalError") return refused(false);
+  if (failure instanceof IssueTrackerNotFoundError) return refused(false, 404);
   const status = statusOf(failure);
   if (status === null) return { kind: "no_verdict", message };
   return fromStatus(status, headerReaderOf(failure), message);
@@ -73,10 +101,10 @@ export function readProviderFailure(failure: unknown): ProviderFailure {
 
 /**
  * What a connection test returns for a failure: `{ ok: false, reason }` when
- * the provider refused the values, and a THROW when it gave no verdict, which
- * core files as the provider being unreachable and which leaves the connection
- * as it was. That is the whole of `ConnectionTestResult`'s contract in one
- * call, so a test reads:
+ * the values were refused, and a THROW when there was no verdict, which core
+ * files as the provider being unreachable and which leaves the connection as
+ * it was. That is the whole of `ConnectionTestResult`'s contract in one call,
+ * so a test reads:
  *
  * ```ts
  * if (!response.ok) return refusedOrThrow(response, "The provider refused the token.");
@@ -91,25 +119,31 @@ export function readProviderFailure(failure: unknown): ProviderFailure {
  * ```
  *
  * `reason` is what the admin reads for a refusal; without one it is the
- * provider's own message. A thrown error is rethrown as it was; a `Response`
- * with no verdict becomes an error naming its status.
+ * provider's own message. A value no request could carry is answered with its
+ * own sentence rather than `reason`, because that sentence names the field and
+ * `reason` was written for a provider saying no; it is marked `malformed`, and
+ * core files it as `value_malformed`. A thrown error with no verdict is
+ * rethrown as it was; a `Response` with none becomes an error naming its
+ * status.
  */
 export function refusedOrThrow(
   failure: unknown,
   reason?: string,
-): { readonly ok: false; readonly reason: string } {
+): { readonly ok: false; readonly reason: string; readonly malformed?: true } {
   const read = readProviderFailure(failure);
   if (read.kind === "no_verdict") {
     if (failure instanceof Error) throw failure;
     throw new Error(`${read.message}, which says nothing about these values`);
   }
+  if (read.malformed) return { ok: false, reason: read.message, malformed: true };
   return { ok: false, reason: reason ?? read.message };
 }
 
 /**
- * Only a 4xx refuses, and not every 4xx: 408 is a timeout, 429 a rate limit,
- * and a 403 that says when to try again is GitHub's spelling of a spent rate
- * limit. A 3xx that reached here and a 5xx are not answers about the values.
+ * Only a 4xx refuses, and not every 4xx: 408 is a timeout, 425 asks for the
+ * request again later (RFC 8470: a user agent "SHOULD retry automatically"),
+ * 429 is a rate limit, and a 403 that is a rate limit is GitHub's (see the
+ * header). A 3xx that reached here and a 5xx are not answers about the values.
  */
 function fromStatus(
   status: number,
@@ -120,17 +154,37 @@ function fromStatus(
     status >= 400 &&
     status < 500 &&
     status !== 408 &&
+    status !== 425 &&
     status !== 429 &&
-    !(status === 403 && isRateLimited(header));
-  return refuses ? { kind: "refused", status, message } : { kind: "no_verdict", message };
+    !(status === 403 && isRateLimited(header, message));
+  return refuses
+    ? { kind: "refused", status, malformed: false, message }
+    : { kind: "no_verdict", message };
 }
 
-function isRateLimited(header: (name: string) => string | null | undefined): boolean {
+function isRateLimited(
+  header: (name: string) => string | null | undefined,
+  message: string,
+): boolean {
   return (
     Boolean(header("retry-after")) ||
     header("x-ratelimit-remaining") === "0" ||
-    header("ratelimit-remaining") === "0"
+    header("ratelimit-remaining") === "0" ||
+    /\bsecondary rate\b/iu.test(message)
   );
+}
+
+/**
+ * Node's `new URL` and `fetch` put `ERR_INVALID_URL` on the error or on its
+ * cause, and WebCrypto names key data it cannot import `DataError`. Neither
+ * ever reached a provider.
+ */
+function isMalformedByPlatform(failure: unknown): boolean {
+  if (!(failure instanceof Error)) return false;
+  if (failure.name === "DataError") return true;
+  const codeOf = (value: unknown) =>
+    value && typeof value === "object" ? (value as { code?: unknown }).code : undefined;
+  return codeOf(failure) === "ERR_INVALID_URL" || codeOf(failure.cause) === "ERR_INVALID_URL";
 }
 
 function statusOf(failure: unknown): number | null {

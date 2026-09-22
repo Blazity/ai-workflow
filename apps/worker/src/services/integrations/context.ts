@@ -4,11 +4,12 @@ import type {
   IntegrationLogger,
   IntegrationRequestInit,
 } from "@integrations/sdk";
-import { INTEGRATION_HTTP_DEFAULTS } from "@integrations/sdk";
+import { ConnectionValueError, INTEGRATION_HTTP_DEFAULTS } from "@integrations/sdk";
 import type { IntegrationManifest } from "@integrations/sdk";
 
 import { logger } from "../../infra/logger.js";
 import { type ConnectionValue, redactIntegrationText } from "./connection-values.js";
+import { valueProblemSentence } from "./value-problems.js";
 
 /**
  * The context an integration's own code receives: a connection test, a health
@@ -41,9 +42,12 @@ export function buildIntegrationContext(input: {
 }): IntegrationContext<IntegrationManifest> {
   const redact = (text: string) => redactIntegrationText(text, input.secrets);
   const webhookUrl = integrationWebhookUrl(input.manifest.id);
+  const fields = sendableFieldsOf(input.manifest, input.values);
   return {
     connection: input.values as never,
-    http: { fetch: (target, init) => fetchWithPolicy(target, init, input.lifetime, redact) },
+    http: {
+      fetch: (target, init) => fetchWithPolicy(target, init, { lifetime: input.lifetime, redact, fields }),
+    },
     log: redactingLogger(input.manifest.id, redact),
     signal: input.lifetime,
     ...(webhookUrl ? { webhookUrl } : {}),
@@ -103,16 +107,18 @@ function redactFields(
 
 /**
  * The HTTP policy the SDK documents: a per-attempt timeout, retries for reads,
- * a rate limit waited out for every method, `Retry-After` honoured up to a
- * ceiling, a non-2xx returned rather than thrown.
+ * `Retry-After` honoured up to a ceiling, a non-2xx returned rather than
+ * thrown, and a value no request can carry refused before anything is sent.
  *
- * Writes are not retried after a failure because a PUT or a DELETE at these
- * providers is a merge, a rebase or a file commit, and repeating one after an
- * ambiguous 5xx reports a conflict for work that landed. A 429 is not
- * ambiguous: the provider says it did nothing, so a write is sent again once
- * the wait it asked for has passed. That is what a Slack notification relied
- * on when it went through Slack's own client, which waited out every rate
- * limit; this policy is the one place that decision lives now.
+ * WRITES ARE SENT ONCE unless the caller says otherwise. A PUT or a DELETE at
+ * these providers is a merge, a rebase or a file commit, and repeating one
+ * after an ambiguous 5xx reports a conflict for work that landed. A 429 is not
+ * proof either: Atlassian's rate-limiting guide says "Only retry if the API is
+ * idempotent and the response includes a Retry-After header", and repeating a
+ * Jira create or an Arthur task create that did land makes a second one. So a
+ * write goes again after a 429 only when the caller set
+ * `resendAfterRateLimit` (a provider that documents the call was not
+ * processed: Slack) and the 429 said how long to wait.
  *
  * THREE THINGS END A REQUEST, and each has one owner:
  *
@@ -140,13 +146,18 @@ function redactFields(
 async function fetchWithPolicy(
   target: string | URL | Request,
   init: IntegrationRequestInit | undefined,
-  lifetime: AbortSignal,
-  redact: (text: string) => string,
+  context: {
+    readonly lifetime: AbortSignal;
+    readonly redact: (text: string) => string;
+    readonly fields: readonly SendableField[];
+  },
 ): Promise<Response> {
   try {
-    return await fetchWithRetries(target, init, lifetime);
+    const unsendable = unsendableValue(target, init?.headers, context.fields);
+    if (unsendable) throw unsendable;
+    return await fetchWithRetries(target, init, context.lifetime);
   } catch (error) {
-    throw redactedError(error, redact);
+    throw redactedError(error, context.redact);
   }
 }
 
@@ -155,19 +166,30 @@ async function fetchWithRetries(
   init: IntegrationRequestInit | undefined,
   lifetime: AbortSignal,
 ): Promise<Response> {
-  const { timeoutMs, retries: requestedRetries, signal: callerSignal, ...request } = init ?? {};
+  const {
+    timeoutMs,
+    retries: requestedRetries,
+    resendAfterRateLimit,
+    signal: callerSignal,
+    ...request
+  } = init ?? {};
   const method = (request.method ?? (target instanceof Request ? target.method : "GET")).toUpperCase();
-  const retriable = INTEGRATION_HTTP_DEFAULTS.retriedMethods.includes(
+  const read = INTEGRATION_HTTP_DEFAULTS.retriedMethods.includes(
     method as (typeof INTEGRATION_HTTP_DEFAULTS.retriedMethods)[number],
   );
   // A body that is read as it is sent cannot be sent twice.
   const replayable = !(target instanceof Request) && !(request.body instanceof ReadableStream);
-  // A read may be repeated after anything. A write only after a 429, the
-  // provider saying it did nothing, and only when its body can be sent again.
-  // An explicit `retries` is the caller's word for every case.
-  const retriesAfter = (rateLimited: boolean): number =>
-    requestedRetries ??
-    (retriable || (rateLimited && replayable) ? INTEGRATION_HTTP_DEFAULTS.retries : 0);
+  // How many times a request may go again after this kind of answer. An
+  // explicit `retries` is the caller's word for every case; otherwise a read
+  // may go again after anything, and a write only after a 429 that said how
+  // long to wait, and only when its caller asked for exactly that.
+  const retriesAfter = (answer: "threw" | "failed" | "rate_limited_with_wait"): number => {
+    if (requestedRetries !== undefined) return requestedRetries;
+    if (read) return INTEGRATION_HTTP_DEFAULTS.retries;
+    return answer === "rate_limited_with_wait" && resendAfterRateLimit === true && replayable
+      ? INTEGRATION_HTTP_DEFAULTS.retries
+      : 0;
+  };
   const attemptDeadlineMs = timeoutMs ?? INTEGRATION_HTTP_DEFAULTS.timeoutMs;
 
   // Retries and the waits between them included.
@@ -183,13 +205,15 @@ async function fetchWithRetries(
     try {
       response = await fetch(target, { ...request, signal: thisAttempt });
     } catch (error) {
-      if (wholeRequest.aborted || attempt >= retriesAfter(false)) throw error;
+      if (wholeRequest.aborted || attempt >= retriesAfter("threw")) throw error;
       await delay(backoffMs(attempt), wholeRequest);
       continue;
     }
     const rateLimited = response.status === 429;
     if (!rateLimited && response.status < 500) return response;
-    if (attempt >= retriesAfter(rateLimited)) return response;
+    const answer =
+      rateLimited && response.headers.has("retry-after") ? "rate_limited_with_wait" : "failed";
+    if (attempt >= retriesAfter(answer)) return response;
     const wait = waitBeforeRetry(response, attempt);
     if (wait === null) return response;
     // Released before the next attempt rather than left to the collector: an
@@ -202,6 +226,83 @@ async function fetchWithRetries(
     }
     await delay(wait, wholeRequest);
   }
+}
+
+/** A connection value as `ctx.http` checks it before sending. */
+interface SendableField {
+  readonly key: string;
+  readonly label: string;
+  readonly env: string;
+  readonly value: string;
+}
+
+function sendableFieldsOf(
+  manifest: IntegrationManifest,
+  values: Readonly<Record<string, ConnectionValue>>,
+): SendableField[] {
+  return manifest.connection.fields.flatMap((field) => {
+    const value = values[field.key];
+    return typeof value === "string" && value.length > 0
+      ? [{ key: field.key, label: field.label, env: field.env, value }]
+      : [];
+  });
+}
+
+/**
+ * A connection value that no request can carry, found before anything is sent,
+ * as the error that says so; null when the request is fine as far as the
+ * connection's values go.
+ *
+ * Node would refuse these too, but with a `TypeError` that quotes the value
+ * whole and says nothing about where it came from, so it read as the provider
+ * being unreachable, and a token pasted with a line break stayed "Connected"
+ * while failing every request. Two cases, both about a value this connection
+ * holds:
+ *
+ * - a header whose value contains a connection value with a line break or a
+ *   NUL (what the fetch standard forbids in a header value) or a character
+ *   above U+00FF (a header is bytes: a zero-width space or a curly quote pasted
+ *   from a document);
+ * - a URL that does not parse and starts with a connection value (a site
+ *   address typed without `https://`).
+ *
+ * The message names the field's label and never the value; the words are
+ * `value-problems.ts`'s, so this and a card's status say the same thing. A
+ * one-line value with a line break never gets here from a run or a test,
+ * because reading the values already refused it; this is the platform's
+ * header rule, which also holds for a value the integration composed.
+ */
+function unsendableValue(
+  target: string | URL | Request,
+  headers: HeadersInit | undefined,
+  fields: readonly SendableField[],
+): ConnectionValueError | null {
+  if (typeof target === "string" && !URL.canParse(target)) {
+    const field = fields.find((candidate) => target.startsWith(candidate.value.replace(/\/+$/u, "")));
+    if (field) {
+      return new ConnectionValueError(field.key, valueProblemSentence(field, "not_a_url"));
+    }
+  }
+  for (const value of headerValues(headers)) {
+    for (const field of fields) {
+      if (!value.includes(field.value)) continue;
+      if (["\r", "\n", "\0"].some((character) => field.value.includes(character))) {
+        return new ConnectionValueError(field.key, valueProblemSentence(field, "line_break"));
+      }
+      if ([...field.value].some((character) => (character.codePointAt(0) ?? 0) > 0xff)) {
+        return new ConnectionValueError(field.key, valueProblemSentence(field, "not_header_safe"));
+      }
+    }
+  }
+  return null;
+}
+
+function headerValues(headers: HeadersInit | undefined): string[] {
+  // A `Headers` object cannot hold such a value: building it would already
+  // have thrown, in the integration's own code.
+  if (!headers || headers instanceof Headers) return [];
+  const entries = Array.isArray(headers) ? headers : Object.entries(headers);
+  return entries.flatMap((entry) => (typeof entry[1] === "string" ? [entry[1]] : []));
 }
 
 /** How deep a cause chain is copied. Node nests one level (`fetch failed` over

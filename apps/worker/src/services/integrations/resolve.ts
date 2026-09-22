@@ -19,6 +19,7 @@ import type {
   StoredIntegrationVersion,
 } from "../../db/repositories/integrations.js";
 import { readIntegrationSecretEnvelope } from "../../infra/secrets-crypto.js";
+import { malformedValueFailure } from "./value-problems.js";
 
 /**
  * The one place a status comes from.
@@ -113,6 +114,8 @@ export function resolveIntegrationState(input: ResolveIntegrationInput): Integra
       ? environmentReadiness(environmentPresence)
       : storedReadiness(storedPresence, secretFailure);
 
+  const malformed = malformedValueInUse({ fields, source, environment, active });
+
   const verification = resolveVerification({
     source,
     active,
@@ -135,7 +138,10 @@ export function resolveIntegrationState(input: ResolveIntegrationInput): Integra
     verification.state === "failed" && verification.failure.reason !== "provider_unreachable"
       ? verification.failure
       : null;
-  const failure = readiness.failure ?? testFailure;
+  // A value that cannot be what its field is fails the connection before any
+  // test does: no provider needs to be asked about a site address without
+  // `https://`, and one that was would be filed as an outage.
+  const failure = readiness.failure ?? malformed ?? testFailure;
   const connection: IntegrationConnectionStatus = failure
     ? "failing"
     : readiness.connection;
@@ -420,6 +426,34 @@ function preparedFrom(
       message: latest.testMessage ?? "The connection test failed",
     },
   };
+}
+
+/**
+ * The first value in use that cannot be what its field is, as the failure that
+ * names it. Every value of an environment source is read, secrets included,
+ * since the environment holds them as text; of a stored source only the plain
+ * config, because a stored secret is ciphertext here. Reading a stored secret
+ * is `readConnectionValues`' job, and it refuses the same value with the same
+ * sentence, so a run and a test never send one.
+ */
+function malformedValueInUse(input: {
+  readonly fields: readonly ConnectionField[];
+  readonly source: IntegrationSource;
+  readonly environment: IntegrationEnvironmentReader;
+  readonly active: StoredIntegrationVersion | null;
+}): IntegrationFailure | null {
+  for (const field of input.fields) {
+    const raw =
+      input.source === "environment"
+        ? input.environment.value(field.env)
+        : field.secret
+          ? undefined
+          : input.active?.config[field.key];
+    if (!isSet(raw)) continue;
+    const failure = malformedValueFailure(field, normalizeConnectionValue(raw, field), input.source);
+    if (failure) return failure;
+  }
+  return null;
 }
 
 interface Readiness {

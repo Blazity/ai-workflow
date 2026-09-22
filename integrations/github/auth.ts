@@ -1,3 +1,4 @@
+import { createPrivateKey } from "node:crypto";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
 import { FatalError, type IntegrationHttp } from "@integrations/sdk";
@@ -34,6 +35,13 @@ export interface GitHubAppCredential {
  * wanted base64, and the two forms cannot be confused for one another, because
  * a PEM says so on its first line and `-` is not in the base64 alphabet.
  *
+ * A block that looks like a PEM is also READ as a key before it is accepted,
+ * because the shape says nothing about the bytes: a key pasted with a line
+ * missing passes every pattern here and used to fail at the first request,
+ * where Node's decoder error carried no status and was filed as GitHub being
+ * unreachable. GitHub signs App tokens with RS256, so an RSA key is the only
+ * kind that can work.
+ *
  * Silence is the one outcome that is never returned: either a key that will
  * sign, or a reason.
  */
@@ -60,7 +68,7 @@ export function readPrivateKey(value: string | undefined): PrivateKeyReading {
   // shell or a deployment UI. That is the same key, so it is read as one.
   const direct = raw.includes("-----BEGIN") ? raw.replace(/\\r\\n|\\n/gu, "\n") : raw;
   const pem = PEM_BLOCK.exec(direct)?.[0];
-  if (pem) return { ok: true, pem: `${pem}\n` };
+  if (pem) return readable(`${pem}\n`);
 
   const packed = raw.replace(/\s+/gu, "");
   if (packed.length % 4 !== 0 || !BASE64.test(packed)) {
@@ -71,11 +79,32 @@ export function readPrivateKey(value: string | undefined): PrivateKeyReading {
   }
   const decoded = Buffer.from(packed, "base64").toString("utf8");
   const decodedPem = PEM_BLOCK.exec(decoded)?.[0];
-  if (decodedPem) return { ok: true, pem: `${decodedPem}\n` };
+  if (decodedPem) return readable(`${decodedPem}\n`);
   return {
     ok: false,
     reason: `The GitHub App private key is base64, but it does not decode to a PEM private key. ${EXPECTED}`,
   };
+}
+
+/** A PEM block that Node can read as an RSA private key, or why not. Node's own
+ *  message is left out: it names a decoder routine, not what to do. */
+function readable(pem: string): PrivateKeyReading {
+  let type: string | undefined;
+  try {
+    type = createPrivateKey(pem).asymmetricKeyType;
+  } catch {
+    return {
+      ok: false,
+      reason: `The GitHub App private key has the shape of a PEM block but does not read as a key; a line may be missing or changed. ${EXPECTED}`,
+    };
+  }
+  if (type !== "rsa") {
+    return {
+      ok: false,
+      reason: `The GitHub App private key is not an RSA key (it reads as ${type ?? "an unknown type"}), and GitHub signs App tokens with RSA. ${EXPECTED}`,
+    };
+  }
+  return { ok: true, pem };
 }
 
 /**

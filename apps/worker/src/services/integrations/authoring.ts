@@ -1,6 +1,6 @@
 import { integrationManifest, integrationManifests } from "@integrations/registry";
 import { integrationRuntime } from "@integrations/registry/worker";
-import type { IntegrationManifest } from "@integrations/sdk";
+import { type IntegrationManifest, readProviderFailure } from "@integrations/sdk";
 import {
   DashboardAuthError,
   type DashboardRole,
@@ -35,6 +35,7 @@ import {
   secretValuesOf,
 } from "./connection-values.js";
 import { buildIntegrationContext } from "./context.js";
+import { noVerdictReason } from "./failure-reason.js";
 import { integrationWriteAccess } from "./deployment-writes.js";
 import {
   type IntegrationSecretsKeyState,
@@ -272,7 +273,7 @@ async function runConnectionTest(
       lifetime: controller.signal,
     });
     const result = await (runtime.testConnection as (ctx: unknown) => Promise<
-      { ok: true; message?: string } | { ok: false; reason: string }
+      { ok: true; message?: string } | { ok: false; reason: string; malformed?: true }
     >)(context);
     if (result.ok) {
       return {
@@ -285,27 +286,50 @@ async function runConnectionTest(
     return {
       ok: false,
       failure: {
-        reason: "credential_rejected",
+        // A value no request could carry is a verdict about that value, and
+        // says which one; a provider saying no is a verdict about the rest.
+        reason: result.malformed === true ? "value_malformed" : "credential_rejected",
         message: redactIntegrationText(result.reason, secrets),
       },
     };
   } catch (error) {
-    // A throw is the provider not answering at all, which is a different
-    // afternoon from the provider answering "no": one is an outage to wait out,
-    // the other is a credential to fix.
+    // A value `ctx.http` refused to send is still a verdict about that value,
+    // whether or not the integration passed it through `refusedOrThrow`: core
+    // raised it, and it never reached a provider.
+    const read = readProviderFailure(error);
+    if (read.kind === "refused" && read.malformed) {
+      return {
+        ok: false,
+        failure: { reason: "value_malformed", message: redactIntegrationText(read.message, secrets) },
+      };
+    }
+    // Any other throw is the provider not answering at all, which is a
+    // different afternoon from the provider answering "no": one is an outage
+    // to wait out, the other is a credential to fix. The sentence says what
+    // happened underneath, and for a host that does not resolve, which field
+    // named it.
     return {
       ok: false,
       failure: {
         reason: "provider_unreachable",
-        message: redactIntegrationText(
-          error instanceof Error ? error.message : "The provider could not be reached",
-          secrets,
-        ),
+        message: redactIntegrationText(noVerdictReason(error, typedAddresses(manifest, values)), secrets),
       },
     };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The values an admin typed that a host could come from, with their labels,
+ *  for naming the field behind a host that does not resolve. */
+function typedAddresses(
+  manifest: IntegrationManifest,
+  values: Readonly<Record<string, ConnectionValue>>,
+): { label: string; value: string }[] {
+  return manifest.connection.fields.flatMap((field) => {
+    const value = values[field.key];
+    return !field.secret && typeof value === "string" ? [{ label: field.label, value }] : [];
+  });
 }
 
 export interface SaveIntegrationConnectionInput {

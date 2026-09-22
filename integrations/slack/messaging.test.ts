@@ -158,6 +158,40 @@ test("a deleted status message is forgotten and the thread starts again", async 
   assert.equal(conv.record.remembered, "1758300000.000500");
 });
 
+test("a deleted status message is anchored again by any event that is not a note", async () => {
+  // The rule the port states: with no usable handle, every event but a note
+  // posts a new status line and hands core its handle. A run that fails after
+  // somebody deleted the status message must still leave a thread to find.
+  const slack = fakeSlack({
+    "chat.update": [{ ok: false, error: "message_not_found" }],
+    "chat.postMessage": [
+      { ok: true, ts: "1758300000.000700" },
+      { ok: true, ts: "1758300000.000800" },
+    ],
+  });
+  const conv = conversation("1758300000.000100");
+  const messaging = slackMessaging({ api: slack.api, channelId: "C1", log: silent });
+
+  const delivery = await messaging.notifyForTicket(
+    TICKET,
+    { kind: "failed", phase: "research", reason: "the agent ran out of budget" },
+    conv.value,
+  );
+
+  assert.deepEqual(delivery, { delivered: true });
+  assert.equal(conv.record.forgotten, true);
+  assert.equal(conv.record.remembered, "1758300000.000700");
+  assert.deepEqual(
+    slack.calls.map((call) => [call.method, call.body.thread_ts]),
+    [
+      ["chat.update", undefined],
+      ["chat.postMessage", undefined],
+      ["chat.postMessage", "1758300000.000700"],
+    ],
+  );
+  assert.match(slack.calls[1]!.body.text!, /STATUS: failed/i);
+});
+
 test("a channel the bot was never invited to is reported, not swallowed", async () => {
   // Slack answers 200 with ok:false here. The block that asked has to be able
   // to say `skipped` and why, rather than reporting a message nobody received.

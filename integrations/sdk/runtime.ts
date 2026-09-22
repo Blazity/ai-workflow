@@ -182,6 +182,12 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
  * `provider-failure.ts`. Provider vocabulary on top of HTTP (a Slack error
  * code, say) is the integration's to translate into those two meanings.
  *
+ * `malformed` marks a refusal no provider made: the values could not form a
+ * request (a token with a line break, a URL that does not parse). Core files
+ * it as `value_malformed` rather than `credential_rejected`. `refusedOrThrow`
+ * sets it; an integration that checks a value itself before sending (a key
+ * that does not parse) may set it too.
+ *
  * Either way, values being saved do not become active: only a pass does that.
  *
  * Core redacts the connection's secrets from `reason`, `message` and a thrown
@@ -189,8 +195,20 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
  */
 export type ConnectionTestResult =
   | { readonly ok: true; readonly message?: string }
-  | { readonly ok: false; readonly reason: string };
+  | { readonly ok: false; readonly reason: string; readonly malformed?: true };
 
+/**
+ * What one health check measured.
+ *
+ * A failure reads by the same rule as a connection test
+ * (`readProviderFailure`), and the status is the same either way, because
+ * from this deployment the provider is not working: `down`. The MESSAGE is
+ * where the two differ, and it has to: a refusal names the value to fix ("the
+ * token was not accepted"), and no verdict says the provider did not answer,
+ * so nobody rotates a working credential over an outage. `degraded` is for a
+ * check that passed with something to say (a probe message it could not
+ * delete, an installation that grants no repository).
+ */
 export interface IntegrationHealthResult {
   readonly status: Extract<SystemHealthMode, "live" | "degraded" | "down">;
   readonly message?: string;

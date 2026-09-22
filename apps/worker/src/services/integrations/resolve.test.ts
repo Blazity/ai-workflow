@@ -201,6 +201,37 @@ describe("stored values as the source", () => {
   });
 });
 
+describe("a value in use that cannot be what its field is", () => {
+  it("fails an environment connection and names the variable, never the value", () => {
+    const state = resolve({ env: { ...COMPLETE_ENV, FIXTURE_API_TOKEN: "env-to\nken-77c1" } });
+    expect(state.status).toBe("failing");
+    expect(state.usable).toBe(false);
+    expect(state.failure).toEqual({
+      reason: "value_malformed",
+      message:
+        "The API token has a line break in it, which no request can carry. Set FIXTURE_API_TOKEN again on this deployment.",
+    });
+    expect(JSON.stringify(state)).not.toContain("77c1");
+  });
+
+  it("fails stored values saved before the address was checked, asking for it again", () => {
+    const state = resolve({
+      stored: storedRow({ active: version({ config: { baseUrl: "fixture.example/stored" } }) }),
+    });
+    expect(state.status).toBe("failing");
+    expect(state.failure).toEqual({
+      reason: "value_malformed",
+      message:
+        "The Site URL is not a web address a request can go to; it has to start with https://. Enter it again.",
+    });
+  });
+
+  it("names what is missing first, since a value that is not there cannot be malformed", () => {
+    const state = resolve({ env: { FIXTURE_BASE_URL: "fixture.example" } });
+    expect(state.failure?.reason).toBe("environment_incomplete");
+  });
+});
+
 describe("stored values prepared while the environment is still the source (INT-053)", () => {
   it("leaves the status to the environment and reports the stored values as ready", () => {
     const state = resolve({

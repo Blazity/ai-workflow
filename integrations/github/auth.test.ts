@@ -50,6 +50,29 @@ describe("the GitHub App private key, in every form it arrives in", () => {
     expect(reading.reason).toContain("-----BEGIN RSA PRIVATE KEY-----");
   });
 
+  it("refuses a PEM block with a line missing, which only reading it as a key catches", () => {
+    const lines = pem.trimEnd().split("\n");
+    lines.splice(5, 1);
+    const reading = readPrivateKey(lines.join("\n"));
+    expect(reading.ok).toBe(false);
+    if (reading.ok) return;
+    expect(reading.reason).toContain("does not read as a key");
+    // The key itself is never quoted back.
+    expect(reading.reason).not.toContain(lines[3]!);
+  });
+
+  it("refuses a key GitHub cannot sign App tokens with", () => {
+    const ec = generateKeyPairSync("ec", {
+      namedCurve: "P-256",
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    }).privateKey as unknown as string;
+    const reading = readPrivateKey(ec);
+    expect(reading.ok).toBe(false);
+    if (reading.ok) return;
+    expect(reading.reason).toContain("not an RSA key (it reads as ec)");
+  });
+
   it("refuses base64 that decodes to something that is not a key", () => {
     const reading = readPrivateKey(Buffer.from("not a key at all", "utf8").toString("base64"));
     expect(reading.ok).toBe(false);

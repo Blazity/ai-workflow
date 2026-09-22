@@ -7,11 +7,17 @@
  * it sees either a body, Slack's word for what it refused, or the fact that
  * Slack gave no verdict at all.
  *
- * Which failure is which is decided here and nowhere else: the HTTP status by
+ * Whether a failure is a verdict at all is decided here: the HTTP status by
  * the SDK's rule (`readProviderFailure`: 429 and 5xx are no verdict), and
- * Slack's own error codes by the list below.
+ * Slack's own error codes by the list below. Which refusal a caller can act on
+ * (a permission, a missing parent message) is the caller's question, asked of
+ * `error`.
  */
-import { readProviderFailure, type IntegrationHttp } from "@integrations/sdk";
+import {
+  readProviderFailure,
+  type IntegrationHttp,
+  type IntegrationRequestInit,
+} from "@integrations/sdk";
 
 const SLACK_API = "https://slack.com/api";
 
@@ -39,11 +45,27 @@ export type SlackCall<T> =
   /** Slack answered and refused. `error` is its own vocabulary, such as `not_in_channel`. */
   | { readonly ok: false; readonly error: string }
   /**
-   * Slack gave no verdict: it could not be reached or did not answer in time,
-   * it rate limited the call past what `ctx.http` waits out, it failed on its
-   * side, or it answered something that is not a Web API reply.
+   * Slack gave no verdict. `kind` says which way, for a caller that answers
+   * differently (a search reports a timeout as a timeout); `cause` is the
+   * sentence.
    */
-  | { readonly ok: false; readonly error: null; readonly cause: string };
+  | {
+      readonly ok: false;
+      readonly error: null;
+      readonly kind: SlackNoVerdict;
+      readonly cause: string;
+    };
+
+/**
+ * - `timeout`: no answer in time.
+ * - `unreachable`: no answer at all (DNS, a refused connection, a socket that
+ *   died).
+ * - `rate_limited`: a 429, or `ratelimited`, past what `ctx.http` waits out.
+ * - `provider_error`: Slack failed on its side (a 5xx, `internal_error` and
+ *   the rest of the list above) or answered something that is not a Web API
+ *   reply.
+ */
+type SlackNoVerdict = "timeout" | "unreachable" | "rate_limited" | "provider_error";
 
 export interface SlackApi {
   /**
@@ -57,9 +79,11 @@ export interface SlackApi {
   ): Promise<SlackCall<T>>;
   /**
    * A method Slack documents as `POST`, form encoded: every write, and
-   * `auth.test`. `ctx.http` retries a 429, which Slack answers without doing
-   * anything, and nothing else: reposting a message after an ambiguous 5xx is
-   * how a channel gets the same line twice.
+   * `auth.test`. Sent again only after a 429 that says how long to wait,
+   * because Slack documents that as "wait for the indicated number of seconds
+   * before retrying the same request" (docs.slack.dev/apis/web-api/rate-limits)
+   * and its own clients do exactly that. Never after an ambiguous 5xx:
+   * reposting a message then is how a channel gets the same line twice.
    */
   post<T extends Record<string, unknown>>(
     method: string,
@@ -80,6 +104,7 @@ export function slackApi(http: IntegrationHttp, token: string): SlackApi {
     post(method, body) {
       return send(http, `${SLACK_API}/${method}`, {
         method: "POST",
+        resendAfterRateLimit: true,
         headers: {
           authorization,
           "content-type": "application/x-www-form-urlencoded; charset=utf-8",
@@ -90,51 +115,52 @@ export function slackApi(http: IntegrationHttp, token: string): SlackApi {
   };
 }
 
-async function send<T>(http: IntegrationHttp, url: string, init: RequestInit): Promise<SlackCall<T>> {
+async function send<T>(
+  http: IntegrationHttp,
+  url: string,
+  init: IntegrationRequestInit,
+): Promise<SlackCall<T>> {
+  const noVerdict = (kind: SlackNoVerdict, cause: string): SlackCall<T> => ({
+    ok: false,
+    error: null,
+    kind,
+    cause,
+  });
   let response: Response;
   try {
     response = await http.fetch(url, init);
   } catch (error) {
-    return { ok: false, error: null, cause: describe(error) };
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      return noVerdict("timeout", "Slack did not answer in time");
+    }
+    return noVerdict("unreachable", error instanceof Error ? error.message : String(error));
   }
   if (!response.ok && readProviderFailure(response).kind === "no_verdict") {
     await response.body?.cancel().catch(() => {});
-    return {
-      ok: false,
-      error: null,
-      cause:
-        response.status === 429
-          ? "Slack is rate limiting this app; try again shortly"
-          : `Slack answered ${response.status}`,
-    };
+    return response.status === 429
+      ? noVerdict("rate_limited", "Slack is rate limiting this app; try again shortly")
+      : noVerdict("provider_error", `Slack answered ${response.status}`);
   }
   let parsed: unknown;
   try {
     parsed = await response.json();
   } catch {
-    return {
-      ok: false,
-      error: null,
-      cause: `Slack answered ${response.status} with something that is not JSON`,
-    };
+    return noVerdict(
+      "provider_error",
+      `Slack answered ${response.status} with something that is not JSON`,
+    );
   }
   if (!parsed || typeof parsed !== "object") {
-    return { ok: false, error: null, cause: "Slack answered with something that is not an object" };
+    return noVerdict("provider_error", "Slack answered with something that is not an object");
   }
   const payload = parsed as Record<string, unknown>;
   if (payload.ok === true) return { ok: true, body: payload as T };
   const error = typeof payload.error === "string" ? payload.error : "unknown_error";
   if (NO_VERDICT_ERRORS.has(error)) {
-    return { ok: false, error: null, cause: `Slack could not answer (${error})` };
+    return noVerdict(
+      error === "ratelimited" ? "rate_limited" : "provider_error",
+      `Slack could not answer (${error})`,
+    );
   }
   return { ok: false, error };
-}
-
-function describe(error: unknown): string {
-  if (error instanceof Error) {
-    return error.name === "TimeoutError" || error.name === "AbortError"
-      ? "Slack did not answer in time"
-      : error.message;
-  }
-  return String(error);
 }

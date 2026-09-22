@@ -44,7 +44,7 @@ const healthy: Answer = (url) => {
   return json(404, { message: "Not Found" });
 };
 
-function context(answer: Answer) {
+function context(answer: Answer, connection: Record<string, unknown> = {}) {
   const fetch = vi.fn(async (input: unknown, init?: RequestInit) =>
     answer(new URL(String(input)), init),
   );
@@ -55,6 +55,7 @@ function context(answer: Answer) {
         privateKey: PRIVATE_KEY,
         installationId: 22,
         webhookSecret: "webhook-secret",
+        ...connection,
       },
       http: { fetch },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -121,6 +122,39 @@ describe("the GitHub connection test", () => {
     );
 
     await expect(runtime.testConnection(ctx)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("throws, rather than refusing, on GitHub's secondary rate limit", async () => {
+    // A 403 with requests left in the primary limit, which only the message
+    // marks (GitHub's REST docs; `@octokit/plugin-throttling` reads it so).
+    const { ctx } = context((url) =>
+      url.pathname === "/installation/repositories"
+        ? json(
+            403,
+            {
+              message:
+                "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+            },
+            { "x-ratelimit-remaining": "4870" },
+          )
+        : healthy(url, undefined),
+    );
+
+    await expect(runtime.testConnection(ctx)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("refuses a key with a line missing as a malformed value, before asking GitHub", async () => {
+    // It still looks like a PEM block, so only reading it as a key tells.
+    const lines = PRIVATE_KEY.trimEnd().split("\n");
+    lines.splice(5, 1);
+    const { ctx, fetch } = context(healthy, { privateKey: `${lines.join("\n")}\n` });
+
+    await expect(runtime.testConnection(ctx)).resolves.toEqual({
+      ok: false,
+      reason: expect.stringContaining("does not read as a key"),
+      malformed: true,
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("throws, rather than refusing, when GitHub cannot be reached", async () => {

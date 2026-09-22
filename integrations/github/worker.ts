@@ -1,5 +1,6 @@
 import {
   defineIntegrationRuntime,
+  readProviderFailure,
   refusedOrThrow,
   type IntegrationContext,
   type IntegrationRuntimeDefinition,
@@ -78,6 +79,25 @@ function trimUrl(value: string): string {
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A health check GitHub did not pass, read with the SDK's rule. Down either
+ * way, because the check did not pass; the sentence is what differs, since a
+ * refusal sends the admin to a value and an answer that says nothing about
+ * the values (a 5xx, a spent rate limit, no answer at all) sends them to wait.
+ * Read on Octokit's own error, whose headers carry the rate limit.
+ */
+function checkFailed(
+  error: unknown,
+  sentences: { readonly refused: string; readonly unanswered: string },
+): { status: "down"; message: string } {
+  return readProviderFailure(error).kind === "refused"
+    ? { status: "down", message: sentences.refused }
+    : {
+        status: "down",
+        message: `GitHub did not answer, so ${sentences.unanswered} could not be checked (${reason(error)}).`,
+      };
 }
 
 /**
@@ -190,7 +210,9 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
     // thing is told what was expected instead of reading GitHub's opinion of
     // some bytes we mangled. A failed test never becomes the active connection.
     const key = readPrivateKey(ctx.connection.privateKey);
-    if (!key.ok) return { ok: false, reason: key.reason };
+    // A key that does not read as one is a verdict about that value, which
+    // core files as malformed rather than as GitHub refusing it.
+    if (!key.ok) return { ok: false, reason: key.reason, malformed: true };
     try {
       const app = await authenticatedApp(ctx);
       const repositories = await installationRepositories(ctx);
@@ -222,7 +244,10 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
           message: `Authenticated as ${app.slug ?? app.name ?? "the configured App"}.`,
         };
       } catch (error) {
-        return { status: "down", message: reason(error) };
+        return checkFailed(error, {
+          refused: `GitHub did not accept the App (${reason(error)}). Check the App id and the private key.`,
+          unanswered: "the App",
+        });
       }
     },
     installation: async (ctx) => {
@@ -242,7 +267,10 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
               message: `Installation ${ctx.connection.installationId} exists but grants access to no repository. Add repositories to it on GitHub.`,
             };
       } catch (error) {
-        return { status: "down", message: reason(error) };
+        return checkFailed(error, {
+          refused: `GitHub refused installation ${ctx.connection.installationId} (${reason(error)}). Check the Installation id and that the App is still installed.`,
+          unanswered: `installation ${ctx.connection.installationId}`,
+        });
       }
     },
     webhook: async (ctx) => {
@@ -258,7 +286,10 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
       try {
         return await appWebhookState(ctx);
       } catch (error) {
-        return { status: "down", message: reason(error) };
+        return checkFailed(error, {
+          refused: `GitHub refused to show the App's webhook settings (${reason(error)}). Check the App id and the private key.`,
+          unanswered: "the App's webhook settings",
+        });
       }
     },
   },

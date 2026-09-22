@@ -133,9 +133,40 @@ export interface ConnectionField {
   /**
    * How the value is checked and entered. `integer` reaches `ctx.connection`
    * as a number and everything else as a string. `multiline` is text such as a
-   * PEM key, entered in a text area.
+   * PEM key, entered in a text area. Every other format is one line (see
+   * `connectionValueProblem`).
    */
   readonly format?: "text" | "multiline" | "url" | "integer";
+}
+
+/** Why a value cannot be what its field's `format` says it is. */
+export type ConnectionValueProblem = "line_break" | "not_a_url" | "not_an_integer";
+
+/**
+ * What is wrong with a value for its field's `format`, or null when nothing
+ * is: the one definition of the formats. Core applies it to every value it
+ * resolves or saves, and conformance to a manifest's defaults.
+ *
+ * Everything but `multiline` is one line, because a one-line value ends up in
+ * a header or a URL, and neither can carry a line break: a token pasted from a
+ * terminal that wrapped it fails every request it is in. A `url` is an http or
+ * https address, because that is the only kind a connection sends requests to.
+ */
+export function connectionValueProblem(
+  value: string,
+  format: ConnectionField["format"],
+): ConnectionValueProblem | null {
+  if (format === "multiline") return null;
+  if (/[\r\n]/u.test(value)) return "line_break";
+  if (format === "integer") return /^\d+$/u.test(value) ? null : "not_an_integer";
+  if (format === "url") return isWebAddress(value) ? null : "not_a_url";
+  return null;
+}
+
+function isWebAddress(value: string): boolean {
+  if (!URL.canParse(value)) return false;
+  const { protocol } = new URL(value);
+  return protocol === "https:" || protocol === "http:";
 }
 
 /** A probe the health page runs against the active connection. */

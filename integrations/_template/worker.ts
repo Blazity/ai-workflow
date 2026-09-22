@@ -43,12 +43,15 @@ const definition: IntegrationRuntimeDefinition<ExampleManifest> = {
         headers: { authorization: `Bearer ${ctx.connection.apiToken}` },
         body: JSON.stringify({ message: params.message }),
       });
-      if (response.status === 401) {
-        // Retrying with the same token cannot succeed, and FatalError is how
-        // an integration says so; everything else core may retry.
-        throw new FatalError("The example provider refused the API token.");
-      }
       if (!response.ok) {
+        // The SDK's rule, not a status list of this block's own: a refusal
+        // (401 a token, 403 a permission, 404 a thing that is not there, a 400
+        // about the request) cannot succeed on a retry, and FatalError is how
+        // an integration says so. A 5xx, a 408 or a rate limit said nothing
+        // about the values, and core may try again.
+        if (readProviderFailure(response).kind === "refused") {
+          throw new FatalError(`The example provider refused the request (${response.status}).`);
+        }
         return {
           kind: "failed",
           message: "The example provider did not answer.",
@@ -67,9 +70,15 @@ const definition: IntegrationRuntimeDefinition<ExampleManifest> = {
         retries: 0,
       });
       if (response.ok) return { status: "live" };
+      // Down either way, because the check did not pass; the sentence is what
+      // differs. A refusal sends the admin to the token, an answer that says
+      // nothing about it sends them to wait (see `IntegrationHealthResult`).
       return readProviderFailure(response).kind === "refused"
         ? { status: "down", message: `The provider refused the API token (${response.status}).` }
-        : { status: "degraded", message: `The provider did not answer (${response.status}).` };
+        : {
+            status: "down",
+            message: `The provider did not answer, so the token could not be checked (${response.status}).`,
+          };
     },
   },
 };
