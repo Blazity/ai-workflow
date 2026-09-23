@@ -46,7 +46,7 @@ These gates are executable today and produce evidence an agent can cite.
 | --- | --- |
 | **G0 — clean task/source freeze** | Confirm the recorded worktree, branch/upstream, start SHA, clean state, Jira scope, and target environment/tenant before edits. Stop on an unexplained mismatch or unrelated dirty state. |
 | **G1 — fast local pre-push** | Run `pnpm run verify:changed` plus any ticket-specific reproducer not selected by that scope-aware gate. This gate is advisory and bypassable; record every skip, bypass, or failure honestly. Local hooks are never authoritative. |
-| **G2 — PR CI** | The candidate must pass the full PR CI run. A repository ruleset on `main` requires the `ci` aggregator before merge, so a red `ci` blocks the merge. The only bypass is one named user account, and every use of it must open a Jira issue recording what was merged and why; that audit is not itself machinery-checked. |
+| **G2 — PR CI** | The candidate must pass the full PR CI run. A repository ruleset on `main` requires the `ci` aggregator before merge, so a red `ci` blocks the merge. The only bypass is one named user account, and every use of it must open a Jira issue recording what was merged and why; that audit is not itself machinery-checked. The engine canary is not part of `ci`: it runs on demand (the `run-canary` label or a manual dispatch of `engine-canary.yml`) and its result is evidence, not a merge gate (ADR-004, change log 2026-09-23). |
 | **G4 — per-ticket evidence** | Map each ticket's acceptance criteria to its reproduction, exact commands and outcomes, CI, candidate/merge SHA, and residual risk. Do not use another ticket's evidence as a substitute. |
 
 ### Not enforced by machinery

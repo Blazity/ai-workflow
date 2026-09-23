@@ -191,7 +191,8 @@ API version: Mem0 Platform API v3 for memories (`/v3/memories/`,
 ## Proving it after the merge
 
 The operator's walk-through is in docs/architecture/integrations.md,
-"Proving it works". On top of it, for Mem0:
+"Proving a memory integration on production", under "Memory". On top of
+it, for Mem0:
 
 1. Before connecting, a production run's logs show memory served by the
    built-in store (`provider` on the memory log lines).
