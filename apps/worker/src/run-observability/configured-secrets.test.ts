@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { integrationManifests } from "@integrations/registry";
-import { environmentSecretValues } from "./configured-secrets.js";
+import { environmentSecretValues, secretForms } from "./configured-secrets.js";
 
 describe("environmentSecretValues", () => {
   it("includes every non-empty secret-named value, including short values", () => {
@@ -66,5 +66,47 @@ describe("environmentSecretValues", () => {
     expect(environmentSecretValues(environment).sort()).toEqual(
       names.map((name) => `value-of-${name}`).sort(),
     );
+  });
+});
+
+const PEM = [
+  "-----BEGIN RSA PRIVATE KEY-----",
+  "MIIEowIBAAKCAQEAx7Qk9mZyJ4pQ0m1nZ9wP",
+  "q8R2s3T4u5V6w7X8y9Z0a1B2c3D4e5F6g7H8",
+  "-----END RSA PRIVATE KEY-----",
+].join("\n");
+const PEM_LINE = "q8R2s3T4u5V6w7X8y9Z0a1B2c3D4e5F6g7H8";
+
+describe("secretForms", () => {
+  it("lists every written form a provider echoes a long secret in, longest first", () => {
+    const token = "ghp_abc+def/12345678";
+    const forms = secretForms([token]);
+    expect(forms).toEqual(
+      expect.arrayContaining([
+        token,
+        encodeURIComponent(token),
+        Buffer.from(token, "utf8").toString("base64"),
+      ]),
+    );
+    expect([...forms].sort((a, b) => b.length - a.length)).toEqual(forms);
+  });
+
+  it("covers a PEM key quoted JSON-escaped and a single line of it, not its header", () => {
+    const forms = secretForms([PEM]);
+    expect(forms).toContain(JSON.stringify(PEM).slice(1, -1));
+    expect(forms).toContain(PEM_LINE);
+    expect(forms).not.toContain("-----END RSA PRIVATE KEY-----");
+  });
+
+  it("keeps a short secret to its exact value, whose encodings would match by chance", () => {
+    expect(secretForms(["ab12"])).toEqual(["ab12"]);
+    expect(secretForms([""])).toEqual([]);
+  });
+
+  it("encodes base64 over UTF-8 as Buffer does, without Buffer", () => {
+    for (const value of ["pässwörd-0123456", "a", "ab", "abc", "zażółć gęślą jaźń"]) {
+      const long = value.padEnd(8, "x");
+      expect(secretForms([long])).toContain(Buffer.from(long, "utf8").toString("base64"));
+    }
   });
 });

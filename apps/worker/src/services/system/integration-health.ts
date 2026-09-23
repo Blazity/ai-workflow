@@ -177,7 +177,7 @@ async function runIntegrationProbe(
   checkId: string,
   signal: AbortSignal,
 ): Promise<SystemHealthProbeResult> {
-  const safe = (text: string) => truncate(redactIntegrationText(text, redactable(entry)));
+  const safe = (text: string) => truncate(redactIntegrationText(text, entry.secrets ?? []));
   try {
     const result: unknown = await probe(checkId, signal);
     const status = isRecord(result) ? result.status : undefined;
@@ -213,33 +213,6 @@ const PROBE_STATUSES = new Set(["live", "degraded", "down"]);
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-/**
- * Every written form of this connection's secrets.
- *
- * The shared redactor covers a value as written, percent-encoded and base64.
- * A PEM key is echoed back JSON-escaped (`\n` for each newline), and a provider
- * quoting one line of it back would otherwise leak that line, so each form and
- * each substantial line goes in as a secret of its own.
- */
-function redactable(entry: IntegrationHealthEntry): string[] {
-  const forms = new Set<string>();
-  for (const secret of entry.secrets ?? []) {
-    if (secret.length === 0) continue;
-    forms.add(secret);
-    const escaped = JSON.stringify(secret).slice(1, -1);
-    if (escaped !== secret) forms.add(escaped);
-    for (const line of secret.split(/\r?\n/)) {
-      // Short lines are coincidences, not credentials: a PEM header is public
-      // and redacting it would mangle the sentence an admin has to read.
-      if (line.trim().length >= MIN_SECRET_LINE) forms.add(line.trim());
-    }
-  }
-  return [...forms];
-}
-
-/** Below this a line of a multiline secret is boilerplate, not a credential. */
-const MIN_SECRET_LINE = 16;
 
 /** Long enough for a provider's sentence, short enough for a row. */
 const MAX_PROBE_MESSAGE = 300;

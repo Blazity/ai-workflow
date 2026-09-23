@@ -9,6 +9,7 @@ import type {
   WorkflowReplayLayoutSnapshot,
 } from "@shared/contracts";
 import { normalizeWorkflowDefinitionLayout } from "@shared/contracts";
+import { secretForms } from "./configured-secrets.js";
 
 export const REPLAY_FIELD_MAX_BYTES = 64 * 1024;
 export const REPLAY_ATTEMPT_MAX_BYTES = 256 * 1024;
@@ -411,9 +412,7 @@ export function redactConfiguredSecretsInText(
   secrets: readonly string[],
 ): string {
   return redactConfiguredSecrets(input, {
-    configuredSecrets: [...secrets].sort(
-      (left, right) => right.length - left.length,
-    ),
+    configuredSecrets: secretForms(secrets),
     redactions: {},
   });
 }
@@ -432,7 +431,7 @@ export function redactConfiguredSecretsInText(
  */
 export function redactConfiguredSecretsInJson<T>(value: T, secrets: readonly string[]): T {
   return redactJsonWith(value, {
-    configuredSecrets: [...secrets].sort((left, right) => right.length - left.length),
+    configuredSecrets: secretForms(secrets),
     redactions: {},
   });
 }
@@ -447,7 +446,7 @@ export function redactConfiguredSecretsInEnvelope(
   secrets: readonly string[],
 ): ReplaySanitizedEnvelope {
   const context = {
-    configuredSecrets: [...secrets].sort((left, right) => right.length - left.length),
+    configuredSecrets: secretForms(secrets),
     redactions: {} as Partial<Record<ReplayRedactionClass, number>>,
   };
   const value = redactJsonWith(envelope.value, context);
@@ -1012,9 +1011,7 @@ export function sanitizeReplayValue(
   options: SanitizeReplayValueOptions = {},
 ): ReplaySanitizedEnvelope {
   const context: TraversalContext = {
-    configuredSecrets: [...(options.secrets ?? [])].sort(
-      (left, right) => right.length - left.length,
-    ),
+    configuredSecrets: secretForms(options.secrets ?? []),
     maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
     maxNodes: options.maxNodes ?? DEFAULT_MAX_NODES,
     maxInputBytes: options.maxInputBytes ?? DEFAULT_MAX_INPUT_BYTES,
