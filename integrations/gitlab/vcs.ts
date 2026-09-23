@@ -222,7 +222,10 @@ export class GitLabAdapter implements
   ManualDispatchPrCapableVCS
 {
   private client: GitLabClient;
-  private gl: InstanceType<typeof Gitlab>;
+  /** Gitbeaker's resources, built the first time a call needs them. */
+  private get gl(): InstanceType<typeof Gitlab> {
+    return this.client.api;
+  }
   private projectId: string;
   private baseBranch: string;
   /** `undefined` until looked up; `null` when GitLab returned no username. */
@@ -234,7 +237,6 @@ export class GitLabAdapter implements
       host: config.host ?? "https://gitlab.com",
       token: config.token,
     });
-    this.gl = this.client.api;
     this.projectId = config.projectId;
     this.baseBranch = config.baseBranch;
   }

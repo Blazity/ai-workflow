@@ -20,6 +20,8 @@ import type { IntegrationHttp, IntegrationRequestInit } from "@integrations/sdk"
 export interface GitLabClient {
   /** The instance's root without a trailing slash, as the connection names it. */
   readonly host: string;
+  /** Built on first use, so a caller that only sends (a health check, the
+   *  connection test) never builds Gitbeaker's resources. */
   readonly api: InstanceType<typeof Gitlab>;
   /**
    * `path` under `/api/v4`, with the token. A non-2xx answer is returned, not
@@ -58,19 +60,23 @@ export function gitLabClient(connection: {
       ...init,
       headers: { "PRIVATE-TOKEN": connection.token, ...init.headers },
     });
+  let api: InstanceType<typeof Gitlab> | undefined;
   return {
     host,
     send,
-    api: new Gitlab({
-      host,
-      token: connection.token,
-      // Gitbeaker builds each request (camelCase options to GitLab's names,
-      // the query string, the token header) and this sends it.
-      requesterFn: createRequesterFn(
-        async (_resource, request) => request,
-        (endpoint, options) => sendForGitbeaker(connection.http, endpoint, options ?? {}),
-      ),
-    }),
+    get api() {
+      api ??= new Gitlab({
+        host,
+        token: connection.token,
+        // Gitbeaker builds each request (camelCase options to GitLab's names,
+        // the query string, the token header) and this sends it.
+        requesterFn: createRequesterFn(
+          async (_resource, request) => request,
+          (endpoint, options) => sendForGitbeaker(connection.http, endpoint, options ?? {}),
+        ),
+      });
+      return api;
+    },
   };
 }
 
