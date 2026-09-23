@@ -14,13 +14,17 @@ import {
   blockAvailabilityOf,
   buildSaveRequest,
   conflictDifferenceLines,
+  disableConfirmationLines,
   disableConsequence,
   enableConsequence,
   integrationImpactLines,
   disconnectConsequence,
   fieldHint,
+  fieldSource,
+  integrationBadges,
   missingRequiredFields,
   readableProviderText,
+  sourceSentence,
   sourceSwitchRefusal,
   statusChip,
   statusDetailLines,
@@ -30,6 +34,7 @@ import {
   testOutcomeLines,
   testRefusal,
   unlocksLines,
+  valuesComeFromEnvironment,
   verificationLine,
 } from "./presentation";
 
@@ -359,21 +364,18 @@ test("a scan that agrees, or a card that is not Connected, adds no line", () => 
 // never stops a run.
 test("switching off an integration says per capability what a run in flight does", () => {
   const tracing = integration({ name: "Arthur", capabilities: ["agent_tracing"], blocks: [] });
-  const tracingSaid = [
-    ...disableConsequence(tracing),
-    ...integrationImpactLines(tracing, null, "disable"),
-  ].join(" ");
+  const tracingSaid = disableConfirmationLines(tracing, null).join(" ");
   assert.match(tracingSaid, /a run in flight goes on untraced, and is not stopped/i);
   assert.doesNotMatch(tracingSaid, /may stop, or go on|fails naming/);
 
   const tracker = integration({ name: "Jira", capabilities: ["issue_tracker"], blocks: [] });
-  const trackerSaid = disableConsequence(tracker).join(" ");
-  assert.match(trackerSaid, /A run in flight that uses its issue tracker fails naming Jira at its next use of it/);
+  const trackerSaid = disableConfirmationLines(tracker, null).join(" ");
+  assert.match(trackerSaid, /a run in flight that uses its issue tracker fails naming Jira at its next use of it/i);
   assert.doesNotMatch(trackerSaid, /goes on/);
 
   const mixed = integration({ name: "Hub", capabilities: ["messaging", "agent_tracing"], blocks: [] });
   assert.match(
-    disableConsequence(mixed).join(" "),
+    disableConfirmationLines(mixed, null).join(" "),
     /uses its messaging fails naming Hub at its next use of it\. Losing only the rest never stops a run: it goes on untraced\./,
   );
 });
@@ -616,8 +618,8 @@ test("disconnecting with nothing else configured says everything using it stops"
 });
 
 test("disabling says runs fail and that the stored values survive it", () => {
-  const lines = disableConsequence(integration());
-  assert.match(lines.join(" "), /A run in flight that uses Demo's blocks and its messaging fails naming Demo/);
+  const lines = disableConfirmationLines(integration(), null);
+  assert.match(lines.join(" "), /a run in flight that uses Demo's blocks and its messaging fails naming Demo/);
   assert.match(lines.join(" "), /enabling it again finds exactly these values/);
 });
 
@@ -996,4 +998,203 @@ test("a failed test of environment values does not send the admin to edit the fo
 
   const saved = testOutcomeLines(outcome, failing, "save").join(" ");
   assert.match(saved, /Correct the values above and save again/, "a save did send exactly those values");
+});
+
+// ── What a person sees beside the name, and beside each field ───────────────
+// The states come from the arrivals the list has to tell apart (Filip on
+// production, 23.09): an environment-configured deployment, one set up here,
+// both at once, half set up, never set up, switched off, failing, and the first
+// save that failed its test. Expected words are the ones an admin acts on.
+
+const ENV_COMPLETE = {
+  setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"],
+  missingVariables: [],
+  complete: true,
+};
+const NOTHING_STORED = {
+  latestVersion: 0,
+  activeVersion: null,
+  missingFields: ["baseUrl", "apiToken"],
+  complete: false,
+  prepared: null,
+};
+
+const ARRIVALS: Record<string, IntegrationDto> = {
+  "configured from the environment, never tested": integration({
+    fields: [{ ...URL_FIELD, envSet: true }, { ...TOKEN_FIELD, envSet: true }],
+    state: state({ source: "environment", environment: ENV_COMPLETE, stored: NOTHING_STORED }),
+  }),
+  "configured here, tested": integration({
+    state: state({ verification: { state: "passed", at: "2026-09-18T10:00:00.000Z" } }),
+  }),
+  "changed since its last test": integration({
+    state: state({ verification: { state: "stale", at: "2026-09-18T10:00:00.000Z" } }),
+  }),
+  "never set up": integration({
+    fields: [URL_FIELD, TOKEN_FIELD],
+    state: state({
+      source: "environment",
+      status: "not_connected",
+      connection: "not_connected",
+      usable: false,
+      environment: { setVariables: [], missingVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"], complete: false },
+      stored: NOTHING_STORED,
+    }),
+  }),
+  "half set up in the environment": integration({
+    fields: [{ ...URL_FIELD, envSet: true }, TOKEN_FIELD],
+    state: state({
+      source: "environment",
+      status: "not_connected",
+      connection: "not_connected",
+      usable: false,
+      environment: { setVariables: ["DEMO_BASE_URL"], missingVariables: ["DEMO_API_TOKEN"], complete: false },
+      stored: NOTHING_STORED,
+    }),
+  }),
+  "first save failed its test": integration({
+    fields: [{ ...URL_FIELD, storedValue: "https://demo.example" }, { ...TOKEN_FIELD, storedSecretSet: true }],
+    state: state({
+      status: "not_connected",
+      connection: "not_connected",
+      usable: false,
+      stored: {
+        latestVersion: 1,
+        activeVersion: null,
+        missingFields: [],
+        complete: true,
+        prepared: {
+          version: 1,
+          at: "2026-09-18T10:00:00.000Z",
+          failure: { reason: "credential_rejected", message: "401 unauthorised" },
+        },
+      },
+    }),
+  }),
+  "switched off": integration({
+    state: state({ enabled: false, status: "disabled", usable: false }),
+  }),
+  "failing its test": integration({
+    state: state({
+      status: "failing",
+      connection: "failing",
+      usable: false,
+      verification: {
+        state: "failed",
+        at: "2026-09-18T10:00:00.000Z",
+        failure: { reason: "credential_rejected", message: "401" },
+      },
+      failure: { reason: "credential_rejected", message: "401" },
+    }),
+  }),
+};
+
+test("every arrival reads differently beside the name", () => {
+  const said = Object.fromEntries(
+    Object.entries(ARRIVALS).map(([arrival, dto]) => {
+      const badges = integrationBadges(dto);
+      return [arrival, [badges.status.label, badges.qualifier?.label ?? "", badges.source ?? ""].join(" | ")];
+    }),
+  );
+  assert.deepEqual(said, {
+    "configured from the environment, never tested": "Connected | Never tested | From environment variables",
+    "configured here, tested": "Connected |  | From values stored here",
+    "changed since its last test": "Connected | Changed since its test | From values stored here",
+    "never set up": "Not set up |  | ",
+    "half set up in the environment": "Not connected | Incomplete | Environment incomplete",
+    "first save failed its test": "Not connected | Saved values failed their test | Stored values not in use yet",
+    "switched off": "Disabled |  | From values stored here",
+    "failing its test": "Failing |  | From values stored here",
+  });
+  assert.equal(new Set(Object.values(said)).size, Object.keys(said).length);
+});
+
+// Red when: an environment field is drawn as an empty input again, which is
+// what made a Connected Jira look broken.
+test("a field read from the environment says so, names its variable, and is not a form", () => {
+  const dto = ARRIVALS["configured from the environment, never tested"]!;
+  assert.equal(valuesComeFromEnvironment(dto), true);
+  const url = fieldSource(dto.fields[0]!, dto);
+  assert.equal(url.tag, "Environment, in use");
+  assert.equal(url.tone, "in_use");
+  assert.match(url.where, /Read from DEMO_BASE_URL\. Its value is never shown here\./);
+  assert.equal(url.other, "");
+});
+
+test("the source sentence says where the values come from before anything else", () => {
+  const env = ARRIVALS["configured from the environment, never tested"]!;
+  assert.equal(sourceSentence(env), "Values come from this deployment's environment variables.");
+  assert.doesNotMatch(
+    statusDetailLines(env, null, { source: false }).join(" "),
+    /environment variables/,
+    "said once, at the top, not again among the other lines",
+  );
+});
+
+test("half an environment names the variable that is missing, field by field", () => {
+  const dto = ARRIVALS["half set up in the environment"]!;
+  assert.equal(valuesComeFromEnvironment(dto), false, "nothing runs from it, so the form is the way forward");
+  const [url, token] = dto.fields.map((field) => fieldSource(field, dto));
+  assert.equal(url!.tag, "Set in environment");
+  assert.equal(token!.tag, "Missing");
+  assert.equal(token!.tone, "missing");
+  assert.equal(token!.where, "DEMO_API_TOKEN is not set on this deployment.");
+});
+
+test("a deployment nobody set up is not told every field is missing", () => {
+  const dto = ARRIVALS["never set up"]!;
+  for (const field of dto.fields) {
+    assert.equal(fieldSource(field, dto).tone, "none");
+  }
+});
+
+test("values stored beside an environment in use are said to be there and unused", () => {
+  const dto = integration({
+    fields: [
+      { ...URL_FIELD, envSet: true, storedValue: "https://other.example" },
+      { ...TOKEN_FIELD, envSet: true, storedSecretSet: true },
+    ],
+    state: state({ source: "environment", environment: ENV_COMPLETE }),
+  });
+  for (const field of dto.fields) {
+    const source = fieldSource(field, dto);
+    assert.equal(source.tag, "Environment, in use");
+    assert.equal(source.other, "A value is also stored here, and is not in use.");
+  }
+});
+
+test("stored values in use say the environment variable beside them is not read", () => {
+  const dto = integration({
+    fields: [{ ...URL_FIELD, envSet: true, storedValue: "https://demo.example" }],
+  });
+  const source = fieldSource(dto.fields[0]!, dto);
+  assert.equal(source.tag, "Stored here, in use");
+  assert.match(source.other, /DEMO_BASE_URL is also set on this deployment, and is not read/);
+});
+
+test("no sentence about a field ever carries a stored value", () => {
+  const secretish = "https://secret-host.example/abc";
+  for (const dto of Object.values(ARRIVALS)) {
+    const fields = dto.fields.map((field) => ({ ...field, storedValue: field.secret ? undefined : secretish }));
+    const withValues = { ...dto, fields };
+    for (const field of fields) {
+      const source = fieldSource(field, withValues);
+      assert.doesNotMatch([source.tag, source.where, source.other].join(" "), /secret-host/);
+    }
+  }
+});
+
+test("the Turn it off dialog says what a run in flight does once, whatever the impact read said", () => {
+  const unusable = {
+    changesFingerprint: false,
+    stops: "unusable" as const,
+    unmeasuredCapabilities: [],
+    enabledDefinitions: [],
+    inFlightRuns: 2,
+    repositories: [],
+  };
+  for (const impact of [null, unusable]) {
+    const said = disableConfirmationLines(integration(), impact).join(" ");
+    assert.equal(said.match(/fails naming Demo/g)?.length, 1, said);
+  }
 });

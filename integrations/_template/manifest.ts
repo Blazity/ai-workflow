@@ -53,6 +53,9 @@ export const manifest = defineIntegration({
   name: "Example",
   description: "One line: what a deployment gets by connecting Example.",
   docsUrl: "https://example.com/docs",
+  // The mark beside the name. A licensed glyph ({ glyph, color }, Simple Icons
+  // is CC0) or, with no license-safe mark, a monogram on the brand's colour.
+  icon: { monogram: "EX", color: "#181B20" },
   connection: {
     fields: [
       {

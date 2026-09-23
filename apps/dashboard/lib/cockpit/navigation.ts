@@ -1,3 +1,5 @@
+import type { IntegrationConnectionStatus, IntegrationStatus } from "@shared/contracts";
+
 /**
  * What the cockpit's navigation is, as data.
  *
@@ -30,13 +32,17 @@ export function browserHandlesClick(event: {
   return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
 }
 
-/** One integration as the chrome needs it: name, pages, and whether it is in use. */
+/** One integration as the chrome needs it: name, pages, and the resolver's answers. */
 export interface CockpitIntegration {
   readonly id: string;
   readonly name: string;
   readonly pages: readonly { readonly id: string; readonly label: string }[];
-  /** Connected and enabled. Only these get a sidebar entry. */
+  /** Connected and enabled. */
   readonly usable: boolean;
+  /** The resolver's status. Absent from a caller that predates it. */
+  readonly status?: IntegrationStatus;
+  /** What the status would be if it were enabled. */
+  readonly connection?: IntegrationConnectionStatus;
 }
 
 export interface NavEntry {
@@ -47,6 +53,10 @@ export interface NavEntry {
   readonly href: string;
   /** The topbar's words when they differ from the sidebar's. */
   readonly title?: string;
+  /** Set on an integration's entry, whose mark is its own icon. */
+  readonly integrationId?: string;
+  /** A word after the label when the entry is not simply in use: Off, Failing. */
+  readonly note?: string;
 }
 
 export interface NavGroup {
@@ -115,8 +125,9 @@ export function integrationHref(id: string, pageId?: string): string {
  * Two characters for the collapsed rail: the name's first letter, then its next
  * capital, or its second letter when it has no other capital.
  *
- * Nothing in a manifest gives us a symbol, and the five providers coming next
- * are camel-cased brands, so the second capital is what tells them apart:
+ * The fallback mark, for an integration whose manifest declares no `icon`
+ * (and for the rail's text alternative). Providers are camel-cased brands, so
+ * the second capital is what tells them apart:
  * GitHub is GH and GitLab is GL, where a first letter alone would have made
  * both G. Holding the first letter fixed is what keeps the mark stable when a
  * name is recased (`Mem0` and `mem0` both read ME), and a name with no Latin
@@ -124,8 +135,7 @@ export function integrationHref(id: string, pageId?: string): string {
  * question marks. It is a mark, not an abbreviation: `OpenAI` reads OA, which
  * is stable and unique, which is the whole job. Two integrations could still
  * collide; every entry carries the full name as `title` and `aria-label`, and
- * the answer if that stops being enough is a glyph in the manifest, which is an
- * additive change.
+ * a manifest that declares its own `icon` is drawn with that instead.
  */
 export function integrationMonogram(name: string): string {
   const characters = [...name.trim()].filter((character) => /[\p{L}\p{N}]/u.test(character));
@@ -139,21 +149,42 @@ export function integrationMonogram(name: string): string {
   return (first + second).toUpperCase();
 }
 
-/** The Integrations section: the page itself, then one entry per usable integration. */
+/**
+ * Whether an integration has a sidebar entry, and the word it carries.
+ *
+ * In use, it has one. Somebody's to act on, it keeps one: an integration an
+ * admin just switched off, or one whose connection is failing, is the one they
+ * are about to go back to, and taking its entry away sent them the long way
+ * round through All integrations to turn it back on. One nobody configured
+ * stays off the sidebar: its card on All integrations is where it starts.
+ */
+function sidebarPresence(integration: CockpitIntegration): { note?: string } | null {
+  if (integration.usable) return {};
+  if (integration.status === "failing") return { note: "Failing" };
+  if (integration.status === "disabled" && integration.connection !== "not_connected") {
+    return { note: "Off" };
+  }
+  return null;
+}
+
+/** The Integrations section: the page itself, then an entry per integration in use or to act on. */
 export function integrationNavEntries(
   integrations: readonly CockpitIntegration[],
 ): readonly NavEntry[] {
-  return [
-    INTEGRATIONS_INDEX_ENTRY,
-    ...integrations
-      .filter((integration) => integration.usable)
-      .map((integration) => ({
-        id: `integration:${integration.id}`,
-        label: integration.name,
-        glyph: integrationMonogram(integration.name),
-        href: integrationHref(integration.id),
-      })),
-  ];
+  const entries: NavEntry[] = [INTEGRATIONS_INDEX_ENTRY];
+  for (const integration of integrations) {
+    const presence = sidebarPresence(integration);
+    if (!presence) continue;
+    entries.push({
+      id: `integration:${integration.id}`,
+      label: integration.name,
+      glyph: integrationMonogram(integration.name),
+      href: integrationHref(integration.id),
+      integrationId: integration.id,
+      ...presence,
+    });
+  }
+  return entries;
 }
 
 const CORE_ENTRIES = CORE_NAV_GROUPS.flatMap((group) => group.entries);

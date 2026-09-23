@@ -50,6 +50,141 @@ export function statusChip(state: IntegrationState): IntegrationStatusChip {
 }
 
 /**
+ * What the list card and the connection screen put beside the name: the
+ * status, one qualifier when the status alone would mislead, and where the
+ * values in use come from.
+ *
+ * Four states a person has to tell apart at a glance, on a phone as much as a
+ * laptop: nothing set up yet, turned off on purpose, failing, and connected
+ * without anybody having proved it. "Not connected" said the first and the
+ * case where half the variables are set in the same grey; "Connected" said
+ * both a passed test and no test at all in the same green. The status is
+ * still the resolver's: `statusChip` names it and nothing here changes which
+ * one it is. The qualifier and the source are read off the same state.
+ */
+export interface IntegrationBadges {
+  readonly status: IntegrationStatusChip;
+  readonly qualifier: { readonly label: string; readonly tone: "warn" | "failed" } | null;
+  /** Where the values in use come from, or null when nothing configures it. */
+  readonly source: string | null;
+}
+
+export function integrationBadges(integration: IntegrationDto): IntegrationBadges {
+  const state = integration.state;
+  const chip = statusChip(state);
+  const status = neverConfigured(integration) ? { label: "Not set up", tone: chip.tone } : chip;
+  return { status, qualifier: qualifierOf(integration), source: sourceBadge(integration) };
+}
+
+function qualifierOf(integration: IntegrationDto): IntegrationBadges["qualifier"] {
+  const state = integration.state;
+  if (state.status === "disabled" || state.status === "failing") return null;
+  if (state.status === "connected") {
+    switch (state.verification.state) {
+      case "never_tested":
+        return { label: "Never tested", tone: "warn" };
+      case "stale":
+        return { label: "Changed since its test", tone: "warn" };
+      case "failed":
+        return { label: "Last test failed", tone: "failed" };
+      default:
+        return null;
+    }
+  }
+  if (state.stored.prepared) return { label: "Saved values failed their test", tone: "failed" };
+  if (!neverConfigured(integration)) return { label: "Incomplete", tone: "warn" };
+  return null;
+}
+
+function sourceBadge(integration: IntegrationDto): string | null {
+  const state = integration.state;
+  if (sourceInUse(state, "environment")) return "From environment variables";
+  if (sourceInUse(state, "stored")) return "From values stored here";
+  if (neverConfigured(integration)) return null;
+  if (state.source === "environment") return "Environment incomplete";
+  return "Stored values not in use yet";
+}
+
+/** Nothing anywhere configures it: no variable set, no value stored. */
+function neverConfigured(integration: IntegrationDto): boolean {
+  const state = integration.state;
+  return (
+    state.connection === "not_connected" &&
+    state.environment.setVariables.length === 0 &&
+    !storesValues(integration)
+  );
+}
+
+/**
+ * Where one connection field's value is, said beside the field.
+ *
+ * A deployment configured through its environment showed Connected above a
+ * form of empty inputs, and the empty inputs are what a person believes: the
+ * value is never sent to a browser, so the field has to say where it lives
+ * instead of looking unset. `tone` is for the tag: `in_use` for the value runs
+ * read, `set` for a value that exists and is not read, `missing` for a
+ * required value the selected source lacks, `none` for nothing to say.
+ */
+export interface FieldSource {
+  readonly tag: string;
+  readonly tone: "in_use" | "set" | "missing" | "none";
+  /** Where the selected source has this value, when a sentence adds to the tag. */
+  readonly where: string;
+  /** What the other source holds for it, when it holds something. */
+  readonly other: string;
+}
+
+export function fieldSource(
+  field: IntegrationConnectionFieldDto,
+  integration: IntegrationDto,
+): FieldSource {
+  const state = integration.state;
+  const stored = field.secret ? field.storedSecretSet : (field.storedValue ?? "").trim().length > 0;
+  const notSet = (): Pick<FieldSource, "tag" | "tone"> =>
+    field.optional || neverConfigured(integration)
+      ? { tag: field.optional ? "Optional, not set" : "Not set", tone: "none" }
+      : { tag: "Missing", tone: "missing" };
+
+  if (state.source === "environment") {
+    const other = stored ? "A value is also stored here, and is not in use." : "";
+    if (field.envSet) {
+      const inUse = sourceInUse(state, "environment");
+      return {
+        tag: inUse ? "Environment, in use" : "Set in environment",
+        tone: inUse ? "in_use" : "set",
+        where: `Read from ${field.env}. Its value is never shown here.`,
+        other,
+      };
+    }
+    return { ...notSet(), where: `${field.env} is not set on this deployment.`, other };
+  }
+
+  const other = field.envSet
+    ? `${field.env} is also set on this deployment, and is not read while the stored values are the source.`
+    : "";
+  if (stored) {
+    const inUse = sourceInUse(state, "stored");
+    return {
+      tag: inUse ? "Stored here, in use" : "Stored here",
+      tone: inUse ? "in_use" : "set",
+      where: "",
+      other,
+    };
+  }
+  return { ...notSet(), where: "", other };
+}
+
+/**
+ * Whether the Values section shows where each value lives rather than a form:
+ * when the environment is the source runs read. The form is still one click
+ * away there, for storing values to switch to, but it is not what a person who
+ * only came to check the connection is shown first.
+ */
+export function valuesComeFromEnvironment(integration: IntegrationDto): boolean {
+  return sourceInUse(integration.state, "environment");
+}
+
+/**
  * Where the values in use come from.
  *
  * A source that cannot serve the integration says so rather than claiming the
@@ -382,6 +517,8 @@ export function statusDetailLines(
   integration: IntegrationDto,
   /** The last stored health scan, when this role could read one. */
   scan: SystemHealthResponse | null = null,
+  /** False where the caller says the source itself, beside the status. */
+  { source = true }: { source?: boolean } = {},
 ): string[] {
   const state = integration.state;
   const lines: string[] = [];
@@ -389,29 +526,18 @@ export function statusDetailLines(
   if (disagreement) lines.push(disagreement);
 
   if (state.status === "disabled") {
+    // Blocks only when there are some, as everywhere else on these screens.
     lines.push(
-      `Turned off here on purpose. Its blocks stay in the workflow editor, greyed out and saying why, and a run that reaches one fails naming ${integration.name}.`,
+      integration.blocks.length > 0
+        ? `Turned off here on purpose. Its blocks stay in the workflow editor, greyed out and saying why, and a run that reaches one fails naming ${integration.name}.`
+        : `Turned off here on purpose, so no workflow uses ${integration.name} until it is turned back on.`,
     );
   }
   if (state.failure) lines.push(failureLine(state.failure));
   const webhook = webhookLine(integration);
   if (webhook) lines.push(webhook);
 
-  const neverConfigured =
-    state.connection === "not_connected" &&
-    state.environment.setVariables.length === 0 &&
-    !storesValues(integration);
-
-  if (neverConfigured) {
-    const required = integration.fields.filter((field) => !field.optional);
-    lines.push(
-      required.length === 0
-        ? "Nothing configures it on this deployment yet."
-        : `Nothing configures it on this deployment yet. It needs its ${andList(required.map((field) => field.label))}.`,
-    );
-  } else {
-    lines.push(sourceLine(state));
-  }
+  if (source) lines.push(sourceSentence(integration));
 
   if (state.connection !== "not_connected") {
     lines.push(verificationLine(state.verification));
@@ -424,6 +550,22 @@ export function statusDetailLines(
     );
   }
   return lines;
+}
+
+/**
+ * Where the values in use come from, as one sentence, or what it needs when
+ * nothing configures it. The connection screen says it first, beside the
+ * status; the card says it among its other lines.
+ */
+export function sourceSentence(integration: IntegrationDto): string {
+  const state = integration.state;
+  if (neverConfigured(integration)) {
+    const required = integration.fields.filter((field) => !field.optional);
+    return required.length === 0
+      ? "Nothing configures it on this deployment yet."
+      : `Nothing configures it on this deployment yet. It needs its ${andList(required.map((field) => field.label))}.`;
+  }
+  return sourceLine(state);
 }
 
 /**
@@ -546,14 +688,11 @@ export function fieldHint(
   state: IntegrationState,
   clearing: boolean,
 ): string {
-  const environment = field.envSet
-    ? `${field.env} is set on this deployment.`
-    : `${field.env} is not set on this deployment.`;
   // What the field is comes first for a secret too: "Nothing is stored yet"
-  // alone left the admin guessing which token, from where.
-  const withDescription = (what: string) =>
-    [field.description, what, environment].filter(Boolean).join(" ");
-  if (!field.secret) return [field.description, environment].filter(Boolean).join(" ");
+  // alone left the admin guessing which token, from where. Where the value
+  // lives is `fieldSource`'s, said once beside it.
+  const withDescription = (what: string) => [field.description, what].filter(Boolean).join(" ");
+  if (!field.secret) return field.description ?? "";
   if (!state.secretsKeyAvailable) {
     return withDescription("It cannot be stored here until INTEGRATION_SECRETS_KEY is set, see above.");
   }
@@ -785,15 +924,31 @@ export function disableConsequence(integration: IntegrationDto): string[] {
   const name = integration.name;
   // Said about blocks only when there are some: Jira has none, and "Jira's
   // blocks grey out" sent an admin looking for blocks that do not exist.
+  //
+  // What a run in flight does is not here: the dialog's first line
+  // (`integrationImpactLines`) says it for every answer the worker can give,
+  // and saying it here too put the same sentence in the dialog twice.
   return [
     ...(integration.blocks.length > 0
       ? [
           `${name}'s blocks grey out in the workflow editor at once, each carrying the reason, and publishing a workflow that uses one is refused.`,
         ]
       : []),
-    `${capitalized(inFlightWithout(integration))} A step already running finishes.`,
-    "Nothing stored is touched, so enabling it again finds exactly these values.",
+    "A step already running finishes. Nothing stored is touched, so enabling it again finds exactly these values.",
   ];
+}
+
+/** Everything the Turn it off dialog says once its impact is read (or not). */
+export function disableConfirmationLines(
+  integration: IntegrationDto,
+  impact: IntegrationImpactPreviewResponse | null,
+): string[] {
+  return [...integrationImpactLines(integration, impact, "disable"), ...disableConsequence(integration)];
+}
+
+/** Said once the kill switch is thrown. */
+export function disabledNoticeLine(integration: IntegrationDto): string {
+  return `${integration.name} is off. ${capitalized(inFlightWithout(integration))} It stays in the sidebar, marked Off, so it can be turned back on from there.`;
 }
 
 export function enableConsequence(integration: IntegrationDto): string {
