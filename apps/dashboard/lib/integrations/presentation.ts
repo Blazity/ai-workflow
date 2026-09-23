@@ -400,7 +400,7 @@ export function statusDetailLines(integration: IntegrationDto): string[] {
     lines.push(
       required.length === 0
         ? "Nothing configures it on this deployment yet."
-        : `Nothing configures it on this deployment yet. It needs ${andList(required.map((field) => field.label))}.`,
+        : `Nothing configures it on this deployment yet. It needs its ${andList(required.map((field) => field.label))}.`,
     );
   } else {
     lines.push(sourceLine(state));
@@ -441,6 +441,41 @@ function webhookLine(integration: IntegrationDto): string | null {
     return `The ${webhook.label} is not answered here: it needs the ${andList(needs)}, which ${needs.length === 1 ? "is" : "are"} not set or cannot be read.`;
   }
   return null;
+}
+
+/**
+ * Whether a source's panel may say "in use": only when that source is the one
+ * selected AND it configures something. A deployment that never configured an
+ * integration reads the environment by default, and "Environment variables ·
+ * in use" there claimed a connection nobody made.
+ */
+export function sourceInUse(state: IntegrationState, source: "environment" | "stored"): boolean {
+  if (state.source !== source) return false;
+  return source === "environment"
+    ? state.environment.setVariables.length > 0
+    : state.stored.activeVersion !== null;
+}
+
+/**
+ * What the Availability section says instead of its switch, or null when the
+ * switch is the truth. An integration that is switched on and not connected
+ * cannot be used by any workflow, so a switch reading "Workflows may use it"
+ * there is false; switched off, the switch stays, since turning it back on is
+ * a real choice.
+ */
+export function availabilityInsteadOfSwitch(integration: IntegrationDto): string | null {
+  const { state } = integration;
+  if (!state.enabled || state.connection !== "not_connected") return null;
+  return `Not connected, so no workflow can use ${integration.name} yet. The switch to turn it off appears once it is connected.`;
+}
+
+/**
+ * The line under Availability when nothing is stored to disconnect.
+ */
+export function nothingToDisconnectLine(integration: IntegrationDto): string {
+  return sourceInUse(integration.state, "environment")
+    ? "This connection lives in the deployment's environment variables, so it is changed by changing them and switched off with the control above."
+    : `There is nothing to disconnect: nothing configures ${integration.name} on this deployment yet.`;
 }
 
 /**

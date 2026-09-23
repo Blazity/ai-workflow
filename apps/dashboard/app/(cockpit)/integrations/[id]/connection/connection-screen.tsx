@@ -31,7 +31,10 @@ import {
   disableConsequence,
   disconnectConsequence,
   enableConsequence,
+  availabilityInsteadOfSwitch,
   fieldHint,
+  nothingToDisconnectLine,
+  sourceInUse,
   SECRETS_KEY_SETUP_URL,
   secretsKeyNotice,
   integrationImpactConfirmLabel,
@@ -592,6 +595,7 @@ export function ConnectionScreen({
   const environmentRefusal = sourceSwitchRefusal(integration, "environment");
   const storedRefusal = sourceSwitchRefusal(integration, "stored");
   const keyNotice = secretsKeyNotice(integration);
+  const availabilityNote = availabilityInsteadOfSwitch(integration);
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8 max-w-[840px]">
@@ -786,7 +790,7 @@ export function ConnectionScreen({
             }`}
           >
             <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
-              Environment variables{state.source === "environment" ? " · in use" : ""}
+              Environment variables{sourceInUse(state, "environment") ? " · in use" : ""}
             </div>
             <div className="mt-1 flex flex-col gap-[2px] font-body text-[11px] text-neutral-600">
               {integration.fields.map((field) => (
@@ -823,7 +827,7 @@ export function ConnectionScreen({
             }`}
           >
             <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
-              Stored here{state.source === "stored" ? " · in use" : ""}
+              Stored here{sourceInUse(state, "stored") ? " · in use" : ""}
             </div>
             <div className="mt-1 font-body text-[11px] text-neutral-600">
               {stored
@@ -859,18 +863,22 @@ export function ConnectionScreen({
           title="Availability"
           description="The kill switch works whichever source the values come from, and changes no value."
         >
-          <Switch
-            checked={state.enabled}
-            disabled={busy !== null}
-            aria-label={`Let workflows use ${integration.name}`}
-            onCheckedChange={(next) =>
-              next ? setEnabled(true) : void previewChange({ preview: "disable" }, "disable")
-            }
-          >
-            <span className="font-body text-[12px] text-neutral-800">
-              {state.enabled ? "Workflows may use it" : "Turned off"}
-            </span>
-          </Switch>
+          {availabilityNote ? (
+            <p className="m-0 font-body text-[12px] text-neutral-700">{availabilityNote}</p>
+          ) : (
+            <Switch
+              checked={state.enabled}
+              disabled={busy !== null}
+              aria-label={`Let workflows use ${integration.name}`}
+              onCheckedChange={(next) =>
+                next ? setEnabled(true) : void previewChange({ preview: "disable" }, "disable")
+              }
+            >
+              <span className="font-body text-[12px] text-neutral-800">
+                {state.enabled ? "Workflows may use it" : "Turned off"}
+              </span>
+            </Switch>
+          )}
 
           {stored ? (
             <div className="flex flex-col gap-1 border-t border-neutral-200 pt-3">
@@ -888,9 +896,7 @@ export function ConnectionScreen({
             </div>
           ) : (
             <p className="m-0 border-t border-neutral-200 pt-3 font-body text-[11px] text-neutral-500">
-              Nothing is stored here to disconnect. This connection lives in the
-              deployment&apos;s environment variables, so it is changed by changing them
-              and switched off with the control above.
+              {nothingToDisconnectLine(integration)}
             </p>
           )}
         </Section>

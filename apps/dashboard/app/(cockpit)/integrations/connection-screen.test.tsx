@@ -469,6 +469,46 @@ test("with no secrets key but the secret already stored, saving other values sta
   assert.match(text(root), /An admin sets it on the deployment/);
 });
 
+// Red when: a provider nobody connected reads "Environment variables · in
+// use", "lives in the deployment's environment variables" and a switch saying
+// "Workflows may use it" (QA, Mem0 on production).
+test("a provider nobody connected claims no source in use and no usable switch", (t) => {
+  const root = render(t, {
+    integration: integration({
+      name: "Mem0",
+      fields: [{ ...URL_FIELD, storedValue: undefined }, { ...TOKEN_FIELD, storedSecretSet: false }],
+      state: state({
+        source: "environment",
+        status: "not_connected",
+        connection: "not_connected",
+        usable: false,
+        environment: { setVariables: [], missingVariables: ["DEMO_API_TOKEN"], complete: false },
+        stored: { latestVersion: 0, activeVersion: null, missingFields: [], complete: false, prepared: null },
+      }),
+    }),
+  });
+  const rendered = text(root);
+  assert.doesNotMatch(rendered, /· in use/);
+  assert.doesNotMatch(rendered, /lives in the/);
+  assert.doesNotMatch(rendered, /Workflows may use it/);
+  assert.match(rendered, /Not connected, so no workflow can use Mem0 yet/);
+  assert.match(rendered, /nothing configures Mem0 on this deployment yet/);
+  assert.equal(root.findAll((node) => node.props?.role === "switch").length, 0);
+});
+
+test("an environment that configures the provider is still said to be in use", (t) => {
+  const root = render(t, {
+    integration: integration({
+      state: state({
+        source: "environment",
+        environment: { setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"], missingVariables: [], complete: true },
+      }),
+    }),
+  });
+  assert.match(text(root), /Environment variables\s+· in use/);
+  assert.ok(root.findAll((node) => node.props?.role === "switch").length > 0);
+});
+
 test("a deployment that does not own its database offers no write control at all", (t) => {
   const root = render(t, {
     writes: {

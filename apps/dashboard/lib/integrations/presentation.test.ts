@@ -163,7 +163,7 @@ test("a fresh deployment is told what the integration needs, not that its values
   );
   const rendered = lines.join(" ");
   assert.match(rendered, /Nothing configures it on this deployment yet/);
-  assert.match(rendered, /Site URL and API token/);
+  assert.match(rendered, /It needs its Site URL and API token\./);
   assert.doesNotMatch(
     rendered,
     /Values come from/,
