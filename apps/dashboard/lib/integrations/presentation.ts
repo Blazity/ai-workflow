@@ -497,7 +497,7 @@ export function nothingToDisconnectLine(integration: IntegrationDto): string {
  * page. The other way round (card failing, probe live) says nothing: the
  * card's failure already names its reason and the fix.
  */
-export function scanDisagreementLine(
+function scanDisagreementLine(
   integration: IntegrationDto,
   scan: SystemHealthResponse | null,
 ): string | null {
