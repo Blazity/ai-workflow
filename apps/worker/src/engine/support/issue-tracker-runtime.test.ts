@@ -41,7 +41,6 @@ const {
   issueTrackerWiring,
   resolveActiveIssueTracker,
   ticketSubject,
-  ticketSubjects,
   trackerMoveTarget,
 } = await import("./issue-tracker-runtime.js");
 const { createAdapters } = await import("./adapters.js");
@@ -385,30 +384,6 @@ describe("the subject key a ticket run is claimed under", () => {
     readable(provider("Jira"));
 
     expect(await ticketSubject("AWT-42")).toBe("ticket:jira:AWT-42");
-  });
-
-  it("spells a whole list the same way, reading the connection once", async () => {
-    // The poller asks for a subject per ticket across the entire AI column,
-    // and the reconciler per active claim. Reading the tracker's connection
-    // per item put a database round trip inside a loop on paths that are
-    // already bounded by the invocation ceiling.
-    readable(provider("Jira"));
-
-    const keys = await ticketSubjects(["AWT-1", "AWT-2", "AWT-3"]);
-
-    expect([...keys.values()]).toEqual([
-      "ticket:jira:AWT-1",
-      "ticket:jira:AWT-2",
-      "ticket:jira:AWT-3",
-    ]);
-    expect(resolveUsableIntegrations).toHaveBeenCalledTimes(1);
-  });
-
-  it("asks nothing at all for an empty list", async () => {
-    readable(provider("Jira"));
-
-    expect(await ticketSubjects([])).toEqual(new Map());
-    expect(resolveUsableIntegrations).not.toHaveBeenCalled();
   });
 
   it("refuses rather than claiming a run under a key nothing else will spell", async () => {

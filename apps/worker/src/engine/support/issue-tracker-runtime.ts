@@ -85,27 +85,20 @@ export type IssueTrackerRefusal = "not_connected" | "ambiguous" | "unusable" | "
  * connected trackers because it happened to be first in the registry is the
  * failure nobody can explain afterwards. Mirrors `messaging.ts`, which refuses
  * the same case in the same shape.
- */
-/**
- * WHO CATCHES A THROW OUT OF THIS FUNCTION, and why it is not this function.
  *
+ * WHO CATCHES A THROW OUT OF THIS FUNCTION, and why it is not this function.
  * It answers a refusal for every state it knows about, so a throw means
  * something it does not know about: a module that failed to load, a driver
- * that gave up. Exactly one caller contains that, `createAdapters`, and
- * deliberately so: it is the one called BEFORE a caller has decided whether it
- * needs a tracker at all, by the poller at the top of a pass, so a throw there
- * cost work that has nothing to do with tickets.
- *
- * The other five callers (`coreServesIssueTracker`, `issueTrackerWiring`,
- * `ticketSubject`, `ticketSubjects`, `trackerMoveTarget`) let it through, and
- * that is the rule rather than an omission. Each is called by something that
- * has already decided it is working on a ticket, and for each of them a
- * fallback would be a wrong answer rather than a smaller one: a subject key
+ * that gave up. Turning that into a refusal here would hand a caller already
+ * working on a ticket a wrong answer rather than a smaller one: a subject key
  * nothing else computes, a move target missing the transition the board needs,
- * a palette that offers a block whose call then fails. The containment for
- * those belongs where the ticket work as a whole can be skipped, which is the
- * ticket half of a poll pass (`triggers/polling/poll-pass.ts`) and the
- * webhook route's own handler.
+ * a palette that offers a block whose call then fails. So the throw is
+ * contained only where a whole piece of work can be skipped or recorded as
+ * unread: the adapter bundle (`createAdapters`), built before its caller has
+ * decided it needs a tracker at all; the run start (`readTrackerWiring` in
+ * `steps/run-start-settings.ts`), which records the tracker as unreadable; and
+ * for the rest the ticket half of a poll pass (`triggers/polling/poll-pass.ts`)
+ * and the webhook route's own handler.
  */
 export async function resolveActiveIssueTracker(
   pins?: readonly IntegrationConnectionPin[],
@@ -319,29 +312,6 @@ export async function ticketSubject(ticketKey: string): Promise<string> {
   const resolved = await resolveActiveIssueTracker();
   if (!resolved.ok) throw new Error(resolved.reason);
   return ticketSubjectKey(resolved.id, ticketKey);
-}
-
-/**
- * The same key for a whole list of tickets, resolving the tracker ONCE.
- *
- * The same derivation as `ticketSubject`, reached through it, so there is
- * still one place that spells the string. It exists because the poller asks
- * for a subject per discovered ticket inside a `Promise.all` across the entire
- * AI column, and per-ticket meant a connection read per ticket on a path that
- * is already bounded by the invocation ceiling.
- */
-export async function ticketSubjects(
-  ticketKeys: readonly string[],
-): Promise<ReadonlyMap<string, string>> {
-  const pairs = new Map<string, string>();
-  if (ticketKeys.length === 0) return pairs;
-  const { ticketSubjectKey } = await import("./subject-key.js");
-  const resolved = await resolveActiveIssueTracker();
-  if (!resolved.ok) throw new Error(resolved.reason);
-  for (const ticketKey of ticketKeys) {
-    pairs.set(ticketKey, ticketSubjectKey(resolved.id, ticketKey));
-  }
-  return pairs;
 }
 
 /**

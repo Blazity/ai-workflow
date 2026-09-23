@@ -133,6 +133,7 @@ export async function cancelRun(
 ): Promise<boolean> {
   return (
     await cancelRunDetailed({
+      subjectKey: await ticketSubject(ticketKey),
       ticketKey,
       target,
       runRegistry,
@@ -152,7 +153,14 @@ export async function cancelRun(
  * a ninth was not an option. Every field is named here instead.
  */
 export interface CancelRunDetailedInput {
-  /** Jira ticket key; its subject key is derived here. */
+  /**
+   * The subject the claim being cancelled holds. Taken from the caller, which
+   * holds the claim, rather than derived here from the ticket key: deriving it
+   * resolved the tracker a second time, and after the tracker changed it named
+   * a subject the claim does not hold, so the cancel released nothing.
+   */
+  subjectKey: string;
+  /** The ticket the claim follows: moved and noticed on, never used to find the claim. */
   ticketKey: string;
   target: CancelRunTarget;
   runRegistry: RunRegistryAdapter;
@@ -185,8 +193,7 @@ export interface CancelRunDetailedInput {
 export async function cancelRunDetailed(
   input: CancelRunDetailedInput,
 ): Promise<CancelRunResult> {
-  const { ticketKey, issueTracker, targetColumn } = input;
-  const subjectKey = await ticketSubject(ticketKey);
+  const { subjectKey, ticketKey, issueTracker, targetColumn } = input;
   const confirmTicketMove = issueTracker && targetColumn
     ? async (owner: { subjectKey: string; ownerToken: string; runId: string | null }) => {
       const { moveConnectedTicketForRun } = await import("../tickets/ticket-transition.js");

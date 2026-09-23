@@ -480,6 +480,7 @@ async function cancelTrackedRun(
   // cancellation, so callers must not report it as "cancelled".
   const cancel = () =>
     cancelRunDetailed({
+      subjectKey,
       ticketKey,
       target: cancellationTarget,
       runRegistry: adapters.runRegistry,
