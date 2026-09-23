@@ -16,8 +16,32 @@ import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js"
 const resolveUsableIntegrations = vi.fn();
 /** Every secret the deployment knows, as the source hands it over. */
 const knownSecretValues = vi.fn(async (): Promise<string[]> => []);
+/**
+ * The registry the runtime reads its candidates from, filled from whatever the
+ * fake reader hands out, and the states the real reader would return beside
+ * it: every usable integration is connected unless the test says otherwise.
+ * The runtime asks the one-provider rule (`oneProviderChoiceOf`) over both.
+ */
+const registered = vi.hoisted(() => [] as Array<{ id: string; name: string; capabilities: string[] }>);
+vi.mock("@integrations/registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@integrations/registry")>()),
+  integrationManifests: registered,
+}));
+async function readAsTheResolverWould(...args: unknown[]): Promise<unknown> {
+  const result = (await resolveUsableIntegrations(...args)) as
+    | { readable: boolean; usable?: Array<{ manifest: { id: string; name: string; capabilities: string[] } }>; states?: Map<string, unknown>; connectionFailures?: Map<string, unknown> }
+    | undefined;
+  if (!result?.readable) return result;
+  const states = new Map(result.states ?? []);
+  for (const entry of result.usable ?? []) {
+    if (!registered.some((manifest) => manifest.id === entry.manifest.id)) registered.push(entry.manifest);
+    if (!states.has(entry.manifest.id)) states.set(entry.manifest.id, { status: "connected", usable: true });
+  }
+  return { ...result, states, connectionFailures: result.connectionFailures ?? new Map() };
+}
+
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
-  resolveUsableIntegrations,
+  resolveUsableIntegrations: readAsTheResolverWould,
   knownSecretValues,
   // The pin comparison itself is the real one. A mocked check would prove that
   // this module calls something, not that a tracker reconfigured mid-run is
@@ -167,6 +191,36 @@ describe("resolveActiveIssueTracker", () => {
       refusal: "ambiguous",
       reason:
         "Tracker One and Tracker Two both provide issue tracking on this deployment and no active provider is selected, so no ticket was read.",
+    });
+  });
+
+  it("counts a failing tracker, so a working one beside it is not picked silently", async () => {
+    // Picking the one that works today moves to the other the day it
+    // recovers; memory has always counted a failing provider, and this is the
+    // same rule (plan D4).
+    registered.push({ id: "tracker two", name: "Tracker Two", capabilities: ["issue_tracker"] });
+    resolveUsableIntegrations.mockResolvedValue({
+      readable: true,
+      usable: [provider("Tracker One")],
+      states: new Map([["tracker two", { status: "failing", usable: false, failure: { message: "the token was refused" } }]]),
+    });
+
+    expect(await resolveActiveIssueTracker()).toMatchObject({ ok: false, refusal: "ambiguous" });
+  });
+
+  it("refuses a sole failing tracker with its own reason, never as not connected", async () => {
+    registered.push({ id: "tracker one", name: "Tracker One", capabilities: ["issue_tracker"] });
+    resolveUsableIntegrations.mockResolvedValue({
+      readable: true,
+      usable: [],
+      states: new Map([["tracker one", { status: "failing", usable: false, failure: { message: "the token was refused" } }]]),
+    });
+
+    expect(await resolveActiveIssueTracker()).toEqual({
+      ok: false,
+      refusal: "unusable",
+      reason:
+        "Tracker One is the issue tracker on this deployment and is not working: the token was refused, so no ticket was read.",
     });
   });
 
@@ -418,4 +472,8 @@ describe("the move a column name means", () => {
 
     expect(await trackerMoveTarget("Backlog", "backlog")).toBe("Backlog");
   });
+});
+
+beforeEach(() => {
+  registered.length = 0;
 });

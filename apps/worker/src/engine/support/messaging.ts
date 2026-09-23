@@ -21,7 +21,8 @@
  * happens.
  */
 import type { IntegrationConnectionPin, IntegrationUnavailableReason } from "@shared/contracts";
-import { activeProviderOf } from "../definition/integration-availability.js";
+import { integrationManifests } from "@integrations/registry";
+import { oneProviderChoiceOf } from "../definition/integration-availability.js";
 import { withChangeRequestReferences } from "./change-request-references.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import { withKnownSecretsRedacted } from "./publication-redaction.js";
@@ -170,11 +171,12 @@ type ResolvedMessaging =
  * The one integration serving `messaging` on this deployment, with its
  * connection resolved and its own context.
  *
- * Several usable providers with nobody chosen is a refusal by name, never a
- * silent pick of the first: a run that posted into one of two connected
- * workspaces because it happened to be first in the registry is the failure an
- * admin cannot explain afterwards. Who serves is `activeProviderOf`, the rule
- * the editor's palette and the Integrations page read too, so they agree.
+ * Several providers with nobody chosen is a refusal by name, never a silent
+ * pick of the first: a run that posted into one of two connected workspaces
+ * because it happened to be first in the registry is the failure an admin
+ * cannot explain afterwards. Who serves is `oneProviderChoiceOf`, the rule the
+ * tracker and memory read too: a failing provider counts toward ambiguity,
+ * and a sole failing one is refused with its own reason.
  */
 async function activeMessaging(
   pins?: readonly IntegrationConnectionPin[],
@@ -194,10 +196,14 @@ async function activeMessaging(
       retrieval: "unavailable",
     };
   }
-  const active = activeProviderOf(resolved.usable);
-  if (active.kind === "none") return { ok: false, reason: NO_PROVIDER, retrieval: "not_connected" };
-  if (active.kind === "ambiguous") {
-    const names = active.providers.map((entry) => entry.manifest.name).join(" and ");
+  const providers = integrationManifests.filter((manifest) =>
+    manifest.capabilities.includes("messaging"),
+  );
+  const nameOf = (id: string) => providers.find((manifest) => manifest.id === id)?.name ?? id;
+  const choice = oneProviderChoiceOf("messaging", providers, resolved.states);
+  if (choice.kind === "none") return { ok: false, reason: NO_PROVIDER, retrieval: "not_connected" };
+  if (choice.kind === "ambiguous") {
+    const names = choice.ids.map(nameOf).join(" and ");
     return {
       ok: false,
       reason: `${names} both provide messaging on this deployment and no active provider is selected, so nothing was sent`,
@@ -206,7 +212,19 @@ async function activeMessaging(
       retrieval: "unavailable",
     };
   }
-  const only = active.provider;
+  const only = resolved.usable.find((entry) => entry.manifest.id === choice.id);
+  if (choice.kind === "failing" || !only) {
+    const failure =
+      resolved.states.get(choice.id)?.failure?.message ??
+      resolved.connectionFailures.get(choice.id)?.message;
+    return {
+      ok: false,
+      reason: `${nameOf(choice.id)} is the messaging provider on this deployment and is not working${
+        failure ? `: ${failure}` : ""
+      }, so nothing was sent`,
+      retrieval: "unavailable",
+    };
+  }
   // A run pinned the provider it started with. Following a live change instead
   // would move where a workflow posts, mid-run, with nobody told. A provider
   // the run's pins do not name arrived after it started, which is the silent

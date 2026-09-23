@@ -22,7 +22,8 @@
  *   reason recorded there, and this module is the half it reads.
  */
 import type { IntegrationConnectionPin } from "@shared/contracts";
-import { activeProviderOf } from "../definition/integration-availability.js";
+import { integrationManifests } from "@integrations/registry";
+import { oneProviderChoiceOf } from "../definition/integration-availability.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import { ISSUE_TRACKER_PUBLICATIONS, redactingPublications } from "./publication-redaction.js";
 import type {
@@ -87,11 +88,13 @@ export type IssueTrackerRefusal = "not_connected" | "ambiguous" | "unusable" | "
 /**
  * The one integration serving `issue_tracker` on this deployment.
  *
- * Several usable trackers with nobody chosen is a refusal by name, never a
- * silent pick of the first: a run that read a ticket out of one of two
- * connected trackers because it happened to be first in the registry is the
- * failure nobody can explain afterwards. Who serves is `activeProviderOf`,
- * the rule messaging, the palette and the Integrations page read too.
+ * Several trackers with nobody chosen is a refusal by name, never a silent
+ * pick of the first: a run that read a ticket out of one of two connected
+ * trackers because it happened to be first in the registry is the failure
+ * nobody can explain afterwards. Who serves is `oneProviderChoiceOf`, the rule
+ * messaging and memory read too: a failing tracker counts, so two where one is
+ * failing is ambiguous rather than a silent pick of the working one, and a
+ * sole failing tracker is refused with its own reason.
  *
  * WHO CATCHES A THROW OUT OF THIS FUNCTION, and why it is not this function.
  * It answers a refusal for every state it knows about, so a throw means
@@ -126,17 +129,32 @@ export async function resolveActiveIssueTracker(
       reason: `This deployment's integration settings could not be read (${resolved.reason}), so its issue tracker was not used.`,
     };
   }
-  const active = activeProviderOf(resolved.usable);
-  if (active.kind === "none") return { ok: false, refusal: "not_connected", reason: NO_PROVIDER };
-  if (active.kind === "ambiguous") {
-    const names = active.providers.map((entry) => entry.manifest.name).join(" and ");
+  const trackers = integrationManifests.filter((manifest) =>
+    manifest.capabilities.includes("issue_tracker"),
+  );
+  const nameOf = (id: string) => trackers.find((manifest) => manifest.id === id)?.name ?? id;
+  const choice = oneProviderChoiceOf("issue_tracker", trackers, resolved.states);
+  if (choice.kind === "none") return { ok: false, refusal: "not_connected", reason: NO_PROVIDER };
+  if (choice.kind === "ambiguous") {
+    const names = choice.ids.map(nameOf).join(" and ");
     return {
       ok: false,
       refusal: "ambiguous",
       reason: `${names} both provide issue tracking on this deployment and no active provider is selected, so no ticket was read.`,
     };
   }
-  const only = active.provider;
+  const failure = resolved.states.get(choice.id)?.failure?.message;
+  const only = resolved.usable.find((entry) => entry.manifest.id === choice.id);
+  if (choice.kind === "failing" || !only) {
+    const unread = resolved.connectionFailures.get(choice.id)?.message;
+    return {
+      ok: false,
+      refusal: "unusable",
+      reason: `${nameOf(choice.id)} is the issue tracker on this deployment and is not working${
+        failure ?? unread ? `: ${failure ?? unread}` : ""
+      }, so no ticket was read.`,
+    };
+  }
 
   /**
    * THE TRACKER IS PINNED BUT THE PIN IS NEVER COMPARED, and the comparison

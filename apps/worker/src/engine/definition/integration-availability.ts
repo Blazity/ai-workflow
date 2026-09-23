@@ -349,17 +349,74 @@ export function memoryProviderChoice(
     readonly capabilities: readonly string[];
   }>,
 ): MemoryProviderChoice {
-  const chosen = [...integrations].filter(
+  const choice = oneProviderChoice(MEMORY, integrations);
+  switch (choice.kind) {
+    case "none":
+      return { kind: "builtin" };
+    case "one":
+      return { kind: "integration", id: choice.id };
+    default:
+      return choice;
+  }
+}
+
+/**
+ * Who serves a capability that has ONE provider (issue tracker, messaging,
+ * memory). THE ONE RULE for all three, read at every use by the runtimes
+ * (`issue-tracker-runtime.ts`, `messaging.ts`, `memory-runtime.ts` through
+ * `memoryProviderChoice`), so none of them can pick differently.
+ *
+ * An integration counts once an admin has switched it on and configured it,
+ * working or not (`connected` or `failing`); disabled and never connected are
+ * the admin's choice and do not count. Two counted is a choice nobody made, and
+ * a failing one counts toward it: picking the one that happens to work today
+ * is a silent pick that moves the day the other one recovers (plan D4). One
+ * counted and failing is that one, failing: never a fallback to another.
+ * Nothing counted is `none`, which memory reads as its built-in store and the
+ * others as "not connected".
+ */
+export type OneProviderChoice =
+  | { readonly kind: "none" }
+  | { readonly kind: "one"; readonly id: string }
+  | { readonly kind: "failing"; readonly id: string }
+  | { readonly kind: "ambiguous"; readonly ids: readonly string[] };
+
+export function oneProviderChoice(
+  capability: string,
+  integrations: Iterable<{
+    readonly id: string;
+    readonly status: IntegrationStatus;
+    readonly capabilities: readonly string[];
+  }>,
+): OneProviderChoice {
+  const counted = [...integrations].filter(
     (integration) =>
-      integration.capabilities.includes(MEMORY) &&
+      integration.capabilities.includes(capability) &&
       (integration.status === "connected" || integration.status === "failing"),
   );
-  const [only] = chosen;
-  if (!only) return { kind: "builtin" };
-  if (chosen.length > 1) return { kind: "ambiguous", ids: chosen.map((integration) => integration.id) };
-  return only.status === "connected"
-    ? { kind: "integration", id: only.id }
-    : { kind: "failing", id: only.id };
+  const [only] = counted;
+  if (!only) return { kind: "none" };
+  if (counted.length > 1) return { kind: "ambiguous", ids: counted.map((integration) => integration.id) };
+  return only.status === "connected" ? { kind: "one", id: only.id } : { kind: "failing", id: only.id };
+}
+
+/**
+ * `oneProviderChoice` over the manifests this build ships and the states the
+ * resolver read. A manifest with no state was never configured.
+ */
+export function oneProviderChoiceOf(
+  capability: string,
+  manifests: readonly { readonly id: string; readonly capabilities: readonly string[] }[],
+  states: ReadonlyMap<string, { readonly status: IntegrationStatus }>,
+): OneProviderChoice {
+  return oneProviderChoice(
+    capability,
+    manifests.map((manifest) => ({
+      id: manifest.id,
+      capabilities: manifest.capabilities,
+      status: states.get(manifest.id)?.status ?? "not_connected",
+    })),
+  );
 }
 
 /**

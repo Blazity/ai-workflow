@@ -204,10 +204,10 @@ export async function activeMemory(
     if (choice.kind === "ambiguous") {
       // Never a silent pick of the first. A run that wrote into one of two
       // connected engines because it happened to be first in the registry is
-      // the failure an admin cannot explain afterwards, and it is the same
-      // refusal `messaging.ts` and `issue-tracker-runtime.ts` answer. A failing
-      // one counts: picking the one that happens to work today is the same
-      // silent pick, and it moves the day the other one recovers.
+      // the failure an admin cannot explain afterwards. One rule decides it
+      // for memory, the tracker and messaging alike (`oneProviderChoice`): a
+      // failing one counts, because picking the one that happens to work today
+      // is the same silent pick, and it moves the day the other one recovers.
       return refusing({
         code: "ambiguous",
         detail: memoryNotServedReason(

@@ -199,8 +199,12 @@ What constrains the answer, all true today:
     one REPLACES the provider rather than supplying the first one, so a
     deployment that never opens the Integrations page keeps exactly the memory
     it has, and `builtin` is never something an admin has to connect. Two
-    connected engines with none chosen is the refusal every other `one`
-    capability answers; settings that could not be read is a refusal too, and
+    engines switched on and configured (working or failing) with none chosen
+    is the refusal every `one` capability answers, by one rule
+    (`oneProviderChoice` in `integration-availability.ts`, which the tracker
+    and messaging runtimes read as well since the hardening round; before it
+    they counted only working providers, so a failing tracker beside a
+    working one was a silent pick); settings that could not be read is a refusal too, and
     deliberately NOT a fall back to the built-in store, which would split a
     deployment's memory across two stores with nobody told, and would buy
     nothing because the integration settings and the built-in store are rows in

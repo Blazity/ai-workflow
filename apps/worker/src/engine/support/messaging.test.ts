@@ -17,8 +17,32 @@ import {
 const resolveUsableIntegrations = vi.fn();
 /** Every secret the deployment knows, as the source hands it over. */
 const knownSecretValues = vi.fn(async (): Promise<string[]> => []);
+/**
+ * The registry the runtime reads its candidates from, filled from whatever the
+ * fake reader hands out, and the states the real reader would return beside
+ * it: every usable integration is connected unless the test says otherwise.
+ * The runtime asks the one-provider rule (`oneProviderChoiceOf`) over both.
+ */
+const registered = vi.hoisted(() => [] as Array<{ id: string; name: string; capabilities: string[] }>);
+vi.mock("@integrations/registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@integrations/registry")>()),
+  integrationManifests: registered,
+}));
+async function readAsTheResolverWould(...args: unknown[]): Promise<unknown> {
+  const result = (await resolveUsableIntegrations(...args)) as
+    | { readable: boolean; usable?: Array<{ manifest: { id: string; name: string; capabilities: string[] } }>; states?: Map<string, unknown>; connectionFailures?: Map<string, unknown> }
+    | undefined;
+  if (!result?.readable) return result;
+  const states = new Map(result.states ?? []);
+  for (const entry of result.usable ?? []) {
+    if (!registered.some((manifest) => manifest.id === entry.manifest.id)) registered.push(entry.manifest);
+    if (!states.has(entry.manifest.id)) states.set(entry.manifest.id, { status: "connected", usable: true });
+  }
+  return { ...result, states, connectionFailures: result.connectionFailures ?? new Map() };
+}
+
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
-  resolveUsableIntegrations,
+  resolveUsableIntegrations: readAsTheResolverWould,
   knownSecretValues,
   // The comparison itself is the real one: a mocked pin check would prove that
   // this module calls something, not that a moved provider is refused.
@@ -261,6 +285,24 @@ describe("messagingSender", () => {
     });
   });
 
+  it("counts a failing provider, so a working one beside it does not post silently", async () => {
+    const first = vi.fn(async () => ({ delivered: true }) as const);
+    registered.push({ id: "other chat", name: "Other Chat", capabilities: ["messaging"] });
+    resolveUsableIntegrations.mockResolvedValue({
+      readable: true,
+      usable: [provider("Test Chat", { notifyForTicket: first })],
+      states: new Map([["other chat", { status: "failing", usable: false, failure: { message: "the token was refused" } }]]),
+    });
+
+    const delivery = await messagingSender().notifyForTicket("AWT-42", { kind: "started" });
+
+    expect(delivery).toMatchObject({
+      delivered: false,
+      reason: expect.stringMatching(/(Test Chat and Other Chat|Other Chat and Test Chat) both provide messaging/),
+    });
+    expect(first).not.toHaveBeenCalled();
+  });
+
   it("refuses by name when two providers serve messaging and nobody chose", async () => {
     const first = vi.fn(async () => ({ delivered: true }) as const);
     const second = vi.fn(async () => ({ delivered: true }) as const);
@@ -358,4 +400,8 @@ describe("messagingSender", () => {
       reason: "unsupported",
     });
   });
+});
+
+beforeEach(() => {
+  registered.length = 0;
 });
