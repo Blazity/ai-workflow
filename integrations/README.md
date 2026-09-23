@@ -3,12 +3,18 @@
 Every third party the product talks to is one package here, compiled into
 every build; a deployment decides which are connected and enabled.
 
-To write one, read [docs/architecture/integrations.md](../docs/architecture/integrations.md)
-and start with:
+To add one, follow "Start here" in
+[docs/architecture/integrations.md](../docs/architecture/integrations.md#start-here):
+the decisions to make first, the steps from this command to a merged pull
+request, the review checklist, and how it is proven.
 
 ```sh
 pnpm run new:integration -- <id> --name "Display Name"
 ```
+
+That copies [`_template/`](./_template) to `integrations/<id>`. A coding agent
+takes the same path through the `new-integration` skill
+(`.claude/skills/new-integration`).
 
 ## What is here
 
@@ -24,6 +30,7 @@ pnpm run new:integration -- <id> --name "Display Name"
 | `gitlab/` | Version control, chosen per repository, on a self-hosted host. |
 | `github/` | Version control through a GitHub App: a credential that is not a token. |
 | `jira/` | The issue tracker a deployment runs its board on. |
+| `mem0/` | Memory in a hosted engine that only adds, reconciled by its adapter, with recorded fixtures and an in-memory double of the engine. |
 
 The built-in memory provider is not here: it needs core's database, so it lives
 in `apps/worker/src/memory/builtin/`.

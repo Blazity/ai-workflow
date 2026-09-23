@@ -23,7 +23,7 @@ to `docs/archive/agent-notes/`; size ceilings: `.claude/context-budget.tsv`.
 | Dashboard visual language, tokens, shared primitives | [DESIGN.md](DESIGN.md) |
 | Evidence, closing a ticket, a release | [docs/delivery-gates.md](docs/delivery-gates.md), the `gate-ladder` skill |
 | Workflow definitions, blocks, bindings, triggers, loops, validation | [docs/architecture/workflow-definition.md](docs/architecture/workflow-definition.md) |
-| Writing or changing an integration | [docs/architecture/integrations.md](docs/architecture/integrations.md) |
+| Writing or changing an integration | [docs/architecture/integrations.md](docs/architecture/integrations.md), the `new-integration` skill |
 | Repository script groups and the checks blocks run | [docs/architecture/repository-scripts.md](docs/architecture/repository-scripts.md) |
 | Telling users what changed | [changelog/README.md](changelog/README.md) |
 | Why the code is shaped this way | [docs/adr/README.md](docs/adr/README.md) |
