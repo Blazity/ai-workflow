@@ -570,10 +570,24 @@ export function testOutcomeLines(
   const lines = [failureLine(test.failure)];
   if (test.failure.reason === "provider_unreachable") {
     lines.push(
-      "That is the provider not answering, not the credential being refused. The values are stored and will be used once a test passes; try again in a moment.",
+      origin === "save"
+        ? "That is the provider not answering, not the credential being refused. The values are stored and will be used once a test passes; try again in a moment."
+        : "That is the provider not answering, not the credential being refused, so the connection is as it was; try again in a moment.",
     );
   }
   const state = integration.state;
+  // A Test of stored values that are in use, which the provider refused (or
+  // one of which cannot be sent at all), turns the connection Failing: those
+  // values are what every run sends. Said before the generic advice, which
+  // would tell this admin nothing changed.
+  if (origin === "test" && state.source === "stored" && state.connection === "failing") {
+    lines.push(
+      test.failure.reason === "value_malformed"
+        ? "These are the values in use, and one of them cannot be sent as it is: the integration is now Failing, and runs that need it stop until corrected values are saved."
+        : `These are the values in use, and ${integration.name} refused them: the integration is now Failing, and runs that need it stop until new values are saved or a later Test passes.`,
+    );
+    return lines;
+  }
   if (state.connection === "connected") {
     lines.push(
       origin === "save"

@@ -298,6 +298,48 @@ test("a provider that could not be reached is told apart from one that said no",
   assert.match(lines.join(" "), /not the credential being refused/);
 });
 
+test("a Test the provider did not answer says the connection is as it was, not that values are stored", () => {
+  // Nothing was saved by pressing Test, so "the values are stored and will be
+  // used once a test passes" described a save that never happened.
+  const lines = testOutcomeLines(
+    { ok: false, failure: { reason: "provider_unreachable", message: "The provider did not answer" } },
+    integration({ state: state({ source: "stored" }) }),
+    "test",
+  ).join(" ");
+  assert.match(lines, /not the credential being refused, so the connection is as it was; try again in a moment/);
+  assert.doesNotMatch(lines, /The values are stored/);
+});
+
+test("a Test that the provider refuses turns the stored values in use Failing, and says so", () => {
+  // The worker resolves a refused Test of the values in use as Failing, and
+  // runs stop on it. "Nothing changed: a test that fails changes no value" was
+  // true of the values and false of everything an admin cares about.
+  const failing = integration({
+    state: state({ source: "stored", status: "failing", connection: "failing", usable: false }),
+  });
+
+  const refused = testOutcomeLines(
+    { ok: false, failure: { reason: "credential_rejected", message: "401 Unauthorized" } },
+    failing,
+    "test",
+  ).join(" ");
+  assert.match(
+    refused,
+    /These are the values in use, and Demo refused them: the integration is now Failing, and runs that need it stop until new values are saved or a later Test passes\./,
+  );
+  assert.doesNotMatch(refused, /Nothing changed/);
+
+  const malformed = testOutcomeLines(
+    { ok: false, failure: { reason: "value_malformed", message: "The API token holds a line break" } },
+    failing,
+    "test",
+  ).join(" ");
+  assert.match(
+    malformed,
+    /one of them cannot be sent as it is: the integration is now Failing, and runs that need it stop until corrected values are saved\./,
+  );
+});
+
 test("a refusal on a deployment with nothing connected does not claim something carries on", () => {
   const lines = testOutcomeLines(
     { ok: false, failure: { reason: "credential_rejected", message: "401 unauthorised" } },
