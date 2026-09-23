@@ -566,7 +566,7 @@ function pressBrowserBack(): { reachedRouter: boolean } {
   let stopped = false;
   const event = { stopImmediatePropagation: () => { stopped = true; } } as unknown as Event;
   act(() => {
-    for (const listener of [...popstateListeners]) {
+    for (const listener of popstateListeners) {
       if (!stopped) listener(event);
     }
   });
