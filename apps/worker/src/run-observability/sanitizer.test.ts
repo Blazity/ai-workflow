@@ -140,6 +140,26 @@ describe("sanitizeReplayValue", () => {
     expect(envelope.metadata.redactions.phone).toBeUndefined();
   });
 
+  it("does not mistake a cost_usd float's decimal drift for a payment card", () => {
+    // A summed cost is prone to float64 drift (2.5286000000000004): the
+    // fractional digits alone are 16 long, start with 5 (a card network
+    // digit), and happen to pass Luhn, so a raw agent log line carrying this
+    // field as text used to get redacted as [REDACTED:payment_card]. Logs are
+    // captured as text, so this reproduces it the way runs.logs receives it:
+    // JSON-shaped text rather than a live number the redactor never touches.
+    const line = JSON.stringify({ cost_usd: 2.5286000000000004, model: "claude-sonnet" });
+    const envelope = sanitizeReplayValue(line);
+    expect(envelope.value).toBe(line);
+    expect(envelope.metadata.redactions.payment_card).toBeUndefined();
+
+    // A real card-shaped run of digits right next to a cost field still gets
+    // caught, so the fix is scoped to the decimal boundary, not to context.
+    const cardLine = "cost_usd: 1.20, card on file: 4242 4242 4242 4242";
+    const cardEnvelope = sanitizeReplayValue(cardLine);
+    expect(cardEnvelope.value).not.toContain("4242 4242 4242 4242");
+    expect(cardEnvelope.metadata.redactions.payment_card).toBeGreaterThan(0);
+  });
+
   it.each([
     "budget_exceeded: the run took 31 min 12 s, over the 30 min limit from " +
       "JOB_TIMEOUT_MS (this workflow sets no budgets.maxDurationMs). Raise " +

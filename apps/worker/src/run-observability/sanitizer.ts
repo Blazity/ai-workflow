@@ -382,7 +382,17 @@ export const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-
  */
 export const PERSONAL_DATA_RULES: readonly SanitizerTextRule[] = [
   { kind: "iban", pattern: /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b/gi, accept: isLikelyIban },
-  { kind: "payment_card", pattern: /(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)/g, accept: isLikelyPaymentCard },
+  {
+    kind: "payment_card",
+    // A decimal amount (a cost_usd sum, prone to float64 drift: 0.1 + 0.2 =
+    // 0.30000000000000004) leaves a long digit run on one side of its ".",
+    // which can be 13-19 digits, start 2-6, and pass Luhn by chance. Real card
+    // numbers never sit directly against a decimal point, so the two
+    // lookarounds around the digit-and-separator group refuse to start or end
+    // a match there while still matching one written with spaces or dashes.
+    pattern: /(?<!\d)(?<!\.)(?:\d[ -]?){12,18}\d(?!\d)(?!\.)/g,
+    accept: isLikelyPaymentCard,
+  },
   {
     kind: "email",
     // The local part starts after a character that cannot belong to it, or
