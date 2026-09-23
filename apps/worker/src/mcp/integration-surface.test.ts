@@ -16,6 +16,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   states: new Map<string, unknown>(),
   readFails: false,
+  capabilities: [] as unknown[],
+  capabilitiesFail: false,
 }));
 
 vi.mock("../infra/vcs-config.js", () => ({
@@ -87,7 +89,11 @@ vi.mock("@integrations/registry", async () => {
   };
 });
 
-import type { IntegrationState, IntegrationStatus } from "@shared/contracts";
+import type {
+  IntegrationCapabilityDto,
+  IntegrationState,
+  IntegrationStatus,
+} from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { createTestDb } from "../db/test-db.js";
 import { organization } from "../db/schema.js";
@@ -150,6 +156,8 @@ beforeEach(async () => {
     .insert(organization)
     .values({ id: "org-execute", name: "Execute", slug: "execute" });
   state.readFails = false;
+  state.capabilities = [];
+  state.capabilitiesFail = false;
   declare("connected");
 });
 
@@ -169,6 +177,10 @@ async function connectedClient(): Promise<Client> {
     loadDeploymentIntegrations: async () => {
       if (state.readFails) throw new Error("connection terminated unexpectedly");
       return testDeploymentIntegrations([...state.states.values()] as IntegrationState[]);
+    },
+    loadCapabilityOverview: async () => {
+      if (state.capabilitiesFail) throw new Error("connection terminated unexpectedly");
+      return { capabilities: state.capabilities as IntegrationCapabilityDto[] };
     },
   });
   // The real server: every tool an agent can reach, registered exactly once and
@@ -255,6 +267,7 @@ describe("what an agent learns from one question", () => {
 
     expect(Object.keys(data).sort()).toEqual([
       "authoringAnnouncements",
+      "capabilities",
       "contractHash",
       "deploymentClass",
       "enabledDomains",
@@ -263,6 +276,71 @@ describe("what an agent learns from one question", () => {
       "readScopes",
       "serverVersion",
     ]);
+  });
+
+  it("says which provider serves each capability, and never an admin's failure sentence", async () => {
+    // The Integrations page could say memory runs on the built-in store, or
+    // that a chosen engine refused; an agent building a workflow could not.
+    // The refusal's own sentence carries the provider's failure text, which
+    // is where a variable name lives, so it is replaced whole.
+    state.capabilities = [
+      {
+        id: "memory",
+        label: "Memory",
+        cardinality: "one",
+        declaredBy: ["demo"],
+        serving: {
+          kind: "refused",
+          ids: ["demo"],
+          reason:
+            "Demo is switched on for memory and its connection is failing (Set DEMO_API_TOKEN on this deployment), so memory was not used",
+        },
+      },
+      {
+        id: "issue_tracker",
+        label: "Issue tracker",
+        cardinality: "one",
+        declaredBy: [],
+        serving: { kind: "none" },
+      },
+    ];
+    const client = await connectedClient();
+
+    const data = dataOf(await client.callTool({ name: "system.capabilities", arguments: {} }));
+
+    expect(JSON.stringify(data.capabilities)).not.toMatch(/DEMO_API_TOKEN/i);
+    expect(data.capabilities).toEqual([
+      {
+        id: "memory",
+        label: "Memory",
+        cardinality: "one",
+        declaredBy: ["demo"],
+        serving: {
+          kind: "refused",
+          ids: ["demo"],
+          reason:
+            "the provider chosen for it is not working, so nothing serves it; an admin can fix it on the Integrations page in the dashboard",
+        },
+      },
+      {
+        id: "issue_tracker",
+        label: "Issue tracker",
+        cardinality: "one",
+        declaredBy: [],
+        serving: { kind: "none" },
+      },
+    ]);
+  });
+
+  it("answers null for the capabilities it could not read, and the rest as usual", async () => {
+    state.capabilitiesFail = true;
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "system.capabilities", arguments: {} });
+
+    expect(result.isError).not.toBe(true);
+    expect(dataOf(result).capabilities).toBeNull();
+    expect(dataOf(result).integrations).not.toBeNull();
   });
 
   it("still answers the rest when the integration state cannot be read", async () => {

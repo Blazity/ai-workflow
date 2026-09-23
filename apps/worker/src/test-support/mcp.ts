@@ -49,6 +49,9 @@ export function depsFor(
     // about integrations means. A test that IS about them overrides this with
     // `testDeploymentIntegrations([...])`, one line, no module mocked.
     loadDeploymentIntegrations: async () => testDeploymentIntegrations(),
+    // Nothing to report, which is what a test that is not about capabilities
+    // means; one that is overrides it with the rows it is about.
+    loadCapabilityOverview: async () => ({ capabilities: [] }),
     requestId: "request-execute",
     traceId: "trace-execute",
     now,

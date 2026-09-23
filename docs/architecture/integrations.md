@@ -901,8 +901,11 @@ Connecting, testing, enabling and choosing a provider are dashboard actions
 only, so a credential never passes through a chat with a model.
 `system.capabilities` lists your integration, whether it is usable, the
 capabilities it declares and its blocks, computed by the same resolver as the
-editor's palette. Anything an agent reads has your declared variable names
-replaced, which is why a name shorter than four characters is refused.
+editor's palette, and, per capability, which provider serves it on this
+deployment (the Integrations page's Capabilities rows). Anything an agent
+reads has your declared variable names replaced, which is why a name shorter
+than four characters is refused, and a refusal sentence about your connection
+is replaced whole by one that names no configuration.
 
 ## Testing without our production credentials
 

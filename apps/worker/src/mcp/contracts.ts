@@ -8,7 +8,7 @@
  * tools keep importing them from one place, and adds the one type that only makes
  * sense up here: what a registered tool is handed when it runs.
  */
-import type { SettingsSnapshot } from "@shared/contracts";
+import type { IntegrationCapabilitiesResponse, SettingsSnapshot } from "@shared/contracts";
 import type { Adapters } from "../services/vcs/adapters.js";
 import type { McpActorContext } from "../services/mcp/contracts.js";
 import type { McpToolServices } from "../services/mcp/tool-services.js";
@@ -80,6 +80,12 @@ export type McpToolDependencies = {
    * this build shipped its first integration.
    */
   loadDeploymentIntegrations: () => Promise<DeploymentIntegrations>;
+  /**
+   * Which provider serves each capability, the built-in memory store included:
+   * the answer the dashboard's Integrations page shows, on demand. A thunk for
+   * the reason the two above are: only `system.capabilities` asks.
+   */
+  loadCapabilityOverview: () => Promise<IntegrationCapabilitiesResponse>;
   requestId: string;
   traceId: string;
   now: () => Date;
