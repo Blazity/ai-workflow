@@ -20,9 +20,11 @@
  * that and because memory must not be able to change a run's outcome. A
  * database error and an oversized document are both answers there.
  *
- * It does not scrub secrets. Every observation reaches every provider, this
- * one included, with this deployment's secrets already taken out, in one place
- * (`withoutKnownSecrets` in `engine/support/memory-runtime.ts`).
+ * What it is sent is already clean: core takes this deployment's secrets out
+ * of every observation before any provider sees it (`withoutKnownSecrets` in
+ * `engine/support/memory-runtime.ts`). What it already HOLDS is its own to
+ * clean, and it does, at the next write into a document
+ * (`heldItems`, with the same rule from `memory/known-secrets.ts`).
  *
  * `store` is the other half and it DOES throw, which the port also says: its
  * three methods have no failure shape to answer with, so the alternative is to
@@ -46,6 +48,7 @@ import type {
   MemoryWrite,
 } from "@integrations/sdk";
 import { prepareMemoryContent, utf8Bytes } from "../content.js";
+import { takeOutKnownSecrets } from "../known-secrets.js";
 import {
   mergeRepoMemoryItems,
   parseRepoMemoryDocument,
@@ -293,16 +296,15 @@ async function storeItems(
   kind: RepoMemoryDocKind,
   observation: Extract<MemoryObserveRequest["observation"], { kind: "items" }>,
 ): Promise<MemoryWrite> {
-  const { getConnectedMemoryDocument, upsertConnectedMemoryDocument } = await import(
-    "../../db/repositories/memory.js"
-  );
-  const stored = await getConnectedMemoryDocument(request.subject.key, kind);
+  const { upsertConnectedMemoryDocument } = await import("../../db/repositories/memory.js");
+  let held = await heldItems(request.subject.key, kind);
+  if (!held.ok) return held.refusal;
 
   if (observation.onlyIfEmpty) {
     // Create only. A document that appears between the read and the insert
     // belongs to whoever wrote it: what a run distilled is strictly better than
     // what a deterministic seed derives, so it is never merged into.
-    if (stored) return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
+    if (held.exists) return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
     const items: RepoMemoryItem[] = observation.learned.map((text) => ({
       text,
       runId: request.runId,
@@ -330,11 +332,8 @@ async function storeItems(
     };
   }
 
-  let existing = stored ? parseRepoMemoryDocument(stored.content) : [];
-  // `stored?.version ?? 0` is the required idiom: the key may never be present
-  // with an undefined value, and 0 is what means "create it".
-  let expectedVersion = stored?.version ?? 0;
   for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
+    const existing = held.items;
     /**
      * FORGETTING ON REQUEST NEVER COSTS MORE THAN WHAT WAS ASKED FOR.
      *
@@ -364,7 +363,9 @@ async function storeItems(
       subject: request.subject.label,
       kind,
     });
-    if (sameItems(merged.items, existing)) {
+    // Against what is stored, not what was cleaned: a document that held a
+    // secret it now knows is written even when nothing else changed.
+    if (sameItems(merged.items, held.stored)) {
       return {
         ok: true,
         stored: false,
@@ -381,7 +382,7 @@ async function storeItems(
       ticketKey: request.ticketKey,
       content: prepared.content,
       sourceRunId: request.runId,
-      expectedVersion,
+      expectedVersion: held.version,
     });
     if (result.applied) {
       // Counts only once the swap applied: a contended or refused write deleted
@@ -405,13 +406,53 @@ async function storeItems(
         detail: `another writer won this document ${MAX_WRITE_ATTEMPTS} times, so this run's observation was not stored`,
       };
     }
-    const fresh = await getConnectedMemoryDocument(request.subject.key, kind);
-    existing = fresh ? parseRepoMemoryDocument(fresh.content) : [];
-    expectedVersion = fresh?.version ?? 0;
+    held = await heldItems(request.subject.key, kind);
+    if (!held.ok) return held.refusal;
   }
   // Unreachable: the loop returns on every path. Present so the function has
   // one type rather than an implicit undefined.
   return { ok: false, code: "contended", detail: "the document could not be written" };
+}
+
+type HeldItems =
+  | {
+      readonly ok: true;
+      /** Whether a document exists, empty or not. */
+      readonly exists: boolean;
+      /** The items as stored, to tell whether a write changes anything. */
+      readonly stored: readonly RepoMemoryItem[];
+      /** The same items with the secrets this deployment knows now taken out:
+       *  what is merged into, sized and written back. */
+      readonly items: RepoMemoryItem[];
+      /** `0` means "create it". */
+      readonly version: number;
+    }
+  | { readonly ok: false; readonly refusal: MemoryWrite };
+
+/**
+ * One facts or lessons document as it is held, cleaned.
+ *
+ * A value stored before it became a known secret is taken out here, at the
+ * next write, as this store did when every write re-rendered and scrubbed the
+ * whole document. Merging into the cleaned items also keeps a retraction
+ * working: core cleans `refuted`, so a run that disproved such an item names it
+ * cleaned, and a raw stored copy would never match it.
+ *
+ * Nothing stored means nothing to clean, so the secret set is not read.
+ */
+async function heldItems(subjectKey: string, kind: RepoMemoryDocKind): Promise<HeldItems> {
+  const { getConnectedMemoryDocument } = await import("../../db/repositories/memory.js");
+  const document = await getConnectedMemoryDocument(subjectKey, kind);
+  const stored = document ? parseRepoMemoryDocument(document.content) : [];
+  // `document?.version ?? 0` is the required idiom: the key may never be
+  // present with an undefined value, and 0 is what means "create it".
+  const version = document?.version ?? 0;
+  if (stored.length === 0) return { ok: true, exists: document !== null, stored, items: [], version };
+  const cleaned = await takeOutKnownSecrets((clean) =>
+    stored.map((item) => ({ ...item, text: clean(item.text) })),
+  );
+  if (!cleaned.ok) return cleaned;
+  return { ok: true, exists: true, stored, items: cleaned.value, version };
 }
 
 /** What the items already stored render to, so a retraction is bounded by what

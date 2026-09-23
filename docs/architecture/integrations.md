@@ -316,7 +316,10 @@ do them and cannot get them wrong:
   reading `knownSecretValues()`). When that set cannot be read, the write
   answers `unavailable` and nothing is sent; text the redaction cannot process
   is `rejected`. Addresses (the subject key, a notebook's name, the run id, the
-  ticket key) are left as they are.
+  ticket key) are left as they are. What your engine stored before a value
+  became a known secret stays as it was: core cleans what it sends, and cannot
+  reach what you hold. (The built-in store cleans its own at the next write
+  into a document, with the same rule, `apps/worker/src/memory/known-secrets.ts`.)
 - **Size in a prompt is capped.** One agent prompt carries at most
   `MEMORY_PROMPT_BUDGET_BYTES` of renderings: 16 KiB of facts and 16 KiB of
   lessons, summed over the owner and every repository in the prompt. A

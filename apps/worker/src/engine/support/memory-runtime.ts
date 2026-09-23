@@ -29,7 +29,7 @@ import type {
   IntegrationUnavailableReason,
 } from "@shared/contracts";
 import type { IntegrationRedaction } from "../../services/integrations/runtime.js";
-import { redactConfiguredSecretsInText } from "../../run-observability/sanitizer.js";
+import { takeOutKnownSecrets } from "../../memory/known-secrets.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import type {
   IntegrationManifest,
@@ -381,13 +381,10 @@ function wrap(
 
 /**
  * The observation with every secret this deployment knows taken out of its
- * text, before any provider sees it. THE ONE PLACE memory text is cleaned, for
- * every provider, the built-in store included.
- *
- * It lives here rather than in each provider because a provider cannot do it:
- * a token an admin stored in the dashboard is decrypted from core's database
- * and never reaches the environment, and an integration is handed neither.
- * An engine written from the guide sends what it receives to a third party.
+ * text, before any provider sees it: every observation, every provider, the
+ * built-in store included. The rule, its secret source and its refusals live
+ * in `memory/known-secrets.ts`, which says why a provider cannot do this
+ * itself.
  *
  * Only the text is cleaned: `learned`, `refuted` and a document's `text`.
  * `refuted` is cleaned too because it is matched against what was stored, and
@@ -395,10 +392,8 @@ function wrap(
  * run id and the ticket key are core's addresses, compared exactly; rewriting
  * one would orphan everything stored under it.
  *
- * FAILS CLOSED, and says which way: a secret set that cannot be read is
- * `unavailable` (the same write may go through on a later step), text the
- * redaction could not process is `rejected` (it would fail the same way
- * again). Nothing is sent in either case.
+ * Nothing is sent when the secrets cannot be read or the text cannot be
+ * cleaned: the refusal is the answer.
  */
 async function withoutKnownSecrets(
   request: MemoryObserveRequest,
@@ -406,29 +401,10 @@ async function withoutKnownSecrets(
   | { readonly ok: true; readonly request: MemoryObserveRequest }
   | { readonly ok: false; readonly refusal: MemoryWrite }
 > {
-  let secrets: readonly string[];
-  try {
-    const { knownSecretValues } = await import("../../services/integrations/runtime.js");
-    secrets = await knownSecretValues();
-  } catch (error) {
-    // The source's own message is fixed and names no database detail.
-    const reason = error instanceof Error ? error.message : String(error);
-    return {
-      ok: false,
-      refusal: {
-        ok: false,
-        code: "unavailable",
-        detail: `${reason} So nothing was sent to memory.`,
-      },
-    };
-  }
-  if (secrets.length === 0) return { ok: true, request };
-  try {
-    const clean = (text: string) => redactConfiguredSecretsInText(text, secrets);
-    const { observation } = request;
-    return {
-      ok: true,
-      request: {
+  const cleaned = await takeOutKnownSecrets(
+    (clean): MemoryObserveRequest => {
+      const { observation } = request;
+      return {
         ...request,
         observation:
           observation.kind === "items"
@@ -438,18 +414,10 @@ async function withoutKnownSecrets(
                 refuted: observation.refuted.map(clean),
               }
             : { ...observation, text: clean(observation.text) },
-      },
-    };
-  } catch {
-    return {
-      ok: false,
-      refusal: {
-        ok: false,
-        code: "rejected",
-        detail: "the text could not be scrubbed of this deployment's secrets, so it was not stored",
-      },
-    };
-  }
+      };
+    },
+  );
+  return cleaned.ok ? { ok: true, request: cleaned.value } : cleaned;
 }
 
 function guardedStore(store: MemoryStoreAdapter, budget: MemoryBudget): MemoryStoreAdapter {

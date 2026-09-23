@@ -15,8 +15,8 @@ const utf8Decoder = new TextDecoder();
  * agent reads this document back.
  *
  * Secrets are not this module's: every observation reaches a provider with
- * them already taken out, in one place for every provider
- * (`withoutKnownSecrets` in `engine/support/memory-runtime.ts`).
+ * them already taken out, and the built-in store cleans what it already holds,
+ * both by the one rule in `memory/known-secrets.ts`.
  */
 export function prepareMemoryContent(
   raw: string,
