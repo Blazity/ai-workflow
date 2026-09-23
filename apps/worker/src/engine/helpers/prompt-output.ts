@@ -626,7 +626,7 @@ export function resolveOpenPrBody(
  * snapshot, whose replayed snapshot carries none. A provider renders `[KEY]()`
  * as a link to the pull request itself, so the key is shown plainly instead.
  */
-export function withoutEmptyLinks(markdown: string): string {
+function withoutEmptyLinks(markdown: string): string {
   return markdown.replace(/\[([^\]\n]+)\]\(\s*\)/g, "$1");
 }
 
