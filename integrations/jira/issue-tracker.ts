@@ -810,16 +810,18 @@ function truncateExcerpt(text: string): string {
  * person put around a label (a heading, a bullet, bold) is part of the label.
  */
 const ACCEPTANCE_LABEL =
-  /acceptance criteria[*_]*:?|^[ \t>#*_-]*(?:acceptance|ac)[*_]*(?:[ \t]*:[*_]*|[ \t]*$)/im;
+  /acceptance criteria[*_]*:?[*_]*|^[ \t>#*_-]*(?:acceptance|ac)[*_]*(?:[ \t]*:[*_]*|[ \t]*$)/im;
 
 /** The criteria are what follows the label and any blank lines after it, up
  *  to the next blank line or markdown heading, or to the end of the
- *  description. */
+ *  description. A heading right after the label is the next section, so the
+ *  label had nothing under it. */
 function extractAcceptanceCriteria(description: any): string {
   const text = extractAdfText(description);
   const label = ACCEPTANCE_LABEL.exec(text);
   if (!label) return "";
   const rest = text.slice(label.index + label[0].length).replace(/^\s+/, "");
+  if (/^#+\s/.test(rest)) return "";
   const match = rest.match(/^([\s\S]*?)(?:\n\n|\n#|$)/);
   return match?.[1]?.trim() ?? "";
 }

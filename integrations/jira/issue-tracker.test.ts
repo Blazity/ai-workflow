@@ -646,6 +646,27 @@ describe("JiraAdapter", () => {
       },
     );
 
+    it.each([["**Acceptance Criteria:**"], ["**AC:**"]])(
+      "reads the criteria after a bold %j label, not the closing marker",
+      async (label) => {
+        mockFetch.mockResolvedValueOnce(
+          withDescription(["Build the pricing table.", "", label, "", "Totals match the CSV", "", "Notes: none"]),
+        );
+
+        const ticket = await jiraAdapter().fetchTicket("PROJ-1");
+
+        expect(ticket.acceptanceCriteria).toBe("Totals match the CSV");
+      },
+    );
+
+    it("reads an empty section as no criteria rather than taking the next heading", async () => {
+      mockFetch.mockResolvedValueOnce(withDescription(["AC:", "", "## Notes", "Use the staging prices"]));
+
+      const ticket = await jiraAdapter().fetchTicket("PROJ-1");
+
+      expect(ticket.acceptanceCriteria).toBe("");
+    });
+
     it("still reads the criteria a sentence introduces", async () => {
       mockFetch.mockResolvedValueOnce(
         withDescription(["These are the acceptance criteria:", "Totals match the CSV", "", "Notes: none"]),
