@@ -8,11 +8,7 @@ import type {
   HarnessProvider,
 } from "@shared/contracts";
 import { buildHarnessProfileDraftV2 } from "@shared/contracts";
-import {
-  BUILTIN_HARNESS_PROFILE_MANIFESTS,
-  isRecognisedModel,
-  selectable,
-} from "@shared/harness";
+import { BUILTIN_HARNESS_PROFILE_MANIFESTS } from "@shared/harness";
 
 export function draftFromManifest(
   manifest: HarnessProfileManifest,
@@ -82,7 +78,8 @@ export function upgradeProfileDraft(
   draft: HarnessProfileDraftManifestV1,
   capabilities: HarnessCapabilitiesResponse,
 ): HarnessProfileDraftManifestV2 | null {
-  if (!isRecognisedModel(capabilities.provider, draft.model.id)) return null;
+  // Upgraded only onto a model the catalog advertises; the builder answers
+  // null for any other, and the draft stays readable as it was.
   return buildHarnessProfileDraftV2(draft, capabilities);
 }
 
@@ -91,11 +88,7 @@ export function withHarnessModel(
   capabilities: HarnessCapabilitiesResponse,
   modelId: string,
 ): HarnessProfileDraftManifestV2 | null {
-  const model = capabilities.models.find(
-    (candidate) =>
-      candidate.id === modelId &&
-      isRecognisedModel(capabilities.provider, candidate.id),
-  );
+  const model = capabilities.models.find((candidate) => candidate.id === modelId);
   if (
     capabilities.stale ||
     capabilities.provider !== draft.harness.provider ||
@@ -132,16 +125,42 @@ export function withHarnessModel(
   };
 }
 
+/**
+ * The models a profile may pick: the capability catalog's own, in its order,
+ * each once. The catalog is what the worker accepts on publish, so it is the
+ * only list; the Claude CLI reports aliases (`default`, `opus[1m]`, `sonnet`,
+ * `haiku`), and a filter against API ids offered none of them.
+ */
 export function selectableHarnessModels(
   capabilities: HarnessCapabilitiesResponse,
 ): HarnessCapabilitiesResponse["models"] {
-  return selectable({
-    provider: capabilities.provider,
-    modelIds: capabilities.models.map((model) => model.id),
-  }).flatMap((modelId) => {
-    const model = capabilities.models.find((candidate) => candidate.id === modelId);
-    return model ? [model] : [];
+  const seen = new Set<string>();
+  return capabilities.models.filter((model) => {
+    if (seen.has(model.id)) return false;
+    seen.add(model.id);
+    return true;
   });
+}
+
+/**
+ * What the Model field says about the profile's model, and the warning under
+ * it. A model the catalog lists reads as its name. One it does not list is
+ * either the built-in profile's (an API id the CLI accepts, which runs use
+ * every day, so no warning) or a custom profile's from an older catalog, which
+ * has to be replaced before the next publish.
+ */
+export function modelSelectionLabel(
+  modelId: string,
+  catalog: HarnessCapabilitiesResponse["models"],
+  builtIn: boolean,
+): { readonly label: string; readonly warning: string | null } {
+  const listed = catalog.find((model) => model.id === modelId);
+  if (listed) return { label: listed.name, warning: null };
+  if (builtIn) return { label: `${modelId} · set by the built-in profile`, warning: null };
+  return {
+    label: `${modelId} · not in the current catalog`,
+    warning: "Historical selection; choose a current model before publishing.",
+  };
 }
 
 export function isProfileSlug(value: string): boolean {

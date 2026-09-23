@@ -4,7 +4,8 @@
  * the browser's, so the same test time read two hours apart on the
  * Integrations list and the connection page, with no zone to tell why. UTC
  * with its name is the one both sides agree on, and renders the same text on
- * the server and in the browser.
+ * the server and in the browser. The name is written here rather than asked
+ * of `timeZoneName`, whose short name is left to each runtime.
  */
 const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
@@ -14,7 +15,6 @@ const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
   second: "2-digit",
   timeZone: "UTC",
-  timeZoneName: "short",
 });
 const MINUTES_PER_HOUR = 60;
 const HOURS_PER_DAY = 24;
@@ -24,7 +24,7 @@ const MS_PER_HOUR = 60 * 60 * 1000;
 /** One date-and-time presentation for operator-facing dashboard screens. */
 export function formatDateTime(value: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : DATE_TIME_FORMATTER.format(date);
+  return Number.isNaN(date.getTime()) ? value : `${DATE_TIME_FORMATTER.format(date)} UTC`;
 }
 
 /** Compact relative age for run and clarification timestamps. */

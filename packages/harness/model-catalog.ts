@@ -8,6 +8,11 @@ import {
 
 export { BUILTIN_HARNESS_PROFILE_IDS } from "@shared/contracts";
 
+// The product policy over provider API ids: what the workflow editor offers
+// from the providers' `/v1/models` listings (`selectable`). It is not the rule
+// for harness profiles: those pick from the capability catalog, which is what
+// the provider's CLI reports (for Claude, aliases such as `sonnet`), and no API
+// id here would ever match one.
 export const recognised = {
   claude: [
     "claude-fable-5",
@@ -50,7 +55,7 @@ export interface ModelProviderContract {
   modelIds: readonly string[];
 }
 
-export function isRecognisedModel(
+function isRecognisedModel(
   provider: HarnessProvider,
   modelId: string,
 ): boolean {

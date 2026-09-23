@@ -6,16 +6,19 @@ import type {
   SystemHealthResponse,
 } from "@shared/contracts";
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { CkChip, type ChipTone } from "@/components/ui";
 import {
   buildSetupOverview,
+  STALE_SCAN_AFTER_HOURS,
   scanAgeLine,
   type SetupOverviewTone,
 } from "@/lib/settings/overview";
 
 const subscribeNever = () => () => {};
+/** The longest a browser timer waits (2^31 - 1 ms, about 24.8 days). */
+const MAX_TIMER_MS = 2_147_483_647;
 
 const TONES: Record<SetupOverviewTone, ChipTone> = {
   ok: "success",
@@ -56,6 +59,17 @@ export function SetupOverview({
   // the page is in the browser; before that the line says only when.
   const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
   const age = scanReadable ? scanAgeLine(scan, hydrated ? Date.now() : null) : null;
+  // A page left open past the stale mark re-reads the clock once, at that
+  // mark: one timer, cleared with the scan, and nothing when it is already
+  // stale or the mark is further off than a timer can wait.
+  const [, restamp] = useState(0);
+  const staleAt = scan ? Date.parse(scan.generatedAt) + STALE_SCAN_AFTER_HOURS * 60 * 60 * 1000 : NaN;
+  useEffect(() => {
+    const wait = staleAt - Date.now();
+    if (!(wait > 0) || wait > MAX_TIMER_MS) return;
+    const timer = setTimeout(() => restamp((count) => count + 1), wait + 1000);
+    return () => clearTimeout(timer);
+  }, [staleAt]);
 
   return (
     <section className="rounded-[4px] border border-neutral-200 bg-panel">

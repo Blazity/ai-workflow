@@ -9,6 +9,7 @@ import {
   isProfileSlug,
   newProfileDraft,
   upgradeProfileDraft,
+  modelSelectionLabel,
   selectableHarnessModels,
   withHarnessModel,
   withHarnessProvider,
@@ -449,6 +450,11 @@ export function ProfileEditor({
     capabilities.cliVersion === draft.harness.cliVersion
       ? selectableHarnessModels(capabilities)
       : [];
+  // Until the catalog answers there is nothing to compare against, so the
+  // field names the stored id and warns about nothing.
+  const modelLabel = capabilities
+    ? modelSelectionLabel(draft.model.id, catalogModels, profile.system)
+    : { label: draft.model.id, warning: null };
   const filteredModels = catalogModels.filter((model) => {
     const query = modelSearch.trim().toLowerCase();
     return (
@@ -1230,11 +1236,7 @@ export function ProfileEditor({
                     hint: model.id,
                   }))}
                   value={draft.model.id}
-                  placeholder={
-                    catalogModels.find(
-                      (model) => model.id === draft.model.id,
-                    )?.name ?? `${draft.model.id} · unavailable`
-                  }
+                  placeholder={modelLabel.label}
                   disabled={
                     !editable ||
                     capabilityLoading ||
@@ -1249,12 +1251,9 @@ export function ProfileEditor({
                     if (model) selectModel(model);
                   }}
                 />
-                {!catalogModels.some(
-                  (model) => model.id === draft.model.id,
-                ) && (
+                {modelLabel.warning && (
                   <span className="font-body text-[10px] leading-[1.35] text-amber-700">
-                    Historical selection; choose a current model before
-                    publishing.
+                    {modelLabel.warning}
                   </span>
                 )}
               </div>

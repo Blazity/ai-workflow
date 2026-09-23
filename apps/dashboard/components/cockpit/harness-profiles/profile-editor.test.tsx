@@ -11,7 +11,6 @@ import {
   pinsDeploymentSkill,
 } from "./profile-editor";
 import type {
-  HarnessCapabilitiesResponse,
   HarnessLocalSkillDiscoveryResponse,
   HarnessProfileDetailResponse,
   HarnessProfileDto,
@@ -22,30 +21,11 @@ import {
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
 } from "@shared/harness";
 import { isGitHubSkillSource } from "@shared/skills";
-import { selectableHarnessModels } from "@/lib/harness-profiles/editor";
 import { installTestDom } from "@/components/ui/test-dom";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 const disabledAttribute = /\sdisabled=""/;
-
-function modelCapability(
-  id: string,
-): HarnessCapabilitiesResponse["models"][number] {
-  return {
-    id,
-    name: `Name ${id}`,
-    description: null,
-    contextWindowTokens: null,
-    reasoningEfforts: [],
-    defaultReasoningEffort: null,
-    serviceTiers: [],
-    defaultServiceTier: null,
-    verbosityOptions: [],
-    defaultVerbosity: null,
-    compactionModes: ["model_default"],
-  };
-}
 
 function profile(
   overrides: Partial<HarnessProfileDto> = {},
@@ -136,11 +116,10 @@ test("editable profiles expose the complete manifest and skill authoring", () =>
   assert.match(html, /Safe home files/);
   assert.match(html, /Add skills/);
   assert.match(html, /Provider default/);
-  assert.match(html, /gpt-5\.4 · unavailable/);
-  assert.match(
-    html,
-    /Historical selection; choose a current model before publishing/,
-  );
+  // The catalog has not answered in a first render, so the stored model is
+  // named plainly and not called unavailable or historical.
+  assert.doesNotMatch(html, /unavailable ·|· unavailable/);
+  assert.doesNotMatch(html, /Historical selection/);
   assert.match(html, /None available/);
   assert.match(html, /filesystem/);
   assert.match(html, /openai/);
@@ -238,29 +217,6 @@ test("harness profile screen busy skill import ignores Escape and backdrop mouse
     mock.restoreAll();
     dom.restore();
   }
-});
-
-test("the rendered Listbox receives the exact filtered model option sequence", () => {
-  const harness =
-    BUILTIN_HARNESS_PROFILE_MANIFESTS[BUILTIN_HARNESS_PROFILE_IDS.codex]
-      .harness;
-  const capabilities: HarnessCapabilitiesResponse = {
-    ...harness,
-    models: [
-      modelCapability("gpt-5-mini"),
-      modelCapability("gpt-5.5"),
-      modelCapability("gpt-5.4"),
-    ],
-    catalogHash: "catalog-current",
-    fetchedAt: "2026-09-11T00:00:00.000Z",
-    stale: false,
-    refreshFailure: null,
-  };
-
-  assert.deepEqual(
-    selectableHarnessModels(capabilities).map((model) => model.id),
-    ["gpt-5-mini", "gpt-5.4"],
-  );
 });
 
 test("unsupported runtime declarations stay readable but cannot be edited", () => {

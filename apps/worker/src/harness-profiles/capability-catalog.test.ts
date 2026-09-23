@@ -397,6 +397,46 @@ describe("Harness capability catalog", () => {
     ).rejects.toBe(persistenceError);
   });
 
+  it("upgrades a Claude draft onto the alias the Claude CLI advertises", () => {
+    // The Claude CLI reports aliases (default, opus[1m], sonnet, haiku), not
+    // API ids. The catalog is the one list a profile may pick from, so a model
+    // it advertises must publish.
+    const {
+      profileId: _profileId,
+      version: _version,
+      slug: _slug,
+      system: _system,
+      ...claudeDraft
+    } = structuredClone(
+      BUILTIN_HARNESS_PROFILE_MANIFESTS[BUILTIN_HARNESS_PROFILE_IDS.claude],
+    );
+    const aliases = ["default", "opus[1m]", "sonnet", "haiku"];
+    const claudeCatalog: HarnessCapabilityCatalog = {
+      ...CATALOG,
+      provider: "claude",
+      packageName: "@anthropic-ai/claude-code",
+      models: aliases.map((id) =>
+        Object.assign(structuredClone(CATALOG.models[0]!), { id, name: id }),
+      ),
+    };
+    const response = {
+      ...claudeCatalog,
+      catalogHash: hashHarnessCapabilityCatalog(claudeCatalog),
+      fetchedAt: "2026-09-23T10:00:00.000Z",
+      stale: false,
+      refreshFailure: null,
+    };
+
+    const upgraded = upgradeHarnessDraftToV2(
+      {
+        ...claudeDraft,
+        model: { id: "sonnet", options: {} },
+      } as HarnessProfileDraftManifestV1,
+      response,
+    );
+    expect(upgraded.model.id).toBe("sonnet");
+  });
+
   it("hashes normalized provider data deterministically and upgrades only a present model", () => {
     const manifest =
       BUILTIN_HARNESS_PROFILE_MANIFESTS[
@@ -427,16 +467,13 @@ describe("Harness capability catalog", () => {
       ),
     ).toThrow(/no longer available/);
 
-    const advertisedOutsidePolicy = structuredClone(response);
-    advertisedOutsidePolicy.models[0]!.id = draft.model.id;
     const unknownDraft = {
       ...draft,
       model: { id: "gpt-5.5", options: {} },
     } as HarnessProfileDraftManifestV1;
-    advertisedOutsidePolicy.models[0]!.id = unknownDraft.model.id;
-    expect(() =>
-      upgradeHarnessDraftToV2(unknownDraft, advertisedOutsidePolicy),
-    ).toThrow(/no longer available/u);
+    expect(() => upgradeHarnessDraftToV2(unknownDraft, response)).toThrow(
+      /no longer available/u,
+    );
 
     const matching = structuredClone(response);
     matching.models[0]!.id = draft.model.id;
