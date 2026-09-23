@@ -410,6 +410,69 @@ guide, and where core owns the behavior, implemented in core:
 | M8 | Why is a block that requires memory refused on a default deployment? | A defect: the built-in store counts as a memory provider for block availability. |
 | M9 | Must learned items go through the engine's own extraction? | The adapter decides and says why; core has already distilled them, so storing them verbatim is the default the guide recommends. |
 
+## Drain before merge
+
+**The merge requires ZERO running and ZERO suspended runs** on every
+deployment whose database this branch will serve: no run in `running`, and no
+run in `awaiting` (parked on a person). Not "few", and not "none on the newest
+page". The procedure is the integrations plan's
+([The drain, as somebody who was not here would run it](2026-09-18-integrations.md#the-drain-as-somebody-who-was-not-here-would-run-it)),
+counted from the dashboard's `/runs?window=all` lists and again immediately
+before the merge.
+
+Why zero: the Workflow DevKit replays a suspended run by calling the new code
+with the old journal. A step's identity is its module path plus its function
+name, a queued step runs on the new code with the input the old code recorded,
+and a completed step hands the new code the result the old code recorded. Each
+row below breaks one of those for a run that crosses the deploy. Every row was
+checked against `origin/main` (`01371a41110deaa0d2b99961444731f607d04b6c`) on
+2026-09-23 by extracting each `"use step"` function's module path, name and
+signature on both trees and comparing them, then reading the types each
+signature names.
+
+| Kind | What changed | What a run crossing the deploy meets |
+|---|---|---|
+| Removed identity | `blockArthurValidatePromptStep` (`engine/blocks/arthur-injection-check/execute.ts`) | A run suspended in it, or with it queued, calls a step that no longer exists. |
+| Removed identity | `blockPrepareWorkspaceEnsureArthurTaskStep` (`engine/blocks/prepare-workspace/execute.ts`) | The same. |
+| Breaking input | `blockInvestigateRetrievalStep`: input keys `jira` and `slack` renamed to `issueTracker` and `chat` | A queued call arrives with the old keys, and both sides read as off: the search runs on nothing. |
+| Breaking result | `blockInvestigateRetrievalStep`: evidence `source` and a gap's `provider` read `issue_tracker` and `chat` (were `jira` and `slack`); evidence refs read `issue_tracker:<KEY>` (were `jira:<KEY>`) | A replayed result carries values the new readers do not name. |
+| Breaking input | `attachResearchRepositoriesStep` (`engine/steps/phase.ts`): `integrationPins` inserted as the 7th positional argument, ahead of `workScopeWrite` | A queued call's recorded `workScopeWrite` lands in the pins parameter and the work scope write is lost. |
+| Breaking input | `verifyFinalizedBranchHeadStep` (`engine/steps/workspace-publication.ts`): the argument was the `FinalizedBranch`, now `{ repository, integrationPins? }` | A queued call hands the branch where the step reads `input.repository`. |
+| Breaking input | `arthurTaskId: string \| null` replaced by `tracingRun: AgentTracingRun` in six steps: `blockInstallPromotedWorkspaceAgentsStep`, `blockPrepareWorkspaceProvisionStep`, `blockProvisionAgentSandboxStep`, `prepareHarnessAgentInvocationStep` (positional), `restoreClarificationSandboxStep`, `provisionDisposableReviewWorkspaceStep` (a field of the input object) | A queued call carries a task id or null where the step reads a tracing run. |
+| Result shape | `loadRepoMemorySourcesStep` (`engine/steps/repo-memory-steps.ts`): was `EffectivePromptMemorySource[]`, now `{ sources, unavailable? }` | A replayed array is read as an object with no `sources`. |
+| Result shape | `notifyTicket` (`engine/steps/ticket-analysis.ts`): was nothing, now a `CoreMessagingDelivery` | Read as delivered; guarded, see ADR-010 ("keeps a run suspended before this deploy on the path it was already taking"), and listed because it is still a changed record. |
+| Result shape | `verifySourcePullRequestStep` and `verifyPullRequestStep`: `PullRequestHead` records `checks` where main recorded `headPipelineId`, `headPipelineStatus`, `headPipelineFailedChecks` and `latestCheckRuns` | A replayed head has no `checks`, and the check fields it does carry are read by nothing. |
+| Handle envelope | The trigger envelope's failed checks record an opaque `handle` where main recorded `checkRunId` and `appSlug` (and `pipelineId` on the pull request). It is part of the recorded input of eight steps: `acknowledgePendingTriggerStep`, `acknowledgePrTriggerDispatchStep`, `assertFixPrOwnershipStep`, `blockPrTriggerRepositoriesStep`, `blockPrTriggerRepositoriesWithSiblingsStep`, `createPrCheckStep`, `completePrCheckStep`, `postPrReviewStep` | `bindCurrentPullRequest` reads both shapes (integrations plan, S11 drain), so this row adds no drain event of its own; a queued or failed delivery is not a run and binds either way. Listed so the list is whole. |
+| Park by bare column name | `loadRunStartSettingsStep` records the board's transition ids in `tracker`, which main's recorded result lacks. A run started before the deploy therefore builds every move target as a bare column name. `moveTicketStep` completes a bare name against the current board (`engine/steps/ticket-transition-step.ts`); the park steps `parkForClarificationStep` and `parkForApprovalStep` do not | On a board that reaches the backlog only by a named transition, the park move finds nothing and the ticket stays in the AI column, where the poll can dispatch it again. |
+| Workflow body | `engine/agent-workflow.ts` (285 lines added, 87 removed against main) and `engine/post-pr-gate-workflow.ts` (28 added, 16 removed); two new step identities are called from them, `runIntegrationBlockStep` and `createIntegrationRunStatesStep` | A replay walks a different sequence of steps than the journal recorded. |
+
+Optional additions, each replay-safe on its own (an input recorded without the
+field reads it as absent, a result recorded without it likewise). They are
+listed so nobody has to re-derive that they were checked:
+
+- `integrationPins?` on the input of `attachResearchRepositoriesStep` (but see
+  its row: the position is what breaks), `blockApprovedRepositoryScopeStep`,
+  `blockPostPrCommentStep`, `blockPrTriggerRepositoriesWithSiblingsStep`,
+  `blockPrepareWorkspaceProvisionStep`, `closeTerminalPrChecksStep`,
+  `completePrCheckStep`, `createOrFindWorkflowOwnedPullRequest`,
+  `createPrCheckStep`, `findWorkflowOwnedPullRequestForBranch`,
+  `postPrReviewStep`, `postReviewLedgerFailureNoteStep`,
+  `promoteRepositoryWriteScopeStep`, `publishTrustedWorkspaceFromSandbox`,
+  `recordBlockStatusesStep`, `verifyPullRequestStep`,
+  `verifySourcePullRequestStep`, and `blockFetchPrContextsStep` (through
+  `FetchPrContextOptions`); `pins?` on `notifyTicket`.
+- `notebookRecalled?` on `persistWorkspaceMemoryStep`'s input
+  (`PersistWorkspaceMemoryInput`, which extends main's `WorkspaceMemoryTarget`).
+- `failureCode?` on `recordRunTelemetryStep`'s input.
+- `tracker?` on `loadRunStartSettingsStep`'s result (see the park row for what
+  its absence does).
+- `queryTemplateNote?` on `blockInvestigateRetrievalStep`'s result.
+- Widened, not changed: `recordRunFailureReasonStep`'s `reason` also takes
+  `{ text, code }`; `provider` on `postReviewLedgerFailureNoteStep` and
+  `resolveHumanRepositoryExpansionStep` is any integration id, not only
+  `"github" | "gitlab"`; `blockPrepareWorkspaceProvisionStep`'s result gains
+  the `{ ok: false; settingsUnreadable: true }` answer.
+
 ## Findings ledger
 
 Every finding the review kept, with its outcome. Updated as each group
