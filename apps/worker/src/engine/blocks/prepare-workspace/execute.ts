@@ -330,6 +330,12 @@ async function blockPrepareWorkspaceProvisionStep(
 ): Promise<
   | { ok: true; sandboxId: string; workspaceManifest: WorkspaceManifest }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
+  /**
+   * This deployment's integration settings could not be read, before any
+   * sandbox existed. Ours, and a retry of the run is the fix; see
+   * `workspaceSettingsUnreadable`.
+   */
+  | { ok: false; settingsUnreadable: true }
 > {
   "use step";
   const { env } = await import("../../../infra/vcs-config.js");
@@ -413,11 +419,32 @@ async function blockPrepareWorkspaceProvisionStep(
     )),
   );
 
-  const manager = new SandboxManager({
-    providers: await buildSandboxProviderConfigs(
+  // Read before anything is provisioned, and inside this step on purpose: the
+  // configs carry the providers' credentials, which must never become a
+  // recorded step result, and this step creates a sandbox, so it is never
+  // retried. A read that failed is therefore answered here, as ours, rather
+  // than thrown out as a sandbox fault.
+  let providers: Awaited<ReturnType<typeof buildSandboxProviderConfigs>>;
+  try {
+    providers = await buildSandboxProviderConfigs(
       selectedRepositories.map((repo) => repo.provider),
       integrationPins,
-    ),
+    );
+  } catch (error) {
+    const { IntegrationSettingsUnreadableError } = await import(
+      "../../../services/integrations/runtime.js"
+    );
+    if (!(error instanceof IntegrationSettingsUnreadableError)) throw error;
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn(
+      { subjectKey, err: error.message, reason: String(error.cause) },
+      "prepare_workspace_settings_unreadable",
+    );
+    return { ok: false, settingsUnreadable: true };
+  }
+
+  const manager = new SandboxManager({
+    providers,
     // The run's own budget plus the checks phase's, because the checks run in
     // THIS sandbox and no longer spend the run's duration. Sizing the lifetime
     // from JOB_TIMEOUT_MS alone would kill the sandbox under a batch that is
@@ -1368,7 +1395,11 @@ export async function ensureWorkspace(
         ctx.settings.JOB_TIMEOUT_MS,
         checksCeilingMs,
       );
-      if (!provisioned.ok) return agentProtocolExecutionError(provisioned.failure);
+      if (!provisioned.ok) {
+        return "settingsUnreadable" in provisioned
+          ? workspaceSettingsUnreadable()
+          : agentProtocolExecutionError(provisioned.failure);
+      }
       ({ sandboxId, workspaceManifest } = provisioned);
     }
     // The manager registered this sandbox immediately after external creation,
@@ -1511,6 +1542,19 @@ export async function ensureWorkspace(
     // and both are finished sentences that lead rather than being clamped.
     return executionError(detail, catalogRefusalExecutionOptions(detail, "sandbox"));
   }
+}
+
+/**
+ * Workspace preparation stopped because this deployment's integration
+ * settings could not be read. `engine`, like an integration block's unread
+ * settings: no sandbox was created and no provider was asked, so neither the
+ * sandbox nor a provider is the one to blame, and a retry of the run asks
+ * again. The database's words are in the step's log line, not here.
+ */
+function workspaceSettingsUnreadable(): BlockExecutionResult {
+  const message =
+    "The workspace could not be prepared: this run could not read the deployment's integration settings, so no sandbox was created. Retry the run.";
+  return executionError(message, { category: "engine", message });
 }
 
 /**

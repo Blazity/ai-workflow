@@ -347,6 +347,35 @@ describe("prepare_workspace execute", () => {
    * catalog. The guarantee is only real where it is observable, so this asserts
    * the WORKSPACE INPUT, which is what provisioning actually clones.
    */
+  it("blames the settings it could not read, not the sandbox, and creates none", async () => {
+    // The provider credentials are read before any sandbox exists. When that
+    // read failed, the person was told the workspace environment could not
+    // complete the block, and went looking at Vercel Sandbox.
+    const { IntegrationSettingsUnreadableError } = await import(
+      "../../../services/integrations/usable.js"
+    );
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.buildSandboxProviderConfigs.mockRejectedValue(
+      new IntegrationSettingsUnreadableError(
+        "so no sandbox was given version control credentials",
+        "connection terminated unexpectedly",
+      ),
+    );
+
+    const result = await ensureWorkspace(makeCtx({ sandboxId: null }), undefined, {});
+
+    if (result.kind !== "execution_error") throw new Error("expected a refusal");
+    expect(result.error.category).toBe("engine");
+    expect(result.error.message).toContain("could not read the deployment's integration settings");
+    expect(JSON.stringify(result.error)).not.toContain("connection terminated");
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+  });
+
   it("clones a related repository read only", async () => {
     const web: SelectedRepository = {
       provider: "github",
