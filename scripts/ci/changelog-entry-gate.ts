@@ -10,7 +10,7 @@ import { bulletsOf } from "../changelog/collate.ts";
  */
 
 /** Product code: a change under one of these owes the changelog an entry. */
-const PRODUCT_PREFIXES = ["apps/", "packages/"] as const;
+const PRODUCT_PREFIXES = ["apps/", "packages/", "integrations/"] as const;
 /** The trailing slash is load bearing: a directory, not a name prefix. */
 const CHANGELOG_ENTRY_PREFIX = "changelog/unreleased/";
 /** The human override. It is a deliberate opt out, not a default. */
@@ -139,7 +139,7 @@ export function changelogEntryVerdict(
     return {
       status: "fail",
       reason:
-        "This pull request changes apps/** or packages/** but adds no file under changelog/unreleased/. Add an entry (see changelog/README.md) or apply the changelog: skip label.",
+        "This pull request changes apps/**, packages/** or integrations/** but adds no file under changelog/unreleased/. Add an entry (see changelog/README.md) or apply the changelog: skip label.",
     };
   }
 
@@ -173,7 +173,7 @@ export function changelogEntryVerdict(
   if (unreadable.length > 0) {
     return {
       status: "fail",
-      reason: `This pull request changes apps/** or packages/** and this gate could not read ${list(unreadable)} from the checkout, so it cannot tell whether the entry says anything. Refusing to pass a product change on an entry it never saw.`,
+      reason: `This pull request changes apps/**, packages/** or integrations/** and this gate could not read ${list(unreadable)} from the checkout, so it cannot tell whether the entry says anything. Refusing to pass a product change on an entry it never saw.`,
     };
   }
 
@@ -192,7 +192,7 @@ export function changelogEntryVerdict(
   });
   return {
     status: "fail",
-    reason: `This pull request changes apps/** or packages/** and leaves no changelog entry behind: ${seen.join(", ")}. An entry is one or two lines starting with "- " (see changelog/README.md); nothing else is collected into CHANGELOG.md. Add an entry or apply the changelog: skip label.`,
+    reason: `This pull request changes apps/**, packages/** or integrations/** and leaves no changelog entry behind: ${seen.join(", ")}. An entry is one or two lines starting with "- " (see changelog/README.md); nothing else is collected into CHANGELOG.md. Add an entry or apply the changelog: skip label.`,
   };
 }
 

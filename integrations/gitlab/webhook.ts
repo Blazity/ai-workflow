@@ -52,7 +52,11 @@ export async function receiveGitLabWebhook(
     // meaning only that project, for the workflow triggers and the legacy gate
     // alike, as it did before GitLab was an integration. A group webhook
     // otherwise starts runs on every project in the group while the catalog
-    // is not yet switched on. ADR-010 keeps this until R1.
+    // is not yet switched on. ADR-010 tied removing this filter to R1
+    // confirming catalog activation on every deployment; R1 was dropped when
+    // the Arthur tenant pilot ended on 2026-09-22, so there is no scheduled
+    // removal and the filter stays until a separate compatibility change
+    // retires it.
     ctx.log.info(
       { project: body?.project?.path_with_namespace ?? null, expected: legacyProjectId },
       "gitlab_webhook_skipped_other_project",

@@ -54,6 +54,19 @@ test("a packages change with no entry fails and names what to add", () => {
   );
 });
 
+test("an integrations change with no entry fails and names what to add", () => {
+  const verdict = changelogEntryVerdict({
+    changedFiles: [changed("integrations/gitlab/webhook.ts")],
+    labels: [],
+  });
+
+  assert.equal(verdict.status, "fail");
+  assert.match(
+    reasonOf(verdict),
+    /adds no file under changelog\/unreleased\/.*changelog\/README\.md.*changelog: skip/u,
+  );
+});
+
 test("a change that touches no product code passes without an entry", () => {
   assert.deepEqual(
     changelogEntryVerdict({
