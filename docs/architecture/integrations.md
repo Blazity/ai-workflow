@@ -1432,9 +1432,11 @@ For a memory integration, the operator's half is this:
 2. **Connect** through the form, and check that Test names the project meant.
 3. **Turn on repository memory** on the Settings page if it is off, and run a
    ticket through a workflow with one agent block on one repository.
-4. **In the worker's logs for that run**, by its id:
-   `memory_document_persisted` at teardown, `repo_memory_seeded`,
-   `repo_memory_injected` and `repo_memory_distilled` with an `outcome` other
+4. **In the worker's logs for that run**, by its id: `repo_memory_seeded`
+   (logged only when the seed wrote something, which on a first run it does
+   when the repository's manifest names its package manager or scripts),
+   `repo_memory_injected`, `memory_document_persisted` at teardown (when the
+   agent wrote a notebook), `repo_memory_distilled` with an `outcome` other
    than `memory_unavailable`, and no `memory_provider_unavailable`, whose
    `provider` field would name who refused.
 5. **In the engine's own console**: memories under the ticket's subject key and
@@ -1442,7 +1444,7 @@ For a memory integration, the operator's half is this:
    (`/memory`) lists the same documents by your `docPath`s.
 6. **Run the same ticket again**: the notebook the first run wrote is back in
    the agent's workspace (`memory_document_hydrated_from_store`), and the seed
-   adds nothing.
+   writes nothing (no `repo_memory_seeded` line).
 7. **Disable the integration**: the next run uses the built-in store, and the
    memory screen shows the built-in documents as they were before step 2.
 
