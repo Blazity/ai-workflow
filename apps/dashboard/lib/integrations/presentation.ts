@@ -261,7 +261,7 @@ export function unlocksLines(
  * newer worker added, the id's words, which is at least what that worker calls
  * it.
  */
-export function capabilityLabel(id: string): string {
+function capabilityLabel(id: string): string {
   const known = sdkCapabilityLabel(id);
   if (known) return known;
   const words = id.replace(/_/g, " ");

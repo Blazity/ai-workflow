@@ -265,7 +265,7 @@ const AGENT_FACING_UNKNOWN_REASON =
  * by one composed for a model. Replaced whole, never pattern-matched, for the
  * reason `agentFacingIntegrations` gives.
  */
-export function agentFacingCapabilities(
+function agentFacingCapabilities(
   capabilities: readonly IntegrationCapabilityDto[],
 ): IntegrationCapabilityDto[] {
   return capabilities.map((capability) => {

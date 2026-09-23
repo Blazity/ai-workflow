@@ -78,7 +78,7 @@ export function capabilitiesTheReachSees(): ReadonlySet<string> {
 }
 
 /** The capabilities an integration serves that the reach calculation cannot see. */
-export function unmeasuredCapabilitiesOf(capabilities: readonly string[]): string[] {
+function unmeasuredCapabilitiesOf(capabilities: readonly string[]): string[] {
   const seen = capabilitiesTheReachSees();
   return capabilities.filter((capability) => !seen.has(capability));
 }
