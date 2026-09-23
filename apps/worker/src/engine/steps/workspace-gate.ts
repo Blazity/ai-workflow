@@ -1,5 +1,5 @@
-import { repositoryCatalogKey } from "@shared/contracts";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
+import { repositoryKey } from "../support/repository-access.js";
 import {
   WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
   WORKSPACE_NOT_VERIFIABLE_MESSAGE,
@@ -180,10 +180,7 @@ export async function recordSuccessfulWorkspaceGate(input: {
   const launched = input.repositoryVersions ?? {};
   const repositoryVersions: Record<string, number> = {};
   for (const repository of inspected.repositories) {
-    const key = repositoryCatalogKey({
-      provider: repository.provider,
-      path: repository.repoPath,
-    });
+    const key = repositoryKey(repository);
     const version = launched[key];
     // Only repositories the configuration actually covers. A workspace
     // repository with no profile has nothing to compare later, and recording a
@@ -528,16 +525,22 @@ function listFiles(files: readonly string[]): string {
   return `: ${named.join(", ")}${remaining > 0 ? ` and ${remaining} more` : ""}`;
 }
 
+/**
+ * Does any changed workspace repository have configured checks?
+ *
+ * Matched on repository identity, never on the exact path: the configuration
+ * carries the catalog row's casing and the workspace the provider's, and an
+ * exact match here answered "no applicable checks" for every `blazity/*`
+ * repository, so the boundary published without asking for a gate at all.
+ */
 function hasApplicableChecks(
   config: PrePrCheckConfig,
   repositories: readonly InspectedWorkspaceRepository[],
 ): boolean {
-  const configured = new Set(
-    config.repositories.map((repo) => `${repo.provider}:${repo.repoPath}`),
-  );
+  const configured = new Set(config.repositories.map(repositoryKey));
   return repositories.some(
     (repo) =>
-      configured.has(`${repo.provider}:${repo.repoPath}`) &&
+      configured.has(repositoryKey(repo)) &&
       (!repo.preAgentSha || repo.preAgentSha !== repo.headSha),
   );
 }

@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   sandboxManagerCtor: vi.fn(),
   resolveChecksProvisioningStep: vi.fn(),
   runRepositorySetup: vi.fn(),
+  postComment: vi.fn(),
+  assertConnectedActiveRunOwner: vi.fn(),
 }));
 
 vi.mock("../../../infra/vcs-config.js", () => ({
@@ -95,7 +97,13 @@ vi.mock("../../../db/repositories/runs.js", () => ({
   listConnectedWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
 }));
 vi.mock("../../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
+  createAdapters: () => ({
+    runRegistry: { registerSandbox: mocks.registerSandbox },
+    issueTrackerResolution: { ok: true, adapter: { postComment: mocks.postComment } },
+  }),
+}));
+vi.mock("../../../db/repositories/active-runs.js", () => ({
+  assertConnectedActiveRunOwner: mocks.assertConnectedActiveRunOwner,
 }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../../sandbox/credentials.js", () => ({
@@ -374,6 +382,101 @@ describe("prepare_workspace execute", () => {
     expect(result.error.message).toContain("could not read the deployment's integration settings");
     expect(JSON.stringify(result.error)).not.toContain("connection terminated");
     expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+  });
+
+  // A person closed the pull request, deleted its branch and moved the ticket
+  // back to start over. The fetch step found the branch gone and handed the
+  // repository back without its ownership; the run must clone the default
+  // branch and tell the person on the ticket why it is not continuing.
+  it("starts a ticket re-run from the default branch and says why on the ticket", async () => {
+    const owned: SelectedRepository = {
+      ...repo,
+      workflowOwnedBranch: {
+        branchName: "ai-workflow/awp-271",
+        pr: { id: 18, url: "https://github.com/acme/api/pull/18", branch: "ai-workflow/awp-271" },
+      },
+    };
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [owned],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue([
+      {
+        repository: repo,
+        prComments: [],
+        checkResults: [],
+        hasConflicts: false,
+        previousBranchGone: {
+          branchName: "ai-workflow/awp-271",
+          pr: { id: 18, url: "https://github.com/acme/api/pull/18" },
+        },
+      },
+    ]);
+    mocks.postComment.mockResolvedValue(null);
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await ensureWorkspace(ctx, undefined, {});
+
+    expect(result.kind).toBe("next");
+    expect(mocks.blockFetchPrContextsStep.mock.calls[0]?.[2]).toMatchObject({
+      dropMissingOwnedBranches: true,
+    });
+    const provisioned = mocks.provisionMultiRepo.mock.calls[0]?.[0] as {
+      repositories: Array<Record<string, unknown>>;
+    };
+    expect(provisioned.repositories[0]?.workflowOwnedBranch).toBeUndefined();
+    expect(provisioned.repositories[0]?.access).toBeUndefined();
+    expect(mocks.postComment).toHaveBeenCalledTimes(1);
+    const [ticketId, body] = mocks.postComment.mock.calls[0] as [string, string];
+    expect(ticketId).toBe(ctx.ticket.identifier);
+    expect(body).toContain("ai-workflow/awp-271 no longer exists");
+    expect(body).toContain("starts from main");
+    expect(body).toContain("Pull request #18");
+    if (result.kind !== "next") throw new Error("expected next");
+    expect(result.output).toMatchObject({
+      freshStarts: [
+        {
+          repository: "github:acme/api",
+          deletedBranch: "ai-workflow/awp-271",
+          startedFrom: "main",
+          previousPullRequest: 18,
+        },
+      ],
+    });
+  });
+
+  it("posts nothing on the ticket when the earlier branch still exists", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const result = await ensureWorkspace(makeCtx({ sandboxId: null }), undefined, {});
+
+    expect(result.kind).toBe("next");
+    expect(mocks.postComment).not.toHaveBeenCalled();
+    if (result.kind !== "next") throw new Error("expected next");
+    expect(result.output).not.toHaveProperty("freshStarts");
+  });
+
+  it("keeps a pull request run on its branch: no branch probe is asked for", async () => {
+    mocks.blockPrTriggerRepositoriesStep.mockResolvedValue([repo]);
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const ctx = makeCtx({
+      sandboxId: null,
+      entry: { ...makeCtx().entry, kind: "pr_trigger", pr: makePrPayload() } as never,
+    });
+
+    await ensureWorkspace(ctx, undefined, {});
+
+    expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledTimes(1);
+    expect(mocks.blockFetchPrContextsStep).toHaveBeenCalledTimes(1);
+    expect(mocks.blockFetchPrContextsStep.mock.calls[0]?.[2]).not.toHaveProperty(
+      "dropMissingOwnedBranches",
+    );
   });
 
   it("clones a related repository read only", async () => {

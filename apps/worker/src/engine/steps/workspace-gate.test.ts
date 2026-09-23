@@ -371,6 +371,33 @@ describe("workspace gate", () => {
     });
   });
 
+  it("requires the gate for a changed repository whose configured path differs only in case", async () => {
+    // The publication boundary's half of the production defect: the profile
+    // comes from a catalog row stored as `ACME/Web`, the workspace holds the
+    // provider's `acme/web`. One repository to both providers, so the checks
+    // apply, and a boundary that answered "no applicable checks" would publish
+    // a pull request no check ever gated.
+    await recordSuccessfulWorkspaceGate({
+      sandboxId: "sbx-1",
+      workspaceManifest: manifest,
+      configurationVersion: 7,
+    });
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+      version: 7,
+      config: {
+        repositories: [{ provider: "github", repoPath: "ACME/Web", commands: ["pnpm test"] }],
+      },
+    });
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: null,
+      }),
+    ).rejects.toMatchObject({ code: "missing_gate" });
+  });
+
   it("requires an exact configuration version and unchanged fingerprint", async () => {
     const gate = await recordSuccessfulWorkspaceGate({
       sandboxId: "sbx-1",

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { repositoryCatalogProviderSchema } from "@shared/contracts";
+import { repositoryCatalogKey, repositoryCatalogProviderSchema } from "@shared/contracts";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 
 export const WORKSPACE_MANIFEST_PATH = "/vercel/sandbox/aiw-repos.json";
@@ -128,7 +128,9 @@ export function buildWorkspaceManifest(input: {
   return {
     version: 2,
     repositories: input.repositories.map((repo, index) => {
-      const key = `${repo.provider}:${repo.repoPath}`;
+      // The repository's identity, not its spelling: two casings of one path
+      // are one repository to both providers and share one slug below.
+      const key = repositoryCatalogKey({ provider: repo.provider, path: repo.repoPath });
       if (seen.has(key)) {
         throw new Error(`Duplicate selected repository: ${key}`);
       }

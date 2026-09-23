@@ -4,6 +4,8 @@ import type React from "react";
 
 interface NavItemSharedProps {
   label: string;
+  /** A word after the label for an entry that is not simply there to open (Off). */
+  badge?: string;
   icon?: React.ReactNode;
   active?: boolean;
   collapsed?: boolean;
@@ -31,6 +33,7 @@ export type NavItemProps = NavItemButtonProps | NavItemLinkProps;
 
 export function NavItem({
   label,
+  badge,
   icon,
   active = false,
   collapsed = false,
@@ -55,6 +58,7 @@ export function NavItem({
     .filter(Boolean)
     .join(" ");
 
+  const spokenLabel = badge ? `${label}, ${badge}` : label;
   const content = (
     <>
       {icon ? (
@@ -66,6 +70,11 @@ export function NavItem({
         </span>
       ) : null}
       {collapsed ? null : <span className="min-w-0">{label}</span>}
+      {badge && !collapsed ? (
+        <span className="font-mono text-[9px] font-medium uppercase tracking-[0.06em] text-neutral-500">
+          {badge}
+        </span>
+      ) : null}
       {active && !collapsed ? (
         <span
           aria-hidden="true"
@@ -86,7 +95,7 @@ export function NavItem({
       <a
         {...anchorProps}
         href={href}
-        aria-label={ariaLabel ?? label}
+        aria-label={ariaLabel ?? spokenLabel}
         aria-current={active ? "page" : undefined}
         className={classes}
       >
@@ -100,7 +109,7 @@ export function NavItem({
     <button
       {...buttonProps}
       type={buttonProps.type ?? "button"}
-      aria-label={ariaLabel ?? label}
+      aria-label={ariaLabel ?? spokenLabel}
       aria-current={active ? "page" : undefined}
       className={classes}
     >

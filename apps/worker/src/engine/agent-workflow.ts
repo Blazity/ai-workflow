@@ -6,6 +6,7 @@ import { ticketRunUrl, hasDashboardLinkComment } from "./support/dashboard-links
 // workflow isolate stays free of Node builtins.
 import {
   catalogRefusalExecutionOptions,
+  repositoryKey,
   workflowNeedsRepositoryAccess,
 } from "./support/repository-access.js";
 // Pure too: which subject this run freezes a record for, and the policy ladder
@@ -2751,13 +2752,12 @@ async function agentWorkflowBody(
           // from the sentences it ALREADY wrote about these repositories, so the
           // plan, the ticket comment and the prompt the model read all carry one
           // account of one refusal; the agent's own reason for wanting each is
-          // read off the request it just made.
+          // read off the request it just made. Keyed by identity, because a
+          // refusal names its repository by the cased-down key and the request
+          // spells it however the agent did.
           const wanted = new Map(
             requests.map(
-              (request): [string, string] => [
-                `${request.provider}:${request.repoPath}`,
-                request.rationale,
-              ],
+              (request): [string, string] => [repositoryKey(request), request.rationale],
             ),
           );
           const missing: MissingRepository[] = [];
@@ -3158,7 +3158,9 @@ async function agentWorkflowBody(
                 ctx.repositoryContexts = await blockFetchPrContextsStep(
                   ownedRepos,
                   ctx.repositories,
-                  reviewLedgerFetchOptions(ctx),
+                  // A pull request whose branch was deleted is work a person
+                  // threw away: its review comments must not frame the new plan.
+                  { ...reviewLedgerFetchOptions(ctx), dropMissingOwnedBranches: true },
                 );
               }
             }
@@ -3381,14 +3383,12 @@ async function agentWorkflowBody(
               // through would send implementation at a checkout that is not
               // there, which is a worse failure than the one this replaces.
               // Nothing is added here, so this cannot widen what a run may
-              // write to.
-              const attachedKeys = new Set(
-                ctx.selectedRepositories.map(
-                  (repository) => `${repository.provider}:${repository.repoPath}`,
-                ),
-              );
+              // write to. Matched by identity: the agent may spell a repository
+              // in another case than the workspace holds it, and it is still the
+              // same repository.
+              const attachedKeys = new Set(ctx.selectedRepositories.map(repositoryKey));
               const writable = (research.writeRepositories ?? []).filter((repository) =>
-                attachedKeys.has(`${repository.provider}:${repository.repoPath}`),
+                attachedKeys.has(repositoryKey(repository)),
               );
               if (writable.length === 0) nothingToWrite = expansion.missing;
               research = {

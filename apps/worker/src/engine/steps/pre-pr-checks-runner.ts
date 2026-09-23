@@ -12,6 +12,7 @@ import type {
   RunnableSandbox,
 } from "../../sandbox/agents/types.js";
 import type { TokenPrice } from "@shared/costs";
+import { isSameRepository } from "../support/repository-access.js";
 import type {
   RunBudgetFailure,
   RunBudgetLimits,
@@ -749,6 +750,16 @@ function withChecksClockObservation<T extends object>(value: T): T & ChecksClock
 }
 
 /**
+ * Why a launch step declined a repository. Carried out so the summary can say
+ * it: "nothing matched" with no repository named is how a gate that verified
+ * nothing read as a pass.
+ *
+ * - `not_in_workspace`: this run's workspace does not hold the repository.
+ * - `unchanged`: the gate's change filter, the agent never moved its HEAD.
+ */
+export type RepoCheckSkipReason = "not_in_workspace" | "unchanged";
+
+/**
  * Write and launch one repository's check batch, detached, and return at once.
  *
  * Returns `skipped` when the repository is not in this run's workspace, and,
@@ -756,6 +767,11 @@ function withChecksClockObservation<T extends object>(value: T): T & ChecksClock
  * blocking runner applied before running any command. Returns an `envFailure`
  * when a declared environment variable could not be forwarded: nothing is
  * written and nothing is launched, so the repository has no result at all.
+ *
+ * The workspace is searched by repository identity, never by the exact path:
+ * the configuration comes from a catalog row in whatever case it was stored,
+ * the manifest from the provider's own casing, and both providers resolve a
+ * path without regard to case.
  */
 export async function startRepoCheckBatchStep(
   sandboxId: string,
@@ -777,7 +793,12 @@ export async function startRepoCheckBatchStep(
   options: RepoCheckBatchStartOptions = {},
 ): Promise<
   (
-    | { skipped: true }
+    | {
+        skipped: true;
+        /** Optional so a result journaled before the reason existed still
+         *  replays; absent means the reason was not recorded. */
+        reason?: RepoCheckSkipReason;
+      }
     | { skipped: false; envFailure: PrePrCheckFailure }
     | {
         skipped: false;
@@ -792,11 +813,12 @@ export async function startRepoCheckBatchStep(
   const { Sandbox } = await import("@vercel/sandbox");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
   const manifest = await readWorkspaceManifest(sandbox);
-  const repo = manifest.repositories.find(
-    (candidate) =>
-      candidate.provider === provider && candidate.repoPath === repoPath,
+  const repo = manifest.repositories.find((candidate) =>
+    isSameRepository(candidate, { provider, repoPath }),
   );
-  if (!repo) return withChecksClockObservation({ skipped: true });
+  if (!repo) {
+    return withChecksClockObservation({ skipped: true, reason: "not_in_workspace" });
+  }
 
   if (requireChange) {
     const headResult = await sandbox.runCommand("git", [
@@ -813,7 +835,7 @@ export async function startRepoCheckBatchStep(
       );
     }
     if (repo.preAgentSha && repo.preAgentSha === headSha) {
-      return withChecksClockObservation({ skipped: true });
+      return withChecksClockObservation({ skipped: true, reason: "unchanged" });
     }
   }
 

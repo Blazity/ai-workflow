@@ -150,6 +150,30 @@ describe("repo workspace manifest", () => {
     ).toThrow("Duplicate selected repository: github:acme/api");
   });
 
+  it("rejects the same repository selected twice in two casings", () => {
+    // Both spellings clone into one slug, so letting the pair through would
+    // provision two checkouts into the same directory.
+    expect(() =>
+      buildWorkspaceManifest({
+        branchName: "blazebot/aiw-45",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+          {
+            provider: "github",
+            repoPath: "Acme/API",
+            defaultBranch: "main",
+            selectedRationale: "the provider's spelling",
+          },
+        ],
+      }),
+    ).toThrow("Duplicate selected repository: github:acme/api");
+  });
+
   it("preserves workflow-owned branch metadata", () => {
     const manifest = buildWorkspaceManifest({
       branchName: "blazebot/aiw-45",

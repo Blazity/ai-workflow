@@ -3,6 +3,8 @@ import type { WorkflowDefinitionV2Node } from "@shared/contracts";
 
 import {
   catalogRefusalExecutionOptions,
+  isSameRepository,
+  repositoryKey,
   repositoryNotEnabledMessage,
   NO_ENABLED_REPOSITORIES_MESSAGE,
   workflowNeedsRepositoryAccess,
@@ -131,5 +133,40 @@ describe("catalogRefusalExecutionOptions", () => {
     expect(catalogRefusalExecutionOptions("the sandbox died", "sandbox")).toEqual({
       category: "sandbox",
     });
+  });
+});
+
+describe("isSameRepository", () => {
+  it("matches the provider's casing against a catalog row's casing", () => {
+    // What GitHub answers for either spelling (`gh api repos/blazity/AIW-CHECKS-FIXTURE`
+    // returns full_name "Blazity/aiw-checks-fixture"); GitLab looks paths up
+    // with LOWER(routes.path). One repository, whichever way it was typed.
+    expect(
+      isSameRepository(
+        { provider: "github", repoPath: "Blazity/aiw-checks-fixture" },
+        { provider: "github", repoPath: "blazity/aiw-checks-fixture" },
+      ),
+    ).toBe(true);
+    expect(
+      isSameRepository(
+        { provider: "gitlab", repoPath: "Acme/Platform/API" },
+        { provider: "gitlab", repoPath: "acme/platform/api" },
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the same path on two providers apart", () => {
+    expect(
+      isSameRepository(
+        { provider: "github", repoPath: "acme/api" },
+        { provider: "gitlab", repoPath: "acme/api" },
+      ),
+    ).toBe(false);
+  });
+
+  it("keys a repository exactly as the catalog does", () => {
+    expect(repositoryKey({ provider: "github", repoPath: "Blazity/aiw-checks-fixture" })).toBe(
+      "github:blazity/aiw-checks-fixture",
+    );
   });
 });

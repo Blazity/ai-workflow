@@ -70,6 +70,28 @@ describe("the ticket comment a person reads", () => {
     expect(comment).toContain("Write repositories: github:acme/api");
   });
 
+  // Red when: the agent names its write repository in another case than the
+  // workspace holds it (GitHub's `Acme/API` against the catalog's `acme/api`),
+  // and the comment then calls the repository the run will write to "read".
+  it("lists a write repository as write whatever case the decision spells it in", () => {
+    const report = buildResearchAnalysisReport({
+      runId: "run-wording",
+      workspaceManifest: {
+        repositories: [
+          { provider: "github", repoPath: "acme/api", defaultBranch: "main", branchName: "ai/AWP-1", researchBaseSha: "abcdef123456", access: "read" },
+        ],
+      },
+      selectedRepositories: [
+        { provider: "github", repoPath: "acme/api", selectedRationale: "The endpoint lives here." },
+      ],
+      writeRepositories: [{ provider: "github", repoPath: "Acme/API", rationale: "The fix goes here." }],
+      researchResult: { body: "# Plan" },
+      usage,
+    });
+    const comment = formatResearchAnalysisComment(report, "https://dashboard.example/runs/run-wording");
+    expect(comment).toContain("- github:acme/api · write ·");
+  });
+
   // Red when: the blank lines inside a code block of the plan are dropped, so
   // the code the comment shows is not the code the plan wrote.
   it("keeps the blank lines of the plan", () => {

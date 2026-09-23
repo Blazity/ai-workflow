@@ -2,6 +2,7 @@
 
 import React from "react";
 import { BlazityLogo, NavItem } from "@/components/ui";
+import { IntegrationIcon } from "@/components/cockpit/integration-icon";
 import {
   CORE_NAV_GROUPS,
   INTEGRATIONS_GROUP_LABEL,
@@ -45,19 +46,29 @@ function SidebarEntry({
     <NavItem
       href={entry.href}
       label={entry.label}
+      badge={entry.note}
       active={active}
       collapsed={collapsed}
-      title={collapsed ? entry.label : undefined}
+      title={collapsed ? [entry.label, entry.note].filter(Boolean).join(", ") : undefined}
       icon={
-        <span
-          className={
-            entry.glyph.length > 1
-              ? "flex h-[18px] w-[18px] items-center justify-center rounded-[3px] border border-current font-mono text-[9px] font-semibold leading-none"
-              : "font-mono text-lg leading-none"
-          }
-        >
-          {entry.glyph}
-        </span>
+        entry.integrationId ? (
+          <IntegrationIcon
+            id={entry.integrationId}
+            name={entry.label}
+            size={18}
+            muted={entry.note === "Off"}
+          />
+        ) : (
+          <span
+            className={
+              entry.glyph.length > 1
+                ? "flex h-[18px] w-[18px] items-center justify-center rounded-[3px] border border-current font-mono text-[9px] font-semibold leading-none"
+                : "font-mono text-lg leading-none"
+            }
+          >
+            {entry.glyph}
+          </span>
+        )
       }
       onClick={(event) => {
         if (browserHandlesClick(event)) return;
@@ -148,7 +159,7 @@ export function CkSidebar({
   onNav: (id: string) => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
-  /** Every integration this build ships; only the usable ones get an entry. */
+  /** Every integration this build ships; those in use or to act on get an entry. */
   integrations?: readonly CockpitIntegration[];
   collapsedGroups?: readonly string[];
   onToggleGroup?: (id: string) => void;

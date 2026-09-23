@@ -141,7 +141,8 @@ test("an environment-configured deployment is told so and asked to do nothing", 
   const root = render(t);
   const rendered = text(root);
   assert.match(rendered, /Connected/);
-  assert.match(rendered, /Values come from this deployment's environment variables/);
+  assert.match(rendered, /From environment variables/);
+  assert.match(rendered, /Never tested/);
   assert.match(rendered, /Nothing has ever tested these values/);
   // No capability the list does not have, and none of the codebase's words.
   assert.doesNotMatch(rendered, /a coding agent\./);
@@ -167,7 +168,7 @@ test("a fresh deployment is told what each integration needs and offered Connect
     ],
   });
   const rendered = text(root);
-  assert.match(rendered, /Not connected/);
+  assert.match(rendered, /Not set up/);
   assert.match(rendered, /Nothing configures it on this deployment yet/);
   assert.match(rendered, /It needs its Site URL/);
   assert.ok(rendered.includes("Connect"), "the card offers the action that fixes it");
