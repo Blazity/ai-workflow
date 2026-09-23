@@ -1399,6 +1399,9 @@ export async function ensureWorkspace(
         workspaceManifest,
         runId: ctx.runId,
       });
+      // For teardown: a file the agent started without the stored notebook
+      // must not be stored over it.
+      ctx.workspaceNotebookRecalled = hydrated.recalled;
       // Recorded on the run, not only in the log: a workspace that started
       // without the notebook an earlier run left is indistinguishable, from
       // the run view, from the first run on a ticket.
@@ -1410,6 +1413,8 @@ export async function ensureWorkspace(
         });
       }
     } catch (err) {
+      // Whatever happened, nothing says what was stored.
+      ctx.workspaceNotebookRecalled = false;
       if (isRunControlError(err)) throw err;
       // Memory is an optimization; the workspace is ready either way.
     }
