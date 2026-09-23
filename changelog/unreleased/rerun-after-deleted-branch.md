@@ -1,2 +1,2 @@
-- A ticket moved back to start after its pull request was closed and its branch deleted now starts again from the repository's default branch, and the run posts a ticket comment naming the deleted branch.
+- A ticket moved back to start after its pull request was closed and its branch deleted now starts again from the repository's default branch, and the ticket gets one comment naming the deleted branch, not one per run.
 - When the sandbox service refuses to create a workspace, the run's failure message names the repository, the branch and the service's reason, with what to check next.
