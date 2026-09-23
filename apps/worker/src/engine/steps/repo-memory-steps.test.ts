@@ -78,6 +78,15 @@ vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
     await importOriginal<typeof import("../../services/integrations/runtime.js")>();
   return {
     ...actual,
+    // Nothing connected: with a memory integration in the registry, resolving
+    // who serves memory reads the integration rows, and several cases swap
+    // the database for a fake that answers only the store's own calls.
+    resolveUsableIntegrations: async () => ({
+      readable: true as const,
+      usable: [],
+      states: new Map(),
+      connectionFailures: new Map(),
+    }),
     knownSecretValues: async () => {
       mocks.secretReads += 1;
       if (mocks.redactionThrows) {

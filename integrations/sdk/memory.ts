@@ -161,6 +161,21 @@ export type MemoryScopeKind = MemoryScope["kind"];
 export const MEMORY_PROMPT_BUDGET_BYTES = { facts: 16 * 1024, lessons: 16 * 1024 } as const;
 
 /**
+ * The most separate entries one subject holds per scope, whichever provider
+ * holds them: 40 facts and 30 lessons. It is what keeps `recall` inside
+ * `MEMORY_PROMPT_BUDGET_BYTES` (entries are at most 200 characters) and what
+ * stops a repository's memory from growing with every run, since a distilling
+ * run may add up to eight facts and five lessons.
+ *
+ * One number for every provider, so switching engines does not change how
+ * much a repository remembers. A provider that only adds enforces it itself:
+ * after an add that takes a subject past it, forget the oldest entries a run
+ * learned (never a `derived` one) by id and report them as `dropped`. A pure
+ * retraction (`refuted` only) never trims. The built-in store reads it too.
+ */
+export const MEMORY_ITEMS_MAX = { facts: 40, lessons: 30 } as const;
+
+/**
  * The largest notebook core moves between a provider and an agent's
  * workspace, in UTF-8 bytes. Core reads at most this much of the agent's file
  * (a longer one arrives with `sourceTruncated`), and writes at most this much
@@ -319,7 +334,11 @@ export type MemoryObservation =
        * Stored WHOLE, REPLACING the previous version: the next recall of this
        * notebook returns exactly this text, not this text joined to the last
        * one and not the last one. Against an engine that only adds, that is an
-       * add of the whole text followed by a delete of the previous version.
+       * add of the whole text followed by a delete of the previous version,
+       * once the add is confirmed. When the text is already held, there is no
+       * add: keep that copy and delete only the other versions, because an
+       * engine that drops an exact repeat would answer the add with nothing
+       * new, and the delete would then remove the only copy.
        *
        * Prefer a write that is done when it answers. The same run reads this
        * notebook back seconds later to distil it, and a write that is only
@@ -375,7 +394,7 @@ export type MemoryWrite =
       readonly stored: boolean;
       /** Entries it forgot because this run refuted them. */
       readonly removed: number;
-      /** Entries it forgot to stay within what it is willing to hold. */
+      /** Entries it forgot to stay within what it is willing to hold (`MEMORY_ITEMS_MAX`). */
       readonly dropped: number;
       /** What it holds for this subject and scope afterwards. */
       readonly remaining: number;

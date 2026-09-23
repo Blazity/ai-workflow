@@ -34,6 +34,16 @@ vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
   const { environmentSecretValues } = await import("../../run-observability/configured-secrets.js");
   return {
     ...actual,
+    // Nothing connected, stated for the same reason: with a memory
+    // integration in the registry, resolving who serves memory reads the
+    // integration rows, and these cases swap the database for a fake that
+    // answers only the store's own calls.
+    resolveUsableIntegrations: async () => ({
+      readable: true as const,
+      usable: [],
+      states: new Map(),
+      connectionFailures: new Map(),
+    }),
     knownSecretValues: async () => {
       if (mocks.secretsUnreadable) {
         const { IntegrationSecretsUnreadableError } = await import(

@@ -47,6 +47,9 @@ import type {
   MemoryStoredDocumentRef,
   MemoryWrite,
 } from "@integrations/sdk";
+// The item caps are every provider's (one home, in the port), and the SDK's
+// index is already in workflow scope through every manifest.
+import { MEMORY_ITEMS_MAX } from "@integrations/sdk";
 import { prepareMemoryContent, utf8Bytes } from "../content.js";
 import {
   knownSecretsReader,
@@ -81,12 +84,11 @@ export const BUILTIN_MEMORY_PROVIDER_NAME = "Built-in memory";
 /**
  * Per stored facts or lessons document. The number and the reasoning behind it
  * moved here unchanged from `repo-memory-steps.ts`: these documents are
- * injected into every prompt for the repository, and the item caps below, not
- * this one, are what bound a mature document.
+ * injected into every prompt for the repository, and the item caps
+ * (`MEMORY_ITEMS_MAX`, in the port), not this one, are what bound a mature
+ * document.
  */
 const MAX_DOC_BYTES = 12 * 1024;
-const FACTS_MAX_ITEMS = 40;
-const LESSONS_MAX_ITEMS = 30;
 /**
  * Compare-and-swap rounds per document. neon-http has no transactions, so the
  * version predicate is what makes the read-merge-write safe; a document under
@@ -372,7 +374,7 @@ async function storeItems(
      * the merge moved here.
      */
     const adds = observation.learned.length > 0;
-    const cap = kind === "facts" ? FACTS_MAX_ITEMS : LESSONS_MAX_ITEMS;
+    const cap = MEMORY_ITEMS_MAX[kind];
     const merged = mergeRepoMemoryItems({
       existing,
       candidates: observation.learned,
