@@ -47,7 +47,8 @@ paths:
   draft and integration connection form. The cockpit shell and logout action
   consult `apps/dashboard/lib/settings/unsaved.ts`; each form registers and
   owns its `beforeunload` listener through `useUnsavedWork`
-  (`apps/dashboard/lib/settings/use-unsaved-work.ts`), and no per-form
+  (`apps/dashboard/lib/settings/use-unsaved-work.ts`). Back and Forward are
+  asked about once, by the shell (`lib/settings/back-guard.ts`); no per-form
   popstate sentinel is added. Guard:
   `apps/dashboard/app/(cockpit)/cockpit-shell.test.tsx`.
 - Gate editing with `canEditSettings`; every role may read settings, members see
