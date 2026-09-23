@@ -684,9 +684,15 @@ export function disableConsequence(integration: IntegrationDto): string[] {
 }
 
 export function enableConsequence(integration: IntegrationDto): string {
+  // Where the values come from: an integration read from the environment has
+  // nothing stored to go back to.
+  const values =
+    integration.state.source === "environment"
+      ? "this deployment's environment variables"
+      : "the values stored for it";
   return integration.blocks.length > 0
-    ? `${integration.name} goes back to the values stored for it, and its blocks return to the workflow editor.`
-    : `${integration.name} goes back to the values stored for it, and workflows may use it again.`;
+    ? `${integration.name} goes back to ${values}, and its blocks return to the workflow editor.`
+    : `${integration.name} goes back to ${values}, and workflows may use it again.`;
 }
 
 /**
@@ -826,6 +832,21 @@ function usingItsCapabilities(integration: IntegrationDto): string {
  * The measured cost shown before a connection change. Null is an unread fact,
  * never an empty fact, so every unknown has its own sentence.
  */
+function repositoriesLine(
+  integration: IntegrationDto,
+  repositories: IntegrationImpactPreviewResponse["repositories"] | null,
+): string {
+  if (repositories === null) {
+    return "Affected repositories: unknown. The worker could not read the repository catalog.";
+  }
+  if (repositories.length === 0) return `Repositories using ${integration.name}: none.`;
+  const shown = repositories.slice(0, IMPACT_NAME_LIMIT).map(({ path }) => path);
+  const remainder = repositories.length - shown.length;
+  return `Repositories using ${integration.name}: ${shown.join(", ")}${
+    remainder > 0 ? `, and ${remainder} more` : ""
+  }.`;
+}
+
 export function integrationImpactLines(
   integration: IntegrationDto,
   impact: IntegrationImpactPreviewResponse | null,
@@ -834,19 +855,9 @@ export function integrationImpactLines(
   const lines = [impactReasonLine(integration, impact, action)];
   const definitions = impact?.enabledDefinitions ?? null;
   const repositories = impact?.repositories ?? null;
-  if (repositories === null) {
-    lines.push("Affected repositories: unknown. The worker could not read the repository catalog.");
-  } else if (repositories.length === 0) {
-    lines.push(`Repositories using ${integration.name}: none.`);
-  } else {
-    const shown = repositories.slice(0, IMPACT_NAME_LIMIT).map(({ path }) => path);
-    const remainder = repositories.length - shown.length;
-    lines.push(
-      `Repositories using ${integration.name}: ${shown.join(", ")}${
-        remainder > 0 ? `, and ${remainder} more` : ""
-      }.`,
-    );
-  }
+  // Repositories belong to a version control provider; "Repositories using
+  // Jira: none" read as a finding about Jira.
+  if (integration.capabilities.includes("vcs")) lines.push(repositoriesLine(integration, repositories));
   const unmeasured = impact?.unmeasuredCapabilities ?? [];
   if (definitions === null && unmeasured.length > 0) {
     lines.push(

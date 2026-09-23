@@ -16,6 +16,7 @@ import {
   conflictDifferenceLines,
   disableConsequence,
   enableConsequence,
+  integrationImpactLines,
   disconnectConsequence,
   fieldHint,
   missingRequiredFields,
@@ -505,6 +506,35 @@ test("an integration with no blocks is not said to grey any out, on or off", () 
     ...disconnectConsequence(tracker),
   ].join(" ");
   assert.doesNotMatch(said, /blocks/);
+});
+
+test("the cost of a change names repositories only for version control", () => {
+  const impact = {
+    changesFingerprint: false,
+    stops: "none",
+    unmeasuredCapabilities: [],
+    enabledDefinitions: [],
+    inFlightRuns: 0,
+    repositories: [],
+  } as const;
+  // "Repositories using Jira: none" read as a finding about Jira.
+  const tracker = integrationImpactLines(integration({ name: "Jira", capabilities: ["issue_tracker"] }), impact, "disable");
+  assert.doesNotMatch(tracker.join(" "), /[Rr]epositories/);
+  const vcs = integrationImpactLines(integration({ name: "GitHub", capabilities: ["vcs"] }), impact, "disable");
+  assert.match(vcs.join(" "), /Repositories using GitHub: none\./);
+  const unread = integrationImpactLines(
+    integration({ name: "GitHub", capabilities: ["vcs"] }),
+    { ...impact, repositories: null },
+    "disable",
+  );
+  assert.match(unread.join(" "), /Affected repositories: unknown/);
+});
+
+test("enabling again goes back to where the values come from", () => {
+  const fromEnvironment = integration({ blocks: [], state: state({ source: "environment" }) });
+  assert.match(enableConsequence(fromEnvironment), /goes back to this deployment's environment variables/);
+  assert.doesNotMatch(enableConsequence(fromEnvironment), /stored/);
+  assert.match(enableConsequence(integration({ blocks: [] })), /goes back to the values stored for it/);
 });
 
 test("switching to an environment that does not configure the integration is refused by name", () => {
