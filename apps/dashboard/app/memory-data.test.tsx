@@ -13,6 +13,8 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 
 import type { DashboardSession } from "@/lib/auth/session";
 
+import { WorkerResponseError } from "../lib/api/worker-errors.ts";
+
 const SUBJECT_KEY = "ticket:jira:AIW-177";
 const DOC_PATH = "ai-workflow/memory/AIW-177.md";
 
@@ -59,7 +61,14 @@ mock.module("../lib/api/server.ts", {
     getJSON: async (path: string) => {
       const answer = answers[path];
       if (typeof answer === "function") (answer as () => never)();
-      if (answer === undefined) throw new Error(`GET ${path} → 404 Not Found`);
+      if (answer === undefined) {
+        throw new WorkerResponseError(path, 404, "Not Found", {
+          error: true,
+          statusCode: 404,
+          statusMessage: "Memory document not found",
+          message: "Memory document not found",
+        });
+      }
       return answer;
     },
   },
@@ -107,12 +116,19 @@ async function renderPage(t: TestContext): Promise<string> {
   return nodeText(renderer.root);
 }
 
-function providerRefused(status: number, reason: string): () => never {
-  // The shape getJSON throws: lib/api/server.ts puts the status and the
-  // worker's statusMessage into the message, which is the only channel the
-  // page has for telling these apart.
+/**
+ * What getJSON throws for a refusal: the status, the reason phrase, and the
+ * body Nitro writes for an h3 error. The reason phrase defaults to the reason
+ * itself, which is what HTTP/1.1 carries when the sentence is plain ASCII.
+ */
+function providerRefused(status: number, reason: string, statusText = reason): () => never {
   return () => {
-    throw new Error(`GET /api/v1/memory → ${status} ${reason}`);
+    throw new WorkerResponseError("/api/v1/memory", status, statusText, {
+      error: true,
+      statusCode: status,
+      statusMessage: reason,
+      message: reason,
+    });
   };
 }
 
@@ -162,4 +178,22 @@ test("a pair that names nothing still reads as a document that is gone", async (
 
   assert.match(text, /This document is no longer stored/);
   assert.doesNotMatch(text, /could not be read/);
+});
+
+test("the reason is read from the body, where it survives the trip the reason phrase does not", async (t) => {
+  // h3 strips everything outside visible ASCII from the reason phrase, and
+  // HTTP/2 has no reason phrase at all, so in production the phrase arrives
+  // empty or mangled while the body still carries the whole sentence.
+  answers = {
+    "/api/v1/memory": providerRefused(
+      503,
+      "Built-in memory could not answer: the store said \u201Cbusy\u201D",
+      "",
+    ),
+    "/api/v1/settings": { settings: [] },
+  };
+
+  const text = await renderPage(t);
+
+  assert.match(text, /Built-in memory could not answer: the store said \u201Cbusy\u201D/);
 });

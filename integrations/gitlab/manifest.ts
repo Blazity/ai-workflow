@@ -65,8 +65,12 @@ export const manifest = defineIntegration({
   capabilities: ["vcs"],
   // No host: a self-hosted GitLab is the normal case and the admin names it in
   // the GitLab URL field above, whose default core reads for gitlab.com. Groups
-  // nest, so a project path is two segments or more.
-  repositories: { nestedPaths: true },
+  // nest, so a project path is two segments or more. A merge request is `!12`:
+  // `#12` names an issue here.
+  repositories: {
+    nestedPaths: true,
+    changeRequest: { noun: "MR", referencePrefix: "!", linkSegment: "/-/merge_requests/" },
+  },
   // A merge request note is the only review GitLab delivers: an approval or a
   // "request changes" arrives as no event a trigger can wait for.
   webhook: { reviewStates: ["commented"] },

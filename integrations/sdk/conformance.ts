@@ -102,6 +102,8 @@ export const RESERVED_INTEGRATION_IDS: readonly string[] = [
   "api",
   "approvals",
   "auth",
+  // `/api/v1/integrations/capabilities` sits beside `/api/v1/integrations/:id`.
+  "capabilities",
   "checks",
   "cost",
   "cron",

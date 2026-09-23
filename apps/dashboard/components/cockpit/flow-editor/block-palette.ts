@@ -297,7 +297,7 @@ function paletteDefaults(
   return defaults;
 }
 
-/** Title Case from a group id, for a group this list was written before. */
+/** Title Case from a group id, for a group a newer worker sends. */
 function groupLabel(group: string): string {
   return (
     GROUP_LABELS[group] ??
@@ -321,11 +321,14 @@ export function buildPaletteItems(
       // "add a new one" affordance is gone.
       contract.type !== "run_checks",
   );
-  // The order is core's, then every group the order was written before, in
-  // registry order. An integration that groups its blocks under its own name is
-  // a group this list cannot have known about, and iterating only the known
-  // order would have dropped its blocks out of the palette with no sign that
-  // anything was missing.
+  // The order is core's, then any group this dashboard does not know, in
+  // registry order. The type says the list is closed, but the registry comes
+  // from the worker at runtime, and a worker one deploy ahead can send a group
+  // this build has never heard of; iterating only the known order would drop
+  // its blocks out of the palette with no sign that anything was missing.
+  // Integration blocks are NOT such a group: the worker files them under
+  // `utility` until the contract names the integration that owns a block
+  // (plan decision 13), which is what grouping them by name needs.
   const knownGroups = new Set<string>(GROUP_ORDER);
   const contributedGroups = [
     ...new Set(

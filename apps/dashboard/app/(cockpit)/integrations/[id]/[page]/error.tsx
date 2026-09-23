@@ -1,5 +1,11 @@
 "use client";
 
+import { useParams, useRouter } from "next/navigation";
+import { useTransition } from "react";
+
+import { Button } from "@/components/ui";
+import { CONNECTION_PAGE, integrationHref } from "@/lib/cockpit/navigation";
+
 /**
  * A page an integration contributes threw.
  *
@@ -13,6 +19,12 @@
  * help are offered: try it again, in case it was the provider having a moment,
  * and the Connection tab, which is the only part of an integration we can do
  * anything about from here.
+ *
+ * Trying again refreshes before it resets. A contributed page is a Server
+ * Component, so what failed was a server render, and `reset` alone re-renders
+ * the boundary from the payload the client already holds, which is the one
+ * that failed. The refresh fetches the page again; both run in one transition
+ * so the boundary clears once, when the new payload is there.
  */
 export default function ContributedPageError({
   error,
@@ -21,6 +33,10 @@ export default function ContributedPageError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const router = useRouter();
+  const { id } = useParams<{ id: string }>();
+  const [retrying, startRetry] = useTransition();
+
   return (
     <div className="flex flex-col gap-3 px-4 lg:px-6 pt-5 pb-8 max-w-[640px]">
       <h2 className="m-0 font-display text-2xl font-medium leading-[1.2] text-neutral-900">
@@ -38,18 +54,23 @@ export default function ContributedPageError({
         </p>
       )}
       <div className="flex flex-wrap items-center gap-4">
-        <button
-          type="button"
-          onClick={reset}
-          className="inline-flex h-[30px] items-center rounded-[3px] border border-neutral-300 bg-panel px-3 font-mono text-[11px] font-medium tracking-[0.04em] text-neutral-800 appearance-none cursor-pointer transition-colors duration-[var(--motion-fast)] hover:bg-app-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1"
+        <Button
+          variant="secondary"
+          loading={retrying}
+          onClick={() =>
+            startRetry(() => {
+              router.refresh();
+              reset();
+            })
+          }
         >
           Try again
-        </button>
+        </Button>
         <a
-          href="/integrations"
+          href={integrationHref(id, CONNECTION_PAGE.id)}
           className="font-mono text-[11px] font-medium tracking-[0.04em] text-mariner no-underline hover:underline"
         >
-          Back to Integrations -&gt;
+          Open Connection -&gt;
         </a>
       </div>
     </div>

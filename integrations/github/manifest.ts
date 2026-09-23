@@ -99,7 +99,11 @@ export const manifest = defineIntegration({
   // against api.github.com, so there is no host for an admin to change. A path
   // there is always exactly owner/name, which is what lets a pasted link be cut
   // after two segments whatever follows them.
-  repositories: { host: "github.com", nestedPaths: false },
+  repositories: {
+    host: "github.com",
+    nestedPaths: false,
+    changeRequest: { noun: "PR", referencePrefix: "#", linkSegment: "/pull/" },
+  },
   // A submitted review carries its state; a review comment or a pull request
   // comment is a "commented" review of its own.
   webhook: { reviewStates: ["changes_requested", "commented"] },

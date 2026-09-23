@@ -3,6 +3,7 @@ import { integrationRuntime } from "@integrations/registry/worker";
 import { type IntegrationManifest, readProviderFailure } from "@integrations/sdk";
 import {
   DashboardAuthError,
+  INTEGRATION_PROVIDER_WAIT_MS,
   type DashboardRole,
   type IntegrationConnectionFieldDto,
   type IntegrationDto,
@@ -78,8 +79,9 @@ export class IntegrationVersionConflictError extends Error {
 }
 
 /** Timeout for a connection test. Well under the invocation ceiling, because an
- *  admin pressing Test is waiting at the screen. */
-const TEST_TIMEOUT_MS = 20_000;
+ *  admin pressing Test is waiting at the screen, and the same number the
+ *  dashboard waits on, because it reads it from the same contract. */
+const TEST_TIMEOUT_MS = INTEGRATION_PROVIDER_WAIT_MS;
 
 /** The key this deployment holds. Exported so the engine's integration step
  *  reads a connection through the same material every other caller does. */

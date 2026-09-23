@@ -29,6 +29,8 @@
  * revoked.
  */
 import type {
+  IntegrationCapabilitiesResponse,
+  IntegrationCapabilityDto,
   IntegrationFailure,
   IntegrationStatus,
   WorkflowBlockContract,
@@ -72,7 +74,8 @@ export interface McpIntegrationFact {
   readonly status: IntegrationStatus;
   /** Enabled and connected: whether its blocks can run at all. */
   readonly usable: boolean;
-  /** The capability ids it declares. Says nothing about which one is active. */
+  /** The capability ids it declares. Which one is active is `capabilities`,
+   *  the envelope's other field, which the resolvers a run uses decided. */
   readonly capabilities: readonly string[];
   readonly blocks: readonly McpIntegrationBlockFact[];
 }
@@ -237,6 +240,60 @@ export async function deploymentIntegrationFacts(
     logger.warn(
       { err: error instanceof Error ? error.message : String(error) },
       "mcp_integration_facts_unavailable",
+    );
+    return null;
+  }
+}
+
+/**
+ * What an agent may read where the resolver refused a provider it chose.
+ *
+ * The admin's sentence carries the provider's own failure text, which is where
+ * S2 puts "Set DEMO_API_TOKEN on this deployment"; the kind and the ids already
+ * say what happened and to whom.
+ */
+const AGENT_FACING_REFUSED_REASON =
+  "the provider chosen for it is not working, so nothing serves it; an admin can fix it on the Integrations page in the dashboard";
+
+/** And where the deployment could not say who serves it at all. */
+const AGENT_FACING_UNKNOWN_REASON =
+  "which provider serves it could not be read just now; an admin can look on the Integrations page in the dashboard";
+
+/**
+ * Who serves each capability, as an agent may read it: the rows the
+ * Integrations page shows, with every sentence composed for an admin replaced
+ * by one composed for a model. Replaced whole, never pattern-matched, for the
+ * reason `agentFacingIntegrations` gives.
+ */
+function agentFacingCapabilities(
+  capabilities: readonly IntegrationCapabilityDto[],
+): IntegrationCapabilityDto[] {
+  return capabilities.map((capability) => {
+    const serving = capability.serving;
+    if (serving.kind === "refused") {
+      return { ...capability, serving: { ...serving, reason: AGENT_FACING_REFUSED_REASON } };
+    }
+    if (serving.kind === "unknown") {
+      return { ...capability, serving: { ...serving, reason: AGENT_FACING_UNKNOWN_REASON } };
+    }
+    return capability;
+  });
+}
+
+/**
+ * The capability rows `system.capabilities` publishes, or `null` when they
+ * could not be read, which is not "nothing serves anything". It never throws,
+ * for the reason `deploymentIntegrationFacts` gives.
+ */
+export async function deploymentCapabilityFacts(
+  read: () => Promise<IntegrationCapabilitiesResponse>,
+): Promise<IntegrationCapabilityDto[] | null> {
+  try {
+    return agentFacingCapabilities((await read()).capabilities);
+  } catch (error) {
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      "mcp_capability_facts_unavailable",
     );
     return null;
   }

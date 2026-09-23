@@ -15,6 +15,7 @@ import { apiClient } from "@/lib/api/client";
 import { runHref } from "@/lib/run-href";
 import { runModelLabel } from "@/lib/run-model";
 import { repositoryAccessLine } from "@/lib/run-repository-access";
+import { changeRequestNaming } from "@integrations/registry";
 import { runPullRequests } from "@/lib/run-prs";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
@@ -23,7 +24,6 @@ import { SPAN_KIND_COLOR } from "@/lib/theme";
 import {
   AGENT_WORKFLOW_ID,
   RUN_COMPLETION_GRACE_MS,
-  pullRequestRef,
   pullRequestRepoLabels,
 } from "@shared/contracts";
 import type { Span, SpanKind, SpanStatus } from "@/lib/types";
@@ -442,23 +442,26 @@ export function TraceDetail({
             )}
             {/* One button per repository the run published to, so a multi-repo
                 run does not hide every PR/MR but the first. */}
-            {runPrs.map((pr, i) => (
-              <a
-                key={`${pr.provider}:${pr.repoPath}:${pr.id}`}
-                href={pr.url}
-                target="_blank"
-                rel="noreferrer"
-                title={pr.repoPath || undefined}
-                className="inline-flex items-center gap-1 max-w-full appearance-none border border-neutral-200 bg-coal px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-white uppercase tracking-[0.04em] cursor-pointer no-underline hover:bg-neutral-800"
-              >
-                {runPrLabels[i] && (
-                  <span className="truncate max-w-[180px]">{runPrLabels[i]}</span>
-                )}
-                <span className="whitespace-nowrap">
-                  PR {pullRequestRef(pr)} ↗
-                </span>
-              </a>
-            ))}
+            {runPrs.map((pr, i) => {
+              const naming = changeRequestNaming(pr);
+              return (
+                <a
+                  key={`${pr.provider}:${pr.repoPath}:${pr.id}`}
+                  href={pr.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={pr.repoPath || undefined}
+                  className="inline-flex items-center gap-1 max-w-full appearance-none border border-neutral-200 bg-coal px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-white uppercase tracking-[0.04em] cursor-pointer no-underline hover:bg-neutral-800"
+                >
+                  {runPrLabels[i] && (
+                    <span className="truncate max-w-[180px]">{runPrLabels[i]}</span>
+                  )}
+                  <span className="whitespace-nowrap">
+                    {naming.noun} {naming.reference} ↗
+                  </span>
+                </a>
+              );
+            })}
           </div>
         )}
       </div>

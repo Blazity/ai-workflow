@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { mcpSettings } from "../services/settings/runtime-settings.js";
 import type { McpToolDependencies } from "./contracts.js";
 import { executeMcpRead } from "./execute-tool.js";
-import { deploymentIntegrationFacts } from "./integration-facts.js";
+import { deploymentCapabilityFacts, deploymentIntegrationFacts } from "./integration-facts.js";
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";
 import { MCP_ENABLED_DOMAINS, registerCatalogTool } from "./tool-catalog.js";
 import { authoringAnnouncementDelivery } from "./tools/authoring-support.js";
@@ -65,6 +65,10 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
         // through a model's context, and this is the half an agent needs to
         // build a workflow that can actually run here.
         integrations: await deploymentIntegrationFacts(deps.loadDeploymentIntegrations),
+        // Which provider serves each capability, the built-in memory store
+        // included: the answer the Integrations page shows, with every
+        // sentence an admin reads replaced by the one an agent may.
+        capabilities: await deploymentCapabilityFacts(deps.loadCapabilityOverview),
       }),
     });
     envelope.meta.trust = "system";

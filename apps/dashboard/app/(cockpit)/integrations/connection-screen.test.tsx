@@ -21,6 +21,8 @@ import type {
   IntegrationState,
 } from "@shared/contracts";
 
+import { CockpitCtx } from "@/components/cockpit/context";
+
 import { ConnectionScreen } from "./[id]/connection/connection-screen";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -109,14 +111,27 @@ interface Sent {
   body: unknown;
 }
 
+/** The impact read every change makes first, answered as "nothing stops"
+ *  unless a test says otherwise. A disconnect leaves the integration unusable;
+ *  a save and a switch of source, whose sources hold the same values, stop
+ *  nothing. */
 function previewReply(call: Sent): unknown | null {
   const body = call.body as { preview?: string } | null;
-  if (body?.preview !== "save" && body?.preview !== "disconnect") return null;
+  const kinds = ["save", "disconnect", "source", "disable"];
+  if (body?.preview === undefined || !kinds.includes(body.preview)) return null;
+  return impactOf({ stops: body.preview === "disconnect" ? "unusable" : "none" });
+}
+
+/** A whole impact answer, as the worker sends one. */
+function impactOf(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    changesFingerprint: body.preview === "disconnect",
+    changesFingerprint: false,
+    stops: "none",
+    unmeasuredCapabilities: [],
     enabledDefinitions: [],
     inFlightRuns: 0,
     repositories: [],
+    ...overrides,
   };
 }
 
@@ -550,11 +565,7 @@ test("the wait says how long the provider has, out loud", async (t) => {
     const body = init?.body === undefined ? null : JSON.parse(String(init.body) || "null");
     if ((body as { preview?: string } | null)?.preview === "save") {
       return Promise.resolve(
-        new Response(JSON.stringify({
-          changesFingerprint: false,
-          enabledDefinitions: [],
-          inFlightRuns: 0,
-        }), {
+        new Response(JSON.stringify(impactOf()), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -605,7 +616,7 @@ test("turning the integration off asks first, and says what it costs", async (t)
 
   assert.equal(sent.length, 0, "nothing is switched off before the consequence is read");
   const rendered = text(root);
-  assert.match(rendered, /fails naming Demo/);
+  assert.match(rendered, /fails naming it at its next use/);
   assert.match(rendered, /enabling it again finds exactly these values/);
 
   await press(button(root, "Turn it off"));
@@ -614,18 +625,114 @@ test("turning the integration off asks first, and says what it costs", async (t)
   assert.deepEqual(sent[0]!.body, { enabled: false });
 });
 
+test("turning it off names the workflows that use it and the runs that stop, though nothing is reconfigured", async (t) => {
+  // Decision 9: impact before Disable. The dialog used to carry three fixed
+  // sentences and no number, so an admin reaching for the kill switch
+  // mid-afternoon could not see that it would stop eleven runs.
+  const sent = stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    if (body?.preview === "disable") {
+      return {
+        status: 200,
+        body: impactOf({
+          stops: "unusable",
+          enabledDefinitions: [{ id: 7, name: "Deploy announcements" }],
+          inFlightRuns: 11,
+        }),
+      };
+    }
+    return {
+      status: 200,
+      body: { integration: integration({ state: state({ enabled: false, status: "disabled" }) }) },
+    };
+  }, false);
+  const root = render(t);
+  const toggle = root.find((node) => node.props?.role === "switch");
+  await act(async () => {
+    toggle.props.onClick?.({ stopPropagation() {}, preventDefault() {} });
+  });
+
+  assert.equal(sent.length, 1, "only the impact is read before the switch is thrown");
+  assert.deepEqual(sent[0]!.body, { preview: "disable" });
+  const rendered = text(root);
+  assert.match(rendered, /Enabled workflows using Demo: Deploy announcements/);
+  assert.match(rendered, /11 runs in flight may stop/);
+  assert.match(rendered, /a run in flight that uses its messaging may stop, or go on without it/);
+  assert.match(rendered, /fails naming it at its next use/);
+
+  await press(button(root, "Turn it off, 11 runs may stop"));
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1]!.body, { enabled: false });
+});
+
+test("a kill switch whose impact could not be read says so on the button", async (t) => {
+  stubReplies(t, () => ({ status: 503, body: { error: "database unavailable" } }), false);
+  const root = render(t);
+  const toggle = root.find((node) => node.props?.role === "switch");
+  await act(async () => {
+    toggle.props.onClick?.({ stopPropagation() {}, preventDefault() {} });
+  });
+
+  assert.match(text(root), /Runs in flight that may stop: unknown/);
+  assert.ok(button(root, "Turn it off with unknown impact"));
+});
+
+test("switching to stored values that differ asks first and names the runs that stop", async (t) => {
+  // The switch moves the pin whenever the two sources hold different values,
+  // and it used to fire on one click.
+  const sent = stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    if (body?.preview === "source") {
+      return {
+        status: 200,
+        body: impactOf({
+          changesFingerprint: true,
+          stops: "reconfigured",
+          enabledDefinitions: [{ id: 4, name: "Nightly triage" }],
+          inFlightRuns: 2,
+        }),
+      };
+    }
+    return { status: 200, body: { integration: integration() } };
+  }, false);
+  const root = render(t, {
+    integration: integration({
+      state: state({
+        source: "environment",
+        environment: {
+          setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"],
+          missingVariables: [],
+          complete: true,
+        },
+      }),
+    }),
+  });
+  await press(button(root, "Use the stored values"));
+
+  assert.equal(sent.length, 1, "nothing is switched before the impact is read and confirmed");
+  assert.deepEqual(sent[0]!.body, { preview: "source", source: "stored" });
+  const rendered = text(root);
+  assert.match(rendered, /This changes the values Demo is used with/);
+  assert.match(rendered, /Nightly triage/);
+  assert.match(rendered, /2 runs in flight may stop/);
+
+  await press(button(root, "Switch the source, 2 runs may stop"));
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1]!.method, "PATCH");
+  assert.deepEqual(sent[1]!.body, { source: "stored" });
+});
+
 test("disconnecting names affected repositories and what is erased", async (t) => {
   const sent = stubReplies(t, (call) => {
     const body = call.body as { preview?: string } | null;
     if (body?.preview === "disconnect") {
       return {
         status: 200,
-        body: {
+        body: impactOf({
           changesFingerprint: true,
-          enabledDefinitions: [],
-          inFlightRuns: 0,
+          stops: "unusable",
           repositories: [{ provider: "gitlab", path: "acme/api" }],
-        },
+        }),
       };
     }
     return { status: 200, body: { integration: integration() } };
@@ -644,17 +751,49 @@ test("disconnecting names affected repositories and what is erased", async (t) =
   assert.equal(sent[1]!.method, "DELETE");
 });
 
+test("disconnecting onto the environment's values says no run stops, and that its token may differ", async (t) => {
+  // A run pins the non-secret values only. The dialog said the deployment
+  // "falls back to the same connection" whenever the environment's URL
+  // matched, whatever token the environment held.
+  const sent = stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    if (body?.preview === "disconnect") {
+      return { status: 200, body: impactOf({ stops: "none" }) };
+    }
+    return { status: 200, body: { integration: integration() } };
+  }, false);
+  const root = render(t, {
+    integration: integration({
+      state: state({
+        environment: {
+          setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"],
+          missingVariables: [],
+          complete: true,
+        },
+      }),
+    }),
+  });
+  await press(button(root, "Disconnect"));
+
+  assert.equal(sent.length, 1, "only the impact preview runs before confirmation");
+  const rendered = text(root);
+  assert.match(rendered, /disconnecting stops no run in flight/);
+  assert.match(rendered, /Runs go on with the environment's secrets, which may not be the ones stored here/);
+  assert.doesNotMatch(rendered, /same connection/);
+});
+
 test("saving a fingerprint change names the enabled definition and the runs that would stop", async (t) => {
   const sent = stubReplies(t, (call) => {
     const body = call.body as { preview?: string } | null;
     if (body?.preview === "save") {
       return {
         status: 200,
-        body: {
+        body: impactOf({
           changesFingerprint: true,
+          stops: "reconfigured",
           enabledDefinitions: [{ id: 7, name: "Deploy announcements" }],
           inFlightRuns: 11,
-        },
+        }),
       };
     }
     return { status: 200, body: { integration: integration(), test: { ok: true } } };
@@ -667,8 +806,8 @@ test("saving a fingerprint change names the enabled definition and the runs that
 
   assert.equal(sent.length, 1, "the impact is read before the configuration is saved");
   assert.match(text(root), /Deploy announcements/);
-  assert.match(text(root), /11 runs in flight will stop/);
-  assert.ok(button(root, "Save and stop 11 runs"));
+  assert.match(text(root), /11 runs in flight may stop/);
+  assert.ok(button(root, "Save the configuration, 11 runs may stop"));
 });
 
 test("a failed impact read says unknown and the destructive save button says so", async (t) => {
@@ -684,14 +823,190 @@ test("a failed impact read says unknown and the destructive save button says so"
 
   assert.equal(sent.length, 1, "a failed read never falls through to the save");
   assert.match(text(root), /Enabled workflows: unknown/);
-  assert.match(text(root), /Runs in flight that would stop: unknown/);
+  assert.match(text(root), /Runs in flight that may stop: unknown/);
   assert.ok(button(root, "Save with unknown impact"));
   assert.doesNotMatch(text(root), /0 runs in flight/);
+});
+
+/**
+ * A fetch whose impact reads wait until the test lets them answer, and whose
+ * every other call answers at once. Returns what was sent and the release.
+ */
+function holdImpactReads(t: TestContext, impact: Record<string, unknown>) {
+  const sent: Sent[] = [];
+  const waiting: Array<() => void> = [];
+  const original = globalThis.fetch;
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    const body = init?.body === undefined ? null : JSON.parse(String(init.body) || "null");
+    sent.push({ url: String(url), method: init?.method, body });
+    if ((body as { preview?: string } | null)?.preview !== undefined) {
+      return new Promise<Response>((resolve) => waiting.push(() => resolve(json(impact))));
+    }
+    return Promise.resolve(json({ integration: integration(), test: { ok: true } }));
+  }) as typeof globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  return { sent, release: () => waiting.splice(0).forEach((answer) => answer()) };
+}
+
+/** Waits for a condition on the screen, never for a number of turns. */
+async function until(condition: () => boolean, what: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) assert.fail(`still waiting for ${what}`);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+  }
+}
+
+/** The dialog's own close, which Escape and a tap on the backdrop call. */
+function closeDialog(root: ReactTestInstance): void {
+  const dialog = root.find(
+    (node) => typeof node.type !== "string" && typeof node.props.onClose === "function" && "title" in node.props,
+  );
+  act(() => dialog.props.onClose());
+}
+
+const ENVIRONMENT_SOURCE = state({
+  source: "environment",
+  environment: {
+    setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"],
+    missingVariables: [],
+    complete: true,
+  },
+});
+
+test("closing the dialog while the impact is read cancels the switch, whatever the read says", async (t) => {
+  // An admin pressed Use the stored values, saw "Reading impact" and changed
+  // their mind: Escape, or a tap on the backdrop on a phone. The read then
+  // said nothing stops and the switch went ahead anyway, handing every later
+  // run a different token after an explicit no.
+  const { sent, release } = holdImpactReads(t, impactOf({ stops: "none" }));
+  const root = render(t, { integration: integration({ state: ENVIRONMENT_SOURCE }) });
+  await press(button(root, "Use the stored values"));
+  closeDialog(root);
+  release();
+
+  await until(() => !button(root, "Use the stored values").props.disabled, "the read to settle");
+  assert.deepEqual(
+    sent.map((call) => call.body),
+    [{ preview: "source", source: "stored" }],
+    "nothing but the impact read was sent",
+  );
+});
+
+test("closing the dialog while the impact is read cancels the save and its test", async (t) => {
+  const { sent, release } = holdImpactReads(t, impactOf({ stops: "none" }));
+  const root = render(t);
+  const url = inputs(root).find((node) => node.props.type === "url");
+  assert.ok(url);
+  type(url, "https://new.example");
+  await press(button(root, "Save and test"));
+  closeDialog(root);
+  release();
+
+  await until(() => !button(root, "Save and test").props.disabled, "the read to settle");
+  assert.equal(sent.length, 1, "nothing but the impact read was sent");
+  assert.equal((sent[0]!.body as { preview: string }).preview, "save");
+});
+
+test("an impact the worker cannot see is unknown, not none, and the button says so", async (t) => {
+  stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    return body?.preview === "disable"
+      ? {
+          status: 200,
+          body: impactOf({
+            stops: "unusable",
+            unmeasuredCapabilities: ["issue_tracker"],
+            enabledDefinitions: null,
+            inFlightRuns: null,
+          }),
+        }
+      : { status: 200, body: { integration: integration() } };
+  }, false);
+  const root = render(t);
+  const toggle = root.find((node) => node.props?.role === "switch");
+  await act(async () => {
+    toggle.props.onClick?.({ stopPropagation() {}, preventDefault() {} });
+  });
+
+  const rendered = text(root);
+  assert.match(rendered, /cannot yet see which workflows use its issue tracker/);
+  assert.doesNotMatch(rendered, /Enabled workflows using Demo: none/);
+  assert.doesNotMatch(rendered, /0 runs in flight/);
+  assert.ok(button(root, "Turn it off with unknown impact"));
+});
+
+test("turning off an integration with no blocks says nothing about blocks, and names what it serves", async (t) => {
+  // "Jira's blocks grey out" sent an admin looking for blocks Jira does not have.
+  stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    return body?.preview === "disable"
+      ? {
+          status: 200,
+          body: impactOf({
+            stops: "unusable",
+            enabledDefinitions: [{ id: 1, name: "Ticket to PR" }],
+            inFlightRuns: 3,
+          }),
+        }
+      : { status: 200, body: { integration: integration() } };
+  }, false);
+  const root = render(t, {
+    integration: integration({ name: "Tracker", capabilities: ["issue_tracker"], blocks: [] }),
+  });
+  const toggle = root.find((node) => node.props?.role === "switch");
+  await act(async () => {
+    toggle.props.onClick?.({ stopPropagation() {}, preventDefault() {} });
+  });
+
+  const rendered = text(root);
+  assert.doesNotMatch(rendered, /blocks grey out/);
+  assert.match(rendered, /a run in flight that uses its issue tracker may stop, or go on without it/);
+  assert.match(rendered, /3 runs in flight may stop/);
+});
+
+test("a config edit that no run checks goes ahead without a question", async (t) => {
+  // The tracker compares no pin, so a Jira edit stops nothing in flight: the
+  // worker says so with a zero, and the save is not interrupted.
+  const sent = stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    return body?.preview === "save"
+      ? {
+          status: 200,
+          body: impactOf({
+            changesFingerprint: true,
+            stops: "reconfigured",
+            enabledDefinitions: [{ id: 1, name: "Ticket to PR" }],
+            inFlightRuns: 0,
+          }),
+        }
+      : { status: 200, body: { integration: integration(), test: { ok: true } } };
+  }, false);
+  const root = render(t);
+  const url = inputs(root).find((node) => node.props.type === "url");
+  assert.ok(url);
+  type(url, "https://new.example");
+  await press(button(root, "Save and test"));
+
+  await until(() => sent.length === 2, "the save to follow the read");
+  assert.equal(sent[1]!.method, "PUT");
+  assert.equal((sent[1]!.body as { preview: string }).preview, "write");
 });
 
 test("an integration whose values live in the environment is not offered Disconnect", (t) => {
   const root = render(t, {
     integration: integration({
+      // Nothing was ever saved here, so no field carries a stored value.
+      fields: [
+        { ...URL_FIELD, storedValue: undefined },
+        { ...TOKEN_FIELD, storedSecretSet: false },
+      ],
       state: state({
         source: "environment",
         environment: {
@@ -714,6 +1029,44 @@ test("an integration whose values live in the environment is not offered Disconn
     0,
   );
   assert.match(text(root), /lives in the deployment's environment variables/);
+});
+
+test("after a disconnect the screen says nothing is stored, and offers nothing that needs values", (t) => {
+  // The version counter survives a disconnect, because it is the token the
+  // next save carries; the values do not. Read as "values are stored", it kept
+  // a live Disconnect for erased values and told the admin that what was
+  // stored "has not passed a test".
+  const root = render(t, {
+    integration: integration({
+      fields: [
+        { ...URL_FIELD, storedValue: undefined },
+        { ...TOKEN_FIELD, storedSecretSet: false },
+      ],
+      state: state({
+        source: "environment",
+        status: "not_connected",
+        connection: "not_connected",
+        usable: false,
+        verification: { state: "never_tested" },
+        stored: {
+          latestVersion: 5,
+          activeVersion: null,
+          missingFields: [],
+          complete: false,
+          prepared: null,
+        },
+      }),
+    }),
+  });
+  const rendered = text(root);
+  assert.equal(
+    root.findAll((node) => node.type === "button" && text(node).trim() === "Disconnect").length,
+    0,
+    "there is nothing left to disconnect",
+  );
+  assert.doesNotMatch(rendered, /Saved 5 times/);
+  assert.doesNotMatch(rendered, /has not passed a test/);
+  assert.match(rendered, /Nothing is stored here/);
 });
 
 test("stored values can be prepared while the environment is still the source", async (t) => {
@@ -739,6 +1092,8 @@ test("stored values can be prepared while the environment is still the source", 
   });
   assert.match(text(root), /Environment variables\s+· in use/);
   await press(button(root, "Use the stored values"));
+  // The impact read found the same connection behind both sources, so the
+  // switch goes ahead without a question nobody needs to answer.
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0]!.body, { source: "stored" });
 });
@@ -792,6 +1147,73 @@ test("another tab changing an integration makes this screen read the server agai
   });
 
   assert.ok(refreshes > 0, "the screen asks the server what is true now");
+});
+
+test("a reload or a closed tab asks before it takes a half-typed value", (t) => {
+  // The shell's own guard covers a move inside the cockpit; leaving the
+  // document is the browser's, and only a beforeunload listener makes it ask.
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    writable: true,
+    value: new EventTarget(),
+  });
+  t.after(() => {
+    if (previous) Object.defineProperty(globalThis, "window", previous);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+  const leave = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    (globalThis as unknown as { window: EventTarget }).window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+
+  const root = render(t);
+  assert.equal(leave(), false, "nothing typed, nothing to lose, no prompt");
+
+  const url = inputs(root).find((node) => node.props.type === "url");
+  assert.ok(url);
+  type(url, "https://half.example");
+  assert.equal(leave(), true, "the browser asks before the typed value is lost");
+});
+
+test("the way back to the list goes through the cockpit's guard, not around it", async (t) => {
+  // A plain link is a full document navigation, which the shell never sees.
+  const moves: string[] = [];
+  let renderer!: ReturnType<typeof create>;
+  act(() => {
+    renderer = create(
+      <AppRouterContext.Provider value={ROUTER as never}>
+        <CockpitCtx.Provider
+          value={{ navigate: (href: string) => (moves.push(href), false) } as never}
+        >
+          <ConnectionScreen integration={integration()} writes={{ allowed: true }} canManage />
+        </CockpitCtx.Provider>
+      </AppRouterContext.Provider>,
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+  const back = renderer.root.find(
+    (node) => node.type === "a" && text(node).includes("Integrations"),
+  );
+  let prevented = false;
+  await act(async () => {
+    back.props.onClick?.({
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      preventDefault() {
+        prevented = true;
+      },
+      stopPropagation() {},
+    });
+  });
+
+  assert.deepEqual(moves, ["/integrations"]);
+  assert.ok(prevented, "the browser's own navigation was handed to the guard");
+  assert.equal(back.props.href, "/integrations", "still a real link for cmd-click and a new tab");
 });
 
 test("a change in another tab while the admin is typing keeps what was typed", async (t) => {

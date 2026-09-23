@@ -80,6 +80,7 @@ export {
   type IntegrationConnection,
   type IntegrationHealthCheck,
   type IntegrationManifest,
+  type IntegrationChangeRequestShape,
   type IntegrationPage,
   type IntegrationRepositoryShape,
   type IntegrationWebhookManifest,

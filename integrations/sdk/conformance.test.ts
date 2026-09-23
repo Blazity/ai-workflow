@@ -122,10 +122,11 @@ test("an id outside lowercase letters and digits, or shorter than three, is refu
 });
 
 test("an id core already uses is refused: webhook routes, capabilities, core words", () => {
-  // `custom` and `resend` are routes under /webhooks today; `vcs` and `memory`
-  // are capability ids; `health` and `settings` are core screens and words the
-  // core-reference gate would find everywhere.
-  for (const id of ["custom", "resend", "vcs", "memory", "health", "settings"]) {
+  // `custom` and `resend` are routes under /webhooks today, and
+  // `capabilities` is the static route beside /api/v1/integrations/:id;
+  // `vcs` and `memory` are capability ids; `health` and `settings` are core
+  // screens and words the core-reference gate would find everywhere.
+  for (const id of ["custom", "resend", "capabilities", "vcs", "memory", "health", "settings"]) {
     const { manifest, runtime } = validIntegration();
     manifest.id = id;
     manifest.blocks[0].type = `${id}_lookup`;

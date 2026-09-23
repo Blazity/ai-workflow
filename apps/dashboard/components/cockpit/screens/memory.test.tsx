@@ -487,6 +487,7 @@ test("a document the provider could not answer for can still be erased, and a re
   await act(async () => {
     button(root, "Confirm delete").props.onClick();
   });
+  await settle();
 
   const text = screenText(root);
   assert.match(text, /Acme Memory is away/);

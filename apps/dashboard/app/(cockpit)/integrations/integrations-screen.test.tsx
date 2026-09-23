@@ -9,7 +9,7 @@ import React from "react";
 import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
-import type { IntegrationDto, IntegrationState } from "@shared/contracts";
+import type { IntegrationCapabilityDto, IntegrationDto, IntegrationState } from "@shared/contracts";
 
 import { IntegrationsScreen } from "./integrations-screen";
 
@@ -109,6 +109,10 @@ function text(root: ReactTestInstance): string {
     .join(" ");
 }
 
+function inputs(root: ReactTestInstance): ReactTestInstance[] {
+  return root.findAll((node) => node.type === "input" || node.type === "textarea");
+}
+
 function links(root: ReactTestInstance): string[] {
   return root
     .findAll((node) => node.type === "a")
@@ -164,6 +168,53 @@ test("a fresh deployment is told what each integration needs and offered Connect
   assert.match(rendered, /Nothing configures it on this deployment yet/);
   assert.match(rendered, /It needs Site URL/);
   assert.ok(rendered.includes("Connect"), "the card offers the action that fixes it");
+});
+
+test("a disconnected integration is offered Connect again, because nothing is stored any more", (t) => {
+  // A disconnect erases every value and leaves the version counter where it
+  // was, because that counter is the token a save carries. Read as "values are
+  // stored", it turned the card of an integration with nothing left into one
+  // being visited rather than set up.
+  const root = render(t, {
+    integrations: [
+      integration({
+        fields: [
+          {
+            key: "baseUrl",
+            label: "Site URL",
+            env: "DEMO_BASE_URL",
+            secret: false,
+            optional: false,
+            format: "url",
+            envSet: false,
+            storedSecretSet: false,
+          },
+        ],
+        state: state({
+          status: "not_connected",
+          connection: "not_connected",
+          usable: false,
+          environment: { setVariables: [], missingVariables: ["DEMO_BASE_URL"], complete: false },
+          stored: {
+            latestVersion: 3,
+            activeVersion: null,
+            missingFields: [],
+            complete: false,
+            prepared: null,
+          },
+        }),
+      }),
+    ],
+  });
+  const rendered = text(root);
+  assert.match(rendered, /Nothing configures it on this deployment yet\. It needs Site URL/);
+  assert.deepEqual(
+    root
+      .findAll((node) => node.type === "a")
+      .map((node) => text(node).trim())
+      .filter((label) => label === "Connect"),
+    ["Connect"],
+  );
 });
 
 test("a failing integration shows the provider's own reason and when it was checked", (t) => {
@@ -296,4 +347,126 @@ test("the card promises the blocks this build can run, and says why about the re
   assert.match(rendered, /Adds the Demo echo block to the workflow editor\./);
   assert.doesNotMatch(rendered, /Adds the Demo echo and Demo lookup/);
   assert.match(rendered, /Demo lookup stays unavailable in the editor: This build cannot yet run/);
+});
+
+// ── Capabilities ─────────────────────────────────────────────────────────────
+
+const CAPABILITIES: IntegrationCapabilityDto[] = [
+  {
+    id: "issue_tracker",
+    label: "Issue tracker",
+    cardinality: "one",
+    declaredBy: ["demo", "other"],
+    serving: { kind: "ambiguous", ids: ["demo", "other"] },
+  },
+  {
+    id: "vcs",
+    label: "Version control",
+    cardinality: "many",
+    declaredBy: ["demo"],
+    serving: { kind: "none" },
+  },
+  {
+    id: "memory",
+    label: "Memory",
+    cardinality: "one",
+    declaredBy: [],
+    serving: { kind: "builtin", name: "Built-in memory" },
+  },
+];
+
+test("the page says which provider serves memory, and the built-in one needs no connection", (t) => {
+  // Decision 10: the built-in provider appears on this screen with no
+  // connection fields. It had no card at all, so an admin could not tell what
+  // memory runs on, or that anything did.
+  const root = render(t, {
+    integrations: [integration(), integration({ id: "other", name: "Other" })],
+    capabilities: CAPABILITIES,
+  });
+  const rendered = text(root);
+  assert.match(rendered, /Memory/);
+  assert.match(rendered, /Served by Built-in memory/);
+  assert.match(rendered, /nothing to connect/);
+  // No memory integration ships in this build, so the card must not send a
+  // first-time admin looking for one.
+  assert.match(rendered, /No integration in this build can replace it/);
+  assert.ok(links(root).includes("/memory"), "what the built-in store holds is one click away");
+  assert.equal(
+    inputs(root).length,
+    0,
+    "a built-in provider has no connection fields to fill in",
+  );
+});
+
+test("two providers of a one-provider capability read as a choice nobody made, not as the first", (t) => {
+  const root = render(t, {
+    integrations: [integration(), integration({ id: "other", name: "Other" })],
+    capabilities: CAPABILITIES,
+  });
+  const rendered = text(root);
+  assert.match(rendered, /Issue tracker/);
+  assert.match(rendered, /Demo and Other both provide it and none is chosen, so neither is used/);
+});
+
+test("a capability nothing serves names who could, by name", (t) => {
+  const root = render(t, { capabilities: CAPABILITIES });
+  assert.match(text(root), /Version control/);
+  assert.match(text(root), /Nothing serves it yet\. Demo can, once connected below/);
+});
+
+test("capabilities that could not be read say so and leave the cards standing", (t) => {
+  const root = render(t, { capabilities: "unreadable" });
+  const rendered = text(root);
+  assert.match(rendered, /Which provider serves each capability could not be read/);
+  assert.match(rendered, /reload in a moment/);
+  assert.ok(links(root).includes("/integrations/demo/connection"), "the cards are still there");
+});
+
+test("a worker from before the overview is named as such, not as a read worth retrying", (t) => {
+  // During a deploy skew the worker answers 404 for the route, and reloading
+  // never helps until it ships.
+  const rendered = text(render(t, { capabilities: "older_worker" }));
+  assert.match(rendered, /This worker does not report which provider serves each capability yet/);
+  assert.doesNotMatch(rendered, /reload/);
+});
+
+test("the built-in card names the integrations that could replace it", (t) => {
+  const root = render(t, {
+    integrations: [integration(), integration({ id: "other", name: "Other" })],
+    capabilities: [
+      {
+        id: "memory",
+        label: "Memory",
+        cardinality: "one",
+        declaredBy: ["demo", "other"],
+        serving: { kind: "builtin", name: "Built-in memory" },
+      },
+    ],
+  });
+  assert.match(text(root), /Connecting Demo and Other below replaces it/);
+});
+
+test("a memory provider the resolver chose and refused is named with its reason, not as unknown", (t) => {
+  const root = render(t, {
+    capabilities: [
+      {
+        id: "memory",
+        label: "Memory",
+        cardinality: "one",
+        declaredBy: ["demo"],
+        serving: {
+          kind: "refused",
+          ids: ["demo"],
+          reason:
+            "Demo is switched on for memory and its connection is failing (the key was refused), so memory was not used",
+        },
+      },
+    ],
+  });
+  const rendered = text(root);
+  assert.match(
+    rendered,
+    /Nothing serves it: Demo is switched on for memory and its connection is failing \(the key was refused\), so memory was not used\./,
+  );
+  assert.doesNotMatch(rendered, /could not be worked out/);
 });

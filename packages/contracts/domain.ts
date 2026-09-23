@@ -57,11 +57,25 @@ export interface RunPullRequest {
   url: string;
   /** Head observed when the workflow published the PR, when available. */
   headSha?: string;
+  /**
+   * How a person references it on its provider (`#12`, `!12`), stamped by
+   * core from the provider's manifest (`changeRequestNaming` in
+   * `@integrations/registry`) on every pull request it hands a messaging
+   * integration. Not stored with a run: the dashboard asks the registry
+   * itself, and an integration cannot, because it may not import one.
+   */
+  reference?: string;
 }
 
-/** Stable provider-neutral pull request reference. */
-export function pullRequestRef(pr: Pick<RunPullRequest, "provider" | "id">): string {
-  return `#${pr.id}`;
+/**
+ * The reference to render for a pull request: the one core stamped, or `#id`
+ * where nothing stamped one. Every pull request core hands a messaging
+ * integration carries a stamp, so `#id` is only ever read for one that came
+ * from somewhere else (a test, or a caller outside core); it is GitHub's form
+ * and on GitLab it names an issue, which is why core stamps.
+ */
+export function pullRequestRef(pr: Pick<RunPullRequest, "id" | "reference">): string {
+  return pr.reference ?? `#${pr.id}`;
 }
 
 /** Last path segment of a potentially nested repository path. */

@@ -47,6 +47,18 @@ let storedTweaks: string | null = null;
  *  navigates away from it. */
 let confirmAnswer = true;
 const confirmPrompts: string[] = [];
+/** The browser's history, as far as the Back guard reads it. */
+const history = {
+  state: { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: ["repositories"] } as unknown,
+  pushed: [] as Array<{ data: unknown; url: string | URL | null | undefined }>,
+  pushState(data: unknown, _unused: string, url?: string | URL | null) {
+    this.pushed.push({ data, url });
+    this.state = data;
+  },
+};
+const locationStub = { href: "http://localhost/repositories" };
+/** Capturing popstate listeners, the only kind the shell registers. */
+const popstateListeners = new Set<(event: Event) => void>();
 /** Every request the mounted tree made, so a guard that has to run BEFORE one
  *  can be shown to have done so. */
 const fetched: string[] = [];
@@ -68,11 +80,15 @@ const doc = {
     getItem: () => storedTweaks,
     setItem: () => {},
   },
-  addEventListener: (event: string, cb: () => void) => {
-    if (event === "focus") focusListeners.add(cb);
+  history,
+  location: locationStub,
+  addEventListener: (event: string, cb: (event: Event) => void) => {
+    if (event === "focus") focusListeners.add(cb as () => void);
+    if (event === "popstate") popstateListeners.add(cb);
   },
-  removeEventListener: (event: string, cb: () => void) => {
-    if (event === "focus") focusListeners.delete(cb);
+  removeEventListener: (event: string, cb: (event: Event) => void) => {
+    if (event === "focus") focusListeners.delete(cb as () => void);
+    if (event === "popstate") popstateListeners.delete(cb);
   },
   dispatchEvent: () => true,
   confirm: (message: string) => {
@@ -540,6 +556,54 @@ function makeDirty(root: ReactTestInstance): void {
     button.props.onClick();
   });
 }
+
+/**
+ * The browser's Back: the URL has already moved, then popstate reaches the
+ * capturing listeners, and the router only if none of them stopped it.
+ */
+function pressBrowserBack(): { reachedRouter: boolean } {
+  locationStub.href = "http://localhost/runs";
+  let stopped = false;
+  const event = { stopImmediatePropagation: () => { stopped = true; } } as unknown as Event;
+  act(() => {
+    for (const listener of popstateListeners) {
+      if (!stopped) listener(event);
+    }
+  });
+  return { reachedRouter: !stopped };
+}
+
+test("the browser's Back from an unsaved draft asks, and a no puts the screen's address back", (t) => {
+  // A phone's back gesture is the main way off a screen, and it threw a
+  // pasted token away with no word: only the in-page links asked.
+  locationStub.href = "http://localhost/repositories";
+  history.pushed.length = 0;
+  const { root } = draftScreen(t);
+  makeDirty(root);
+
+  confirmAnswer = false;
+  const back = pressBrowserBack();
+
+  assert.deepEqual(confirmPrompts, ["Discard unsaved changes?"]);
+  assert.equal(back.reachedRouter, false, "the router never saw the Back");
+  assert.deepEqual(
+    history.pushed.map((entry) => entry.url),
+    ["http://localhost/repositories"],
+    "the screen's own address is put back",
+  );
+});
+
+test("the browser's Back from a clean screen is the router's, and nobody is asked", (t) => {
+  locationStub.href = "http://localhost/repositories";
+  history.pushed.length = 0;
+  draftScreen(t);
+
+  const back = pressBrowserBack();
+
+  assert.deepEqual(confirmPrompts, []);
+  assert.equal(back.reachedRouter, true);
+  assert.deepEqual(history.pushed, []);
+});
 
 test("navigating away from a clean screen is not interrupted", (t) => {
   const { root, pushes } = draftScreen(t);

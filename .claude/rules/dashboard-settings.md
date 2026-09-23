@@ -43,10 +43,13 @@ paths:
   `apps/dashboard/lib/api/client.ts`, while the worker remains the authority for
   role checks and registry validation. Guard:
   `apps/dashboard/app/api/settings/handler.test.ts`.
-- Use one dirty-form registry for every settings form and repository profile
-  draft. The cockpit shell and logout action consult
-  `apps/dashboard/lib/settings/unsaved.ts`, each form owns its `beforeunload`
-  listener, and no per-form popstate sentinel is added. Guard:
+- Use one dirty-form registry for every settings form, repository profile
+  draft and integration connection form. The cockpit shell and logout action
+  consult `apps/dashboard/lib/settings/unsaved.ts`; each form registers and
+  owns its `beforeunload` listener through `useUnsavedWork`
+  (`apps/dashboard/lib/settings/use-unsaved-work.ts`). Back and Forward are
+  asked about once, by the shell (`lib/settings/back-guard.ts`); no per-form
+  popstate sentinel is added. Guard:
   `apps/dashboard/app/(cockpit)/cockpit-shell.test.tsx`.
 - Gate editing with `canEditSettings`; every role may read settings, members see
   read-only forms, and the worker enforces writes. Place:

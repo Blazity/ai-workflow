@@ -103,6 +103,7 @@ const deps = {
     audience: "https://worker.example.com/mcp",
   },
   loadDeploymentIntegrations: async () => testDeploymentIntegrations(),
+  loadCapabilityOverview: async () => ({ capabilities: [] }),
   loadKnownSecrets: async () => [],
   requestId: "request_1",
   traceId: "trace_1",

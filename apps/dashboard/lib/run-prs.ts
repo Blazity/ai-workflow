@@ -1,4 +1,4 @@
-import { pullRequestRef, type RunPullRequest, type VcsProviderKind } from "@shared/contracts";
+import type { RunPullRequest, VcsProviderKind } from "@shared/contracts";
 import { integrationsProviding } from "@integrations/registry";
 
 /** The PR-carrying fields of a Run/RunDetail, so both shapes can be passed in. */
@@ -29,12 +29,6 @@ export function soleVcsProvider(providerIds: readonly string[]): VcsProviderKind
   return providerIds.length === 1 ? providerIds[0]! : "";
 }
 
-function pullRequestNoun(pr: RunPullRequest): { noun: string; sigil: string } {
-  return pr.url.includes("/-/merge_requests/")
-    ? { noun: "MR", sigil: "!" }
-    : { noun: "PR", sigil: "#" };
-}
-
 /**
  * Every PR/MR to render for a run.
  *
@@ -43,8 +37,9 @@ function pullRequestNoun(pr: RunPullRequest): { noun: string; sigil: string } {
  * list rather than dropped. `repoPath` is empty for them: the repository was
  * never stored, and callers only use it to disambiguate multi-PR runs, which a
  * single legacy PR is not. `provider` is empty for the same reason wherever the
- * deployment ships more than one, and the link still says PR or MR because that
- * comes from the URL the row did store.
+ * deployment ships more than one, and the link still says PR or MR because
+ * `changeRequestNaming` (@integrations/registry) reads it off the link the row
+ * did store.
  */
 export function runPullRequests(run: RunPrRefs): RunPullRequest[] {
   if (run.prs && run.prs.length > 0) return run.prs;
@@ -59,11 +54,4 @@ export function runPullRequests(run: RunPrRefs): RunPullRequest[] {
       url: run.prUrl,
     },
   ];
-}
-
-export function primaryPullRequestLabel(run: RunPrRefs): string | null {
-  const primary = runPullRequests(run)[0];
-  if (!primary) return null;
-  const { noun, sigil } = pullRequestNoun(primary);
-  return `${noun} ${pullRequestRef(primary).replace("#", sigil)}`;
 }

@@ -102,3 +102,27 @@ describe("integrationEnabledRequestSchema", () => {
     assert.equal(parsed.ok === false && parsed.message, "enabled must be true or false");
   });
 });
+
+describe("integrationImpactPreviewRequestSchema", () => {
+  it("previews a switch of source, naming the source it would switch to", () => {
+    // Decision 9: impact before a switch of source. The switch moves the pin
+    // whenever the two sources hold different values, so it is asked first.
+    const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, {
+      preview: "source",
+      source: "stored",
+    });
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(parsed.ok && parsed.value, { preview: "source", source: "stored" });
+  });
+
+  it("refuses a source preview that does not say which source", () => {
+    const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, { preview: "source" });
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.ok === false && parsed.message, "source must be environment or stored");
+  });
+
+  it("previews the kill switch", () => {
+    const parsed = parseRequestBody(integrationConnectionSaveRequestSchema, { preview: "disable" });
+    assert.equal(parsed.ok, true);
+  });
+});

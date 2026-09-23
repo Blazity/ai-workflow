@@ -48,7 +48,8 @@ export interface StoredIntegrationConnection {
   readonly latestVersion: number;
   readonly activeVersion: number | null;
   readonly active: StoredIntegrationVersion | null;
-  /** The newest version when it never became active, so the card can say why. */
+  /** The newest version when it never became active, so the card can say why.
+   *  Null once a disconnect erased it: `latestVersion` still counts it. */
   readonly latest: StoredIntegrationVersion | null;
   readonly lastTest: StoredIntegrationTest | null;
 }
@@ -123,6 +124,10 @@ export async function readIntegrationConnections(
   );
   if (connections.length === 0) return new Map();
 
+  // An erased version is history for the audit, not a stored value: a
+  // disconnect keeps the counter where it was and empties every version, so
+  // reading one back here would present erased values as a save waiting to be
+  // tried (the card's "did not pass its test" line) when nothing is stored.
   const versions = rowsOf<VersionRow>(
     await db.execute(sql`
       SELECT v.integration_id, v.version, v.config, v.secrets, v.secret_digests,
@@ -130,6 +135,7 @@ export async function readIntegrationConnections(
       FROM ${integrationConnectionVersions} AS v
       JOIN ${integrationConnections} AS c ON c.integration_id = v.integration_id
       WHERE v.version IN (c.active_version, c.latest_version)
+        AND v.redacted_at IS NULL
     `),
   );
   const byIntegration = new Map<string, VersionRow[]>();
