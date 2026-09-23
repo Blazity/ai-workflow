@@ -16,10 +16,7 @@ import {
 } from "@shared/contracts";
 import { z } from "zod";
 
-export {
-  BUILTIN_HARNESS_PROFILE_MANIFESTS,
-  isRecognisedModel as isRecognisedHarnessModel,
-} from "@shared/harness";
+export { BUILTIN_HARNESS_PROFILE_MANIFESTS } from "@shared/harness";
 
 export const HARNESS_PROVIDER_CONTRACTS = {
   claude: {
