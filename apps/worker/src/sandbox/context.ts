@@ -127,6 +127,17 @@ export interface SelectedRepositoryPromptContext {
   /** Review ledger feed for this repository's PR. Present only on the
    * triggering PR's own repository and only while REVIEW_LEDGER_ENABLED. */
   reviewThreads?: ReviewThreadFeed;
+  /** Set when this ticket's earlier workflow branch no longer exists on the
+   *  provider, so the run dropped its ownership and starts from the default
+   *  branch. Absent on every journal written before this existed. */
+  previousBranchGone?: PreviousBranchGone;
+}
+
+/** A workflow branch an earlier run of the ticket left, found deleted. */
+export interface PreviousBranchGone {
+  branchName: string;
+  /** The pull request that branch carried, when one was recorded. */
+  pr?: { id: number; url: string };
 }
 
 export interface ResearchPlanContextInput {

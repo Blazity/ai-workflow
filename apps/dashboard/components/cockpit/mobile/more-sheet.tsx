@@ -4,6 +4,7 @@
 import { MobileSheet } from "./mobile-sheet";
 import { Button } from "@/components/ui/button";
 import { LogoutButton } from "@/components/cockpit/logout-button";
+import { IntegrationIcon } from "@/components/cockpit/integration-icon";
 import {
   CORE_NAV_GROUPS,
   INTEGRATIONS_GROUP_LABEL,
@@ -65,16 +66,30 @@ export function MoreSheet({
                     on ? "bg-mariner-100 text-mariner font-semibold" : "bg-transparent text-neutral-900"
                   }`}
                 >
-                  <span
-                    className={`${
-                      entry.glyph.length > 1
-                        ? "flex h-[20px] w-[20px] items-center justify-center rounded-[3px] border border-current font-mono text-[10px] font-semibold"
-                        : "font-mono text-lg"
-                    } leading-none ${on ? "text-mariner" : "text-neutral-700"}`}
-                  >
-                    {entry.glyph}
-                  </span>
+                  {entry.integrationId ? (
+                    <IntegrationIcon
+                      id={entry.integrationId}
+                      name={entry.label}
+                      size={20}
+                      muted={entry.note === "Off"}
+                    />
+                  ) : (
+                    <span
+                      className={`${
+                        entry.glyph.length > 1
+                          ? "flex h-[20px] w-[20px] items-center justify-center rounded-[3px] border border-current font-mono text-[10px] font-semibold"
+                          : "font-mono text-lg"
+                      } leading-none ${on ? "text-mariner" : "text-neutral-700"}`}
+                    >
+                      {entry.glyph}
+                    </span>
+                  )}
                   {entry.label}
+                  {entry.note && (
+                    <span className="font-mono text-[10px] font-medium uppercase tracking-[0.06em] text-neutral-500">
+                      {entry.note}
+                    </span>
+                  )}
                 </Button>
               );
             })}

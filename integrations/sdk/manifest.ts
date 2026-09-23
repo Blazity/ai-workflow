@@ -28,6 +28,12 @@ export interface IntegrationManifest {
   /** One line: what this is, for someone deciding whether to connect it. */
   readonly description: string;
   readonly docsUrl?: string;
+  /**
+   * The mark beside the name on the Integrations list, the connection screen
+   * and the sidebar. Optional: without one the dashboard draws the name's
+   * initials on a neutral tile, which is honest and never a guess at a brand.
+   */
+  readonly icon?: IntegrationIcon;
   readonly connection: IntegrationConnection;
   /**
    * Operator settings this integration reads: behaviour an admin decides, as
@@ -57,6 +63,28 @@ export interface IntegrationManifest {
    */
   readonly runState?: boolean;
 }
+
+/**
+ * An integration's mark, as data: the manifest is read where no React and no
+ * asset pipeline exists, so a mark is a path or two letters, never a file.
+ *
+ * A brand mark is somebody's trademark. Take one only from a source that
+ * licenses it (Simple Icons publishes its glyphs as CC0 and says where each
+ * came from) and follow the brand's own guidelines. A provider with no
+ * license-safe mark gets a monogram on its colour instead of a redrawn logo.
+ */
+export type IntegrationIcon =
+  | {
+      /** One SVG path on a 24 by 24 grid, filled; drawn in white on `color`. */
+      readonly glyph: string;
+      /** The brand colour as `#RRGGBB`: the tile the glyph sits on. */
+      readonly color: string;
+    }
+  | {
+      /** One or two characters, drawn in white on `color`. */
+      readonly monogram: string;
+      readonly color: string;
+    };
 
 export interface IntegrationConnection {
   readonly fields: readonly ConnectionField[];

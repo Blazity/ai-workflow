@@ -2,7 +2,7 @@
 
 import { SECRETS_KEY_SETUP_URL } from "@/lib/docs-links";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type {
   IntegrationConnectionFieldDto,
@@ -18,6 +18,7 @@ import type {
 } from "@shared/contracts";
 
 import { useCockpit } from "@/components/cockpit/context";
+import { IntegrationIcon } from "@/components/cockpit/integration-icon";
 import { Button, CkChip, Field, Input, Switch, Textarea, Modal } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import { browserHandlesClick } from "@/lib/cockpit/navigation";
@@ -30,11 +31,13 @@ import {
   andList,
   buildSaveRequest,
   conflictDifferenceLines,
-  disableConsequence,
+  disableConfirmationLines,
+  disabledNoticeLine,
   disconnectConsequence,
   enableConsequence,
   availabilityInsteadOfSwitch,
   fieldHint,
+  fieldSource,
   nothingToDisconnectLine,
   sourceInUse,
   secretsKeyNotice,
@@ -43,21 +46,24 @@ import {
   missingRequiredFields,
   readableProviderText,
   sourceSwitchRefusal,
-  statusChip,
+  sourceSentence,
   statusDetailLines,
   storesValues,
   testOutcomeLines,
   testRefusal,
   unlocksLines,
+  valuesComeFromEnvironment,
   versionConflictLine,
   waitingOnProviderLine,
   CHANGED_ELSEWHERE_LINE,
   CONFLICT_REREAD_FAILED_LINE,
   MEMBER_READ_ONLY_LINE,
   READING_IMPACT_LINE,
+  type FieldSource,
   type IntegrationImpactAction,
-  type IntegrationTone,
 } from "@/lib/integrations/presentation";
+
+import { StatusBadges } from "../../status-badges";
 
 /**
  * The one screen where a credential is typed.
@@ -78,13 +84,6 @@ import {
  * that won, because seeding them once was what made "Save again" hand back a
  * colleague's change as this admin's.
  */
-
-const CHIP_TONES: Record<IntegrationTone, "success" | "failed" | "neutral" | "blocked"> = {
-  success: "success",
-  failed: "failed",
-  quiet: "blocked",
-  off: "neutral",
-};
 
 type NoticeTone = "good" | "bad" | "plain";
 
@@ -180,6 +179,72 @@ function NoticePanel({ notice }: { notice: Notice }) {
   );
 }
 
+const FIELD_TAG_TONES: Record<Exclude<FieldSource["tone"], "none">, "success" | "neutral" | "warn"> = {
+  in_use: "success",
+  set: "neutral",
+  missing: "warn",
+};
+
+/** Where one field's value lives, beside its label. Nothing when there is nothing to say. */
+function FieldSourceTag({ source }: { source: FieldSource }) {
+  if (source.tone === "none") return null;
+  return (
+    <span className="ml-2 inline-flex align-middle">
+      <CkChip tone={FIELD_TAG_TONES[source.tone]}>{source.tag}</CkChip>
+    </span>
+  );
+}
+
+/**
+ * One connection field whose value runs read from the environment.
+ *
+ * Not an input: the value never reaches the browser, and an empty input is
+ * what made a working connection look broken. It says the variable is set and
+ * hides the value, or that it is not set, and names the variable either way.
+ */
+function EnvironmentValue({
+  field,
+  source,
+}: {
+  field: IntegrationConnectionFieldDto;
+  source: FieldSource;
+}) {
+  const hint = [field.description, source.other].filter(Boolean).join(" ");
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-body text-xs font-medium text-neutral-800">
+          {field.label}
+          {!field.optional && (
+            <span aria-hidden="true" className="ml-1 text-fail">
+              *
+            </span>
+          )}
+        </span>
+        <FieldSourceTag source={source} />
+      </div>
+      <div
+        data-environment-value={field.key}
+        className="flex min-h-[30px] flex-wrap items-center gap-x-2 rounded-[3px] border border-dashed border-neutral-300 bg-app-bg px-2 py-1 font-mono text-[12px]"
+      >
+        {field.envSet ? (
+          <>
+            <span aria-hidden="true" className="tracking-[0.2em] text-neutral-700">
+              ••••••••
+            </span>
+            <span className="break-all text-neutral-600">
+              <span className="sr-only">Value hidden, </span>set in {field.env}
+            </span>
+          </>
+        ) : (
+          <span className="break-all text-neutral-500">{field.env} is not set</span>
+        )}
+      </div>
+      {hint && <p className="m-0 font-body text-[11px] leading-relaxed text-neutral-500">{hint}</p>}
+    </div>
+  );
+}
+
 function ConfirmDialog({
   title,
   lines,
@@ -248,6 +313,10 @@ export function ConnectionScreen({
   // typing. State rather than a ref: it is on screen.
   const [dirty, setDirty] = useState(false);
   const [changedElsewhere, setChangedElsewhere] = useState(false);
+  // Open from the start when something is already stored beside an environment
+  // in use, so those values are not hidden from the admin who stored them.
+  const [formOpen, setFormOpen] = useState(() => storesValues(initialIntegration));
+  const formId = useId();
   const inFlight = useRef(false);
   // Which impact read is the live one. Closing the dialog moves it on, so a
   // read that lands after the admin cancelled finds itself stale and neither
@@ -288,7 +357,6 @@ export function ConnectionScreen({
   }
 
   const state = integration.state;
-  const chip = statusChip(state);
   const writable = canManage && writes.allowed;
   const stored = storesValues(integration);
 
@@ -539,7 +607,7 @@ export function ConnectionScreen({
           tone: "plain",
           lines: enabled
             ? [enableConsequence(result.data.integration)]
-            : [`${integration.name} is off. ${disableConsequence(integration)[0]}`],
+            : [disabledNoticeLine(integration)],
         });
       },
       closeConfirmation,
@@ -600,20 +668,40 @@ export function ConnectionScreen({
   const storedRefusal = sourceSwitchRefusal(integration, "stored");
   const keyNotice = secretsKeyNotice(integration);
   const availabilityNote = availabilityInsteadOfSwitch(integration);
+  const fromEnvironment = valuesComeFromEnvironment(integration);
+  // Below an environment in use, the form is for preparing stored values, so
+  // it waits behind a button; anywhere else it is the point of the section.
+  const showForm = !fromEnvironment || formOpen;
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8 max-w-[840px]">
       <div className="flex flex-col gap-1">
         <BackToIntegrations />
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="m-0 font-display text-2xl font-medium leading-[1.2] text-neutral-900">
-            {integration.name}
-          </h2>
-          <CkChip tone={CHIP_TONES[chip.tone]}>{chip.label}</CkChip>
+        <div className="flex items-center gap-3">
+          <IntegrationIcon
+            id={integration.id}
+            name={integration.name}
+            size={40}
+            muted={state.status === "disabled"}
+          />
+          <div className="flex min-w-0 flex-col gap-1">
+            <h2 className="m-0 font-display text-2xl font-medium leading-[1.2] text-neutral-900">
+              {integration.name}
+            </h2>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <StatusBadges integration={integration} />
+            </div>
+          </div>
         </div>
+        {/* Where the values come from, first and beside the status: an
+            environment-configured connection read as Connected above empty
+            inputs, and the sentence that explained it was further down. */}
+        <p className="m-0 mt-1 font-body text-[13px] text-neutral-800 break-words">
+          {sourceSentence(integration)}
+        </p>
         <p className="m-0 font-body text-[13px] text-neutral-600">{integration.description}</p>
         <div className="flex flex-col gap-[2px] mt-1">
-          {statusDetailLines(integration, scan).map((line, index) => (
+          {statusDetailLines(integration, scan, { source: false }).map((line, index) => (
             <span key={index} className="font-body text-[12px] text-neutral-500 break-words">
               {line}
             </span>
@@ -662,104 +750,169 @@ export function ConnectionScreen({
       <Section
         title="Values"
         description={
-          writable
-            ? "Saved values are tested against the provider before anything starts using them. A test that fails leaves the connection in use exactly as it was."
-            : "What this integration needs, and which of it this deployment has."
+          fromEnvironment
+            ? "Runs read these from this deployment's environment variables. No value is ever shown here: each field says whether its variable is set. To change one, change the variable on the deployment."
+            : writable
+              ? "Saved values are tested against the provider before anything starts using them. A test that fails leaves the connection in use exactly as it was."
+              : "What this integration needs, and which of it this deployment has."
         }
       >
-        <div className="flex flex-col gap-3">
-          {keyNotice && (
-            <p
-              role="note"
-              className="m-0 rounded-[3px] border border-neutral-300 bg-neutral-50 px-3 py-2 font-body text-[12px] text-neutral-700"
+        {fromEnvironment && (
+          <div className="flex flex-col gap-3">
+            {integration.fields.map((field) => (
+              <EnvironmentValue
+                key={field.key}
+                field={field}
+                source={fieldSource(field, integration)}
+              />
+            ))}
+          </div>
+        )}
+
+        {fromEnvironment && writable && (
+          <div className="flex flex-col gap-1 border-t border-neutral-200 pt-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="self-start"
+              aria-expanded={formOpen}
+              aria-controls={formId}
+              onClick={() => setFormOpen((open) => !open)}
             >
-              {keyNotice.text}{" "}
-              <a
-                href={SECRETS_KEY_SETUP_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="text-neutral-900 underline"
+              {formOpen
+                ? "Hide the values stored here"
+                : stored
+                  ? "Show the values stored here"
+                  : "Store values here instead"}
+            </Button>
+            <p className="m-0 font-body text-[11px] text-neutral-500">
+              Values stored here are tested when saved and stay unused until you choose Use the
+              stored values below. Runs keep reading the environment until then.
+            </p>
+          </div>
+        )}
+
+        {showForm && (
+          <div id={formId} className="flex flex-col gap-3">
+            {keyNotice && (
+              <p
+                role="note"
+                className="m-0 rounded-[3px] border border-neutral-300 bg-neutral-50 px-3 py-2 font-body text-[12px] text-neutral-700"
               >
-                Open SETUP.md
-              </a>
-            </p>
-          )}
-          {integration.fields.length === 0 && (
-            <p className="m-0 font-body text-[12px] text-neutral-600">
-              This integration needs no values.
-            </p>
-          )}
-          {integration.fields.map((field) => {
-            const clearing = clearedSecrets.includes(field.key);
-            const secretLocked = field.secret && !state.secretsKeyAvailable;
-            const control =
-              field.format === "multiline" ? (
-                <Textarea
-                  value={values[field.key] ?? ""}
-                  disabled={!writable || busy !== null || secretLocked || clearing}
-                  monospace
-                  onChange={(event) => typeInto(field.key, event.target.value)}
-                />
-              ) : (
-                <Input
-                  type={field.secret ? "password" : field.format === "url" ? "url" : "text"}
-                  inputMode={field.format === "integer" ? "numeric" : undefined}
-                  autoComplete={field.secret ? "new-password" : "off"}
-                  value={values[field.key] ?? ""}
-                  placeholder={
-                    field.secret && field.storedSecretSet && !clearing
-                      ? "A value is stored"
-                      : undefined
-                  }
-                  disabled={!writable || busy !== null || secretLocked || clearing}
-                  monospace
-                  onChange={(event) => typeInto(field.key, event.target.value)}
-                />
-              );
-            return (
-              <div key={field.key} className="flex flex-col gap-1">
-                <Field
-                  label={field.label}
-                  required={!field.optional}
-                  hint={fieldHint(field, state, clearing)}
-                  error={missing.includes(field.label) ? "This one is required." : undefined}
+                {keyNotice.text}{" "}
+                <a
+                  href={SECRETS_KEY_SETUP_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-neutral-900 underline"
                 >
-                  {control}
-                </Field>
-                {field.secret && field.storedSecretSet && writable && (
-                  <Button
-                    variant="text"
-                    className="self-start font-body text-[11px] text-neutral-700 underline"
-                    disabled={busy !== null}
-                    onClick={() => {
-                      setDirty(true);
-                      setClearedSecrets((current) =>
-                        clearing
-                          ? current.filter((key) => key !== field.key)
-                          : [...current, field.key],
-                      );
-                    }}
+                  Open SETUP.md
+                </a>
+              </p>
+            )}
+            {integration.fields.length === 0 && (
+              <p className="m-0 font-body text-[12px] text-neutral-600">
+                This integration needs no values.
+              </p>
+            )}
+            {integration.fields.map((field) => {
+              const clearing = clearedSecrets.includes(field.key);
+              const secretLocked = field.secret && !state.secretsKeyAvailable;
+              const source = fieldSource(field, integration);
+              const control =
+                field.format === "multiline" ? (
+                  <Textarea
+                    required={!field.optional}
+                    value={values[field.key] ?? ""}
+                    disabled={!writable || busy !== null || secretLocked || clearing}
+                    monospace
+                    onChange={(event) => typeInto(field.key, event.target.value)}
+                  />
+                ) : (
+                  <Input
+                    required={!field.optional}
+                    type={field.secret ? "password" : field.format === "url" ? "url" : "text"}
+                    inputMode={field.format === "integer" ? "numeric" : undefined}
+                    autoComplete={field.secret ? "new-password" : "off"}
+                    value={values[field.key] ?? ""}
+                    placeholder={
+                      field.secret && field.storedSecretSet && !clearing
+                        ? "A value is stored"
+                        : undefined
+                    }
+                    disabled={!writable || busy !== null || secretLocked || clearing}
+                    monospace
+                    onChange={(event) => typeInto(field.key, event.target.value)}
+                  />
+                );
+              return (
+                <div key={field.key} className="flex flex-col gap-1">
+                  <Field
+                    label={
+                      <>
+                        {field.label}
+                        {/* The marker Field draws for `required`, drawn here so
+                            it stays beside the name rather than after the tag;
+                            the control still carries `required`. */}
+                        {!field.optional && (
+                          <span aria-hidden="true" className="ml-1 text-fail">
+                            *
+                          </span>
+                        )}
+                        {/* In the stored-values form below an environment in
+                            use, the environment's tag would describe the other
+                            source: the form says what is stored. */}
+                        {!fromEnvironment && <FieldSourceTag source={source} />}
+                      </>
+                    }
+                    hint={[
+                      fieldHint(field, state, clearing),
+                      fromEnvironment ? "" : source.where,
+                      fromEnvironment ? "" : source.other,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    error={missing.includes(field.label) ? "This one is required." : undefined}
                   >
-                    {clearing ? "Keep the stored value" : "Erase the stored value on save"}
-                  </Button>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                    {control}
+                  </Field>
+                  {field.secret && field.storedSecretSet && writable && (
+                    <Button
+                      variant="text"
+                      className="self-start font-body text-[11px] text-neutral-700 underline"
+                      disabled={busy !== null}
+                      onClick={() => {
+                        setDirty(true);
+                        setClearedSecrets((current) =>
+                          clearing
+                            ? current.filter((key) => key !== field.key)
+                            : [...current, field.key],
+                        );
+                      }}
+                    >
+                      {clearing ? "Keep the stored value" : "Erase the stored value on save"}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {writable && (
           <div className="flex flex-col gap-2">
             <div className="flex flex-wrap gap-2">
-              <Button
-                variant="primary"
-                loading={busy === "save"}
-                disabled={busy !== null || keyNotice?.blocksSave === true}
-                title={keyNotice?.blocksSave ? keyNotice.text : undefined}
-                onClick={save}
-              >
-                Save and test
-              </Button>
+              {showForm && (
+                <Button
+                  variant="primary"
+                  loading={busy === "save"}
+                  disabled={busy !== null || keyNotice?.blocksSave === true}
+                  title={keyNotice?.blocksSave ? keyNotice.text : undefined}
+                  onClick={save}
+                >
+                  Save and test
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 loading={busy === "test"}
@@ -912,10 +1065,7 @@ export function ConnectionScreen({
           lines={
             busy === "impact"
               ? [READING_IMPACT_LINE]
-              : [
-                  ...integrationImpactLines(integration, impact, "disable"),
-                  ...disableConsequence(integration),
-                ]
+              : disableConfirmationLines(integration, impact)
           }
           confirmLabel={
             busy === "impact" ? "Reading impact" : integrationImpactConfirmLabel(impact, "disable")

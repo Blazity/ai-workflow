@@ -88,6 +88,65 @@ describe("SandboxManager.provisionMultiRepo", () => {
     );
   });
 
+  // The SDK's own words for a refused create are "Status code 400 is not ok",
+  // which is what a person read on the ticket when a re-run tried to check out
+  // a branch that had been deleted.
+  function sdkRefusal(status: number, json: unknown) {
+    return Object.assign(new Error(`Status code ${status} is not ok`), {
+      response: { status },
+      json,
+    });
+  }
+  const ownedRepository = {
+    provider: "github" as const,
+    repoPath: "acme/api",
+    defaultBranch: "main",
+    selectedRationale: "workflow-owned branch for this ticket",
+    workflowOwnedBranch: { branchName: "ai-workflow/awp-271" },
+  };
+
+  it("names the repository, branch and reason when the sandbox service refuses the create", async () => {
+    const { Sandbox } = await import("@vercel/sandbox");
+    vi.mocked(Sandbox.create).mockRejectedValueOnce(
+      sdkRefusal(400, { error: { code: "bad_request", message: "Revision not found" } }),
+    );
+    const manager = new SandboxManager(baseConfig);
+
+    const failure = await manager
+      .provisionMultiRepo(
+        { branchName: "ai-workflow/awp-271", repositories: [ownedRepository] },
+        null,
+        null,
+      )
+      .then(
+        () => {
+          throw new Error("expected the create to be refused");
+        },
+        (error: unknown) => error as Error,
+      );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).not.toContain("Status code 400 is not ok");
+    expect(failure.message).toContain("github:acme/api at branch ai-workflow/awp-271");
+    expect(failure.message).toContain("HTTP 400: Revision not found");
+    expect(failure.message).toContain("Check that the branch exists");
+  });
+
+  it("leaves a server-side sandbox failure as it came", async () => {
+    const { Sandbox } = await import("@vercel/sandbox");
+    const outage = sdkRefusal(503, {});
+    vi.mocked(Sandbox.create).mockRejectedValueOnce(outage);
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        { branchName: "ai-workflow/awp-271", repositories: [ownedRepository] },
+        null,
+        null,
+      ),
+    ).rejects.toBe(outage);
+  });
+
   it("checks out default branches and records research baselines in read mode", async () => {
     const { Sandbox } = await import("@vercel/sandbox");
     mockRunCommand.mockImplementation(async (_name: string, args: string[]) => ({

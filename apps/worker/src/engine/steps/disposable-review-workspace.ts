@@ -1,4 +1,5 @@
 import type { AgentTracingRun } from "../support/integration-tracing.js";
+import { sandboxCreateRefusal } from "../../sandbox/create-refusal.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { AgentProtocolResult } from "../../sandbox/agents/types.js";
 import type {
@@ -215,6 +216,8 @@ export async function provisionDisposableReviewWorkspaceStep(
     ...getSandboxCredentials(),
     runtime: "node24",
     timeout: input.jobTimeoutMs,
+  }).catch((error: unknown) => {
+    throw sandboxCreateRefusal(error) ?? error;
   });
   const { runRegistry } = await createAdapters();
 

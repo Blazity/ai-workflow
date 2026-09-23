@@ -47,25 +47,44 @@ test("a deployment with nothing connected still has the Integrations page", () =
   assert.equal(entries[0]!.href, "/integrations");
 });
 
-test("only connected and enabled integrations get an entry", () => {
+test("an integration nobody configured gets no entry; one in use does", () => {
   const entries = integrationNavEntries([
     demo,
-    integration("acme", "Acme", { usable: false }),
+    integration("acme", "Acme", { usable: false, status: "not_connected", connection: "not_connected" }),
     integration("other", "Other"),
   ]);
   assert.deepEqual(
     entries.map((entry) => entry.id),
     ["integrations", "integration:demo", "integration:other"],
   );
+  assert.ok(entries.every((entry) => entry.note === undefined), "in use needs no word");
 });
 
-test("an integration switched off leaves the sidebar", () => {
-  // Same integration, same build, one flag: the entry is the answer to "why is
-  // nothing running", and leaving it would say the opposite.
-  const on = integrationNavEntries([demo]).map((entry) => entry.id);
-  const off = integrationNavEntries([{ ...demo, usable: false }]).map((entry) => entry.id);
-  assert.ok(on.includes("integration:demo"));
-  assert.ok(!off.includes("integration:demo"));
+// Red when: the sidebar lists only usable integrations again (QA, Arthur on
+// production): an admin who had just switched Arthur off had to go through
+// All integrations to switch it back on.
+test("an integration switched off keeps its entry, marked Off, so it can be switched back on", () => {
+  const on = integrationNavEntries([demo]).find((entry) => entry.id === "integration:demo");
+  const off = integrationNavEntries([
+    { ...demo, usable: false, status: "disabled", connection: "connected" },
+  ]).find((entry) => entry.id === "integration:demo");
+  assert.equal(on?.note, undefined);
+  assert.equal(off?.note, "Off");
+  assert.equal(off?.href, "/integrations/demo");
+});
+
+test("a failing integration keeps its entry and says so; one switched off before it was ever set up does not", () => {
+  const entries = integrationNavEntries([
+    integration("demo", "Demo", { usable: false, status: "failing", connection: "failing" }),
+    integration("acme", "Acme", { usable: false, status: "disabled", connection: "not_connected" }),
+  ]);
+  assert.deepEqual(
+    entries.map((entry) => [entry.id, entry.note]),
+    [
+      ["integrations", undefined],
+      ["integration:demo", "Failing"],
+    ],
+  );
 });
 
 test("an integration's entry opens its area, not its connection form", () => {

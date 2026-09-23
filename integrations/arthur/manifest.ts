@@ -60,6 +60,8 @@ export const manifest = defineIntegration({
   description:
     "Traces every agent run, grades it continuously, and screens untrusted text for prompt injection.",
   docsUrl: "https://docs.arthur.ai/",
+  // No license-safe mark is published for Arthur, so its initials on a neutral tile.
+  icon: { monogram: "AE", color: "#181B20" },
   connection: {
     fields: [
       {

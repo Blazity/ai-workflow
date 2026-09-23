@@ -111,15 +111,16 @@ interface Sent {
   body: unknown;
 }
 
-/** The impact read every change makes first, answered as "nothing stops"
- *  unless a test says otherwise. A disconnect leaves the integration unusable;
- *  a save and a switch of source, whose sources hold the same values, stop
- *  nothing. */
+/** The impact read every change makes first, answered as the worker's
+ *  `previewedChange` answers for a usable integration: a disconnect and the
+ *  kill switch leave it unusable; a save and a switch of source, whose sources
+ *  hold the same values, stop nothing. */
 function previewReply(call: Sent): unknown | null {
   const body = call.body as { preview?: string } | null;
   const kinds = ["save", "disconnect", "source", "disable"];
   if (body?.preview === undefined || !kinds.includes(body.preview)) return null;
-  return impactOf({ stops: body.preview === "disconnect" ? "unusable" : "none" });
+  const unusable = body.preview === "disconnect" || body.preview === "disable";
+  return impactOf({ stops: unusable ? "unusable" : "none" });
 }
 
 /** A whole impact answer, as the worker sends one. */
@@ -686,6 +687,13 @@ test("turning the integration off asks first, and says what it costs", async (t)
   const rendered = text(root);
   assert.match(rendered, /fails naming Demo at its next use of it/);
   assert.match(rendered, /enabling it again finds exactly these values/);
+  // Red when: the consequence lines repeat what the impact line already said
+  // about runs in flight (QA, Arthur: the same sentence twice in one dialog).
+  assert.equal(
+    rendered.match(/a run in flight that uses Demo's blocks and its messaging fails naming Demo/gi)?.length,
+    1,
+    "the dialog says what happens to a run in flight exactly once",
+  );
 
   await press(button(root, "Turn it off"));
   assert.equal(sent.length, 1);
@@ -1340,4 +1348,71 @@ test("a change in another tab while the admin is typing keeps what was typed", a
     "https://mine.example",
   );
   assert.match(text(root), /Somebody else changed this integration while you were typing/);
+});
+
+// Red when: an integration whose values come from the environment shows its
+// fields as empty inputs again (Filip on production: a Connected Jira above a
+// blank form reads as broken, and the reason was further down the page).
+test("values read from the environment are shown as set and hidden, not as empty inputs", async (t) => {
+  stubFetch(t, () => ({}));
+  const root = render(t, {
+    integration: integration({
+      fields: [
+        { ...URL_FIELD, envSet: true, storedValue: undefined },
+        { ...TOKEN_FIELD, envSet: true, storedSecretSet: false },
+      ],
+      state: state({
+        source: "environment",
+        verification: { state: "never_tested" },
+        environment: {
+          setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"],
+          missingVariables: [],
+          complete: true,
+        },
+        stored: { latestVersion: 0, activeVersion: null, missingFields: [], complete: false, prepared: null },
+      }),
+    }),
+  });
+  const rendered = text(root);
+  // The source first, next to the status, before the description.
+  assert.ok(
+    rendered.indexOf("Values come from this deployment's environment variables") <
+      rendered.indexOf("A deterministic provider used for demos"),
+    "the source sentence comes before anything else about the integration",
+  );
+  assert.match(rendered, /From environment variables/);
+  assert.match(rendered, /Never tested/);
+  assert.equal(inputs(root).length, 0, "no input stands in for a value the browser never sees");
+  assert.match(rendered, /set in\s+DEMO_BASE_URL/);
+  assert.match(rendered, /set in\s+DEMO_API_TOKEN/);
+  assert.match(rendered, /Environment, in use/);
+  // Testing what is in use needs no form.
+  button(root, "Test what is in use");
+
+  await press(button(root, "Store values here instead"));
+  assert.equal(inputs(root).length, 2, "the form is one deliberate click away");
+  button(root, "Save and test");
+});
+
+test("values stored beside an environment in use are shown from the start", (t) => {
+  stubFetch(t, () => ({}));
+  const root = render(t, {
+    integration: integration({
+      fields: [
+        { ...URL_FIELD, envSet: true },
+        { ...TOKEN_FIELD, envSet: true },
+      ],
+      state: state({
+        source: "environment",
+        environment: {
+          setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"],
+          missingVariables: [],
+          complete: true,
+        },
+      }),
+    }),
+  });
+  assert.equal(inputs(root).length, 2);
+  assert.match(text(root), /A value is also stored here, and is not in use\./);
+  button(root, "Hide the values stored here");
 });
