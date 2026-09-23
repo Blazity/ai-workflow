@@ -154,7 +154,6 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
     readWebhookConnection,
     redactIntegrationText,
     secretValuesOf,
-    storedValuesMovedToSettings,
   } = await import("./connection-values.js");
   const { environmentReaderFrom } = await import("./resolve.js");
   const { buildIntegrationContext, redactedError } = await import("./context.js");
@@ -234,15 +233,6 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
     }
     let settings: Record<string, readonly string[]> | undefined;
     if (input.forWebhook && (manifest.settings?.length ?? 0) > 0) {
-      // A value stored before its setting existed is not what applies now; it
-      // is said on every request that would have used it, not only on a card
-      // an admin may never open.
-      for (const moved of storedValuesMovedToSettings(manifest, reading.active)) {
-        logger.warn(
-          { integration: manifest.id, key: moved.key, setting: moved.setting, source: state.source },
-          "integration_stored_value_not_read",
-        );
-      }
       try {
         settingsSnapshot ??= await input.forWebhook.settings();
         settings = integrationSettingValues(manifest, settingsSnapshot);

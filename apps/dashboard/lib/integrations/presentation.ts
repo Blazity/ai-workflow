@@ -21,7 +21,6 @@ import { INTEGRATION_PROVIDER_WAIT_MS } from "@shared/contracts";
 
 import { capabilityLabel as sdkCapabilityLabel } from "@integrations/registry";
 import { formatDateTime } from "@/lib/date-time";
-import { settingLabel } from "@/lib/settings/format";
 
 /** The chip tones the cockpit already ships, named by what they mean here. */
 export type IntegrationTone = "success" | "failed" | "quiet" | "off";
@@ -390,14 +389,6 @@ export function statusDetailLines(integration: IntegrationDto): string[] {
   if (state.failure) lines.push(failureLine(state.failure));
   const webhook = webhookLine(integration);
   if (webhook) lines.push(webhook);
-  // A stored value nothing reads any more, most likely an allowlist: said
-  // here because the setting that replaced it applies with its own default
-  // when nothing sets it, which can let everyone in.
-  for (const moved of integration.movedToSettings ?? []) {
-    lines.push(
-      `The value stored here under ${moved.key} is not used: it moved to the setting ${settingLabel(moved.setting)} (${moved.setting}) on the Settings page, under Integrations, which applies instead, with its default when nothing sets it. Set it there; saving this connection again removes the stored value.`,
-    );
-  }
 
   const neverConfigured =
     state.connection === "not_connected" &&

@@ -789,10 +789,6 @@ settings: [
   setting: it is read while nothing is stored, as a comma-separated list, and a
   stored value shadows it. A new setting needs none. A stored list is one value
   per entry: core refuses an entry that is blank or holds a comma.
-- A value a stored connection version still holds under a setting's key (a
-  field that became a setting) is read by nothing; core names it on the card
-  (`movedToSettings`) and logs `integration_stored_value_not_read` from the
-  webhook read, and the next save drops it.
 - Your webhook reads it as `ctx.settings.<key>`, loaded when the request
   arrives. When the settings cannot be read core answers 503 and never calls
   you, so an empty list always means the admin left it empty.

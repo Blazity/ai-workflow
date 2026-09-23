@@ -1,9 +1,5 @@
-import { type ConnectionField, type IntegrationManifest, integrationSettingKey } from "@integrations/sdk";
-import type {
-  IntegrationFailure,
-  IntegrationMovedValueDto,
-  IntegrationSource,
-} from "@shared/contracts";
+import type { ConnectionField, IntegrationManifest } from "@integrations/sdk";
+import type { IntegrationFailure, IntegrationSource } from "@shared/contracts";
 
 import {
   IntegrationSecretCorruptedError,
@@ -77,29 +73,6 @@ export function readConnectionValues(input: {
     values[field.key] = field.format === "integer" ? Number(resolved) : resolved;
   }
   return { ok: true, values };
-}
-
-/**
- * What a stored connection version holds under the key of one of the
- * integration's operator settings, and is therefore not read.
- *
- * Slack's allowlist was a connection field (`allowedUserIds`) until it became
- * a setting. A version saved before that still carries it in `config`, and no
- * reader of a connection knows the key any more: the setting applies instead,
- * read from its stored row, else its variable, else its default. With neither
- * set, a stored allowlist that used to keep the command to a few people now
- * lets the whole workspace in, so this is what the card shows and the webhook
- * read logs instead of staying quiet. It disappears on the next save, which
- * builds a version from the connection fields alone.
- */
-export function storedValuesMovedToSettings(
-  manifest: IntegrationManifest,
-  active: StoredIntegrationVersion | null,
-): IntegrationMovedValueDto[] {
-  if (!active) return [];
-  return (manifest.settings ?? [])
-    .filter((setting) => (active.config[setting.key] ?? "").trim().length > 0)
-    .map((setting) => ({ key: setting.key, setting: integrationSettingKey(manifest.id, setting.key) }));
 }
 
 /**

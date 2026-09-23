@@ -72,12 +72,6 @@ holds a comma is refused. Changing it never stops a run that is posting to
 Slack, and switching the connection between environment and stored values
 leaves it as it is.
 
-A Slack connection stored while the allowlist was still a connection field may
-carry it as `allowedUserIds`. Nothing reads that value; the setting applies,
-and with nothing set it lets everyone in. The Slack card says so and names the
-setting, each command logs `integration_stored_value_not_read`, and saving the
-connection again removes the old value.
-
 The commands are `list`, `status <KEY>`, `cancel <KEY>`, `redis summary`,
 `redis inspect <KEY>` and `redis reset <KEY>`. What each of them does is the
 product's, not this package's: it turns the text into a run control command and

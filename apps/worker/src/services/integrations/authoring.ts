@@ -35,7 +35,6 @@ import {
   readConnectionValues,
   readWebhookConnection,
   redactIntegrationText,
-  storedValuesMovedToSettings,
   secretValuesOf,
 } from "./connection-values.js";
 import { buildIntegrationContext } from "./context.js";
@@ -178,7 +177,6 @@ function toDto(
 ): IntegrationDto {
   const state = stateOf(manifest, stored, material);
   const webhook = webhookOf(manifest, stored, material, state);
-  const moved = storedValuesMovedToSettings(manifest, stored?.active ?? null);
   return {
     id: manifest.id,
     name: manifest.name,
@@ -190,7 +188,6 @@ function toDto(
     fields: fieldDtos(manifest, stored),
     state,
     ...(webhook === undefined ? {} : { webhook }),
-    ...(moved.length === 0 ? {} : { movedToSettings: moved }),
   };
 }
 

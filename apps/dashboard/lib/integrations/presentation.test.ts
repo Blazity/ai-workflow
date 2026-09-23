@@ -248,19 +248,6 @@ test("a webhook that agrees with the rest of the integration adds nothing to the
   assert.doesNotMatch(off, /slash command/, "switched off says so once, above");
 });
 
-test("an allowlist stored before it became a setting is named as not used, with where it went", () => {
-  // Nothing reads it, and the setting that replaced it applies with its
-  // default (everyone) when nothing sets it: a card that stayed quiet would
-  // leave the admin believing the command is still kept to a few people.
-  const rendered = statusDetailLines(
-    commandOnlySlack({ movedToSettings: [{ key: "allowedUserIds", setting: "SLACK_ALLOWED_USER_IDS" }] }),
-  ).join(" ");
-  assert.match(rendered, /The value stored here under allowedUserIds is not used/);
-  assert.match(rendered, /Slack allowed user ids \(SLACK_ALLOWED_USER_IDS\) on the Settings page, under Integrations/);
-  assert.match(rendered, /saving this connection again removes the stored value/);
-  assert.doesNotMatch(statusDetailLines(commandOnlySlack()).join(" "), /is not used/);
-});
-
 test("a save that failed its test is reported as stored and not in use", () => {
   const lines = statusDetailLines(
     integration({
