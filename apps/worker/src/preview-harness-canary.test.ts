@@ -9,6 +9,7 @@ import {
   leaveTargetAfterFailedRun,
   readAiColumn,
   releaseCanaryRun,
+  canaryCaseSelection,
   resolveCanaryCases,
   sweepFixtureTicket,
   waitForSuccessfulRun,
@@ -321,8 +322,28 @@ describe("engine canary fixtures", () => {
 });
 
 describe("canary observations: identity before dispatch", () => {
-  it("resolves one case per fixture from workflows.list", () => {
+  // Red when: the default canary runs the built-in Opus and Codex cases, which
+  // spend real model money on every run and fail on a provider account rather
+  // than on the code under test. The default is the one cheap custom case.
+  it("runs only the custom Haiku case unless all three are asked for", () => {
     const cases = resolveCanaryCases(listedFixtures());
+
+    expect(cases.map((canary) => canary.label)).toEqual(["custom"]);
+    expect(cases[0]!.workflowId).toBe(ENGINE_CANARY_FIXTURES.custom.workflowId);
+    expect(ENGINE_CANARY_FIXTURES.custom.workflowId).toBe(38);
+  });
+
+  it("reads the case selection from the environment and refuses anything else", () => {
+    expect(canaryCaseSelection({})).toBe("custom");
+    expect(canaryCaseSelection({ ENGINE_CANARY_CASES: "" })).toBe("custom");
+    expect(canaryCaseSelection({ ENGINE_CANARY_CASES: "all" })).toBe("all");
+    expect(() => canaryCaseSelection({ ENGINE_CANARY_CASES: "codex" })).toThrow(
+      /ENGINE_CANARY_CASES must be "custom" or "all"/,
+    );
+  });
+
+  it("resolves one case per fixture from workflows.list when all are asked for", () => {
+    const cases = resolveCanaryCases(listedFixtures(), "all");
 
     expect(cases.map((canary) => canary.label)).toEqual([
       "claude",
@@ -346,13 +367,13 @@ describe("canary observations: identity before dispatch", () => {
       (workflow) =>
         workflow.definitionId !== ENGINE_CANARY_FIXTURES.codex.workflowId,
     );
-    expect(() => resolveCanaryCases(listed)).toThrow(/codex.*not listed/);
+    expect(() => resolveCanaryCases(listed, "all")).toThrow(/codex.*not listed/);
   });
 
   it("fails when a fixture definition is enabled", () => {
     const listed = listedFixtures();
     listed.workflows[0]!.enabled = true;
-    expect(() => resolveCanaryCases(listed)).toThrow(/must stay disabled/);
+    expect(() => resolveCanaryCases(listed, "all")).toThrow(/must stay disabled/);
   });
 
   it("fails when the deployed version is not the pinned one", () => {
@@ -378,7 +399,7 @@ describe("canary observations: identity before dispatch", () => {
   it("fails when the trigger is not one manually dispatchable ticket trigger", () => {
     const listed = listedFixtures();
     listed.workflows[1]!.triggers[0]!.manuallyDispatchable = false;
-    expect(() => resolveCanaryCases(listed)).toThrow(
+    expect(() => resolveCanaryCases(listed, "all")).toThrow(
       /one manually dispatchable ticket trigger/,
     );
   });
