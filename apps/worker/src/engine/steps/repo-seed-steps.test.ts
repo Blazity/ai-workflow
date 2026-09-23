@@ -281,6 +281,13 @@ beforeEach(async () => {
   mocks.db = db;
 });
 
+describe("a seed write that may have landed", () => {
+  it("is never repeated by the step runner", () => {
+    // Core never repeats a memory write: a retry could store the seed twice.
+    expect(seedRepoMemoryStep.maxRetries).toBe(0);
+  });
+});
+
 describe("seedRepoMemoryStep", () => {
   it("does nothing without a repository", async () => {
     expect(await seedRepoMemoryStep({ ...input, repositories: [] })).toEqual({

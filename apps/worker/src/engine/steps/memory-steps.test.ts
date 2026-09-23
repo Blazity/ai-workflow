@@ -155,6 +155,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe("a notebook write that may have landed", () => {
+  it("is never repeated by the step runner", () => {
+    // A retried step would send the same observe again after an answer that
+    // may have been stored: core never repeats a memory write.
+    expect(hydrateWorkspaceMemoryStep.maxRetries).toBe(0);
+    expect(persistWorkspaceMemoryStep.maxRetries).toBe(0);
+  });
+});
+
 describe("hydrateWorkspaceMemoryStep", () => {
   it("writes the stored document to the agent cwd", async () => {
     await storeDocument("# stored notes\nzażółć");

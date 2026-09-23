@@ -629,6 +629,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("a distilled write that may have landed", () => {
+  it("is never repeated by the step runner", () => {
+    // Core never repeats a memory write: a retry could store the lessons twice.
+    expect(distillRepoMemoryStep.maxRetries).toBe(0);
+  });
+});
+
 describe("distillRepoMemoryStep", () => {
   it("does nothing without a write-scoped repository", async () => {
     expect(await distillRepoMemoryStep({ ...input, repositories: [] })).toEqual({

@@ -274,6 +274,19 @@ describe("a deployment that connected one engine", () => {
     });
   });
 
+  it("asks an engine that answers unavailable once, and hands the refusal on", async () => {
+    // A write that timed out may have landed. Asking again could store it
+    // twice, so core never repeats an observe: the next run's write is the retry.
+    const refusal = { ok: false, code: "unavailable", detail: "the engine answered 503" } as const;
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => refusal);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+
+    const write = await (await activeMemory()).observe(OBSERVE);
+
+    expect(write).toEqual(refusal);
+    expect(observe).toHaveBeenCalledTimes(1);
+  });
+
   it("offers no admin half when the engine ships none", async () => {
     // An engine that cannot enumerate what it holds is fully usable for runs.
     // `store: null` is what stops a screen showing its silence as an empty
