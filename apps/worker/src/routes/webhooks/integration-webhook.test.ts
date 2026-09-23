@@ -10,6 +10,11 @@
  *
  * `/webhooks/slack` is the address Slack already calls, and it still answers
  * here: the static route was deleted, so this dynamic one takes it.
+ *
+ * The resolver is a double here, handing out whatever each case set. Which
+ * values a webhook is served on is proved through the real one:
+ * `slack-signing-secret-only.test.ts` beside this file, and
+ * `services/integrations/webhook-resolution.test.ts`.
  */
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -35,12 +40,11 @@ const state = vi.hoisted(() => ({
   pushSuppressionInputs: [] as Record<string, unknown>[],
   botLogin: vi.fn(async (_provider: string) => "ai-workflow-bot" as string | undefined),
   botLoginReadable: true,
-  resolveInput: undefined as undefined | { forWebhook?: { settings: () => Promise<unknown> } },
 }));
 
 vi.mock("../../services/integrations/runtime.js", () => ({
-  resolveUsableIntegrations: async (input: typeof state.resolveInput) =>
-    (state.resolveInput = input) && state.readable
+  resolveUsableIntegrations: async () =>
+    state.readable
       ? { readable: true, usable: state.usable, states: state.states }
       : { readable: false, reason: "the settings read timed out" },
 }));
@@ -506,16 +510,6 @@ describe("POST /webhooks/:id", () => {
     expect(logged?.error).toContain("Failed query");
     expect(logged?.diagnosticId).toMatch(/^AIW-DIAG-run-control-/u);
     expect(text).toContain(`\`${logged!.diagnosticId}\``);
-  });
-
-  it("resolves the integration for its webhook, with this request's settings", async () => {
-    // Without the webhook purpose Slack would need its whole connection, bot
-    // token included, to answer a command that uses none of it; without the
-    // settings its allowlist would not be there to read.
-    await app()(request("slack", "help"));
-
-    expect(state.resolveInput?.forWebhook).toBeDefined();
-    expect(await state.resolveInput!.forWebhook!.settings()).toEqual({ MAX_CONCURRENT_AGENTS: 3 });
   });
 
   it("answers help itself without deferring run-control work", async () => {
