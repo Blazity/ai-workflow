@@ -32,7 +32,10 @@ export const NO_TICKET_LINKS: TicketLinks = () => null;
  * a pull request with no ticket), and null from a tracker that gives no
  * links. A tracker that throws gives none as well, because a link sits beside
  * something a person is already reading, and a run list must not stop
- * rendering over one.
+ * rendering over one; the throw is written to the console (this file imports
+ * nothing, so not the logger) under `ticket_link_failed`, because a tracker
+ * that stopped linking is a bug somebody has to find. An answer that is not a
+ * string (integration code is trusted, not typed at runtime) is no link.
  */
 export function ticketLinksOf(
   tracker: { ticketUrl?(ticketKey: string): string | null } | null | undefined,
@@ -40,8 +43,13 @@ export function ticketLinksOf(
   if (!tracker || typeof tracker.ticketUrl !== "function") return NO_TICKET_LINKS;
   return (ticketKey) => {
     try {
-      return tracker.ticketUrl?.(ticketKey) ?? null;
-    } catch {
+      const answer: unknown = tracker.ticketUrl?.(ticketKey);
+      return typeof answer === "string" && answer.length > 0 ? answer : null;
+    } catch (error) {
+      console.warn("ticket_link_failed", {
+        ticketKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   };
