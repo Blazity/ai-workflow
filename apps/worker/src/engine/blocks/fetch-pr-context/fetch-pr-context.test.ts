@@ -35,15 +35,17 @@ vi.mock("../../../db/repositories/runs.js", () => ({
 vi.mock("../../../infra/vcs-config.js", () => ({ env: {} }));
 
 vi.mock("../../../infra/logger.js", () => ({
-  logger: { warn: mocks.warn },
+  logger: { warn: mocks.warn, info: vi.fn() },
 }));
 
 import type { ReviewThread, ReviewThreadFeed } from "../../../adapters/vcs/types.js";
 import type { WorkspaceRepositoryInput } from "../../../sandbox/repo-workspace.js";
 import {
+  blockFetchPrContextsStep,
   blockPrTriggerRepositoriesWithSiblingsStep,
   execute,
 } from "./execute.js";
+import { buildWorkspaceManifest } from "../../../sandbox/repo-workspace.js";
 import { manifest } from "./manifest.js";
 import {
   makeCtx,
@@ -686,5 +688,94 @@ describe("PR trigger multi-repo review selection", () => {
       expect.objectContaining({ repoPath: "acme/api-contract" }),
       "review_sibling_repository_not_allowed",
     );
+  });
+});
+
+// A person closed the pull request, deleted its branch, and moved the ticket
+// back to start over. The re-run used to check out the deleted branch and die
+// in the sandbox service with "Status code 400 is not ok".
+describe("a ticket re-run whose earlier branch was deleted", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function adapter(head: string | null | Error) {
+    const vcs = {
+      getBranchShaIfExists: vi.fn(async () => {
+        if (head instanceof Error) throw head;
+        return head;
+      }),
+      getPRComments: vi.fn().mockResolvedValue([{ author: "bob", body: "redo", liked: false }]),
+      getCheckRunResults: vi.fn().mockResolvedValue([]),
+      getPRConflictStatus: vi.fn().mockResolvedValue(false),
+    };
+    mocks.createRepositoryVCS.mockReturnValue(vcs);
+    return vcs;
+  }
+
+  it("drops the ownership so the workspace checks out the default branch", async () => {
+    const vcs = adapter(null);
+
+    const [context] = await blockFetchPrContextsStep([repoWithPr], UNRESTRICTED, {
+      dropMissingOwnedBranches: true,
+    });
+
+    expect(vcs.getBranchShaIfExists).toHaveBeenCalledWith("blazebot/awt-1");
+    expect(context.repository.workflowOwnedBranch).toBeUndefined();
+    expect(context.previousBranchGone).toEqual({
+      branchName: "blazebot/awt-1",
+      pr: { id: 7, url: "https://pr/7" },
+    });
+    // The closed pull request's review is not read into a fresh attempt.
+    expect(vcs.getPRComments).not.toHaveBeenCalled();
+    expect(context.prComments).toEqual([]);
+    // What the sandbox is asked to check out: the default branch, read only,
+    // exactly as a first run of the ticket would be.
+    const manifest = buildWorkspaceManifest({
+      branchName: "blazebot/awt-1",
+      repositories: [{ ...context.repository, access: "read" }],
+    });
+    expect(manifest.repositories[0]).toMatchObject({ branchName: "main", access: "read" });
+  });
+
+  it("keeps the owned branch and its pull request context while the branch exists", async () => {
+    const vcs = adapter("abc123");
+
+    const [context] = await blockFetchPrContextsStep([repoWithPr], UNRESTRICTED, {
+      dropMissingOwnedBranches: true,
+    });
+
+    expect(context.repository).toEqual(repoWithPr);
+    expect(context.previousBranchGone).toBeUndefined();
+    expect(vcs.getPRComments).toHaveBeenCalledWith(7);
+    const manifest = buildWorkspaceManifest({
+      branchName: "blazebot/awt-1",
+      repositories: [{ ...context.repository, access: "write" }],
+    });
+    expect(manifest.repositories[0]?.branchName).toBe("blazebot/awt-1");
+  });
+
+  it("keeps the ownership when the provider cannot say whether the branch exists", async () => {
+    adapter(new Error("socket hang up"));
+
+    const [context] = await blockFetchPrContextsStep([repoWithPr], UNRESTRICTED, {
+      dropMissingOwnedBranches: true,
+    });
+
+    expect(context.repository).toEqual(repoWithPr);
+    expect(context.previousBranchGone).toBeUndefined();
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ branchName: "blazebot/awt-1" }),
+      "workflow_owned_branch_probe_failed",
+    );
+  });
+
+  it("does not probe the branch unless the caller asks (pull request runs)", async () => {
+    const vcs = adapter(null);
+
+    const [context] = await blockFetchPrContextsStep([repoWithPr], UNRESTRICTED);
+
+    expect(vcs.getBranchShaIfExists).not.toHaveBeenCalled();
+    expect(context.repository).toEqual(repoWithPr);
   });
 });

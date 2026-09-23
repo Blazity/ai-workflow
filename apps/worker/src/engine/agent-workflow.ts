@@ -3158,7 +3158,9 @@ async function agentWorkflowBody(
                 ctx.repositoryContexts = await blockFetchPrContextsStep(
                   ownedRepos,
                   ctx.repositories,
-                  reviewLedgerFetchOptions(ctx),
+                  // A pull request whose branch was deleted is work a person
+                  // threw away: its review comments must not frame the new plan.
+                  { ...reviewLedgerFetchOptions(ctx), dropMissingOwnedBranches: true },
                 );
               }
             }
