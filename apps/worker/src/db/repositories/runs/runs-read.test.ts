@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb } from "../../test-db.js";
 import type { Db } from "../../client.js";
-import { activeRuns, workflowOwnedBranches, workflowRuns } from "../../schema.js";
+import { activeRuns, workflowDefinitions, workflowOwnedBranches, workflowRuns } from "../../schema.js";
 import type {
   BlockRunState,
   HarnessRunManifestRecord,
@@ -55,6 +55,8 @@ interface SeedRun {
   runId?: string;
   workflowId?: string;
   workflowName?: string;
+  definitionId?: number | null;
+  definitionVersion?: number | null;
   status?: string | null;
   statusReason?: string | null;
   ticketKey?: string | null;
@@ -81,6 +83,8 @@ async function seed(over: SeedRun = {}): Promise<void> {
     runId: over.runId ?? `wrun_${seq}`,
     workflowId: over.workflowId ?? "wf_agent",
     workflowName: over.workflowName ?? "Agent",
+    definitionId: over.definitionId ?? null,
+    definitionVersion: over.definitionVersion ?? null,
     status: over.status === undefined ? "success" : over.status,
     statusReason: over.statusReason ?? null,
     ticketKey: over.ticketKey === undefined ? "AWT-1" : over.ticketKey,
@@ -398,6 +402,45 @@ describe("costAgg", () => {
     await seed({ costUsd: 9, startedAt: new Date(NOW.getTime() - 40 * DAY) });
     const c = await costAgg({ db, window: "24h", now: NOW });
     expect(c.totals.traceCount).toBe(0);
+  });
+
+  it("breaks cost down by workflow definition, not by the single Workflow DevKit function every definition runs through", async () => {
+    // Both runs execute the same "wf_agent" function; without grouping by
+    // definitionId they collapsed into one "Agent" bucket that hid which
+    // ticket workflow actually spent the money (qa-findings-integrations.md,
+    // "runs.stats cost.byWorkflow still reports a single Agent/wf_agent bucket").
+    const [autofix] = await db
+      .insert(workflowDefinitions)
+      .values({ name: "Autofix PR checks", createdById: "admin", createdByLabel: "Admin" })
+      .returning({ id: workflowDefinitions.id });
+    const [ticketWorkflow] = await db
+      .insert(workflowDefinitions)
+      .values({ name: "Default ticket workflow", createdById: "admin", createdByLabel: "Admin" })
+      .returning({ id: workflowDefinitions.id });
+
+    await seed({
+      workflowId: "wf_agent",
+      definitionId: autofix!.id,
+      definitionVersion: 3,
+      costUsd: 2,
+      startedAt: new Date(NOW.getTime() - HOUR),
+    });
+    await seed({
+      workflowId: "wf_agent",
+      definitionId: ticketWorkflow!.id,
+      definitionVersion: 11,
+      costUsd: 5,
+      startedAt: new Date(NOW.getTime() - HOUR),
+    });
+
+    const c = await costAgg({ db, window: "24h", now: NOW });
+
+    expect(c.byWorkflow).toHaveLength(2);
+    const autofixBucket = c.byWorkflow.find((w) => w.name === "Autofix PR checks v3");
+    const ticketBucket = c.byWorkflow.find((w) => w.name === "Default ticket workflow v11");
+    expect(autofixBucket?.cost).toBeCloseTo(2);
+    expect(ticketBucket?.cost).toBeCloseTo(5);
+    expect(c.byWorkflow.some((w) => w.name === "Agent")).toBe(false);
   });
 });
 

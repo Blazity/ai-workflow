@@ -114,7 +114,16 @@ export function listLatestWorkflowRunRows(db: Db) {
 export function listCostAggregateRows(db: Db, cutoff: Date | null) {
   return db.select({
     workflowId: workflowRuns.workflowId,
-    workflowName: workflowRuns.workflowName,
+    // A run that names a stored definition (the ticket workflow, almost every
+    // run) is grouped and labelled by that definition, the same name
+    // runs.get and the ticket page already show; a run that names none (the
+    // framework's pre-sandbox and post-PR-gate stages) keeps grouping by its
+    // Workflow DevKit function id, its only identity. Without definitionId in
+    // the grouping key every ticket workflow definition would collapse into
+    // the single "wf_agent" bucket and inherit whichever definition's name
+    // happened to be read first.
+    definitionId: workflowRuns.definitionId,
+    workflowName: runWorkflowLabel,
     costUsd: workflowRuns.costUsd,
     tokensInput: workflowRuns.tokensInput,
     tokensOutput: workflowRuns.tokensOutput,

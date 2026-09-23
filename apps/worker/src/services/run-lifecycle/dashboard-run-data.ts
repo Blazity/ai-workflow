@@ -292,7 +292,12 @@ async function costAggWithQueries(
   const cutoff = bounds(options.window, options.now).cutoff;
   const rows = await queries.listCosts(cutoff);
   const enriched = rows.map((row) => ({
-    workflowId: row.workflowId ?? "wf_unknown",
+    // A run that names a stored definition is grouped by that definition, so
+    // every ticket workflow gets its own bucket instead of collapsing into
+    // the one Workflow DevKit function ("wf_agent") every definition runs
+    // through. A run with no definition (pre-sandbox, the post-PR gate) has
+    // no other identity to group by, so it keeps the raw workflow id.
+    groupKey: row.definitionId != null ? `def_${row.definitionId}` : (row.workflowId ?? "wf_unknown"),
     workflowName: row.workflowName ?? row.workflowId ?? "-",
     cost: row.costUsd ?? 0,
     tokens: (row.tokensInput ?? 0) + (row.tokensOutput ?? 0),
@@ -303,11 +308,11 @@ async function costAggWithQueries(
   const traceCount = enriched.length;
   const byId = new Map<string, { name: string; runs: number; tokens: number; cost: number }>();
   for (const row of enriched) {
-    const value = byId.get(row.workflowId) ?? { name: row.workflowName, runs: 0, tokens: 0, cost: 0 };
+    const value = byId.get(row.groupKey) ?? { name: row.workflowName, runs: 0, tokens: 0, cost: 0 };
     value.runs += 1;
     value.tokens += row.tokens;
     value.cost += row.cost;
-    byId.set(row.workflowId, value);
+    byId.set(row.groupKey, value);
   }
   const byWorkflow = [...byId.entries()].map(([taskId, value]) => ({
     taskId,
