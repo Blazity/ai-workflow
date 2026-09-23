@@ -1,4 +1,5 @@
 import { type AgentWorkflowInput } from "../agent-input.js";
+import type { RelatedTicket } from "../../adapters/issue-tracker/types.js";
 import type { HumanDecision } from "../support/human-decisions-memory.js";
 import { appendClarificationRound } from "./prompt-output.js";
 import type { BlockOutput, JsonValue, WorkflowBlockType, WorkflowDefinitionNode } from "@shared/contracts";
@@ -55,6 +56,13 @@ interface WorkflowTicketInputContext {
     answeredBy?: string;
     answeredAt?: string;
   }>;
+  /**
+   * The ticket's parent, subtasks and links as the run read them. Never put
+   * into the trigger's output (`ticketBindingFields` names what an author can
+   * bind, and this is not in that contract): an agent reads them from the
+   * run's own read, like its attachments. See `resolveAgentTicketInput`.
+   */
+  relatedTickets?: RelatedTicket[];
 }
 
 function ticketBindingFields(
@@ -229,7 +237,15 @@ function resolveAgentTicketInputFromBindings(
   ) {
     throw new Error('Agent input "ticket" must be a ticket context object.');
   }
-  const ticket = resolvedInputs.ticket as WorkflowTicketInputContext;
+  const bound = resolvedInputs.ticket as WorkflowTicketInputContext;
+  // A bound ticket is the trigger's output, whose contract has no related
+  // tickets, so they come from the run's own read of the ticket, and only
+  // when the binding IS that ticket: another ticket's parent and subtasks
+  // would be a plan for the wrong work.
+  const ticket =
+    fallback.relatedTickets !== undefined && bound.identifier === fallback.identifier
+      ? { ...bound, relatedTickets: fallback.relatedTickets }
+      : bound;
   const comments = Object.prototype.hasOwnProperty.call(resolvedInputs, "comments")
     ? resolvedInputs.comments
     : ticket.comments;

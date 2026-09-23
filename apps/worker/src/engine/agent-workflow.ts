@@ -1308,6 +1308,9 @@ async function agentWorkflowBody(
       ...(clarificationHistory && clarificationHistory.length > 0
         ? { clarifications: clarificationHistory }
         : {}),
+      // Rendered for the planning and implementation passes; the trigger's
+      // output leaves them out (its binding contract has no such field).
+      ...(ticket.relatedTickets ? { relatedTickets: ticket.relatedTickets } : {}),
     };
     const triggerOutput: BlockOutput = triggerOutputWithTicketContext(entry, ticketData);
 

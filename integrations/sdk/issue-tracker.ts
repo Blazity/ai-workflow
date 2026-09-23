@@ -75,7 +75,50 @@ export interface TicketContent {
   trackerStatus: string;
   trackerStatusId?: string;
   attachments: TicketAttachment[];
+  /**
+   * The other tickets this one is connected to on the tracker: its parent,
+   * the tickets under it, and every other link, in that order and each group
+   * in the tracker's own order (a parent's subtasks are in the order the team
+   * ranked them, which is the order a person plans them in).
+   *
+   * Reported from the same read as the rest of the ticket, never from a
+   * second request: this read sits on the poll path. So it is only what that
+   * one answer carries, which for a tracker whose read does not list a
+   * parent's children (an epic's stories, on Jira) means the children are not
+   * here.
+   *
+   * ABSENT MEANS NOT READ: a tracker that does not report relations, and a
+   * ticket snapshot recorded before this field existed. An empty list means
+   * the tracker said there are none. Core bounds how many it shows.
+   */
+  relatedTickets?: RelatedTicket[];
 }
+
+/**
+ * Another ticket, as far as the ticket that links to it can say: enough for a
+ * person or a model to know it exists and where it stands, never its body.
+ */
+export interface RelatedTicket {
+  /** The tracker's key for it, as a person types it. */
+  key: string;
+  title: string;
+  /** Its status, in the tracker's own words. Empty when the tracker did not say. */
+  status: string;
+  /**
+   * How THIS ticket stands to that one, as the words that complete "this
+   * ticket ... <key>". Hierarchy uses the two phrases below, the same for every
+   * tracker. Any other link carries the tracker's own phrase for this
+   * direction, unchanged ("blocks", "is blocked by", "relates to",
+   * "duplicates"), because a team's link types are its own and a model reads
+   * the phrase as written.
+   */
+  relation: string;
+}
+
+/** `relation` of a ticket's parent: this ticket is a child of it. */
+export const RELATED_TICKET_PARENT = "is a child of";
+/** `relation` of a ticket directly under this one (a subtask): this ticket is its parent. */
+export const RELATED_TICKET_CHILD = "is the parent of";
 
 /**
  * How a tracker reads a query a workflow author typed (the `providerQuery` of

@@ -9,6 +9,7 @@ import {
 // Discovery runs as part of engine preparation and carries no service composition.
 import type { PreSandboxRepositoryDiscovery } from "../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../sandbox/agents/types.js";
+import { boundRelatedTickets } from "../../sandbox/related-tickets.js";
 import {
   repositoryCatalogKey,
   type RepositoryCatalogEntry,
@@ -92,16 +93,35 @@ type RepositoryDiscoveryPromptInput = {
     | "acceptanceCriteria"
     | "comments"
     | "labels"
+    | "relatedTickets"
   >;
   discovery: PreSandboxRepositoryDiscovery;
 };
+
+/**
+ * The ticket as discovery reads it: whatever the tracker read, with its
+ * related tickets cut to what the planning prompt shows and the cut counted,
+ * so the pass that picks repositories and the pass that plans see the same
+ * parent, subtasks and links. A subtask's title naming the files it touches
+ * is often the only line in a parent ticket that says which repository the
+ * work is in.
+ */
+function discoveryTicket(ticket: RepositoryDiscoveryPromptInput["ticket"]): unknown {
+  const view = boundRelatedTickets(ticket?.relatedTickets);
+  if (!view) return ticket;
+  return {
+    ...ticket,
+    relatedTickets: view.shown,
+    ...(view.omitted > 0 ? { relatedTicketsOmitted: view.omitted } : {}),
+  };
+}
 
 /**
  * The discovery prompt and the named parts it is made of. Discovery has no
  * compiled sections (it runs on the legacy harness path, with no profile), so
  * its parts tile the prompt itself: `prompt` is exactly their concatenation.
  * The ticket is stringified as the engine passes it, every field and key order
- * included.
+ * included, except that its related tickets are bounded (`discoveryTicket`).
  */
 export function composeRepositoryDiscoveryPrompt(
   input: RepositoryDiscoveryPromptInput,
@@ -129,7 +149,7 @@ export function composeRepositoryDiscoveryPrompt(
       origin: typeof input.ticket?.identifier === "string"
         ? { kind: "ticket", ref: input.ticket.identifier }
         : { kind: "ticket" },
-      content: `Ticket:\n${JSON.stringify(input.ticket)}\n\n`,
+      content: `Ticket:\n${JSON.stringify(discoveryTicket(input.ticket))}\n\n`,
     },
     {
       id: "mandatory-repositories",

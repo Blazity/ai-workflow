@@ -193,10 +193,13 @@ export {
 export {
   ISSUE_TRACKER_BOARD_FIELDS,
   IssueTrackerNotFoundError,
+  RELATED_TICKET_CHILD,
+  RELATED_TICKET_PARENT,
   type IssueTrackerAdapter,
   type IssueTrackerQueryRule,
   type IssueTrackerMoveTarget,
   type IssueTrackerTransitionTarget,
+  type RelatedTicket,
   type TicketAttachment,
   type TicketComment,
   type TicketContent,

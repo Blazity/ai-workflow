@@ -441,6 +441,234 @@ describe("JiraAdapter", () => {
     });
   });
 
+  // P2.3. A team that plans a parent with subtasks and links ("blocks",
+  // "relates to") expects the agent planning the parent to know its children
+  // and their order, and the agent on a subtask to know its parent. The read
+  // asked Jira for none of it, so planning on a parent whose three subtasks
+  // named their files saw no subtask at all.
+  //
+  // The shapes below are Jira's own, cut down from real issues exported by
+  // Jira's REST API and kept at github.com/tidev/jira-archive (ALOY-210 for
+  // subtasks, ALOY-717 for a parent, ALOY-330 and ALOY-323 for the two
+  // directions of one "Depends" link), plus Atlassian's "Blocks" link type.
+  describe("fetchTicket related tickets", () => {
+    function issueWith(fields: Record<string, unknown>) {
+      return {
+        ok: true,
+        json: async () => ({
+          id: "99986",
+          key: "ALOY-210",
+          fields: {
+            summary: "Support Dynamic Styling",
+            description: null,
+            comment: { comments: [], total: 0 },
+            labels: [],
+            status: { name: "AI" },
+            attachment: [],
+            ...fields,
+          },
+        }),
+      };
+    }
+
+    it("asks for the parent, the subtasks and the links in the same one request", async () => {
+      mockFetch.mockResolvedValueOnce(issueWith({ subtasks: [], issuelinks: [], parent: null }));
+
+      await jiraAdapter().fetchTicket("ALOY-210");
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const fields = new URL(String(mockFetch.mock.calls[0][0])).searchParams.get("fields")?.split(",");
+      expect(fields).toEqual(expect.arrayContaining(["subtasks", "parent", "issuelinks"]));
+    });
+
+    it("lists a parent's subtasks in the order the team ranked them", async () => {
+      mockFetch.mockResolvedValueOnce(
+        issueWith({
+          subtasks: [
+            { id: "112534", key: "ALOY-613", fields: { summary: "Develop API for adding/removing style classes", status: { id: "5", name: "Resolved" }, issuetype: { name: "Sub-task", subtask: true } } },
+            { id: "115689", key: "ALOY-695", fields: { summary: "Create controller-specific version of Alloy.UI.create() that doesn't require controller name", status: { id: "6", name: "Closed" }, issuetype: { name: "Sub-task", subtask: true } } },
+            { id: "115747", key: "ALOY-698", fields: { summary: "Change require('alloy/styler').generateStyle() to Alloy.createStyle()", status: { id: "5", name: "Resolved" }, issuetype: { name: "Sub-task", subtask: true } } },
+          ],
+          issuelinks: [],
+          parent: null,
+        }),
+      );
+
+      const ticket = await jiraAdapter().fetchTicket("ALOY-210");
+
+      expect(ticket.relatedTickets).toEqual([
+        { key: "ALOY-613", title: "Develop API for adding/removing style classes", status: "Resolved", relation: "is the parent of" },
+        { key: "ALOY-695", title: "Create controller-specific version of Alloy.UI.create() that doesn't require controller name", status: "Closed", relation: "is the parent of" },
+        { key: "ALOY-698", title: "Change require('alloy/styler').generateStyle() to Alloy.createStyle()", status: "Resolved", relation: "is the parent of" },
+      ]);
+    });
+
+    it("names a subtask's parent, ahead of its links", async () => {
+      mockFetch.mockResolvedValueOnce(
+        issueWith({
+          subtasks: [],
+          parent: { id: "99986", key: "ALOY-210", fields: { summary: "Support Dynamic Styling", status: { name: "Closed" }, issuetype: { name: "New Feature" } } },
+          issuelinks: [
+            { id: "30247", type: { id: "10003", name: "Relates", inward: "relates to", outward: "relates to" }, outwardIssue: { id: "117259", key: "TIMOB-14575", fields: { summary: "iOS: setting borderRadius to null causes error", status: { name: "Open" } } } },
+          ],
+        }),
+      );
+
+      const ticket = await jiraAdapter().fetchTicket("ALOY-717");
+
+      expect(ticket.relatedTickets).toEqual([
+        { key: "ALOY-210", title: "Support Dynamic Styling", status: "Closed", relation: "is a child of" },
+        { key: "TIMOB-14575", title: "iOS: setting borderRadius to null causes error", status: "Open", relation: "relates to" },
+      ]);
+    });
+
+    // A link is one row seen from two ends, and Jira says which end this
+    // ticket is by which side it fills in: the other issue under
+    // `outwardIssue` means this ticket is the one the outward phrase is
+    // about ("ALOY-330 depends on ALOY-323"), under `inwardIssue` the inward
+    // one ("ALOY-323 is dependent of ALOY-134"). A team's own phrases, awkward
+    // ones included, go through as written.
+    it("keeps each link's own phrase for the direction this ticket is on", async () => {
+      mockFetch.mockResolvedValueOnce(
+        issueWith({
+          subtasks: [],
+          parent: null,
+          issuelinks: [
+            { id: "21863", type: { id: "10020", name: "Depends", inward: "is dependent of", outward: "depends on" }, outwardIssue: { key: "ALOY-323", fields: { summary: "Make Alloy support only TiSDK 3.0+", status: { name: "Resolved" } } } },
+            { id: "23220", type: { id: "10020", name: "Depends", inward: "is dependent of", outward: "depends on" }, inwardIssue: { key: "ALOY-405", fields: { summary: "'orientation' device query", status: { name: "Open" } } } },
+            { id: "10010", type: { id: "10000", name: "Blocks", inward: "is blocked by", outward: "blocks" }, inwardIssue: { key: "ALOY-209", fields: { summary: "ti.physicalSizeCategory module removed for Alloy 1.0.0 (TiSDK 3.0+)", status: { name: "Resolved" } } } },
+          ],
+        }),
+      );
+
+      const ticket = await jiraAdapter().fetchTicket("ALOY-330");
+
+      expect(ticket.relatedTickets?.map(({ key, relation }) => `${relation} ${key}`)).toEqual([
+        "depends on ALOY-323",
+        "is dependent of ALOY-405",
+        "is blocked by ALOY-209",
+      ]);
+    });
+
+    it("says there are none when Jira lists none, and when the site has the feature off", async () => {
+      mockFetch.mockResolvedValueOnce(issueWith({ subtasks: [], issuelinks: [], parent: null }));
+      // Subtasks and issue linking can each be switched off for a site, and
+      // then the field is simply not in the answer.
+      mockFetch.mockResolvedValueOnce(issueWith({}));
+
+      const adapter = jiraAdapter();
+      expect((await adapter.fetchTicket("PROJ-1")).relatedTickets).toEqual([]);
+      expect((await adapter.fetchTicket("PROJ-2")).relatedTickets).toEqual([]);
+    });
+
+    it("skips an entry without a key rather than naming a ticket that is not there", async () => {
+      mockFetch.mockResolvedValueOnce(
+        issueWith({
+          subtasks: [{ id: "1", fields: { summary: "No key" } }],
+          parent: { id: "2" },
+          issuelinks: [
+            { id: "3", type: { name: "Blocks", inward: "is blocked by", outward: "blocks" } },
+            { id: "4", type: { name: "Blocks", inward: "is blocked by", outward: "blocks" }, outwardIssue: { key: "PROJ-9" } },
+          ],
+        }),
+      );
+
+      const ticket = await jiraAdapter().fetchTicket("PROJ-1");
+
+      expect(ticket.relatedTickets).toEqual([
+        { key: "PROJ-9", title: "", status: "", relation: "blocks" },
+      ]);
+    });
+  });
+
+  // QA round 2 nit: the description said "Acceptance: ..." and the plan read
+  // "Acceptance Criteria: None specified", because the only label the reader
+  // knew was the two-word one. These are the labels people actually write.
+  describe("fetchTicket acceptance criteria", () => {
+    function withDescription(lines: string[]) {
+      return {
+        ok: true,
+        json: async () => ({
+          id: "10001",
+          key: "PROJ-1",
+          fields: {
+            summary: "Pricing table",
+            description: {
+              type: "doc",
+              content: lines.map((line) =>
+                line === "" ? { type: "paragraph" } : { type: "paragraph", content: [{ type: "text", text: line }] },
+              ),
+            },
+            comment: { comments: [], total: 0 },
+            labels: [],
+            status: { name: "AI" },
+            attachment: [],
+          },
+        }),
+      };
+    }
+
+    it.each([
+      ["Acceptance: prices show in zł with two decimals", "prices show in zł with two decimals"],
+      ["Acceptance criteria: prices show in zł with two decimals", "prices show in zł with two decimals"],
+      ["AC: prices show in zł with two decimals", "prices show in zł with two decimals"],
+      ["ac: prices show in zł with two decimals", "prices show in zł with two decimals"],
+      ["**Acceptance:** prices show in zł with two decimals", "prices show in zł with two decimals"],
+      ["- AC: prices show in zł with two decimals", "prices show in zł with two decimals"],
+    ])("reads %j as the acceptance criteria", async (line, expected) => {
+      mockFetch.mockResolvedValueOnce(withDescription(["Build the pricing table.", "", line]));
+
+      const ticket = await jiraAdapter().fetchTicket("PROJ-1");
+
+      expect(ticket.acceptanceCriteria).toBe(expected);
+    });
+
+    it("reads a heading on its own line followed by the criteria", async () => {
+      mockFetch.mockResolvedValueOnce(
+        withDescription(["Build the pricing table.", "", "Acceptance", "Totals match the CSV", "", "Notes: none"]),
+      );
+
+      const ticket = await jiraAdapter().fetchTicket("PROJ-1");
+
+      expect(ticket.acceptanceCriteria).toBe("Totals match the CSV");
+    });
+
+    it.each([["Acceptance Criteria"], ["Acceptance:"], ["AC:"]])(
+      "reads the criteria a blank line after the %j heading",
+      async (heading) => {
+        mockFetch.mockResolvedValueOnce(
+          withDescription(["Build the pricing table.", "", heading, "", "Totals match the CSV", "", "Notes: none"]),
+        );
+
+        const ticket = await jiraAdapter().fetchTicket("PROJ-1");
+
+        expect(ticket.acceptanceCriteria).toBe("Totals match the CSV");
+      },
+    );
+
+    it("still reads the criteria a sentence introduces", async () => {
+      mockFetch.mockResolvedValueOnce(
+        withDescription(["These are the acceptance criteria:", "Totals match the CSV", "", "Notes: none"]),
+      );
+
+      const ticket = await jiraAdapter().fetchTicket("PROJ-1");
+
+      expect(ticket.acceptanceCriteria).toBe("Totals match the CSV");
+    });
+
+    it.each([
+      ["ACME: pricing for the ACME account"],
+      ["Acceptance tests live in e2e/pricing.spec.ts"],
+      ["Voltage AC: 230V"],
+    ])("does not take %j for acceptance criteria", async (line) => {
+      mockFetch.mockResolvedValueOnce(withDescription(["Build the pricing table.", "", line]));
+
+      const ticket = await jiraAdapter().fetchTicket("PROJ-1");
+
+      expect(ticket.acceptanceCriteria).toBe("");
+    });
+  });
+
   describe("fetchTicket attachments", () => {
     it("parses attachment metadata into TicketAttachment[]", async () => {
       mockFetch.mockResolvedValueOnce({
