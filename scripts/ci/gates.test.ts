@@ -117,7 +117,17 @@ function filesNamed(root: string, name: string): string[] {
   const found: string[] = [];
   const ignored = new Set([".git", "node_modules", ".next", ".output", ".nitro"]);
   const visit = (directory: string) => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      // Another test file in the same run makes and removes fixture trees
+      // under the repository root (`generate-integration-registry.test.ts`),
+      // so a directory seen a moment ago can be gone. Gone holds no file.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
       if (ignored.has(entry.name)) continue;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) visit(path);
