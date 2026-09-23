@@ -43,7 +43,7 @@ const state = vi.hoisted(() => ({
     MAX_CONCURRENT_AGENTS: 4,
   },
   requireMcpActor: vi.fn(),
-  createAdapters: vi.fn<() => Record<string, unknown>>(() => ({})),
+  createAdapters: vi.fn<() => unknown>(() => ({})),
   fetchTicket: vi.fn(),
   // The outbound half of an authoring write: the same adapter the platform tells
   // people about runs through. Faked at the adapter, not at the tool, so what the
@@ -67,7 +67,8 @@ process.env.JIRA_PROJECT_KEY = "AIW";
 // client we do not have. Everything downstream of the actor is real.
 vi.mock("./request-context.js", () => ({ requireMcpActor: state.requireMcpActor }));
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../engine/support/adapters.js", () => ({
+vi.mock("../engine/support/adapters.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../engine/support/adapters.js")>()),
   createAdapters: state.createAdapters,
   // Read whenever this build ships an integration, because the palette has to
   // say which capabilities core itself already serves. A partial mock of this
@@ -84,6 +85,8 @@ vi.mock("../services/manual-dispatch/service.js", () => ({
 }));
 
 import type { Db } from "../db/client.js";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import { adaptersFor } from "../test-support/issue-tracker.js";
 import { createTestDb } from "../db/test-db.js";
 import {
   mcpAuditEvents,
@@ -640,10 +643,11 @@ beforeEach(async () => {
   vi.stubEnv("CHAT_SDK_CHANNEL_ID", "C1");
   state.fetchTicket.mockResolvedValue(BENIGN_TICKET);
   state.notifyForTicket.mockResolvedValue(undefined);
-  state.createAdapters.mockImplementation(() => ({
-    issueTracker: { fetchTicket: state.fetchTicket },
-    messaging: { notifyForTicket: state.notifyForTicket },
-  }));
+  state.createAdapters.mockImplementation(() =>
+    adaptersFor({ fetchTicket: state.fetchTicket } as unknown as IssueTrackerAdapter, {
+      messaging: { notifyForTicket: state.notifyForTicket },
+    }),
+  );
   state.preflightManualDispatch.mockReset();
   state.dispatchManualWorkflow.mockReset();
   await db().delete(mcpAuditEvents);

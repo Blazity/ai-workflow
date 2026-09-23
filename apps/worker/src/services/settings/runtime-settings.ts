@@ -12,7 +12,6 @@
  * module per case, and a module-level snapshot would freeze the first value.
  */
 import type { SettingsSnapshot } from "@shared/contracts";
-import { integrationManifests } from "@integrations/registry";
 import { env } from "../../infra/vcs-config.js";
 
 /**
@@ -105,37 +104,6 @@ export function deploymentSettings(): {
     vercelEnv: env.VERCEL_ENV,
     commitSha: env.VERCEL_GIT_COMMIT_SHA,
   };
-}
-
-/**
- * Every configured credential, for the redaction pass that runs over anything a
- * tool is about to publish. A value that is not set is not a secret to redact,
- * so unset entries are dropped rather than turning into an empty-string match
- * that would redact everything.
- *
- * The issue tracker's token and webhook secret used to be named here one by
- * one. They are not missing: they are connection fields marked `secret` now,
- * and the loop over the manifests below reads every one of those, which is why
- * removing the two literals redacts exactly what it did before.
- */
-export function configuredSecretValues(): string[] {
-  return [
-    env.ANTHROPIC_API_KEY,
-    env.CODEX_API_KEY,
-    env.CODEX_CHATGPT_OAUTH_TOKEN,
-    env.VERCEL_TOKEN,
-    env.CRON_SECRET,
-    env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
-    env.BETTER_AUTH_SECRET,
-    env.SSO_CLIENT_SECRET,
-    env.RESEND_API_KEY,
-    env.RESEND_WEBHOOK_SECRET,
-    ...integrationManifests.flatMap((manifest) =>
-      manifest.connection.fields
-        .filter((field) => field.secret)
-        .map((field) => process.env[field.env]),
-    ),
-  ].filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
 }
 
 /** The secret the OAuth flow cookie is signed with. */

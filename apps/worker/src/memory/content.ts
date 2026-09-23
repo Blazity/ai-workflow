@@ -1,4 +1,3 @@
-import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import { redactConfiguredSecretsInText } from "../run-observability/sanitizer.js";
 
 /**
@@ -16,18 +15,20 @@ const utf8Decoder = new TextDecoder();
  * error), redaction changes the byte count, so the cap is measured last on the
  * bytes that actually get stored. Only configured secrets are rewritten, because
  * the agent reads this document back and everything else has to stay verbatim.
+ *
+ * `secrets` is every secret the deployment knows (`knownSecretValues`), which
+ * the writer resolves: a document is written from a step, and a token an admin
+ * stored in the dashboard is not in the environment for this module to find.
  */
 export function prepareMemoryContent(
   raw: string,
   maxBytes: number,
   sourceTruncated: boolean,
+  secrets: readonly string[],
 ): { content: string; truncated: boolean } | null {
   let content: string;
   try {
-    content = redactConfiguredSecretsInText(
-      raw.replace(/\0/g, ""),
-      configuredReplaySecrets(),
-    );
+    content = redactConfiguredSecretsInText(raw.replace(/\0/g, ""), secrets);
   } catch {
     return null;
   }

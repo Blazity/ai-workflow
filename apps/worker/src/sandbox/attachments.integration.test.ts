@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { fetchAttachmentsWithRetry, type AttachmentCaps } from "./attachments.js";
+import { downloadTicketAttachments, type AttachmentCaps } from "./attachments.js";
 import type { TicketAttachment } from "../adapters/issue-tracker/types.js";
 
 describe("attachments → sandbox writeFiles shape", () => {
@@ -35,7 +35,7 @@ describe("attachments → sandbox writeFiles shape", () => {
       downloadTimeoutMs: 5_000,
     };
 
-    const downloaded = await fetchAttachmentsWithRetry(
+    const downloaded = await downloadTicketAttachments(
       downloader,
       attachments,
       caps,

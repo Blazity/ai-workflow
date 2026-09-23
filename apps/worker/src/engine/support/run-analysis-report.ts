@@ -14,7 +14,7 @@ import { parseStoredRunAnalysisReport } from "../../db/repositories/runs/analysi
 export { parseStoredRunAnalysisReport };
 import type { PhaseUsage } from "../../sandbox/agents/types.js";
 import type { PriceLookup, UsageTotals } from "../../sandbox/usage.js";
-import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
+import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { scrubForPublication } from "../../infra/publication-scrub.js";
 
@@ -240,12 +240,19 @@ function aggregateMetadata(
   };
 }
 
+/**
+ * The environment's secrets only, because these builders run in workflow
+ * scope, which cannot read a connection stored in the dashboard. That is a
+ * first pass, not the last: the one step that stores a report and the one that
+ * posts it to the ticket (steps/ticket-analysis.ts) redact it again with every
+ * secret the deployment knows before it leaves.
+ */
 function sanitizeBundle(bundle: Record<string, unknown>): {
   value: Record<string, unknown>;
   metadata: ReplaySanitizationMetadata;
 } {
   const envelope = sanitizeReplayValue(bundle, {
-    secrets: configuredReplaySecrets(),
+    secrets: environmentSecretValues(),
     maxBytes: REPORT_MAX_BYTES,
   });
   if (
@@ -528,7 +535,8 @@ export function withAnalysisPublication(
     rationales: report.repositories.map((repository) => repository.rationale),
   };
   const summaryEnvelope = sanitizeReplayValue(safeSummary, {
-    secrets: configuredReplaySecrets(),
+    // Workflow scope: see sanitizeBundle for why this is the first pass only.
+    secrets: environmentSecretValues(),
     // Leave enough room for JSON escaping (including control characters) and
     // sanitizer metadata before the publication bundle applies its exact
     // combined-byte bound.

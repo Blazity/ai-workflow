@@ -17,12 +17,14 @@ export async function parkForClarificationStep(
   const { loadAdaptersPort } = await import(
     "../internal/ports.js"
   );
-  const { createAdapters } = await loadAdaptersPort();
+  const { createAdapters, issueTrackerOrThrow } = await loadAdaptersPort();
   const { NEEDS_CLARIFICATION_LABEL } = await import("../../engine/support/ticket-labels.js");
   const { updateConnectedTicketLabelsForRun } = await import(
     "../../engine/support/ticket-label-mutation.js"
   );
-  const { issueTracker } = await createAdapters();
+  // Parking a ticket IS moving it back, so a ticket run with no tracker to
+  // move it on cannot park here, and says why.
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
   // The questions live durably in the clarification store and the overview reads
   // awaiting state from the DB; the caller also posts a best-effort Jira comment
   // with the questions separately (postClarificationQuestionsCommentStep). This
@@ -66,7 +68,7 @@ export async function reconcileClarificationsOnPickup(
 ): Promise<void> {
   "use step";
   const { loadAdaptersPort } = await import("../internal/ports.js");
-  const { createAdapters } = await loadAdaptersPort();
+  const { createAdapters, issueTrackerIfConnected } = await loadAdaptersPort();
   const { NEEDS_CLARIFICATION_LABEL } = await import("../../engine/support/ticket-labels.js");
   const { updateConnectedTicketLabelsForRun } = await import(
     "../../engine/support/ticket-label-mutation.js"
@@ -74,14 +76,16 @@ export async function reconcileClarificationsOnPickup(
   const { reconcileConnectedClarificationPickupState } = await import(
     "../../db/repositories/clarifications.js"
   );
-  const { issueTracker } = await createAdapters();
+  const issueTracker = issueTrackerIfConnected(await createAdapters());
   // Re-pickup housekeeping, all idempotent so default step retries are safe:
   //  - drop the awaiting-input label (best-effort; a label error must not fail
   //    the fresh run),
   //  - supersede any still-pending clarification (a no-op for a
   //    clarification_answered entry whose row was already answered),
   //  - flip parked predecessor runs off "awaiting" so they don't linger.
-  if (typeof issueTracker.updateLabels === "function") {
+  // The label is best-effort, the clarification rows are not: with no
+  // tracker the label is left alone and the rows are still reconciled.
+  if (typeof issueTracker?.updateLabels === "function") {
     try {
       await updateConnectedTicketLabelsForRun({
         issueTracker,
@@ -116,9 +120,12 @@ export async function postPickupCommentStep(
   const { assertConnectedActiveRunOwner } = await import(
     "../../db/repositories/active-runs.js"
   );
-  const { createAdapters } = await loadAdaptersPort();
+  const { createAdapters, issueTrackerIfConnected } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
-  const { issueTracker } = await createAdapters();
+  const issueTracker = issueTrackerIfConnected(await createAdapters());
+  // Best-effort, like the post below: no tracker is one more reason the link
+  // is not posted, and the run carries on.
+  if (!issueTracker) return;
   // No run param: the ticket view auto-selects the newest run. The link doubles
   // as the idempotency marker (hasDashboardLinkComment), so this must post at
   // most once per ticket. Best-effort: a post failure must not fail the run.
@@ -166,11 +173,13 @@ export async function postClarificationQuestionsCommentStep(
     "../../db/repositories/active-runs.js"
   );
   const { defaultSettingsSnapshot } = await import("@shared/contracts");
-  const { createAdapters } = await loadAdaptersPort();
+  const { createAdapters, issueTrackerIfConnected } = await loadAdaptersPort();
   const { formatClarificationQuestionsComment } = await import(
     "../support/clarification-comment-format.js"
   );
-  const { issueTracker } = await createAdapters();
+  const issueTracker = issueTrackerIfConnected(await createAdapters());
+  // Best-effort, so no tracker answers the way a failed post does: no link.
+  if (!issueTracker) return null;
   // Best-effort: surfacing the questions in Jira must never fail the paused run.
   // Returns the comment deep-link on success, null on any failure. A run-control
   // error still rethrows so the workflow ownership CAS is honored.

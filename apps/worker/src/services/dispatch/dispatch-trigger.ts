@@ -1128,13 +1128,13 @@ async function resolveTicketIdentity(
         // admin disabled, or two with none chosen is how the deployment is
         // set up, and stays that way until a person changes it.
         const diagnosticId = recordIngestionFailure(
-          tracker.unreadable
+          tracker.refusal === "unreadable"
             ? "trigger_ticket_identity_lookup_retryable_failure"
             : "trigger_ticket_identity_tracker_unavailable",
           new Error(tracker.reason),
           { ticketKey },
         );
-        return tracker.unreadable
+        return tracker.refusal === "unreadable"
           ? { status: "retryable_error", diagnosticId }
           : { status: "tracker_unavailable", diagnosticId };
       }

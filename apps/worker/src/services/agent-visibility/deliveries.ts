@@ -9,7 +9,7 @@ import {
 import type { Db } from "../../db/types.js";
 import { logger } from "../../infra/logger.js";
 import {
-  configuredVisibilityDetector,
+  knownSecretsVisibilityDetector,
   redactForStorage,
   VisibilityCaptureRefusal,
 } from "../../run-observability/visibility-detector.js";
@@ -92,7 +92,7 @@ export async function recordAnswerDelivery(
   options: RecordAnswerDeliveryOptions = {},
 ): Promise<RecordAnswerDeliveryOutcome> {
   try {
-    const sanitize = options.sanitize ?? configuredVisibilityDetector();
+    const sanitize = options.sanitize ?? (await knownSecretsVisibilityDetector());
     // A field the detector cannot prove clean is stored as the marker rather
     // than lost with the whole arrival: that a person answered, when, and what
     // it did is worth more than the text of one field.

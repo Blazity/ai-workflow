@@ -5,7 +5,7 @@ import { RunBudgetError } from "../../helpers/run-budget.js";
 const mocks = vi.hoisted(() => ({
   sandboxGet: vi.fn(),
   generateStructured: vi.fn(),
-  configuredReplaySecrets: vi.fn(() => [] as string[]),
+  knownSecrets: vi.fn(() => [] as string[]),
   warn: vi.fn(),
   captureAgentBriefing: vi.fn(async (_briefing: unknown) => ({ outcome: "recorded", briefingId: 1 })),
 }));
@@ -20,11 +20,17 @@ vi.mock("../../agent-visibility/capture.js", () => ({
 vi.mock("../../../infra/logger.js", () => ({
   logger: { warn: mocks.warn, info: vi.fn(), error: vi.fn() },
 }));
-vi.mock("../../../run-observability/configured-secrets.js", () => ({
-  configuredReplaySecrets: mocks.configuredReplaySecrets,
+// The deployment's known secrets, the environment's and every connected
+// integration's (a token an admin stored in the dashboard included). The scan
+// asks this source and nothing else, so a value handed back here and set in no
+// environment variable is exactly what a stored connection looks like to it.
+vi.mock("../../../services/integrations/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/integrations/runtime.js")>()),
+  knownSecretValues: async () => mocks.knownSecrets(),
 }));
 
 import { execute } from "./execute.js";
+import { IntegrationSecretsUnreadableError } from "../../../services/integrations/secret-values.js";
 import { manifest as leakManifest } from "./manifest.js";
 import { expectOutputConformsToRegistry, makeCtx, makeInvocation, makeNode } from "../support/test-support.js";
 
@@ -140,7 +146,7 @@ describe("leak_review paramsSchema", () => {
 describe("leak_review execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.configuredReplaySecrets.mockReturnValue([]);
+    mocks.knownSecrets.mockReturnValue([]);
   });
 
   it("reports ok for a clean diff and screens it with the LLM once", async () => {
@@ -236,7 +242,7 @@ describe("leak_review execute", () => {
     expect(passes.output!.status).toBe("ok");
 
     vi.clearAllMocks();
-    mocks.configuredReplaySecrets.mockReturnValue([]);
+    mocks.knownSecrets.mockReturnValue([]);
     cleanScan();
     const added = await execute(
       makeNode("leak_review"),
@@ -390,7 +396,7 @@ describe("leak_review execute", () => {
   });
 
   it("fails when a configured environment secret appears in the diff", async () => {
-    mocks.configuredReplaySecrets.mockReturnValue(["hunter2-configured-secret"]);
+    mocks.knownSecrets.mockReturnValue(["hunter2-configured-secret"]);
     const ctx = singleRepoCtx({
       head: "head1",
       log: "chore: add config\n",
@@ -407,8 +413,54 @@ describe("leak_review execute", () => {
     expect(result.error.message).not.toContain("hunter2-configured-secret");
   });
 
+  // What `knownSecretValues` hands back for a token an admin stored in the
+  // Integrations page (secret-values.test.ts proves the source holds it, and
+  // that no environment variable carries it): a plain value no pattern knows.
+  it("fails when a secret stored in the dashboard appears in the diff", async () => {
+    mocks.knownSecrets.mockReturnValue(["plainvalue4471tracer"]);
+    const ctx = singleRepoCtx({
+      head: "head1",
+      log: "chore: wire tracing\n",
+      diff: '+++ b/tracing.ts\n+export const key = "plainvalue4471tracer";\n',
+    });
+
+    const result = await execute(makeNode("leak_review"), {}, ctx);
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind !== "execution_error") return;
+    expect(result.error.category).toBe("checks");
+    expect(result.error.message).not.toContain("plainvalue4471tracer");
+    expect(mocks.generateStructured).not.toHaveBeenCalled();
+  });
+
+  // Red when: a set that cannot be read reports ok, or is read as "no
+  // configured secrets" and the diff is scanned for patterns alone.
+  it("publishes nothing, and says why, when the secrets to scan for cannot be read", async () => {
+    mocks.knownSecrets.mockImplementation(() => {
+      throw new IntegrationSecretsUnreadableError(new Error("connection reset"));
+    });
+    const ctx = singleRepoCtx({
+      head: "head1",
+      log: "chore: add config\n",
+      diff: '+++ b/config.ts\n+export const retries = 3;\n',
+    });
+
+    const result = await execute(makeNode("leak_review"), {}, ctx);
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind !== "execution_error") return;
+    // Not the workspace's fault and not a leak: the deployment's settings.
+    expect(result.error.category).toBe("engine");
+    expect(result.error.message).toContain("Nothing was published.");
+    expect(result.error.message).toContain(
+      "this deployment's integration settings could not be read",
+    );
+    expect(result.error.message).not.toContain("connection reset");
+    expect(mocks.generateStructured).not.toHaveBeenCalled();
+  });
+
   it("keeps most of a short configured secret out of the failure message", async () => {
-    mocks.configuredReplaySecrets.mockReturnValue(["abcd1234"]);
+    mocks.knownSecrets.mockReturnValue(["abcd1234"]);
     const ctx = singleRepoCtx({
       head: "head1",
       log: "chore: add config\n",

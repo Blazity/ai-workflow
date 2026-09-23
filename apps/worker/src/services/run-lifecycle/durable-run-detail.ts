@@ -69,6 +69,9 @@ export interface FetchRunDetailFromDbOptions {
   db: Db;
   runId: string;
   ticketOrigin: string;
+  /** Every secret the deployment knows (`knownSecretValues`), which the
+   *  persisted step errors are redacted with on the way out. */
+  secrets: readonly string[];
 }
 
 /**
@@ -81,6 +84,7 @@ export interface FetchRunDetailFromDbOptions {
 function mapRunDetailRow(
   row: NonNullable<Awaited<ReturnType<typeof readRunDetailRow>>>,
   ticketOrigin: string,
+  secrets: readonly string[],
 ): {
   run: RunDetail;
   steps: RunStep[];
@@ -124,7 +128,7 @@ function mapRunDetailRow(
   // "this failure carries no code", never "unknown failure".
   const failureCode = isRunFailureCode(row.statusReasonCode) ? row.statusReasonCode : null;
   if (persisted && persisted.length > 0) {
-    const safePersisted = sanitizeRunSteps(persisted) ?? [];
+    const safePersisted = sanitizeRunSteps(persisted, null, secrets) ?? [];
     const steps = TERMINAL.has(run.status)
       ? normalizeFinishedSteps(safePersisted, run.completedAt)
       : safePersisted;
@@ -141,14 +145,14 @@ function mapRunDetailRow(
 
 export async function fetchRunDetailFromDb(opts: FetchRunDetailFromDbOptions) {
   const row = await readRunDetailRow(opts.db, opts.runId);
-  return row ? mapRunDetailRow(row, opts.ticketOrigin) : null;
+  return row ? mapRunDetailRow(row, opts.ticketOrigin, opts.secrets) : null;
 }
 
 export async function fetchConnectedRunDetailFromDb(
   opts: Omit<FetchRunDetailFromDbOptions, "db">,
 ) {
   const row = await readConnectedRunDetailRow(opts.runId);
-  return row ? mapRunDetailRow(row, opts.ticketOrigin) : null;
+  return row ? mapRunDetailRow(row, opts.ticketOrigin, opts.secrets) : null;
 }
 
 function mapRunRefs(

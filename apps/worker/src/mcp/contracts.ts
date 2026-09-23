@@ -53,6 +53,8 @@ export type {
  */
 export type McpToolDependencies = {
   services: McpToolServices;
+  /** Built by `createAdapters`, so the tracker comes with the resolution it
+   *  was read from: see `issue-tracker-access.ts` for how a tool reaches it. */
   adapters: Adapters;
   actor: McpActorContext;
   /** The deployment's settings as the transport read them for this call. One
@@ -80,6 +82,15 @@ export type McpToolDependencies = {
    * this build shipped its first integration.
    */
   loadDeploymentIntegrations: () => Promise<DeploymentIntegrations>;
+  /**
+   * Every secret this deployment knows, which every result is redacted with
+   * before it leaves (`knownSecretValues`: the environment's and every
+   * connected integration's, a token stored in the dashboard included). A
+   * thunk for the reason the two above are: the transport passes the connected
+   * read, a test passes a value. It throws when the integration settings cannot
+   * be read, and the call is refused before anything runs.
+   */
+  loadKnownSecrets: () => Promise<string[]>;
   requestId: string;
   traceId: string;
   now: () => Date;

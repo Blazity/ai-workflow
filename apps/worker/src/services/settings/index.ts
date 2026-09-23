@@ -8,7 +8,6 @@
 export {
   betterAuthBaseUrl,
   betterAuthSecret,
-  configuredSecretValues,
   cronSecret,
   dashboardOrganizationSettings,
   dashboardOrigin,
@@ -21,9 +20,11 @@ export {
   issueTrackerBaseUrl,
   outboundEmailSettings,
   resendWebhookSecret,
+  ticketBoardOf,
   ticketBoardSettings,
   webhookTriggerEncryptionKey,
 } from "./integration-settings.js";
+export type { TicketBoardSettings } from "./integration-settings.js";
 export {
   getRequestSettingsSnapshot,
 } from "./request-snapshot.js";

@@ -3,7 +3,7 @@ import {
   sanitizeFilename,
   formatBytes,
   formatAttachmentsIndex,
-  fetchAttachmentsWithRetry,
+  downloadTicketAttachments,
   type DownloadedAttachment,
   type AttachmentCaps,
 } from "./attachments.js";
@@ -153,12 +153,12 @@ function meta(
   };
 }
 
-describe("fetchAttachmentsWithRetry", () => {
+describe("downloadTicketAttachments", () => {
   it("downloads all attachments when under caps", async () => {
     const downloader = {
       downloadAttachment: vi.fn(async () => Buffer.from([1, 2, 3])),
     };
-    const out = await fetchAttachmentsWithRetry(
+    const out = await downloadTicketAttachments(
       downloader,
       [meta("1", "a.png", 3), meta("2", "b.png", 3)],
       defaultCaps,
@@ -174,7 +174,7 @@ describe("fetchAttachmentsWithRetry", () => {
     const downloader = {
       downloadAttachment: vi.fn(async () => Buffer.from([1, 2, 3])),
     };
-    const out = await fetchAttachmentsWithRetry(
+    const out = await downloadTicketAttachments(
       downloader,
       [
         {
@@ -203,7 +203,7 @@ describe("fetchAttachmentsWithRetry", () => {
       downloadAttachment: vi.fn(async () => Buffer.from([])),
     };
     const caps: AttachmentCaps = { ...defaultCaps, maxFileSizeBytes: 100 };
-    const out = await fetchAttachmentsWithRetry(
+    const out = await downloadTicketAttachments(
       downloader,
       [meta("1", "small.bin", 50), meta("2", "big.bin", 10_000)],
       caps,
@@ -219,7 +219,7 @@ describe("fetchAttachmentsWithRetry", () => {
       downloadAttachment: vi.fn(async () => Buffer.from([])),
     };
     const caps: AttachmentCaps = { ...defaultCaps, maxTotalSizeBytes: 150 };
-    const out = await fetchAttachmentsWithRetry(
+    const out = await downloadTicketAttachments(
       downloader,
       [
         meta("1", "a.bin", 100),
@@ -240,7 +240,7 @@ describe("fetchAttachmentsWithRetry", () => {
       downloadAttachment: vi.fn(async () => Buffer.from([])),
     };
     const caps: AttachmentCaps = { ...defaultCaps, maxCount: 2 };
-    const out = await fetchAttachmentsWithRetry(
+    const out = await downloadTicketAttachments(
       downloader,
       [
         meta("1", "a.bin", 10),
@@ -257,80 +257,55 @@ describe("fetchAttachmentsWithRetry", () => {
     expect(downloader.downloadAttachment).toHaveBeenCalledTimes(2);
   });
 
-  it("retries transient 5xx up to 3 times then marks failed", async () => {
+  // Red when: a failure the adapter's HTTP policy already retried is retried
+  // again here, which asked a tracker that stays down for the same file up to
+  // nine times and spent the operator's per-attachment deadline three times
+  // over inside one step.
+  it("asks the tracker once for a file it could not serve and marks it failed", async () => {
     const downloader = {
       downloadAttachment: vi
         .fn()
-        .mockRejectedValue(new Error("Jira attachment error: status 500 Internal Server Error on url")),
+        .mockRejectedValue(
+          Object.assign(
+            new Error("Jira attachment error: status 503 Service Unavailable on https://jira.example/1"),
+            { status: 503 },
+          ),
+        ),
     };
-    const out = await fetchAttachmentsWithRetry(
+    const out = await downloadTicketAttachments(
       downloader,
-      [meta("1", "a.bin", 10)],
+      [meta("1", "a.bin", 10), meta("2", "b.bin", 10)],
       defaultCaps,
       noopLogger(),
     );
-    expect(out[0].failed).toBeDefined();
-    expect(out[0].failed?.attempts).toBe(3);
-    expect(downloader.downloadAttachment).toHaveBeenCalledTimes(3);
+    expect(downloader.downloadAttachment).toHaveBeenCalledTimes(2);
+    expect(out[0].failed).toEqual({ reason: "HTTP 503 Service Unavailable", attempts: 1 });
+    expect(out[1].failed).toEqual({ reason: "HTTP 503 Service Unavailable", attempts: 1 });
   });
 
-  it("does not retry on 404", async () => {
+  it("keeps downloading the rest after one file fails", async () => {
     const downloader = {
       downloadAttachment: vi
         .fn()
-        .mockRejectedValue(new Error("Jira attachment error: status 404 Not Found on url")),
-    };
-    const out = await fetchAttachmentsWithRetry(
-      downloader,
-      [meta("1", "a.bin", 10)],
-      defaultCaps,
-      noopLogger(),
-    );
-    expect(out[0].failed).toBeDefined();
-    expect(out[0].failed?.attempts).toBe(1);
-    expect(downloader.downloadAttachment).toHaveBeenCalledTimes(1);
-  });
-
-  it("succeeds on second attempt after transient failure", async () => {
-    const downloader = {
-      downloadAttachment: vi
-        .fn()
-        .mockRejectedValueOnce(new Error("Jira attachment error: status 503 Service Unavailable on url"))
+        .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "TimeoutError" }))
         .mockResolvedValueOnce(Buffer.from([9])),
     };
-    const out = await fetchAttachmentsWithRetry(
+    const out = await downloadTicketAttachments(
       downloader,
-      [meta("1", "a.bin", 1)],
+      [meta("1", "a.bin", 1), meta("2", "b.bin", 1)],
       defaultCaps,
       noopLogger(),
     );
-    expect(out[0].content).toBeDefined();
-    expect(out[0].failed).toBeUndefined();
-    expect(downloader.downloadAttachment).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not treat a bare 5xx sequence in a URL as retryable", async () => {
-    const downloader = {
-      downloadAttachment: vi
-        .fn()
-        .mockRejectedValue(new Error("fetch failed on https://example.test/path/500/resource")),
-    };
-    const out = await fetchAttachmentsWithRetry(
-      downloader,
-      [meta("1", "a.bin", 10)],
-      defaultCaps,
-      noopLogger(),
-    );
-    expect(out[0].failed).toBeDefined();
     expect(out[0].failed?.attempts).toBe(1);
-    expect(downloader.downloadAttachment).toHaveBeenCalledTimes(1);
+    expect(out[1].content).toBeDefined();
+    expect(out[1].failed).toBeUndefined();
   });
 
   it("resolves collisions by appending -{id} before the extension", async () => {
     const downloader = {
       downloadAttachment: vi.fn(async () => Buffer.from([1])),
     };
-    const out = await fetchAttachmentsWithRetry(
+    const out = await downloadTicketAttachments(
       downloader,
       [meta("1", "report.pdf", 1), meta("2", "report.pdf", 1)],
       defaultCaps,
@@ -339,25 +314,5 @@ describe("fetchAttachmentsWithRetry", () => {
     expect(out[0].filename).toBe("report.pdf");
     expect(out[1].filename).toBe("report-2.pdf");
     expect(out[1].originalFilename).toBe("report.pdf");
-  });
-
-  it("retries on network abort errors", async () => {
-    const abortErr = Object.assign(new Error("The operation was aborted"), {
-      name: "AbortError",
-    });
-    const downloader = {
-      downloadAttachment: vi
-        .fn()
-        .mockRejectedValueOnce(abortErr)
-        .mockResolvedValueOnce(Buffer.from([1])),
-    };
-    const out = await fetchAttachmentsWithRetry(
-      downloader,
-      [meta("1", "a.bin", 1)],
-      defaultCaps,
-      noopLogger(),
-    );
-    expect(out[0].content).toBeDefined();
-    expect(downloader.downloadAttachment).toHaveBeenCalledTimes(2);
   });
 });

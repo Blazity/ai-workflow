@@ -11,7 +11,8 @@ async function blockPostTicketCommentStep(
   "use step";
   const { assertConnectedActiveRunOwner } = await import("../../../db/repositories/active-runs.js");
   const { createAdapters } = await import("../../../engine/support/adapters.js");
-  const { issueTracker } = await createAdapters();
+  const { issueTrackerOrThrow } = await import("../../../engine/support/connected-issue-tracker.js");
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
   await assertConnectedActiveRunOwner(owner);
   // The body arrives with its {{data:...}} tokens resolved (by
   // resolveV2PromptConfiguration in executeV2Block) or bound whole through the

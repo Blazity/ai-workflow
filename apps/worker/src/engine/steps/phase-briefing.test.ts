@@ -53,6 +53,10 @@ vi.mock("../../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ token: "t", teamId: "team", projectId: "project" }),
 }));
 
+// The deployment's database, for the one read this suite does not route by
+// hand: the secrets a briefing is redacted with are read from the integration
+// settings before anything is stored.
+vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../db/repositories/agent-visibility.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../db/repositories/agent-visibility.js")>();
   return {

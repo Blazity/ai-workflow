@@ -69,7 +69,8 @@ async function mirrorApprovalCommentStep(
   "use step";
   const { assertConnectedActiveRunOwner } = await import("../../../db/repositories/active-runs.js");
   const { createAdapters } = await import("../../../engine/support/adapters.js");
-  const { issueTracker } = await createAdapters();
+  const { issueTrackerOrThrow } = await import("../../../engine/support/connected-issue-tracker.js");
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
   await assertConnectedActiveRunOwner(owner);
   await issueTracker.postComment(ticketId, body);
 }
@@ -95,12 +96,13 @@ async function parkForApprovalStep(
 ): Promise<void> {
   "use step";
   const { createAdapters } = await import("../../../engine/support/adapters.js");
+  const { issueTrackerOrThrow } = await import("../../../engine/support/connected-issue-tracker.js");
   const { AWAITING_APPROVAL_LABEL } = await import("../../../engine/support/ticket-labels.js");
   const { updateConnectedTicketLabelsForRun } = await import(
     "../../../engine/support/ticket-label-mutation.js"
   );
   const { moveConnectedTicketForRun } = await import("../../../engine/support/ticket-transition.js");
-  const { issueTracker } = await createAdapters();
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
   if (typeof issueTracker.updateLabels === "function") {
     try {
       await updateConnectedTicketLabelsForRun({

@@ -1,9 +1,13 @@
 /* eslint-disable max-lines, max-lines-per-function */
 import { type UsageTotals } from "../../sandbox/usage.js";
-import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
+import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
 import { type ClarificationDecisionObservation } from "../../run-observability/agent-observations.js";
 import type { ClarificationDecisionDigest } from "../helpers/clarification-decision-digest.js";
 import { replayCaptureWithinTimeout } from "../../run-observability/capture-timeout.js";
+import {
+  redactConfiguredSecretsInEnvelope,
+  redactConfiguredSecretsInJson,
+} from "../../run-observability/sanitizer.js";
 import { usageSnapshot } from "../../engine/support/run-analysis-report.js";
 import { summarizeRunBlockStatuses } from "../run-block-status-summary.js";
 import { type RunBudgetFailure } from "../helpers/run-budget.js";
@@ -91,8 +95,19 @@ export async function recordRunTelemetryStep(payload: {
   // how run history could go missing for days unnoticed. Every attempt logs and
   // rethrows, so the durable retry still happens and the caller still sees the
   // exhausted budget.
+  // Every secret the deployment knows, read inside the guarded body so a set
+  // that cannot be read is logged like any other failed attempt, and the
+  // durable retry asks again (services/integrations/secret-values.ts has the
+  // rule). Until it is read, an error's text is withheld from the log.
+  let known: readonly string[] | null = null;
   try {
+    const { knownSecretValues } = await import("../../services/integrations/runtime.js");
+    const secrets = await knownSecretValues();
+    known = secrets;
     const { loadRunTelemetryPort } = await import("../internal/ports.js");
+    const { redactConfiguredSecretsInText } = await import(
+      "../../run-observability/sanitizer.js"
+    );
     const { recordConnectedRunUsage } = await loadRunTelemetryPort();
     const { finalizeConnectedRunAnalysisUsage } = await import("../../run-analysis/persistence.js");
     const { getWorld } = await import("workflow/runtime");
@@ -102,11 +117,21 @@ export async function recordRunTelemetryStep(payload: {
     const capturedSteps = await collectRunDetailMod.captureRunStepsBestEffort(
       getWorld() as unknown as import("../support/collect-run-detail.js").RunDetailSource,
       payload.runId,
+      secrets,
     );
     const steps = collectRunDetailMod.sanitizeRunStepsForDiagnosticError(
       capturedSteps,
       payload.executionError,
+      secrets,
     );
+    // The failure sentence was composed in workflow scope, which cannot see a
+    // connection stored in the dashboard, and this is the write that keeps it.
+    const executionError = payload.executionError
+      ? {
+          ...payload.executionError,
+          message: redactConfiguredSecretsInText(payload.executionError.message, secrets),
+        }
+      : null;
     const { totals } = payload;
     await recordConnectedRunUsage({
       runId: payload.runId,
@@ -121,7 +146,7 @@ export async function recordRunTelemetryStep(payload: {
       // was captured, else a short derivation from the structured budget stop.
       // The machine-readable code rides in the same value, so the row can never
       // hold one without the other.
-      statusReason: failureReasonOf(payload),
+      statusReason: failureReasonOf({ ...payload, executionError }),
       ticketKey: payload.ticketKey,
       ticketTitle: payload.ticketTitle,
       ticketUrl: payload.ticketUrl,
@@ -156,7 +181,7 @@ export async function recordRunTelemetryStep(payload: {
         {
           runId: payload.runId,
           ticketKey: payload.ticketKey,
-          error: redactDiagnosticText(errorMessage(error)),
+          error: redactDiagnosticText(errorMessage(error), secrets),
         },
         "run_analysis_final_usage_failed",
       );
@@ -167,7 +192,9 @@ export async function recordRunTelemetryStep(payload: {
       {
         runId: payload.runId,
         ticketKey: payload.ticketKey,
-        error: redactDiagnosticText(errorMessage(error)),
+        error: known
+          ? redactDiagnosticText(errorMessage(error), known)
+          : `${error instanceof Error ? error.name : "Error"} (text withheld: the secrets to redact it with were not read)`,
       },
       "run_completion_telemetry_persist_failed",
     );
@@ -192,7 +219,8 @@ async function persistRunTelemetryBestEffort(
       "run_completion_telemetry_persist_exhausted",
       payload.runId,
       payload.ticketKey,
-      redactDiagnosticText(errorMessage(error)),
+      // Workflow scope: the environment's secrets are all it can see.
+      redactDiagnosticText(errorMessage(error), environmentSecretValues()),
     );
   });
 }
@@ -368,6 +396,11 @@ async function captureV2RunObservationStartStep(payload: {
         const { sanitizeV2ReplaySnapshotForCapture } = await import(
           "../../run-observability/runtime-hooks.js"
         );
+        // Every secret the deployment knows. Workflow scope redacted what it
+        // sent with the environment's alone; a set that cannot be read throws
+        // into the catch below and the replay is marked unavailable rather
+        // than written with a stored secret in it.
+        const secrets = await replaySecretValues();
         const organizationSlug =
           payload.organizationSlug ?? (await replayOrganizationSlug());
         const organization = await createConnectedAuthRepository().findOrganizationBySlug(
@@ -403,7 +436,7 @@ async function captureV2RunObservationStartStep(payload: {
         const snapshot = sanitizeV2ReplaySnapshotForCapture({
           graph,
           layout,
-          secrets: configuredReplaySecrets(),
+          secrets,
         });
         if (!snapshot) {
           throw new Error("Replay snapshot exceeds safe capture limits");
@@ -416,7 +449,7 @@ async function captureV2RunObservationStartStep(payload: {
           definitionSchemaVersion: 2,
           graph: snapshot.graph,
           layout: snapshot.layout,
-          runtimeManifest: payload.runtimeManifest,
+          runtimeManifest: redactConfiguredSecretsInEnvelope(payload.runtimeManifest, secrets),
         });
       })(),
     );
@@ -495,6 +528,31 @@ interface SanitizedReplayObservation {
 }
 
 /**
+ * Every secret the deployment knows, for the capture steps in this file.
+ *
+ * Workflow scope sanitized each value it hands these steps, but only with the
+ * environment's secrets: a connection an admin stored in the dashboard never
+ * reaches the environment, and workflow scope cannot read one. So each step
+ * redacts again with the whole set before it writes. A set that cannot be read
+ * throws into the step's own catch, which marks the replay unavailable rather
+ * than storing what it could not clean.
+ */
+async function replaySecretValues(): Promise<string[]> {
+  const { knownSecretValues } = await import("../../services/integrations/runtime.js");
+  return knownSecretValues();
+}
+
+function redactObservationsWith(
+  observations: readonly SanitizedReplayObservation[],
+  secrets: readonly string[],
+): SanitizedReplayObservation[] {
+  return observations.map((observation) => ({
+    kind: observation.kind,
+    envelope: redactConfiguredSecretsInEnvelope(observation.envelope, secrets),
+  }));
+}
+
+/**
  * Append observations to a still-running attempt.
  *
  * The other two writers are state transitions and carry their observations as
@@ -522,7 +580,11 @@ async function flushV2RunObservationsStep(payload: {
     const { prepareReplayAttemptObservationPersistence } = await import(
       "../../run-observability/runtime-hooks.js"
     );
-    for (const observation of payload.observations) {
+    const observations = redactObservationsWith(
+      payload.observations,
+      await replaySecretValues(),
+    );
+    for (const observation of observations) {
       const recorded = await replayCaptureWithinTimeout(
         persistPreparedReplayAttempt({
           read: () => getConnectedWorkflowBlockAttemptPersistence({
@@ -578,6 +640,10 @@ async function updateV2RunObservationWaitingStep(payload: {
     const { prepareReplayAttemptWaitingPersistence } = await import(
       "../../run-observability/runtime-hooks.js"
     );
+    const observations = redactObservationsWith(
+      payload.observations,
+      await replaySecretValues(),
+    );
     const updated = await replayCaptureWithinTimeout(
       persistPreparedReplayAttempt({
         read: () => getConnectedWorkflowBlockAttemptPersistence({
@@ -593,7 +659,7 @@ async function updateV2RunObservationWaitingStep(payload: {
         }),
         prepare: (current) => prepareReplayAttemptWaitingPersistence(current, {
           selectedTransition: payload.selectedTransition,
-          observations: payload.observations,
+          observations,
         }),
         errorMessage: "Concurrent attempt state updates exceeded the retry limit",
       }),
@@ -641,6 +707,9 @@ async function finishV2RunObservationAttemptStep(payload: {
     const { prepareReplayAttemptFinishPersistence } = await import(
       "../../run-observability/runtime-hooks.js"
     );
+    const secrets = await replaySecretValues();
+    const observations = redactObservationsWith(payload.observations, secrets);
+    const outcome = redactConfiguredSecretsInJson(payload.outcome, secrets);
     const finished = await replayCaptureWithinTimeout(
       persistPreparedReplayAttempt({
         read: () => getConnectedWorkflowBlockAttemptPersistence({
@@ -656,10 +725,10 @@ async function finishV2RunObservationAttemptStep(payload: {
         }),
         prepare: (current) => prepareReplayAttemptFinishPersistence(current, {
           state: payload.state,
-          outcome: payload.outcome,
+          outcome,
           selectedTransition: payload.selectedTransition,
           diagnosticId: payload.diagnosticId,
-          observations: payload.observations,
+          observations,
           completedAt: new Date(payload.completedAt),
         }),
         errorMessage: "Concurrent attempt finalization exceeded the retry limit",

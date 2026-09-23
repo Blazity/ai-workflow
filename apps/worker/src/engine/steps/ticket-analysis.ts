@@ -5,7 +5,12 @@ import type { IntegrationConnectionPin } from "@shared/contracts";
 import type { CoreMessagingDelivery } from "../support/messaging.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { type WorkflowExecutionLogEvent } from "../../run-observability/safe-execution-log.js";
-import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
+import {
+  WITHHELD_UNREDACTABLE,
+  withKnownSecretsRedacted,
+  withKnownSecretsRedactedOr,
+} from "../support/publication-redaction.js";
+import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { type AgentWorkflowInput } from "../agent-input.js";
 import type { ActiveRunOwner, TicketTransitionOwner } from "../internal/ports.js";
@@ -25,8 +30,10 @@ export async function postPrLinksComment(
     "../internal/ports.js"
   );
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
-  const { createAdapters } = await loadAdaptersPort();
-  const { issueTracker } = await createAdapters();
+  const { createAdapters, issueTrackerIfConnected } = await loadAdaptersPort();
+  // Best-effort like the post itself: no tracker leaves the links on the run.
+  const issueTracker = issueTrackerIfConnected(await createAdapters());
+  if (!issueTracker) return;
   const lines = prs.map((pr) => `- ${pr.provider}:${pr.repoPath}: #${pr.id} ${pr.url}`);
   try {
     await assertConnectedActiveRunOwner(owner);
@@ -49,7 +56,7 @@ async function recordRunAnalysisReportStep(report: RunAnalysisReport): Promise<v
   "use step";
   const { logger } = await import("../../infra/logger.js");
   const { recordConnectedRunAnalysisReport } = await import("../../run-analysis/persistence.js");
-  await recordConnectedRunAnalysisReport(report);
+  await recordConnectedRunAnalysisReport(await withKnownSecretsRedacted(report));
   logger.info({ runId: report.runId, stage: report.stage }, "run_analysis_report_recorded");
 }
 recordRunAnalysisReportStep.maxRetries = 2;
@@ -123,9 +130,10 @@ export async function postRunAnalysisCommentStep(
   const { loadActiveRunOwnerPort, loadAdaptersPort, loadEnvironmentPort } =
     await import("../internal/ports.js");
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
-  const { createAdapters } = await loadAdaptersPort();
+  const { createAdapters, issueTrackerOrThrow } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
-  const { issueTracker } = await createAdapters();
+  // A throw is this comment's failure, recorded as such by every caller.
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
   await assertConnectedActiveRunOwner(owner);
   const attemptedAt = new Date().toISOString();
   const marker = analysisCommentMarker(report.runId, stage);
@@ -147,9 +155,10 @@ export async function postRunAnalysisCommentStep(
     return { state: "posted", attemptedAt, commentUrl: existingCommentUrl, error: null };
   }
   const dashboardUrl = ticketRunUrl(env.DASHBOARD_ORIGIN, ticketKey, report.runId);
+  const safeReport = await withKnownSecretsRedacted(report);
   const body = stage === "research"
-    ? formatResearchAnalysisComment(report, dashboardUrl)
-    : formatPublishedAnalysisComment(report, dashboardUrl);
+    ? formatResearchAnalysisComment(safeReport, dashboardUrl)
+    : formatPublishedAnalysisComment(safeReport, dashboardUrl);
   await assertConnectedActiveRunOwner(owner);
   const commentUrl = await issueTracker.postComment(ticketKey, body);
   const { logger } = await import("../../infra/logger.js");
@@ -191,9 +200,11 @@ function safeRunAnalysisReportError(error: unknown): string {
   return safeRunAnalysisError(error, "Run analysis report capture failed.");
 }
 
+/** Workflow scope, so the environment's secrets are all it can redact with;
+ *  the text only reaches a console line. */
 function safeRunAnalysisError(error: unknown, fallback: string): string {
   const envelope = sanitizeReplayValue(errorMessage(error), {
-    secrets: configuredReplaySecrets(),
+    secrets: environmentSecretValues(),
     maxBytes: 2 * 1024,
   });
   return !envelope.metadata.unavailable && typeof envelope.value === "string"
@@ -214,8 +225,8 @@ export async function postTicketComment(
     "../internal/ports.js"
   );
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
-  const { createAdapters } = await loadAdaptersPort();
-  const { issueTracker } = await createAdapters();
+  const { createAdapters, issueTrackerOrThrow } = await loadAdaptersPort();
+  const issueTracker = issueTrackerOrThrow(await createAdapters());
   await assertConnectedActiveRunOwner(owner);
   return issueTracker.postComment(ticketId, comment);
 }
@@ -247,10 +258,8 @@ export async function notifyTicket(
   const { loadActiveRunOwnerPort, loadAdaptersPort } = await import("../internal/ports.js");
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
-  // Destructuring takes the sender and never touches `issueTracker`, which is
-  // the getter that refuses where no tracker is connected. A notification must
-  // never change a run's outcome, and a deployment with chat and no tracker
-  // still sends this one.
+  // Only the sender: a notification must never change a run's outcome, and a
+  // deployment with chat and no tracker still sends this one.
   const { messaging } = await createAdapters(undefined, pins);
   await assertConnectedActiveRunOwner(owner);
   return messaging.notifyForTicket(ticketKey, event);
@@ -299,11 +308,17 @@ async function postFailureReasonCommentStep(
     "../internal/ports.js"
   );
   const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
-  const { createAdapters } = await loadAdaptersPort();
-  const { issueTracker } = await createAdapters();
+  const { createAdapters, issueTrackerIfConnected } = await loadAdaptersPort();
+  const issueTracker = issueTrackerIfConnected(await createAdapters());
+  // Best-effort: with no tracker there is no ticket to explain the failure on,
+  // and the run's own record still carries the reason.
+  if (!issueTracker) return;
   try {
+    // Composed in workflow scope, which cannot see a secret stored in the
+    // dashboard; a set that cannot be read posts nothing (the catch below).
+    const safeReason = await withKnownSecretsRedacted(reason);
     await assertConnectedActiveRunOwner(owner);
-    await issueTracker.postComment(ticketKey, reason);
+    await issueTracker.postComment(ticketKey, safeReason);
   } catch (err) {
     if (isRunControlError(err)) throw err;
     const { logger } = await import("../../infra/logger.js");
@@ -322,8 +337,10 @@ async function logPhaseFailure(
 ): Promise<void> {
   "use step";
   const { logger } = await import("../../infra/logger.js");
+  // Composed in workflow scope, so only the environment half was applied.
+  const safeReason = await withKnownSecretsRedactedOr(reason, WITHHELD_UNREDACTABLE);
   logger.warn(
-    { ticketKey, phase, reason: reason.slice(0, 1_000) },
+    { ticketKey, phase, reason: safeReason.slice(0, 1_000) },
     "agent_phase_failed",
   );
 }
@@ -361,8 +378,9 @@ async function recordRunFailureReasonStep(
       import("@shared/contracts"),
       import("../../infra/logger.js"),
     ]);
-  const parts = runStatusReasonParts(reason);
   try {
+    // The same sentence the ticket is given, redacted the same way.
+    const parts = runStatusReasonParts(await withKnownSecretsRedacted(reason));
     await recordConnectedRunStatusReason(
       runId,
       // The clamp is the sentence's, not the code's: a closed-set member is
@@ -399,7 +417,17 @@ async function logWorkflowExecutionErrorStep(
 ): Promise<void> {
   "use step";
   const { logger } = await import("../../infra/logger.js");
-  logger.error(event, "workflow_execution_error");
+  // The detail and message were composed in workflow scope; the correlation
+  // fields are still worth a line when the texts have to be withheld.
+  const { agentProtocol: _unredactable, detail, message, ...correlation } = event;
+  logger.error(
+    await withKnownSecretsRedactedOr(event, {
+      ...correlation,
+      ...(detail !== undefined ? { detail: WITHHELD_UNREDACTABLE } : {}),
+      ...(message !== undefined ? { message: WITHHELD_UNREDACTABLE } : {}),
+    }),
+    "workflow_execution_error",
+  );
 }
 logWorkflowExecutionErrorStep.maxRetries = 0;
 
@@ -414,9 +442,11 @@ async function markTicketFailed(
   const { createAdapters } = await loadAdaptersPort();
   const { runRegistry } = await createAdapters();
   if (!owner.runId) throw new Error("Failed-ticket marking requires a bound run owner.");
+  // The mark is what keeps the ticket from being dispatched again, so it is
+  // written whatever happens to the text, which workflow scope composed.
   await runRegistry.markFailed(ticketIdentifier, {
     runId,
-    error,
+    error: await withKnownSecretsRedactedOr(error, WITHHELD_UNREDACTABLE),
     failedAt: new Date().toISOString(),
   }, {
     subjectKey: owner.subjectKey,

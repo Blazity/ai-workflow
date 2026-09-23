@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readProviderFailure } from "@integrations/sdk";
 import type { TicketSummary } from "../../../adapters/issue-tracker/types.js";
 import type {
   MessageRetrievalFailure,
@@ -11,6 +12,7 @@ import { resolveCallLlmTarget } from "../call-llm/execute.js";
 import { planLlmBriefing } from "../../agent-visibility/block.js";
 import { recordSendBriefing, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
+import { investigateSources } from "./manifest.js";
 
 const DEFAULT_CHAT_LOOKBACK_DAYS = 30;
 const DEFAULT_MAX_RESULTS = 10;
@@ -146,23 +148,6 @@ function chatEvidence(match: MessageSearchMatch): InvestigateEvidence {
   };
 }
 
-/**
- * Enabled sources, mirroring the dashboard's investigateSources. Accepts both
- * the capability vocabulary (`issue_tracker`, `chat`) and the old provider
- * vocabulary (`jira`, `slack`), because a run suspended before the rename
- * replays a recorded plan built with the old words: without this tolerance
- * that run would resume investigating nothing. An absent or unreadable list
- * means both are on: the schema defaults it that way, and a node whose
- * selection cannot be read should investigate everything rather than silently
- * investigate nothing.
- */
-function resolveSources(raw: unknown): { issueTracker: boolean; chat: boolean } {
-  if (!Array.isArray(raw)) return { issueTracker: true, chat: true };
-  return {
-    issueTracker: raw.includes("issue_tracker") || raw.includes("jira"),
-    chat: raw.includes("chat") || raw.includes("slack"),
-  };
-}
 
 function resolveChatChannels(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -291,25 +276,18 @@ type ProviderOutcome<T> =
   | { status: "failed"; reason: MessageRetrievalFailure };
 
 /**
- * Coarse class for a tracker error, from what the adapter actually throws: a
- * refused credential is somebody's configuration to fix, an abort is a timeout,
- * anything else is treated as an outage.
+ * Coarse class for a tracker error, from what the adapter actually throws: an
+ * abort is a timeout, a provider that answered and said no (the SDK's
+ * `readProviderFailure`, read from the `status` the client puts on its errors)
+ * is somebody's configuration to fix, and anything else is an outage.
  *
- * This is a weak signal: the port (`IssueTrackerAdapter`) does not carry typed
- * errors, so all this has to go on is the message text. It matches a 401 or
- * 403 appearing as a standalone number anywhere in the message rather than one
- * provider's exact wording, so a differently worded permission error still
- * classifies. The cost of getting it wrong either way is the same: a
- * permission failure may be reported to the run as merely "unavailable",
- * which reads as an outage rather than something the tenant's connection
- * needs fixed.
+ * Under that rule a 400 or a 404 from a search reads as "permission", because
+ * it is the provider refusing what it was sent rather than failing to answer.
  */
 export function classifyTrackerFailure(error: unknown): MessageRetrievalFailure {
   const name = error instanceof Error ? error.name : "";
   if (name === "TimeoutError" || name === "AbortError") return "timeout";
-  const message = error instanceof Error ? error.message : "";
-  const permission = /(?<![0-9])(401|403)(?![0-9])/.test(message);
-  return permission ? "permission" : "unavailable";
+  return readProviderFailure(error).kind === "refused" ? "permission" : "unavailable";
 }
 
 async function searchTrackerSource(adapters: Adapters, input: {
@@ -318,11 +296,12 @@ async function searchTrackerSource(adapters: Adapters, input: {
   maxResults: number;
 }): Promise<ProviderOutcome<TicketSummary[]>> {
   try {
-    const { issueTracker } = adapters;
-    if (typeof issueTracker.findTickets !== "function") {
-      // The configured tracker cannot serve keyword search at all, which is a
-      // capability gap rather than an outage, but reads the same to the
-      // caller: no tracker evidence this run.
+    const { issueTrackerIfConnected } = await import("../../support/connected-issue-tracker.js");
+    const issueTracker = issueTrackerIfConnected(adapters);
+    if (!issueTracker || typeof issueTracker.findTickets !== "function") {
+      // No usable tracker, or one that cannot serve keyword search at all:
+      // a capability gap rather than an outage, but it reads the same to the
+      // caller, no tracker evidence this run.
       return { status: "failed", reason: "unavailable" };
     }
     const value = await issueTracker.findTickets({
@@ -422,6 +401,31 @@ async function blockInvestigateRetrievalStep(input: {
   queryTemplateNote?: string;
 }> {
   "use step";
+  // Every secret the deployment knows, read BEFORE anything is searched:
+  // ticket and chat evidence is text other people wrote, and a token pasted
+  // into it must not ride out in this step's durable result. A set that
+  // cannot be read is the one failure this block used to turn into a failed
+  // run; it degrades the way a provider failure does instead, into gaps for
+  // each source it was asked to search, and no evidence at all.
+  const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
+  let secrets: string[];
+  try {
+    secrets = await knownSecretValues();
+  } catch (error) {
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      "investigate_evidence_withheld",
+    );
+    return {
+      evidence: [],
+      gaps: [
+        ...(input.issueTracker ? [{ provider: "issue_tracker" as const, reason: "unavailable" as const, scope: "" }] : []),
+        ...(input.chat ? [{ provider: "chat" as const, reason: "unavailable" as const, scope: "" }] : []),
+      ],
+    };
+  }
+
   // A template the tracker would not run is left out here, in view, rather
   // than dropped by its adapter unseen. Without it the search narrows by the
   // keywords alone; with no keywords either there is nothing to narrow by,
@@ -495,10 +499,6 @@ async function blockInvestigateRetrievalStep(input: {
   const { redactConfiguredSecretsInText } = await import(
     "../../../run-observability/sanitizer.js"
   );
-  const { configuredReplaySecrets } = await import(
-    "../../../run-observability/configured-secrets.js"
-  );
-  const secrets = configuredReplaySecrets();
   return {
     evidence: evidence.map((item) => Object.assign({}, item, {
       title: redactConfiguredSecretsInText(item.title, secrets),
@@ -569,7 +569,7 @@ export const execute: BlockExecuteFn = async (
   // before this rename hands the block the old words, and a definition the
   // one-off rewrite has not reached still stores them (see
   // RENAMED_WORKFLOW_BLOCK_PARAMS in @shared/contracts).
-  const sources = resolveSources(block.params.sources ?? block.params.providers);
+  const sources = investigateSources(block.params);
   const maxResults =
     typeof block.params.maxResults === "number"
       ? block.params.maxResults

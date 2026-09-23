@@ -247,12 +247,12 @@ vi.mock("../../engine/support/adapters.js", () => ({
       adapterPins.seen.push(pins);
       return {};
     })()),
-    issueTracker: {
+    issueTrackerResolution: { ok: true, adapter: {
       postComment: jira.postComment,
       fetchTicket: jira.fetchTicket,
       moveTicket: jira.moveTicket,
       updateLabels: jira.updateLabels,
-    },
+    } },
     messaging: { notifyForTicket: messaging.notifyForTicket },
   }),
 }));

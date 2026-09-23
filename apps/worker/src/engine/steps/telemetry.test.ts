@@ -5,6 +5,41 @@ const state = vi.hoisted(() => ({
   finalizeRunAnalysisUsage: vi.fn(),
   loggerError: vi.fn(),
   recordRunUsage: vi.fn(),
+  knownSecrets: vi.fn(),
+  replaced: [] as unknown[],
+  markedUnavailable: vi.fn(),
+}));
+
+// The replay store, at the statement boundary: one attempt that exists, and
+// every replacement kept so a test can read exactly what would be written.
+vi.mock("../../db/repositories/runs/run-observability.js", () => ({
+  getConnectedWorkflowBlockAttemptPersistence: async () => ({
+    state: "running",
+    outcome: null,
+    selectedTransition: null,
+    diagnosticId: null,
+    inputEnvelope: null,
+    outputEnvelope: null,
+    logEnvelope: null,
+    metadataEnvelope: null,
+    observationRevision: 0,
+    startedAt: new Date("2026-09-22T10:00:00.000Z"),
+    completedAt: null,
+    durationMs: null,
+  }),
+  replaceConnectedWorkflowBlockAttemptPersistence: async (prepared: unknown) => {
+    state.replaced.push(prepared);
+    return true;
+  },
+  markConnectedRunReplayCaptureUnavailable: (...args: unknown[]) =>
+    state.markedUnavailable(...args),
+}));
+
+// Every secret the deployment knows. The step asks this source and no other,
+// so a value handed back here and set in no environment variable is what a
+// token an admin stored in the dashboard looks like to it.
+vi.mock("../../services/integrations/runtime.js", () => ({
+  knownSecretValues: () => state.knownSecrets(),
 }));
 
 vi.mock("../internal/ports.js", () => ({
@@ -21,11 +56,16 @@ vi.mock("../../run-analysis/persistence.js", () => ({
     state.finalizeRunAnalysisUsage(...args),
 }));
 vi.mock("../../infra/logger.js", () => ({
-  logger: { error: (...args: unknown[]) => state.loggerError(...args) },
+  logger: { error: (...args: unknown[]) => state.loggerError(...args), warn: vi.fn() },
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({ world: true }) }));
 
-import { persistRunTelemetryBestEffort, recordRunTelemetryStep } from "./telemetry.js";
+import {
+  flushV2RunObservationsStep,
+  persistRunTelemetryBestEffort,
+  recordRunTelemetryStep,
+} from "./telemetry.js";
+import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 
 const telemetryPayload = (): Parameters<typeof recordRunTelemetryStep>[0] => ({
   runId: "wrun_completion_pending",
@@ -60,6 +100,8 @@ const expectedLog = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.replaced.length = 0;
+  state.knownSecrets.mockResolvedValue([]);
   state.captureRunSteps.mockResolvedValue(null);
   state.finalizeRunAnalysisUsage.mockResolvedValue(undefined);
 });
@@ -171,6 +213,47 @@ describe("the durable why a failed run records", () => {
     });
   });
 
+  // Red when: the failure sentence, composed in workflow scope with only the
+  // environment's secrets, is written as it arrived. An agent that echoed a
+  // token an admin stored in the dashboard puts it in exactly this sentence,
+  // and this row is what the trace screen and runs.get show.
+  it("redacts a secret stored in the dashboard out of the sentence it keeps", async () => {
+    const stored = "plainvalue5530stored";
+    state.knownSecrets.mockResolvedValue([stored]);
+
+    const reason = await recordedReason({
+      status: "failed",
+      executionError: {
+        message: `The CLI exited with code 1 (printed ${stored} on the way out).`,
+        code: "diag-4",
+      },
+    });
+
+    expect(JSON.stringify(reason)).not.toContain(stored);
+    expect(reason).toContain("[REDACTED:configured_secret]");
+  });
+
+  // Red when: a set that cannot be read is treated as an empty one and the
+  // sentence is written anyway. The attempt fails instead and the durable
+  // retry asks again.
+  it("writes nothing when the secrets cannot be read", async () => {
+    state.knownSecrets.mockRejectedValue(new Error("integration settings unreadable"));
+
+    await expect(
+      recordRunTelemetryStep({
+        ...telemetryPayload(),
+        status: "failed",
+        executionError: { message: "The block timed out.", code: "diag-5" },
+      }),
+    ).rejects.toThrow("integration settings unreadable");
+    expect(state.recordRunUsage).not.toHaveBeenCalled();
+    // Still a line per failed attempt, which is what this step promises.
+    expect(state.loggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "wrun_completion_pending" }),
+      "run_completion_telemetry_persist_failed",
+    );
+  });
+
   it("records nothing on an outcome that is not a failure", async () => {
     expect(
       await recordedReason({
@@ -199,6 +282,51 @@ describe("persistRunTelemetryBestEffort", () => {
       "wrun_completion_pending",
       "PROJ-1",
       "database unavailable",
+    );
+  });
+});
+
+describe("a replay observation on its way to the store", () => {
+  const stored = "plainvalue6618stored";
+  // What workflow scope hands the step: already sanitized, but with the
+  // environment's secrets only, because that is all workflow scope can see.
+  const observation = {
+    kind: "log" as const,
+    envelope: sanitizeReplayValue(`agent printed ${stored} while running tests`, {
+      secrets: [],
+      retain: "tail",
+    }),
+  };
+  const flush = () =>
+    flushV2RunObservationsStep({
+      runId: "wrun_replay",
+      organizationId: "org-1",
+      attemptId: 7,
+      observations: [observation],
+    });
+
+  // Red when: the step writes the envelope as workflow scope sent it, which is
+  // how a token an admin stored in the dashboard reached a replay in the clear.
+  it("is written with every secret the deployment knows redacted, a stored one included", async () => {
+    state.knownSecrets.mockResolvedValue([stored]);
+
+    expect(await flush()).toBe(true);
+
+    const written = JSON.stringify(state.replaced);
+    expect(written).not.toContain(stored);
+    expect(written).toContain("[REDACTED:configured_secret]");
+  });
+
+  // Red when: a set that cannot be read lets the observation through unredacted
+  // instead of marking the replay unavailable.
+  it("is not written when the secrets cannot be read, and the replay says it is unavailable", async () => {
+    state.knownSecrets.mockRejectedValue(new Error("integration settings unreadable"));
+
+    expect(await flush()).toBe(false);
+
+    expect(state.replaced).toEqual([]);
+    expect(state.markedUnavailable).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "wrun_replay" }),
     );
   });
 });

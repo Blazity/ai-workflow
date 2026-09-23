@@ -98,14 +98,18 @@ export interface McpToolServices extends McpGateServices {
      *  ticket comment say "through an MCP client" rather than "in the
      *  dashboard". */
     surface: { kind: "mcp"; clientId: string; userId: string | null };
-    issueTracker: IssueTrackerAdapter;
+    /** The tracker the question's ticket lives in; absent for a question
+     *  with no ticket, which touches none. */
+    issueTracker?: IssueTrackerAdapter;
   }): Promise<AnswerClarificationOutcome>;
   cancelRunForOperator(
     runId: string,
     options: {
       actorLabel: string;
       runRegistry: RunRegistryAdapter;
-      issueTracker: IssueTrackerAdapter;
+      /** Absent when no tracker is usable: the run is stopped either way, and
+       *  its ticket is moved back only when there is a board to move it on. */
+      issueTracker?: IssueTrackerAdapter;
     },
   ): ReturnType<typeof cancelRunForOperator>;
 
@@ -145,6 +149,8 @@ export interface McpToolServices extends McpGateServices {
   fetchRunDetail(
     runId: string,
     ticketOrigin: string,
+    /** The set the calling tool resolved; persisted step errors are redacted with it. */
+    secrets: readonly string[],
   ): Promise<{
     run: RunDetail;
     steps: RunStep[];
@@ -282,11 +288,12 @@ export function createMcpToolServices(
       return savePromptVersionWithPolicy(db, { ...input, body: validatePromptBody(input.body) });
     },
 
-    fetchRunDetail: (runId, ticketOrigin) =>
+    fetchRunDetail: (runId, ticketOrigin, secrets) =>
       fetchRunDetailFromDb({
         db,
         runId,
         ticketOrigin,
+        secrets,
       }),
     getRunReplay: (input) => getRunReplay({ db, ...input }),
     getRunReplayAvailability: (input) => getRunReplayAvailability({ db, ...input }),

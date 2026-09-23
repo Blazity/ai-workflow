@@ -29,6 +29,7 @@ import {
   type RunDetailSource,
 } from "../../engine/support/collect-run-detail.js";
 import { issueTrackerBaseUrl } from "../settings/index.js";
+import { knownSecretValues } from "../integrations/index.js";
 
 /** The detail payload as the wire carries it, minus the timestamp the route stamps. */
 export type RunDetailPayload = Omit<RunDetailResponse, "generatedAt">;
@@ -54,12 +55,24 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
     .then((row) => (row ? serializeClarification(row) : null))
     .catch(() => null);
 
+  // Every secret the deployment knows, which the world's raw step errors and
+  // the durable row are redacted with below. When it cannot be read the page
+  // gets the empty state rather than a trace redacted with part of the set.
+  let secrets: string[];
+  try {
+    secrets = await knownSecretValues();
+  } catch (err) {
+    logger.warn({ err: errorMessage(err), runId }, "run_detail_secrets_unreadable");
+    return EMPTY;
+  }
+
   try {
     // Read the durable row first: it carries the persisted waterfall (finished
     // runs) plus the ticket/PR refs the world lacks, and is the coarse fallback.
     const dbDetail = await fetchConnectedRunDetailFromDb({
       runId,
       ticketOrigin,
+      secrets,
     }).catch(() => null);
     let analysisReport = dbDetail?.analysisReport ?? null;
     if (!analysisReport) {
@@ -82,6 +95,7 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
             world: getWorld() as unknown as RunDetailSource,
             model: dbDetail?.run.model ?? null,
             runId,
+            secrets,
           }),
           fetchConnectedRunRefs(runId, ticketOrigin).catch(() => null),
         ]);
@@ -107,7 +121,7 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
     });
 
     if (!result) return EMPTY;
-    const safe = sanitizeRunDetailForResponse(result);
+    const safe = sanitizeRunDetailForResponse({ ...result, secrets });
     return {
       available: true,
       run: safe.run,
@@ -125,9 +139,10 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
       const fallback = await fetchConnectedRunDetailFromDb({
         runId,
         ticketOrigin,
+        secrets,
       });
       if (fallback) {
-        const safe = sanitizeRunDetailForResponse(fallback);
+        const safe = sanitizeRunDetailForResponse({ ...fallback, secrets });
         return {
           available: true,
           run: safe.run,

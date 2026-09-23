@@ -99,9 +99,11 @@ export async function moveTicketStep(
 ): Promise<void> {
   "use step";
   const { createAdapters } = await import("../../engine/support/adapters.js");
+  const { issueTrackerOrThrow } = await import("../../engine/support/connected-issue-tracker.js");
   const { moveConnectedTicketForRun } = await import("../../engine/support/ticket-transition.js");
   await moveConnectedTicketForRun({
-    issueTracker: (await createAdapters()).issueTracker,
+    // A move is the whole of this step, so no tracker fails it with the reason.
+    issueTracker: issueTrackerOrThrow(await createAdapters()),
     ticketKey,
     target: await moveTargetOnCurrentBoard(ticketKey, target),
     owner,

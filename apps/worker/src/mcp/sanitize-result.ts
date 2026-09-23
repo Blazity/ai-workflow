@@ -119,6 +119,21 @@ function sanitizeValue(
   return input;
 }
 
+/**
+ * The same floor for the message a tool refuses with. An error never travels in
+ * an envelope (the SDK forwards `error.message` as it is), and several refusals
+ * carry words somebody else wrote: a memory provider's reason, a dispatch
+ * blocker naming an integration. So the message passes through exactly what
+ * the data does, the secrets this call resolved included.
+ */
+export function sanitizeMcpText(input: string, secrets: readonly string[]): string {
+  return sanitizeString(
+    input,
+    secrets.filter((secret) => secret.length > 0),
+    { value: 0 },
+  );
+}
+
 export function sanitizeMcpData<T>(data: T, options: SanitizeOptions): McpEnvelope<T> {
   const redactions = { value: 0 };
   const sanitized = sanitizeValue(

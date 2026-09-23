@@ -29,7 +29,7 @@ beforeEach(async () => {
 }, 30_000);
 
 async function runDetail(id: string) {
-  const result = await fetchRunDetailFromDb({ db, runId: id, ticketOrigin: JIRA });
+  const result = await fetchRunDetailFromDb({ db, runId: id, ticketOrigin: JIRA, secrets: [] });
   if (result === null) throw new Error(`no run detail row for ${id}`);
   return result.run;
 }

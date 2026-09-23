@@ -1,76 +1,185 @@
 /**
- * Every secret this deployment's integrations hold, for the redaction pass
- * that runs over anything core is about to publish.
+ * The secrets this deployment knows, for every redaction and scan core runs.
  *
- * Core used to name each provider's credential by hand, one line per
- * environment variable. An integration's credential does not appear in that
- * list and cannot: the variable names belong to the integration, and a stored
- * connection has no variable at all. So the redaction set asks the same
- * resolver everything else asks, and a new integration is covered the day it
- * ships rather than the day somebody remembers.
+ * ONE SOURCE. `knownSecretValues()` is the environment's secret-named values
+ * (`environmentSecretValues`, the one rule for which variable holds a secret)
+ * plus every integration's secrets (`integrationSecretValues`: what its secret
+ * fields hold in the environment, and every stored version a disconnect has not
+ * redacted). The stored half is the reason this module exists: a connection an
+ * admin stored in the dashboard is decrypted from `integration_connection_versions`
+ * and never reaches the environment, so a set built from `process.env` alone
+ * printed a pasted token into run logs and replays in the clear. Every
+ * redaction set in core is this one; the per-site lists it replaced are gone.
  *
- * It exists because a credential can reach core's output the long way round: a
- * tracing provider's key lives inside the sandbox (ADR-010, decision 7), an
- * agent can echo its own environment, and what an agent wrote is what a person
- * reads in a run log and what a tool hands back over MCP.
+ * Workflow scope cannot call it (no database, and a step result holding every
+ * secret would put them all in the run's event log). It redacts with the
+ * environment half before a value crosses into a step, and the step that
+ * writes or publishes the value applies this whole set, at the boundaries
+ * `engine/support/publication-redaction.ts` lists (the tracker and version
+ * control adapters, the messaging sender, and the steps that write
+ * workflow-scope text to core's own rows and logs).
+ *
+ * FAILURE POLICY, one for every caller: when the stored versions cannot be
+ * read (after a short retry that rides out a blink), both functions below
+ * throw `IntegrationSecretsUnreadableError`, and no caller catches it to carry
+ * on with the environment half. Every caller is about to write core's own
+ * tables or publish outside the process, and a smaller set there is a stored
+ * secret written in the clear, silently. What each caller does instead is its
+ * own to say (refuse, withhold the text, degrade to a gap, retry the step),
+ * never "use part of it". A stored version whose values cannot be opened (no
+ * secrets key, a key that does not match the one it was sealed with) is a
+ * different case and is skipped: this process cannot hand that secret to a
+ * sandbox or a provider either, so there is nothing of it to leak from here.
  */
 import type { IntegrationManifest } from "@integrations/sdk";
+import type { Db } from "../../db/types.js";
+import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
+
+export interface SecretSourceOptions {
+  /** The database the connections are read from: the deployment's own by
+   *  default. A caller that already holds a handle (a read model built on one,
+   *  a test on pglite) reads the same rows through the same derivation. */
+  readonly db?: Db;
+}
+
+/** The integration settings could not be read, so the set of secrets this
+ *  deployment knows is incomplete and must not be used as if it were whole.
+ *
+ *  The message is fixed and the database's own words ride in `cause`: callers
+ *  put this message where people read it (a ticket, a run's failure), and a
+ *  driver's error text there reads like a leak and helps nobody act. The
+ *  source logs the cause once, where it throws. */
+export class IntegrationSecretsUnreadableError extends Error {
+  constructor(cause: unknown) {
+    super(INTEGRATION_SECRETS_UNREADABLE, { cause });
+    this.name = "IntegrationSecretsUnreadableError";
+  }
+}
+
+const INTEGRATION_SECRETS_UNREADABLE =
+  "The integration settings could not be read, so the secrets they hold could not be redacted.";
 
 /**
- * The plaintext secrets of every usable integration, in no particular order
- * and with duplicates removed. Empty when nothing is connected, when the
- * secrets key is absent, or when a connection cannot be read: redaction is a
- * safety net over values we hold, never a reason to fail a caller.
+ * Every secret this deployment knows: the environment's and every connected
+ * integration's, deduplicated. Throws `IntegrationSecretsUnreadableError`
+ * when the integration half cannot be read (see the failure policy above).
  */
-export async function integrationSecretValues(): Promise<string[]> {
+export async function knownSecretValues(options: SecretSourceOptions = {}): Promise<string[]> {
+  return [
+    ...new Set([...environmentSecretValues(), ...(await integrationSecretValues(options))]),
+  ];
+}
+
+/** How long a failing read waits before its next attempt. Short: every caller
+ *  is on a path somebody is waiting on (an MCP call, a step, a page), and this
+ *  exists to ride out a database blink, not an outage. */
+const READ_RETRY_DELAYS_MS = [150, 450] as const;
+
+/**
+ * The plaintext secrets every integration `include` accepts (all of them by
+ * default) holds or has held here, deduplicated. Two halves, whatever an
+ * integration's connection state:
+ *
+ * - The values its secret fields have in the environment. A value this process
+ *   holds is one it can print, connected through it or not.
+ * - Every stored version that still holds secrets, not only the active one
+ *   (`readRetainedIntegrationSecrets`): a key rotated mid-run is still in the
+ *   sandboxes that run started, and stays in this set until a disconnect
+ *   redacts it. Disabled is included for the same reason: switching an
+ *   integration off does not make a key that is still in a sandbox safe to
+ *   print.
+ *
+ * One read of the connection tables, retried briefly (`READ_RETRY_DELAYS_MS`)
+ * so a blink of the database does not fail a caller that would otherwise
+ * succeed; a read that still fails throws `IntegrationSecretsUnreadableError`.
+ *
+ * A caller that needs a narrower set than `knownSecretValues` passes a filter
+ * rather than building its own list: the clarification snapshot scan writes
+ * its patterns INTO the sandbox, so it asks for exactly the integrations whose
+ * secrets are in a sandbox by design (`agent_tracing`, ADR-010 decision 7) and
+ * never hands a sandbox a credential it did not already hold.
+ */
+export async function integrationSecretValues(
+  options: SecretSourceOptions & {
+    readonly include?: (manifest: IntegrationManifest) => boolean;
+  } = {},
+): Promise<string[]> {
   const { integrationManifests } = await import("@integrations/registry");
-  const { readIntegrationStatesFrom, secretsKeyMaterial } = await import("./authoring.js");
+  const { secretsKeyMaterial } = await import("./authoring.js");
   const { readConnectionValues, secretValuesOf } = await import("./connection-values.js");
   const { environmentReaderFrom } = await import("./resolve.js");
-  const { readConnectedIntegrationConnections } = await import(
-    "../../db/repositories/integrations.js"
-  );
 
-  const hasSecret = (manifest: IntegrationManifest) =>
-    manifest.connection.fields.some((field) => field.secret);
-  const candidates = integrationManifests.filter(hasSecret);
+  const include = options.include ?? (() => true);
+  const candidates = integrationManifests.filter(
+    (manifest) => include(manifest) && manifest.connection.fields.some((field) => field.secret),
+  );
   if (candidates.length === 0) return [];
 
+  const retained = await readRetainedSecrets(options.db);
   const environment = environmentReaderFrom();
   const secretsKey = secretsKeyMaterial();
-  // A redaction set is a safety net over values we hold. Failing the caller
-  // because the net could not be read would turn an unreachable database into
-  // a refusal on a path that is about to fail on its own reads anyway.
-  // One read: the states and the values they gate come from the same rows.
-  let states: ReturnType<typeof readIntegrationStatesFrom>;
-  let stored: Awaited<ReturnType<typeof readConnectedIntegrationConnections>>;
-  try {
-    stored = await readConnectedIntegrationConnections();
-    states = readIntegrationStatesFrom(stored);
-  } catch (error) {
-    const { logger } = await import("../../infra/logger.js");
-    logger.warn(
-      { err: error instanceof Error ? error.message : String(error) },
-      "integration_secrets_unreadable",
-    );
-    return [];
-  }
-
   const values = new Set<string>();
+  const unopenable: string[] = [];
   for (const manifest of candidates) {
-    // Disabled is deliberately included: an admin turning an integration off
-    // does not make a key that is still in a sandbox safe to print.
-    const state = states.get(manifest.id);
-    if (!state || state.connection !== "connected") continue;
-    const resolved = readConnectionValues({
+    const fromEnvironment = readConnectionValues({
       manifest,
-      source: state.source,
+      source: "environment",
       environment,
-      active: stored.get(manifest.id)?.active ?? null,
+      active: null,
       secretsKey,
     });
-    if (!resolved.ok) continue;
-    for (const secret of secretValuesOf(manifest, resolved.values)) values.add(secret);
+    if (fromEnvironment.ok) {
+      for (const secret of secretValuesOf(manifest, fromEnvironment.values)) values.add(secret);
+    }
+    const versions = retained.get(manifest.id) ?? [];
+    for (const [index, version] of versions.entries()) {
+      const opened = readConnectionValues({
+        manifest,
+        source: "stored",
+        environment,
+        active: version,
+        secretsKey,
+      });
+      if (!opened.ok) {
+        // Only the newest is worth a line: an older version sealed under a key
+        // this deployment has since replaced will never open again, and saying
+        // so on every call is noise, not news.
+        if (index === 0) unopenable.push(manifest.id);
+        continue;
+      }
+      for (const secret of secretValuesOf(manifest, opened.values)) values.add(secret);
+    }
+  }
+  if (unopenable.length > 0) {
+    const { logger } = await import("../../infra/logger.js");
+    logger.warn({ integrations: unopenable }, "integration_secrets_unopenable");
   }
   return [...values];
+}
+
+async function readRetainedSecrets(
+  db: Db | undefined,
+): Promise<Map<string, import("../../db/repositories/integrations.js").StoredIntegrationVersion[]>> {
+  const { readConnectedRetainedIntegrationSecrets, readRetainedIntegrationSecrets } = await import(
+    "../../db/repositories/integrations.js"
+  );
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= READ_RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, READ_RETRY_DELAYS_MS[attempt - 1]);
+      });
+    }
+    try {
+      return db ? await readRetainedIntegrationSecrets(db) : await readConnectedRetainedIntegrationSecrets();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const { logger } = await import("../../infra/logger.js");
+  logger.warn(
+    { err: lastError instanceof Error ? lastError.message : String(lastError) },
+    "integration_secrets_unreadable",
+  );
+  throw new IntegrationSecretsUnreadableError(lastError);
 }

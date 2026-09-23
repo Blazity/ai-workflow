@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   usableIntegrations: vi.fn(async (): Promise<unknown[]> => []),
   checkIntegrationPin: vi.fn(),
   loggerWarn: vi.fn(),
+  knownSecretValues: vi.fn(async (): Promise<string[]> => []),
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
@@ -24,16 +25,22 @@ vi.mock("../integrations/runtime.js", () => ({
   resolveUsableIntegrations: mocks.resolveUsableIntegrations,
   usableIntegrations: mocks.usableIntegrations,
   checkIntegrationPin: mocks.checkIntegrationPin,
+  knownSecretValues: mocks.knownSecretValues,
 }));
 
 vi.mock("../../infra/logger.js", () => ({
   logger: { warn: mocks.loggerWarn },
 }));
 
+import type { IntegrationManifest } from "@integrations/sdk";
+import type { IntegrationState } from "@shared/contracts";
+import { deploymentIntegrations } from "../../engine/definition/integration-availability.js";
+import { integrationPinsFor } from "../../engine/definition/integration-run.js";
 import {
   buildSandboxProviderConfigs,
   createManualDispatchPrReader,
   createRepositoryVcsRuntime,
+  listVcsRepositories,
 } from "./vcs-runtime.js";
 
 function connected(
@@ -210,6 +217,150 @@ describe("createRepositoryVcsRuntime", () => {
       "Version control provider GitLab moved after this run started (reconfigured). Start a new run.",
     );
     expect(vcs).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A run suspended across the deploy that widened what a run pins.
+ *
+ * Pins are a recorded step result and replay unchanged, so a run started on
+ * the earlier build comes back holding what that build pinned. For an agent
+ * plus send_message graph that was its chat provider alone. Its next version
+ * control call used to read GitHub's absence from that set as GitHub having
+ * moved, and stopped the run with a sentence about a change nobody made.
+ */
+describe("a run whose recorded pins do not name the VCS provider", () => {
+  const chatOnly = [{ integrationId: "slack", configFingerprint: "workspace-1" }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("works on the repository against the provider as it is now", async () => {
+    const findPR = vi.fn().mockResolvedValue(null);
+    resolvesTo(connected("github", { findPR }));
+
+    const runtime = createRepositoryVcsRuntime({
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+      integrationPins: chatOnly,
+    });
+
+    await expect(runtime.vcs.findPR("ai-workflow/aiw-1")).resolves.toBeNull();
+    expect(findPR).toHaveBeenCalledTimes(1);
+    expect(mocks.checkIntegrationPin).not.toHaveBeenCalled();
+  });
+
+  it("still lists that provider's repositories", async () => {
+    resolvesTo(
+      connected("github", {
+        listRepositories: async () => [{ provider: "github", path: "acme/api" }],
+      }),
+    );
+
+    const listed = await listVcsRepositories({ integrationPins: chatOnly });
+
+    expect(listed.failures).toEqual([]);
+    expect(listed.repositories).toEqual([{ provider: "github", path: "acme/api" }]);
+  });
+
+  it("compares the pin a run started today records for the same graph", async () => {
+    // The other half: a run started on this build pins version control for an
+    // agent block, so the same call is held to the connection it started with.
+    const manifest = (id: string, capability: string): IntegrationManifest =>
+      ({
+        id,
+        name: id,
+        description: "",
+        connection: { fields: [] },
+        capabilities: [capability],
+        blocks: [],
+        pages: [],
+        health: [],
+      }) as unknown as IntegrationManifest;
+    const state = (id: string, fingerprint: string): IntegrationState =>
+      ({
+        integrationId: id,
+        enabled: true,
+        source: "environment",
+        status: "connected",
+        connection: "connected",
+        verification: { state: "never_tested" },
+        failure: null,
+        usable: true,
+        environment: { setVariables: [], missingVariables: [], complete: true },
+        stored: { latestVersion: 0, activeVersion: null, missingFields: [], complete: false, prepared: null },
+        pin: { integrationId: id, configFingerprint: fingerprint },
+        secretsKeyAvailable: true,
+      }) as IntegrationState;
+    const pins = integrationPinsFor(
+      [{ type: "trigger_ticket_ai" }, { type: "implementation_agent" }, { type: "send_message" }],
+      deploymentIntegrations({
+        manifests: [manifest("github", "vcs"), manifest("slack", "messaging")],
+        states: new Map([
+          ["github", state("github", "app-1")],
+          ["slack", state("slack", "workspace-1")],
+        ]),
+      }),
+    );
+    const findPR = vi.fn().mockResolvedValue(null);
+    resolvesTo(connected("github", { findPR }));
+    mocks.checkIntegrationPin.mockReturnValue({ ok: true });
+
+    const runtime = createRepositoryVcsRuntime({
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+      integrationPins: pins,
+    });
+
+    await expect(runtime.vcs.findPR("ai-workflow/aiw-1")).resolves.toBeNull();
+    expect(mocks.checkIntegrationPin).toHaveBeenCalledWith(
+      { integrationId: "github", configFingerprint: "app-1" },
+      expect.anything(),
+    );
+  });
+});
+
+// Red when: the adapter core publishes through hands the provider what an agent
+// wrote. A pull request body or a review comment is agent text, and a tracing
+// key stored in the dashboard sits in every agent sandbox by design.
+describe("what core publishes through version control", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("takes every secret the deployment knows out of a pull request before the provider sees it", async () => {
+    const createPR = vi.fn(async () => ({ id: 7, url: "https://github.com/acme/api/pull/7" }));
+    resolvesTo(connected("github", { createPR }));
+    mocks.knownSecretValues.mockResolvedValueOnce(["plainvalue4471tracer"]);
+
+    const runtime = createRepositoryVcsRuntime({ provider: "github", repoPath: "acme/api", baseBranch: "main" });
+    await runtime.vcs.createPR("ai-workflow/aiw-1", "AIW-1", "Configured tracing with plainvalue4471tracer.");
+
+    expect(createPR).toHaveBeenCalledWith("ai-workflow/aiw-1", "AIW-1", expect.not.stringContaining("plainvalue4471tracer"));
+  });
+
+  it("publishes nothing when the secrets to redact with cannot be read", async () => {
+    const postPRComment = vi.fn(async () => ({ url: null }));
+    resolvesTo(connected("github", { postPRComment }));
+    mocks.knownSecretValues.mockRejectedValueOnce(new Error("settings unreadable"));
+
+    const runtime = createRepositoryVcsRuntime({ provider: "github", repoPath: "acme/api", baseBranch: "main" });
+
+    await expect(runtime.vcs.postPRComment(7, "anything")).rejects.toThrow("settings unreadable");
+    expect(postPRComment).not.toHaveBeenCalled();
+  });
+
+  it("reads without asking for the secrets", async () => {
+    const findPR = vi.fn().mockResolvedValue(null);
+    resolvesTo(connected("github", { findPR }));
+
+    const runtime = createRepositoryVcsRuntime({ provider: "github", repoPath: "acme/api", baseBranch: "main" });
+    await runtime.vcs.findPR("ai-workflow/aiw-1");
+
+    expect(mocks.knownSecretValues).not.toHaveBeenCalled();
   });
 });
 

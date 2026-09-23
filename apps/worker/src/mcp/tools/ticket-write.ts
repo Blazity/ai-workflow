@@ -4,12 +4,13 @@ import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
+  ticketSubjectKey,
 } from "../../services/mcp/app-dependencies.js";
-import { ticketSubject } from "../../services/mcp/app-dependencies.js";
 import { scrubForPublication } from "../../services/publication/publication-scrub.js";
 import { moveTicket } from "../../services/tickets/ticket-transition.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation } from "../execute-tool.js";
+import { requireIssueTracker } from "../issue-tracker-access.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
@@ -152,7 +153,7 @@ export function registerTicketWriteTools(
         // the comment itself is already durable in the tracker.
         payloadHash: `sha256:${hashCanonicalJson({ ticketKey, body: input.body })}`,
         operation: async (): Promise<CommentData> => {
-          const issueTracker = deps.adapters.issueTracker;
+          const { adapter: issueTracker } = requireIssueTracker(deps.adapters);
           const body = scrubForPublication(input.body);
           let ticket;
           try {
@@ -214,8 +215,9 @@ export function registerTicketWriteTools(
         idempotencyKey: input.idempotencyKey,
         payloadHash: `sha256:${hashCanonicalJson({ ticketKey, target: input.target })}`,
         operation: async (): Promise<TransitionData> => {
-          const issueTracker = deps.adapters.issueTracker;
-          const subjectKey = await ticketSubject(ticketKey);
+          const tracker = requireIssueTracker(deps.adapters);
+          const issueTracker = tracker.adapter;
+          const subjectKey = ticketSubjectKey(tracker.id, ticketKey);
           // undefined means the registry read itself failed, which is NOT the same as
           // "nobody owns it": moving a ticket out from under a live run cancels it, so
           // an unknown answer has to stop the write rather than be read as a free pass.
@@ -289,7 +291,7 @@ export function registerTicketWriteTools(
           labels: input.labels ?? null,
         })}`,
         operation: async (): Promise<CreateData> => {
-          const issueTracker = deps.adapters.issueTracker;
+          const { adapter: issueTracker } = requireIssueTracker(deps.adapters);
           if (!issueTracker.createTicket) {
             throw refused(
               "VALIDATION_FAILED",

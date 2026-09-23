@@ -22,6 +22,8 @@
  *   reason recorded there, and this module is the half it reads.
  */
 import type { IntegrationConnectionPin } from "@shared/contracts";
+import { recordedPinFor } from "./recorded-pins.js";
+import { ISSUE_TRACKER_PUBLICATIONS, redactingPublications } from "./publication-redaction.js";
 import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,
@@ -55,7 +57,25 @@ export type ResolvedIssueTracker =
       readonly adapter: IssueTrackerAdapter;
       readonly wiring: IssueTrackerWiring;
     }
-  | { readonly ok: false; readonly reason: string; readonly unreadable: boolean };
+  | { readonly ok: false; readonly reason: string; readonly refusal: IssueTrackerRefusal };
+
+/** The resolution when there is a tracker. */
+export type ConnectedIssueTracker = Extract<ResolvedIssueTracker, { ok: true }>;
+
+/**
+ * Which kind of "no tracker" this is, because each one is acted on differently:
+ *
+ * - `not_connected`: nothing serves issue tracking here. A state a deployment
+ *   may legitimately be in, so a caller that reports it does so quietly.
+ * - `ambiguous`: two trackers serve it and none is selected. A misconfiguration
+ *   that silently stops every ticket until an admin picks one, so it is loud.
+ * - `unusable`: the one tracker cannot serve this (it moved under a pinned run,
+ *   ships no code, cannot say which account it acts as). Loud for the same
+ *   reason.
+ * - `unreadable`: the settings could not be read, so nobody knows. Transient,
+ *   and the only one a retry can fix.
+ */
+export type IssueTrackerRefusal = "not_connected" | "ambiguous" | "unusable" | "unreadable";
 
 /**
  * The one integration serving `issue_tracker` on this deployment.
@@ -102,58 +122,53 @@ export async function resolveActiveIssueTracker(
   if (!resolved.readable) {
     return {
       ok: false,
-      unreadable: true,
+      refusal: "unreadable",
       reason: `This deployment's integration settings could not be read (${resolved.reason}), so its issue tracker was not used.`,
     };
   }
   const usable = resolved.usable;
-  if (usable.length === 0) return { ok: false, unreadable: false, reason: NO_PROVIDER };
+  if (usable.length === 0) return { ok: false, refusal: "not_connected", reason: NO_PROVIDER };
   if (usable.length > 1) {
     const names = usable.map((entry) => entry.manifest.name).join(" and ");
     return {
       ok: false,
-      unreadable: false,
+      refusal: "ambiguous",
       reason: `${names} both provide issue tracking on this deployment and no active provider is selected, so no ticket was read.`,
     };
   }
   const [only] = usable;
-  if (!only) return { ok: false, unreadable: false, reason: NO_PROVIDER };
+  if (!only) return { ok: false, refusal: "not_connected", reason: NO_PROVIDER };
 
   /**
-   * NOTHING PINS THE TRACKER TODAY, and the comparison below is why that
-   * sentence has to come first: it reads like a protection that operates, and
-   * it does not.
+   * THE TRACKER IS PINNED BUT THE PIN IS NEVER COMPARED, and the comparison
+   * below is why that sentence has to come first: it reads like a protection
+   * that operates, and it does not.
    *
-   * What it would do: hold a run to the tracker it recorded at its start, so
-   * that following a live change could not move which project it is working
-   * in, mid-run, with nobody told.
+   * A run whose graph reaches the tracker records its pin at its start
+   * (`integrationPinsFor`), but every caller in core reaches the tracker
+   * through `createAdapters()` with no pins, so this comparison does not run
+   * in production; `createAdapters(target, pins)` threads them the moment a
+   * caller has a reason to. What it would do then: hold a run to the tracker it
+   * started with, so a live change could not move which project it works in,
+   * mid-run, with nobody told. Nothing about the merge may rest on it
+   * operating, and the plan's S12 drain paragraph says so.
    *
-   * TWO REASONS IT DOES NOT.
-   *
-   * An absent or empty set means "nothing holds this run", not "the tracker
-   * moved", which is the same reading `hasRecordedIntegrationPins` states for
-   * the VCS side (`vcs-runtime.ts`). A run whose row predates
-   * `workflow_runs.integration_pins` carries NULL and can never recover its
-   * pins, so it proceeds against the tracker as it is configured now. A set
-   * that names other integrations but not this one is the same case seen from
-   * a different angle, and reads as "moved", which is why the drain matters.
-   *
-   * And no step passes tracker pins today. Every caller in core reaches the
-   * tracker through `createAdapters()` with no pins, so this comparison does
-   * not run in production; `createAdapters(target, pins)` threads them the
-   * moment a caller has a reason to. Nothing about the merge may rest on this
-   * check operating, and the plan's S12 drain paragraph says so.
+   * Which pin it would compare, and what a tracker absent from the run's pins
+   * means, is `recorded-pins.ts`'s rule, the one version control, messaging
+   * and memory follow.
    */
-  if (pins && pins.length > 0) {
+  const recorded = recordedPinFor(pins, only.manifest.id, "one_per_deployment");
+  if (recorded.kind !== "not_pinned") {
     const { checkIntegrationPin } = await import("../../services/integrations/runtime.js");
-    const pin = pins.find((candidate) => candidate.integrationId === only.manifest.id);
     const state = resolved.states.get(only.manifest.id);
     const check =
-      pin && state ? checkIntegrationPin(pin, state) : ({ ok: false, reason: "disconnected" } as const);
+      recorded.kind === "pinned" && state
+        ? checkIntegrationPin(recorded.pin, state)
+        : ({ ok: false, reason: "disconnected" } as const);
     if (!check.ok) {
       return {
         ok: false,
-        unreadable: false,
+        refusal: "unusable",
         reason: `The issue tracker ${only.manifest.name} moved after this run started (${check.reason}). Start a new run.`,
       };
     }
@@ -163,7 +178,7 @@ export async function resolveActiveIssueTracker(
   if (typeof factory !== "function") {
     return {
       ok: false,
-      unreadable: false,
+      refusal: "unusable",
       reason: `${only.manifest.name} declares issue tracking and ships no code for it.`,
     };
   }
@@ -179,7 +194,7 @@ export async function resolveActiveIssueTracker(
   if (typeof adapter.getCurrentUserAccountId !== "function") {
     return {
       ok: false,
-      unreadable: false,
+      refusal: "unusable",
       reason: `${only.manifest.name} cannot say which account it acts as, so this deployment could not tell its own ticket moves from a person's. An issue tracker has to answer that.`,
     };
   }
@@ -189,7 +204,10 @@ export async function resolveActiveIssueTracker(
     ok: true,
     id: only.manifest.id,
     name: only.manifest.name,
-    adapter,
+    // Every comment and ticket core posts through it is redacted with the whole
+    // set of known secrets first: one of the publishing boundaries
+    // `publication-redaction.ts` lists.
+    adapter: redactingPublications(adapter, ISSUE_TRACKER_PUBLICATIONS),
     wiring: {
       projectKey: text(connection.projectKey),
       baseUrl: text(connection.baseUrl),

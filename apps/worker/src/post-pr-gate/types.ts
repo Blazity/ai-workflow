@@ -48,7 +48,9 @@ export interface PostPrGateStepContext {
   files: PostPrGateFile[] | null;
   adapters: {
     vcs: VCSAdapter;
-    issueTracker: IssueTrackerAdapter;
+    /** Absent on a deployment with no usable issue tracker. The gate runs on
+     *  the pull request either way, and no step reads it today. */
+    issueTracker?: IssueTrackerAdapter;
   };
 }
 

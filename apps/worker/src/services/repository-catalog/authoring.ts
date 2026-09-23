@@ -44,7 +44,7 @@ import { getConnectedDashboardUserLabel, type DashboardRole } from "../auth/inde
 import { loadRepositoryCatalogEntries, serializeRepositoryCatalogEntry } from "./store.js";
 import { publicSuggestionFailureReason } from "./suggestion-failure.js";
 import { serializeRepositoryProfileVersion } from "./versions.js";
-import { assertVcsProviderAvailable } from "./provider-validation.js";
+import { assertVcsProviderShipped } from "./provider-validation.js";
 
 /** Who is acting, as the profile version records them. */
 export interface RepositoryCatalogActor {
@@ -109,7 +109,7 @@ export async function saveRepositoryProfile(input: {
   expectedId?: number;
 }): Promise<RepositoryCatalogMutationResponse> {
   requireCatalogManager(input.actor);
-  assertVcsProviderAvailable(input.request.provider, "save");
+  assertVcsProviderShipped(input.request.provider, "save");
   const rulesError =
     input.request.rules === undefined
       ? null
@@ -307,7 +307,7 @@ export async function setRepositoryCatalogEnabled(input: {
 }): Promise<RepositoryCatalogMutationResponse> {
   requireCatalogManager(input.actor);
   const existing = await requireRow(input.id);
-  if (input.enabled) assertVcsProviderAvailable(existing.provider, "enable");
+  if (input.enabled) assertVcsProviderShipped(existing.provider, "enable");
   const row = await setConnectedRepositoryEnabled({ id: input.id, enabled: input.enabled });
   if (!row) throw new DashboardAuthError(404, "Unknown repository");
   // Read AFTER the write, and counted here rather than on each surface: the
@@ -371,7 +371,7 @@ export async function activateRepositoryCatalog(input: {
     throw new RepositoryCatalogNoEnabledError();
   }
   for (const entry of entries) {
-    if (entry.enabled) assertVcsProviderAvailable(entry.provider, "activate");
+    if (entry.enabled) assertVcsProviderShipped(entry.provider, "activate");
   }
   const claimed = await listConnectedClaimedRepositoriesNotEnabled();
   const acknowledged = new Set(

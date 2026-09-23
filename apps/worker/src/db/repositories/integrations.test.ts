@@ -207,6 +207,33 @@ describe("recording what the provider said about the live configuration", () => 
   });
 });
 
+describe("a save that activates after a failed test", () => {
+  // The verdict is one fact. A passing save carries no reason and no message,
+  // and the update kept the previous ones whenever the new value was null, so
+  // the card read "passed" beside the words of the failure it replaced.
+  it("clears the failure's reason and message rather than keeping them beside a pass", async () => {
+    await save();
+    await recordIntegrationTest(db, {
+      integrationId: "fixture",
+      status: "failed",
+      reason: "credential_rejected",
+      message: "401 Unauthorized",
+      fingerprint: "fp-live",
+      actorId: "u",
+    });
+
+    await save({ expectedVersion: 1, test: PASSED });
+
+    const stored = (await readIntegrationConnections(db)).get("fixture");
+    expect(stored?.lastTest).toMatchObject({
+      status: "passed",
+      reason: null,
+      message: null,
+      fingerprint: "fp-1",
+    });
+  });
+});
+
 describe("switching the source", () => {
   it("is one action that changes no value (INT-054)", async () => {
     await save();

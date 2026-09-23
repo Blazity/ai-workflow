@@ -188,6 +188,17 @@ async function builtinRecall(request: MemoryRecallRequest): Promise<MemoryRecall
   }
 }
 
+/**
+ * Every secret the deployment knows, for the redaction every write runs first.
+ * A set that cannot be read throws, and `builtinObserve` answers that as
+ * `unavailable`: the write is refused and worth retrying, never stored with a
+ * token an admin kept in the dashboard left in the clear.
+ */
+async function memorySecretValues(): Promise<string[]> {
+  const { knownSecretValues } = await import("../../services/integrations/runtime.js");
+  return knownSecretValues();
+}
+
 async function builtinObserve(request: MemoryObserveRequest): Promise<MemoryWrite> {
   try {
     if (request.observation.kind === "document") {
@@ -250,7 +261,12 @@ async function storeDocument(
   // carry the marker. Without it a prefix that happens to fit the cap is
   // indistinguishable from a whole document, and the stored text would end mid
   // sentence with nothing saying why.
-  const prepared = prepareMemoryContent(text, MAX_MEMORY_DOCUMENT_BYTES, sourceTruncated);
+  const prepared = prepareMemoryContent(
+    text,
+    MAX_MEMORY_DOCUMENT_BYTES,
+    sourceTruncated,
+    await memorySecretValues(),
+  );
   // Fail closed: text that could not be scrubbed of this deployment's
   // configured secrets never reaches the database.
   if (!prepared) {
@@ -302,6 +318,7 @@ async function storeItems(
   const { getConnectedMemoryDocument, upsertConnectedMemoryDocument } = await import(
     "../../db/repositories/memory.js"
   );
+  const secrets = await memorySecretValues();
   const stored = await getConnectedMemoryDocument(request.subject.key, kind);
 
   if (observation.onlyIfEmpty) {
@@ -317,7 +334,7 @@ async function storeItems(
     if (items.length === 0) {
       return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
     }
-    const prepared = prepared12k(request.subject.label, kind, items);
+    const prepared = prepared12k(request.subject.label, kind, items, secrets);
     if (!prepared.ok) return prepared.write;
     const created = await upsertConnectedMemoryDocument({
       subjectKey: request.subject.key,
@@ -379,7 +396,7 @@ async function storeItems(
         remaining: merged.items.length,
       };
     }
-    const prepared = prepared12k(request.subject.label, kind, merged.items);
+    const prepared = prepared12k(request.subject.label, kind, merged.items, secrets);
     if (!prepared.ok) return prepared.write;
     const result = await upsertConnectedMemoryDocument({
       subjectKey: request.subject.key,
@@ -448,11 +465,13 @@ function prepared12k(
   subject: string,
   kind: RepoMemoryDocKind,
   items: readonly RepoMemoryItem[],
+  secrets: readonly string[],
 ): PreparedDocument {
   const prepared = prepareMemoryContent(
     renderRepoMemoryDocument({ subject, kind, items }),
     MAX_DOC_BYTES,
     false,
+    secrets,
   );
   if (!prepared) {
     return {
