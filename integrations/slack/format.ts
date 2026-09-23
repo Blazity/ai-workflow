@@ -201,8 +201,9 @@ function truncateRepoLabel(label: string): string {
 
 /**
  * Slack `<url|label>` for one PR/MR. The label is the provider-native reference
- * (`#12` on GitHub, `!12` on GitLab), prefixed with the repository name when the
- * run opened more than one so the links are told apart without a hover.
+ * core stamped on it (`#12` on GitHub, `!12` on GitLab, read from each
+ * provider's manifest), prefixed with the repository name when the run opened
+ * more than one so the links are told apart without a hover.
  */
 function prSlackLink(pr: RunPullRequest, repoLabel?: string): string {
   const ref = pullRequestRef(pr);

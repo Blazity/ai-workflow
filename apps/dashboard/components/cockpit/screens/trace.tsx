@@ -15,7 +15,8 @@ import { apiClient } from "@/lib/api/client";
 import { runHref } from "@/lib/run-href";
 import { runModelLabel } from "@/lib/run-model";
 import { repositoryAccessLine } from "@/lib/run-repository-access";
-import { pullRequestNaming, runPullRequests } from "@/lib/run-prs";
+import { changeRequestNaming } from "@integrations/registry";
+import { runPullRequests } from "@/lib/run-prs";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { RunAnalysisReportCard } from "./run-analysis-report";
@@ -442,7 +443,7 @@ export function TraceDetail({
             {/* One button per repository the run published to, so a multi-repo
                 run does not hide every PR/MR but the first. */}
             {runPrs.map((pr, i) => {
-              const naming = pullRequestNaming(pr);
+              const naming = changeRequestNaming(pr);
               return (
                 <a
                   key={`${pr.provider}:${pr.repoPath}:${pr.id}`}

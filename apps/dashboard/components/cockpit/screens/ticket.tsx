@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { CkChip, CkStatusPill } from "@/components/ui";
 import { useTicketSelection } from "@/components/cockpit/screens/ticket-selection";
 import { runModelLabel } from "@/lib/run-model";
-import { pullRequestNaming, runPullRequests } from "@/lib/run-prs";
+import { changeRequestNaming } from "@integrations/registry";
+import { runPullRequests } from "@/lib/run-prs";
 import type { TicketRunsResponse } from "@shared/contracts";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
@@ -126,7 +127,7 @@ export function TicketScreen({
           runs.map((r) => {
             const active = r.id === activeId;
             const primaryPr = runPullRequests(r)[0];
-            const prNaming = primaryPr ? pullRequestNaming(primaryPr) : null;
+            const prNaming = primaryPr ? changeRequestNaming(primaryPr) : null;
             return (
               <Button
                 key={r.id}

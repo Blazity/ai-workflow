@@ -4,7 +4,8 @@ import React from "react";
 import { Spark } from "@/components/charts";
 import { pullRequestRepoLabels } from "@shared/contracts";
 import type { RunPullRequest } from "@shared/contracts";
-import { pullRequestNaming, runPullRequests } from "@/lib/run-prs";
+import { changeRequestNaming } from "@integrations/registry";
+import { runPullRequests } from "@/lib/run-prs";
 import type { RunStatus } from "@/lib/types";
 import { Button } from "./ui/button";
 
@@ -348,7 +349,7 @@ function PRLink({
   repoLabel?: string;
   size?: "sm" | "lg";
 }) {
-  const naming = pullRequestNaming(pr);
+  const naming = changeRequestNaming(pr);
   return (
     <a
       href={pr.url}

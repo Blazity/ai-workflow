@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pullRequestNaming, runPullRequests, soleVcsProvider } from "./run-prs";
+import { changeRequestNaming } from "@integrations/registry";
+import { runPullRequests, soleVcsProvider } from "./run-prs";
 
 test("a multi-repo run returns every PR/MR in stored order", () => {
   assert.deepEqual(
@@ -84,7 +85,7 @@ test("a legacy merge request URL keeps its link and is still read as an MR", () 
     prUrl: "https://gitlab.com/acme/api/-/merge_requests/18",
     prNumber: 18,
   });
-  assert.deepEqual(pullRequestNaming(legacy!), { noun: "MR", reference: "!18" });
+  assert.deepEqual(changeRequestNaming(legacy!), { noun: "MR", reference: "!18" });
 });
 
 test("a deployment with one version control provider attributes a legacy row to it", () => {
@@ -104,44 +105,5 @@ test("a run with only half a legacy ref is not rendered as a broken link", () =>
   assert.deepEqual(
     runPullRequests({ prs: null, prUrl: "https://github.com/a/b/pull/4", prNumber: null }),
     [],
-  );
-});
-
-test("a change request is named in its provider's own words", () => {
-  // On GitLab `#51` names issue 51; the merge request is `!51`. The words come
-  // from each provider's manifest, so core names no provider.
-  assert.deepEqual(
-    pullRequestNaming({
-      provider: "gitlab",
-      id: 51,
-      url: "https://gitlab.example/acme/app/-/merge_requests/51",
-    }),
-    { noun: "MR", reference: "!51" },
-  );
-  assert.deepEqual(
-    pullRequestNaming({ provider: "github", id: 12, url: "https://github.com/acme/app/pull/12" }),
-    { noun: "PR", reference: "#12" },
-  );
-});
-
-test("a change request no provider claims reads as a pull request", () => {
-  assert.deepEqual(
-    pullRequestNaming({ provider: "", id: 7, url: "https://code.example/acme/app/changes/7" }),
-    { noun: "PR", reference: "#7" },
-  );
-});
-
-test("the most specific link shape wins over a shorter one it happens to contain", () => {
-  // A GitLab project called `pull` carries GitHub's `/pull/` in its path.
-  const manifests = [
-    { id: "hub", repositories: { changeRequest: { noun: "PR", referencePrefix: "#", linkSegment: "/pull/" } } },
-    { id: "lab", repositories: { changeRequest: { noun: "MR", referencePrefix: "!", linkSegment: "/-/merge_requests/" } } },
-  ] as unknown as Parameters<typeof pullRequestNaming>[1];
-  assert.deepEqual(
-    pullRequestNaming(
-      { provider: "", id: 3, url: "https://lab.example/acme/pull/-/merge_requests/3" },
-      manifests,
-    ),
-    { noun: "MR", reference: "!3" },
   );
 });

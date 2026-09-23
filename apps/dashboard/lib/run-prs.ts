@@ -1,11 +1,6 @@
 import type { RunPullRequest, VcsProviderKind } from "@shared/contracts";
 import { integrationsProviding } from "@integrations/registry";
 
-type VcsManifest = ReturnType<typeof integrationsProviding>[number];
-
-/** How a change request is named when no provider says otherwise. */
-const PULL_REQUEST = { noun: "PR", referencePrefix: "#" } as const;
-
 /** The PR-carrying fields of a Run/RunDetail, so both shapes can be passed in. */
 interface RunPrRefs {
   prs: RunPullRequest[] | null;
@@ -43,7 +38,8 @@ export function soleVcsProvider(providerIds: readonly string[]): VcsProviderKind
  * never stored, and callers only use it to disambiguate multi-PR runs, which a
  * single legacy PR is not. `provider` is empty for the same reason wherever the
  * deployment ships more than one, and the link still says PR or MR because
- * `pullRequestNaming` reads it off the link the row did store.
+ * `changeRequestNaming` (@integrations/registry) reads it off the link the row
+ * did store.
  */
 export function runPullRequests(run: RunPrRefs): RunPullRequest[] {
   if (run.prs && run.prs.length > 0) return run.prs;
@@ -58,38 +54,4 @@ export function runPullRequests(run: RunPrRefs): RunPullRequest[] {
       url: run.prUrl,
     },
   ];
-}
-
-/**
- * The integration a change request belongs to: the one it records, or, for a
- * row that records none, the one whose declared link segment its URL carries.
- * The longest segment wins, so a provider's specific shape is never shadowed by
- * another's shorter one.
- */
-function changeRequestProvider(
-  pr: Pick<RunPullRequest, "provider" | "url">,
-  manifests: readonly VcsManifest[],
-): VcsManifest | undefined {
-  if (pr.provider) return manifests.find((manifest) => manifest.id === pr.provider);
-  let found: { manifest: VcsManifest; length: number } | undefined;
-  for (const manifest of manifests) {
-    const segment = manifest.repositories?.changeRequest?.linkSegment;
-    if (!segment || !pr.url.includes(segment)) continue;
-    if (!found || segment.length > found.length) found = { manifest, length: segment.length };
-  }
-  return found?.manifest;
-}
-
-/**
- * How a person reads one change request: its provider's noun and reference,
- * `MR !12` on GitLab and `PR #12` on GitHub or wherever the provider is not
- * known. The words are the provider's own, from its manifest, so core names
- * no provider and a GitLab team does not read `#12`, which is an issue there.
- */
-export function pullRequestNaming(
-  pr: Pick<RunPullRequest, "provider" | "id" | "url">,
-  manifests: readonly VcsManifest[] = integrationsProviding("vcs"),
-): { readonly noun: string; readonly reference: string } {
-  const shape = changeRequestProvider(pr, manifests)?.repositories?.changeRequest ?? PULL_REQUEST;
-  return { noun: shape.noun, reference: `${shape.referencePrefix}${pr.id}` };
 }
