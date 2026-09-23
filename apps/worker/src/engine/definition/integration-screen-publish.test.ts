@@ -81,11 +81,17 @@ const connected: IntegrationState = {
   secretsKeyAvailable: true,
 };
 
-const integrations = deploymentIntegrations({
-  manifests: [screen],
-  states: new Map([["acmescreen", connected]]),
-  builtinCapabilities: ["vcs"],
-});
+const integrations = withVersionControl(
+  deploymentIntegrations({
+    manifests: [screen],
+    states: new Map([["acmescreen", connected]]),
+  }),
+);
+
+/** The graphs here reach version control, which a connected GitHub serves. */
+function withVersionControl(deployment: ReturnType<typeof deploymentIntegrations>) {
+  return { ...deployment, providers: new Map([...deployment.providers, ["vcs", ["github"]]]) };
+}
 
 function node(id: string, type: string, configuration: Record<string, unknown> = {}) {
   return { id, type, x: 0, y: 0, configuration, inputs: {}, additionalInputs: [] };
@@ -213,11 +219,12 @@ describe("a screen's text comes from the run's subject unless the author binds i
       ...screen,
       blocks: [{ ...block, inputs: { content: { required: true, schema: { type: "string" } } } }],
     };
-    const plain = deploymentIntegrations({
-      manifests: [withoutDefault],
-      states: new Map([["acmescreen", connected]]),
-      builtinCapabilities: ["vcs"],
-    });
+    const plain = withVersionControl(
+      deploymentIntegrations({
+        manifests: [withoutDefault],
+        states: new Map([["acmescreen", connected]]),
+      }),
+    );
     const parsed = parse({ schemaVersion: 2, ...branching });
     const definition = parsed.definition!;
     const resolveContract = createWorkflowBlockContractResolver({

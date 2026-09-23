@@ -103,7 +103,14 @@ function availabilityFor(
   const fromIntegration = integrationBlockAvailability(type, context.integrations, {
     coreOwnsType: coreOwnsBlockType(type),
   });
-  if (fromIntegration) return fromIntegration;
+  if (fromIntegration) {
+    if (!fromIntegration.available) return fromIntegration;
+    // The one credential rule core applies to an integration block: the model
+    // it reaches through `ctx.llm` is paid for with this deployment's key.
+    const block = context.integrations.blocks.get(type)?.block;
+    const llmIssue = block?.requires?.llm === true ? directLlmIssue(block.ui.label, {}, context) : null;
+    return llmIssue ? unavailable(llmIssue) : fromIntegration;
+  }
   const definitionIssue = workflowBlockDefinitionIssue(type, params);
   if (definitionIssue) return unavailable(definitionIssue);
   // What this core block needs is stated once, in integration-availability, and
@@ -159,29 +166,16 @@ function availabilityFor(
     }
   }
   if (type === "call_llm") {
-    const explicitProvider: LlmProvider | undefined =
+    const provider: LlmProvider | undefined =
       params.provider === "claude" || params.provider === "codex"
         ? params.provider
         : undefined;
-    const explicitModel =
+    const model =
       typeof params.model === "string" && params.model.trim() !== ""
         ? params.model.trim()
         : undefined;
-    const runtimeProvider =
-      explicitModel === undefined
-        ? (explicitProvider ?? context.defaultAgent.provider)
-        : explicitProvider;
-    const requested = resolveLlmProvider(
-      explicitModel ?? context.defaultAgent.model,
-      runtimeProvider,
-    );
-    if (!context.llmProviders[requested]) {
-      return unavailable(
-        requested === "codex"
-          ? "Codex API credentials are not configured for Call LLM."
-          : "Claude API credentials are not configured for Call LLM.",
-      );
-    }
+    const issue = directLlmIssue("Call LLM", { provider, model }, context);
+    if (issue) return unavailable(issue);
   }
   if (agentBlocks.has(type)) {
     const requested =
@@ -197,6 +191,32 @@ function availabilityFor(
     }
   }
   return available;
+}
+
+/**
+ * Why a block that calls a model directly (with an API key, rather than
+ * through an agent's harness) cannot do so on this deployment, or null.
+ *
+ * THE ONE GATE for such a call, asked by `call_llm` and by every integration
+ * block that declares `requires.llm`, whose `ctx.llm` spends the run default
+ * provider's key (`integrationLlm`). A credential an agent harness accepts is
+ * not always one a direct call does (a Claude OAuth token, which
+ * `llmProviders` leaves out), so a block offered without asking this would
+ * publish a workflow whose first model call is refused. With no model named,
+ * the run's default provider and model are the ones the call uses.
+ */
+function directLlmIssue(
+  label: string,
+  choice: { readonly provider?: LlmProvider; readonly model?: string },
+  context: WorkflowBlockRegistryContext,
+): string | null {
+  const runtimeProvider =
+    choice.model === undefined ? (choice.provider ?? context.defaultAgent.provider) : choice.provider;
+  const requested = resolveLlmProvider(choice.model ?? context.defaultAgent.model, runtimeProvider);
+  if (context.llmProviders[requested]) return null;
+  return requested === "codex"
+    ? `Codex API credentials are not configured for ${label}.`
+    : `Claude API credentials are not configured for ${label}.`;
 }
 
 /**

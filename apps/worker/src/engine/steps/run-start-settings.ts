@@ -127,10 +127,9 @@ export interface RunStartSettings {
    *
    * ABSENT MEANS NO WIRING WAS RECORDED, which is a result stored before this
    * field existed or a run that started with no tracker connected. Absent, a
-   * ticket is moved by the name of the column and nothing else, and a ticket
-   * link is left out: both are what a board without configured transition ids
-   * already did, so absence is the behaviour of the simplest working
-   * deployment rather than a guess.
+   * ticket is moved by the name of the column and nothing else, which is what
+   * a board without configured transition ids already did, so absence is the
+   * behaviour of the simplest working deployment rather than a guess.
    *
    * It is frozen here for the same reason the columns are. Until S12 the
    * transition ids were environment variables read at the moment of each move,
@@ -142,7 +141,18 @@ export interface RunStartSettings {
 }
 
 export interface RunStartTracker {
-  /** Where a person opens a ticket. Empty when no tracker was connected. */
+  /**
+   * The tracker's Site URL as its connection held it. Empty when no tracker
+   * was connected.
+   *
+   * NOT READ BY THIS BUILD, and still written on purpose. The build before
+   * this one built its ticket links from it; how a ticket is linked is now the
+   * tracker's own answer, recorded with the run's ticket
+   * (`WorkflowTicket.url`). A run started here and resumed after a rollback to
+   * that build replays this result, and without the field that build would
+   * fail the run building a link. Stop writing it once a release has passed
+   * with nothing to roll back to.
+   */
   baseUrl: string;
   backlogTransitionId?: string;
   aiTransitionId?: string;
@@ -284,8 +294,7 @@ export function runStartSettings(stored: RunStartSettings): SettingsSnapshot {
  * by name finds no transition and the ticket is stranded at the end of a run
  * that otherwise worked. The bare name is completed against the current board
  * in `steps/ticket-transition-step.ts`, which runs in the worker and can read
- * the connection; the link is dropped, which is the one part of absence that
- * really is benign.
+ * the connection.
  */
 export function runStartTracker(stored: RunStartSettings): RunStartTracker {
   return stored.tracker ?? { baseUrl: "" };

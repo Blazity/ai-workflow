@@ -12,7 +12,6 @@ import type {
 } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
 import { resolveVcsBotLogin } from "../../adapters/vcs/vcs-bot-identity.js";
-import { coreServesIssueTracker } from "../support/adapters.js";
 import { env } from "../../infra/vcs-config.js";
 import {
   createWorkflowBlockContractResolver,
@@ -21,16 +20,18 @@ import {
 import { NO_INTEGRATIONS, type DeploymentIntegrations } from "./integration-availability.js";
 
 /**
- * The deployment as its credentials describe it: which agents, LLMs, VCS
- * providers and integrations this process can actually reach.
+ * The deployment as its environment describes it: which agents and LLMs this
+ * process has credentials for, and whether webhook trigger secrets can be
+ * sealed.
  *
- * Credentials only. Provider and model belong to a Harness Profile and are
- * added by `workflowBlockRegistryContext` below.
+ * Credentials only. Provider and model belong to a Harness Profile, and every
+ * provider an integration serves (version control included) comes from the
+ * integrations the caller read; `workflowBlockRegistryContext` below adds both.
  */
-function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAgent"> {
-  // Empty since S11: every version control provider is an integration, and the
-  // async reader below merges in what the database says is connected.
-  const vcsProviders: WorkflowBlockRegistryContext["vcsProviders"] = [];
+function deploymentCapabilities(): Omit<
+  WorkflowBlockRegistryContext,
+  "defaultAgent" | "vcsProviders" | "vcsBotIdentities" | "integrations"
+> {
   return {
     agentProviders: {
       claude: Boolean(env.ANTHROPIC_API_KEY),
@@ -42,40 +43,8 @@ function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAg
       ),
       codex: Boolean(env.CODEX_API_KEY),
     },
-    vcsProviders,
-    vcsBotIdentities: [],
     webhookTriggerConfigured: Boolean(env.WEBHOOK_TRIGGER_ENCRYPTION_KEY),
-    // Filled by the async reader below, which is the only caller that can ask
-    // the database what is connected. A caller that cannot wait gets an empty
-    // deployment, which offers no integration block rather than offering one
-    // nothing here could run.
-    integrations: NO_INTEGRATIONS,
   };
-}
-
-/**
- * The capabilities this deployment serves from core rather than from an
- * integration.
- *
- * Each one is a provider the plan moves into its own package in a later stage
- * (ADR-010, stages S8 to S13). Until then a block that asks for the capability
- * is served by core's own adapters, built from the same variables they always
- * were, which is what keeps every deployment running with nothing to migrate.
- * The set shrinks to nothing as those stages land; nothing else reads it.
- */
-export async function builtinCapabilitiesOfDeployment(): Promise<string[]> {
-  const deployment = deploymentCapabilities();
-  const served: string[] = [];
-  // Each one is credential-gated, the way the palette already gates the core
-  // blocks that use it. An ungated entry would offer and publish a block on a
-  // deployment that cannot serve the capability at all, and the refusal would
-  // arrive inside the call rather than in the editor. The tracker's own module
-  // answers for it, so this file names no provider.
-  if (await coreServesIssueTracker()) served.push("issue_tracker");
-  if (deployment.vcsProviders.length > 0) served.push("vcs");
-  // `messaging` left with S9: an integration serves it now, and core reads no
-  // variable of its own for it.
-  return served;
 }
 
 /**
@@ -98,8 +67,9 @@ export function workflowBlockRegistryContext(
   integrations: DeploymentIntegrations = NO_INTEGRATIONS,
 ): WorkflowBlockRegistryContext {
   const deployment = deploymentCapabilities();
-  const integrationVcsProviders = integrations.providers.get("vcs") ?? [];
-  const vcsProviders = [...new Set([...deployment.vcsProviders, ...integrationVcsProviders])];
+  // Every version control provider is an integration since S11, so the ones
+  // this deployment has are the usable integrations that serve it.
+  const vcsProviders = [...(integrations.providers.get("vcs") ?? [])];
   const soleProvider = vcsProviders.length === 1 ? vcsProviders[0] : undefined;
   // Whether a provider has an automation account is the integration resolver's
   // answer and only its answer. Reading the environment a second time here

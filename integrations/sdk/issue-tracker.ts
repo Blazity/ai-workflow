@@ -298,6 +298,23 @@ export interface IssueTrackerAdapter {
    */
   getCurrentUserAccountId(): Promise<string>;
   /**
+   * The page a person opens for one of this tracker's tickets, or null when
+   * `key` is not one of its tickets.
+   *
+   * Core asks it wherever a ticket is shown beside a run (the run views, a
+   * chat message, an MCP answer, the record a run keeps) and never spells a
+   * link itself, so the tracker's own URL scheme and key grammar live here and
+   * nowhere else. The keys core passes are not all tickets: a run started by a
+   * webhook delivery, a schedule or a pull request with no ticket has a
+   * subject key the tracker never issued, and answering a link for one sends a
+   * person to a page that does not exist, so those answer null.
+   *
+   * Pure and synchronous: no request, and it must not throw (core reads a
+   * throw as no link). Optional: a tracker without it gives no links, and
+   * nothing else changes.
+   */
+  ticketUrl?(key: string): string | null;
+  /**
    * Download an attachment by URL. Optional: not all issue trackers support this.
    * Implementations should handle auth and redirects (e.g. signed CDN URLs) internally.
    */

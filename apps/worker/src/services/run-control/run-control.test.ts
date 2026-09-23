@@ -69,7 +69,9 @@ function deps(
   registry: RunRegistryAdapter & ThreadStore,
   cancelRun = vi.fn().mockResolvedValue(true),
 ): RunControlDeps & { cancelRun: ReturnType<typeof vi.fn> } {
-  return { registry, cancelRun, trackerBaseUrl: TRACKER } as never;
+  // The tracker's own links, which every answer carries for its tickets.
+  const issueTracker = { ticketUrl: (key: string) => `${TRACKER}/browse/${key}` };
+  return { registry, cancelRun, issueTracker } as never;
 }
 
 function active(ticketKey: string, overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -201,7 +203,8 @@ describe("cancel", () => {
       "AWT-1",
       { ownerToken: "owner:AWT-1", runId: "run_a" },
       registry,
-      undefined,
+      // The tracker the answers link through is the one a cancel moves with.
+      d.issueTracker,
       undefined,
       undefined,
       // Who, not where from: the next provider of this command writes the same
@@ -241,7 +244,8 @@ describe("cancel", () => {
       "AWT-1",
       { ownerToken: "owner:AWT-1", runId: null },
       registry,
-      undefined,
+      // The tracker the answers link through is the one a cancel moves with.
+      d.issueTracker,
       undefined,
       undefined,
       "Cancelled by U1 through a run control command",

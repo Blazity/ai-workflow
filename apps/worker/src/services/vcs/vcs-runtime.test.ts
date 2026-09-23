@@ -13,7 +13,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 const mocks = vi.hoisted(() => ({
   resolveUsableIntegrations: vi.fn(),
-  usableIntegrations: vi.fn(async (): Promise<unknown[]> => []),
   checkIntegrationPin: vi.fn(),
   loggerWarn: vi.fn(),
   knownSecretValues: vi.fn(async (): Promise<string[]> => []),
@@ -21,11 +20,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
-vi.mock("../integrations/runtime.js", () => ({
+vi.mock("../integrations/runtime.js", async () => ({
   resolveUsableIntegrations: mocks.resolveUsableIntegrations,
-  usableIntegrations: mocks.usableIntegrations,
   checkIntegrationPin: mocks.checkIntegrationPin,
   knownSecretValues: mocks.knownSecretValues,
+  // The real refusal, so what a caller catches is the class it would catch.
+  IntegrationSettingsUnreadableError: (await import("../integrations/usable.js"))
+    .IntegrationSettingsUnreadableError,
 }));
 
 vi.mock("../../infra/logger.js", () => ({
@@ -41,7 +42,9 @@ import {
   createManualDispatchPrReader,
   createRepositoryVcsRuntime,
   listVcsRepositories,
+  resolveConfiguredPullRequestUrl,
 } from "./vcs-runtime.js";
+import { IntegrationSettingsUnreadableError } from "../integrations/usable.js";
 
 function connected(
   id: string,
@@ -66,10 +69,18 @@ function resolvesTo(...entries: Array<Record<string, unknown>>): void {
         states: new Map(
           usable.map((entry) => [(entry.manifest as { id: string }).id, { usable: true }]),
         ),
+        connectionFailures: new Map(),
       };
     },
   );
-  mocks.usableIntegrations.mockResolvedValue(entries);
+}
+
+/** The database did not answer when the settings were read. */
+function settingsUnreadable(): void {
+  mocks.resolveUsableIntegrations.mockResolvedValue({
+    readable: false,
+    reason: "connection terminated unexpectedly",
+  });
 }
 
 function githubLike(): Record<string, unknown> {
@@ -148,6 +159,32 @@ describe("buildSandboxProviderConfigs", () => {
       expect.objectContaining({ provider: "github" }),
       "sandbox_provider_identity_resolution_failed",
     );
+  });
+});
+
+describe("settings that could not be read", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("fails the sandbox loudly rather than building it with no credentials to push with", async () => {
+    // An empty list here used to be the whole answer: the sandbox started
+    // with no version control credentials and the run failed minutes later at
+    // its first clone, blaming the provider for a database that was away.
+    settingsUnreadable();
+
+    await expect(buildSandboxProviderConfigs(new Set(["github"]))).rejects.toBeInstanceOf(
+      IntegrationSettingsUnreadableError,
+    );
+  });
+
+  it("refuses to say no provider recognises a pull request URL nobody could check", async () => {
+    settingsUnreadable();
+
+    const refusal = resolveConfiguredPullRequestUrl(new URL("https://github.com/acme/api/pull/42"));
+
+    await expect(refusal).rejects.toBeInstanceOf(IntegrationSettingsUnreadableError);
+    await expect(refusal).rejects.toThrow(/could not be read, so the pull request URL could not be matched/);
   });
 });
 

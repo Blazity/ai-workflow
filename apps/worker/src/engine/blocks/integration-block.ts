@@ -74,10 +74,7 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
   // this block or a sandbox it traces, and never for any other integration.
   const runState = await integrationRunState(ctx, entry.integrationId);
   if (runState.status === "unreadable") {
-    // Nothing was asked of the integration, so it is not the one to blame, and
-    // nothing was remembered, so a retry of the run asks again.
-    const message = `${entry.block.ui.label} could not start: this run could not read the deployment's integration settings (${runState.reason}). Nothing was asked of the integration; retry the run.`;
-    return executionError(message, { category: "engine", message });
+    return settingsUnreadable(entry.block.ui.label, runState.reason);
   }
   if (runState.status === "unavailable") {
     // The integration moved under the run, and the cause is what an admin acts
@@ -129,6 +126,7 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
         message: result.message,
       });
     }
+    if (result.kind === "unreadable") return settingsUnreadable(entry.block.ui.label, result.reason);
     return executionError(result.message, { category: "provider" });
   } catch (error) {
     if (isRunControlError(error)) throw error;
@@ -137,6 +135,21 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
     });
   }
 };
+
+/**
+ * A block that could not start because this deployment's integration settings
+ * could not be read, whether the read that failed was the one creating the
+ * run's state for the integration or the block's own.
+ *
+ * `engine`, never `provider`: nothing was asked of the integration, so it is
+ * not the one to blame, and nothing was remembered, so a retry of the run asks
+ * again. One sentence for both reads, because the person reading it acts the
+ * same way on either.
+ */
+function settingsUnreadable(label: string, reason: string): BlockExecutionResult {
+  const message = `${label} could not start: this run could not read the deployment's integration settings (${reason}). Nothing was asked of the integration; retry the run.`;
+  return executionError(message, { category: "engine", message });
+}
 
 /**
  * The block's inputs with every unbound one that names a default filled from

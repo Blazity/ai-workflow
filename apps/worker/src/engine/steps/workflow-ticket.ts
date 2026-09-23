@@ -21,6 +21,15 @@ import type { AgentWorkflowInput } from "../agent-input.js";
 export type WorkflowTicket = TicketContent & {
   botAccountId?: string;
   subjectTextIsPlaceholder?: true;
+  /**
+   * Where a person opens this ticket, as its tracker links it (`ticketUrl` on
+   * the issue tracker port), recorded with the read: the workflow body cannot
+   * ask a tracker, and every record the run writes links the ticket with this.
+   * Absent for a subject that is not a ticket, from a tracker that gives no
+   * link, and on a result recorded before this field existed; a run view then
+   * links the key through the tracker in force when it is read.
+   */
+  url?: string;
 };
 
 export async function resolveWorkflowTicketStep(
@@ -123,7 +132,12 @@ export async function resolveWorkflowTicketStep(
   // A ticket-correlated run starts from its ticket, and there is no ticket to
   // read without a tracker: the run fails at its start, saying why.
   const issueTracker = issueTrackerOrThrow(await createAdapters());
-  const ticket = await issueTracker.fetchTicket(ticketKey);
+  const { ticketLinksOf } = await import("../support/ticket-url.js");
+  const read = await issueTracker.fetchTicket(ticketKey);
+  // By the identifier the tracker answered with, the one every run record
+  // names the ticket by.
+  const url = ticketLinksOf(issueTracker)(read.identifier);
+  const ticket: WorkflowTicket = url ? { ...read, url } : read;
   if (entry.kind === "ticket" && ticket.trackerStatus.toLowerCase() !== columnAi.toLowerCase()) {
     return null;
   }

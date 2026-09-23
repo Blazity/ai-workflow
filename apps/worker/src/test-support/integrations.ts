@@ -20,14 +20,24 @@ import {
  * what says a database is involved.
  */
 
-/** A deployment with no integration usable, whatever this build ships. */
+/**
+ * A deployment with no integration usable, whatever this build ships, unless
+ * `states` says otherwise.
+ *
+ * `serving` names providers of a capability outright, for a test about
+ * something else that needs one served (version control, say) without
+ * arranging that integration's connection: `{ vcs: ["github"] }`.
+ */
 export function testDeploymentIntegrations(
   states: readonly IntegrationState[] = [],
-  builtinCapabilities: readonly string[] = [],
+  serving: Readonly<Record<string, readonly string[]>> = {},
 ): DeploymentIntegrations {
-  return deploymentIntegrations({
+  const deployment = deploymentIntegrations({
     manifests: integrationManifests,
     states: new Map(states.map((state) => [state.integrationId, state])),
-    builtinCapabilities: new Set(builtinCapabilities),
   });
+  return {
+    ...deployment,
+    providers: new Map([...deployment.providers, ...Object.entries(serving)]),
+  };
 }
