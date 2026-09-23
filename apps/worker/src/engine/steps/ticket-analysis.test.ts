@@ -16,6 +16,7 @@ const STORED_KEY = "plainvalue4471tracer";
 const mocks = vi.hoisted(() => ({
   knownSecretValues: vi.fn(),
   postComment: vi.fn(),
+  findCommentByMarker: vi.fn(),
   markFailed: vi.fn(),
   recordStatusReason: vi.fn(),
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -37,7 +38,7 @@ vi.mock("../internal/ports.js", async () => {
           ok: true,
           id: "jira",
           name: "Jira",
-          adapter: { postComment: mocks.postComment },
+          adapter: { postComment: mocks.postComment, findCommentByMarker: mocks.findCommentByMarker },
           wiring: { projectKey: "AIW", baseUrl: "https://tracker.example" },
         },
         runRegistry: { markFailed: mocks.markFailed },
@@ -45,6 +46,7 @@ vi.mock("../internal/ports.js", async () => {
       issueTrackerIfConnected,
       issueTrackerOrThrow,
     }),
+    loadEnvironmentPort: async () => ({ env: { DASHBOARD_ORIGIN: "https://dashboard.example" } }),
     loadRunTelemetryPort: async () => ({
       recordConnectedRunStatusReason: mocks.recordStatusReason,
     }),
@@ -56,8 +58,10 @@ const {
   logWorkflowExecutionErrorStep,
   markTicketFailed,
   postFailureReasonCommentStep,
+  postRunAnalysisCommentStep,
   recordRunFailureReasonStep,
 } = await import("./ticket-analysis.js");
+const { buildResearchAnalysisReport } = await import("../support/run-analysis-report.js");
 
 const owner = { subjectKey: "ticket:jira:AIW-1", ownerToken: "owner-1", runId: "run-1" };
 const REASON = `The agent printed ${STORED_KEY} and stopped.`;
@@ -187,5 +191,27 @@ describe("the operator log", () => {
 
     const [event] = mocks.logger.error.mock.calls[0] as [{ detail: string }];
     expect(event.detail).not.toContain(STORED_KEY);
+  });
+});
+
+describe("the run's report on the ticket", () => {
+  // Red when: a post retried after the marker lost its "Arthur" prefix does
+  // not find the comment the same run already posted under the old marker,
+  // and posts the report a second time.
+  it("finds a report posted under the marker comments carried before, and posts nothing", async () => {
+    knowsTheStoredKey();
+    mocks.findCommentByMarker.mockImplementation(async (_ticket: string, marker: string) =>
+      marker === "Arthur report: run-1:research" ? "https://tracker.example/AIW-1#c1" : null,
+    );
+    const report = buildResearchAnalysisReport({
+      runId: "run-1",
+      researchResult: { body: "Plan" },
+      usage: { costUsd: 0, costKnown: true, tokensInput: 0, tokensCached: 0, tokensOutput: 0, phases: {} },
+    });
+
+    const delivery = await postRunAnalysisCommentStep("AIW-1", report, "research", owner);
+
+    expect(mocks.postComment).not.toHaveBeenCalled();
+    expect(delivery).toMatchObject({ state: "posted", commentUrl: "https://tracker.example/AIW-1#c1" });
   });
 });

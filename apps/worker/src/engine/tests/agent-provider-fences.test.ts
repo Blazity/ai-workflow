@@ -249,7 +249,9 @@ describe("agent provider side-effect fences", () => {
     await expect(
       postRunAnalysisCommentStep("AWT-1", analysisReport, "research", owner),
     ).rejects.toThrow("owner changed");
-    expect(mocks.findCommentByMarker).toHaveBeenCalledOnce();
+    // Both markers looked up (the current one, then the one comments carried
+    // before it was renamed), and only then the ownership recheck refused.
+    expect(mocks.findCommentByMarker).toHaveBeenCalledTimes(2);
     expect(mocks.postComment).not.toHaveBeenCalled();
   });
 
