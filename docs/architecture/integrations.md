@@ -471,6 +471,14 @@ Read them in the worker's runtime logs by the run id.
   unavailable`. Answering `held: false` for it makes the seed write into a store
   that is already full, and makes a run take an old committed file for the
   ticket's notebook.
+- **A subject holds at most `MEMORY_ITEMS_MAX` entries per scope** (40 facts,
+  30 lessons, the built-in store's numbers, declared once in the port). A
+  distilling run may add eight facts and five lessons, so an engine that only
+  adds grows without end unless the adapter trims: after an add that takes a
+  subject past the limit, delete the oldest entries a run learned (never a
+  `derived` one) by id and report them as `dropped`. A pure retraction never
+  trims. Check `onlyIfEmpty` before any refusal about size: a seed on a full
+  subject answers `stored: false`.
 - **`onlyIfEmpty` is yours to honour**: a deterministic seed may create a
   subject's memory and never edit what a run wrote. Check `held` first.
 - **`subject.key` and a notebook's `name` are addresses, not text.** Store
@@ -1717,6 +1725,11 @@ pnpm run verify:changed -- --worktree
   fixed it the way those files already state their other premises: the
   resolver answers "nothing connected" in the test's mock. `verify:changed`
   runs these files; if you are the first provider of a capability, expect it.
+  It changes production too: since Mem0 shipped, every `activeMemory` call on
+  every deployment reads the integration rows before choosing the built-in
+  store, so a database that does not answer for a moment makes that step's
+  memory `unreadable` (memory not used, said on the run) where it used to go
+  straight to the built-in store, which lives in the same database.
 - No em dash and no en dash anywhere in the package: code, comments, strings,
   the README, fixtures' `.source.txt` and the changelog. The repository writes
   with commas, colons and parentheses instead.
