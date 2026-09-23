@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 import type { IntegrationFailureReason, IntegrationSource } from "@shared/contracts";
 
 import { integrationConnectionVersions, integrationConnections } from "../schema/integrations.js";
@@ -267,6 +267,14 @@ export type SaveIntegrationVersionResult =
 export function saveIntegrationVersionStatement(input: SaveIntegrationVersionInput) {
   const activates = input.test.status === "passed";
   const takesOver = activates && input.takeOverSource;
+  // The new value when the saved version is the one in use after this
+  // statement, the old one otherwise; decided per row for an existing row,
+  // whose source is read inside the statement.
+  const inUse = (next: SQL, kept: SQL): SQL => {
+    if (!activates) return kept;
+    if (takesOver) return next;
+    return sql`CASE WHEN ${integrationConnections}.source = 'stored' THEN ${next} ELSE ${kept} END`;
+  };
   return sql`
     WITH existing AS (
       SELECT integration_id, latest_version, active_version, source, enabled
@@ -288,11 +296,11 @@ export function saveIntegrationVersionStatement(input: SaveIntegrationVersionInp
       SELECT
         ${input.integrationId}, 1, ${activates ? sql`1` : sql`NULL::integer`},
         ${takesOver ? sql`'stored'` : sql`'environment'`},
-        ${activates ? sql`${input.test.status}` : sql`NULL::text`},
-        ${activates && input.test.reason ? sql`${input.test.reason}` : sql`NULL::text`},
-        ${activates && input.test.message ? sql`${input.test.message}` : sql`NULL::text`},
-        ${activates ? sql`now()` : sql`NULL::timestamptz`},
-        ${activates ? sql`${input.test.fingerprint}` : sql`NULL::text`},
+        ${takesOver ? sql`${input.test.status}` : sql`NULL::text`},
+        ${takesOver && input.test.reason ? sql`${input.test.reason}` : sql`NULL::text`},
+        ${takesOver && input.test.message ? sql`${input.test.message}` : sql`NULL::text`},
+        ${takesOver ? sql`now()` : sql`NULL::timestamptz`},
+        ${takesOver ? sql`${input.test.fingerprint}` : sql`NULL::text`},
         ${input.actorId}, now()
       FROM resolved
       WHERE resolved.creating AND resolved.allowed
@@ -311,14 +319,19 @@ export function saveIntegrationVersionStatement(input: SaveIntegrationVersionInp
             : sql`${integrationConnections}.active_version`
         },
         source = ${takesOver ? sql`'stored'` : sql`${integrationConnections}.source`},
-        last_test_status = ${activates ? sql`${input.test.status}` : sql`${integrationConnections}.last_test_status`},
-        -- An activating save writes its verdict whole, nulls included: a passing
-        -- test carries no reason and often no message, and keeping the old ones
-        -- put a previous failure's words beside a "passed" status.
-        last_test_reason = ${activates ? sql`${input.test.reason}::text` : sql`${integrationConnections}.last_test_reason`},
-        last_test_message = ${activates ? sql`${input.test.message}::text` : sql`${integrationConnections}.last_test_message`},
-        last_test_at = ${activates ? sql`now()` : sql`${integrationConnections}.last_test_at`},
-        last_test_fingerprint = ${activates ? sql`${input.test.fingerprint}` : sql`${integrationConnections}.last_test_fingerprint`},
+        -- The connection's last test is the verdict on the values IN USE, so a
+        -- save writes it only when its version becomes the one in use: it
+        -- activates and the source is (or now becomes) stored. Saved beside a
+        -- working environment, the version keeps its own verdict and the
+        -- environment's stays, or the card said "tested, before these values
+        -- changed" about variables nobody changed. Written whole, nulls
+        -- included: a passing test carries no reason and often no message, and
+        -- keeping the old ones put a previous failure's words beside "passed".
+        last_test_status = ${inUse(sql`${input.test.status}`, sql`${integrationConnections}.last_test_status`)},
+        last_test_reason = ${inUse(sql`${input.test.reason}::text`, sql`${integrationConnections}.last_test_reason`)},
+        last_test_message = ${inUse(sql`${input.test.message}::text`, sql`${integrationConnections}.last_test_message`)},
+        last_test_at = ${inUse(sql`now()`, sql`${integrationConnections}.last_test_at`)},
+        last_test_fingerprint = ${inUse(sql`${input.test.fingerprint}`, sql`${integrationConnections}.last_test_fingerprint`)},
         updated_by = ${input.actorId},
         updated_at = now()
       FROM resolved

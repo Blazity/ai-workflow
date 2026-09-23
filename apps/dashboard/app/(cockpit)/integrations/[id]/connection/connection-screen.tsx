@@ -400,7 +400,9 @@ export function ConnectionScreen({
                 tone: outcome.ok ? "good" : "bad",
                 lines: [
                   ...testOutcomeLines(outcome, next, "save"),
-                  ...(outcome.ok ? unlocksLines(next) : []),
+                  // What connecting adds, only when these values are the ones
+                  // in use; stored beside a working environment they add nothing.
+                  ...(outcome.ok && next.state.source === "stored" ? unlocksLines(next) : []),
                 ],
               },
         );

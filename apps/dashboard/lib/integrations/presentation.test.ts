@@ -248,6 +248,24 @@ test("a webhook that agrees with the rest of the integration adds nothing to the
   assert.doesNotMatch(off, /slash command/, "switched off says so once, above");
 });
 
+test("values saved beside a working environment are said to be stored, tested and not in use", () => {
+  // The worker keeps a connected environment as the source. "Accepted" alone
+  // read as "in use", and an admin who then revoked the old credential
+  // stopped every run.
+  const beside = integration({
+    state: state({ source: "environment", environment: { setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"], missingVariables: [], complete: true } }),
+  });
+  const rendered = testOutcomeLines({ ok: true }, beside, "save").join(" ");
+  assert.match(rendered, /stored and tested, and not in use: runs still use this deployment's environment variables/);
+  assert.match(rendered, /Use the stored values/);
+  assert.match(rendered, /Keep the old credential/);
+
+  const inUse = testOutcomeLines({ ok: true }, integration(), "save").join(" ");
+  assert.equal(inUse, "Demo accepted these values.");
+  // A Test of what is in use is about the environment itself: no switch to offer.
+  assert.doesNotMatch(testOutcomeLines({ ok: true }, beside, "test").join(" "), /not in use/);
+});
+
 test("a save that failed its test is reported as stored and not in use", () => {
   const lines = statusDetailLines(
     integration({

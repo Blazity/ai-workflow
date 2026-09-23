@@ -589,6 +589,21 @@ export function testOutcomeLines(
   origin: "save" | "test",
 ): string[] {
   if (test.ok) {
+    // A save on a deployment whose environment already connects the
+    // integration stores and tests the values and leaves the source alone
+    // (the worker never takes over a working environment). "Accepted" alone
+    // read as "in use", and an admin who then revoked the old credential
+    // stopped every run.
+    if (origin === "save" && integration.state.source === "environment") {
+      const lines = [
+        `${integration.name} accepted these values. They are stored and tested, and not in use: runs still use this deployment's environment variables.`,
+      ];
+      if (test.message) lines.push(readableProviderText(test.message));
+      lines.push(
+        "To use them, choose Use the stored values below, which first shows what the switch would interrupt. Keep the old credential until then.",
+      );
+      return lines;
+    }
     const lines = [`${integration.name} accepted these values.`];
     if (test.message) lines.push(readableProviderText(test.message));
     return lines;
