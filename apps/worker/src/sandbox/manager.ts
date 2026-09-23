@@ -15,6 +15,7 @@ import {
   type WorkspaceRepo,
   type WorkspaceRepositoryInput,
 } from "./repo-workspace.js";
+import { sandboxCreateRefusal } from "./create-refusal.js";
 import { isActiveRunOwnerError } from "../db/repositories/active-run-owner-error.js";
 import { buildVcsUrls, gitAuthArgs } from "../infra/vcs-urls.js";
 import { stopSandboxAndConfirm } from "./stop-ticket-sandboxes.js";
@@ -88,18 +89,22 @@ export class SandboxManager {
 
     let sandbox: SandboxInstance | null = null;
     try {
-      sandbox = await Sandbox.create({
-        ...getSandboxCredentials(),
-        source: {
-          type: "git",
-          url: firstUrls.cloneUrl,
-          username: firstUrls.authUser,
-          password: firstToken,
-          revision: firstRepo.branchName,
-        },
-        runtime: "node24",
-        timeout: this.config.jobTimeoutMs,
-      });
+      try {
+        sandbox = await Sandbox.create({
+          ...getSandboxCredentials(),
+          source: {
+            type: "git",
+            url: firstUrls.cloneUrl,
+            username: firstUrls.authUser,
+            password: firstToken,
+            revision: firstRepo.branchName,
+          },
+          runtime: "node24",
+          timeout: this.config.jobTimeoutMs,
+        });
+      } catch (error) {
+        throw sandboxCreateRefusal(error, firstRepo) ?? error;
+      }
 
       await lifecycle.onCreated?.(sandbox.sandboxId);
 

@@ -7,7 +7,10 @@ import {
 import type { RunStartWorkScope } from "../../steps/run-start-settings.js";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
 import type { ReviewThreadFeed } from "../../../adapters/vcs/types.js";
-import type { SelectedRepositoryPromptContext } from "../../../sandbox/context.js";
+import type {
+  PreviousBranchGone,
+  SelectedRepositoryPromptContext,
+} from "../../../sandbox/context.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import { selectWorkItems } from "../../helpers/review-ledger.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
@@ -240,6 +243,17 @@ export interface FetchPrContextOptions {
    *  second. Absent reads as off, the registry default. */
   reviewLedgerEnabled?: boolean;
   integrationPins?: readonly IntegrationConnectionPin[];
+  /**
+   * Ask the provider whether each workflow-owned branch still exists, and treat
+   * one that does not as abandoned: the repository comes back without its
+   * ownership (so the workspace checks out the default branch) and the context
+   * says which branch went away. Only a ticket run sets it. A person who closed
+   * the pull request and deleted its branch threw that work away on purpose,
+   * and checking out a branch that is gone kills the workspace with a bare
+   * provider status. A pull request run keeps the old reading: its branch is
+   * the subject of the event.
+   */
+  dropMissingOwnedBranches?: boolean;
 }
 
 /**
@@ -300,6 +314,29 @@ export async function blockFetchPrContextsStep(
           repositoryNotEnabledMessage("read pull request context for", repo),
         );
       }
+      const adapter = () =>
+        createRepositoryVCS({
+          provider: repo.provider,
+          repoPath: repo.repoPath,
+          baseBranch: repo.defaultBranch,
+          integrationPins: options.integrationPins,
+        });
+      if (options.dropMissingOwnedBranches && repo.workflowOwnedBranch) {
+        const gone = await ownedBranchIsGone(adapter(), repo);
+        if (gone) {
+          const { workflowOwnedBranch: _abandoned, ...rest } = repo;
+          return {
+            repository: {
+              ...rest,
+              selectedRationale: `${repo.selectedRationale}; its earlier branch ${gone.branchName} no longer exists, so this run starts again from ${repo.defaultBranch}`,
+            },
+            prComments: [],
+            checkResults: [],
+            hasConflicts: false,
+            previousBranchGone: gone,
+          };
+        }
+      }
       const pr = repo.workflowOwnedBranch?.pr ?? repo.reviewPullRequest;
       if (!pr) {
         return {
@@ -309,12 +346,7 @@ export async function blockFetchPrContextsStep(
           hasConflicts: false,
         };
       }
-      const vcs = createRepositoryVCS({
-        provider: repo.provider,
-        repoPath: repo.repoPath,
-        baseBranch: repo.defaultBranch,
-        integrationPins: options.integrationPins,
-      });
+      const vcs = adapter();
       const wantsReviewThreads =
         options.reviewLedgerEnabled === true &&
         options.reviewLedgerFor?.provider === repo.provider &&
@@ -353,6 +385,53 @@ export async function blockFetchPrContextsStep(
       };
     }),
   );
+}
+
+/**
+ * The branch this ticket's earlier run left, when the provider says it no
+ * longer exists; null while it exists. Only an authoritative "no such branch"
+ * counts: a provider that cannot be reached leaves the ownership exactly as it
+ * was, because throwing away a live branch over a network blip would start a
+ * person's pull request over behind their back.
+ */
+async function ownedBranchIsGone(
+  vcs: { getBranchShaIfExists(branch: string): Promise<string | null> },
+  repo: SelectedRepository,
+): Promise<PreviousBranchGone | null> {
+  const owned = repo.workflowOwnedBranch!;
+  let head: string | null;
+  try {
+    head = await vcs.getBranchShaIfExists(owned.branchName);
+  } catch (error) {
+    if (isRunControlError(error)) throw error;
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn(
+      {
+        provider: repo.provider,
+        repoPath: repo.repoPath,
+        branchName: owned.branchName,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "workflow_owned_branch_probe_failed",
+    );
+    return null;
+  }
+  if (head !== null) return null;
+  const { logger } = await import("../../../infra/logger.js");
+  logger.info(
+    {
+      provider: repo.provider,
+      repoPath: repo.repoPath,
+      branchName: owned.branchName,
+      prId: owned.pr?.id ?? null,
+      defaultBranch: repo.defaultBranch,
+    },
+    "workflow_owned_branch_gone",
+  );
+  return {
+    branchName: owned.branchName,
+    ...(owned.pr ? { pr: { id: owned.pr.id, url: owned.pr.url } } : {}),
+  };
 }
 
 /**
