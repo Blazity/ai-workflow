@@ -15,10 +15,11 @@ import { posix } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
-import type {
-  IntegrationHttp,
-  RepositorySkillSource,
-  RepositorySkillTreeEntry,
+import {
+  readProviderFailure,
+  type IntegrationHttp,
+  type RepositorySkillSource,
+  type RepositorySkillTreeEntry,
 } from "@integrations/sdk";
 import { extract } from "tar-stream";
 import type { Octokit } from "@octokit/rest";
@@ -55,22 +56,25 @@ export class SkillSourceError extends Error {
  * GitHub's own "Not Found" and "Resource not accessible by integration" used
  * to reach the dashboard verbatim. What a person can act on is which of two
  * things went wrong: the repository is not there for this installation, or the
- * installation may not read it. Anything else, a GitHub outage included, loses
- * its status and gets core's generic answer.
+ * installation may not read it. Anything else, a GitHub outage or rate limit
+ * included, loses its status and gets core's generic answer.
  */
 async function gitHubCall<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation();
   } catch (error) {
     if (error instanceof SkillSourceError) throw error;
-    const status = (error as { status?: unknown } | null)?.status;
-    if (status === 404) {
+    // Which answers refuse is the SDK's decision, not a 4xx range: a 429 and
+    // a 403 that is GitHub's rate limit say nothing about the repository, and
+    // calling them "cannot read" sent a person to fix access that was fine.
+    const failure = readProviderFailure(error);
+    if (failure.kind === "refused" && failure.status === 404) {
       throw new SkillSourceError(
         "GitHub repository not found, or not part of this App installation",
         404,
       );
     }
-    if (typeof status === "number" && status >= 400 && status < 500) {
+    if (failure.kind === "refused") {
       throw new SkillSourceError(
         "The GitHub App installation cannot read this repository",
         422,

@@ -8,6 +8,8 @@
  */
 import {
   defineIntegrationRuntime,
+  readProviderFailure,
+  refusedOrThrow,
   type IntegrationContext,
   type IntegrationRuntimeDefinition,
   type MessagingAdapter,
@@ -53,7 +55,9 @@ const definition: IntegrationRuntimeDefinition<DemoManifest> = {
       timeoutMs: 5_000,
     });
     if (response.ok) return { ok: true };
-    return { ok: false, reason: await response.text() };
+    // The SDK decides which answers refuse the token; a rate limit or a 5xx
+    // throws, which leaves a working connection as it was.
+    return refusedOrThrow(response, "The demo provider did not accept this API token.");
   },
   capabilities: {
     messaging: demoMessaging,
@@ -78,7 +82,8 @@ const definition: IntegrationRuntimeDefinition<DemoManifest> = {
     auth: async (ctx) => {
       const response = await ctx.http.fetch(new URL("/me", ctx.connection.baseUrl), { signal: ctx.signal, retries: 0 });
       if (response.ok) return { status: "live" };
-      return { status: response.status === 401 ? "down" : "degraded", message: `The demo provider answered ${response.status}.` };
+      const refused = readProviderFailure(response).kind === "refused";
+      return { status: refused ? "down" : "degraded", message: `The demo provider answered ${response.status}.` };
     },
     delivery: async () => {
       if (sentMessages.length === 0) return { status: "degraded", message: "No message has been sent yet." };

@@ -538,6 +538,7 @@ import {
   type MemoryRecall,
   type MemoryScope,
   type MemoryWrite,
+  readProviderFailure,
 } from "@integrations/sdk";
 import type { manifest } from "./manifest";
 
@@ -550,10 +551,13 @@ function scopeName(scope: MemoryScope): string {
   return scope.kind === "notebook" ? `notebook/${scope.name}` : scope.kind;
 }
 
-/** A status the engine answered with, as the port's word for it. */
-function failureOf(status: number): MemoryFailure {
-  const retryable = status === 408 || status === 429 || status >= 500;
-  return retryable ? "unavailable" : "rejected";
+/**
+ * An answer that was not a success, as the port's word for it. The SDK decides
+ * which answers refuse (`readProviderFailure`), so a rate limit, a timeout or a
+ * 5xx is `unavailable` here exactly as it is everywhere else.
+ */
+function failureOf(response: Response): MemoryFailure {
+  return readProviderFailure(response).kind === "refused" ? "rejected" : "unavailable";
 }
 
 function described(error: unknown): string {
@@ -574,7 +578,7 @@ export function hippoMemory(ctx: Context): MemoryAdapter {
       // Well below the step's memory budget, so one slow answer cannot spend it.
       const response = await ctx.http.fetch(url, { headers, timeoutMs: 10_000 });
       if (!response.ok) {
-        return { ok: false, code: failureOf(response.status), detail: `Hippo answered ${response.status}` };
+        return { ok: false, code: failureOf(response), detail: `Hippo answered ${response.status}` };
       }
       const answer = searchAnswer.safeParse(await response.json().catch(() => null));
       if (!answer.success) {
@@ -623,7 +627,7 @@ export function hippoMemory(ctx: Context): MemoryAdapter {
           }),
         });
         if (!response.ok) {
-          return { ok: false, code: failureOf(response.status), detail: `Hippo answered ${response.status}` };
+          return { ok: false, code: failureOf(response), detail: `Hippo answered ${response.status}` };
         }
         // Hippo answers 202 and merges later: `stored` means it took the
         // observation, never that the next recall returns it. The three counts
@@ -876,6 +880,7 @@ in the message.
 ```ts file=worker.ts
 import {
   defineIntegrationRuntime,
+  readProviderFailure,
   refusedOrThrow,
   z,
   type IntegrationRuntimeDefinition,
@@ -918,7 +923,10 @@ const definition: IntegrationRuntimeDefinition<typeof manifest> = {
         { headers: { authorization: `Bearer ${ctx.connection.apiKey}` }, retries: 0, timeoutMs: 3_000 },
       );
       if (response.ok) return { status: "live" };
-      return { status: "down", message: `Hippo answered ${response.status}.` };
+      // Down only for an answer that refuses these values; a rate limit or a
+      // 5xx says nothing about them and reads degraded.
+      const refused = readProviderFailure(response).kind === "refused";
+      return { status: refused ? "down" : "degraded", message: `Hippo answered ${response.status}.` };
     },
   },
   webhook,

@@ -237,6 +237,30 @@ describe("GitHub refusing a skill import", () => {
     });
   });
 
+  it("does not call a rate limit a repository the installation cannot read", async () => {
+    // 429, and the 403 GitHub answers a spent limit with, say nothing about
+    // access; a 422 "cannot read" would send an admin to fix access that works.
+    octokit.repos.get.mockRejectedValueOnce(requestError(429, "Too Many Requests"));
+    octokit.repos.getCommit.mockRejectedValueOnce(
+      Object.assign(requestError(403, "API rate limit exceeded"), {
+        response: { headers: { "x-ratelimit-remaining": "0" } },
+      }),
+    );
+    const source = createGitHubSkillSource(CLIENT, HTTP);
+
+    const limited = await source
+      .getDefaultBranch({ owner: "acme", repository: "skills" })
+      .catch((error: unknown) => error);
+    const spent = await source
+      .resolveCommit({ owner: "acme", repository: "skills", ref: "main" })
+      .catch((error: unknown) => error);
+
+    for (const failure of [limited, spent]) {
+      expect(failure).not.toBeInstanceOf(SkillSourceError);
+      expect(failure).not.toHaveProperty("status");
+    }
+  });
+
   it("leaves a GitHub outage without a status of its own", async () => {
     octokit.git.getTree.mockRejectedValueOnce(requestError(502, "Bad Gateway"));
 
