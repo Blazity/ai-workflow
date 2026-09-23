@@ -3,9 +3,11 @@ import { z } from "zod";
 // AgentProtocolDiagnostic, its failure-kind union and the provider name are
 // plain serializable data that `@shared/workflow-graph` also names, so they
 // live in contracts.
-import type {
-  AgentProtocolDiagnostic,
-  AgentProtocolProvider,
+import {
+  INTEGRATION_ID,
+  repositoryCatalogProviderSchema,
+  type AgentProtocolDiagnostic,
+  type AgentProtocolProvider,
 } from "@shared/contracts";
 import type { AgentTracingSetup } from "@integrations/sdk";
 
@@ -277,7 +279,7 @@ export interface ResearchResult {
 }
 
 const researchRepositorySchema = z.object({
-  provider: z.string().trim().regex(/^[a-z][a-z0-9_-]{2,31}$/),
+  provider: repositoryCatalogProviderSchema,
   repoPath: z.string().min(1),
   rationale: z.string().min(1),
 }).strict();
@@ -302,6 +304,17 @@ export const researchOutputSchema = z.object({
   error: z.string().nullish(),
 }).strict();
 export type ResearchOutput = z.infer<typeof researchOutputSchema>;
+
+/**
+ * The provider a research answer names, as the harness is told it: the same
+ * rule `researchRepositorySchema` validates the answer with, so the model is
+ * constrained to exactly what will be accepted. `pattern` rather than the
+ * `minLength` this replaced, which the rule already implies: both harnesses'
+ * structured outputs document `pattern` on a string (Claude's as a simple
+ * regex, OpenAI's under strict mode), and Claude's lists `minLength` as
+ * unsupported.
+ */
+const RESEARCH_PROVIDER_JSON_SCHEMA = { type: "string", pattern: INTEGRATION_ID.source } as const;
 
 export const RESEARCH_SCHEMA = JSON.stringify({
   type: "object",
@@ -338,7 +351,7 @@ export const RESEARCH_SCHEMA = JSON.stringify({
           items: {
             type: "object",
             properties: {
-              provider: { type: "string", minLength: 1 },
+              provider: RESEARCH_PROVIDER_JSON_SCHEMA,
               repoPath: { type: "string" },
               rationale: { type: "string" },
             },
@@ -357,7 +370,7 @@ export const RESEARCH_SCHEMA = JSON.stringify({
           items: {
             type: "object",
             properties: {
-              provider: { type: "string", minLength: 1 },
+              provider: RESEARCH_PROVIDER_JSON_SCHEMA,
               repoPath: { type: "string" },
               rationale: { type: "string" },
             },

@@ -16,11 +16,11 @@
 import { z } from "zod";
 import type { WorkflowBlockType } from "./block-catalog.generated";
 import type { WorkflowRepositoryScope } from "./domain";
+import { INTEGRATION_ID } from "./integration-id";
 import {
   REPOSITORY_CATALOG_LABEL_MAX_LENGTH,
   REPOSITORY_CATALOG_PATH_PATTERN,
   repositoryCatalogKey,
-  repositoryCatalogProviderSchema,
 } from "./repository-catalog";
 import type { PrTriggerType } from "./trigger-events";
 
@@ -265,7 +265,10 @@ function isRepositoryKey(key: string): boolean {
   if (separator < 0) return false;
   const path = key.slice(separator + 1);
   return (
-    repositoryCatalogProviderSchema.safeParse(key.slice(0, separator)).success &&
+    // The id rule itself, not the provider schema: that one trims, and a key
+    // is compared as the string it is, so "github :acme/api" would pass as a
+    // key no catalog entry ever equals.
+    INTEGRATION_ID.test(key.slice(0, separator)) &&
     path.length <= REPOSITORY_CATALOG_LABEL_MAX_LENGTH &&
     REPOSITORY_CATALOG_PATH_PATTERN.test(path)
   );

@@ -18,7 +18,9 @@ import {
   type RepositoryExpansionState,
 } from "./runner.js";
 import type { RepositoryCatalogEntry } from "./catalog.js";
-import type { WorkScopeRefusalReason } from "@shared/contracts";
+import { repositoryCatalogProviderSchema, type WorkScopeRefusalReason } from "@shared/contracts";
+import Ajv from "ajv";
+import { PROVIDER_ID_PROBES } from "../../test-support/provider-id-probes.js";
 
 describe("repository discovery harness protocol", () => {
   it("uses a strict bounded output schema", () => {
@@ -33,6 +35,17 @@ describe("repository discovery harness protocol", () => {
       "questions",
       "error",
     ]);
+  });
+
+  it("holds the model to exactly the providers the answer is validated with", () => {
+    // The answer's provider is parsed with the catalog's provider rule
+    // (`discoveryResultSchema` in engine/repository-discovery/protocol.ts), so
+    // the schema the model is handed has to admit the same ids and no others.
+    const items = JSON.parse(REPOSITORY_DISCOVERY_SCHEMA).properties.repositories.anyOf[0].items;
+    const admits = new Ajv({ strict: false }).compile(items.properties.provider);
+    for (const probe of PROVIDER_ID_PROBES.filter((value) => value.trim() === value)) {
+      expect(admits(probe), probe).toBe(repositoryCatalogProviderSchema.safeParse(probe).success);
+    }
   });
 
   it("includes only bounded catalog metadata and mandatory identities", () => {
@@ -418,7 +431,7 @@ describe("repository expansion validation", () => {
     if (decision.kind === "clarification_needed") {
       const [question] = decision.questions;
       // The examples themselves are pinned against a registry this build does
-      // not contain, in repository-path-example.test.ts. Here the question is
+      // not contain, in repository-map/repository-path-example.test.ts. Here the question is
       // only whether the sentence is said at all.
       expect(question).toContain("reply with exact repository paths as");
       expect(isExpansionLimitClarification(decision.questions)).toBe(true);

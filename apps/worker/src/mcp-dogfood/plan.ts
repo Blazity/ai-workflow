@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { integrationsProviding } from "@integrations/registry";
+import { INTEGRATION_ID } from "@shared/contracts";
 
 type JsonSchema = {
   type?: string;
@@ -100,8 +101,8 @@ function sampleString(schema: JsonSchema): string {
     // An integration id, which every repository argument is scoped by. Taken
     // from this build rather than written out, so the probe names a provider
     // the deployment can actually answer about.
-    if (schema.pattern === "^[a-z][a-z0-9_-]{2,31}$") {
-      return integrationsProviding("vcs")[0]?.id ?? "provider-id";
+    if (schema.pattern === INTEGRATION_ID.source) {
+      return integrationsProviding("vcs")[0]?.id ?? "provider";
     }
     throw new Error(`no sample for pattern ${schema.pattern}`);
   }

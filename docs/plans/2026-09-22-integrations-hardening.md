@@ -269,6 +269,74 @@ and is not read here; worth doing when the record is).
 SDK beside `INTEGRATION_CAPABILITIES`; the registry re-exports it and the
 editor lowercases it into sentences.
 
+### Round H2: hygiene
+
+Numbered H2.x for the same reason as H1.
+
+#### H2.1. A provider id is an integration id, on every path
+
+**Problem.** The provider rule `[a-z][a-z0-9_-]{2,31}` was written out about
+28 times (contracts, the graph schema, nine trigger manifests, the MCP catalog,
+the research and discovery schemas, the pre-PR checks config, the sandbox
+workspace, memory routing), and it was wider than the id an integration can
+carry (`INTEGRATION_ID`, `[a-z][a-z0-9]{2,31}`). The research schema handed to
+the harness said only `minLength: 1`, so the model was held to less than the
+answer was validated with.
+
+**Decision.** `INTEGRATION_ID` in `packages/contracts/integration-id.ts` is the
+rule, and `repositoryCatalogProviderSchema` is its one zod form. Everything
+that can import a value reads one of the two; a JSON schema handed to a model
+carries `INTEGRATION_ID.source` as `pattern`; the MCP catalog rebuilds it in
+its Zod 3 dialect from `INTEGRATION_ID`. The trigger manifests may import the
+contracts only as types (ADR-002), so they keep a literal copy, and
+`trigger-provider-rule-sync.test.ts` and `trigger-repository-policy-sync.test.ts`
+hold every copy equal to the contract on values at the rule's edges.
+
+The narrower rule applies to stored values as well as new ones, deliberately.
+A rule may refuse only what never worked, and this one refuses nothing any
+deployment stored: `origin/main` accepted exactly `github` and `gitlab` in every
+one of these places (`z.enum` in the contracts, the graph schema, the manifests,
+the MCP catalog, the pre-PR checks config, the sandbox workspace; `(github|gitlab)`
+in memory routing; database checks on the catalog), both pass the narrow rule,
+and the wider rule never reached a deployment because this branch was never
+pushed (`git ls-remote origin` lists no integrations branch on 2026-09-23) and
+demo was ruled out for it. What it refuses, an id with `-` or `_`, could never
+name an integration. A separate reader rule for stored values would have been a
+second rule with nothing to hold.
+
+The probes found one reader that disagreed: the repository key accepted
+`github :acme/api`, because it checked its provider half with the trimming
+schema. A key is compared as the string it is, so the key rule now tests the
+half with `INTEGRATION_ID` directly, as `main`'s enum did.
+
+#### H2.2. A cancel names the claim it holds; a reconcile pass reads its tracker once
+
+**Problem.** `cancelRunDetailed` derived the subject to cancel from the ticket
+key, which resolved the issue tracker again. The reconciler and the stall
+watchdog already held both the claim and the pass's one tracker resolution, so
+every stalled or orphaned claim cost another connection read, and a tracker
+switched mid-pass would have named a subject the claim does not hold. On a
+deployment with no tracker the watchdog's own re-derivation threw, so a dead
+pull request run that carried a ticket key was never settled.
+
+**Decision.** The caller passes the subject its claim holds (`subjectKey` on
+`CancelRunDetailedInput`); only `cancelRun`, which is handed a bare ticket key,
+derives it. The watchdog takes the pass's tracker id and decides whether a
+claim follows its ticket with `ticketSubjectKey`, never asking the deployment.
+
+#### H2.3. Tracing never fails a run, and one function keeps that promise
+
+**Problem.** The SDK and `tracing.ts` promise that tracing never fails a run,
+but a rejected sandbox write or command escaped the install, and the hook merge
+went through each harness's settings writer, which throws on a non-zero exit
+because the commit guard it also writes must fail loudly.
+
+**Decision.** `applyTracingPlans` in `sandbox/agents/tracing.ts` is what both
+harnesses call. It contains every install failure (removing staged copies,
+which may hold the provider's key) and catches the hook registration, leaving
+the sandbox untraced with `agent_tracing_off` in the log. The harness's writer
+keeps throwing for everything that is not tracing.
+
 ## Memory contract (from the S14 gate, before S15)
 
 A reader given only the guide and the SDK tried to plan the Mem0 integration
@@ -297,7 +365,7 @@ The table is generated from the review's own records plus each executor's
 report, so an entry cannot be lost between the two.
 
 <!-- ledger:start -->
-Totals: 169 findings; FIXED 126, OPEN 40, DEFERRED 3.
+Totals: 169 findings; FIXED 133, OPEN 34, DEFERRED 2.
 
 | Id | Severity | Review | Where | Problem | Group | Outcome |
 |---|---|---|---|---|---|---|
@@ -372,10 +440,10 @@ Totals: 169 findings; FIXED 126, OPEN 40, DEFERRED 3.
 | F15 | minor | CONFIRMED | `integrations/jira/issue-tracker.test.ts:11` | The 47 adapter tests all build JiraAdapter without `config.fetch`, so they exercise the global-fetch default that no production path uses: worker.ts:54 and webhook.ts:123 always pass ctx.http.fetch. | E-sdk-gates | FIXED `a9bb49b4`: group E, merged |
 | F16 | minor | CONFIRMED | `integrations/jira/issue-tracker.ts:104` | The `browseOrigin` getter was added in this branch ('for a link core shows next to a run'), but it is not on the port and nothing reads it. | E-sdk-gates | FIXED `32a212e1`: optional ticketUrl(key) on the tracker port; Jira builds every link in one method |
 | F17 | minor | CONFIRMED | `integrations/jira/worker.ts:63` | The `api` health check reports every error as 'Jira authentication failed: the Site URL or the API token was not accepted.' (lines 63-75), and the `project` check reports every error as 'project is not accessible' (lines... | B-connections | FIXED `865233f1`: D6: one verdict rule in integrations/sdk/provider-failure.ts, used by every provider and the template (merged) |
-| F18 | minor | CONFIRMED | `integrations/jira/webhook.ts:25` | Several comments state history that is false. | E-sdk-gates | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
+| F18 | minor | CONFIRMED | `integrations/jira/webhook.ts:25` | Several comments state history that is false. | E-sdk-gates | FIXED `3fee9800`: false history comments removed |
 | F24 | minor | CONFIRMED | `apps/worker/src/engine/support/trigger-current-pull-request.ts:58` | Pending or error-retry PR envelopes recorded before this branch carry failedChecks with checkRunId/appSlug (and pipelineId) but no handle. | A-triggers | FIXED `8267544f`: legacy envelopes rebuilt by the provider that wrote them (recordedCheckIdentity); live path fixed in round 3 (merged) |
 | F25 | minor | CONFIRMED | `apps/worker/src/services/dispatch/dispatch-trigger.ts:450` | isConfiguredTriggerRepository is now `Boolean(pr.provider && pr.repoPath)`, a tautology behind a name that claims a configuration check. | A-triggers | FIXED `8267544f`: group A (four rounds, reviewed); merged (merged) |
-| F26 | minor | CONFIRMED | `apps/worker/src/services/dispatch/dispatch-trigger.test.ts:204` | The default dispatch test double builds the provider's 'current' pull request from the event itself: checks come from pr.failedChecks with state 'red', using the same object references. | A-triggers | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
+| F26 | minor | CONFIRMED | `apps/worker/src/services/dispatch/dispatch-trigger.test.ts:204` | The default dispatch test double builds the provider's 'current' pull request from the event itself: checks come from pr.failedChecks with state 'red', using the same object references. | A-triggers | FIXED `3fee9800`: dispatch double reports declared provider state |
 | F27 | minor | CONFIRMED | `integrations/github/webhook.ts:44` | The rule for which check names are our own gate's now lives in three places: core isManagedGateCheckName (workflow-naming.ts:55, still used by isGateCheckName in trigger-events.ts:43), GitHub MANAGED_CHECK_PREFIXES, and ... | A-triggers | FIXED `8267544f`: group A (four rounds, reviewed); merged (merged) |
 | F28 | minor | CONFIRMED | `apps/worker/src/services/triggers/polling/poll-pass.ts:466` | Every failure of the ticket half becomes the same warn line and ticketPhases 'skipped', whether the deployment has no tracker (expected) or has a connected tracker that is broken, for example Jira returning 401 or reconc... | C-engine | FIXED `ecd612a2`: D9: poll pass without a tracker skips only ticket phases and says why (merged) |
 | F29 | minor | CONFIRMED | `apps/worker/src/services/dispatch/dispatch.ts:79` | dispatchTicket resolves the active tracker twice per ticket, via issueTrackerWiring() at :79 and ticketSubject() at :95. | A-triggers | FIXED `8267544f`: group A (four rounds, reviewed); merged (merged) |
@@ -423,7 +491,7 @@ Totals: 169 findings; FIXED 126, OPEN 40, DEFERRED 3.
 | F96 | minor | UNVERIFIED | `packages/contracts/block-catalog.generated.ts:1015` | The default for `trigger_pr_review.on` now differs by where it is read. | E-sdk-gates | FIXED `8267544f`: group A: DEFAULT_REVIEW_TRIGGER_STATES in the trigger manifest, used everywhere (merged) |
 | F97 | minor | CONFIRMED | `scripts/gates/core-references.mjs:133` | The gate source uses literal NUL bytes as the `path`/`id` key separator: 6 of them, the first at byte 4503, inside template literals at lines 133, 170, 176, 199, 200 and 207. | E-sdk-gates | FIXED `a9bb49b4`: group E, merged |
 | F98 | minor | UNVERIFIED | `scripts/gates/tiers.json:197` | The dashboard-bundle rules only match a file named `dashboard.tsx`: the worker-import ban at :197 and the `next/`, `node:` and `server-only` specifier ban at :209, both `^integrations/.*dashboard\\.tsx$`. | E-sdk-gates | FIXED `a9bb49b4`: group E, merged |
-| F99 | minor | UNVERIFIED | `packages/contracts/repository-catalog.ts:40` | The provider-id rule is copied inline 28 times as `[a-z][a-z0-9_-]{2,31}`. | E-sdk-gates | DEFERRED: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
+| F99 | minor | UNVERIFIED | `packages/contracts/repository-catalog.ts:40` | The provider-id rule is copied inline 28 times as `[a-z][a-z0-9_-]{2,31}`. | E-sdk-gates | FIXED `3fee9800`: INTEGRATION_ID is the one provider id rule; manifests held equal by tests |
 | F100 | minor | UNVERIFIED | `docs/adr/ADR-010-integrations.md:367` | The docs promise registry checks that nothing runs. | Z-other | FIXED `a9bb49b4`: group E: docs, rules and changelog paths |
 | F101 | minor | UNVERIFIED | `.claude/rules/arthur-engine.md:3` | The area rules still point at where the code used to be. | Z-other | FIXED `a9bb49b4`: group E: docs, rules and changelog paths |
 | F102 | minor | UNVERIFIED | `.claude/skills/init-vcs/SKILL.md:8` | Setup guidance still describes variables this branch stopped reading. | Z-other | FIXED `a9bb49b4`: group E: docs, rules and changelog paths |
@@ -432,12 +500,12 @@ Totals: 169 findings; FIXED 126, OPEN 40, DEFERRED 3.
 | F107 | minor | UNVERIFIED | `apps/worker/src/db/repositories/integrations.ts:275` | An activating save keeps the previous last_test_reason and last_test_message, because the UPDATE writes the new value only when it is non-null (`activates && input.test.reason ? new : old`). | C-engine | FIXED `ecd612a2`: group C (merged) |
 | F108 | minor | UNVERIFIED | `apps/worker/src/mcp/tools/memory.ts:76` | memory.list/get/forget put the provider's raw error text into McpPublicError messages. | C-engine | FIXED `ecd612a2`: group C (merged) |
 | F109 | minor | UNVERIFIED | `apps/worker/src/adapters/vcs/types.ts:39` | The optional VCS capability contracts (ManualDispatchPullRequestSnapshot, GateStatusCapableVCS, RichGateStatusCapableVCS, PRFilesCapableVCS, PRReviewCapableVCS, PRReviewPublication, CheckRunAnnotation) stay in core, whil... | C-engine | FIXED `a370cb93`: extension types in the SDK and type-checked through VcsIntegrationAdapter; digest stays in core, its package copies gone |
-| F110 | minor | UNVERIFIED | `apps/worker/src/sandbox/agents/types.ts:341` | The research output's provider field is constrained differently in its two schemas. | C-engine | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
+| F110 | minor | UNVERIFIED | `apps/worker/src/sandbox/agents/types.ts:341` | The research output's provider field is constrained differently in its two schemas. | C-engine | FIXED `3fee9800`: research JSON schema carries the same pattern |
 | F111 | minor | UNVERIFIED | `apps/worker/src/mcp/execute-tool.ts:236` | prepare() now resolves integrationSecretValues() before the rate limiter, whose comment still says 'Cheapest guard first'. | C-engine | FIXED `ecd612a2`: secret set read in one statement, every stored version not yet redacted |
 | F112 | minor | UNVERIFIED | `apps/worker/src/mcp/server.ts:60` | system.capabilities calls deps.loadDeploymentIntegrations twice, once for authoringAnnouncements (line 60) and once for integrations (line 67). | C-engine | FIXED `32a212e1`: system.capabilities reads the deployment once |
-| F113 | minor | UNVERIFIED | `apps/worker/src/sandbox/context.ts:26` | sandbox/ now imports engine/support/repository-path-example.ts. | C-engine | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
-| F114 | minor | UNVERIFIED | `apps/worker/src/mcp/tools/repositories.test.ts:1469` | The 'nothing is connected that can read this repository' case no longer exercises that state. | C-engine | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
-| F115 | minor | UNVERIFIED | `apps/worker/src/sandbox/agents/tracing.ts:174` | The module header (line 10) and the SDK contract (integrations/sdk/agent-tracing.ts:69-72) both promise that a tracing install or file write 'never fails the run'. | C-engine | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
+| F113 | minor | UNVERIFIED | `apps/worker/src/sandbox/context.ts:26` | sandbox/ now imports engine/support/repository-path-example.ts. | C-engine | FIXED `3fee9800`: helpers moved to repository-map, engine/sandbox loop gone |
+| F114 | minor | UNVERIFIED | `apps/worker/src/mcp/tools/repositories.test.ts:1469` | The 'nothing is connected that can read this repository' case no longer exercises that state. | C-engine | FIXED `3fee9800`: test runs the real resolver |
+| F115 | minor | UNVERIFIED | `apps/worker/src/sandbox/agents/tracing.ts:174` | The module header (line 10) and the SDK contract (integrations/sdk/agent-tracing.ts:69-72) both promise that a tracing install or file write 'never fails the run'. | C-engine | FIXED `3fee9800`: applyTracingPlans: tracing never fails a run |
 | F121 | minor | UNVERIFIED | `apps/worker/src/engine/definition/block-contract-environment.ts:74` | builtinCapabilitiesOfDeployment still lists issue_tracker as core's built-in whenever coreServesIssueTracker() is true. | C-engine | FIXED `32a212e1`: builtinCapabilities removed |
 | F122 | minor | UNVERIFIED | `apps/worker/src/engine/support/ticket-url.ts:24` | Core builds every ticket link as `${base}/browse/${KEY}` and filters keys with a Jira-shaped pattern. | C-engine | FIXED `32a212e1`: every core link site goes through ticketLinksOf/ticketLinkFor; a ticket run records the tracker link |
 | F123 | minor | UNVERIFIED | `apps/worker/src/engine/definition/integration-availability.ts:384` | integrationsUsedBy passes `node.params` to coreBlockCapabilities, but every caller (definition-step.ts:172,180, services/integrations/impact.ts:55,138, manual-dispatch) passes v2 nodes, which carry `configuration`. | C-engine | FIXED `ecd612a2`: group C (merged) |

@@ -15,7 +15,7 @@ import {
   type CancelRunResult,
 } from "./cancel-run.js";
 import { logger } from "../../infra/logger.js";
-import { ticketSubject } from "../../engine/support/issue-tracker-runtime.js";
+import { ticketSubjectKey } from "../../engine/support/subject-key.js";
 import {
   withdrawConnectedTicketFromAiForRun,
   withdrawTicketFromAiForRun,
@@ -196,6 +196,13 @@ function isIssueTrackerNotFound(error: unknown): boolean {
 interface StalledRunInput {
   entry: ActiveRunEntry & { runId: string };
   runRegistry: RunRegistryAdapter;
+  /**
+   * The issue tracker the caller's pass resolved, absent when it has none. A
+   * claim follows its ticket when it holds that ticket's subject under THIS
+   * tracker; asking the deployment again here was a second resolution per
+   * stalled claim, and one that could answer from a tracker switched mid-pass.
+   */
+  trackerId?: string;
   issueTracker?: IssueTrackerAdapter;
   moveTarget?: IssueTrackerMoveTarget;
   aiColumn?: string;
@@ -281,7 +288,9 @@ async function reconcileStalledRunWithPersistence(
   const target = { ownerToken: entry.ownerToken, runId: entry.runId };
   const ticketKey = entry.ticketKey;
   const followsTicket =
-    ticketKey !== null && entry.subjectKey === await ticketSubject(ticketKey);
+    ticketKey !== null &&
+    input.trackerId !== undefined &&
+    entry.subjectKey === ticketSubjectKey(input.trackerId, ticketKey);
   let moveTarget = input.moveTarget;
   if (followsTicket) {
     const decision = await safeTicketMoveTarget({
@@ -313,6 +322,7 @@ async function reconcileStalledRunWithPersistence(
   const result: CancelRunResult =
     followsTicket
       ? await cancelRunDetailed({
+          subjectKey: entry.subjectKey,
           ticketKey,
           target,
           runRegistry,

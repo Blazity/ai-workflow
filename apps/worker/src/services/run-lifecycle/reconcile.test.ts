@@ -527,6 +527,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       ),
     ).toEqual({ cancelled: 0, cleaned: 1 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: "run-1",
       runRegistry,
@@ -892,6 +893,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       ),
     ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: "run-1",
       runRegistry,
@@ -966,6 +968,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     // No clarificationNotice: the ticket is gone, so there is nothing to post a
     // closing comment on. Asserted as an exact object so adding one here fails.
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: "run-1",
       runRegistry,
@@ -1130,6 +1133,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(new Set(), runRegistry, connected(tracker)),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: "run-1",
       runRegistry,
@@ -1181,6 +1185,9 @@ describe("reconcileRuns owner-CAS recovery", () => {
       entry: bound,
       runRegistry,
       db: mockDb,
+      // The pass's own tracker, so the watchdog decides whether the claim
+      // follows its ticket without resolving the tracker again.
+      trackerId: "jira",
       issueTracker: tracker,
       moveTarget: "Backlog",
       aiColumn: "AI",
@@ -1233,6 +1240,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
@@ -1257,6 +1265,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(new Set(), runRegistry, connected(tracker), undefined, onReleased),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
@@ -1524,6 +1533,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       await reconcileRuns(new Set(), runRegistry, connected(tracker), undefined, onReleased),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: "run-1",
       runRegistry,
@@ -1545,6 +1555,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       reconcileRuns(new Set(), runRegistry, connected(issueTracker("Done"))),
     ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: "run-1",
       runRegistry,
@@ -1633,6 +1644,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockHasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
     expect(mockCancelRunDetailed).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
       target: "run-1",
       runRegistry,

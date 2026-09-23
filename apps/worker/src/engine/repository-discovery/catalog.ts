@@ -3,7 +3,7 @@ import {
   type RepositoryRelationshipKind,
 } from "@shared/contracts";
 import type { RepositoryMetadata } from "../../adapters/vcs/repository-directory.js";
-import { providerNestsRepositoryPaths } from "./provider-shape.js";
+import { providerNestsRepositoryPaths } from "../../repository-map/provider-shape.js";
 import type { RepositoryMapFacts } from "../../repository-map/map.js";
 
 /** Repository candidates resolved before sandbox execution begins. */
