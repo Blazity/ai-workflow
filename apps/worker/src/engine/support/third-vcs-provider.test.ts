@@ -150,7 +150,7 @@ const { assertVcsProviderShipped } = await import(
 const { buildRepositoryCatalog } = await import("../repository-discovery/catalog.js");
 const { PROVIDER_BY_HOST } = await import("../repository-discovery/runner.js");
 const { providerNestsRepositoryPaths } = await import(
-  "../repository-discovery/provider-shape.js"
+  "../../repository-map/provider-shape.js"
 );
 const { createRepositoryVcsRuntime } = await import("./vcs-runtime.js");
 const { readVcsBotLogin } = await import("../../services/integrations/vcs-bot-login.js");

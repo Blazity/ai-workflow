@@ -8,7 +8,7 @@ import {
   type RepositoryCatalogEntry,
 } from "./catalog.js";
 import { exclusionRecoveryNotes, unnamedRecoveryNotes } from "../work-scope/context.js";
-import { exampleRepositoryPath } from "../support/repository-path-example.js";
+import { exampleRepositoryPath } from "../../repository-map/repository-path-example.js";
 import { replyThatDecidesCandidates } from "../support/clarification-comment-format.js";
 import { isGuessEntry, isUnnamedInAnswer } from "../work-scope/decide.js";
 import {

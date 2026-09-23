@@ -13,8 +13,8 @@ import {
   repositoryCatalogKey,
   type RepositoryCatalogEntry,
 } from "./catalog.js";
-import { providerNestsRepositoryPaths } from "./provider-shape.js";
-import { repositoryPathExamples } from "../support/repository-path-example.js";
+import { providerNestsRepositoryPaths } from "../../repository-map/provider-shape.js";
+import { repositoryPathExamples } from "../../repository-map/repository-path-example.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 // The transformation the ticket comment applies to a question on its way out,
 // so the drop below compares against what a person was actually shown.

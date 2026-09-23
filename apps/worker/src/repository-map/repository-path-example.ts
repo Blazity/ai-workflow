@@ -1,5 +1,5 @@
 import { integrationsProviding } from "@integrations/registry";
-import { providerNestsRepositoryPaths } from "../repository-discovery/provider-shape.js";
+import { providerNestsRepositoryPaths } from "./provider-shape.js";
 
 /**
  * The example repository path a sentence shows when it teaches somebody, or
@@ -35,7 +35,10 @@ import { providerNestsRepositoryPaths } from "../repository-discovery/provider-s
  *
  * This module is plain data on purpose: `repo-selection.ts` and the sandbox
  * context both run inside a Workflow DevKit step, where a Node module fails the
- * Vercel build and nothing local. Reading manifests imports none.
+ * Vercel build and nothing local. Reading manifests imports none. It lives in
+ * `repository-map/` with the path shape it reads for the same reason the map
+ * does: the engine and the sandbox both use it, and a copy in either would
+ * make the other import it (ADR-001).
  */
 export function exampleRepositoryPath(
   repoPath: string,

@@ -23,7 +23,7 @@ import {
   resolvePendingReviewFeedback,
   selectReviewLedgerWorkItems as selectWorkItems,
 } from "../adapters/vcs/vcs-bot-identity.js";
-import { exampleRepositoryPath } from "../engine/support/repository-path-example.js";
+import { exampleRepositoryPath } from "../repository-map/repository-path-example.js";
 import {
   buildRepositoryMap,
   type RepositoryMap,
