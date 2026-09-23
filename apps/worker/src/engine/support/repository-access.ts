@@ -25,6 +25,7 @@
  */
 import {
   isRepositoryAccessible,
+  repositoryCatalogKey,
   type ExecutionErrorCategory,
   type RunRepositoryAccess,
   type VcsProviderKind,
@@ -48,6 +49,33 @@ export function mayRunTouchRepository(
     provider: repository.provider,
     path: repository.repoPath,
   });
+}
+
+/**
+ * The identity of an engine-spelled repository: `provider:owner/name`, the path
+ * cased down. The catalog key, adapted here like every other catalog question.
+ *
+ * Use it wherever two repository values from different places are compared.
+ * The same repository reaches a run spelled differently: the workspace
+ * manifest carries the provider's casing (`Blazity/aiw-checks-fixture`, from
+ * GitHub's `full_name`), while a catalog row, and so a profile, a pin or a work
+ * scope entry, carries whatever an operator or a migration stored
+ * (`blazity/aiw-checks-fixture`). GitHub and GitLab both resolve paths without
+ * regard to case, so the two spellings name one repository, and an exact string
+ * comparison between them silently answers "not this repository". That is how
+ * the pre-PR checks skipped every `blazity/*` repository and let red checks
+ * open a green pull request.
+ */
+export function repositoryKey(repository: { provider: string; repoPath: string }): string {
+  return repositoryCatalogKey({ provider: repository.provider, path: repository.repoPath });
+}
+
+/** Whether two engine-spelled values name the same repository. */
+export function isSameRepository(
+  left: { provider: string; repoPath: string },
+  right: { provider: string; repoPath: string },
+): boolean {
+  return repositoryKey(left) === repositoryKey(right);
 }
 
 /** Drop every repository this run may not touch, preserving listing order. */

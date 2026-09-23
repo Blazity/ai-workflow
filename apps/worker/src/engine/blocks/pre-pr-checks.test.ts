@@ -230,14 +230,84 @@ describe("runPrePrChecksWithFixes", () => {
     expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
   });
 
-  it("skips a repository the start step declined and reports no matching checks", async () => {
-    mocks.startRepoCheckBatchStep.mockResolvedValue({ skipped: true });
+  it("skips a repository the start step declined and says why nothing ran", async () => {
+    mocks.startRepoCheckBatchStep.mockResolvedValue({ skipped: true, reason: "unchanged" });
 
     const result = await runPrePrChecksWithFixes(options());
 
     expect(result.passed).toBe(true);
-    expect(result.summary).toBe("No repository scripts matched changed repositories.");
+    expect(result.summary).toBe(
+      "No repository scripts matched changed repositories. " +
+        "Not run in github:acme/web: this run did not change it.",
+    );
     expect(mocks.collectRepoCheckBatchStep).not.toHaveBeenCalled();
+  });
+
+  it("names a configured repository missing from the workspace when the gate ran nothing", async () => {
+    // The shape production hit on AWP-272: every configured repository was
+    // declined, the summary said only that nothing matched, and the pull
+    // request opened green. Whatever the reason, an operator reading a gate
+    // that verified nothing must be told which repository it passed over and
+    // why, so a repository they know WAS in the run stands out.
+    mocks.startRepoCheckBatchStep.mockImplementation(async (
+      _sandboxId: string,
+      _provider: string,
+      repoPath: string,
+    ) => ({
+      skipped: true,
+      reason: repoPath === "acme/web" ? "unchanged" : "not_in_workspace",
+    }));
+
+    const result = await runPrePrChecksWithFixes(options({ config }));
+
+    expect(result.passed).toBe(true);
+    expect(result.summary).toBe(
+      "No repository scripts matched changed repositories. " +
+        "Not run in github:acme/web: this run did not change it. " +
+        "Not run in gitlab:acme/api: it is not in this run's workspace.",
+    );
+  });
+
+  it("names the changed-repository slice it passed over next to a gate that did run", async () => {
+    // A gate that verified one repository and passed over another it holds
+    // still has to say so: "passed" is true of the one that ran. A configured
+    // repository the workspace does not hold is not narrated here, because the
+    // configuration lists every profiled repository in the catalog and a
+    // passing run is not the place to recite the ones it was never about.
+    const threeRepoConfig = {
+      repositories: [
+        ...config.repositories,
+        { provider: "github", repoPath: "acme/infra", commands: ["terraform validate"] },
+      ],
+    };
+    mocks.startRepoCheckBatchStep.mockImplementation(async (
+      _sandboxId: string,
+      _provider: string,
+      repoPath: string,
+      _setup: string[],
+      _commands: string[],
+      _fixCycle: number,
+      repoIndex: number,
+    ) =>
+      repoPath === "acme/web"
+        ? started(repoIndex)
+        : { skipped: true, reason: repoPath === "acme/api" ? "unchanged" : "not_in_workspace" });
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [
+          { provider: "github", repoPath: "acme/web", command: "make bootstrap", exitCode: 0 },
+          { provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 0 },
+        ],
+      }),
+    );
+
+    const result = await runPrePrChecksWithFixes(options({ config: threeRepoConfig }));
+
+    expect(result.passed).toBe(true);
+    expect(result.summary).toBe(
+      "Repository scripts passed (2 commands). " +
+        "Not run in gitlab:acme/api: this run did not change it.",
+    );
   });
 
   it("keeps a second repository running after the first one's setup fails, and starts no fix cycle", async () => {
@@ -981,11 +1051,16 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
   });
 
   it("keeps the gate's own sentence when the gate is what selected nothing", async () => {
+    // No reason: a launch journaled by a deployment that did not record one,
+    // replayed after this one shipped. The repository is still named.
     mocks.startRepoCheckBatchStep.mockResolvedValue({ skipped: true });
 
     const run = await runPrePrChecksWithFixes(options({ config: groupedConfig }));
 
-    expect(run.summary).toBe("No repository scripts matched changed repositories.");
+    expect(run.summary).toBe(
+      "No repository scripts matched changed repositories. " +
+        "Not run in github:acme/web: no reason was recorded.",
+    );
   });
 
   it("reports which repositories a selected group is missing from, and says so in the summary", async () => {

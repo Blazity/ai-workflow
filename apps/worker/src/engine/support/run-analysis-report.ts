@@ -10,6 +10,7 @@ import type {
   ReplaySanitizationMetadata,
 } from "@shared/contracts";
 import { parseStoredRunAnalysisReport } from "../../db/repositories/runs/analysis-report.js";
+import { isSameRepository } from "./repository-access.js";
 
 export { parseStoredRunAnalysisReport };
 import type { PhaseUsage } from "../../sandbox/agents/types.js";
@@ -680,9 +681,9 @@ function accessDecided(
   report: RunAnalysisReport,
   repo: RunAnalysisReport["repositories"][number],
 ): "read" | "write" {
-  const writes = report.writeRepositories.some(
-    (request) => request.provider === repo.provider && request.repoPath === repo.repoPath,
-  );
+  // By identity: the write list is the agent's spelling, the manifest the
+  // provider's.
+  const writes = report.writeRepositories.some((request) => isSameRepository(request, repo));
   return writes ? "write" : repo.access;
 }
 

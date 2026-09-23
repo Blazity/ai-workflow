@@ -349,6 +349,7 @@ describe("startRepoCheckBatchStep", () => {
 
     expect(started).toEqual({
       skipped: true,
+      reason: "unchanged",
       checksClockObservedAtMs: expect.any(Number),
     });
     expect(mockWriteFiles).not.toHaveBeenCalled();
@@ -369,8 +370,63 @@ describe("startRepoCheckBatchStep", () => {
 
     expect(started).toEqual({
       skipped: true,
+      reason: "not_in_workspace",
       checksClockObservedAtMs: expect.any(Number),
     });
+    expect(mockWriteFiles).not.toHaveBeenCalled();
+  });
+
+  it("launches a repository whose workspace path differs from the configured one only in case", async () => {
+    // Production, AWP-272 and AWP-278: GitHub names the repository
+    // `Blazity/aiw-checks-fixture`, so the workspace manifest carries that,
+    // while the catalog row the profile came from says
+    // `blazity/aiw-checks-fixture`. GitHub and GitLab both resolve paths
+    // without regard to case, so this is one repository. Skipping it answered
+    // "not part of this run" and let failing checks open a green pull request.
+    const fixture = {
+      ...manifest.repositories[0]!,
+      repoPath: "Blazity/aiw-checks-fixture",
+      slug: "github__blazity__aiw-checks-fixture",
+      preAgentSha: "fixture-base",
+    };
+    mockRunCommand.mockImplementation(
+      sandboxServing({ ...manifest, repositories: [fixture] }, "fixture-head"),
+    );
+
+    const started = await startRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "blazity/aiw-checks-fixture",
+      [],
+      ["pnpm verify"],
+      0,
+      0,
+    );
+
+    expect(started).toMatchObject({
+      skipped: false,
+      commandId: "cmd-batch",
+      localPath: "/vercel/sandbox",
+    });
+    expect(mockRunCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ cmd: "bash", detached: true }),
+    );
+  });
+
+  it("still keeps the same path on two providers apart", async () => {
+    mockRunCommand.mockImplementation(sandboxWithHead("web-head"));
+
+    const started = await startRepoCheckBatchStep(
+      "sbx-test-123",
+      "gitlab",
+      "Acme/Web",
+      [],
+      ["pnpm typecheck"],
+      0,
+      0,
+    );
+
+    expect(started).toMatchObject({ skipped: true, reason: "not_in_workspace" });
     expect(mockWriteFiles).not.toHaveBeenCalled();
   });
 
@@ -1119,9 +1175,14 @@ function commandResult(exitCode: number, stdout = "", stderr = "") {
 
 /** Sandbox that serves the manifest and reports `head` for every rev-parse. */
 function sandboxWithHead(head: string) {
+  return sandboxServing(manifest, head);
+}
+
+/** As sandboxWithHead, serving the given manifest. */
+function sandboxServing(served: unknown, head: string) {
   return (cmd: unknown, args: unknown) => {
     if (cmd === "cat" && Array.isArray(args) && args[0] === WORKSPACE_MANIFEST_PATH) {
-      return commandResult(0, JSON.stringify(manifest));
+      return commandResult(0, JSON.stringify(served));
     }
     if (cmd === "git") return commandResult(0, head);
     if (isWrapperLaunch(cmd)) return batchLaunch();

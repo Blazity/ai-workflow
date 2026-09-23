@@ -1677,6 +1677,20 @@ describe("the next research pass is told every request this run refused", () => 
     ).toBe(true);
   });
 
+  it("finds the agent's own reason for a refused repository whatever case it spelled it in", () => {
+    // A refusal names its repository by the cased-down catalog key, the
+    // request by the agent's spelling. Keyed by the raw spelling, any path
+    // with a capital letter missed, and the repository fell out of the plan's
+    // "could not use" section and the failure text with no word said.
+    const workflow = workflowLines.join("\n");
+    expect(
+      /requests\.map\(\s*\(request\): \[string, string\] => \[repositoryKey\(request\), request\.rationale\],?\s*\)/u.test(
+        workflow,
+      ),
+      "the requests the refusals are matched against are no longer keyed by identity",
+    ).toBe(true);
+  });
+
   it("stops the loop when the corrective pass is spent, instead of restarting it", () => {
     // The same kind of tripwire, on the decision that ends the eleven minutes.
     // `decideRepositoryExpansion` returning `plan_without` buys nothing unless
@@ -1728,6 +1742,15 @@ describe("the next research pass is told every request this run refused", () => 
       ),
       "a declared write is no longer held to the repositories the workspace actually has",
     ).toBe(true);
+    // Held by identity, never by spelling: the agent may name a repository in
+    // another case than the workspace holds it (`Blazity/x` against
+    // `blazity/x`), and dropping that write stops the run with
+    // "nothing_to_write" on a repository that is attached.
+    expect(
+      workflow,
+      "the attached set is no longer keyed by repository identity",
+    ).toContain("const attachedKeys = new Set(ctx.selectedRepositories.map(repositoryKey));");
+    expect(workflow).toContain("attachedKeys.has(repositoryKey(repository))");
     const commentAt = workflow.indexOf("postRunAnalysisCommentStep(");
     const stopAt = workflow.indexOf("if (nothingToWrite) {");
     expect(commentAt).toBeGreaterThan(0);
