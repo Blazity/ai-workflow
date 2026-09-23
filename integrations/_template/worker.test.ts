@@ -67,7 +67,7 @@ test("the connection test refuses a rejected token and throws when the provider 
   const refused = providerAnswering(() => json(401, {}));
   assert.deepEqual(await runtime.testConnection(refused.ctx), {
     ok: false,
-    reason: "Example refused the API token.",
+    reason: "Example refused the API token (401).",
   });
   const down = providerAnswering(() => json(503, {}));
   await assert.rejects(runtime.testConnection(down.ctx), /503/u);

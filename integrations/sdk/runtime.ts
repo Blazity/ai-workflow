@@ -13,7 +13,7 @@ import type { IssueTrackerAdapter, IssueTrackerQueryRule } from "./issue-tracker
 import type { IntegrationBlockManifest, IntegrationManifest } from "./manifest";
 import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter } from "./messaging";
-import type { VCSAdapter } from "./vcs";
+import type { VCSAdapter, VcsHandleIdentity } from "./vcs";
 import type { IntegrationWebhook, IntegrationWebhookReception } from "./webhook";
 
 /**
@@ -35,19 +35,29 @@ import type { IntegrationWebhook, IntegrationWebhookReception } from "./webhook"
  * there and never retries the call, wherever it was made from.
  */
 export type IntegrationRuntimeDefinition<M extends IntegrationManifest> =
-  IntegrationRuntimeBase<M> & RunStateSlot<M> & IssueTrackerQueryRuleSlot<M>;
+  IntegrationRuntimeBase<M> & RunStateSlot<M> & IssueTrackerQueryRuleSlot<M> & VcsHandlesSlot<M>;
 
 /**
  * `issueTrackerQueryRule`, required exactly when the manifest declares the
  * `issue_tracker` capability and refused otherwise: how this tracker reads a
- * query an author typed, for core to ask when a definition is saved, without
- * a connection (see `IssueTrackerQueryRule`). A tracker that could drop a
- * query at run time and not say so at save time would leave the author with a
- * search that quietly ignores them.
+ * query an author typed, for core to ask without a connection when a
+ * definition is saved and before the investigate block searches (see
+ * `IssueTrackerQueryRule`). A tracker that could drop a query at run time and
+ * not say so would leave the author with a search that quietly ignores them.
  */
 type IssueTrackerQueryRuleSlot<M extends IntegrationManifest> = "issue_tracker" extends M["capabilities"][number]
   ? { readonly issueTrackerQueryRule: IssueTrackerQueryRule }
   : { readonly issueTrackerQueryRule?: never };
+
+/**
+ * `vcsHandles`, required exactly when the manifest declares the `vcs`
+ * capability and refused otherwise: how this provider's handles compare, for
+ * core to call without a connection (see `VcsHandleIdentity`). A provider that
+ * could mint handles and not compare them would bind no failed check at all.
+ */
+type VcsHandlesSlot<M extends IntegrationManifest> = "vcs" extends M["capabilities"][number]
+  ? { readonly vcsHandles: VcsHandleIdentity }
+  : { readonly vcsHandles?: never };
 
 /**
  * `beginRun`, required exactly when the manifest declares `runState` and
@@ -153,6 +163,9 @@ export interface ErasedIntegrationRuntime {
   /** Present exactly when the manifest declares the `issue_tracker`
    *  capability. Pure: nothing in it takes a context, so nothing needs erasing. */
   readonly issueTrackerQueryRule?: IssueTrackerQueryRule;
+  /** Present exactly when the manifest declares the `vcs` capability. Pure:
+   *  nothing in it takes a context, so nothing needs erasing. */
+  readonly vcsHandles?: VcsHandleIdentity;
   /** One reader per page that has data behind it, keyed by page id. */
   readonly api?: Readonly<Record<string, ErasedIntegrationCall<JsonValue>>>;
   /** Present exactly when the manifest's integration answers a webhook. */
@@ -192,6 +205,18 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
  * and returning `{ ok: false }` turns a thirty second outage into a Failing
  * card that only a person pressing Test again can clear.
  *
+ * Which is which is not for each integration to decide:
+ * `refusedOrThrow(responseOrError, reason)` returns the refusal for a failure
+ * that is one and throws for every other, by the one rule in
+ * `provider-failure.ts`. Provider vocabulary on top of HTTP (a Slack error
+ * code, say) is the integration's to translate into those two meanings.
+ *
+ * `malformed` marks a refusal no provider made: the values could not form a
+ * request (a token with a line break, a URL that does not parse). Core files
+ * it as `value_malformed` rather than `credential_rejected`. `refusedOrThrow`
+ * sets it; an integration that checks a value itself before sending (a key
+ * that does not parse) may set it too.
+ *
  * Either way, values being saved do not become active: only a pass does that.
  *
  * Core redacts the connection's secrets from `reason`, `message` and a thrown
@@ -199,8 +224,20 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
  */
 export type ConnectionTestResult =
   | { readonly ok: true; readonly message?: string }
-  | { readonly ok: false; readonly reason: string };
+  | { readonly ok: false; readonly reason: string; readonly malformed?: true };
 
+/**
+ * What one health check measured.
+ *
+ * A failure reads by the same rule as a connection test
+ * (`readProviderFailure`), and the status is the same either way, because
+ * from this deployment the provider is not working: `down`. The MESSAGE is
+ * where the two differ, and it has to: a refusal names the value to fix ("the
+ * token was not accepted"), and no verdict says the provider did not answer,
+ * so nobody rotates a working credential over an outage. `degraded` is for a
+ * check that passed with something to say (a probe message it could not
+ * delete, an installation that grants no repository).
+ */
 export interface IntegrationHealthResult {
   readonly status: Extract<SystemHealthMode, "live" | "degraded" | "down">;
   readonly message?: string;

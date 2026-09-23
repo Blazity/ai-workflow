@@ -11,11 +11,6 @@
 import type { SettingsSnapshot } from "@shared/contracts";
 import { env } from "../../infra/vcs-config.js";
 
-/** Provider ids that carry a signed webhook core itself verifies. The issue
- *  tracker left this list in S12: an integration verifies its own deliveries
- *  and the shared webhook route records them. */
-export type WebhookProviderId = "email";
-
 /**
  * The board the ticket triggers are scoped to: where a ticket has to be for a
  * run to start, where a run puts it when it finishes, fails or parks, and how
@@ -98,16 +93,6 @@ export function outboundEmailSettings(): { apiKey?: string; from?: string } {
 /** The AES key the webhook trigger secrets are sealed with. */
 export function webhookTriggerEncryptionKey(): string | undefined {
   return env.WEBHOOK_TRIGGER_ENCRYPTION_KEY;
-}
-
-/** The configured secret for one provider, used to scope health observations. */
-export function providerWebhookSecret(
-  integrationId: WebhookProviderId,
-): string | undefined {
-  switch (integrationId) {
-    case "email":
-      return env.RESEND_WEBHOOK_SECRET;
-  }
 }
 
 /**

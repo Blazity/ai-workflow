@@ -16,6 +16,7 @@ import {
 import {
   collectSystemHealth,
   PublicHealthProbeError,
+  WEBHOOK_DELIVERY_CHECK_ID,
   type SystemHealthConfig,
   type SystemHealthProbeResult,
   type SystemHealthProbes,
@@ -25,9 +26,9 @@ import { integrationManifests } from "@integrations/registry";
 import { readConnectedIntegrationConnections } from "../../db/repositories/integrations.js";
 import { integrationHealthEntries } from "./integration-probes.js";
 import {
-  getLatestSystemHealthObservations,
+  latestWebhookDeliveries,
   sweepSystemHealthObservations,
-  systemHealthObservationScope,
+  type SystemHealthObservation,
 } from "./observations.js";
 
 const LOCAL_OBSERVATION_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
@@ -103,7 +104,7 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
         throw new PublicHealthProbeError("Database did not respond.");
       }
     },
-    "email.webhook-delivery": async (signal) =>
+    [`email.${WEBHOOK_DELIVERY_CHECK_ID}`]: async (signal) =>
       resendWebhookResult(config, signal),
     "custom-webhooks.aggregate": () => customWebhookAggregate(),
   };
@@ -134,7 +135,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
     probes["email.sender"] = (signal) => resendSenderResult(config, signal);
   }
 
-
   if (config.mcpEnabled) {
     probes["mcp.contract"] = async () => {
       const toolCount: number = FIRST_SLICE_TOOLS.length;
@@ -148,19 +148,11 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
   return probes;
 }
 
-function localObservations(integrationId: string, secret: string | undefined) {
-  return getLatestSystemHealthObservations(
-    integrationId,
-    "webhook-delivery",
-    systemHealthObservationScope(secret),
-  );
-}
-
 /** Turns the worker's own record of signed requests into a check result. With
  * no request in the window the secret is merely "configured": the scan makes
  * no claim it cannot back, and it never invents an amber state for silence. */
 function classifyObservations(
-  observations: Awaited<ReturnType<typeof getLatestSystemHealthObservations>>,
+  observations: SystemHealthObservation[],
   now: Date = new Date(),
 ): SystemHealthProbeResult {
   const latest = observations[0];
@@ -232,7 +224,7 @@ async function resendWebhookResult(
 ): Promise<SystemHealthProbeResult> {
   if (!config.resendApiKey) {
     return classifyObservations(
-      await localObservations("email", config.resendWebhookSecret),
+      await latestWebhookDeliveries("email"),
     );
   }
   const response = await resendFetch(config, "/webhooks", signal);
@@ -257,7 +249,7 @@ async function resendWebhookResult(
       );
     }
     const local = classifyObservations(
-      await localObservations("email", config.resendWebhookSecret),
+      await latestWebhookDeliveries("email"),
     );
     return local.mode === "configured"
       ? {
@@ -269,7 +261,7 @@ async function resendWebhookResult(
   }
   if (response.status === 401) {
     const local = classifyObservations(
-      await localObservations("email", config.resendWebhookSecret),
+      await latestWebhookDeliveries("email"),
     );
     return {
       ...local,

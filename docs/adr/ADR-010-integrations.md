@@ -107,7 +107,7 @@ What constrains the answer, all true today:
    | Capability | Port | Cardinality | Designed |
    |---|---|---|---|
    | `issue_tracker` | `IssueTrackerAdapter`, plus `IssueTrackerQueryRule` on the runtime | one active | S0 (moved) |
-   | `vcs` | `VCSAdapter` | many, chosen per repository | S0 (moved) |
+   | `vcs` | `VCSAdapter`, plus `VcsHandleIdentity` on the runtime | many, chosen per repository | S0 (moved) |
    | `messaging` | `MessagingAdapter` | one active | S0 (moved) |
    | `memory` | reserved | one active | S13 |
    | `agent_tracing` | reserved | many | S8 |
@@ -238,8 +238,11 @@ integration package depends on it.
   `run`, `llm` and `capabilities` exist only in the block context. Everything
   else (a capability adapter, a connection test, a health probe) receives the
   same `IntegrationContext`: the connection, `http`, `log` and a `signal`. The
-  adapter gets the signal too, so a capability called from a webhook route
-  cannot outlive the route's own deadline.
+  signal is the context's lifetime, not a per-call deadline: an adapter built
+  for a webhook request gets the request's deadline, so a capability called
+  from the route cannot outlive it, while an adapter core holds for a stretch
+  of work (a poll pass, a run's attachment downloads) gets one that never
+  aborts on its own, and each request is bounded by its own timeout instead.
 - **Widening a name is refused at the manifest.** Every later check rests on
   literal types, so a manifest that annotated a block `: IntegrationBlockManifest`
   or built its fields elsewhere would silently switch them off: `blocks: {}`
@@ -310,14 +313,17 @@ integration package depends on it.
   cannot turn a cancellation into a success or an ordinary failure. This is a
   requirement on S4's generic step. `ctx.signal` aborts on cancellation, on
   budget and near the invocation ceiling; `http` and `llm` are bound to it.
-  **Correction, 2026-09-22 (S14): the last two sentences describe a
-  requirement that was not delivered.** Every context core builds carries a
-  plain deadline (`AbortSignal.timeout`: 240 s for a block, 20 s for a
-  connection test and a page reader, 120 s for a webhook, 30 s for a
-  capability resolution), tied to neither a cancellation nor a budget;
-  `ctx.llm` is not bound to it; and nothing in the context raises a run-control
-  error, so the generic step can only let through one an executor throws. The
-  SDK's comments say so now.
+  **Correction, 2026-09-22: the last two sentences describe a requirement that
+  was not delivered.** `ctx.signal` is the context's lifetime. Work with a
+  deadline of its own gets that deadline (240 s for a block, 20 s for a
+  connection test and a page reader, 120 s for a webhook request, about 4 s for
+  a health probe); an adapter core holds for a stretch of work gets a lifetime
+  that does not abort on its own, except memory, which core aborts once the
+  provider has used up its budget in a step (hardening round, D1 and D2). It
+  does NOT abort when a run is cancelled or its run budget is spent: nothing
+  wires those to it. `http` is bound to it and `llm` is not, and nothing in
+  the context raises a run-control error, so the generic step can only let
+  through one an executor throws. The SDK's comments say so.
 - **An integration whose fields are all optional must not read Connected by
   itself.** A manifest may declare only optional fields, and a complete
   environment would then be vacuously complete on every deployment, so a card
@@ -2419,13 +2425,20 @@ and generic failed checks. Each integration maps its native CI model onto it.
 Gate status references are opaque records minted and interpreted by the same
 provider. Core stores and returns them without parsing. Stored check-trigger
 definitions are upgraded on read from the two former producer filters into
-`trustedProducers`; their rows are not rewritten.
+`trustedProducers`; their rows are not rewritten. The upgrade lives in
+`canonicalizeWorkflowBlockTypes`, the reader every stored graph goes through,
+so dispatch, validation, the editor and a replaying run see the same list, and
+a filter a node never set keeps the default it had.
 
 The GitLab package owns its adapter, repository listing and profile read,
 health checks, webhook verification and normalization. The generic route keeps
 `/webhooks/gitlab` stable and core dispatches only normalized events. Existing
 environment variables remain connection fields. `GITLAB_PROJECT_ID` continues
-to select one legacy project. It may be removed only after R1 confirms every
+to select one legacy project: the GitLab webhook ignores a delivery from any
+other project, for the workflow triggers and the legacy post-PR gate alike. The
+fallback that applied when it was unset, admitting only projects the token
+could list, is retired: the repository catalog is the gate, and core no longer
+lists a provider's repositories on each delivery. It may be removed only after R1 confirms every
 deployment has activated the repository catalog and a separate compatibility
 change is approved. `VCS_BOT_LOGIN` applies only when exactly one VCS provider
 is configured and retires in S11, after the second provider moves into its
@@ -2617,6 +2630,15 @@ PEM says so on its first line and `-` is not in the base64 alphabet. A value
 that arrives with its newlines written as backslash-n, which is what survives a
 shell or a deployment variable editor, is read as the same key.
 
+Base64 is still decoded the lenient way, because values set against that
+decoder are in production: without padding, inside the quotes a `.env` file
+adds, or holding a PEM whose newlines were escaped before it was encoded (the
+signing library turned those back into line breaks). What makes the leniency
+safe now is what follows it: the decoded text has to hold a PEM block, and the
+block has to read as an RSA key (`createPrivateKey`), so salvaged rubbish is
+refused with the same sentence as before. (Corrected 2026-09-23: this section
+used to require strict base64, which refused two forms main signed with.)
+
 The refusal lands before anything is stored as the active connection: saving
 runs the connection test first and activates only on a pass
 (`services/integrations/authoring.ts`), and the test reads the key before it
@@ -2786,7 +2808,13 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-23 | review fixes | `ConnectionValueError`, `connectionValueProblem` and `ConnectionValueProblem`; `malformed` on a connection test's refusal and on `ProviderFailure`; the failure reason `value_malformed` in `@shared/contracts` | A value that cannot form a request (a token with a line break inside it, a site address without `https://`, an App id that is not a number, a PEM block missing a line) was filed as the provider being unreachable, because Node refuses it with an error that carries no status, so a card stayed Connected while every request failed, and the error quoted the value. It is a verdict about the value. What a field's `format` allows is the SDK's rule (`connectionValueProblem`, the one conformance already applies to a manifest's defaults), and it REFUSES ONLY WHAT COULD NEVER HAVE WORKED, because main deploys itself and a value running today that a new rule refuses turns that integration Failing on the deploy: a `url` has to be an http or https address (a line break inside one is dropped by the URL parser, as `fetch` drops it); an `integer` is whatever `Number()` reads as a whole number that is not negative, which is what `z.coerce.number()` accepted before ("+123", "123.0", "0x7b"); a one-line secret holds no line break, since it goes into a header or is a signing key a provider shows on one line; and nothing else is checked, since a setting that is never sent (Slack's allowlist, read as comma separated) may hold a line break and work. The characterization tests in `services/integrations/main-values.test.ts` feed the forms main's parsers accepted, each citing the main line. Core applies it wherever values are read (the resolved status, so a card reads Failing before anyone presses Test, and the values a run and a test receive); `ctx.http` refuses a header value no request can carry before sending, with a `ConnectionValueError` that names the field and never the value; and `refusedOrThrow` answers any of these, a URL the platform could not parse and key data WebCrypto rejected included, as `{ ok: false, reason, malformed: true }`, which core files as `value_malformed`. Additive: an optional field on the refusal and a reason only core assigns. |
+| 2026-09-23 | review fixes | `NESTED_ADAPTER_MEMBERS` and `NestedAdapterRole` | Core redacts what integration code throws at one boundary (`redactingRuntime` in `services/integrations/usable.ts`), and that boundary missed an adapter reached through a port member: `vcs.skillSource()` returns a skill source running on GitHub's own Octokit. The members that return or hold another adapter are now named per port (`vcs.skillSource` returns one, `memory.store` holds one), typed against the ports so a misspelt member does not compile, and the boundary follows exactly those, the async results included; any other value a port hands over is data and passes untouched. A port that grows such a member lists it in the same change. The boundary covers every capability adapter, `beginRun`, each page reader and `webhook.receive` and `deliver`; the rest redacts where it is called: the connection test in `services/integrations/authoring.ts`, health probes in `services/system/integration-health.ts`, blocks in `engine/steps/integration-block-step.ts`, and the webhook route until it calls `usable.runtime.webhook` rather than the registry's. Additive. |
 | 2026-09-22 | S12 | `IssueTrackerQueryRule`, carried by a tracker's runtime as `issueTrackerQueryRule`, required exactly when the manifest declares `issue_tracker`; conformance codes `issue_tracker_query_rule_missing` and `issue_tracker_query_rule_undeclared` | The investigate block's query template is written in the tracker's own language, and core kept a copy of JQL's quoting to check it at save time. The copy knew only double quotes, so it refused valid JQL (`summary ~ 'fix)'`) and saved templates Jira's adapter then dropped at run time, when the block searched without them and nobody was told. The rule is the tracker's: a pure function of the text, reached without a connection (the shape `VcsHandleIdentity` set), which the adapter applies before it sends a query and core asks only when exactly one usable tracker is connected: on save and deploy it refuses a template the deployed version does not already run (one it runs comes back as a validation notice, and rollback, restore and enable do not ask, so the rule never takes away what a stored definition runs today), and the investigate block asks it again before it searches and says in its theory when it left a template out. Not additive for a tracker, whose runtime must now carry it: Jira and the SDK fixture do in the same change, and no manifest field changes. |
+| 2026-09-22 | S11 | `PullRequestUnreadableError`, `isPullRequestRefusal` and `providerAnswerOf`, documented on `VCSAdapter.getPRHead`: a head read throws the error exactly when this connection can never read that pull request (a 404, or a 403 that is neither a rate limit nor a missing scope or permission: `WWW-Authenticate` naming `insufficient_scope`, GitLab's `insufficient_scope`, GitHub's `Resource not accessible by`), and every provider classifies with the one predicate; GitHub counts only a 404, because its 403 on a pull request is always the installation's permission or SAML. A refused credential is thrown with the provider's status on it, which core's redacted copy keeps. `VcsHandleIdentity.recordedCheckHandle` became optional, with a removal point: it goes once no queued or failed trigger delivery of the pre-handle shape is left (the counting query is in the S11 drain note of `docs/plans/2026-09-18-integrations.md`) and no run started before the handle deploy is in flight. `sameHandle` is documented to compare by value | The head read used the Workflow DevKit's `FatalError` for "cannot read", which also covered a refused credential: a token that expired closed every delivery for good and dropped every queued trigger, when fixing the connection would have served them. A 401 is now thrown as it came and stays retryable. `isPullRequestRefusal` is a call to `readProviderFailure` narrowed to the statuses that can name one resource, so which answer is a refusal and which 403 is a rate limit is decided in one place. `recordedCheckHandle` exists for rows only GitHub and GitLab ever wrote, so a new provider need not implement it. Handles are stored as JSON and compared after a round trip, and the SDK fixture compared them by reference, which binds no failed check. Additive for a provider: an integration that implemented `recordedCheckHandle` keeps working, and one that throws `FatalError` from `getPRHead` has its delivery retried instead of closed. |
+| 2026-09-22 | S11 | `sameHandle` moved off `VCSAdapter` onto `VcsHandleIdentity`, beside the new `recordedCheckHandle`; a vcs integration's runtime carries it as `vcsHandles`, required exactly when the manifest declares `vcs`. It replaces `recordedCheckIdentity` and `readRecordedCheckIdentity`, added earlier on this branch and never released | Core reaches a VCS adapter lazily and forwards each member as a Promise once the connection resolves, so the synchronous `sameHandle` came back as a Promise, which reads as `true`: every failed check compared equal to every other, and a GitLab failure from a superseded pipeline would have started a fix on the pipeline that replaced it. Comparing two handles needs no connection, so it is the provider's, and core calls it directly. `VCSAdapter` is asynchronous throughout now, and core's deferred adapter type leaves out any synchronous member, so one added later does not compile through it. Not additive for a provider: each vcs runtime adds `vcsHandles` and drops the adapter method, which is why it landed with the only two. |
+| 2026-09-22 | review fixes | `readProviderFailure`, `refusedOrThrow` and `ProviderFailure` (`provider-failure.ts`) | Which failure is a refused configuration and which is a provider that gave no verdict was decided by each integration, and GitHub, GitLab, Jira and Slack all caught every error and returned `{ ok: false }`, so an outage during a Test turned a working card Failing; the template taught a 5xx as a refusal. The rule now has one home: a 4xx other than 408, 425 (RFC 8470: retry it) and 429 refuses, except a 403 that is a rate limit (GitHub's REST documents a spent limit as 403 or 429, marked by `retry-after`, by `x-ratelimit-remaining: 0`, or for a secondary limit only by its message, which is read the way `@octokit/plugin-throttling` reads it, `/\bsecondary rate\b/i`); `FatalError` and `IssueTrackerNotFoundError` refuse; and everything else is no verdict and throws. A host that does not resolve (`getaddrinfo ENOTFOUND`) stays no verdict on purpose, because a VPN that is down says the same about a host that exists; core names the host and the field it came from instead. The header signals live on the provider's original error, so the rule is read inside the integration, before core's redacted copy (which keeps `status` but not the response) exists. Provider vocabulary on top of HTTP (a Slack error code) stays the integration's to translate into those two meanings. Additive. |
+| 2026-09-22 | review fixes | `resendAfterRateLimit` on `IntegrationRequestInit`: `ctx.http` sends a write again after a 429 only when the request says so; and a thrown error keeps its class and its string, number and boolean fields | Slack's own client used to wait out every rate limit and the move to `ctx.http` lost that, so a burst dropped notifications. Whether a rate-limited write may be repeated is the provider's to say, so it is a flag and not a default: Slack's rate-limit guide tells a client to "wait for the indicated number of seconds before retrying the same request", and Slack's `post` sets it, while Atlassian's says "Only retry if the API is idempotent and the response includes a Retry-After header", so a Jira create (like an Arthur task create) is sent once. Even with the flag a write goes again only after a 429 that carries `Retry-After`, and only when its body can be sent twice (not a stream, not a `Request`); an explicit `retries` still wins. The redacted copy of an error used to be a plain `Error`, which was harmless while only `ctx.http` made one; core now redacts every capability adapter's errors at one boundary (`services/integrations/usable.ts`), and core decides by `instanceof IssueTrackerNotFoundError`, `status` and `code`. Additive: an optional field, and a write without it is sent once, as it was before this change. |
 | 2026-09-22 | S13 | `memory` designed and unreserved: `MemoryAdapter` with `recall` and `observe`, the optional `MemoryStoreAdapter` behind `adapter.store`, and `MemorySubject`, `MemoryScope`, `MemoryEntry`, `MemoryRecall`, `MemoryObservation`, `MemoryObserveRequest`, `MemoryWrite`, `MemoryFailure`, `MemoryStoreListing` and the stored-document types | The capability's port, reserved in S0 for this stage. Additive: a reserved id becoming providable makes nothing that compiled stop compiling. THE RUN-FACING HALF IS OBSERVATIONS IN, RENDERING OUT. "Read the document, merge it and write it back with the version you read" is a shape only our own store can implement, because a hosted engine does the merging itself and that merging is the product: Mem0 runs supersede and merge over what is added, Zep invalidates the edge a new fact contradicts. "Add, update by id, delete by id" is the opposite failure, where two runs both add and nobody reconciles. So core says what a run learned and asks what is known, and today's pure functions (parse, dedup, retract, stamp, evict, compare and swap) moved into the built-in provider. THE ADMIN HALF IS A SECOND INTERFACE, because listing, reading and erasing a stored document is a different caller with a different need, and conflating them is how the id-shaped port returns. It is optional: an engine that can search but not enumerate serves runs perfectly well, and core then says the store cannot be listed here rather than showing an empty one. `MemoryWrite.stored` is acceptance, not read-after-write: Mem0 answers an add with an event id to poll and Zep with 202 and a task id. Two decisions a provider may ignore and stay correct: `derived` marks an observation nothing can re-derive once its run is over, and `exclude` asks the provider to leave out what the caller already holds, so "the same thing said twice" stays one judgement. |
 | 2026-09-21 | S11 | `IntegrationManifest.repositories`, with `host` and `nestedPaths`, and the type `IntegrationRepositoryShape` | Core branched on the name `github` in three places that decide nothing about credentials: which provider a pasted link belongs to, where a repository path ends inside that link, and whether `owner/name` is well formed. A fourth provider would have had to be added to each. Optional and absent by default, and a provider that declares nothing gets the general case (any host, paths may nest), so every manifest written before this is unchanged. |
 | 2026-09-21 | S11 | `RepositorySkillSource` and `RepositorySkillTreeEntry`, and the optional `skillSource()` on `VcsIntegrationAdapter` | The harness skill importer held a second GitHub API client inside core, with the four provider calls it needs already behind an interface. Those four are the port now; everything a skill import decides (which paths are containers, what a valid `SKILL.md` is, how an artifact is hashed, what is persisted) stays core's. `getFiles` answers `Uint8Array` rather than Node's `Buffer` because this entry is bundled for a browser. Optional: an adapter without it simply cannot serve a skill import, and core says so naming the provider. |

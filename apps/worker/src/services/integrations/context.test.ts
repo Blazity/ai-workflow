@@ -12,10 +12,11 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { integrationManifest } from "@integrations/registry";
-import type { IntegrationManifest } from "@integrations/sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { integrationRuntime } from "@integrations/registry/worker";
+import { IssueTrackerNotFoundError, type IntegrationManifest } from "@integrations/sdk";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildIntegrationContext } from "./context.js";
+import { buildIntegrationContext, redactedError } from "./context.js";
 
 const manifest = integrationManifest("jira") as IntegrationManifest;
 
@@ -23,6 +24,9 @@ interface Server {
   readonly url: string;
   /** Requests that reached the server, by method. */
   readonly hits: string[];
+  /** Settles when the first request has reached the server, so a test can
+   *  end a request that is in flight rather than one a timer hopes is. */
+  readonly received: Promise<void>;
   close(): Promise<void>;
 }
 
@@ -34,8 +38,13 @@ afterEach(async () => {
 /** A server that answers every request with `answer`, or never answers. */
 async function serve(answer: ((req: http.IncomingMessage, res: http.ServerResponse) => void) | "never"): Promise<Server> {
   const hits: string[] = [];
+  let arrived = () => {};
+  const received = new Promise<void>((resolve) => {
+    arrived = resolve;
+  });
   const server = http.createServer((req, res) => {
     hits.push(req.method ?? "");
+    arrived();
     if (answer !== "never") answer(req, res);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -43,6 +52,7 @@ async function serve(answer: ((req: http.IncomingMessage, res: http.ServerRespon
   const handle: Server = {
     url: `http://127.0.0.1:${port}/`,
     hits,
+    received,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();
@@ -100,19 +110,22 @@ describe("an adapter's own signal", () => {
   });
 
   it("ends a request the server never answers, at the caller's deadline and not the attempt's", async () => {
+    // Ended once the server holds the request, not on a timer: a timer raced
+    // the request to the server, and under a loaded machine it sometimes won.
     const server = await serve("never");
     const caller = new AbortController();
-    const startedAt = Date.now();
-    setTimeout(() => caller.abort(new DOMException("caller gave up", "TimeoutError")), 100);
+    const pending = context().http.fetch(server.url, { signal: caller.signal });
+    await server.received;
+    caller.abort(new DOMException("caller gave up", "TimeoutError"));
 
-    const error = await rejection(
-      context().http.fetch(server.url, { signal: caller.signal }),
-    );
+    const error = await rejection(pending);
 
+    // The caller's own reason, which is how its deadline is told from the
+    // attempt's (30 s, "The operation was aborted due to timeout"); a policy
+    // that ignored the caller would not settle before the test's own limit.
     expect(error.name).toBe("TimeoutError");
-    // The attempt deadline is 30 s and a read tries three times; the caller's
-    // 100 ms is what ended it, and it was not retried after the caller left.
-    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(error.message).toBe("caller gave up");
+    // Not tried again after the caller left.
     expect(server.hits).toEqual(["GET"]);
   });
 });
@@ -126,11 +139,13 @@ describe("the context's lifetime", () => {
     const pending = context({ lifetime: lifetime.signal }).http.fetch(server.url, {
       method: "POST",
     });
-    setTimeout(() => lifetime.abort(new DOMException("budget spent", "TimeoutError")), 50);
+    await server.received;
+    lifetime.abort(new DOMException("budget spent", "TimeoutError"));
 
     const error = await rejection(pending);
 
     expect(error.name).toBe("TimeoutError");
+    expect(error.message).toBe("budget spent");
     expect(server.hits).toEqual(["POST"]);
   });
 });
@@ -147,6 +162,100 @@ describe("retries", () => {
     const response = await context().http.fetch(server.url, { method: "POST", body: "{}" });
 
     expect(response.status).toBe(503);
+    expect(server.hits).toEqual(["POST"]);
+  });
+
+  /** A server that answers 429 first, with `retryAfter` when given, then 200. */
+  async function rateLimitedOnce(retryAfter: string | null) {
+    let answered = 0;
+    return serve((_req, res) => {
+      answered += 1;
+      if (answered === 1) {
+        res.statusCode = 429;
+        if (retryAfter !== null) res.setHeader("retry-after", retryAfter);
+        res.end("slow down");
+        return;
+      }
+      res.end("ok");
+    });
+  }
+
+  it("sends a write again after a 429 when the caller says the provider allows it", async () => {
+    // Slack's rate-limit guide: "wait for the indicated number of seconds
+    // before retrying the same request". Its own client waited out every 429;
+    // sending the write once and giving up lost the notification.
+    const server = await rateLimitedOnce("0");
+
+    const response = await context().http.fetch(server.url, {
+      method: "POST",
+      body: "text=hi",
+      resendAfterRateLimit: true,
+    });
+
+    expect(response.status).toBe(200);
+    expect(server.hits).toEqual(["POST", "POST"]);
+  });
+
+  it("sends a rate-limited write once when the caller did not say so", async () => {
+    // A Jira create. Atlassian: "Only retry if the API is idempotent and the
+    // response includes a Retry-After header." A create that did land and was
+    // sent again is a second ticket.
+    const server = await rateLimitedOnce("0");
+
+    const response = await context().http.fetch(server.url, {
+      method: "POST",
+      body: JSON.stringify({ fields: { summary: "Login broken" } }),
+    });
+
+    expect(response.status).toBe(429);
+    expect(server.hits).toEqual(["POST"]);
+  });
+
+  it("sends a rate-limited write once when the 429 did not say how long to wait", async () => {
+    const server = await rateLimitedOnce(null);
+
+    const response = await context().http.fetch(server.url, {
+      method: "POST",
+      body: "text=hi",
+      resendAfterRateLimit: true,
+    });
+
+    expect(response.status).toBe(429);
+    expect(server.hits).toEqual(["POST"]);
+  });
+
+  it("sends a write whose body is a stream once, whatever the caller asked", async () => {
+    // The stream was read as it was sent; a second attempt would send nothing.
+    const server = await rateLimitedOnce("0");
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("text=hi"));
+        controller.close();
+      },
+    });
+
+    const response = await context().http.fetch(server.url, {
+      method: "POST",
+      body,
+      duplex: "half",
+      resendAfterRateLimit: true,
+    } as RequestInit & { duplex: "half"; resendAfterRateLimit: true });
+
+    expect(response.status).toBe(429);
+    expect(server.hits).toEqual(["POST"]);
+  });
+
+  it("sends a rate-limited write once when the caller said once", async () => {
+    const server = await rateLimitedOnce("0");
+
+    const response = await context().http.fetch(server.url, {
+      method: "POST",
+      body: "{}",
+      resendAfterRateLimit: true,
+      retries: 0,
+    });
+
+    expect(response.status).toBe(429);
     expect(server.hits).toEqual(["POST"]);
   });
 
@@ -209,6 +318,137 @@ describe("what a failed request throws", () => {
     );
 
     expect(error.name).toBe("TimeoutError");
-    expect(server.hits).toEqual(["GET"]);
+    // At most the one attempt. Whether it reached the server inside 50 ms is
+    // the machine's business, not the policy's, and asserting it raced.
+    expect(server.hits.length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("a connection value no request can carry", () => {
+  const jira = integrationManifest("jira") as IntegrationManifest;
+  function jiraContext(values: Record<string, string>) {
+    return buildIntegrationContext({
+      manifest: jira,
+      values,
+      secrets: [values.apiToken ?? ""].filter(Boolean),
+      lifetime: new AbortController().signal,
+    });
+  }
+
+  it("is refused before anything is sent, naming the field and not the value", async () => {
+    // A token pasted from a terminal that wrapped it. Node refuses the header
+    // too, with a TypeError that quotes the whole value and reads like a
+    // network failure, so the card stayed Connected over a key that can never
+    // work.
+    const server = await serve((_req, res) => res.end("ok"));
+    const token = "ATATT3x\nFF00-9c1e";
+    const ctx = jiraContext({ baseUrl: server.url, apiToken: token, projectKey: "AIW" });
+
+    const error = await rejection(
+      ctx.http.fetch(server.url, { headers: { Authorization: `Bearer ${token}` } }),
+    );
+
+    expect(error.name).toBe("ConnectionValueError");
+    expect((error as { field?: string }).field).toBe("apiToken");
+    expect(error.message).toContain("API token");
+    expect(error.message).toContain("line break");
+    expect(everythingIn(error)).not.toContain("FF00-9c1e");
+    expect(server.hits).toEqual([]);
+  });
+
+  it("names a site address typed without https://", async () => {
+    const ctx = jiraContext({ baseUrl: "acme.atlassian.net", apiToken: "token", projectKey: "AIW" });
+
+    const error = await rejection(ctx.http.fetch("acme.atlassian.net/_edge/tenant_info"));
+
+    expect(error.name).toBe("ConnectionValueError");
+    expect((error as { field?: string }).field).toBe("baseUrl");
+    expect(error.message).toContain("has to start with https://");
+  });
+});
+
+describe("a Slack notification that hit a rate limit", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is delivered once Slack's wait has passed, as Slack's own client used to do", async () => {
+    // The real Slack package, the real context, and Slack's documented answer
+    // to a burst: HTTP 429 with Retry-After. Only `fetch` is replaced, at the
+    // edge of the process.
+    const answers = [
+      new Response("", { status: 429, headers: { "retry-after": "0" } }),
+      Response.json({ ok: true, ts: "1758300000.000900" }),
+    ];
+    const fetch = vi.fn(async () => answers.shift() ?? Response.json({ ok: false, error: "unexpected" }));
+    vi.stubGlobal("fetch", fetch);
+
+    const slack = integrationManifest("slack") as IntegrationManifest;
+    const messaging = (
+      integrationRuntime("slack")!.capabilities.messaging as (ctx: unknown) => {
+        notifyForTicket(
+          ticket: { key: string; url?: string },
+          event: { kind: "note"; text: string },
+          conversation: { handle: string | null; remember(): Promise<void>; forget(): Promise<void> },
+        ): Promise<unknown>;
+      }
+    )(
+      buildIntegrationContext({
+        manifest: slack,
+        values: { botToken: "xoxb-token", channelId: "C1" },
+        secrets: ["xoxb-token"],
+        lifetime: new AbortController().signal,
+      }),
+    );
+
+    const delivery = await messaging.notifyForTicket(
+      { key: "AWT-42" },
+      { kind: "note", text: "deploying now" },
+      { handle: "1758300000.000100", remember: async () => {}, forget: async () => {} },
+    );
+
+    expect(delivery).toEqual({ delivered: true });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the copy core passes on of what a provider threw", () => {
+  const SECRET = "atl-4f9a2c1e8b7d3e";
+
+  it("is still the class core decides by, with the secret gone from everything", () => {
+    // Core reads a ticket that no longer exists from `instanceof
+    // IssueTrackerNotFoundError`. A copy that was a plain Error turned every
+    // missing ticket into an outage.
+    const original = new IssueTrackerNotFoundError("Ticket", `AWT-42 (token ${SECRET})`);
+
+    const copy = redactedError(original, (text) => text.replaceAll(SECRET, "[redacted]"));
+
+    expect(copy).toBeInstanceOf(IssueTrackerNotFoundError);
+    expect(copy.name).toBe("IssueTrackerNotFoundError");
+    expect((copy as { code?: string }).code).toBe("NOT_FOUND");
+    expect(everythingIn(copy)).not.toContain(SECRET);
+    expect(copy.message).toContain("[redacted]");
+  });
+
+  it("keeps the status and code a caller reads, and leaves the request behind", () => {
+    const original = Object.assign(new Error(`GitLab refused ${SECRET}`), {
+      status: 403,
+      code: `E_${SECRET}`,
+      fatal: true,
+      request: { headers: { authorization: `Bearer ${SECRET}` } },
+    });
+
+    const copy = redactedError(original, (text) => text.replaceAll(SECRET, "[redacted]")) as Error & {
+      status?: number;
+      code?: string;
+      fatal?: boolean;
+      request?: unknown;
+    };
+
+    expect(copy.status).toBe(403);
+    expect(copy.code).toBe("E_[redacted]");
+    expect(copy.fatal).toBe(true);
+    expect(copy.request).toBeUndefined();
+    expect(everythingIn(copy)).not.toContain(SECRET);
   });
 });

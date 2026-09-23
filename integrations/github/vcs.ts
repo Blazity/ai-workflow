@@ -1,6 +1,9 @@
 import type { Octokit } from "@octokit/rest";
 import {
   FatalError,
+  isPullRequestRefusal,
+  isReviewLedgerWorkItem,
+  PullRequestUnreadableError,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   type CheckRunResult,
@@ -24,6 +27,12 @@ import {
   type VcsSandboxCredentials,
 } from "@integrations/sdk";
 import {
+  checkRunHandle,
+  githubHandle,
+  isTrustedByDefaultCheckProducer,
+  type GitHubHandle,
+} from "./handles";
+import {
   buildOctokit,
   getBotIdentity,
   mintInstallationToken,
@@ -36,7 +45,6 @@ import {
   hasReviewLedgerFailureMarker,
   isReopenedLedgerThread,
   isReviewLedgerNote,
-  isReviewLedgerWorkItem,
   markReviewLedgerReplyResolved,
   markReviewLedgerReplyStale,
   readAnyReviewLedgerMarker,
@@ -102,6 +110,7 @@ interface ManualDispatchPullRequestSnapshot {
     handle?: VcsOpaqueHandle;
     producer: string;
     source?: string;
+    trustedByDefault?: boolean;
   }>;
   reviews: Array<{
     state: "changes_requested" | "commented";
@@ -156,18 +165,18 @@ export interface GitHubConfig {
   owner: string;
   repo: string;
   baseBranch: string;
-  botLogin?: string;
   log?: IntegrationLogger;
 }
 
-type GitHubHandle = {
-  provider?: "github";
-  id?: number;
-  owner?: string;
-};
-
-function githubHandle(value: GitHubHandle): VcsOpaqueHandle {
-  return value as unknown as VcsOpaqueHandle;
+/** The path of the request an Octokit `RequestError` was answered for. */
+function refusedRequestPath(err: unknown): string | undefined {
+  const url = (err as { request?: { url?: unknown } } | null)?.request?.url;
+  if (typeof url !== "string") return undefined;
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return undefined;
+  }
 }
 
 function isSelfAuthoredReviewError(error: unknown): boolean {
@@ -522,19 +531,8 @@ export class GitHubAdapter
     this.octokit = buildOctokit(config.credential);
   }
 
-  get botLogin(): string | undefined {
-    return this.config.botLogin;
-  }
-
   private get ownerRepo() {
     return { owner: this.config.owner, repo: this.config.repo };
-  }
-
-  sameHandle(left: VcsOpaqueHandle | undefined, right: VcsOpaqueHandle | undefined): boolean {
-    if (!left || !right) return left === right;
-    const a = left as unknown as Partial<GitHubHandle>;
-    const b = right as unknown as Partial<GitHubHandle>;
-    return a.provider === b.provider && a.id === b.id && a.owner === b.owner;
   }
 
   /** Every repository this App installation can see, one page of 100 at a time.
@@ -759,11 +757,43 @@ export class GitHubAdapter
     }
   }
 
+  /**
+   * One pull request, with the one failure core closes for good told apart
+   * (see `PullRequestUnreadableError`): a 404 for the pull request itself.
+   *
+   * Not a 403. GitHub answers 403 on a pull request when the installation
+   * lacks the permission (`Resource not accessible by integration`, which its
+   * REST docs define as a token without the endpoint's permission) or the
+   * organisation enforces SAML: both refuse every pull request alike, so they
+   * are thrown as they came. And only when the refused request was the pull
+   * request: the App's installation token is minted inside this same call,
+   * and a 404 there (the installation was removed or reinstalled) is a
+   * credential fault every pull request shares.
+   */
+  private async readPullRequest(prId: number) {
+    try {
+      const { data } = await this.octokit.pulls.get({
+        ...this.ownerRepo,
+        pull_number: prId,
+      });
+      return data;
+    } catch (err) {
+      if (
+        refusedRequestPath(err)?.endsWith(`/pulls/${prId}`) &&
+        isPullRequestRefusal(err) &&
+        (err as { status?: unknown }).status === 404
+      ) {
+        throw new PullRequestUnreadableError(
+          `GitHub PR #${prId} in ${this.ownerRepo.owner}/${this.ownerRepo.repo} cannot be read with this installation`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
+  }
+
   async getPRHead(prId: number): Promise<PullRequestHead> {
-    const { data } = await this.octokit.pulls.get({
-      ...this.ownerRepo,
-      pull_number: prId,
-    });
+    const data = await this.readPullRequest(prId);
     const baseRef = data.base.ref?.trim();
     if (!baseRef) throw new Error(`GitHub PR #${prId} is missing its target branch`);
     const state = data.merged === true ? "merged" : data.state;
@@ -778,15 +808,19 @@ export class GitHubAdapter
           (check.conclusion === "failure" || check.conclusion === "timed_out"),
       )
       .map((check) => ({
-        handle: githubHandle({ id: check.id, owner: check.appSlug }),
+        handle: checkRunHandle(check),
         name: check.name,
         conclusion: check.conclusion!,
       }));
+    // A completed failure is final for that check run: `filter: "latest"`
+    // already drops one a re-run superseded. So a failure is red even while
+    // other check runs on the head (our own gate check among them) are still
+    // going, which is the meaning `PullRequestHeadChecks` gives the word.
     const checks = {
-      state: latest.some((check) => check.status !== "completed")
-        ? "running" as const
-        : failed.length > 0
-          ? "red" as const
+      state: failed.length > 0
+        ? "red" as const
+        : latest.some((check) => check.status !== "completed")
+          ? "running" as const
           : "green" as const,
       failed,
     };
@@ -802,10 +836,7 @@ export class GitHubAdapter
   async getManualDispatchPullRequest(
     prId: number,
   ): Promise<ManualDispatchPullRequestSnapshot> {
-    const { data } = await this.octokit.pulls.get({
-      ...this.ownerRepo,
-      pull_number: prId,
-    });
+    const data = await this.readPullRequest(prId);
     const baseRef = data.base.ref?.trim();
     if (!baseRef) throw new Error(`GitHub PR #${prId} is missing its target branch`);
     const state = data.merged === true ? "merged" : data.state;
@@ -829,8 +860,9 @@ export class GitHubAdapter
       .map((check) => ({
         name: check.name,
         conclusion: check.conclusion!,
-        handle: githubHandle({ id: check.id, owner: check.appSlug }),
+        handle: checkRunHandle(check),
         producer: check.appSlug,
+        trustedByDefault: isTrustedByDefaultCheckProducer(check.appSlug),
       }));
     return {
       prNumber: prId,

@@ -3,6 +3,7 @@ import type {
   IntegrationContext,
   IntegrationManifest,
   VCSAdapter,
+  VcsHandleIdentity,
   VcsIntegrationAdapter,
   VcsSandboxCredentials,
 } from "@integrations/sdk";
@@ -10,6 +11,7 @@ import type { IntegrationConnectionPin } from "@shared/contracts";
 import { env, type VcsProviderKind } from "../../infra/vcs-config.js";
 import {
   hasManualDispatchPrCapability,
+  ManualDispatchUnsupportedError,
   type ManualDispatchPrCapableVCS,
 } from "../../adapters/vcs/types.js";
 import type { SandboxProviderConfig } from "../../sandbox/manager.js";
@@ -67,8 +69,44 @@ export interface RepositoryVcsRuntime {
   provider: VcsProviderKind;
   repoPath: string;
   baseBranch: string;
-  vcs: VCSAdapter;
+  vcs: DeferredVcsAdapter;
   credentials: () => Promise<VcsSandboxCredentials>;
+}
+
+/**
+ * The members of `T` that a connection resolved on first use can forward
+ * honestly: the methods that return a Promise.
+ *
+ * A synchronous member cannot be answered before the connection resolves.
+ * Forwarded anyway, it hands back a Promise, and a Promise reads as `true`:
+ * that is how every failed check once compared equal to every other through
+ * this runtime. So it is not in the type at all, and a caller reaching for one
+ * through a deferred adapter does not compile.
+ */
+export type DeferredMembers<T> = {
+  [K in keyof T as T[K] extends (...args: never[]) => Promise<unknown> ? K : never]: T[K];
+};
+
+/** A VCS adapter reached before its connection resolves. */
+export type DeferredVcsAdapter = DeferredMembers<VCSAdapter>;
+
+/**
+ * How `provider`'s handles compare, from its integration's runtime.
+ *
+ * No connection is resolved for it: comparing two handles is a pure function
+ * of the handles, the same for every account and repository, which is why it
+ * lives on the provider rather than on the adapter above (see
+ * `VcsHandleIdentity`).
+ */
+export async function vcsHandleIdentity(provider: string): Promise<VcsHandleIdentity> {
+  const { integrationRuntime } = await import("@integrations/registry/worker");
+  const identity = integrationRuntime(provider)?.vcsHandles;
+  if (!identity) {
+    throw new Error(
+      `No integration in this build serves version control for ${provider}. The repository's provider has to be one this deployment ships.`,
+    );
+  }
+  return identity;
 }
 
 /**
@@ -132,14 +170,12 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
     throw new TypeError(`${usable.manifest.name} declares version control and ships no adapter.`);
   }
 
-  const { getVcsBotLogin } = await import("../../services/integrations/runtime.js");
+  // The legacy single-provider login is core's to resolve (`readVcsBotLogin`),
+  // never an adapter's to read.
   const { legacyBotLogin: _legacyBotLogin, ...connectionWithoutLegacyBot } = usable.ctx.connection;
   const ctx = {
     ...usable.ctx,
-    connection: {
-      ...connectionWithoutLegacyBot,
-      botLogin: await getVcsBotLogin(target.provider),
-    },
+    connection: connectionWithoutLegacyBot,
   } as unknown as IntegrationContext<IntegrationManifest>;
   return (factory as unknown as (
     context: IntegrationContext<IntegrationManifest>,
@@ -147,13 +183,12 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
   ) => VCSAdapter)(ctx, target);
 }
 
-function lazyAdapter(resolve: () => Promise<VCSAdapter>): VCSAdapter {
+function lazyAdapter(resolve: () => Promise<VCSAdapter>): DeferredVcsAdapter {
   let resolved: Promise<VCSAdapter> | undefined;
   const adapter = () => (resolved ??= resolve());
-  return new Proxy({} as VCSAdapter, {
+  return new Proxy({} as DeferredVcsAdapter, {
     get(_target, property) {
       if (property === "then") return;
-      if (property === "botLogin") return;
       return async (...args: unknown[]) => {
         const concrete = await adapter();
         const member = (concrete as unknown as Record<PropertyKey, unknown>)[property];
@@ -191,7 +226,7 @@ export function createRepositoryVcsRuntime(target: RepositoryVcsTarget): Reposit
   };
 }
 
-export function createRepositoryVCS(target: RepositoryVcsTarget): VCSAdapter {
+export function createRepositoryVCS(target: RepositoryVcsTarget): DeferredVcsAdapter {
   return createRepositoryVcsRuntime(target).vcs;
 }
 
@@ -209,11 +244,17 @@ export function createManualDispatchPrReader(target: {
   provider: VcsProviderKind;
   repoPath: string;
 }): ManualDispatchPrCapableVCS {
-  const vcs = createRepositoryVCS({ ...target, baseBranch: "" });
-  if (!hasManualDispatchPrCapability(vcs)) {
-    throw new Error(`VCS provider ${target.provider} cannot read pull requests`);
-  }
-  return vcs;
+  return {
+    async getManualDispatchPullRequest(prId) {
+      // The capability is asked of the resolved adapter: the deferred one
+      // answers every member with a function.
+      const adapter = await resolveIntegrationAdapter({ ...target, baseBranch: "" });
+      if (!hasManualDispatchPrCapability(adapter)) {
+        throw new ManualDispatchUnsupportedError(target.provider);
+      }
+      return adapter.getManualDispatchPullRequest(prId);
+    },
+  };
 }
 
 export async function resolveConfiguredPullRequestUrl(

@@ -1,8 +1,19 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReviewThread } from "@integrations/sdk";
 import { selectReviewLedgerWorkItems } from "@integrations/sdk";
 import { GitHubAdapter } from "./vcs.js";
-import { AI_WORKFLOW_COMMENT_MARKER, reviewFindingDigest } from "./review-markers.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+
+/**
+ * Core's thread identity for a finding (`reviewFindingDigest` in the worker),
+ * computed here from its definition: the adapter only reads digests back, so
+ * the test states the formula independently rather than borrowing the code.
+ */
+function reviewFindingDigest(comment: { path: string; body: string }): string {
+  return createHash("sha256").update(`${comment.path} ${comment.body}`).digest("hex").slice(0, 32);
+}
+
 
 const logger = {
   debug: vi.fn(),
@@ -85,11 +96,6 @@ describe("GitHubAdapter", () => {
   });
 
   describe("the operational surfaces core detects by method", () => {
-    it("reports the configured bot login and nothing when none is set", () => {
-      expect(ghAdapter({ botLogin: "ai-workflow[bot]" }).botLogin).toBe("ai-workflow[bot]");
-      expect(ghAdapter().botLogin).toBeUndefined();
-    });
-
     it("maps every repository the installation can see", async () => {
       mockOctokit.paginate.mockResolvedValueOnce([
         {
@@ -365,6 +371,60 @@ describe("GitHubAdapter", () => {
         state: "merged",
         checks: { state: "green", failed: [] },
       });
+    });
+
+    // The shape of Octokit's `RequestError`: the status, the answer's headers,
+    // and the request it answered, whose URL tells a refusal of the pull
+    // request from a refusal of the installation token minted inside the call.
+    const pullRequestUrl = "https://api.github.com/repos/test-org/test-repo/pulls/42";
+    const installationTokenUrl = "https://api.github.com/app/installations/99/access_tokens";
+    function refused(
+      status: number,
+      message: string,
+      headers: Record<string, string> = {},
+      url = pullRequestUrl,
+    ) {
+      return Object.assign(new Error(message), {
+        status,
+        response: { headers },
+        request: { url },
+      });
+    }
+
+    it.each([
+      ["gone", refused(404, "Not Found")],
+    ])("calls a pull request that is %s unreadable for good", async (_label, error) => {
+      mockOctokit.pulls.get.mockRejectedValueOnce(error);
+
+      const caught = await ghAdapter().getPRHead(42).catch((failure) => failure as Error);
+
+      expect(caught).toMatchObject({ name: "PullRequestUnreadableError" });
+      expect((caught as Error).cause).toBe(error);
+    });
+
+    it.each([
+      ["a refused credential", refused(401, "Bad credentials")],
+      // GitHub's REST docs: the installation lacks the endpoint's permission,
+      // which refuses every pull request alike.
+      [
+        "an installation without the pull request permission",
+        refused(403, "Resource not accessible by integration - https://docs.github.com/rest/pulls/pulls#get-a-pull-request"),
+      ],
+      [
+        "an organisation that enforces SAML",
+        refused(403, "Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization."),
+      ],
+      ["an installation that is gone", refused(404, "Not Found", {}, installationTokenUrl)],
+      ["an installation that is suspended", refused(403, "This installation has been suspended", {}, installationTokenUrl)],
+      ["a primary rate limit", refused(403, "API rate limit exceeded", { "x-ratelimit-remaining": "0" })],
+      ["a secondary rate limit", refused(403, "You have exceeded a secondary rate limit", { "retry-after": "60" })],
+      ["a server error", refused(502, "Bad Gateway")],
+    ])("lets %s be retried", async (_label, error) => {
+      mockOctokit.pulls.get.mockRejectedValueOnce(error);
+
+      const caught = await ghAdapter().getPRHead(42).catch((failure) => failure as Error);
+
+      expect(caught).toBe(error);
     });
   });
 

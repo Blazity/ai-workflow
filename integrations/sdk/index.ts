@@ -51,6 +51,8 @@ export type { IntegrationRunStart, IntegrationRunState } from "./run-state";
 
 export {
   INTEGRATION_CAPABILITIES,
+  NESTED_ADAPTER_MEMBERS,
+  type NestedAdapterRole,
   type IntegrationCapabilityAccess,
   type IntegrationCapabilityId,
   type IntegrationCapabilityPorts,
@@ -61,8 +63,17 @@ export {
 } from "./capabilities";
 
 export {
+  isPullRequestRefusal,
+  isPullRequestUnreadableError,
+  providerAnswerOf,
+  PullRequestUnreadableError,
+} from "./pull-request-unreadable";
+
+export {
+  connectionValueProblem,
   defineIntegration,
   defineIntegrationBlock,
+  type ConnectionValueProblem,
   type ConnectionField,
   type IntegrationBlockManifest,
   type IntegrationBlockOutput,
@@ -72,6 +83,8 @@ export {
   type IntegrationManifest,
   type IntegrationPage,
   type IntegrationRepositoryShape,
+  type IntegrationWebhookManifest,
+  type VcsReviewState,
 } from "./manifest";
 
 export {
@@ -103,7 +116,13 @@ export {
   type IntegrationRuntimeDefinition,
 } from "./runtime";
 
-export { FatalError } from "./errors";
+export { ConnectionValueError, FatalError } from "./errors";
+
+export {
+  readProviderFailure,
+  refusedOrThrow,
+  type ProviderFailure,
+} from "./provider-failure";
 
 export {
   boundRepositoryProfileBundle,
@@ -169,6 +188,9 @@ export {
 
 export {
   AI_WORKFLOW_MARKER_PATTERN,
+  GATE_CHECK_NAME_PREFIX,
+  LEGACY_GATE_CHECK_NAME_PREFIX,
+  isManagedGateCheckName,
   isOurOwnVcsComment,
   isReviewLedgerWorkItem,
   selectReviewLedgerWorkItems,
@@ -195,6 +217,7 @@ export {
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
   type VCSAdapter,
+  type VcsHandleIdentity,
   type VcsIntegrationAdapter,
   type VcsOpaqueHandle,
   type VcsRepositoryMetadata,

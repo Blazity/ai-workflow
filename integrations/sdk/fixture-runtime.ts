@@ -15,6 +15,8 @@ import {
   defineIntegrationRuntime,
   FatalError,
   IssueTrackerNotFoundError,
+  isPullRequestRefusal,
+  PullRequestUnreadableError,
   z,
   type AgentTracingAdapter,
   type ConnectionValues,
@@ -50,8 +52,32 @@ async function readJson(ctx: FixtureContext, path: string, init?: RequestInit): 
     headers: { authorization: `Bearer ${ctx.connection.apiToken}` },
   });
   if (response.status === 401) throw new FatalError("The fixture provider refused the API token.");
-  if (!response.ok) throw new Error(`Fixture provider answered ${response.status} for ${path}.`);
+  if (!response.ok) {
+    // The status and headers ride along, so a caller can tell a refusal of
+    // one resource from any other failure (`isPullRequestRefusal`).
+    throw Object.assign(new Error(`Fixture provider answered ${response.status} for ${path}.`), {
+      status: response.status,
+      response: { headers: response.headers },
+    });
+  }
   return response.json();
+}
+
+/** Equality by value: handles cross JSON, so the same check is never the
+ *  same object twice. */
+function sameJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== "object" || typeof right !== "object" || left === null || right === null) {
+    return false;
+  }
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const keys = Object.keys(leftRecord);
+  return (
+    keys.length === Object.keys(rightRecord).length &&
+    keys.every((key) => Object.hasOwn(rightRecord, key) && sameJson(leftRecord[key], rightRecord[key]))
+  );
 }
 
 class FixtureTracker implements IssueTrackerAdapter {
@@ -124,10 +150,6 @@ class FixtureRepository implements VCSAdapter {
     return `/repos/${this.repository.repoPath}${suffix}`;
   }
 
-  sameHandle(left: import("./vcs").VcsOpaqueHandle | undefined, right: import("./vcs").VcsOpaqueHandle | undefined): boolean {
-    return left === right;
-  }
-
   async createBranchIfMissing(name: string, base: string): Promise<"created" | "existing"> {
     const body = (await readJson(this.ctx, this.path("/branches"), {
       method: "POST",
@@ -196,7 +218,18 @@ class FixtureRepository implements VCSAdapter {
   }
 
   async getPRHead(prId: number): Promise<PullRequestHead> {
-    return (await readJson(this.ctx, this.path(`/pulls/${prId}/head`))) as PullRequestHead;
+    try {
+      return (await readJson(this.ctx, this.path(`/pulls/${prId}/head`))) as PullRequestHead;
+    } catch (error) {
+      // Gone, or forbidden to this token for this pull request alone, is
+      // closed for good. A refused token, a token without the scope to read
+      // pull requests at all, and an outage are thrown as they came, so the
+      // delivery can be retried once the connection is repaired.
+      if (isPullRequestRefusal(error)) {
+        throw new PullRequestUnreadableError(`Fixture pull request ${prId} cannot be read.`, { cause: error });
+      }
+      throw error;
+    }
   }
 
   async listReviewThreads(): Promise<ReviewThreadFeed> {
@@ -306,6 +339,12 @@ const definition: IntegrationRuntimeDefinition<FixtureManifest> = {
   // than accepting one it would ignore.
   issueTrackerQueryRule: {
     problem: () => "The fixture tracker has no search, so it runs no query.",
+  },
+  // The fixture's handles are whatever its provider answers, compared by value
+  // because they come back parsed. It never recorded a check without a handle,
+  // so it has no `recordedCheckHandle`.
+  vcsHandles: {
+    sameHandle: (left, right) => left !== undefined && right !== undefined && sameJson(left, right),
   },
   blocks: {
     sdkfixture_research: async ({ params, inputs }, ctx) => {
@@ -529,6 +568,14 @@ const _refusedRuntimes = {
     ...otelDefinition,
     // @ts-expect-error only a tracker reads authored queries
     issueTrackerQueryRule: definition.issueTrackerQueryRule,
+  }),
+  vcsWithoutHandleIdentity: (): IntegrationRuntimeDefinition<FixtureManifest> =>
+    // @ts-expect-error the manifest declares vcs, so how its handles compare is required
+    ({ ...definition, vcsHandles: undefined }),
+  handleIdentityWithoutVcs: (): IntegrationRuntimeDefinition<typeof otelFixtureManifest> => ({
+    ...otelDefinition,
+    // @ts-expect-error only a vcs integration mints handles to compare
+    vcsHandles: definition.vcsHandles,
   }),
   readerForUndeclaredPage: (): IntegrationRuntimeDefinition<FixtureManifest> => ({
     ...definition,

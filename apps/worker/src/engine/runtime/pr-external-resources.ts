@@ -832,8 +832,9 @@ function rangeContainsOnlyChangedSideLines(
  * findings no inline comment could carry.
  *
  * The note is the SAME string the inline comment body carries, on its own
- * indented continuation line, exactly as `reviewFallbackBullet` renders that body
- * when a provider refuses an inline position. A finding reaches this line because
+ * indented continuation line, exactly as each VCS integration's
+ * `reviewFallbackBullet` renders that body when a provider refuses an inline
+ * position. A finding reaches this line because
  * it could not be anchored or lost its inline slot, which changes nothing about
  * what it earned: with a wording of its own here, a non-blocking High read as a
  * blocking one purely because of where it landed, and the agreement note read as

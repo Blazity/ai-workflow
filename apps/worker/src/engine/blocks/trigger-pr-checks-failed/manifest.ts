@@ -30,6 +30,13 @@ const repositoryPolicy = z
     expansion: z.enum(["attach", "ask_once", "never"]),
   })
   .strict();
+/**
+ * The most producers one node may trust. It is the sum of the two lists it
+ * replaced (`githubAppSlugs` and `gitlabPipelineSources`, 20 each): a graph
+ * saved with both full is upgraded into this one list and must still validate.
+ */
+export const MAX_TRUSTED_PRODUCERS = 40;
+
 const paramsSchema = z
   .object({
     providers: vcsProviderSelection.default([]),
@@ -38,7 +45,7 @@ const paramsSchema = z
     ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
     trustedProducers: z
       .array(z.string().trim().min(1).max(100))
-      .max(20)
+      .max(MAX_TRUSTED_PRODUCERS)
       .default([]),
     maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
     rateLimitMax: z.number().int().min(1).optional(),

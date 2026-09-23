@@ -39,9 +39,12 @@ export async function readIntegrationPageData(
   if (!manifest || !manifest.pages.some((page) => page.id === pageId)) {
     return { status: "unknown" };
   }
-  const runtime = integrationRuntime(integrationId);
-  const reader = runtime?.api?.[pageId];
-  if (typeof reader !== "function") return { status: "none" };
+  // Whether the page has a reader is a fact about the build, answered before
+  // any connection is opened: a page without one shows only what it ships,
+  // connected or not.
+  if (typeof integrationRuntime(integrationId)?.api?.[pageId] !== "function") {
+    return { status: "none" };
+  }
 
   const { usableIntegrations } = await import("./usable.js");
   const [usable] = await usableIntegrations({
@@ -58,9 +61,14 @@ export async function readIntegrationPageData(
     };
   }
 
-  const { redactIntegrationText, secretValuesOf } = await import("./connection-values.js");
+  // The usable runtime's reader, not the registry's: what it throws arrives
+  // with this connection's secrets already taken out, and a provider that
+  // echoes a credential in an error body is normal, while that body is what a
+  // person reads on a screen. The boundary wraps every reader the registry's
+  // runtime has, so the one found above is here.
+  const read = usable.runtime.api?.[pageId] as (context: typeof usable.ctx) => Promise<JsonValue>;
   try {
-    const value = await (reader as (context: typeof usable.ctx) => Promise<JsonValue>)(usable.ctx);
+    const value = await read(usable.ctx);
     return { status: "ok", value };
   } catch (error) {
     const { logger } = await import("../../infra/logger.js");
@@ -68,14 +76,7 @@ export async function readIntegrationPageData(
       { integration: integrationId, page: pageId },
       "integration_page_data_failed",
     );
-    // A provider that echoes a credential in an error body is normal, and that
-    // body is what a person reads on a screen.
-    const secrets = secretValuesOf(manifest, usable.ctx.connection as never);
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      status: "unavailable",
-      cause: "provider",
-      reason: redactIntegrationText(message, secrets).slice(0, 300),
-    };
+    return { status: "unavailable", cause: "provider", reason: message.slice(0, 300) };
   }
 }

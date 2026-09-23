@@ -97,6 +97,9 @@ export const manifest = defineIntegration({
   // there is always exactly owner/name, which is what lets a pasted link be cut
   // after two segments whatever follows them.
   repositories: { host: "github.com", nestedPaths: false },
+  // A submitted review carries its state; a review comment or a pull request
+  // comment is a "commented" review of its own.
+  webhook: { reviewStates: ["changes_requested", "commented"] },
   blocks: [],
   pages: [],
   health: [

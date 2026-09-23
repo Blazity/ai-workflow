@@ -6,9 +6,15 @@ import type { PullRequestHead } from "../../adapters/vcs/types.js";
 // validates environment variables during this unit test.
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: vi.fn(),
+  vcsHandleIdentity: vi.fn(),
 }));
 
-const { bindCurrentPullRequest } = await import("./trigger-current-pull-request.js");
+const { bindCurrentPullRequest: bindWith } = await import("./trigger-current-pull-request.js");
+const { githubHandleIdentity } = await import("../../../../../integrations/github/handles.js");
+// Every event here is GitHub's, so GitHub's own comparison, although none of
+// these cases reaches a handle.
+const bindCurrentPullRequest = (event: TriggerEvent, current: PullRequestHead) =>
+  bindWith(event, current, githubHandleIdentity);
 type TriggerEvent = import("./trigger-events.js").TriggerEvent;
 
 function reviewEvent(overrides: Partial<TriggerEvent["pr"]> = {}): TriggerEvent {
@@ -96,5 +102,33 @@ describe("bindCurrentPullRequest", () => {
     };
 
     expect(bindCurrentPullRequest(event, openHead)).toBeNull();
+  });
+
+  // `recordedCheckHandle` is a shim only the two providers that recorded the
+  // old shape carry. A provider without one binds a check that has no handle
+  // to nothing, and a check that carries one exactly as before.
+  it("binds only handled checks for a provider that never recorded the old shape", () => {
+    const sameValue = { sameHandle: (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right) };
+    const red: PullRequestHead = {
+      ...openHead,
+      checks: {
+        state: "red",
+        failed: [{ name: "build", conclusion: "failure", handle: { run: 3 } as never }],
+      },
+    };
+    const checksEvent = (failed: Record<string, unknown>): TriggerEvent => ({
+      delivery: { provider: "github", producer: "ci", deliveryId: "d3" },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...reviewEvent().pr,
+        headSha: "live-sha",
+        baseRef: "main",
+        review: undefined,
+        failedChecks: [{ name: "build", conclusion: "failure", ...failed }] as never,
+      },
+    });
+
+    expect(bindWith(checksEvent({ checkRunId: 3 }), red, sameValue)).toBeNull();
+    expect(bindWith(checksEvent({ handle: { run: 3 } }), red, sameValue)).not.toBeNull();
   });
 });

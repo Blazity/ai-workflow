@@ -64,6 +64,9 @@ export const manifest = defineIntegration({
   // the GitLab URL field above, whose default core reads for gitlab.com. Groups
   // nest, so a project path is two segments or more.
   repositories: { nestedPaths: true },
+  // A merge request note is the only review GitLab delivers: an approval or a
+  // "request changes" arrives as no event a trigger can wait for.
+  webhook: { reviewStates: ["commented"] },
   blocks: [],
   pages: [],
   health: [

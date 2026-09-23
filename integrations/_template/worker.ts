@@ -10,6 +10,8 @@
  */
 import {
   defineIntegrationRuntime,
+  readProviderFailure,
+  refusedOrThrow,
   type IntegrationContext,
   type IntegrationRuntimeDefinition,
   z,
@@ -57,11 +59,11 @@ const definition: IntegrationRuntimeDefinition<ThisManifest> = {
       headers: authorization(ctx),
       retries: 0,
     });
-    if (response.status === 401 || response.status === 403) {
-      return { ok: false, reason: "Example refused the API token." };
-    }
     if (!response.ok) {
-      throw new Error(`Example answered ${response.status} at ${ctx.connection.baseUrl}.`);
+      // A 401 is the provider refusing the token; a 503, a 429 or a timeout
+      // says nothing about it. `refusedOrThrow` returns the first and throws
+      // the second, which keeps an outage from turning the card Failing.
+      return refusedOrThrow(response, `Example refused the API token (${response.status}).`);
     }
     const account = accountAnswer.safeParse(await json(response));
     if (!account.success) {
@@ -85,7 +87,15 @@ const definition: IntegrationRuntimeDefinition<ThisManifest> = {
       url.searchParams.set("limit", String(params.limit));
       const response = await ctx.http.fetch(url, { headers: authorization(ctx) });
       if (!response.ok) {
-        return { kind: "failed", message: `Example could not search: it answered ${response.status}.` };
+        // The SDK's rule decides which sentence is true: a refusal sends a
+        // person to the token or the query, anything else to try again later.
+        return {
+          kind: "failed",
+          message:
+            readProviderFailure(response).kind === "refused"
+              ? `Example refused the search (${response.status}).`
+              : `Example did not answer the search (${response.status}); try again later.`,
+        };
       }
       const answer = searchAnswer.safeParse(await json(response));
       if (!answer.success) {
@@ -122,10 +132,15 @@ const definition: IntegrationRuntimeDefinition<ThisManifest> = {
         timeoutMs: 3_000,
       });
       if (response.ok) return { status: "live" };
-      return {
-        status: response.status === 401 || response.status === 403 ? "down" : "degraded",
-        message: `Example answered ${response.status}.`,
-      };
+      // Down either way, because the check did not pass; the sentence is what
+      // differs. A refusal sends the admin to the token, an answer that says
+      // nothing about it sends them to wait (see `IntegrationHealthResult`).
+      return readProviderFailure(response).kind === "refused"
+        ? { status: "down", message: `Example refused the API token (${response.status}).` }
+        : {
+            status: "down",
+            message: `Example did not answer, so the token could not be checked (${response.status}).`,
+          };
     },
   },
 

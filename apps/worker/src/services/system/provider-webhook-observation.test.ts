@@ -6,17 +6,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@vercel/functions", () => ({ waitUntil: state.waitUntil }));
-vi.mock("../../infra/vcs-config.js", () => ({
-  env: {
-    GITHUB_WEBHOOK_SECRET: "github-secret",
-    RESEND_WEBHOOK_SECRET: "resend-secret",
-  },
-}));
-vi.mock("./observations.js", () => ({
-  recordSystemHealthObservation: state.record,
-  systemHealthObservationScope: (secret: string | undefined) =>
-    `scope:${secret ?? "unconfigured"}`,
-}));
+vi.mock("./observations.js", () => ({ recordWebhookDelivery: state.record }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 
 const { observeProviderWebhook } = await import("./provider-webhook-observation.js");
@@ -32,9 +22,13 @@ describe("provider webhook health observations", () => {
       observeProviderWebhook("email", "accepted", "deferred-test"),
     ).toBeUndefined();
     expect(state.record).toHaveBeenCalledOnce();
-    expect(state.record).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "scope:resend-secret" }),
-    );
+    // The shared pair decides the check and the deployment scope, exactly as
+    // for an integration's webhook; nothing here derives one from a secret.
+    expect(state.record).toHaveBeenCalledWith({
+      integrationId: "email",
+      outcome: "accepted",
+      reason: "deferred-test",
+    });
     expect(state.waitUntil).toHaveBeenCalledOnce();
   });
 

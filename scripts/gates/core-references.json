@@ -108,6 +108,17 @@
     },
     {
       "ids": [
+        "github",
+        "gitlab"
+      ],
+      "stage": "R1",
+      "reason": "the two producer filters `trigger_pr_checks_failed` carried until S10 (`githubAppSlugs`, `gitlabPipelineSources`) and the value each one meant when absent, read off check triggers published before S10 and folded into `trustedProducers` wherever a stored graph enters the build. ADR-010 keeps those rows unrewritten, so dispatch, validation and a replaying run can only honour the list an operator saved if this one reader still knows the old keys. R1 removes it once no stored graph carries them.",
+      "paths": [
+        "packages/contracts/workflow-graph.ts"
+      ]
+    },
+    {
+      "ids": [
         "slack"
       ],
       "stage": "never",

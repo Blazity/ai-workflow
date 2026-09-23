@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => ({
   resolveUsableIntegrations: vi.fn(),
   usableIntegrations: vi.fn(async (): Promise<unknown[]> => []),
   checkIntegrationPin: vi.fn(),
-  getVcsBotLogin: vi.fn(),
   loggerWarn: vi.fn(),
 }));
 
@@ -25,14 +24,17 @@ vi.mock("../integrations/runtime.js", () => ({
   resolveUsableIntegrations: mocks.resolveUsableIntegrations,
   usableIntegrations: mocks.usableIntegrations,
   checkIntegrationPin: mocks.checkIntegrationPin,
-  getVcsBotLogin: mocks.getVcsBotLogin,
 }));
 
 vi.mock("../../infra/logger.js", () => ({
   logger: { warn: mocks.loggerWarn },
 }));
 
-import { buildSandboxProviderConfigs, createRepositoryVcsRuntime } from "./vcs-runtime.js";
+import {
+  buildSandboxProviderConfigs,
+  createManualDispatchPrReader,
+  createRepositoryVcsRuntime,
+} from "./vcs-runtime.js";
 
 function connected(
   id: string,
@@ -78,7 +80,6 @@ function githubLike(): Record<string, unknown> {
 describe("buildSandboxProviderConfigs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getVcsBotLogin.mockResolvedValue(undefined);
   });
 
   it("hands a sandbox the credentials of a provider it knows nothing else about", async () => {
@@ -146,7 +147,6 @@ describe("buildSandboxProviderConfigs", () => {
 describe("createRepositoryVcsRuntime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getVcsBotLogin.mockResolvedValue(undefined);
   });
 
   it("builds the adapter once per runtime, however often it is called", async () => {
@@ -210,5 +210,34 @@ describe("createRepositoryVcsRuntime", () => {
       "Version control provider GitLab moved after this run started (reconfigured). Start a new run.",
     );
     expect(vcs).not.toHaveBeenCalled();
+  });
+});
+
+describe("createManualDispatchPrReader", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Asked through the deferred adapter, every member is a function, so a
+  // provider without this one used to fail only at the call, reported to the
+  // person as the provider being unreachable.
+  it("tells a provider that cannot read pull requests apart from one that is down", async () => {
+    resolvesTo(connected("github", githubLike()));
+
+    await expect(
+      createManualDispatchPrReader({ provider: "github", repoPath: "acme/api" })
+        .getManualDispatchPullRequest(7),
+    ).rejects.toMatchObject({ name: "ManualDispatchUnsupportedError", provider: "github" });
+  });
+
+  it("reads the pull request through the provider that can", async () => {
+    const getManualDispatchPullRequest = vi.fn().mockResolvedValue({ prNumber: 7 });
+    resolvesTo(connected("github", { ...githubLike(), getManualDispatchPullRequest }));
+
+    await expect(
+      createManualDispatchPrReader({ provider: "github", repoPath: "acme/api" })
+        .getManualDispatchPullRequest(7),
+    ).resolves.toEqual({ prNumber: 7 });
+    expect(getManualDispatchPullRequest).toHaveBeenCalledWith(7);
   });
 });

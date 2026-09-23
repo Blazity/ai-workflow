@@ -1,6 +1,17 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./vcs.js";
-import { reviewFindingDigest, AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "./review-markers.js";
+
+/**
+ * Core's thread identity for a finding (`reviewFindingDigest` in the worker),
+ * computed here from its definition: the adapter only reads digests back, so
+ * the test states the formula independently rather than borrowing the code.
+ */
+function reviewFindingDigest(comment: { path: string; body: string }): string {
+  return createHash("sha256").update(`${comment.path} ${comment.body}`).digest("hex").slice(0, 32);
+}
+
 import type { GateStatusRef, ReviewThread } from "@integrations/sdk";
 
 function gateHandle(value: object): GateStatusRef {
@@ -156,7 +167,7 @@ describe("GitLabAdapter", () => {
 
     it("seeds empty repo on 404 then creates branch", async () => {
       const error = new Error("404 Branch Not Found") as any;
-      error.cause = { response: { status: 404 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 404 }) };
       mockBranches.create.mockRejectedValueOnce(error);
       mockRepositoryFiles.create.mockResolvedValueOnce({
         branch: "main",
@@ -180,7 +191,7 @@ describe("GitLabAdapter", () => {
 
     it("reports an existing branch without deleting it on 400", async () => {
       const error = new Error("Branch already exists") as any;
-      error.cause = { response: { status: 400 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 400 }) };
       mockBranches.create.mockRejectedValueOnce(error);
 
       const adapter = glAdapter();
@@ -208,7 +219,7 @@ describe("GitLabAdapter", () => {
 
     it("rethrows other 400 errors (invalid ref, invalid name) without deleting branch", async () => {
       const error = new Error("Invalid branch name") as any;
-      error.cause = { response: { status: 400 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 400 }) };
       mockBranches.create.mockRejectedValueOnce(error);
 
       const adapter = glAdapter();
@@ -256,7 +267,7 @@ describe("GitLabAdapter", () => {
 
     it("throws FatalError on 409", async () => {
       const error = new Error("MR already exists") as any;
-      error.cause = { response: { status: 409 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 409 }) };
       mockMergeRequests.create.mockRejectedValueOnce(error);
 
       const adapter = glAdapter();
@@ -267,7 +278,7 @@ describe("GitLabAdapter", () => {
 
     it("throws FatalError on 404", async () => {
       const error = new Error("Project not found") as any;
-      error.cause = { response: { status: 404 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 404 }) };
       mockMergeRequests.create.mockRejectedValueOnce(error);
 
       const adapter = glAdapter();
@@ -278,7 +289,7 @@ describe("GitLabAdapter", () => {
 
     it.each([400, 422])("throws FatalError on deterministic %i validation failures", async (status) => {
       const error = new Error("Merge request policy rejected the request") as any;
-      error.cause = { response: { status } };
+      error.cause = { description: error.message, response: new Response(null, { status }) };
       mockMergeRequests.create.mockRejectedValueOnce(error);
 
       const caught = await glAdapter()
@@ -298,7 +309,7 @@ describe("GitLabAdapter", () => {
       mockRepositoryFiles.show.mockImplementation((_pid: string, path: string) => {
         if (path === "src/new.ts") {
           const err = new Error("404") as any;
-          err.cause = { response: { status: 404 } };
+          err.cause = { description: err.message, response: new Response(null, { status: 404 }) };
           return Promise.reject(err);
         }
         return Promise.resolve({ file_path: path });
@@ -343,7 +354,7 @@ describe("GitLabAdapter", () => {
 
     it("rethrows non-404 errors from file existence probe", async () => {
       const err = new Error("500 Internal Server Error") as any;
-      err.cause = { response: { status: 500 } };
+      err.cause = { description: err.message, response: new Response(null, { status: 500 }) };
       mockRepositoryFiles.show.mockRejectedValueOnce(err);
 
       const adapter = glAdapter();
@@ -449,30 +460,80 @@ describe("GitLabAdapter", () => {
         checks: { state: "green", failed: [] },
       });
     });
+
+    // Gitbeaker 43.8.0's error: GitLab's `error` or `message` field is kept on
+    // `cause.description` (documented) and used as the message (not
+    // documented), and the answer rides on `cause.response`.
+    function refused(
+      status: number,
+      description: string,
+      headers: Record<string, string> = {},
+      message = description,
+    ) {
+      return Object.assign(new Error(message), {
+        cause: { description, response: new Response(null, { status, headers }) },
+      });
+    }
+
+    // A group webhook reports merge requests in every project of the group,
+    // including ones this token may not read. That answer never changes, so
+    // core closes the delivery instead of failing it.
+    it.each([
+      ["forbidden to this token", refused(403, "403 Forbidden")],
+      ["gone", refused(404, "404 Merge Request Not Found")],
+    ])("calls a merge request that is %s unreadable for good", async (_label, error) => {
+      mockMergeRequests.show.mockRejectedValueOnce(error);
+
+      const caught = await glAdapter().getPRHead(42).catch((failure) => failure as Error);
+
+      expect(caught).toMatchObject({ name: "PullRequestUnreadableError" });
+      expect((caught as Error).cause).toBe(error);
+    });
+
+    // A token GitLab stopped accepting, or one without the scope to read
+    // anything, refuses every merge request: the connection is at fault.
+    it.each([
+      ["a refused token", refused(401, "401 Unauthorized")],
+      ["a token without the read scope", refused(403, "insufficient_scope")],
+      // The documented place, whatever a later client puts in the message.
+      [
+        "a token without the read scope, read from its description",
+        refused(403, "insufficient_scope", {}, "Forbidden"),
+      ],
+      ["a rate limit", refused(429, "429 Too Many Requests", { "retry-after": "30" })],
+      ["a server error", refused(502, "502 Bad Gateway")],
+    ])("lets %s be retried", async (_label, error) => {
+      mockMergeRequests.show.mockRejectedValueOnce(error);
+
+      const caught = await glAdapter().getPRHead(42).catch((failure) => failure as Error);
+
+      expect(caught).toBe(error);
+      // With GitLab's status on it: core reads a copy of this error, which
+      // keeps an own `status` and drops Gitbeaker's `cause.response`.
+      expect(caught).toHaveProperty("status", error.cause.response.status);
+    });
   });
 
   describe("getManualDispatchPullRequest", () => {
+    function failedMergeRequest() {
+      return {
+        web_url: "https://gitlab.com/blazity/demo-app/-/merge_requests/42",
+        source_branch: "feature/manual",
+        target_branch: "main",
+        title: "Manual dispatch",
+        author: { username: "alice" },
+        draft: false,
+        state: "opened",
+        diff_refs: { head_sha: "head-sha" },
+        head_pipeline: { id: 901, status: "failed" },
+      };
+    }
+
     it("returns current MR pipeline failures and human review comments", async () => {
-      mockMergeRequests.show
-        .mockResolvedValueOnce({
-          web_url: "https://gitlab.com/blazity/demo-app/-/merge_requests/42",
-          source_branch: "feature/manual",
-          target_branch: "main",
-          title: "Manual dispatch",
-          author: { username: "alice" },
-          draft: false,
-          state: "opened",
-          diff_refs: { head_sha: "head-sha" },
-          head_pipeline: { id: 901, status: "failed" },
-        })
-        .mockResolvedValueOnce({
-          target_branch: "main",
-          state: "opened",
-          diff_refs: { head_sha: "head-sha" },
-          head_pipeline: { id: 901, status: "failed" },
-        });
+      mockMergeRequests.show.mockResolvedValueOnce(failedMergeRequest());
       mockJobs.all.mockResolvedValueOnce([
         { id: 11, name: "lint", status: "failed" },
+        { id: 12, name: "test", status: "success" },
       ]);
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
       mockMergeRequestNotes.all.mockResolvedValueOnce([
@@ -488,17 +549,14 @@ describe("GitLabAdapter", () => {
         source: "merge_request_event",
       });
 
-      await expect(
-        glAdapter().getManualDispatchPullRequest(42),
-      ).resolves.toMatchObject({
+      const snapshot = await glAdapter().getManualDispatchPullRequest(42);
+
+      expect(snapshot).toMatchObject({
         prNumber: 42,
         headRef: "feature/manual",
         headSha: "head-sha",
         baseRef: "main",
         state: "open",
-        failedChecks: expect.arrayContaining([
-          expect.objectContaining({ name: "lint", conclusion: "failed" }),
-        ]),
         reviews: [
           {
             state: "commented",
@@ -507,6 +565,72 @@ describe("GitLabAdapter", () => {
           },
         ],
       });
+      // Exactly what the Pipeline Hook reports for the same pipeline: the
+      // failed job, under GitLab CI as its producer and the pipeline's source,
+      // and not the pipeline itself beside it. A check with no producer is one
+      // core can never trust, so manual dispatch of a failed pipeline used to
+      // find nothing eligible.
+      expect(snapshot.failedChecks).toEqual([
+        {
+          handle: { kind: "job", container: 901, id: 11 },
+          name: "lint",
+          conclusion: "failed",
+          producer: "gitlab-ci",
+          source: "merge_request_event",
+          trustedByDefault: true,
+        },
+      ]);
+    });
+
+    it("reports the pipeline itself when it failed without a failed job", async () => {
+      mockMergeRequests.show.mockResolvedValueOnce(failedMergeRequest());
+      mockJobs.all.mockResolvedValueOnce([{ id: 11, name: "lint", status: "success" }]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockPipelines.show.mockResolvedValueOnce({ id: 901, source: "push" });
+
+      const snapshot = await glAdapter().getManualDispatchPullRequest(42);
+
+      expect(snapshot.failedChecks).toEqual([
+        {
+          handle: { kind: "aggregate", id: 901 },
+          name: "pipeline",
+          conclusion: "failed",
+          producer: "gitlab-ci",
+          source: "push",
+          // The rule the Pipeline Hook applies: a push pipeline is not trusted
+          // unless a workflow names it.
+          trustedByDefault: false,
+        },
+      ]);
+    });
+  });
+
+  describe("parsePullRequestUrl", () => {
+    it("reads a merge request URL on gitlab.com", () => {
+      expect(
+        glAdapter().parsePullRequestUrl(
+          new URL("https://gitlab.com/platform/services/api/-/merge_requests/17"),
+        ),
+      ).toEqual({ repoPath: "platform/services/api", prNumber: 17 });
+    });
+
+    it("keeps an instance's relative URL root out of the project path", () => {
+      // GitLab installed at https://code.example.com/gitlab: the root is the
+      // instance's, and a repository path carrying it matches nothing in the
+      // catalog, so manual dispatch would say the repository is not enabled.
+      const adapter = glAdapter({ host: "https://code.example.com/gitlab/" });
+
+      expect(
+        adapter.parsePullRequestUrl(
+          new URL("https://code.example.com/gitlab/platform/api/-/merge_requests/17"),
+        ),
+      ).toEqual({ repoPath: "platform/api", prNumber: 17 });
+      expect(
+        adapter.parsePullRequestUrl(
+          new URL("https://code.example.com/other/platform/api/-/merge_requests/17"),
+        ),
+      ).toBeNull();
     });
   });
 
@@ -552,7 +676,7 @@ describe("GitLabAdapter", () => {
 
     it("throws FatalError when the merge request is deterministically unavailable", async () => {
       const error = new Error("Merge request not found") as any;
-      error.cause = { response: { status: 404 } };
+      error.cause = { description: error.message, response: new Response(null, { status: 404 }) };
       mockMergeRequests.show.mockRejectedValueOnce(error);
 
       const caught = await glAdapter().getPRHeadSha(42).catch((failure) => failure as Error);

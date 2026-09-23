@@ -1154,6 +1154,13 @@ export type IntegrationFailureReason =
   | "stored_incomplete"
   /** The provider answered, and refused the credential. */
   | "credential_rejected"
+  /**
+   * A value cannot be what its field is: a URL that does not parse, a number
+   * that is not one, a one-line value with a line break in it, a key that does
+   * not read as a key. No provider was needed to say so, and no request could
+   * have carried it. The message names the field and never repeats the value.
+   */
+  | "value_malformed"
   /** The provider could not be reached at all. */
   | "provider_unreachable"
   /** `INTEGRATION_SECRETS_KEY` is not set on this deployment. */

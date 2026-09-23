@@ -44,7 +44,6 @@ const baseContext = {
 
 function vcsAdapter(methods: Partial<GateStatusCapableVCS & RichGateStatusCapableVCS>) {
   return {
-    sameHandle: vi.fn((left, right) => left === right),
     createBranchIfMissing: vi.fn(),
     resetOwnedBranch: vi.fn(),
     createPR: vi.fn(),

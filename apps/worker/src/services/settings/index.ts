@@ -20,13 +20,9 @@ export {
 export {
   issueTrackerBaseUrl,
   outboundEmailSettings,
-  providerWebhookSecret,
   resendWebhookSecret,
   ticketBoardSettings,
   webhookTriggerEncryptionKey,
-} from "./integration-settings.js";
-export type {
-  WebhookProviderId,
 } from "./integration-settings.js";
 export {
   getRequestSettingsSnapshot,

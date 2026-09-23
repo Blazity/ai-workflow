@@ -152,17 +152,24 @@ type LlmAccess<B extends IntegrationBlockManifest> = B extends {
  *
  * Core applies a per-attempt timeout and retries a read (GET, HEAD, OPTIONS)
  * after a network error, a 429 or a 5xx, honouring `Retry-After` up to
- * `maxRetryAfterMs`. Nothing else is retried unless `retries` says so: a PUT
- * or a DELETE is a write at these providers (a merge, a rebase, a file
- * commit), and repeating one after an ambiguous 5xx reports a conflict for
- * work that landed. A `signal` in `init` ends the request as a whole, retries
- * included, alongside `ctx.signal`. A non-2xx response is returned, not
- * thrown.
+ * `maxRetryAfterMs`. A write (anything else) is sent once by default: a PUT
+ * or a DELETE repeated after an ambiguous 5xx reports a conflict for a merge,
+ * a rebase or a file commit that landed, and even a 429 is no proof a write
+ * did nothing (Atlassian: "Only retry if the API is idempotent and the
+ * response includes a Retry-After header"). `resendAfterRateLimit` and
+ * `retries` are the two ways a caller says otherwise. A `signal` in `init`
+ * ends the request as a whole, retries included, alongside `ctx.signal`. A
+ * non-2xx response is returned, not thrown.
+ *
+ * A value no request can carry is refused before anything is sent: a header
+ * built from a connection value with a line break in it, or a URL built from
+ * one that does not parse, throws `ConnectionValueError` naming the field.
  *
  * What a failed request throws has every connection secret taken out of its
- * message and its causes, and keeps its `name`: a deadline is still a
- * `TimeoutError` or an `AbortError`, and "never reached the server" is still a
- * `TypeError` with a cause.
+ * message, its stack, its fields and its causes, and is otherwise the error it
+ * was: the same class and `name` (a deadline is still a `TimeoutError` or an
+ * `AbortError`, "never reached the server" is still a `TypeError` with a
+ * cause), and the same `code` and `status`.
  */
 export interface IntegrationHttp {
   fetch(input: string | URL | Request, init?: IntegrationRequestInit): Promise<Response>;
@@ -173,16 +180,29 @@ export interface IntegrationRequestInit extends RequestInit {
   timeoutMs?: number;
   /**
    * Extra attempts. Defaults to `INTEGRATION_HTTP_DEFAULTS.retries` for a read
-   * and 0 for everything else. Set it on a write only where the provider makes
-   * the request idempotent (an idempotency key, a conditional header).
+   * and 0 for a write. Set it on a write only where the provider makes the
+   * request idempotent (an idempotency key, a conditional header); set it to
+   * 0 for a request that must be sent exactly once whatever comes back.
    */
   retries?: number;
+  /**
+   * Send this WRITE again after a 429 that says how long to wait
+   * (`Retry-After`), once that wait has passed; nothing else about it is
+   * retried, and a 429 without `Retry-After` is final. Set it only where the
+   * provider documents that a rate-limited call was not processed and may be
+   * repeated as it was: Slack does ("wait for the indicated number of seconds
+   * before retrying the same request", docs.slack.dev/apis/web-api/rate-limits).
+   * Atlassian says the opposite for its writes. A read needs no flag. A body
+   * that is a stream, or a `Request` object, is sent once regardless, because
+   * it cannot be sent twice.
+   */
+  resendAfterRateLimit?: boolean;
 }
 
 export const INTEGRATION_HTTP_DEFAULTS = {
   timeoutMs: 30_000,
   retries: 2,
-  /** The methods core retries on its own. */
+  /** The methods core retries on its own; see `IntegrationRequestInit` for writes. */
   retriedMethods: ["GET", "HEAD", "OPTIONS"],
   /** A longer `Retry-After` is treated as a refusal rather than a wait. */
   maxRetryAfterMs: 30_000,
