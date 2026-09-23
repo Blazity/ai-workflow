@@ -67,7 +67,6 @@ const vcsWithoutRepository: VCSAdapter = {
   postPRComment: refuseWithoutRepository,
   getCheckRunResults: refuseWithoutRepository,
   getPRConflictStatus: refuseWithoutRepository,
-  getPRHeadSha: refuseWithoutRepository,
   findPR: refuseWithoutRepository,
   getBranchSha: refuseWithoutRepository,
   getBranchShaIfExists: refuseWithoutRepository,

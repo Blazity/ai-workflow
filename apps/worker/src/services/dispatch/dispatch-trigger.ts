@@ -1243,9 +1243,10 @@ async function readCurrentPullRequest(
       );
       return { status: "ignored", result: "ignored_pull_request_unreadable" };
     }
-    // Read on core's copy of the error, which keeps its class and status but
-    // not the provider's headers (see `readProviderFailure`): a GitHub 403
-    // that is a rate limit only by its headers reads as a refusal here.
+    // Read on core's copy of the error, which keeps its class, the provider's
+    // status and the headers a verdict reads (`redactedError`): a GitHub 403
+    // that is a rate limit only by its headers is an outage here too, not a
+    // refused credential.
     const refusedCredential = readProviderFailure(error).kind === "refused";
     const diagnosticId = recordIngestionFailure(
       refusedCredential

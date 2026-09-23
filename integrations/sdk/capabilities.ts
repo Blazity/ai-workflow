@@ -2,7 +2,8 @@ import type { AgentTracingAdapter } from "./agent-tracing";
 import type { IssueTrackerAdapter } from "./issue-tracker";
 import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter, MessagingSender } from "./messaging";
-import type { VCSAdapter, VcsIntegrationAdapter } from "./vcs";
+import type { VCSAdapter } from "./vcs";
+import type { VcsIntegrationAdapter } from "./vcs-extensions";
 
 /**
  * Integration capabilities: the seams in core that an integration can fill.

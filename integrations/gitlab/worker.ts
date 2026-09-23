@@ -5,6 +5,7 @@ import {
   type IntegrationContext,
   type IntegrationRuntimeDefinition,
 } from "@integrations/sdk";
+import { gitLabClient } from "./client";
 import { gitlabHandleIdentity } from "./pipeline-checks";
 import { manifest } from "./manifest";
 import { GitLabAdapter } from "./vcs";
@@ -19,6 +20,7 @@ function adapter(
 ) {
   const target = repository ?? { repoPath: "", baseBranch: "" };
   return new GitLabAdapter({
+    http: ctx.http,
     token: ctx.connection.token,
     host: ctx.connection.host,
     projectId: target.repoPath,
@@ -29,15 +31,14 @@ function adapter(
 }
 
 /**
- * One read of the GitLab API with the connection's token, through `ctx.http`,
+ * One read of the GitLab API through the integration's client (`client.ts`),
  * so it is bounded by the context and a non-2xx comes back as the answer it
  * was rather than as a sentence.
  */
 function gitlab(ctx: GitLabContext, path: string): Promise<Response> {
-  const host = ctx.connection.host.replace(/\/+$/u, "");
-  return ctx.http.fetch(`${host}/api/v4${path}`, {
-    headers: { "PRIVATE-TOKEN": ctx.connection.token },
-  });
+  return gitLabClient({ http: ctx.http, host: ctx.connection.host, token: ctx.connection.token }).send(
+    path,
+  );
 }
 
 /** Who the token is, or GitLab's answer when it would not say. */

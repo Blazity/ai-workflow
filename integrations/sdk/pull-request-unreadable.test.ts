@@ -10,7 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isPullRequestRefusal, providerAnswerOf } from "./index";
+import { isPullRequestRefusal, providerAnswer } from "./index";
 
 function octokit(status: number, message: string, headers: Record<string, string> = {}) {
   return Object.assign(new Error(message), { status, response: { headers } });
@@ -55,8 +55,13 @@ test("a rate limit and a provider that did not answer are no verdict at all", ()
 });
 
 test("the answer is read where each client keeps it", () => {
-  const withStatus = octokit(404, "Not Found");
-  assert.equal(providerAnswerOf(withStatus), withStatus);
-  const kept = gitbeaker(401, "401 Unauthorized");
-  assert.equal(providerAnswerOf(kept), kept.cause.response);
+  assert.deepEqual(providerAnswer(octokit(404, "Not Found", { "x-ratelimit-remaining": "12" })), {
+    status: 404,
+    headers: { "x-ratelimit-remaining": "12" },
+  });
+  assert.deepEqual(providerAnswer(gitbeaker(401, "401 Unauthorized", { "retry-after": "30" })), {
+    status: 401,
+    headers: { "retry-after": "30" },
+  });
+  assert.equal(providerAnswer(new Error("socket hang up")), null);
 });

@@ -7,10 +7,9 @@ import type {
   PrTriggerPayload,
   TriggerEvent,
 } from "@integrations/sdk";
-import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
+import { isManagedGateCheckName, isOurOwnVcsComment, vcsLoginsMatch } from "@integrations/sdk";
 import type { manifest } from "./manifest";
 import { checkRunHandle, isTrustedByDefaultCheckProducer } from "./handles";
-import { vcsLoginsMatch } from "./review-markers";
 
 type GitHubContext = IntegrationContext<typeof manifest>;
 

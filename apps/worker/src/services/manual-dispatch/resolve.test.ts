@@ -238,28 +238,30 @@ describe("manual pull request input", () => {
     // adapter reported (checks with no producer), which a hand-made snapshot
     // would have papered over.
     const { GitLabAdapter } = await import("../../../../../integrations/gitlab/vcs.js");
-    const client = {
-      MergeRequests: {
-        show: vi.fn().mockResolvedValue({
-          web_url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
-          source_branch: "feature/manual",
-          target_branch: "main",
-          title: "Manual dispatch",
-          author: { username: "alice" },
-          state: "opened",
-          diff_refs: { head_sha: "head-sha" },
-          head_pipeline: { id: 901, status: "failed" },
-        }),
+    const { gitLabRestAnswers } = await import("../../test-support/gitlab-rest.js");
+    const project = "/api/v4/projects/platform/api";
+    const answers: Record<string, unknown> = {
+      [`${project}/merge_requests/17`]: {
+        web_url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+        source_branch: "feature/manual",
+        target_branch: "main",
+        title: "Manual dispatch",
+        author: { username: "alice" },
+        state: "opened",
+        diff_refs: { head_sha: "head-sha" },
+        head_pipeline: { id: 901, status: "failed" },
       },
-      Jobs: { all: vi.fn().mockResolvedValue([{ id: 11, name: "lint", status: "failed" }]) },
-      Pipelines: { show: vi.fn().mockResolvedValue({ id: 901, source: "merge_request_event" }) },
-      MergeRequestNotes: { all: vi.fn().mockResolvedValue([]) },
-      MergeRequestDiscussions: { all: vi.fn().mockResolvedValue([]) },
+      [`${project}/pipelines/901/jobs`]: [{ id: 11, name: "lint", status: "failed" }],
+      [`${project}/pipelines/901`]: { id: 901, source: "merge_request_event" },
+      [`${project}/merge_requests/17/notes`]: [],
+      [`${project}/merge_requests/17/discussions`]: [],
     };
-    const gitLabSnapshot = await new GitLabAdapter(
-      { token: "t", projectId: "platform/api", baseBranch: "main" },
-      client as never,
-    ).getManualDispatchPullRequest(17);
+    const gitLabSnapshot = await new GitLabAdapter({
+      http: gitLabRestAnswers((path) => answers[path]),
+      token: "t",
+      projectId: "platform/api",
+      baseBranch: "main",
+    }).getManualDispatchPullRequest(17);
     const gitLabPr: PrTriggerPayload = {
       ...pr,
       provider: "gitlab",

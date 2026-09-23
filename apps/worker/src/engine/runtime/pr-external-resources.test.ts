@@ -38,8 +38,16 @@ const {
   mockAssertActiveRunOwner: vi.fn(),
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
+// One adapter per resolution, as the runtime hands it out: the deferred port
+// and the resolved adapter are the same object here, which is what they are
+// once the connection has resolved.
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mockCreateRepositoryVCS,
+  resolveRepositoryVCS: async (target: unknown) => mockCreateRepositoryVCS(target),
+  createRepositoryVcsRuntime: (target: unknown) => {
+    const vcs = mockCreateRepositoryVCS(target);
+    return { vcs, adapter: async () => vcs };
+  },
 }));
 vi.mock("../../infra/logger.js", () => ({ logger: mockLogger }));
 vi.mock("../../db/repositories/active-runs.js", () => ({
