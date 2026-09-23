@@ -17,7 +17,11 @@
  * the day this lands; reading the test verdict here would empty their palettes.
  */
 import { investigateSources } from "../blocks/investigate/manifest.js";
-import type { IntegrationBlockManifest, IntegrationManifest } from "@integrations/sdk";
+import {
+  INTEGRATION_CAPABILITIES,
+  type IntegrationBlockManifest,
+  type IntegrationManifest,
+} from "@integrations/sdk";
 import type {
   IntegrationConnectionPin,
   IntegrationFailure,
@@ -234,9 +238,11 @@ export function integrationUnusableReason(presence: IntegrationPresence): string
  * integration is refused by name, however many integrations declare it; each
  * of stages S9 to S13 adds its capability here in the same change that teaches
  * execution to resolve it. S9 added `messaging`
- * (`engine/support/messaging.ts`).
+ * (`engine/support/messaging.ts`). `memory` and the `many` capabilities
+ * (`vcs`, `agent_tracing`) never reach this check: each is answered above by
+ * the rule a run is answered by.
  */
-const INTEGRATION_SERVED_CAPABILITIES: ReadonlySet<string> = new Set(["messaging", "vcs"]);
+const INTEGRATION_SERVED_CAPABILITIES: ReadonlySet<string> = new Set(["messaging"]);
 
 /**
  * The same question for a CORE block that needs a capability.
@@ -256,9 +262,15 @@ function capabilityIssue(
   capability: string,
   integrations: DeploymentIntegrations,
 ): string | null {
+  // Memory is answered by its own rule, the one every run is answered by: a
+  // block has no key for it, so "offered" can only mean "runs here remember".
+  if (capability === MEMORY) return memoryIssue(integrations);
   const holders = integrations.providers.get(capability) ?? [];
   const label = capabilityLabel(capability);
-  if (capability === "vcs") {
+  // Every usable provider of a `many` capability serves at once (version
+  // control per repository, tracing on every sandbox), so one is enough and
+  // two are not a choice to make.
+  if (cardinalityOf(capability) === "many") {
     if (integrations.builtinCapabilities.has(capability) || holders.length > 0) return null;
     const idle = [...integrations.byId.values()].filter(
       (presence) => presence.capabilities.includes(capability) && !presence.usable,
@@ -301,6 +313,76 @@ function capabilityIssue(
   // disable the ones you do not want, and the sentence says that rather than
   // sending an admin to a control nobody has built.
   return `${[...names, "this deployment's built-in provider"].join(" and ")} all provide the ${label} capability. Disable the ones you do not want until the Integrations page can select an active provider.`;
+}
+
+/**
+ * Who answers memory on this deployment. THE ONE RULE, read by every run
+ * (`activeMemory` in `engine/support/memory-runtime.ts`) and by the palette (a
+ * block that requires `memory`), so an editor cannot offer a block on memory
+ * that the run it starts will not have.
+ *
+ * An integration counts once an admin has switched it on and configured it,
+ * working or not (`connected` or `failing`). Nothing counted means the
+ * built-in store: memory is the one capability core serves by itself, so that
+ * is the default deployment rather than a refusal. One counted replaces the
+ * built-in store, and when it is failing it is still the one chosen: serving
+ * the built-in store instead would split the deployment's memory across two
+ * stores with nobody told. Two counted is a choice nobody made, and a failing
+ * one counts toward it, so a refused key cannot quietly hand memory to the
+ * other engine. Disabled and never connected are the admin's choice to use
+ * the built-in store.
+ */
+export type MemoryProviderChoice =
+  | { readonly kind: "builtin" }
+  | { readonly kind: "integration"; readonly id: string }
+  | { readonly kind: "failing"; readonly id: string }
+  | { readonly kind: "ambiguous"; readonly ids: readonly string[] };
+
+export function memoryProviderChoice(
+  integrations: Iterable<{
+    readonly id: string;
+    readonly status: IntegrationStatus;
+    readonly capabilities: readonly string[];
+  }>,
+): MemoryProviderChoice {
+  const chosen = [...integrations].filter(
+    (integration) =>
+      integration.capabilities.includes(MEMORY) &&
+      (integration.status === "connected" || integration.status === "failing"),
+  );
+  const [only] = chosen;
+  if (!only) return { kind: "builtin" };
+  if (chosen.length > 1) return { kind: "ambiguous", ids: chosen.map((integration) => integration.id) };
+  return only.status === "connected"
+    ? { kind: "integration", id: only.id }
+    : { kind: "failing", id: only.id };
+}
+
+/** The palette's sentence for the memory rule above, or null when runs here remember. */
+function memoryIssue(integrations: DeploymentIntegrations): string | null {
+  const choice = memoryProviderChoice(integrations.byId.values());
+  if (choice.kind === "builtin" || choice.kind === "integration") return null;
+  const nameOf = (id: string) => integrations.byId.get(id)?.name ?? id;
+  if (choice.kind === "ambiguous") {
+    const names = choice.ids.map(nameOf);
+    const listed =
+      names.length === 2
+        ? `${names[0]} and ${names[1]} both provide`
+        : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} all provide`;
+    return `${listed} memory on this deployment. Disable all but one of them on the Integrations page.`;
+  }
+  const failure = integrations.byId.get(choice.id)?.failure?.message;
+  return `${nameOf(choice.id)} provides memory on this deployment and its connection is failing${
+    failure ? ` (${failure})` : ""
+  }, so runs go without memory. Fix it on the Integrations page, or disable it there to use the built-in memory.`;
+}
+
+/** The SDK's word for how many providers of a capability serve at once. */
+function cardinalityOf(capability: string): "one" | "many" | null {
+  const declared = (INTEGRATION_CAPABILITIES as Readonly<Record<string, { cardinality: "one" | "many" }>>)[
+    capability
+  ];
+  return declared?.cardinality ?? null;
 }
 
 /** The capability's id as a person reads it. Names no provider. */

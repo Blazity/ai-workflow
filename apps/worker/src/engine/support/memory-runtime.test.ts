@@ -21,14 +21,30 @@ import type {
 import type { IntegrationState } from "@shared/contracts";
 
 const resolveUsableIntegrations = vi.fn();
+/** Every secret this deployment knows, as the one source answers it. Nothing
+ *  by default; a case that is about secrets says which. */
+const knownSecretValues = vi.fn<() => Promise<string[]>>();
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
   resolveUsableIntegrations,
+  knownSecretValues,
   // The comparison itself is the real one: a mocked pin check would prove that
   // this module calls something, not that a moved provider is refused.
   checkIntegrationPin: (
     await importOriginal<typeof import("../../services/integrations/runtime.js")>()
   ).checkIntegrationPin,
 }));
+/** The real redaction unless a case breaks it on purpose. */
+const redaction = vi.hoisted(() => ({ broken: false }));
+vi.mock("../../run-observability/sanitizer.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../run-observability/sanitizer.js")>();
+  return {
+    ...actual,
+    redactConfiguredSecretsInText: (text: string, secrets: readonly string[]) => {
+      if (redaction.broken) throw new Error("redaction failed");
+      return actual.redactConfiguredSecretsInText(text, secrets);
+    },
+  };
+});
 
 // The memory integrations this build ships. No real one exists yet, so each
 // case registers the fakes it is about, the way a generated registry would.
@@ -159,6 +175,8 @@ afterEach(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   registered.splice(0);
+  redaction.broken = false;
+  knownSecretValues.mockResolvedValue([]);
   builtinRecall.mockResolvedValue({ ok: true, held: false, entries: [], rendering: "" });
   builtinObserve.mockResolvedValue({
     ok: true,
@@ -606,5 +624,110 @@ describe("what memory copies out of a provider", () => {
     await expect((await activeMemory()).store?.list({})).rejects.toThrow(
       "listing refused for [redacted]",
     );
+  });
+});
+
+describe("what an observation carries out of this deployment", () => {
+  // A token an admin pasted into the dashboard is decrypted from the database
+  // and never reaches the environment, so an engine's own code cannot know it.
+  // Core takes it out before the engine sees the text, for every provider.
+  const STORED_TOKEN = "stored-dashboard-token-5e1f0c";
+  const written = { ok: true, stored: true, removed: 0, dropped: 0, remaining: 1 } as const;
+
+  it("hands a connected engine every text with this deployment's secrets taken out", async () => {
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+    const memory = await activeMemory();
+
+    await memory.observe({
+      ...OBSERVE,
+      observation: {
+        kind: "items",
+        learned: [`Deploy with ${STORED_TOKEN} in the header`],
+        refuted: [`The token ${STORED_TOKEN} is read from .env`],
+        derived: true,
+      },
+    });
+    await memory.observe({
+      ...OBSERVE,
+      scope: { kind: "notebook", name: "AIW-1" },
+      observation: { kind: "document", text: `curl -H "x-key: ${STORED_TOKEN}"`, sourceTruncated: true },
+    });
+
+    expect(JSON.stringify(observe.mock.calls)).not.toContain(STORED_TOKEN);
+    expect(observe.mock.calls.map(([request]) => request.observation)).toEqual([
+      {
+        kind: "items",
+        learned: ["Deploy with [REDACTED:configured_secret] in the header"],
+        refuted: ["The token [REDACTED:configured_secret] is read from .env"],
+        derived: true,
+      },
+      {
+        kind: "document",
+        text: 'curl -H "x-key: [REDACTED:configured_secret]"',
+        sourceTruncated: true,
+      },
+    ]);
+    // Addresses are core's, compared exactly: rewriting one would orphan what
+    // is stored under it, so they arrive as they were sent.
+    expect(observe.mock.calls[1]?.[0]).toMatchObject({
+      subject: SUBJECT,
+      scope: { kind: "notebook", name: "AIW-1" },
+      runId: "run_1",
+    });
+  });
+
+  it("cleans what the built-in store is given in the same place", async () => {
+    // One home for the rule: the built-in store no longer scrubs for itself.
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    readable();
+
+    await (await activeMemory()).observe({
+      ...OBSERVE,
+      observation: { kind: "items", learned: [`uses ${STORED_TOKEN}`], refuted: [] },
+    });
+
+    expect(builtinObserve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        observation: { kind: "items", learned: ["uses [REDACTED:configured_secret]"], refuted: [] },
+      }),
+    );
+  });
+
+  it("sends nothing when the secrets to take out cannot be read", async () => {
+    // Fail closed. A smaller set here is a stored secret sent to a third party
+    // in the clear, and nobody would ever see that it happened.
+    const { IntegrationSecretsUnreadableError } = await import(
+      "../../services/integrations/secret-values.js"
+    );
+    knownSecretValues.mockRejectedValue(new IntegrationSecretsUnreadableError(new Error("db down")));
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+
+    const write = await (await activeMemory()).observe(OBSERVE);
+
+    expect(write).toEqual({
+      ok: false,
+      code: "unavailable",
+      detail: expect.stringContaining("could not be read"),
+    });
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing it could not clean", async () => {
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    redaction.broken = true;
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+
+    const write = await (await activeMemory()).observe(OBSERVE);
+
+    expect(write).toEqual({
+      ok: false,
+      code: "rejected",
+      detail: expect.stringContaining("could not be scrubbed"),
+    });
+    expect(observe).not.toHaveBeenCalled();
   });
 });

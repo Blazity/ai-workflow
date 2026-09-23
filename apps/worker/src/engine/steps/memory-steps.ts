@@ -1,5 +1,6 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
-import { utf8Bytes, utf8BoundaryEnd } from "../../memory/content.js";
+import { MEMORY_NOTEBOOK_MAX_BYTES } from "@integrations/sdk";
+import { fitMemoryText, utf8Bytes, utf8BoundaryEnd } from "../../memory/content.js";
 import {
   WORKSPACE_ROOT_DIR,
   type WorkspaceManifest,
@@ -8,15 +9,17 @@ import {
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.get>>;
 
 /**
- * The size of one workspace memory document, as this step reads it out of a
- * sandbox.
+ * The size of one workspace memory document, in both directions: how much of
+ * the agent's file this step reads out of a sandbox, and how much of a
+ * recalled notebook it writes into one. The SDK states it
+ * (`MEMORY_NOTEBOOK_MAX_BYTES`) because a provider's author has to know it.
  *
- * It is the store's limit and it is spelled here because the read happens
- * before any provider is involved: a stream has to be capped as it is
- * consumed, and there is nothing to ask yet. The provider applies its own
- * limit to what it is given, so a provider that holds less simply stores less.
+ * The read happens before any provider is involved: a stream has to be capped
+ * as it is consumed, and there is nothing to ask yet. The provider applies its
+ * own limit to what it is given, so a provider that holds less simply stores
+ * less. The write is capped whatever the provider returned.
  */
-const MAX_WORKSPACE_MEMORY_BYTES = 256 * 1024;
+const MAX_WORKSPACE_MEMORY_BYTES = MEMORY_NOTEBOOK_MAX_BYTES;
 
 /** Exactly the path the agent still reads and commits, relative to its cwd, so
  * the store and the working copy stay the same document. */
@@ -159,7 +162,14 @@ export async function hydrateWorkspaceMemoryStep(
         unavailable: recalled.detail,
       };
     }
-    const stored = recalled.held ? { content: recalled.rendering } : null;
+    // Whatever the provider returned, the agent's file is at most the notebook
+    // limit, and a cut one says so on its last line (`fitMemoryText`, the one
+    // rule for cutting memory). The limit is far above the rule's floor, so
+    // the empty fallback is never reached; it exists so that nothing past the
+    // limit can be written even then.
+    const stored = recalled.held
+      ? { content: fitMemoryText(recalled.rendering, MAX_WORKSPACE_MEMORY_BYTES)?.text ?? "" }
+      : null;
     if (stored) {
       if (trackedInRepo) {
         // Overwriting a tracked file is a tracked modification, which the
@@ -209,10 +219,11 @@ export async function hydrateWorkspaceMemoryStep(
       },
     });
     if (!seeded.ok) {
-      // Every refusal is reported. `rejected` is the provider declining this
-      // text (it could not be scrubbed of configured secrets), which used to be
-      // `memory_document_redaction_failed` here and is now the provider's
-      // decision with its own sentence.
+      // Every refusal is reported. `rejected` is the text being declined
+      // (core could not scrub it of this deployment's secrets, or the
+      // provider will not take it), which used to be
+      // `memory_document_redaction_failed` here and now carries its own
+      // sentence.
       log.warn(
         { code: seeded.code, provider: memory.id, detail: seeded.detail },
         "memory_document_seed_refused",

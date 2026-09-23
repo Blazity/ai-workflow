@@ -18,8 +18,11 @@
  *
  * `recall` and `observe` NEVER THROW. Both answer, because the port promises
  * that and because memory must not be able to change a run's outcome. A
- * database error, an oversized document and a refused redaction are all
- * answers there.
+ * database error and an oversized document are both answers there.
+ *
+ * It does not scrub secrets. Every observation reaches every provider, this
+ * one included, with this deployment's secrets already taken out, in one place
+ * (`withoutKnownSecrets` in `engine/support/memory-runtime.ts`).
  *
  * `store` is the other half and it DOES throw, which the port also says: its
  * three methods have no failure shape to answer with, so the alternative is to
@@ -188,17 +191,6 @@ async function builtinRecall(request: MemoryRecallRequest): Promise<MemoryRecall
   }
 }
 
-/**
- * Every secret the deployment knows, for the redaction every write runs first.
- * A set that cannot be read throws, and `builtinObserve` answers that as
- * `unavailable`: the write is refused and worth retrying, never stored with a
- * token an admin kept in the dashboard left in the clear.
- */
-async function memorySecretValues(): Promise<string[]> {
-  const { knownSecretValues } = await import("../../services/integrations/runtime.js");
-  return knownSecretValues();
-}
-
 async function builtinObserve(request: MemoryObserveRequest): Promise<MemoryWrite> {
   try {
     if (request.observation.kind === "document") {
@@ -261,21 +253,7 @@ async function storeDocument(
   // carry the marker. Without it a prefix that happens to fit the cap is
   // indistinguishable from a whole document, and the stored text would end mid
   // sentence with nothing saying why.
-  const prepared = prepareMemoryContent(
-    text,
-    MAX_MEMORY_DOCUMENT_BYTES,
-    sourceTruncated,
-    await memorySecretValues(),
-  );
-  // Fail closed: text that could not be scrubbed of this deployment's
-  // configured secrets never reaches the database.
-  if (!prepared) {
-    return {
-      ok: false,
-      code: "rejected",
-      detail: "the text could not be scrubbed of configured secrets, so it was not stored",
-    };
-  }
+  const prepared = prepareMemoryContent(text, MAX_MEMORY_DOCUMENT_BYTES, sourceTruncated);
   if (prepared.truncated) {
     // Stored truncated rather than dropped, which is what this store has
     // always done. The warning is the record that it happened.
@@ -318,7 +296,6 @@ async function storeItems(
   const { getConnectedMemoryDocument, upsertConnectedMemoryDocument } = await import(
     "../../db/repositories/memory.js"
   );
-  const secrets = await memorySecretValues();
   const stored = await getConnectedMemoryDocument(request.subject.key, kind);
 
   if (observation.onlyIfEmpty) {
@@ -334,7 +311,7 @@ async function storeItems(
     if (items.length === 0) {
       return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
     }
-    const prepared = prepared12k(request.subject.label, kind, items, secrets);
+    const prepared = prepared12k(request.subject.label, kind, items);
     if (!prepared.ok) return prepared.write;
     const created = await upsertConnectedMemoryDocument({
       subjectKey: request.subject.key,
@@ -396,7 +373,7 @@ async function storeItems(
         remaining: merged.items.length,
       };
     }
-    const prepared = prepared12k(request.subject.label, kind, merged.items, secrets);
+    const prepared = prepared12k(request.subject.label, kind, merged.items);
     if (!prepared.ok) return prepared.write;
     const result = await upsertConnectedMemoryDocument({
       subjectKey: request.subject.key,
@@ -452,44 +429,32 @@ type PreparedDocument =
   | { readonly ok: false; readonly write: MemoryWrite };
 
 /**
- * Render, scrub and size one facts or lessons document.
+ * Render and size one facts or lessons document.
  *
- * Both refusals fail closed, and both are `rejected` rather than a silent skip:
- * text that could not be scrubbed must never reach the database, and a
- * truncation here means redaction GREW the text past a cap the merge already
- * sized it under, so the cut would land inside a bullet or its provenance
- * comment. Storing a mangled document is worse than storing none, and the next
- * run re-derives this one.
+ * The merge already sized the items under the cap, so a cut here is reached
+ * only by a pure retraction on a document stored under an older, larger cap
+ * (see "forgetting on request" in `storeItems`). It is `rejected` rather than
+ * a silent trim: the cut would land inside a bullet or its provenance comment,
+ * storing a mangled document is worse than storing none, and the next run
+ * that adds something trims it properly.
  */
 function prepared12k(
   subject: string,
   kind: RepoMemoryDocKind,
   items: readonly RepoMemoryItem[],
-  secrets: readonly string[],
 ): PreparedDocument {
   const prepared = prepareMemoryContent(
     renderRepoMemoryDocument({ subject, kind, items }),
     MAX_DOC_BYTES,
     false,
-    secrets,
   );
-  if (!prepared) {
-    return {
-      ok: false,
-      write: {
-        ok: false,
-        code: "rejected",
-        detail: "the text could not be scrubbed of configured secrets, so it was not stored",
-      },
-    };
-  }
   if (prepared.truncated) {
     return {
       ok: false,
       write: {
         ok: false,
         code: "rejected",
-        detail: "scrubbing grew the document past what this store holds, so it was not stored",
+        detail: `the document would be larger than the ${MAX_DOC_BYTES / 1024} KiB this store holds, so it was not stored`,
       },
     };
   }

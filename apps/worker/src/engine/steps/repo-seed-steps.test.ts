@@ -985,9 +985,9 @@ describe("seedRepoMemoryStep pruning", () => {
 
   it("does not store a pruned document that no longer fits the cap", async () => {
     // Past the 12 KiB document cap the distill step renders against, so the
-    // survivors come back truncated. The cut lands wherever redaction leaves it,
-    // most often inside a bullet or its provenance comment, and a mangled
-    // document is worse than a stale one.
+    // survivors would come back truncated. The cut lands wherever it lands, most
+    // often inside a bullet or its provenance comment, and a mangled document
+    // is worse than a stale one.
     const bulky = Array.from({ length: 80 }, (_, index) => `${"f".repeat(180)} ${index}`);
     await storeFacts(["Run lint with: pnpm lint", ...bulky], "run_0");
     fakeSandbox(packageJson({ scripts: { test: "vitest run" } }));
@@ -997,7 +997,7 @@ describe("seedRepoMemoryStep pruning", () => {
       pruned: 0,
       // S13: the store refuses a document it cannot render inside its own cap
       // and says so, rather than the step deciding that for it.
-      unavailable: expect.stringContaining("grew the document"),
+      unavailable: expect.stringContaining("larger than the 12 KiB this store holds"),
     });
     expect(stepUpserts()).toEqual([]);
     expect((await readFacts()) ?? []).toHaveLength(bulky.length + 1);

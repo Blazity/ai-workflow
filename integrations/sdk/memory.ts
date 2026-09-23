@@ -94,6 +94,33 @@ export type MemoryScope =
 /** The three words a scope can be, for a caller that iterates or reports. */
 export type MemoryScopeKind = MemoryScope["kind"];
 
+/**
+ * How much of what providers recall reaches one agent prompt, in UTF-8 bytes
+ * of `rendering`, per scope, summed over every subject the prompt carries (the
+ * owner's facts and each repository's). Core enforces it where it builds the
+ * prompt, whatever a provider returns: a rendering that does not fit what is
+ * left is cut at a line end and ends with a line saying it was cut, and later
+ * renderings of that scope are left out and logged. Facts and lessons have a
+ * budget each, so a long facts list never starves the lessons beside it.
+ *
+ * So a provider does not need to be small, only ordered: what core cuts is the
+ * end, and what a provider puts first is what survives. Put what nothing else
+ * can reproduce first (entries marked `derived`), then what a recent run
+ * confirmed. Rendering far past this budget costs your engine the reads and
+ * this deployment nothing.
+ */
+export const MEMORY_PROMPT_BUDGET_BYTES = { facts: 16 * 1024, lessons: 16 * 1024 } as const;
+
+/**
+ * The largest notebook core moves between a provider and an agent's
+ * workspace, in UTF-8 bytes. Core reads at most this much of the agent's file
+ * (a longer one arrives with `sourceTruncated`), and writes at most this much
+ * of a recalled notebook into the workspace, cut with a line saying so. A
+ * notebook is a file the agent opens, never a prompt section, so the prompt
+ * budget above does not apply to it.
+ */
+export const MEMORY_NOTEBOOK_MAX_BYTES = 256 * 1024;
+
 /** One thing a provider remembers, as a person and a model read it. */
 export interface MemoryEntry {
   /**

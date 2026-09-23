@@ -40,6 +40,8 @@ import {
   getMemoryDocument,
   upsertMemoryDocument,
 } from "../../memory/store.js";
+import { MEMORY_NOTEBOOK_MAX_BYTES } from "@integrations/sdk";
+import { MEMORY_CUT_MARKER } from "../../memory/content.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import {
   hydrateWorkspaceMemoryStep,
@@ -170,6 +172,32 @@ describe("hydrateWorkspaceMemoryStep", () => {
     expect(sandbox.writeFiles).toHaveBeenCalledWith([
       { path: ROOT_PATH, content: Buffer.from("# stored notes\nzażółć") },
     ]);
+  });
+
+  it("writes a recalled notebook longer than the notebook limit cut, and says where", async () => {
+    // M2 for the notebook: whatever a provider returns, the agent's file is at
+    // most the SDK's notebook limit, and a cut one ends with a line the agent
+    // reads. Written straight into the table, the way a row from an older cap
+    // or an engine that holds more looks, because the store refuses to write
+    // one this size itself.
+    const paragraph = `${"notes about the plan ".repeat(40)}\n`;
+    const content = paragraph.repeat(Math.ceil((300 * 1024) / paragraph.length));
+    await db.insert(agentMemoryDocuments).values({
+      subjectKey: SUBJECT_KEY,
+      docPath: DOC_PATH,
+      ticketKey: TASK_ID,
+      content,
+      bytes: Buffer.byteLength(content, "utf8"),
+      sourceRunId: "run_0",
+    });
+    const sandbox = fakeSandbox();
+
+    expect(await hydrateWorkspaceMemoryStep(target)).toMatchObject({ written: true });
+    const written = (sandbox.writeFiles.mock.calls[0]?.[0] as Array<{ content: Buffer }>)[0]
+      ?.content;
+    expect(written?.byteLength).toBeLessThanOrEqual(MEMORY_NOTEBOOK_MAX_BYTES);
+    expect(written?.toString("utf8").endsWith(`\n${MEMORY_CUT_MARKER}`)).toBe(true);
+    expect(written?.toString("utf8").startsWith(paragraph)).toBe(true);
   });
 
   it("hydrates a document stored under the legacy key when the new key is absent", async () => {

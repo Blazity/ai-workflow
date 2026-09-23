@@ -1,4 +1,5 @@
-import { sliceUtf8Head, utf8Bytes } from "../../memory/content.js";
+import { MEMORY_PROMPT_BUDGET_BYTES } from "@integrations/sdk";
+import { fitMemoryText, MEMORY_CUT_MARKER, utf8Bytes } from "../../memory/content.js";
 import {
   REPO_MEMORY_DOC_PATHS,
   repoMemoryComparisonKey,
@@ -25,29 +26,29 @@ const MAX_MATERIAL_BYTES = 24 * 1024;
  * `memory/builtin/adapter.ts`, with their reasoning. This step reports what
  * the provider says it forgot and bounds only what it puts in a prompt, below.
  */
-/** Across every document injected into one invocation. This feature exists to
- * save tokens, and 32 KiB is already around 8k tokens on every invocation, so
- * the ceiling stays put. Eight mature repositories can still lose the tail of
- * the injection; that residual is known and acceptable because every dropped
- * document is logged. Per-repository budgets are future work. */
-const MAX_INJECTED_MEMORY_BYTES = 32 * 1024;
 /**
- * The ceiling above, split per document kind, each with its own latch. One
- * shared latch measured at eight mature repositories injected four facts
- * documents and dropped every single lessons document, and at three
- * repositories only one lessons document survived, so the paid LLM call was
- * buying output no prompt ever saw: the build and test commands in the facts
- * documents come from the free deterministic seed, and lessons are the one
- * thing the model produces that nothing else does.
+ * Across every document injected into one invocation, split per document kind
+ * with a latch each. The numbers are the SDK's (`MEMORY_PROMPT_BUDGET_BYTES`),
+ * because a provider's author has to read them there; the reasons are here.
  *
- * An even split, for two reasons. It is the largest lessons budget the ceiling
- * allows without letting facts starve them, and at one repository, which is the
- * overwhelmingly common manifest, 16 KiB is enough for a whole mature pair
- * including documents written under an older, larger write cap. Facts pay for
- * the org document too, since an org document holds facts only.
+ * 32 KiB in all: this feature exists to save tokens, and 32 KiB is already
+ * around 8k tokens on every invocation. Eight mature repositories can still
+ * lose the tail of the injection; that residual is known and acceptable
+ * because every cut and every left-out document is logged. Per-repository
+ * budgets are future work.
+ *
+ * Split, because one shared latch measured at eight mature repositories
+ * injected four facts documents and dropped every single lessons document, and
+ * at three repositories only one lessons document survived, so the paid LLM
+ * call was buying output no prompt ever saw: the build and test commands in
+ * the facts documents come from the free deterministic seed, and lessons are
+ * the one thing the model produces that nothing else does. Evenly, because it
+ * is the largest lessons budget the ceiling allows without letting facts starve
+ * them, and at one repository, the overwhelmingly common manifest, 16 KiB holds
+ * a whole mature pair. Facts pay for the org document too, since an org
+ * document holds facts only.
  */
-const MAX_INJECTED_FACTS_BYTES = MAX_INJECTED_MEMORY_BYTES / 2;
-const MAX_INJECTED_LESSONS_BYTES = MAX_INJECTED_MEMORY_BYTES - MAX_INJECTED_FACTS_BYTES;
+const MAX_INJECTED_MEMORY_BYTES = MEMORY_PROMPT_BUDGET_BYTES.facts + MEMORY_PROMPT_BUDGET_BYTES.lessons;
 /**
  * Whole-step budget for the reads in loadRepoMemorySourcesStep, not a per-query
  * one, so what an operator can state is "this step costs at most this long"
@@ -893,18 +894,20 @@ export async function distillRepoMemoryStep(
     }
     // Every part shares one budget and the shortest, densest one comes first, so
     // an oversized ticket memory document loses its tail rather than the summary
-    // or the review feedback. Only the section's presence depends on the notes,
-    // never anything the step decides.
-    const material = sliceUtf8Head(
-      [
-        "## change summary",
-        input.changeSummary.trim() === "" ? "(none)" : input.changeSummary,
-        ...(reviewNotes === "" ? [] : ["## review feedback", reviewNotes]),
-        "## run material",
-        notes.trim() === "" ? "(none)" : notes,
-      ].join("\n\n"),
-      MAX_MATERIAL_BYTES,
-    );
+    // or the review feedback, and the model is told it did (`fitMemoryText`).
+    // Only the section's presence depends on the notes, never anything the step
+    // decides.
+    const material =
+      fitMemoryText(
+        [
+          "## change summary",
+          input.changeSummary.trim() === "" ? "(none)" : input.changeSummary,
+          ...(reviewNotes === "" ? [] : ["## review feedback", reviewNotes]),
+          "## run material",
+          notes.trim() === "" ? "(none)" : notes,
+        ].join("\n\n"),
+        MAX_MATERIAL_BYTES,
+      )?.text ?? "";
 
     // The provider-qualified key is what the prompt shows and what the model's
     // answer is matched on, so the same path on two providers stays two
@@ -1753,11 +1756,44 @@ export async function loadRepoMemorySourcesStep(
      * point of the split.
      */
     const budgets: Record<RepoMemoryDocKind, { max: number; bytes: number; exhausted: boolean }> = {
-      facts: { max: MAX_INJECTED_FACTS_BYTES, bytes: 0, exhausted: false },
-      lessons: { max: MAX_INJECTED_LESSONS_BYTES, bytes: 0, exhausted: false },
+      facts: { max: MEMORY_PROMPT_BUDGET_BYTES.facts, bytes: 0, exhausted: false },
+      lessons: { max: MEMORY_PROMPT_BUDGET_BYTES.lessons, bytes: 0, exhausted: false },
     };
     let dropped = 0;
     const droppedRepositories: string[] = [];
+    const truncatedRepositories: string[] = [];
+    /**
+     * One rendering against its kind's budget, WHATEVER THE PROVIDER RETURNED:
+     * whole when it fits what is left; cut to what is left, at a line, with a
+     * marker the model reads, when it does not (`fitMemoryText`); left out when
+     * the kind is spent or too little is left to be worth a section. A cut
+     * spends the kind, so nothing after it is injected.
+     *
+     * Cut rather than dropped whole since M2: a provider that holds more than
+     * one prompt may carry used to cost the agent all of that kind's memory,
+     * and half a list is only misleading without the marker, which is why
+     * "whole documents only" was the rule before.
+     *
+     * `label` is provider-qualified here and nowhere else: the bare-path
+     * contract governs the prompt label, and this diagnostic is the one place
+     * that has to tell the same path on two providers apart.
+     */
+    const charge = (kind: RepoMemoryDocKind, rendering: string, label: string): string | null => {
+      const budget = budgets[kind];
+      const fitted = budget.exhausted ? null : fitMemoryText(rendering, budget.max - budget.bytes);
+      if (fitted === null) {
+        budget.exhausted = true;
+        dropped += 1;
+        if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
+        return null;
+      }
+      if (fitted.cut) {
+        budget.exhausted = true;
+        if (!truncatedRepositories.includes(label)) truncatedRepositories.push(label);
+      }
+      budget.bytes += utf8Bytes(fitted.text);
+      return fitted.text;
+    };
     /**
      * Absolute, so the deadline bounds the whole step rather than each query:
      * every read races the time left until this instant, and a read that loses
@@ -1847,23 +1883,18 @@ export async function loadRepoMemorySourcesStep(
       if (timedOut) break;
       const items = stored?.entries ?? [];
       if (items.length === 0) continue;
-      const injected = stored?.rendering ?? "";
-      const injectedBytes = utf8Bytes(injected);
-      const budget = budgets.facts;
-      if (budget.exhausted || budget.bytes + injectedBytes > budget.max) {
-        budget.exhausted = true;
-        dropped += 1;
-        // Scope-qualified as well as provider-qualified: an owner label and a
-        // repository label under it would otherwise read as the same loss.
-        const label = `org:${entry.provider}:${entry.owner}`;
-        if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
-        continue;
-      }
-      budget.bytes += injectedBytes;
+      const rendering = stored?.rendering ?? "";
+      // Scope-qualified as well as provider-qualified: an owner label and a
+      // repository label under it would otherwise read as the same loss.
+      const injected = charge("facts", rendering, `org:${entry.provider}:${entry.owner}`);
+      if (injected === null) continue;
       const ownerScope = shadowKey(entry.provider, entry.owner, "");
       const texts = orgTextsByOwner.get(ownerScope) ?? [];
       for (const item of items) {
         if (repoMemoryComparisonKey(item.text).length === 0) continue;
+        // An entry cut off the end never reached the prompt, so it must not
+        // keep a repository's own copy of it out either.
+        if (injected !== rendering && !injected.includes(item.text)) continue;
         texts.push(item.text);
       }
       orgTextsByOwner.set(ownerScope, texts);
@@ -1922,23 +1953,14 @@ export async function loadRepoMemorySourcesStep(
         // the rendering carries no provenance is the port's promise and the
         // built-in provider's test, not something re-checked here: a second
         // strip in core would be a second definition of what an agent may see.
-        const injected = stored?.rendering ?? "";
-        const injectedBytes = utf8Bytes(injected);
-        // Whole documents only: half a facts list still reads to the model as a
-        // complete one. Dropped documents are counted rather than cut, and the
-        // scan continues so the warning can name every one of them.
-        const budget = budgets[kind];
-        if (budget.exhausted || budget.bytes + injectedBytes > budget.max) {
-          budget.exhausted = true;
-          dropped += 1;
-          // Provider-qualified here and nowhere else: the bare-path contract
-          // governs the prompt label, and this diagnostic is the one place that
-          // has to tell the same path on two providers apart.
-          const label = `${repository.provider}:${repository.repoPath}`;
-          if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
-          continue;
-        }
-        budget.bytes += injectedBytes;
+        // The scan continues past a left-out document so the warning can name
+        // every one of them.
+        const injected = charge(
+          kind,
+          stored?.rendering ?? "",
+          `${repository.provider}:${repository.repoPath}`,
+        );
+        if (injected === null) continue;
         // The bare path, the same label repository instruction sections use, so
         // one repository never appears in a compiled prompt under two names. The
         // provider qualifies the subject key above and stops there. No hash: the
@@ -1981,10 +2003,10 @@ export async function loadRepoMemorySourcesStep(
         // Nothing left to report with.
       }
     }
-    if (dropped > 0) {
+    if (dropped > 0 || truncatedRepositories.length > 0) {
       // Wrapped on its own: a failed logger import must not discard a fully
       // populated result through the outer catch just because the warning about
-      // what was dropped could not be emitted.
+      // what was cut or left out could not be emitted.
       try {
         const { logger } = await import("../../infra/logger.js");
         logger.warn(
@@ -1992,6 +2014,7 @@ export async function loadRepoMemorySourcesStep(
             step: "loadRepoMemorySources",
             dropped,
             repositories: droppedRepositories,
+            truncated: truncatedRepositories,
             maxBytes: MAX_INJECTED_MEMORY_BYTES,
           },
           "repo_memory_injection_budget_exceeded",
@@ -2012,6 +2035,7 @@ export async function loadRepoMemorySourcesStep(
             bytes: budgets.facts.bytes + budgets.lessons.bytes,
             maxBytes: MAX_INJECTED_MEMORY_BYTES,
             dropped,
+            truncated: truncatedRepositories.length,
             orgDocuments,
           },
           "repo_memory_injected",
@@ -2133,7 +2157,9 @@ function buildDistillPrompt(
  * Whole entries only, and from the head of the list. A retraction addresses a
  * stored entry by quoting it exactly, so an entry cut in half is an entry that
  * can never be retracted; dropping it entirely only costs the chance to retract
- * it this run.
+ * it this run. A list that lost its tail ends with `MEMORY_CUT_MARKER` on a line
+ * of its own, charged to the same share, so the model does not read part of a
+ * list as all of it.
  *
  * The head is what the merge leaves least recently confirmed, which is the
  * stalest knowledge and so the likeliest to be contradicted by this run, while
@@ -2144,23 +2170,25 @@ function buildDistillPrompt(
  */
 function knownList(items: readonly RepoMemoryItem[], maxBytes: number): string {
   if (items.length === 0) return "(none)";
+  // Text only: provenance is bookkeeping and never reaches the model. The
+  // newline that joins a line to the one before is counted too, so the section
+  // cannot overrun its share by the number of entries in it.
+  const all = items.map((item) => `- ${item.text}`);
+  const cost = (line: string) => utf8Bytes(line) + 1;
+  if (all.reduce((total, line) => total + cost(line), 0) <= maxBytes) return all.join("\n");
+  const room = maxBytes - cost(MEMORY_CUT_MARKER);
   const lines: string[] = [];
   let bytes = 0;
-  for (const item of items) {
-    // Text only: provenance is bookkeeping and never reaches the model.
-    const line = `- ${item.text}`;
-    // The newline that joins it to the line before is counted too, so the
-    // section cannot overrun its share by the number of entries in it.
-    const cost = utf8Bytes(line) + 1;
-    if (bytes + cost > maxBytes) break;
-    bytes += cost;
+  for (const line of all) {
+    if (bytes + cost(line) > room) break;
+    bytes += cost(line);
     lines.push(line);
   }
   // A share too small for even one entry reads as a repository with nothing
   // stored, which costs a retraction rather than corrupting one. MAX_ITEM_CHARS
   // bounds an entry, so reaching this needs a manifest of dozens of repositories.
   if (lines.length === 0) return "(none)";
-  return lines.join("\n");
+  return [...lines, MEMORY_CUT_MARKER].join("\n");
 }
 
 /**

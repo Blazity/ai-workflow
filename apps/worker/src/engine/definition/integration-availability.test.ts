@@ -484,3 +484,143 @@ describe("what a graph reaches beyond the blocks the palette gates", () => {
     ]);
   });
 });
+
+/**
+ * A block may require `memory` or `agent_tracing` only to be offered or not:
+ * neither has a key on the executor's context, because core applies both
+ * around a run. So the palette's answer has to be the run's answer: whoever
+ * serves the capability for a run serves it for the block.
+ */
+describe("a block that requires a capability core applies around the run", () => {
+  const recaller = manifest({
+    id: "acmerecall",
+    name: "Acme Recall",
+    capabilities: ["memory"],
+    blocks: [{ type: "acmerecall_search", requires: { capabilities: ["memory"] } }],
+  });
+  const secondMemory = manifest({ id: "acmenotes", name: "Acme Notes", capabilities: ["memory"] });
+  const tracer = manifest({ id: "acmetracer", name: "Acme Tracer", capabilities: ["agent_tracing"] });
+  const otherTracer = manifest({ id: "acmespans", name: "Acme Spans", capabilities: ["agent_tracing"] });
+  const tracedBlock = manifest({
+    id: "acmeaudit",
+    name: "Acme Audit",
+    blocks: [{ type: "acmeaudit_review", requires: { capabilities: ["agent_tracing"] } }],
+  });
+  const memoryBlock = manifest({
+    id: "acmeaudit",
+    name: "Acme Audit",
+    blocks: [{ type: "acmeaudit_recall", requires: { capabilities: ["memory"] } }],
+  });
+
+  it("is offered on a default deployment, where the built-in store serves memory", () => {
+    // S14-36: a deployment that connected nothing serves memory from the
+    // built-in store, and every run on it remembers. Refusing the block there
+    // told the author to connect something that nothing needs.
+    const integrations = deploymentIntegrations({
+      manifests: [memoryBlock, recaller],
+      states: new Map([
+        ["acmeaudit", state("acmeaudit")],
+        ["acmerecall", state("acmerecall", { status: "not_connected", usable: false })],
+      ]),
+    });
+
+    expect(integrationBlockAvailability("acmeaudit_recall", integrations)).toEqual({
+      available: true,
+      unavailableReason: null,
+    });
+  });
+
+  it("is offered with one memory engine connected, which replaces the built-in store", () => {
+    const integrations = deploymentIntegrations({
+      manifests: [recaller],
+      states: new Map([["acmerecall", state("acmerecall")]]),
+    });
+
+    expect(integrationBlockAvailability("acmerecall_search", integrations)).toEqual({
+      available: true,
+      unavailableReason: null,
+    });
+  });
+
+  it("is offered when the memory engine is switched off, because the built-in store serves again", () => {
+    const integrations = deploymentIntegrations({
+      manifests: [memoryBlock, recaller],
+      states: new Map([
+        ["acmeaudit", state("acmeaudit")],
+        ["acmerecall", state("acmerecall", { status: "disabled", enabled: false, usable: false })],
+      ]),
+    });
+
+    expect(integrationBlockAvailability("acmeaudit_recall", integrations)?.available).toBe(true);
+  });
+
+  it("is refused while the connected memory engine is failing, as every run then goes without memory", () => {
+    const integrations = deploymentIntegrations({
+      manifests: [memoryBlock, recaller],
+      states: new Map([
+        ["acmeaudit", state("acmeaudit")],
+        [
+          "acmerecall",
+          state("acmerecall", {
+            status: "failing",
+            connection: "failing",
+            usable: false,
+            failure: { reason: "credential_rejected", message: "the key was refused" },
+          }),
+        ],
+      ]),
+    });
+
+    expect(integrationBlockAvailability("acmeaudit_recall", integrations)).toEqual({
+      available: false,
+      unavailableReason:
+        "Acme Recall provides memory on this deployment and its connection is failing (the key was refused), so runs go without memory. Fix it on the Integrations page, or disable it there to use the built-in memory.",
+    });
+  });
+
+  it("is refused while two memory engines are switched on, as runs then refuse memory", () => {
+    const integrations = deploymentIntegrations({
+      manifests: [memoryBlock, recaller, secondMemory],
+      states: new Map([
+        ["acmeaudit", state("acmeaudit")],
+        ["acmerecall", state("acmerecall")],
+        ["acmenotes", state("acmenotes", { status: "failing", connection: "failing", usable: false })],
+      ]),
+    });
+
+    expect(integrationBlockAvailability("acmeaudit_recall", integrations)).toEqual({
+      available: false,
+      unavailableReason:
+        "Acme Recall and Acme Notes both provide memory on this deployment. Disable all but one of them on the Integrations page.",
+    });
+  });
+
+  it("is offered with any usable tracing provider, however many", () => {
+    const integrations = deploymentIntegrations({
+      manifests: [tracedBlock, tracer, otherTracer],
+      states: new Map([
+        ["acmeaudit", state("acmeaudit")],
+        ["acmetracer", state("acmetracer")],
+        ["acmespans", state("acmespans")],
+      ]),
+    });
+
+    expect(integrationBlockAvailability("acmeaudit_review", integrations)).toEqual({
+      available: true,
+      unavailableReason: null,
+    });
+  });
+
+  it("is refused when nothing traces agents on this deployment", () => {
+    const integrations = deploymentIntegrations({
+      manifests: [tracedBlock],
+      states: new Map([["acmeaudit", state("acmeaudit")]]),
+    });
+
+    expect(integrationBlockAvailability("acmeaudit_review", integrations)).toEqual({
+      available: false,
+      unavailableReason:
+        "Nothing on this deployment provides the agent tracing capability, which this block needs. Connect an integration that provides it on the Integrations page.",
+    });
+  });
+});
