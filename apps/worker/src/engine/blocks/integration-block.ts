@@ -74,7 +74,7 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
   // this block or a sandbox it traces, and never for any other integration.
   const runState = await integrationRunState(ctx, entry.integrationId);
   if (runState.status === "unreadable") {
-    return settingsUnreadable(entry.block.ui.label, runState.reason);
+    return settingsUnreadable(entry.block.ui.label);
   }
   if (runState.status === "unavailable") {
     // The integration moved under the run, and the cause is what an admin acts
@@ -126,7 +126,7 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
         message: result.message,
       });
     }
-    if (result.kind === "unreadable") return settingsUnreadable(entry.block.ui.label, result.reason);
+    if (result.kind === "unreadable") return settingsUnreadable(entry.block.ui.label);
     if (result.kind === "llm_unconfigured") {
       return executionError(result.message, { category: "configuration", message: result.message });
     }
@@ -148,9 +148,15 @@ export const executeIntegrationBlock: BlockExecuteFn = async (
  * not the one to blame, and nothing was remembered, so a retry of the run asks
  * again. One sentence for both reads, because the person reading it acts the
  * same way on either.
+ *
+ * The database's own reason is not in it: it is text nobody running a
+ * workflow can act on, and it can carry a host or a query. The step that read
+ * the settings logs it (`integration_block_settings_unreadable`,
+ * `integration_run_state_settings_unreadable`), which is where an operator
+ * looks.
  */
-function settingsUnreadable(label: string, reason: string): BlockExecutionResult {
-  const message = `${label} could not start: this run could not read the deployment's integration settings (${reason}). Nothing was asked of the integration; retry the run.`;
+function settingsUnreadable(label: string): BlockExecutionResult {
+  const message = `${label} could not start: this run could not read the deployment's integration settings. Nothing was asked of the integration; retry the run.`;
   return executionError(message, { category: "engine", message });
 }
 

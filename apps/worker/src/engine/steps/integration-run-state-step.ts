@@ -116,6 +116,10 @@ export async function createIntegrationRunStatesStep(
         filter: (candidate) => candidate.id === integrationId,
       });
       if (!resolved.readable) {
+        logger.warn(
+          { integration: integrationId, reason: resolved.reason },
+          "integration_run_state_settings_unreadable",
+        );
         return [
           integrationId,
           { status: "unreadable", reason: resolved.reason } as IntegrationRunStateOutcome,

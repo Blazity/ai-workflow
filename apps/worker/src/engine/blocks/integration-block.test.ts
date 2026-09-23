@@ -187,6 +187,8 @@ describe("a run reaching an integration block", () => {
     if (result.kind !== "execution_error") throw new Error("expected a refusal");
     expect(result.error.category).toBe("engine");
     expect(result.error.message).toContain("could not read the deployment's integration settings");
+    // The database's words are for the log, not for the person reading this.
+    expect(JSON.stringify(result.error)).not.toContain("connection refused");
     expect(runStep).not.toHaveBeenCalled();
   });
 
@@ -203,6 +205,7 @@ describe("a run reaching an integration block", () => {
     expect(result.error.category).toBe("engine");
     expect(result.error.message).toContain("could not read the deployment's integration settings");
     expect(result.error.message).toContain("Nothing was asked of the integration");
+    expect(JSON.stringify(result.error)).not.toContain("connection terminated");
   });
 
   it("hands the block no state when the provider could not make one, so the block decides", async () => {

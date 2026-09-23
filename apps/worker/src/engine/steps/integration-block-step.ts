@@ -129,7 +129,16 @@ export async function runIntegrationBlockStep(
     lifetime: AbortSignal.timeout(INTEGRATION_BLOCK_TIMEOUT_MS),
     filter: (candidate) => candidate.id === input.integrationId,
   });
-  if (!resolved.readable) return { kind: "unreadable", reason: resolved.reason };
+  if (!resolved.readable) {
+    // The database's own words stay in the log; what a person reads says what
+    // happened and what to do (`settingsUnreadable` in integration-block.ts).
+    const { logger } = await import("../../infra/logger.js");
+    logger.warn(
+      { integration: input.integrationId, block: input.blockType, reason: resolved.reason },
+      "integration_block_settings_unreadable",
+    );
+    return { kind: "unreadable", reason: resolved.reason };
+  }
   const states = resolved.states;
   const integrations = deploymentIntegrations({ manifests: integrationManifests, states });
   const state = states.get(input.integrationId);
