@@ -163,3 +163,20 @@ export function isSettingChanged(
   if (raw === undefined) return false;
   return !sameValue(toSettingValue(entry.key, raw), entry.value);
 }
+
+/**
+ * The concurrency token of a patch: for every key it carries, the version the
+ * form loaded that key at (the id of its newest history row, 0 for none). The
+ * worker refuses the patch with 409 when any of them has moved on, which is
+ * how a second tab learns about the first instead of silently undoing it.
+ */
+export function expectedVersionsFor(
+  entries: readonly SettingsEntryView[],
+  patch: Readonly<Record<string, SettingValue>>,
+): Record<string, number> {
+  const expected: Record<string, number> = {};
+  for (const entry of entries) {
+    if (entry.key in patch) expected[entry.key] = entry.lastVersion?.id ?? 0;
+  }
+  return expected;
+}

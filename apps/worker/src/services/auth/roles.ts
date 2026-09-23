@@ -17,6 +17,7 @@ export {
   canEditPromptLibrary,
   canEditSettings,
   canEditWorkflowDefinitions,
+  canResetSettings,
   canInvite,
   canManageHarnessProfiles,
   normalizeDashboardRole,

@@ -15,9 +15,11 @@
 import { settingDefinition, settingDefinitions } from "@integrations/registry";
 import {
   SETTING_LIST_ENTRY_RULE,
+  resolveSettingWithoutStoredRow,
   validateSettingsPatch,
   type SettingValidationIssue,
   type SettingValue,
+  type SettingsConflictView,
   type SettingsEntryView,
   type SettingsPatchResponse,
   type SettingsReadResponse,
@@ -25,12 +27,14 @@ import {
   type SettingsVersionView,
   type SettingsVersionsResponse,
 } from "@shared/contracts";
+import { getConnectedDashboardUserLabels } from "../../db/repositories/auth.js";
 import {
   latestConnectedSettingsVersions,
   listConnectedSettingsVersions,
   writeManyConnectedSettings,
   type SettingsVersionRow,
 } from "../../db/repositories/settings.js";
+import { settingsEnvironment } from "../../infra/settings-environment.js";
 import { loadSettingsResolution, type SettingsResolution } from "./snapshot.js";
 
 /** How many past changes of one key the history answers with. */
@@ -58,16 +62,46 @@ export class SettingsValidationError extends Error {
   }
 }
 
+/**
+ * A settings write refused because a key it touches was changed by somebody
+ * else after the caller read it. Nothing of the write was stored. Carries each
+ * refused key as it stands now, so a surface can show what won without a
+ * second read.
+ */
+export class SettingsVersionConflictError extends Error {
+  readonly conflicts: SettingsConflictView[];
+
+  constructor(conflicts: SettingsConflictView[]) {
+    super(
+      `Changed since you read it: ${conflicts
+        .map((conflict) => `${conflict.key} (now version ${conflict.currentVersion})`)
+        .join(", ")}. Nothing was stored. Read the setting again and send its current version to overwrite.`,
+    );
+    this.name = "SettingsVersionConflictError";
+    this.conflicts = conflicts;
+  }
+}
+
+/** Who each writer is, by the id the rows store. */
+export type ActorLabels = ReadonlyMap<string, string>;
+
+/** The people behind these rows, in one read. A writer that is not a user
+ *  ("migration", a deleted account) is simply absent from the answer. */
+export function actorLabelsFor(rows: readonly SettingsVersionRow[]): Promise<ActorLabels> {
+  return getConnectedDashboardUserLabels(rows.map((row) => row.actor));
+}
+
 /** One recorded change, as every settings surface publishes it. Exported so a
  *  second reader of the same rows (the paged history) maps them the same way
  *  rather than growing its own copy. */
-export function versionView(row: SettingsVersionRow): SettingsVersionView {
+export function versionView(row: SettingsVersionRow, labels: ActorLabels): SettingsVersionView {
   return {
     id: row.id,
     key: row.key,
     previousValue: row.previousValue,
     newValue: row.newValue,
     actor: row.actor,
+    actorLabel: labels.get(row.actor) ?? row.actor,
     reason: row.reason,
     createdAt: row.createdAt.toISOString(),
   };
@@ -76,8 +110,9 @@ export function versionView(row: SettingsVersionRow): SettingsVersionView {
 function entryViews(
   resolution: SettingsResolution,
   latest: SettingsVersionRow[],
+  labels: ActorLabels,
 ): SettingsEntryView[] {
-  const lastByKey = new Map(latest.map((row) => [row.key, versionView(row)]));
+  const lastByKey = new Map(latest.map((row) => [row.key, versionView(row, labels)]));
   const values = resolution.snapshot as unknown as Readonly<Record<string, SettingValue>>;
   return settingDefinitions.map((definition) => ({
     key: definition.key,
@@ -89,6 +124,11 @@ function entryViews(
     appliesToRunsInFlight: definition.appliesToRunsInFlight,
     requiresRedeploy: definition.requiresRedeploy,
     lastVersion: lastByKey.get(definition.key) ?? null,
+    // The same rule the reset records as the value that takes over, so what
+    // the confirmation promised is what the history then shows.
+    fallback:
+      resolveSettingWithoutStoredRow(definition.key, settingsEnvironment, settingDefinition) ??
+      undefined,
   }));
 }
 
@@ -98,7 +138,23 @@ export async function readSettings(): Promise<SettingsReadResponse> {
     loadSettingsResolution(),
     latestConnectedSettingsVersions(),
   ]);
-  return { settings: entryViews(resolution, latest) };
+  return { settings: entryViews(resolution, latest, await actorLabelsFor(latest)) };
+}
+
+/** The conflict each stale key is answered with: the key as it stands now. */
+export async function settingsConflicts(
+  stale: readonly { key: string; currentVersion: number }[],
+  expected: (key: string) => number,
+): Promise<SettingsConflictView[]> {
+  const current = new Map((await readSettings()).settings.map((entry) => [entry.key, entry]));
+  return stale.flatMap((row) => {
+    const setting = current.get(row.key);
+    // Every stale key was a registry key the write validated, and the read
+    // enumerates the registry, so this cannot be missing.
+    return setting
+      ? [{ key: row.key, expectedVersion: expected(row.key), currentVersion: row.currentVersion, setting }]
+      : [];
+  });
 }
 
 /** One key's recorded changes, newest first. A key that is not a setting is
@@ -111,7 +167,8 @@ export async function readSettingsHistory(
     throw new SettingsValidationError([{ key, reason: "unknown_key" }]);
   }
   const rows = await listConnectedSettingsVersions(key, HISTORY_LIMIT);
-  return { versions: rows.map(versionView) };
+  const labels = await actorLabelsFor(rows);
+  return { versions: rows.map((row) => versionView(row, labels)) };
 }
 
 /**
@@ -162,11 +219,16 @@ function crossFieldIssues(
  * changes nothing at all rather than half of what was asked for. The write
  * itself is one statement in the repository tier; the snapshot is read back
  * afterwards because a statement cannot see its own writes.
+ *
+ * `expectedVersions` is the caller's concurrency token per key (see
+ * `settingsPatchRequestSchema`). A stale key refuses the whole patch with
+ * `SettingsVersionConflictError`; without the token the last write wins.
  */
 export async function updateSettings(input: {
   patch: Readonly<Record<string, unknown>>;
   actor: string;
   reason: string;
+  expectedVersions?: Readonly<Record<string, number>>;
 }): Promise<SettingsPatchResponse> {
   const issues = validateSettingsPatch(input.patch, settingDefinition);
   if (issues.length > 0) throw new SettingsValidationError(issues);
@@ -175,17 +237,24 @@ export async function updateSettings(input: {
   const crossField = crossFieldIssues(input.patch, inForce.snapshot);
   if (crossField.length > 0) throw new SettingsValidationError(crossField);
 
-  const versions = await writeManyConnectedSettings({
+  const written = await writeManyConnectedSettings({
     patch: input.patch as Readonly<Record<string, SettingValue>>,
     actor: input.actor,
     reason: input.reason,
+    expectedVersions: input.expectedVersions,
   });
+  if (written.stale.length > 0) {
+    throw new SettingsVersionConflictError(
+      await settingsConflicts(written.stale, (key) => input.expectedVersions?.[key] ?? 0),
+    );
+  }
   const [resolution, latest] = await Promise.all([
     loadSettingsResolution(),
     latestConnectedSettingsVersions(),
   ]);
+  const labels = await actorLabelsFor([...latest, ...written.versions]);
   return {
-    settings: entryViews(resolution, latest),
-    versions: versions.map(versionView),
+    settings: entryViews(resolution, latest, labels),
+    versions: written.versions.map((row) => versionView(row, labels)),
   };
 }

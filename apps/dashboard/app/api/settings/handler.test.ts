@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { handleSettingsGet, handleSettingsPatch } from "./handler";
+import { handleSettingsGet, handleSettingsPatch, handleSettingsReset } from "./handler";
 
 test("the read forwards only the key parameter, and only when it is a key", async () => {
   const paths: string[] = [];
@@ -107,4 +107,42 @@ test("a worker that never answers becomes a JSON timeout, not a crash", async ()
   assert.equal(timeout.status, 504);
   assert.deepEqual(await timeout.json(), { error: "Worker request timed out" });
   assert.equal(timeout.headers.get("cache-control"), "no-store");
+});
+
+test("removing a stored value is forwarded as a POST to the worker's reset route", async () => {
+  const calls: Array<{ path: string; method: string | undefined; body: unknown }> = [];
+  const proxy = async (path: string, init?: RequestInit) => {
+    calls.push({ path, method: init?.method, body: JSON.parse(String(init?.body)) });
+    return Response.json({ removed: true, setting: { key: "COLUMN_AI" } });
+  };
+
+  const response = await handleSettingsReset(
+    new Request("https://dashboard.test/api/settings/reset", {
+      method: "POST",
+      body: JSON.stringify({ key: "COLUMN_AI", reason: "back to default", expectedVersion: 4 }),
+    }),
+    proxy,
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    {
+      path: "/api/v1/settings/reset",
+      method: "POST",
+      body: { key: "COLUMN_AI", reason: "back to default", expectedVersion: 4 },
+    },
+  ]);
+});
+
+test("a stale save's 409 reaches the form with the conflict it names", async () => {
+  const conflict = {
+    error: "settings_version_conflict",
+    conflicts: [{ key: "COLUMN_AI", expectedVersion: 0, currentVersion: 4 }],
+  };
+  const response = await handleSettingsPatch(
+    new Request("https://dashboard.test/api/settings", { method: "PATCH", body: "{}" }),
+    async () => Response.json(conflict, { status: 409 }),
+  );
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), conflict);
 });

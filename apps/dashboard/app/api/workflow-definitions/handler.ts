@@ -91,22 +91,6 @@ export async function handleDefinitionCatalog(
   return response;
 }
 
-export async function handleDefinitionMigrate(
-  req: Request,
-  context: IdRouteContext,
-  workerProxy: WorkerProxy,
-) {
-  const response = await forwardJsonAction(
-    req,
-    context,
-    workerProxy,
-    "migrate",
-    "POST",
-  );
-  response.headers.set("cache-control", "private, no-store");
-  return response;
-}
-
 export async function handleDefinitionPromptPreview(
   req: Request,
   context: IdRouteContext,

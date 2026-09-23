@@ -39,6 +39,7 @@ export type {
 } from "./snapshot.js";
 export {
   SettingsValidationError,
+  SettingsVersionConflictError,
   readSettings,
   readSettingsHistory,
   updateSettings,
