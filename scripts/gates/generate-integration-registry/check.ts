@@ -24,23 +24,19 @@ export function staleGeneratedFiles(options: GeneratorOptions): Array<keyof Gene
   );
 }
 
-export function checkIntegrationRegistry(options: GeneratorOptions): boolean {
-  const paths = outputPaths(options);
-  const stale = staleGeneratedFiles(options);
+/** Whether the committed registry is the one generated without fixtures. */
+export function checkIntegrationRegistry(options: Omit<GeneratorOptions, "includeFixtures">): boolean {
+  const committed = { ...options, includeFixtures: false };
+  const paths = outputPaths(committed);
+  const stale = staleGeneratedFiles(committed);
   if (stale.length === 0) {
-    console.log(
-      options.includeFixtures === true
-        ? "integration registry files are current, fixtures included"
-        : "integration registry files are current",
-    );
+    console.log("integration registry files are current");
     return true;
   }
   console.error("integration registry files are stale:");
   for (const name of stale) console.error(`  ${relative(options.root, paths[name])}`);
   console.error(
-    options.includeFixtures === true
-      ? `Run ${FIXTURE_FLAG}=1 pnpm run gen:integrations.`
-      : `Run pnpm run gen:integrations. If the difference is a fixture integration, the committed registry is the one generated without ${FIXTURE_FLAG}.`,
+    `Run pnpm run gen:integrations. The committed registry is the one generated without ${FIXTURE_FLAG}, so unset it first if this shell exports it.`,
   );
   return false;
 }

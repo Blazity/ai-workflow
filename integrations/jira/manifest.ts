@@ -97,12 +97,12 @@ export const manifest = defineIntegration({
       label: "Project access",
       description:
         "The configured project exists, is visible to this account, and has statuses to move tickets between.",
-      // Critical, and this row is the reason the worker can boot without Jira
-      // at all now. Until S12 the site, the token and the project key were
-      // required environment variables, so a project key with a typo in it
-      // stopped the deployment at boot. Optional values turn that into
-      // silence: every delivery would be ignored as the wrong project and
-      // nothing would ever say why. This check is where that noise went.
+      // Critical, because a project key nobody can see is otherwise silent:
+      // every delivery would be ignored as the wrong project and nothing would
+      // say why. Until S12 the site, the token and the project key were
+      // required environment variables, but required only to be present, so a
+      // key with a typo booted fine then too; core's own Jira probe caught it
+      // on the health page. This check is where that probe's project half went.
       critical: true,
     },
     {

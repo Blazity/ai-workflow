@@ -342,9 +342,15 @@ importers:
       react:
         specifier: 'catalog:'
         version: 19.2.4
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+      zod4:
+        specifier: 'catalog:'
+        version: zod@4.3.6
 
   integrations/arthur:
     dependencies:

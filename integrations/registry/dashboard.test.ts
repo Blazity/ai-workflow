@@ -6,9 +6,9 @@
 // integration on the first load of any integration route, connected or not,
 // and nothing in the route above would notice.
 //
-// The generated registry this build carries has no entries in it (fixtures are
-// left out on purpose), so these drive the real functions over a registry of
-// their own, which is also the only way to count loads.
+// The generated registry holds whichever integrations this build ships, which
+// changes as integrations come and go, so these drive the real functions over a
+// registry of their own, which is also the only way to count loads.
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 

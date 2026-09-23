@@ -1,12 +1,10 @@
 {
   "coreRoots": [
-    "apps/worker/src",
-    "apps/dashboard/app",
-    "apps/dashboard/components",
-    "apps/dashboard/lib",
+    "apps/worker",
+    "apps/dashboard",
     "packages"
   ],
-  "coreRootsReason": "Core is the code that must stop knowing a provider. integrations/ is where the names belong. scripts/ is release and gate tooling, and the Arthur tenant repository it names is not the Arthur provider. changelog/ and docs/ are prose about what shipped. apps/*/drizzle holds applied migrations, which are history and cannot be rewritten.",
+  "coreRootsReason": "Core is the code that must stop knowing a provider: each app whole, so a config file or a directory added at its root is read the day it lands, and packages. integrations/ is where the names belong. scripts/ is release and gate tooling, and the Arthur tenant repository it names is not the Arthur provider. changelog/ and docs/ are prose about what shipped. The app directories the exclude list names are not core either: apps/worker/drizzle holds applied migrations, which are history and cannot be rewritten, apps/worker/scripts and apps/dashboard/scripts are operations tooling beside the app in the way scripts/ is beside the repository, apps/worker/e2e, workflow-sdk-tests and workflow-test-fixtures are test suites, and apps/dashboard/public is static files.",
   "exclude": [
     "\\.(?:test|spec)\\.[cm]?[jt]sx?$",
     "\\.generated\\.[cm]?[jt]sx?$",
@@ -14,12 +12,14 @@
     "(?:^|/)test-support/",
     "^apps/worker/src/workflow-graph-suites/",
     "^apps/worker/src/mcp-dogfood/",
-    "(?:^|/)(?:fixtures/|[^/]+\\.fixture\\.)"
+    "(?:^|/)(?:fixtures/|[^/]+\\.fixture\\.)",
+    "^apps/worker/(?:drizzle|e2e|scripts|workflow-sdk-tests|workflow-test-fixtures)/",
+    "^apps/dashboard/(?:public|scripts)/"
   ],
   "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support modules and any test-support directory, workflow-graph-suites, mcp-dogfood, fixture files and fixtures trees are test material by another name: nothing outside a test imports them, and a fixture naming a provider is the subject of the test rather than a coupling in the product.",
   "plannedIntegrations": {},
   "plannedIntegrationsReason": "A name core still writes, with the stage that takes it away. Empty since S12: every provider this build knows now arrives from the registry, so a new name here would be a provider core started writing before an integration owned it. The gate watches these as well as the registry ids, so it passes on what is here today and fails on anything new.",
-  "incidentalReason": "A row may carry \"incidental\": true when its files spell a provider id by accident, such as a CSS keyword or a URL, rather than depending on the provider; the gate then keeps the row listed but never reports it as stale, because such a hit comes and goes with ordinary edits and a failure on one could not be acted on.",
+  "incidentalReason": "A row may carry \"incidental\": true when its files spell a provider id by accident, such as a URL on the provider's host or a CSS keyword written outside a className or style attribute, rather than depending on the provider; the gate then keeps the row listed but never reports it as stale, because such a hit comes and goes with ordinary edits and a failure on one could not be acted on. Text inside a className or style attribute is never a mention, so it needs no row.",
   "allowlist": [
     {
       "ids": [
@@ -67,10 +67,11 @@
     },
     {
       "ids": [
-        "github"
+        "github",
+        "gitlab"
       ],
       "stage": "never",
-      "reason": "`GITHUB_BASE_BRANCH` in the frozen list of environment names the worker permanently refuses. The list is deliberately a literal rather than anything derived, so that a later registry edit cannot make a retired name legal again; a retired name has to stay spelled out somewhere, and this is that somewhere.",
+      "reason": "`GITHUB_BASE_BRANCH` and `GITLAB_BASE_BRANCH` in the frozen list of environment names the worker permanently refuses at boot, so an operator who still sets one learns that the base branch is now a repository profile value rather than having it silently ignored. The list is deliberately a literal rather than anything derived, so that a later registry edit cannot make a retired name legal again; a retired name has to stay spelled out somewhere, and this is that somewhere.",
       "paths": [
         "packages/contracts/settings-registry.ts"
       ]
@@ -184,23 +185,45 @@
     },
     {
       "ids": [
-        "github",
-        "jira"
-      ],
-      "stage": "kept",
-      "reason": "EXAMPLES of the subject key shape (`ticket:jira:AWP-1`, `pr:github:acme/app#7`) in the validation message that teaches a caller to write one. The provider segment is a registry id chosen at runtime; one instance of it is shown because a caller told only `ticket:<provider>:<KEY>` types the word `provider` and is refused.",
-      "paths": [
-        "packages/contracts/work-scope.ts"
-      ]
-    },
-    {
-      "ids": [
         "jira"
       ],
       "stage": "kept",
       "reason": "the same key-shape example in the MCP tool descriptions, plus two tracker behaviours explained in prose: a summary field's 255 characters, and a board that resolves a move only through two transitions. Those two are the tracker's limits described in core, and they belong with the tracker capability rather than in a tool description; they are here because rewriting a published tool description is a contract change with its own review, not part of moving the providers out.",
       "paths": [
         "apps/worker/src/mcp/tool-catalog.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "never",
+      "incidental": true,
+      "reason": "URLs on github.com hosts that are not the GitHub provider: the default Codex price list, which a third party publishes on raw.githubusercontent.com, and the public repository the sandbox installs the frontend-design skill from. The worker downloads both over plain HTTPS whatever version control integration a deployment connects, so neither is a dependency on the provider.",
+      "paths": [
+        "apps/worker/src/infra/runtime-env.ts",
+        "apps/worker/src/sandbox/agents/shared.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "open",
+      "reason": "the manual dispatch field shows a GitHub pull request URL as its placeholder whichever version control integration is connected, so a GitLab deployment is shown an example it cannot paste. The example belongs to the connected integration, not to core; the fix is the dashboard's, and until it lands this row says the placeholder names a provider. The comment-stripping bug in this gate hid it until 2026-09-22.",
+      "paths": [
+        "apps/dashboard/components/cockpit/manual-dispatch-modal.tsx"
+      ]
+    },
+    {
+      "ids": [
+        "github",
+        "gitlab"
+      ],
+      "stage": "migration",
+      "reason": "the default implementation prompt tells the agent not to call the GitHub/GitLab API and not to ask for their credentials. The sentence belongs in provider-neutral words (\"the version control provider\"), but a prompt is pinned by the workflows that use it, so changing its bytes needs the resync migration this repository uses for pinned prompts; until that delivery the words stay and this row says so. They used to be split into fragments so this gate could not see them, which hid the coupling instead of recording it.",
+      "paths": [
+        "packages/prompts/default-prompts.ts"
       ]
     }
   ]

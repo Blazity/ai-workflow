@@ -86,7 +86,10 @@ export const workScopeSubjectKeySchema = z
   .refine(
     (key) => WORK_SCOPE_SUBJECT_KINDS.some((kind) => key.startsWith(kind)),
     {
-      message: `subjectKey must name a subject kind (${WORK_SCOPE_SUBJECT_KINDS.join(" ")}), for example ticket:jira:AWP-1 or pr:github:acme/app#7`,
+      // No example key, for the reason the repository key gives none: this
+      // package may not read the registry, so any provider it wrote would be a
+      // guess, and a reader copies an example back verbatim.
+      message: `subjectKey must start with a subject kind (${WORK_SCOPE_SUBJECT_KINDS.join(" ")}), then the provider id and the subject, exactly as a run and its work scope record print it`,
     },
   );
 const WORK_SCOPE_WRITE_PLAN_KEYS_MAX = 16;

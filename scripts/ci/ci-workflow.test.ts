@@ -870,12 +870,13 @@ test("the source build covers worker and dashboard without deployment side effec
     "pnpm validate:local-skills",
     "pnpm mcp:contract:check",
     "pnpm --dir ../.. run gen:blocks -- --check",
+    "pnpm --dir ../.. run gen:integrations -- --check",
     "rm -rf .nitro/workflow",
     "NODE_OPTIONS=--max-old-space-size=8192 nitro build",
   ]);
   assert.equal(
     dashboardPackage.scripts.build,
-    "tsx ../../scripts/gates/generate-block-catalog.ts --check && next build",
+    "tsx ../../scripts/gates/generate-block-catalog.ts --check && tsx ../../scripts/gates/generate-integration-registry.ts --check && next build",
   );
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /db:migrate/);
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /seed:auth-user/);
@@ -902,16 +903,29 @@ test("the source build uses the validator entrypoints and preserves deployment s
     workerPackage.scripts["mcp:contract:check"],
     "tsx scripts/generate-mcp-contract.ts --check",
   );
-  assert.deepEqual(commands(workerPackage.scripts.build), [
-    "tsx scripts/check-retired-env.ts",
-    "pnpm validate:pre-sandbox",
-    "pnpm validate:local-skills",
+  // The production build writes to the database before it compiles, so every
+  // check that can refuse the commit has to run first: a check that fails after
+  // `db:migrate` leaves production on a new schema with the old code serving.
+  // Held as what follows the first write, exactly, so a check added after it
+  // fails here whatever it is called; before it, the order is free.
+  const build = commands(workerPackage.scripts.build);
+  const firstWrite = build.indexOf("pnpm db:migrate");
+  assert.ok(firstWrite > 0, "the worker build migrates, after its checks");
+  assert.deepEqual(build.slice(firstWrite), [
     "pnpm db:migrate",
     "pnpm seed:auth-user",
-    "pnpm --dir ../.. run gen:blocks -- --check",
     "rm -rf .nitro/workflow",
     "NODE_OPTIONS=--max-old-space-size=8192 nitro build",
   ]);
+  for (const command of [
+    "tsx scripts/check-retired-env.ts",
+    "pnpm validate:pre-sandbox",
+    "pnpm validate:local-skills",
+    "pnpm --dir ../.. run gen:blocks -- --check",
+    "pnpm --dir ../.. run gen:integrations -- --check",
+  ]) {
+    assert.ok(build.slice(0, firstWrite).includes(command), `the worker build runs ${command} before it writes to the database`);
+  }
 });
 
 test("all setup-node workflow jobs use Node 24", async () => {

@@ -9,6 +9,7 @@ import {
   type TicketComment,
   type TicketSummary,
 } from "@integrations/sdk";
+import { jqlFragmentProblem } from "./jql";
 
 export interface JiraConfig {
   baseUrl: string;
@@ -16,13 +17,14 @@ export interface JiraConfig {
   projectKey: string;
   cloudId?: string;
   /**
-   * How this adapter reaches Jira. The integration runtime passes
-   * `ctx.http.fetch`, which carries the SDK's timeout, its retry policy for
-   * reads and its secret redaction; the default is the global one, for the
-   * health probe that runs before a context exists, and it ignores the SDK's
-   * own options (`timeoutMs`, `retries`).
+   * How this adapter reaches Jira: always the context's `ctx.http.fetch`, and
+   * required so that no request can take a path production never takes. It
+   * gives each attempt its own deadline, retries reads, honours `Retry-After`,
+   * joins a `signal` passed here to every attempt and to the waits between
+   * them, and takes the connection's secrets out of any error it throws.
+   * Errors this adapter builds from a response it received are its own.
    */
-  fetch?: IntegrationHttp["fetch"];
+  fetch: IntegrationHttp["fetch"];
 }
 
 const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
@@ -108,12 +110,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     this.authHeader = `Bearer ${config.apiToken}`;
     this.projectKey = config.projectKey;
     this.cloudId = config.cloudId ?? null;
-    this.fetch = config.fetch ?? ((target, init) => fetch(target, init));
-  }
-
-  /** The site a person opens a ticket at, for a link core shows next to a run. */
-  get browseOrigin(): string {
-    return this.tenantOrigin;
+    this.fetch = config.fetch;
   }
 
   private async getCloudId(signal?: AbortSignal | null): Promise<string> {
@@ -608,9 +605,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
    * nothing rather than that project's tickets.
    *
    * `providerQuery` is a JQL fragment a workflow author typed. It is used only
-   * when it is structurally balanced, because an unbalanced fragment would
-   * make the whole query fail and turn an author's typo into "there is no
-   * evidence".
+   * when it stays inside the parentheses it is wrapped in (`jqlFragmentProblem`
+   * finds nothing wrong with it), which is what makes the promise above hold
+   * for text nobody here wrote.
    */
   async findTickets(input: {
     keywords: readonly string[];
@@ -619,7 +616,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
   }): Promise<TicketSummary[]> {
     const clauses = [`project = "${jqlLiteral(this.projectKey)}"`];
     const authored = input.providerQuery?.trim() ?? "";
-    if (authored !== "" && hasBalancedJqlStructure(authored)) clauses.push(authored);
+    if (authored !== "" && jqlFragmentProblem(authored) === null) clauses.push(authored);
     const keywordClause = input.keywords
       .map(jqlLiteral)
       .filter((keyword) => keyword !== "")
@@ -794,27 +791,4 @@ function sanitizeAttachmentSize(size: unknown): number {
  *  escape that can. */
 function jqlLiteral(value: string): string {
   return value.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-/** Whether an authored JQL fragment closes everything it opened. An unbalanced
- *  one would make the whole query fail, which reads to the person who wrote it
- *  as "there was no evidence" rather than "your query does not parse". */
-function hasBalancedJqlStructure(clause: string): boolean {
-  let depth = 0;
-  let quoted = false;
-  for (let index = 0; index < clause.length; index += 1) {
-    const char = clause[index];
-    if (quoted) {
-      if (char === "\\") index += 1;
-      else if (char === '"') quoted = false;
-      continue;
-    }
-    if (char === '"') quoted = true;
-    else if (char === "(") depth += 1;
-    else if (char === ")") {
-      depth -= 1;
-      if (depth < 0) return false;
-    }
-  }
-  return depth === 0 && !quoted;
 }

@@ -178,10 +178,15 @@ export interface MessagingAdapter {
   /**
    * Send a ticket-scoped notification.
    *
-   * The first `started` event for a ticket anchors the conversation and
-   * `remember`s its handle. Later events go under it. A handle that no longer
-   * resolves is `forget`ten and re-anchored, without re-anchoring on an event
-   * that is not `started`.
+   * Every event except a `note` carries the ticket's current status. With a
+   * usable handle it updates the anchor message and replies under it; with no
+   * handle, or one that no longer resolves (which is `forget`ten first), it
+   * posts a new anchor carrying that status, `remember`s it and replies under
+   * it. So the first event of any kind anchors the conversation, not only
+   * `started`, and a vanished anchor is replaced by the next status event
+   * rather than waiting for a run to start again. A `note` never anchors: it
+   * replies under the handle when there is one and is posted on its own when
+   * there is not.
    */
   notifyForTicket(
     ticket: MessagingTicket,

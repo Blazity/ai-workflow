@@ -9,7 +9,7 @@ import type { AgentTracingAdapter } from "./agent-tracing";
 import type { VcsRepositoryTarget } from "./capabilities";
 import type { IntegrationRunStart, IntegrationRunState } from "./run-state";
 import type { IntegrationBlockContext, IntegrationContext } from "./context";
-import type { IssueTrackerAdapter } from "./issue-tracker";
+import type { IssueTrackerAdapter, IssueTrackerQueryRule } from "./issue-tracker";
 import type { IntegrationBlockManifest, IntegrationManifest } from "./manifest";
 import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter } from "./messaging";
@@ -35,7 +35,19 @@ import type { IntegrationWebhook, IntegrationWebhookReception } from "./webhook"
  * there and never retries the call, wherever it was made from.
  */
 export type IntegrationRuntimeDefinition<M extends IntegrationManifest> =
-  IntegrationRuntimeBase<M> & RunStateSlot<M> & VcsHandlesSlot<M>;
+  IntegrationRuntimeBase<M> & RunStateSlot<M> & IssueTrackerQueryRuleSlot<M> & VcsHandlesSlot<M>;
+
+/**
+ * `issueTrackerQueryRule`, required exactly when the manifest declares the
+ * `issue_tracker` capability and refused otherwise: how this tracker reads a
+ * query an author typed, for core to ask without a connection when a
+ * definition is saved and before the investigate block searches (see
+ * `IssueTrackerQueryRule`). A tracker that could drop a query at run time and
+ * not say so would leave the author with a search that quietly ignores them.
+ */
+type IssueTrackerQueryRuleSlot<M extends IntegrationManifest> = "issue_tracker" extends M["capabilities"][number]
+  ? { readonly issueTrackerQueryRule: IssueTrackerQueryRule }
+  : { readonly issueTrackerQueryRule?: never };
 
 /**
  * `vcsHandles`, required exactly when the manifest declares the `vcs`
@@ -148,6 +160,9 @@ export interface ErasedIntegrationRuntime {
   readonly health: Readonly<Record<string, ErasedIntegrationCall<IntegrationHealthResult>>>;
   /** Present exactly when the manifest declares `runState`. */
   readonly beginRun?: ErasedIntegrationCall<IntegrationRunState | null>;
+  /** Present exactly when the manifest declares the `issue_tracker`
+   *  capability. Pure: nothing in it takes a context, so nothing needs erasing. */
+  readonly issueTrackerQueryRule?: IssueTrackerQueryRule;
   /** Present exactly when the manifest declares the `vcs` capability. Pure:
    *  nothing in it takes a context, so nothing needs erasing. */
   readonly vcsHandles?: VcsHandleIdentity;

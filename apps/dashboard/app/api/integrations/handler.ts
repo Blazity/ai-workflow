@@ -10,6 +10,7 @@
 // its database with a 403, and answers a stale save with a 409 body; each of
 // those is what the screen renders, so a second copy of the rule cannot drift
 // away from the one that is enforced.
+import { INTEGRATION_ID } from "@shared/contracts";
 import { NextResponse } from "next/server";
 
 import { isWorkerTimeout } from "@/lib/api/worker-response-error";
@@ -47,13 +48,12 @@ async function forward(
 /**
  * An integration id as it may appear in a path segment.
  *
- * The same shape the worker's own route helper accepts
- * (`apps/worker/src/routes/api/v1/integrations/route-id.ts`), re-encoded on the
- * way out, so a hostile segment cannot leave the segment it is in and add a
- * path of its own to the worker URL.
+ * `INTEGRATION_ID`, the one rule the worker's route helper also reads,
+ * re-encoded on the way out, so a hostile segment cannot leave the segment it
+ * is in and add a path of its own to the worker URL.
  */
 function integrationPath(id: string, suffix = ""): string | null {
-  if (!/^[a-z][a-z0-9]{2,31}$/.test(id)) return null;
+  if (!INTEGRATION_ID.test(id)) return null;
   return `/api/v1/integrations/${encodeURIComponent(id)}${suffix}`;
 }
 

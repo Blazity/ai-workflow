@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -116,5 +117,33 @@ test("the guide's samples compile, and the ones that form an integration pass co
       runtime: unknown;
     };
     assert.deepEqual(sdk.checkIntegrationConformance(manifest, runtime), []);
+  }
+
+  // Compiling a test proves it type-checks, not that what it teaches is true:
+  // the guide's own test has to pass against the guide's own webhook. Its
+  // fixture is a delivery the provider signed, which a fictional provider
+  // cannot hand over, so it is signed here the way the guide says the provider
+  // signs: HMAC-SHA256 over `<timestamp>.<raw body>`, sent as the hex digest.
+  if (files.has("webhook.test.ts")) {
+    const secret = "guide-sample-secret";
+    const timestamp = "1758000000";
+    const rawBody = JSON.stringify({ event: "memory.updated", project: "p_1" });
+    const signature = createHmac("sha256", secret).update(`${timestamp}.${rawBody}`).digest("hex");
+    await mkdir(join(directory, "test-fixtures"), { recursive: true });
+    await writeFile(
+      join(directory, "test-fixtures/signed-delivery.json"),
+      `${JSON.stringify({ secret, timestamp, signature, rawBody }, null, 2)}\n`,
+    );
+    // Without this suite's own runner context, which would take the child's
+    // report instead of letting it print one.
+    const { NODE_TEST_CONTEXT: _, ...env } = process.env;
+    const run = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--test", "--test-reporter=spec", join(directory, "webhook.test.ts")],
+      { cwd: root, encoding: "utf8", env },
+    );
+    assert.equal(run.status, 0, `the guide's webhook.test.ts fails against the guide's webhook.ts:\n${run.stdout}${run.stderr}`);
+    assert.match(run.stdout, /^ℹ pass [1-9]/mu, "the guide's webhook.test.ts ran no test");
+    assert.match(run.stdout, /^ℹ fail 0$/mu);
   }
 });

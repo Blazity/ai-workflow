@@ -362,3 +362,44 @@ test("immediate transport failures restore the last completed state", async () =
     availableValuesByNode: {},
   });
 });
+
+test("a notice the worker sends stays with the result, through the next check, without making it invalid", async () => {
+  const notice = {
+    code: "tracker_query_not_run",
+    nodeId: "look",
+    path: "/nodes/1/configuration/issueTrackerQueryTemplate",
+    message: "Jira does not run this query, so the block searches without it.",
+  };
+  const states: WorkflowValidationState[] = [];
+  const second = deferred<WorkflowDefinitionValidationResponse>();
+  let calls = 0;
+  const controller = createWorkflowValidationController<string>({
+    validate: async () => (calls++ === 0 ? { ...valid, notices: [notice] } : second.promise),
+    onState: (state) => states.push(state),
+  });
+
+  await controller.validateNow("first");
+  assert.deepEqual(states.at(-1), {
+    status: "valid",
+    issues: [],
+    notices: [notice],
+    nodeContracts: {},
+    availableValuesByNode: {},
+  });
+
+  // While the next answer is pending, what was last said is still shown.
+  const settled = controller.validateNow("second");
+  assert.equal(states.at(-1)?.status, "checking");
+  assert.deepEqual(states.at(-1)?.notices, [notice]);
+
+  // An answer with nothing to say clears it.
+  second.resolve(valid);
+  await settled;
+  assert.deepEqual(states.at(-1), {
+    status: "valid",
+    issues: [],
+    nodeContracts: {},
+    availableValuesByNode: {},
+  });
+  controller.dispose();
+});

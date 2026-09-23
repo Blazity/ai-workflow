@@ -52,9 +52,11 @@ export function parseWorkflowDefinitionCandidate(
 
 /** Validate a candidate the editor holds but has not saved. An unparseable
  *  candidate is a validation result, not a bad request: the editor renders the
- *  issues in the same panel either way. */
-export async function validateWorkflowDefinitionDraftCandidate(candidate: unknown) {
-  const validation = await validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(candidate);
+ *  issues in the same panel either way. The definition it belongs to is what
+ *  the tracker's query rule compares against, so a template the deployed
+ *  version already runs comes back as a notice rather than an issue. */
+export async function validateWorkflowDefinitionDraftCandidate(candidate: unknown, definitionId: number) {
+  const validation = await validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(candidate, definitionId);
   return validation.response;
 }
 

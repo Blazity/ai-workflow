@@ -82,7 +82,9 @@ export const manifest = defineIntegration({
   },
   capabilities: ["agent_tracing"],
   blocks: [injectionCheckBlock],
-  pages: [{ id: "evals", label: "Evals" }],
+  // Evals was a core screen at /evals before it moved here, and that link is
+  // in bookmarks and in messages the worker posted.
+  pages: [{ id: "evals", label: "Evals", legacyPaths: ["/evals"] }],
   health: [
     {
       id: "api",

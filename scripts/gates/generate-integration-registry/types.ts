@@ -35,11 +35,11 @@ export type IntegrationRecord = {
 };
 
 /**
- * Set at generation time by the deployments that want the fixture
- * integrations: CI and demo. Production and the Arthur tenant never set it, so
- * the registry they build from holds no import of `integrations/_fixtures`.
- * The committed registry is the one generated without it, which is why
- * `--check` in CI fails on a registry that carries a fixture.
+ * Set at generation time by a developer who wants the fixture integrations in
+ * a local registry. No deployment and no CI job sets it: the committed
+ * registry is the one generated without it, which is why `--check` (run by CI
+ * and by the worker build) fails on a registry that carries a fixture. Tests
+ * reach the fixtures by passing `includeFixtures` to the generator directly.
  */
 export const FIXTURE_FLAG = "INTEGRATION_FIXTURES";
 
@@ -66,5 +66,3 @@ export const DEFAULT_OUTPUT_PATHS = {
 
 export const GENERATED_HEADER =
   "// THIS FILE IS GENERATED. DO NOT EDIT.\n// Run pnpm run gen:integrations to update.\n\n";
-
-export const INTEGRATION_ID = /^[a-z][a-z0-9]{2,31}$/u;
