@@ -96,7 +96,9 @@ wrong capability means rewriting the package.
 ### 2. From scaffold to merged
 
 Commands run from the repository root. Each step ends in a checkpoint: do
-not start the next until it holds.
+not start the next until it holds. On a fresh clone, run `pnpm install` once
+before step 1: `new:integration` runs through `tsx`, which does not exist
+until dependencies are installed.
 
 1. **Create the package.**
 
@@ -194,6 +196,10 @@ not start the next until it holds.
      its line in the README.
    - **No webhook:** leave `webhook` out of `worker.ts`; the route answers
      404 for you. A memory integration normally has none.
+
+   Changed a connection field's key, env, secret flag, default or identity?
+   Rerun step 3's connection-shape test with `-u`: it is not one of the four
+   commands below, and nothing regenerates the committed snapshot for you.
 
    Record each provider page you wrote against in the README's table, and
    every recorded payload with its source ("Recorded payloads").
@@ -466,7 +472,7 @@ context and returns the port's adapter.
 
 | Capability | Port (in `integrations/sdk`) | Providers at once | Served today by | Read first |
 |---|---|---|---|---|
-| `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueryRule` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. The optional `ticketUrl(key)` is the page a person opens for a ticket: core records it on the run and never spells a tracker's URL itself, so a tracker without it gets no links rather than wrong ones. |
+| `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueryRule` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. The optional `ticketUrl(key)` is the page a person opens for a ticket: core records it on the run and never spells a tracker's URL itself, so a tracker without it gets no links rather than wrong ones. The optional `relatedTickets` on a read ticket (parent, subtasks, links, as key, title, status and the phrase for this ticket's side) is what planning is told about the work's shape; leave it absent when your tracker cannot say, and core shows nothing rather than "none". |
 | `vcs` | `VCSAdapter` (`vcs.ts`), plus the optional surfaces in `vcs-extensions.ts` | many, chosen per repository | GitHub, GitLab | `integrations/gitlab`: a provider chosen per repository, self-hosted, with nested paths. `integrations/github`: a credential that is not a token (an App id, an installation id and a private key, read in `auth.ts`). A `vcs` manifest also declares `repositories` (host, whether paths nest, and in `changeRequest` what a person calls a change request and how one is referenced) and the connection field for its automation account's login (below). |
 | `messaging` | `MessagingAdapter` (`messaging.ts`) | one | Slack | `integrations/slack`: one active provider, run notifications in one thread per ticket, a slash command. |
 | `memory` | `MemoryAdapter` (`memory.ts`) | one | built-in, in core; Mem0 | "Memory" below, which states every rule an engine needs. `integrations/mem0`: a hosted engine that only adds, reconciled by its adapter (dedup, delete by id, notebook replacement), with its namespace on every call and the admin half. The built-in store (`apps/worker/src/memory/builtin/adapter.ts`) is core's own. |

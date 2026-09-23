@@ -5,6 +5,7 @@ export {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
+  type RelatedTicket,
   type TicketAttachment,
   type TicketComment,
   type TicketContent,

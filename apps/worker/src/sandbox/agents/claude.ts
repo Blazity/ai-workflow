@@ -362,6 +362,8 @@ touch ${paths.sentinel}
   ): AgentProtocolResult<void> {
     const envelope = findResultEnvelope(artifacts.stdout);
     const event = eventMetadata(envelope);
+    const refusal = errorEnvelopeFailure(this.cliSpec, phase, artifacts, envelope, event);
+    if (refusal) return refusal;
     const processFailure = artifactFailure(this.cliSpec, phase, artifacts, event);
     if (processFailure) return processFailure;
     if (!envelope) {
@@ -377,20 +379,6 @@ touch ${paths.sentinel}
         message: "The current agent phase returned an invalid structured response.",
         detail: "Claude did not emit a terminal result envelope.",
         includeStdoutTail: true,
-      });
-    }
-    if (envelope.is_error === true || envelope.subtype === "error") {
-      const providerError = structuredProviderErrorText(envelope);
-      return protocolFailure({
-        spec: this.cliSpec,
-        phase,
-        artifacts,
-        failureKind: "provider_error",
-        category: "provider",
-        message: "The current agent phase could not be completed.",
-        event,
-        detail: "Claude emitted an error result envelope.",
-        ...(providerError ? { providerError } : {}),
       });
     }
     if (envelope.subtype !== "success") {
@@ -608,24 +596,12 @@ function extractClaudePayload(
 ): AgentProtocolResult<unknown> {
   const envelope = findResultEnvelope(artifacts.stdout);
   const event = eventMetadata(envelope);
+  const refusal = errorEnvelopeFailure(spec, phase, artifacts, envelope, event);
+  if (refusal) return refusal;
   const processFailure = artifactFailure(spec, phase, artifacts, event);
   if (processFailure) return processFailure;
 
   if (envelope) {
-    if (envelope.is_error === true || envelope.subtype === "error") {
-      const providerError = structuredProviderErrorText(envelope);
-      return protocolFailure({
-        spec,
-        phase,
-        artifacts,
-        failureKind: "provider_error",
-        category: "provider",
-        message: "The current agent phase could not be completed.",
-        event,
-        detail: "Claude emitted an error result envelope.",
-        ...(providerError ? { providerError } : {}),
-      });
-    }
     if (envelope.subtype !== "success") {
       return protocolFailure({
         spec,
@@ -693,6 +669,40 @@ function parseClaudeRecords(raw: string): unknown[] {
     .flatMap((line) => {
       try { return [JSON.parse(line)]; } catch { return []; }
     });
+}
+
+/**
+ * The provider's own refusal, when the CLI ended on an error result envelope.
+ *
+ * Checked ahead of the exit code, as Codex does (AIW-312): the Claude CLI exits
+ * 1 on a refused API call too, so testing the exit code first filed every
+ * refusal as a bare `cli_exit` whose only evidence was the stdout tail, and the
+ * provider's one-line reason ("Credit balance is too low", production run
+ * wrun_01M3755BR7PYPCZ7VVSJ7RGM88) was never isolated as the provider error.
+ * The stdout tail is still kept beside it for a non-zero exit, because it is the
+ * whole record of the process's last words.
+ */
+function errorEnvelopeFailure(
+  spec: AgentCliSpec,
+  phase: string,
+  artifacts: CollectedPhaseArtifacts,
+  envelope: Record<string, unknown> | null,
+  event: ReturnType<typeof eventMetadata>,
+): AgentProtocolResult<never> | null {
+  if (!envelope || (envelope.is_error !== true && envelope.subtype !== "error")) return null;
+  const providerError = structuredProviderErrorText(envelope);
+  return protocolFailure({
+    spec,
+    phase,
+    artifacts,
+    failureKind: "provider_error",
+    category: "provider",
+    message: "The current agent phase could not be completed.",
+    event,
+    detail: "Claude emitted an error result envelope.",
+    includeStdoutTail: artifacts.exitCode !== 0,
+    ...(providerError ? { providerError } : {}),
+  });
 }
 
 function findResultEnvelope(raw: string): Record<string, unknown> | null {

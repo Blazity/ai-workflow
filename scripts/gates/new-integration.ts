@@ -224,15 +224,19 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
     console.log(
       [
         "",
+        // Same steps, same order, as docs/architecture/integrations.md,
+        // "From scaffold to merged" (2 to 5): the guide is the source, this
+        // is a copy of it for the terminal, not a second list of its own.
         "Next, from the repository root:",
         "  pnpm install",
         "  pnpm run gen:integrations",
+        "  pnpm --dir apps/worker exec vitest run src/services/integrations/connection-shape.test.ts -u",
+        `  Add --filter @integrations/${id} to test:packages and test:packages:zod4 in the root package.json: CI runs those lists and nothing else.`,
         `  pnpm --filter @integrations/${id} run typecheck`,
         `  pnpm --filter @integrations/${id} run test`,
+        `  pnpm --filter @integrations/${id} run test:zod4`,
         "  pnpm --filter @integrations/registry run test",
-        "  pnpm --dir apps/worker exec vitest run src/services/integrations/connection-shape.test.ts -u",
         "",
-        `Add --filter @integrations/${id} to test:packages and test:packages:zod4 in the root package.json: CI runs those lists and nothing else.`,
         "Then docs/architecture/integrations.md, from \"Make it yours\".",
       ].join("\n"),
     );

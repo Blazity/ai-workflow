@@ -491,7 +491,7 @@ push, PR/MR creation, ticket transitions, notifications, telemetry, teardown.
 ### 11.1 Issue Tracker Adapter
 
 ```
-fetchTicket(id) → TicketContent (title, description, acceptance criteria, comments, labels, attachments)
+fetchTicket(id) → TicketContent (title, description, acceptance criteria, comments, labels, attachments, related tickets)
 moveTicket(id, target) → void        // column name or pinned transition id
 postComment(id, comment) → string | null
 searchTickets(jql) → string[]

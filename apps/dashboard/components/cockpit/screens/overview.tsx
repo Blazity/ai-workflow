@@ -27,28 +27,35 @@ import {
 import type { Run } from "@/lib/types";
 import type {
   KpisResponse,
-  LiveRunsResponse,
   DispatchCapacityResponse,
   RunsResponse,
   WorkflowsResponse,
 } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
+import { formatAgeMinutes } from "@/lib/date-time";
+import { slotHolders, slotHoldersSentence } from "@/lib/dispatch-slots";
+import { olderOpenRunsSentence, tallyListedRuns } from "@/lib/runs-display";
 
 const MISSING_VALUE = "N/A";
 
 /** Bundle of the server-fetched responses passed into the presentational Overview. */
 export interface OverviewScreenData {
   kpis: KpisResponse;
-  liveRuns: LiveRunsResponse;
+  /**
+   * One list for every card: the store's runs for the window with the live
+   * board's open runs merged in (`mergeLiveRuns`), the list the Runs page shows.
+   * Two lists, one merged and one not, put "3 paused" above "0 awaiting".
+   */
+  runs: RunsResponse;
   capacity: DispatchCapacityResponse;
-  recentRuns: RunsResponse;
   workflows: WorkflowsResponse;
 }
 
 /* Live "Now running" panel. Shows executing runs, plus the occupied-slot count
  * counted the way dispatch refuses (parked claims included, from
- * listCapacityConsumers) and the at-capacity waiting queue, so a full pool with
- * zero executing runs no longer looks idle. */
+ * listCapacityConsumers), what holds the slots no executing run does, and the
+ * at-capacity waiting queue, so a full pool with zero executing runs no longer
+ * looks idle. */
 export function NowRunningPanel({
   rows,
   capacity,
@@ -64,6 +71,15 @@ export function NowRunningPanel({
   // full, so never render the amber "full" style for it.
   const capacityUnknown = maxSlots === 0;
   const poolFull = !capacityUnknown && occupiedSlots >= maxSlots;
+  const heldBy = capacityUnknown
+    ? null
+    : slotHoldersSentence(
+        slotHolders({
+          occupiedSlots,
+          executing: running.length,
+          awaiting: rows.filter((r) => r.status === "awaiting").length,
+        }),
+      );
   // Defense in depth against a stale row: a ticket that is running (or otherwise
   // holds a live slot) is not waiting, so it must never show in both panels.
   const liveTickets = new Set(rows.map((r) => r.ticket));
@@ -98,7 +114,14 @@ export function NowRunningPanel({
       pad={0}
     >
       {running.length === 0 ? (
-        <div className="px-5 py-8 text-center text-neutral-500 text-sm">No runs in flight</div>
+        heldBy ? (
+          <div className="px-5 py-6 text-center text-sm">
+            <div className="text-neutral-700">No runs executing.</div>
+            <div className="mt-1 text-neutral-500">{heldBy}</div>
+          </div>
+        ) : (
+          <div className="px-5 py-8 text-center text-neutral-500 text-sm">No runs in flight</div>
+        )
       ) : (
         <div className="flex flex-col">
           {running.map((r, i) => {
@@ -159,6 +182,11 @@ export function NowRunningPanel({
               </div>
             );
           })}
+        </div>
+      )}
+      {running.length > 0 && heldBy && (
+        <div className="border-t border-neutral-200 px-5 py-2.5 font-body text-xs text-neutral-600">
+          {heldBy}
         </div>
       )}
       {queued.length > 0 && (
@@ -239,7 +267,7 @@ export function AwaitingInputPanel({
                   {r.questionFor && <CkChip tone="warn">@{r.questionFor}</CkChip>}
                   {typeof r.askedAtMin === "number" && (
                     <span className="ml-auto font-mono text-[11px] text-neutral-500 whitespace-nowrap">
-                      {r.askedAtMin}m ago
+                      {formatAgeMinutes(r.askedAtMin)}
                     </span>
                   )}
                 </div>
@@ -309,8 +337,11 @@ export function OverviewScreen({
   const WF_PAGE_SIZE = 5;
   const [wfPage, setWfPage] = useState(0);
 
-  const liveRows = data.liveRuns.rows;
-  const recentData = data.recentRuns;
+  // One list for the live panels and the timeline alike, so each count below
+  // is the same count wherever it appears.
+  const liveRows = data.runs.rows;
+  const recentData = data.runs;
+  const olderOpen = olderOpenRunsSentence(tallyListedRuns(recentData, "all", window));
   const wfData = data.workflows;
 
   // Client-side pagination over the rows fetched once on the server (no refetch).
@@ -466,6 +497,11 @@ export function OverviewScreen({
           </div>
         ) : (
           <>
+            {olderOpen && (
+              <div className="border-b border-neutral-200 px-4 py-2 font-body text-xs text-neutral-600">
+                {olderOpen}
+              </div>
+            )}
             <table className="w-full border-collapse font-body text-[13px]">
               <thead>
                 <tr className="bg-off-white text-neutral-700 font-mono text-[10px] tracking-[0.06em] uppercase">
@@ -523,7 +559,7 @@ export function OverviewScreen({
                       {runModelLabel(r.model)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-[11px] text-neutral-500">
-                      {r.startedAtMin}m ago
+                      {formatAgeMinutes(r.startedAtMin)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-medium">
                       {r.duration === null ? MISSING_VALUE : `${r.duration}s`}

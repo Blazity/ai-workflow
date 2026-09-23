@@ -28,6 +28,12 @@ const ROUTER = {
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// The phone's More sheet is a Modal, which schedules its enter state on a frame.
+globalThis.requestAnimationFrame ??= (callback: FrameRequestCallback) => {
+  callback(0);
+  return 0;
+};
+globalThis.cancelAnimationFrame ??= () => {};
 Object.defineProperty(globalThis, "window", { configurable: true, value: {
   addEventListener() {},
   removeEventListener() {},
@@ -566,5 +572,68 @@ test("a refusal nobody gave a reason for still says the workflow was not deploye
   await settle();
 
   assert.match(alertText(renderer.root), /Not deployed: the workflow did not pass validation\./);
+  await act(async () => renderer.unmount());
+});
+
+// ── The header on a phone ───────────────────────────────────────────────────
+//
+// QA at 400 px: the laptop header, wrapped onto a phone, put Save draft in a
+// sideways scroller and drew Deploy over Undo and Paste. A phone gets one row
+// of its own: the actions a person takes while editing, and More for the rest.
+
+function phoneRow(root: ReactTestInstance): ReactTestInstance {
+  const rows = root.findAll(
+    (node) => typeof node.type === "string" && node.props["data-phone-actions"] !== undefined,
+  );
+  assert.equal(rows.length, 1, "the header carries one phone action row");
+  return rows[0]!;
+}
+
+function labels(node: ReactTestInstance): string[] {
+  return node.findAllByType("button").map((candidate) => textOf(candidate.children).trim());
+}
+
+// Red when: the phone has no row of its own, only the laptop header wrapped.
+test("on a phone every header action is on the action row or one tap away in More", async (t) => {
+  installFetch(async (url) => {
+    if (url.includes("/validate")) {
+      return Response.json({ valid: true, issues: [], nodeContracts: {}, availableValuesByNode: {} });
+    }
+    if (url.includes("/catalog")) return Response.json({ nodeContracts: {}, catalogByNode: {} });
+    return Response.json({ profiles: [], repositories: [] });
+  });
+  t.after(() => mock.restoreAll());
+  const renderer = await renderDeployable();
+
+  const row = phoneRow(renderer.root);
+  assert.deepEqual(labels(row), ["Undo", "Redo", "More", "Deploy", "Save draft"]);
+  assert.equal(
+    renderer.root.findAll((node) => node.props.role === "dialog").length,
+    0,
+    "More is closed until asked for",
+  );
+
+  act(() => {
+    button(row, /^More$/).props.onClick();
+  });
+  const sheet = renderer.root.find((node) => node.type === "section" && node.props.role === "dialog");
+  assert.deepEqual(labels(sheet).filter((label) => label !== "×"), [
+    "Copy",
+    "Paste",
+    "Reset to deployed",
+    "Workflows (1)",
+    "History (1)",
+  ]);
+
+  // An action taken from the sheet closes it and does what it says.
+  act(() => {
+    button(sheet, /^History \(1\)$/).props.onClick();
+  });
+  // Closed, though still mounted for its exit animation.
+  assert.equal(
+    renderer.root.findAll((node) => node.props.role === "dialog" && node.props["data-state"] === "open").length,
+    0,
+  );
+  assert.match(textOf(renderer.toJSON()), /Snapshots/);
   await act(async () => renderer.unmount());
 });

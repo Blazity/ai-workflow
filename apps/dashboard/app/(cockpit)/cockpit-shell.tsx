@@ -93,9 +93,10 @@ export function CockpitShell({
   // own beforeunload guard never sees: a screen holding unsaved edits would be
   // unmounted without a word. Screens that can hold them say so through a
   // module-level flag (there is no provider boundary between the shell and its
-  // `children`, which are a server component's rendered output). Two of them
-  // answer now: the Repository scripts editor and any settings form, including
-  // the one embedded in the Memory page.
+  // `children`, which are a server component's rendered output). Every screen
+  // that holds a draft registers through `useUnsavedWork`: the settings forms
+  // (one of them on the Memory page), the connection forms, a repository
+  // entry's tabs, and the workflow editor's graph.
   // Set once a discard has been agreed to, and cleared when the destination
   // actually arrives: a push is not instant, and asking twice for one departure
   // ("are you sure" on the nav item, then again on the tab bar underneath it)

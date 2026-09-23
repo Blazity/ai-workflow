@@ -606,6 +606,9 @@ describe("POST /webhooks/jira, against recorded Jira deliveries", () => {
         issueTracker: connected.issueTrackerResolution.adapter,
         reason: "Ticket left the AI column (AI → In Progress) via Jira webhook",
         clarificationNotice: { aiColumnName: "AI" },
+        // A person moved it, so the ticket hears that its run stopped, naming
+        // the column the delivery reported, like the reason does.
+        leftColumn: { movedTo: "In Progress" },
       });
     });
 

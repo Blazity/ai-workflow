@@ -900,6 +900,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       issueTracker: expect.anything(),
       reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
       clarificationNotice: { aiColumnName: "AI" },
+      leftColumn: { movedTo: "Backlog" },
     });
     expect(runRegistry.release).not.toHaveBeenCalled();
   });
@@ -1140,6 +1141,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       issueTracker: tracker,
       reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
       clarificationNotice: { aiColumnName: "AI" },
+      leftColumn: { movedTo: "Done" },
     });
   });
 
@@ -1541,6 +1543,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       onReleased,
       reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
       clarificationNotice: { aiColumnName: "AI" },
+      leftColumn: { movedTo: "Done" },
     });
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
   });
@@ -1582,6 +1585,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       issueTracker: expect.anything(),
       reason: "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
       clarificationNotice: { aiColumnName: "AI" },
+      leftColumn: { movedTo: "Done" },
     });
   });
 
@@ -1671,6 +1675,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       issueTracker: expect.anything(),
       reason: "Jira AI Review transition before durable PR publication evidence",
       clarificationNotice: { aiColumnName: "AI" },
+      leftColumn: { movedTo: "Review" },
     });
   });
 

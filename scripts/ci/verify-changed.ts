@@ -60,6 +60,17 @@ export const INTEGRATION_SDK_SEAM_TESTS = [
   "src/adapters/vcs/types.test.ts",
 ] as const;
 
+/**
+ * The committed fingerprint of every shipped integration's connection fields.
+ * A manifest is the only place a connection field's key, env, secret or
+ * default lives, so this is the one test a manifest edit can go stale
+ * against without a diagnostic saying so (see the test's own comment). A
+ * change to a manifest anywhere under integrations/ plans it.
+ */
+export const CONNECTION_SHAPE_TEST = [
+  "src/services/integrations/connection-shape.test.ts",
+] as const;
+
 export const WORKTREE_DIFF = ["git", "diff", "--check"] as const satisfies Cmd;
 export const STAGED_WORKTREE_DIFF = ["git", "diff", "--cached", "--check"] as const satisfies Cmd;
 export const candidateDiff = (merge: string, candidate: string): Cmd =>
@@ -125,6 +136,7 @@ const FIXED_TESTS = new Set<string>([
   ...WORKFLOW_TESTS,
   ...WORKFLOW_GRAPH_TESTS,
   ...INTEGRATION_SDK_SEAM_TESTS,
+  ...CONNECTION_SHAPE_TEST,
 ]);
 const TEST = /\.(?:test|spec)\.tsx?$/;
 export function listDirectory(
@@ -175,6 +187,8 @@ const isCi = (path: string) =>
   path.startsWith(".codex/") ||
   ROOT_CI.has(path);
 const isIntegration = (path: string) => path.startsWith("integrations/");
+const isIntegrationManifest = (path: string) =>
+  isIntegration(path) && path.endsWith("/manifest.ts");
 const isWorkflowGraph = (path: string) =>
   path.startsWith("packages/workflow-graph/");
 const isProduct = (path: string) =>
@@ -293,6 +307,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const dashboard = any(paths, (path) => path.startsWith("apps/dashboard/") && !isDocs(path));
   const shared = any(paths, (path) => path.startsWith("packages/") && !isDocs(path));
   const integrations = any(paths, (path) => isIntegration(path) && !isDocs(path));
+  const integrationManifest = any(paths, isIntegrationManifest);
   const workflowSdk = any(paths, isWorkflowSdkSubject);
   const blockCatalog = any(paths, isBlockCatalogSource);
   const integrationRegistry = any(paths, isIntegrationRegistrySource);
@@ -311,6 +326,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     ...(product ? WORKFLOW_TESTS : []),
     ...(any(paths, isWorkflowGraph) ? WORKFLOW_GRAPH_TESTS : []),
     ...(integrations ? INTEGRATION_SDK_SEAM_TESTS : []),
+    ...(integrationManifest ? CONNECTION_SHAPE_TEST : []),
   ]);
   const dashboardTests = new Set<string>();
   const docs = any(paths, (path) => isDocs(path) && !isSkill(path) && !isRelease(path));

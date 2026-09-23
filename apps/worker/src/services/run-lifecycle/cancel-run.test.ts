@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   recordStatusReason: vi.fn(),
   markBlockedOnCancel: vi.fn(),
   markBlockedByOperator: vi.fn(),
+  closeOpenAttempts: vi.fn(),
   findLiveClaim: vi.fn(),
   findRunOutcome: vi.fn(),
   settleOccurrence: vi.fn(),
@@ -54,6 +55,9 @@ vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   recordConnectedRunStatusReason: state.recordStatusReason,
   markConnectedRunBlockedOnCancel: state.markBlockedOnCancel,
   markConnectedRunBlockedByOperator: state.markBlockedByOperator,
+}));
+vi.mock("../../db/repositories/runs/run-observability.js", () => ({
+  closeConnectedOpenBlockAttempts: state.closeOpenAttempts,
 }));
 vi.mock("../../db/repositories/runs.js", () => ({
   findConnectedLiveRunClaimByRunId: state.findLiveClaim,
@@ -329,7 +333,8 @@ describe("cancelRun", () => {
       target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
     })).resolves.toBe(true);
-    expect(state.markBlockedOnCancel).toHaveBeenCalledWith("run-1");
+    // This cancel stopped the live run itself, so a "running" row settles too.
+    expect(state.markBlockedOnCancel).toHaveBeenCalledWith("run-1", { fromRunning: true });
   });
 
   // Cancelling wakes the parked body, whose own error path flips the run back to
@@ -1666,6 +1671,148 @@ describe("cancelling a run parked on a question", () => {
       expect(issueTracker.postComment).not.toHaveBeenCalled();
       expect(state.updateLabels).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * A person dragged the ticket out of the trigger column while its run was working
+ * (production run wrun_01M375BB1PC0CG3F8KR0DGEWJ6, AWP-280). The run was stopped
+ * within three seconds, and then every surface lagged or said nothing: the row
+ * read "running" beside its stop reason for three minutes, the attempt that was
+ * executing never got a completion time, and the ticket's last word was "picked
+ * this ticket up".
+ */
+describe("a run a person stops by moving its ticket out of the column", () => {
+  function tracker(): IssueTrackerAdapter {
+    return {
+      postComment: vi.fn().mockResolvedValue("https://jira.example/comment/1"),
+      findCommentByMarker: vi.fn().mockResolvedValue(null),
+      updateLabels: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IssueTrackerAdapter;
+  }
+
+  const stop = (issueTracker: IssueTrackerAdapter, leftColumn?: { movedTo: string | null }) =>
+    cancelRunDetailed({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry: registry(),
+      issueTracker,
+      reason: "Ticket left the AI column (Ai → To Do) via Jira webhook",
+      clarificationNotice: { aiColumnName: "Ai" },
+      ...(leftColumn ? { leftColumn } : {}),
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    state.getRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    state.listSteps.mockResolvedValue({ data: [], cursor: null, hasMore: false });
+    state.stopSandboxes.mockResolvedValue(undefined);
+    state.tombstone.mockResolvedValue({
+      matched: false,
+      successorOwnerToken: null,
+      retiredPublished: false,
+    });
+    state.retireApproval.mockResolvedValue(0);
+    state.recordStatusReason.mockResolvedValue(undefined);
+    // The row was "running" and this cancel moved it.
+    state.markBlockedOnCancel.mockResolvedValue(true);
+    state.closeOpenAttempts.mockResolvedValue(1);
+  });
+
+  it("settles the row as blocked and closes the open attempt the moment the run is torn down", async () => {
+    await expect(stop(tracker(), { movedTo: "To Do" })).resolves.toMatchObject({
+      cancelled: true,
+      alreadyTerminal: false,
+    });
+
+    expect(state.markBlockedOnCancel).toHaveBeenCalledWith("run-1", { fromRunning: true });
+    expect(state.closeOpenAttempts).toHaveBeenCalledWith({
+      runId: "run-1",
+      outcomeStatus: "run_cancelled",
+    });
+  });
+
+  it("tells the ticket once that the run stopped, when, and how to start again", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-23T12:56:35.055Z"));
+    const issueTracker = tracker();
+    try {
+      await stop(issueTracker, { movedTo: "To Do" });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(issueTracker.postComment).toHaveBeenCalledTimes(1);
+    const [ticketKey, body] = vi.mocked(issueTracker.postComment).mock.calls[0]!;
+    expect(ticketKey).toBe("PROJ-1");
+    expect(body).toContain(
+      'The AI workflow stopped working on this ticket at 2026-09-23 12:56 UTC because the ticket was moved from "Ai" to "To Do". Nothing failed.',
+    );
+    expect(body).toContain('move the ticket back to "Ai"');
+    expect(body).toContain("AI workflow run stopped: run-1");
+  });
+
+  it("does not post it again when the tracker already holds it", async () => {
+    const issueTracker = tracker();
+    vi.mocked(issueTracker.findCommentByMarker!).mockResolvedValue({ id: "c-1" } as never);
+
+    await stop(issueTracker, { movedTo: "To Do" });
+
+    expect(issueTracker.findCommentByMarker).toHaveBeenCalledWith(
+      "PROJ-1",
+      "AI workflow run stopped: run-1",
+    );
+    expect(issueTracker.postComment).not.toHaveBeenCalled();
+  });
+
+  it("says nothing about a stop when the run had already closed its own row", async () => {
+    // Its own failure move races the cancel: the row says "failed", and a
+    // comment calling that a stop where nothing failed would be a lie.
+    state.markBlockedOnCancel.mockResolvedValue(false);
+    const issueTracker = tracker();
+
+    await stop(issueTracker, { movedTo: "Backlog" });
+
+    expect(issueTracker.postComment).not.toHaveBeenCalled();
+  });
+
+  it("leaves a run that finished on its own alone", async () => {
+    state.getRun.mockReturnValue({
+      cancel: vi.fn().mockRejectedValue(new Error("already completed")),
+      status: Promise.resolve("completed"),
+    });
+    const issueTracker = tracker();
+
+    await expect(stop(issueTracker, { movedTo: "To Do" })).resolves.toMatchObject({
+      alreadyTerminal: true,
+    });
+
+    expect(state.markBlockedOnCancel).toHaveBeenCalledWith("run-1", { fromRunning: false });
+    expect(state.closeOpenAttempts).not.toHaveBeenCalled();
+    expect(issueTracker.postComment).not.toHaveBeenCalled();
+  });
+
+  it("posts only the question-closed comment when a question was open, which says it stopped", async () => {
+    state.tombstone
+      .mockResolvedValueOnce({ matched: true, successorOwnerToken: null, retiredPublished: true })
+      .mockResolvedValue({ matched: false, successorOwnerToken: null, retiredPublished: false });
+    const issueTracker = tracker();
+
+    await stop(issueTracker, { movedTo: "To Do" });
+
+    expect(issueTracker.postComment).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(issueTracker.postComment).mock.calls[0]![1]).toContain(
+      "its questions are no longer open",
+    );
+  });
+
+  it("stays silent for a cancel that is not a person moving the ticket", async () => {
+    const issueTracker = tracker();
+
+    await stop(issueTracker);
+
+    expect(issueTracker.postComment).not.toHaveBeenCalled();
   });
 });
 

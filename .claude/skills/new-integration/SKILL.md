@@ -42,9 +42,13 @@ Record the branch and the full start SHA before editing (root `AGENTS.md`,
    fails before you edited anything, stop and report it: that is a defect in
    the template or the scaffold, not yours to work around.
 3. **Make it yours**, in the order the guide gives: manifest, worker, tests,
-   README. After each file, rerun the package's typecheck, tests and
-   conformance. Write each test so it fails when the rule it names breaks,
-   and see it fail once.
+   README. After each file, rerun the package's tests and conformance; rerun
+   typecheck too, except right after the manifest alone: a manifest that
+   declares a capability or a block fails typecheck on its own until the
+   worker matches it, on purpose (the two files hold each other accountable),
+   so treat the manifest and the worker as one checkpoint for typecheck.
+   Write each test so it fails when the rule it names breaks, and see it
+   fail once.
 4. **Review yourself** against the
    [review checklist](../../../docs/architecture/integrations.md#3-review-checklist),
    every box, and run its commands.
