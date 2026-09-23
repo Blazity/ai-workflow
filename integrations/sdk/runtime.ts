@@ -13,7 +13,8 @@ import type { IssueTrackerAdapter, IssueTrackerQueryRule } from "./issue-tracker
 import type { IntegrationBlockManifest, IntegrationManifest } from "./manifest";
 import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter } from "./messaging";
-import type { VcsHandleIdentity, VcsIntegrationAdapter } from "./vcs";
+import type { VcsHandleIdentity } from "./vcs";
+import type { VcsIntegrationAdapter } from "./vcs-extensions";
 import type { IntegrationWebhook, IntegrationWebhookReception } from "./webhook";
 
 /**

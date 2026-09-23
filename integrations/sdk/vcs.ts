@@ -6,18 +6,11 @@
  * Moved from `apps/worker/src/adapters/vcs/types.ts`, which re-exports every
  * name, so no core caller changed. What a provider MAY add to the port (gate
  * statuses, pull request files, published reviews, manual dispatch snapshots)
- * is in `vcs-extensions.ts`; the comment markers every provider writes are in
- * `review-markers.ts`. Only the review finding digest stays in core, because
- * it needs `node:crypto`.
+ * is in `vcs-extensions.ts`, together with `VcsIntegrationAdapter`, the port
+ * plus those additions, which a factory returns. The comment markers every
+ * provider writes are in `review-markers.ts`. Only the review finding digest
+ * stays in core, because it needs `node:crypto`.
  */
-
-import type {
-  GateStatusCapableVCS,
-  ManualDispatchPrCapableVCS,
-  PRFilesCapableVCS,
-  PRReviewCapableVCS,
-  RichGateStatusCapableVCS,
-} from "./vcs-extensions";
 
 export interface PullRequest {
   id: number;
@@ -317,28 +310,6 @@ export interface RepositorySkillSource {
     commitSha: string;
     paths: string[];
   }): Promise<Map<string, Uint8Array>>;
-}
-
-/**
- * The adapter an integration's `vcs` factory returns: the port, plus what a
- * provider may add to it. Every addition is optional, and every one is typed
- * here, so a provider that implements one is held to the signature core calls
- * (the extensions are defined in `vcs-extensions.ts`, with the guards core
- * asks them with).
- */
-export interface VcsIntegrationAdapter
-  extends VCSAdapter,
-    Partial<GateStatusCapableVCS>,
-    Partial<RichGateStatusCapableVCS>,
-    Partial<PRFilesCapableVCS>,
-    Partial<PRReviewCapableVCS>,
-    Partial<ManualDispatchPrCapableVCS> {
-  listRepositories?(): Promise<VcsRepositoryMetadata[]>;
-  loadRepositoryProfile?(repoPath: string): Promise<import("./repository-profile").RepositoryProfileBundle>;
-  sandboxCredentials?(): Promise<VcsSandboxCredentials>;
-  parsePullRequestUrl?(url: URL): { repoPath: string; prNumber: number } | null;
-  /** Present when this provider can serve a skill import; see the port above. */
-  skillSource?(): RepositorySkillSource;
 }
 
 /**

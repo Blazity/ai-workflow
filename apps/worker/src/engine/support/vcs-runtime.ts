@@ -224,7 +224,7 @@ async function resolveIntegrationAdapter(
 function lazyAdapter(resolve: () => Promise<VcsIntegrationAdapter>): DeferredVcsAdapter {
   return new Proxy({} as DeferredVcsAdapter, {
     get(_target, property) {
-      if (!isPortMember(property)) return undefined;
+      if (!isPortMember(property)) return;
       return async (...args: unknown[]) => {
         const concrete = await resolve();
         const member: unknown = concrete[property];

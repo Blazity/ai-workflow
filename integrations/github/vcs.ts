@@ -49,7 +49,6 @@ import {
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
   type VcsIntegrationAdapter,
-  type VcsOpaqueHandle,
   type VcsRepositoryMetadata,
   type VcsSandboxCredentials,
 } from "@integrations/sdk";

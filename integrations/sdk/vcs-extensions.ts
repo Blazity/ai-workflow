@@ -18,7 +18,37 @@
  * Moved here from `apps/worker/src/adapters/vcs/types.ts`, which re-exports
  * every name, and from the copies the GitHub and GitLab packages kept of it.
  */
-import type { VCSAdapter, VcsOpaqueHandle } from "./vcs";
+import type { RepositoryProfileBundle } from "./repository-profile";
+import type {
+  RepositorySkillSource,
+  VCSAdapter,
+  VcsOpaqueHandle,
+  VcsRepositoryMetadata,
+  VcsSandboxCredentials,
+} from "./vcs";
+
+/**
+ * The adapter an integration's `vcs` factory returns: the port, plus what a
+ * provider may add to it. Every addition is optional, and every one is typed
+ * here, so a provider that implements one is held to the signature core calls.
+ * It lives beside the extensions rather than beside the port so that the port
+ * (`vcs.ts`) depends on nothing here.
+ */
+export interface VcsIntegrationAdapter
+  extends VCSAdapter,
+    Partial<GateStatusCapableVCS>,
+    Partial<RichGateStatusCapableVCS>,
+    Partial<PRFilesCapableVCS>,
+    Partial<PRReviewCapableVCS>,
+    Partial<ManualDispatchPrCapableVCS> {
+  listRepositories?(): Promise<VcsRepositoryMetadata[]>;
+  loadRepositoryProfile?(repoPath: string): Promise<RepositoryProfileBundle>;
+  sandboxCredentials?(): Promise<VcsSandboxCredentials>;
+  parsePullRequestUrl?(url: URL): { repoPath: string; prNumber: number } | null;
+  /** Present when this provider can serve a skill import; see
+   *  `RepositorySkillSource` in `vcs.ts`. */
+  skillSource?(): RepositorySkillSource;
+}
 
 // ---------------------------------------------------------------------------
 // Gate statuses

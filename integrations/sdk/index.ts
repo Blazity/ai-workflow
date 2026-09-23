@@ -220,7 +220,6 @@ export {
   type SettleReviewThreadResult,
   type VCSAdapter,
   type VcsHandleIdentity,
-  type VcsIntegrationAdapter,
   type VcsOpaqueHandle,
   type VcsRepositoryMetadata,
   type VcsSandboxCredentials,
@@ -248,6 +247,7 @@ export {
   type PRReviewPublicationResult,
   type RichGateStatusCapableVCS,
   type RichGateStatusUpdate,
+  type VcsIntegrationAdapter,
 } from "./vcs-extensions";
 
 export {
