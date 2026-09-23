@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { sandboxCreateRefusal } from "../../sandbox/create-refusal.js";
 import type { IntegrationConnectionPin, RunRepositoryAccess } from "@shared/contracts";
 import type { RepositoryVcsRuntime } from "../support/vcs-runtime.js";
 import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../../infra/vcs-urls.js";
@@ -366,6 +367,8 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     ...getSandboxCredentials(),
     runtime: "node24",
     timeout: input.jobTimeoutMs,
+  }).catch((error: unknown) => {
+    throw sandboxCreateRefusal(error) ?? error;
   });
   try {
     const { createAdapters } = await import("../support/adapters.js");
