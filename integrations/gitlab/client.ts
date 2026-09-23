@@ -41,7 +41,7 @@ export interface GitLabClient {
  * seconds, which GitLab usually does and does not promise. A request that sets
  * its own `timeoutMs` keeps it.
  */
-export const GITLAB_ATTEMPT_DEADLINE_MS = 75_000;
+const GITLAB_ATTEMPT_DEADLINE_MS = 75_000;
 
 /** `ctx.http`'s options, with headers as a plain record; the token is added. */
 export type GitLabRequestInit = Omit<IntegrationRequestInit, "headers"> & {
