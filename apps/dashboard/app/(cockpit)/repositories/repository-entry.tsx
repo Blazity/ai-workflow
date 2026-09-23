@@ -903,10 +903,11 @@ function MemoryTab({
       ) : (
         <>
           {!memory.complete && (
+            // Neutral on whose limit it was: the cap may be this deployment's
+            // own as easily as the provider's.
             <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">
-              This deployment&apos;s memory cannot promise its list is everything
-              it holds, so a document for this repository may be stored without
-              appearing here.
+              This list may not be everything stored for this repository, so a
+              document missing here may still exist.
             </p>
           )}
           {error && (
@@ -914,7 +915,9 @@ function MemoryTab({
               {error}
             </div>
           )}
-          {memory.documents.length === 0 && (
+          {/* Only beside a list that is everything: "nothing recorded" next to
+              "this may not be everything" is two answers to one question. */}
+          {memory.documents.length === 0 && memory.complete && (
             <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">
               Nothing recorded yet. Documents appear here once a run writes to
               this repository&apos;s memory.
@@ -942,7 +945,7 @@ function MemoryTab({
                     {gone
                       ? "Erased."
                       : slot.unreadable !== null
-                        ? `Could not be read right now: ${slot.unreadable} Reload the page to try again.`
+                        ? `Could not be read right now. ${asSentence(slot.unreadable)}`
                         : "No longer stored: it was erased after the list was read."}
                   </p>
                 ) : (
@@ -1022,10 +1025,11 @@ function MemoryTab({
 }
 
 /**
- * The provider could not be asked. Said as a state with what to do, never as
- * "nothing recorded": a person who reads that about a store nobody could read
- * concludes the agent forgot this repository. The sentence in the middle is
- * the worker's, which names the provider and, when it knows, the fix.
+ * The provider could not be asked. Said as a state, never as "nothing
+ * recorded": a person who reads that about a store nobody could read
+ * concludes the agent forgot this repository. What to do is the worker's
+ * sentence, because only the worker knows whether the fix is waiting, an
+ * admin on the Integrations page, or the provider's own console.
  */
 function MemoryUnavailable({ retryable, reason }: { retryable: boolean; reason: string }) {
   return (
@@ -1036,23 +1040,17 @@ function MemoryUnavailable({ retryable, reason }: { retryable: boolean; reason: 
       <p className="m-0 font-body text-[13px] font-medium text-neutral-900">
         {retryable ? "Memory is not available right now" : "Memory cannot be browsed here"}
       </p>
-      <p className="m-0 mt-1 font-body text-[12px] text-neutral-700">{reason}</p>
-      <p className="m-0 mt-1 font-body text-[12px] text-neutral-500">
-        {retryable ? (
-          <>
-            Nothing was erased. Reload the page to try again; if it keeps
-            failing, check the memory provider on the{" "}
-            <a href="/integrations" className="text-mariner">
-              Integrations
-            </a>{" "}
-            page.
-          </>
-        ) : (
-          "Reloading will not change this: the provider that keeps this deployment's memory cannot list what it holds."
-        )}
-      </p>
+      <p className="m-0 mt-1 font-body text-[12px] text-neutral-700">{asSentence(reason)}</p>
+      <p className="m-0 mt-1 font-body text-[12px] text-neutral-500">Nothing was erased.</p>
     </div>
   );
+}
+
+/** The worker's refusals end without a full stop, so a screen quoting one can
+ *  place it; standing alone here, it gets one. */
+function asSentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 function HistoryTab({

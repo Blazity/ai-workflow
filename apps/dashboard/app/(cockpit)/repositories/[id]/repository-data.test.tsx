@@ -279,7 +279,7 @@ test("shows an older repository's documents on a busy deployment", async (t) => 
 
   assert.match(text, /The storefront runs on Next\.js\./);
   assert.match(text, /Do not run the codegen twice\./);
-  assert.doesNotMatch(text, /may be stored without appearing here/);
+  assert.doesNotMatch(text, /may not be everything stored/);
   assert.ok(!asked.includes("/api/v1/memory"), "the page never pages through everything");
 });
 
@@ -296,14 +296,20 @@ test("asks for no document when the listing holds none for this repository", asy
 
 test("a provider that is away shows memory as not available right now, and what to do", async (t) => {
   answers = withRepository({
-    [LISTING_PATH]: providerRefused(503, "Recall Engine could not answer: socket hang up"),
+    [LISTING_PATH]: providerRefused(
+      503,
+      "Recall Engine could not answer: socket hang up. Try again in a moment, and if it keeps failing, check Recall Engine's connection on the Integrations page",
+    ),
   });
 
   const text = await renderMemoryTab(t);
 
   assert.match(text, /Memory is not available right now/);
-  assert.match(text, /Recall Engine could not answer: socket hang up/);
-  assert.match(text, /Reload the page to try again/);
+  // What to do is the worker's sentence, shown whole; the page adds no advice
+  // of its own that could contradict it.
+  assert.match(text, /Recall Engine could not answer: socket hang up\. Try again in a moment/);
+  assert.match(text, /on the Integrations page\./);
+  assert.match(text, /Nothing was erased\./);
   // Never the empty state: that tells a person the agent forgot this repository.
   assert.doesNotMatch(text, /Nothing recorded yet/);
   assert.deepEqual(documentReads(), []);
@@ -311,7 +317,7 @@ test("a provider that is away shows memory as not available right now, and what 
   assert.match(text, /Overview/);
 });
 
-test("a provider that cannot list says reloading will not help", async (t) => {
+test("a provider that cannot list says it cannot be browsed here, in its own words", async (t) => {
   answers = withRepository({
     [LISTING_PATH]: providerRefused(
       501,
@@ -323,7 +329,6 @@ test("a provider that cannot list says reloading will not help", async (t) => {
 
   assert.match(text, /Memory cannot be browsed here/);
   assert.match(text, /Read and erase it where that provider keeps it\./);
-  assert.match(text, /Reloading will not change this/);
   assert.doesNotMatch(text, /Nothing recorded yet/);
 });
 
@@ -335,7 +340,7 @@ test("one read the provider could not answer is said on that document, not as er
 
   const text = await renderMemoryTab(t);
 
-  assert.match(text, /Could not be read right now: Built-in memory could not answer: db down/);
+  assert.match(text, /Could not be read right now\. Built-in memory could not answer: db down\./);
   assert.doesNotMatch(text, /No longer stored/);
 });
 
@@ -346,5 +351,7 @@ test("a listing that may be partial says so, so absence is not read as proof", a
 
   const text = await renderMemoryTab(t);
 
-  assert.match(text, /may be stored without appearing here/);
+  assert.match(text, /may not be everything stored for this repository/);
+  // One answer, not two: never "nothing recorded" beside "maybe not all".
+  assert.doesNotMatch(text, /Nothing recorded yet/);
 });
