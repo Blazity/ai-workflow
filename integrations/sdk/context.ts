@@ -161,6 +161,12 @@ type LlmAccess<B extends IntegrationBlockManifest> = B extends {
  * ends the request as a whole, retries included, alongside `ctx.signal`. A
  * non-2xx response is returned, not thrown.
  *
+ * An attempt ends when the whole body has been read: the Response comes back
+ * with its body already read, so the attempt deadline covers the body too, and
+ * a body the provider did not finish sending in time is an attempt that failed
+ * (a read goes again, a write throws) rather than a short success.
+ * `streamBody` opts out, for a download too large to hold in memory.
+ *
  * A value no request can carry is refused before anything is sent: a header
  * built from a connection value with a line break in it, or a URL built from
  * one that does not parse, throws `ConnectionValueError` naming the field.
@@ -201,6 +207,17 @@ export interface IntegrationRequestInit extends RequestInit {
    * it cannot be sent twice.
    */
   resendAfterRateLimit?: boolean;
+  /**
+   * Hand back the answer as soon as its headers arrive and leave the body to
+   * the caller, for a download too large to hold in memory. By default the
+   * body is read inside the attempt, so the attempt deadline covers it and a
+   * body cut short is an attempt that failed. A streamed body is outside that:
+   * the attempt deadline still runs while the caller reads it, so give such a
+   * request a `timeoutMs` that covers the whole download, and treat a read
+   * that throws as the provider not being reached. What that read throws is
+   * the runtime's own error, not a redacted copy.
+   */
+  streamBody?: boolean;
 }
 
 export const INTEGRATION_HTTP_DEFAULTS = {

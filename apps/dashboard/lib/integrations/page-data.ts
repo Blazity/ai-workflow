@@ -22,7 +22,7 @@ type WorkerPageData =
   | { status: "ok"; value: unknown }
   | { status: "unknown" }
   | { status: "none" }
-  | { status: "unavailable"; cause?: "not_connected" | "provider"; reason: string };
+  | { status: "unavailable"; cause?: "worker" | "not_connected" | "provider"; reason: string };
 
 /** Our own wait ran out: the worker did not answer inside its own budget. */
 const TIMED_OUT = "timed_out" as const;

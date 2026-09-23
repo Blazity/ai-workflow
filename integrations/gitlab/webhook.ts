@@ -7,7 +7,7 @@ import type {
   PrTriggerPayload,
   TriggerEvent,
 } from "@integrations/sdk";
-import { isManagedGateCheckName, isOurOwnVcsComment } from "@integrations/sdk";
+import { isManagedGateCheckName, isOurOwnVcsComment, vcsLoginsMatch } from "@integrations/sdk";
 import type { manifest } from "./manifest";
 import {
   failedPipelineChecks,
@@ -213,7 +213,7 @@ export function normalizeGitLabEvent(
       body?.object_kind !== "note" || !attrs || !body?.merge_request || !body?.project ||
       attrs.action !== "create" || attrs.noteable_type !== "MergeRequest" ||
       attrs.system === true || attrs.internal === true || attrs.confidential === true ||
-      sameLogin(producer, options.botLogin) ||
+      vcsLoginsMatch(producer, options.botLogin) ||
       // Ours only when the author wrote the marker, not when they quoted one of
       // ours back at us: the same rule the GitHub comment paths use, and the
       // reason a reviewer's "this still does not work" reply is not silently
@@ -326,8 +326,4 @@ function legacyGateInput(body: any) {
 function legacyGateAction(body: any): string {
   const action = body?.object_attributes?.action;
   return action === "open" ? "opened" : action === "reopen" ? "reopened" : String(action ?? "");
-}
-
-function sameLogin(left: string | undefined, right: string | undefined): boolean {
-  return Boolean(left && right && left.trim().toLowerCase() === right.trim().toLowerCase());
 }

@@ -84,10 +84,14 @@ export type McpToolDependencies = {
   loadDeploymentIntegrations: () => Promise<DeploymentIntegrations>;
   /**
    * Which provider serves each capability, the built-in memory store included:
-   * the answer the dashboard's Integrations page shows, on demand. A thunk for
-   * the reason the two above are: only `system.capabilities` asks.
+   * the answer the dashboard's Integrations page shows, on demand, over the
+   * deployment the caller already read (`loadDeploymentIntegrations`), so one
+   * call reads the integrations once. A thunk for the reason the two above
+   * are: only `system.capabilities` asks.
    */
-  loadCapabilityOverview: () => Promise<IntegrationCapabilitiesResponse>;
+  loadCapabilityOverview: (
+    deployment: DeploymentIntegrations,
+  ) => Promise<IntegrationCapabilitiesResponse>;
   /**
    * Every secret this deployment knows, which every result is redacted with
    * before it leaves (`knownSecretValues`: the environment's and every

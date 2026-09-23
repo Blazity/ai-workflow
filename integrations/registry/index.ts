@@ -12,11 +12,7 @@
  * directories under `integrations/`. Nothing here is edited by hand, and
  * nothing here knows an id: a lookup takes the id its caller already holds.
  */
-import {
-  INTEGRATION_CAPABILITIES,
-  type IntegrationBlockManifest,
-  type IntegrationManifest,
-} from "@integrations/sdk";
+import type { IntegrationBlockManifest, IntegrationManifest } from "@integrations/sdk";
 import {
   generatedIntegrationFixtureIds,
   generatedIntegrationManifests,
@@ -73,15 +69,11 @@ export function integrationsProviding(capability: string): readonly IntegrationM
 }
 
 /**
- * What a person reads for a capability, from the SDK's one table of
- * capabilities (`Issue tracker`, `Version control`), or null for an id this
- * build does not know, which a worker a deploy ahead can send.
+ * What a person reads for a capability (`Issue tracker`, `Version control`),
+ * or null for an id this build does not know. Defined in the SDK beside its
+ * table, and offered here for the dashboard, which reads the registry.
  */
-export function capabilityLabel(id: string): string | null {
-  return Object.hasOwn(INTEGRATION_CAPABILITIES, id)
-    ? INTEGRATION_CAPABILITIES[id as keyof typeof INTEGRATION_CAPABILITIES].label
-    : null;
-}
+export { capabilityLabel } from "@integrations/sdk";
 
 /** How a person reads one change request: `MR` and `!12`, `PR` and `#12`. */
 export interface ChangeRequestNaming {

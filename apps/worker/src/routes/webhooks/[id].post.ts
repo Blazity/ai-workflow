@@ -86,7 +86,8 @@ export default defineEventHandler(async (event) => {
   // review authors and producers again against the resolved account (the
   // legacy single-provider login included) in `selectEligibleEvent`.
   const readBotLogin = memoizedVcsBotLogin();
-  const { legacyBotLogin: _legacyBotLogin, ...connection } = usable.ctx.connection;
+  const { VCS_LEGACY_BOT_LOGIN_FIELD } = await import("@integrations/sdk");
+  const { [VCS_LEGACY_BOT_LOGIN_FIELD.key]: _legacyBotLogin, ...connection } = usable.ctx.connection;
   let reception;
   try {
     reception = await calls.receive(

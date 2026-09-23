@@ -1485,3 +1485,38 @@ describe("JiraAdapter", () => {
     });
   });
 });
+
+describe("the page a person opens for a ticket", () => {
+  function adapterFor(baseUrl: string) {
+    return new JiraAdapter({
+      baseUrl,
+      apiToken: "token",
+      projectKey: "PROJ",
+      cloudId: CLOUD_ID,
+      fetch: mockFetch,
+    });
+  }
+
+  it("links an issue key on the site's origin, whatever path the Site URL was saved with", () => {
+    // Core used to spell this link itself from the raw Site URL, so a site
+    // saved as https://acme.atlassian.net/jira linked every run view to
+    // /jira/browse/KEY, a page Jira Cloud does not serve.
+    expect(adapterFor("https://acme.atlassian.net/jira/").ticketUrl("AWT-42")).toBe(
+      "https://acme.atlassian.net/browse/AWT-42",
+    );
+    expect(adapterFor("https://acme.atlassian.net").ticketUrl("AWT-42")).toBe(
+      "https://acme.atlassian.net/browse/AWT-42",
+    );
+  });
+
+  it("gives no link for a subject key Jira never issued, and asks Jira nothing", () => {
+    mockFetch.mockReset();
+    const adapter = adapterFor("https://acme.atlassian.net");
+
+    expect(adapter.ticketUrl("pr:acme/api#128")).toBeNull();
+    expect(adapter.ticketUrl("webhook-7f3a2c-1a2b3c4d")).toBeNull();
+    expect(adapter.ticketUrl("schedule-sch_1-20260923T0400")).toBeNull();
+    expect(adapter.ticketUrl("awt-42")).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});

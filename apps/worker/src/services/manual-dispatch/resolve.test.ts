@@ -58,6 +58,13 @@ vi.mock("../../engine/support/vcs-runtime.js", () => ({
     getManualDispatchPullRequest: mocks.getManualDispatchPullRequest,
   }),
   resolveConfiguredPullRequestUrl: async (url: URL) => {
+    if (url.host === "settings-unreadable.example") {
+      const { IntegrationSettingsUnreadableError } = await import("../integrations/usable.js");
+      throw new IntegrationSettingsUnreadableError(
+        "so the pull request URL could not be matched to a provider",
+        "connection terminated unexpectedly",
+      );
+    }
     if (url.host === "github.com") {
       const match = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(url.pathname);
       return match
@@ -160,6 +167,20 @@ describe("manual pull request input", () => {
     await expect(parsePullRequestUrl(url)).resolves.toBeNull();
   });
 
+  it("answers settings that could not be read retryably, never as a provider that is not configured", async () => {
+    // "The pull request provider is not configured" sent a person to the
+    // Integrations page to connect a provider that was connected; a queued
+    // dispatch took it as final and gave up.
+    const refusal = parsePullRequestUrl("https://settings-unreadable.example/acme/api/pull/42");
+
+    await expect(refusal).rejects.toMatchObject({
+      name: "ManualDispatchError",
+      statusCode: 503,
+      code: "integration_unavailable",
+    });
+    await expect(refusal).rejects.toThrow(/integration settings could not be read/);
+  });
+
   it("requires created and merged triggers to match current lifecycle state", () => {
     expect(
       selectManualTriggerEvent(
@@ -217,28 +238,30 @@ describe("manual pull request input", () => {
     // adapter reported (checks with no producer), which a hand-made snapshot
     // would have papered over.
     const { GitLabAdapter } = await import("../../../../../integrations/gitlab/vcs.js");
-    const client = {
-      MergeRequests: {
-        show: vi.fn().mockResolvedValue({
-          web_url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
-          source_branch: "feature/manual",
-          target_branch: "main",
-          title: "Manual dispatch",
-          author: { username: "alice" },
-          state: "opened",
-          diff_refs: { head_sha: "head-sha" },
-          head_pipeline: { id: 901, status: "failed" },
-        }),
+    const { gitLabRestAnswers } = await import("../../test-support/gitlab-rest.js");
+    const project = "/api/v4/projects/platform/api";
+    const answers: Record<string, unknown> = {
+      [`${project}/merge_requests/17`]: {
+        web_url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+        source_branch: "feature/manual",
+        target_branch: "main",
+        title: "Manual dispatch",
+        author: { username: "alice" },
+        state: "opened",
+        diff_refs: { head_sha: "head-sha" },
+        head_pipeline: { id: 901, status: "failed" },
       },
-      Jobs: { all: vi.fn().mockResolvedValue([{ id: 11, name: "lint", status: "failed" }]) },
-      Pipelines: { show: vi.fn().mockResolvedValue({ id: 901, source: "merge_request_event" }) },
-      MergeRequestNotes: { all: vi.fn().mockResolvedValue([]) },
-      MergeRequestDiscussions: { all: vi.fn().mockResolvedValue([]) },
+      [`${project}/pipelines/901/jobs`]: [{ id: 11, name: "lint", status: "failed" }],
+      [`${project}/pipelines/901`]: { id: 901, source: "merge_request_event" },
+      [`${project}/merge_requests/17/notes`]: [],
+      [`${project}/merge_requests/17/discussions`]: [],
     };
-    const gitLabSnapshot = await new GitLabAdapter(
-      { token: "t", projectId: "platform/api", baseBranch: "main" },
-      client as never,
-    ).getManualDispatchPullRequest(17);
+    const gitLabSnapshot = await new GitLabAdapter({
+      http: gitLabRestAnswers((path) => answers[path]),
+      token: "t",
+      projectId: "platform/api",
+      baseBranch: "main",
+    }).getManualDispatchPullRequest(17);
     const gitLabPr: PrTriggerPayload = {
       ...pr,
       provider: "gitlab",

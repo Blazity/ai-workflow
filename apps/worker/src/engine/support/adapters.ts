@@ -67,7 +67,6 @@ const vcsWithoutRepository: VCSAdapter = {
   postPRComment: refuseWithoutRepository,
   getCheckRunResults: refuseWithoutRepository,
   getPRConflictStatus: refuseWithoutRepository,
-  getPRHeadSha: refuseWithoutRepository,
   findPR: refuseWithoutRepository,
   getBranchSha: refuseWithoutRepository,
   getBranchShaIfExists: refuseWithoutRepository,
@@ -79,8 +78,6 @@ const vcsWithoutRepository: VCSAdapter = {
   settleReviewThread: refuseWithoutRepository,
   postRunFailureNote: refuseWithoutRepository,
 };
-
-export { coreServesIssueTracker } from "./issue-tracker-runtime.js";
 
 /**
  * ASYNCHRONOUS since S12, and the reason is worth keeping.

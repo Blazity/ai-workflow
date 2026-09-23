@@ -81,6 +81,9 @@ export async function agentTracingRun(
     subjectKey: runSubjectKey(ctx),
     states,
     ...(invocation ? { invocation } : {}),
+    // Compared by the tracers themselves before each sandbox, because the
+    // connection can move between the state's creation and this sandbox.
+    ...(ctx.integrationPins ? { integrationPins: ctx.integrationPins } : {}),
   };
 }
 
@@ -122,6 +125,7 @@ async function callStep(
     integrationIds: [...integrationIds],
     runId: ctx.runId,
     subjectKey: runSubjectKey(ctx),
+    ...(ctx.integrationPins ? { integrationPins: ctx.integrationPins } : {}),
   });
 }
 

@@ -190,6 +190,21 @@ describe("a run reaching an integration block", () => {
     expect(runStep).not.toHaveBeenCalled();
   });
 
+  it("blames the settings, not the provider, when the block's own read of them failed", async () => {
+    // The same read, reached one step later: the run's state was made, then
+    // the block step could not read the connection it runs with. Reported as
+    // the provider's failure, it sent a person to a provider nobody asked.
+    runState.mockResolvedValue({ status: "ready", state: { taskId: "task-7" } });
+    runStep.mockResolvedValue({ kind: "unreadable", reason: "connection terminated" });
+
+    const result = await executeIntegrationBlock(node, {}, ctx, {});
+
+    if (result.kind !== "execution_error") throw new Error("expected a refusal");
+    expect(result.error.category).toBe("engine");
+    expect(result.error.message).toContain("could not read the deployment's integration settings");
+    expect(result.error.message).toContain("Nothing was asked of the integration");
+  });
+
   it("hands the block no state when the provider could not make one, so the block decides", async () => {
     runState.mockResolvedValue({ status: "failed", reason: "503" });
     runStep.mockResolvedValue({ kind: "next", output: { status: "sent" } });

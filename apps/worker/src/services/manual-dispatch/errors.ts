@@ -33,11 +33,24 @@ export class ManualDispatchError extends Error {
 export function issueTrackerForDispatch(resolution: ResolvedIssueTracker): IssueTrackerAdapter {
   if (resolution.ok) return resolution.adapter;
   if (resolution.refusal === "unreadable") {
-    throw new ManualDispatchError(
-      503,
-      "integration_unavailable",
-      "This deployment's integration settings could not be read, so the issue tracker could not be used and nothing was dispatched. Try again shortly.",
-    );
+    throw settingsUnreadableForDispatch("the issue tracker could not be used");
   }
   throw new ManualDispatchError(409, "integration_unavailable", resolution.reason);
+}
+
+/**
+ * The refusal for a dispatch that needed this deployment's integration
+ * settings and could not read them, whichever part of the dispatch asked.
+ *
+ * 503 and `integration_unavailable`, for the reasons above: nothing was
+ * reserved, a retry is the fix, and a queued dispatch's recovery retries it on
+ * the next tick. Never the refusal for "not configured", which sends a person
+ * to connect something that is connected.
+ */
+export function settingsUnreadableForDispatch(consequence: string): ManualDispatchError {
+  return new ManualDispatchError(
+    503,
+    "integration_unavailable",
+    `This deployment's integration settings could not be read, so ${consequence} and nothing was dispatched. Try again shortly.`,
+  );
 }

@@ -7,6 +7,7 @@ import type {
 } from "@shared/contracts";
 import { isRunFailureCode } from "@shared/contracts";
 import type { Db } from "../../db/types.js";
+import { ticketLinkFor, type TicketLinks } from "../../engine/support/ticket-url.js";
 import {
   readConnectedRunDetailRow,
   readConnectedRunRefsRow,
@@ -68,7 +69,8 @@ function phasesToSteps(phases: unknown, base: Date): RunStep[] {
 export interface FetchRunDetailFromDbOptions {
   db: Db;
   runId: string;
-  ticketOrigin: string;
+  /** How the active tracker links a ticket (`issueTrackerTicketLinks`). */
+  ticketLinks: TicketLinks;
   /** Every secret the deployment knows (`knownSecretValues`), which the
    *  persisted step errors are redacted with on the way out. */
   secrets: readonly string[];
@@ -83,7 +85,7 @@ export interface FetchRunDetailFromDbOptions {
  */
 function mapRunDetailRow(
   row: NonNullable<Awaited<ReturnType<typeof readRunDetailRow>>>,
-  ticketOrigin: string,
+  ticketLinks: TicketLinks,
   secrets: readonly string[],
 ): {
   run: RunDetail;
@@ -92,7 +94,6 @@ function mapRunDetailRow(
   analysisReport: RunAnalysisReport | null;
   failureCode: RunFailureCode | null;
 } {
-  const tenantOrigin = ticketOrigin.replace(/\/+$/, "");
   const base = row.startedAt ?? row.createdAt ?? row.firstSeenAt;
   const status = coerceStatus(row.status);
   const run: RunDetail = {
@@ -102,7 +103,7 @@ function mapRunDetailRow(
     status,
     ticket: row.ticketKey ?? "",
     ticketTitle: row.ticketTitle ?? row.ticketKey ?? "",
-    ticketUrl: row.ticketUrl ?? (row.ticketKey ? `${tenantOrigin}/browse/${row.ticketKey}` : ""),
+    ticketUrl: ticketLinkFor(row.ticketUrl, row.ticketKey, ticketLinks) ?? "",
     prNumber: row.prNumber,
     prUrl: row.prUrl,
     prs: row.prs,
@@ -145,19 +146,19 @@ function mapRunDetailRow(
 
 export async function fetchRunDetailFromDb(opts: FetchRunDetailFromDbOptions) {
   const row = await readRunDetailRow(opts.db, opts.runId);
-  return row ? mapRunDetailRow(row, opts.ticketOrigin, opts.secrets) : null;
+  return row ? mapRunDetailRow(row, opts.ticketLinks, opts.secrets) : null;
 }
 
 export async function fetchConnectedRunDetailFromDb(
   opts: Omit<FetchRunDetailFromDbOptions, "db">,
 ) {
   const row = await readConnectedRunDetailRow(opts.runId);
-  return row ? mapRunDetailRow(row, opts.ticketOrigin, opts.secrets) : null;
+  return row ? mapRunDetailRow(row, opts.ticketLinks, opts.secrets) : null;
 }
 
 function mapRunRefs(
   row: NonNullable<Awaited<ReturnType<typeof readRunRefsRow>>>,
-  ticketOrigin: string,
+  ticketLinks: TicketLinks,
 ): {
   ticketKey: string | null;
   ticketUrl: string | null;
@@ -167,19 +168,15 @@ function mapRunRefs(
   prs: RunPullRequest[] | null;
   statusReason: string | null;
 } {
-  const tenantOrigin = ticketOrigin.replace(/\/+$/, "");
-  return {
-    ...row,
-    ticketUrl: row.ticketUrl ?? (row.ticketKey ? `${tenantOrigin}/browse/${row.ticketKey}` : null),
-  };
+  return { ...row, ticketUrl: ticketLinkFor(row.ticketUrl, row.ticketKey, ticketLinks) };
 }
 
-export async function fetchRunRefs(db: Db, runId: string, ticketOrigin: string) {
+export async function fetchRunRefs(db: Db, runId: string, ticketLinks: TicketLinks) {
   const row = await readRunRefsRow(db, runId);
-  return row ? mapRunRefs(row, ticketOrigin) : null;
+  return row ? mapRunRefs(row, ticketLinks) : null;
 }
 
-export async function fetchConnectedRunRefs(runId: string, ticketOrigin: string) {
+export async function fetchConnectedRunRefs(runId: string, ticketLinks: TicketLinks) {
   const row = await readConnectedRunRefsRow(runId);
-  return row ? mapRunRefs(row, ticketOrigin) : null;
+  return row ? mapRunRefs(row, ticketLinks) : null;
 }

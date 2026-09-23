@@ -1,5 +1,5 @@
 {
-  "contractHash": "78a8778ee25dde42896c52336733ee02e195d5ce9f2ab3d73fca1f45874adb90",
+  "contractHash": "01542b8772f96ac9201ed8fb0aacee5ae5b9fea1ceccd2c8818162dae56805cc",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -16,7 +16,7 @@
   "tools": [
     {
       "name": "system.capabilities",
-      "description": "Describe this authenticated MCP deployment: protocol versions, server version, contract hash, enabled domains, read scopes, whether authoring announcements reach anybody, `integrations` - every integration this build ships with its status and the blocks it makes available, or null when that state could not be read - and `capabilities` - for each capability core asks a provider for, who serves it on this deployment (`integrations` with their ids, the `builtin` provider, `none`, `ambiguous` when several are switched on and none is chosen, `refused` when the chosen one is not working, or `unknown`), or null when that could not be read. Integrations are read-only here; connecting, testing, enabling and configuring one is a dashboard action.",
+      "description": "Describe this authenticated MCP deployment: protocol versions, server version, contract hash, enabled domains, read scopes, whether authoring announcements reach anybody (`chat`, `none`, or null when this deployment's integrations could not be read), `integrations` - every integration this build ships with its status and the blocks it makes available, or null when that state could not be read - and `capabilities` - for each capability core asks a provider for, who serves it on this deployment (`integrations` with their ids, the `builtin` provider, `none`, `ambiguous` when several are switched on and none is chosen, `refused` when the chosen one is not working, or `unknown`), or null when that could not be read. Integrations are read-only here; connecting, testing, enabling and configuring one is a dashboard action.",
       "inputSchema": {
         "type": "object",
         "properties": {}

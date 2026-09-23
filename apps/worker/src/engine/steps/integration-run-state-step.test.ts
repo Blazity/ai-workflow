@@ -22,7 +22,9 @@ const manifests = vi.hoisted(() => ({
 vi.mock("@integrations/registry", () => ({
   integrationManifest: (id: string) => manifests.value.find((manifest) => manifest.id === id),
 }));
-vi.mock("../../services/integrations/runtime.js", () => ({
+vi.mock("../../services/integrations/runtime.js", async () => ({
+  // The real comparison, the one every runtime makes against a run's pin.
+  checkIntegrationPin: (await import("../../services/integrations/resolve.js")).checkIntegrationPin,
   resolveUsableIntegrations: async (input: { filter?: (manifest: { id: string }) => boolean }) => {
     resolved.calls += 1;
     const answer = resolved.value as
@@ -211,6 +213,43 @@ describe("creating per-run integration state", () => {
       acmetrace: { status: "unreadable", reason: "connection refused" },
     });
     expect(beginTrace).not.toHaveBeenCalled();
+  });
+
+  it("creates nothing on a connection reconfigured since the run pinned it", async () => {
+    // Made now, the state would live on an engine the run never started with,
+    // and every later use in the run would read it from there.
+    const at = (fingerprint: string) => ({
+      integrationId: "acmetrace",
+      enabled: true,
+      connection: "connected",
+      pin: { integrationId: "acmetrace", configFingerprint: fingerprint },
+    });
+    resolved.value = { ...integrations(), states: new Map([["acmetrace", at("engine-two")]]) };
+
+    const outcomes = await createIntegrationRunStatesStep({
+      integrationIds: ["acmetrace"],
+      ...START,
+      integrationPins: [{ integrationId: "acmetrace", configFingerprint: "engine-one" }],
+    });
+
+    expect(outcomes).toEqual({
+      acmetrace: {
+        status: "unavailable",
+        reason: "reconfigured",
+        message: "Acme Trace was reconfigured after this run started, so nothing was asked of it for this run.",
+      },
+    });
+    expect(beginTrace).not.toHaveBeenCalled();
+
+    resolved.value = { ...integrations(), states: new Map([["acmetrace", at("engine-one")]]) };
+    beginTrace.mockResolvedValue({ taskId: "task-1" });
+    await expect(
+      createIntegrationRunStatesStep({
+        integrationIds: ["acmetrace"],
+        ...START,
+        integrationPins: [{ integrationId: "acmetrace", configFingerprint: "engine-one" }],
+      }),
+    ).resolves.toEqual({ acmetrace: { status: "ready", state: { taskId: "task-1" } } });
   });
 
   it("lets a run-control error through instead of recording it as a provider failure", async () => {

@@ -1,5 +1,8 @@
 import { logger } from "../../services/mcp/app-dependencies.js";
-import type { DeploymentIntegrations } from "../../services/workflow-definitions/block-contracts.js";
+import {
+  activeProviderOf,
+  type DeploymentIntegrations,
+} from "../../services/workflow-definitions/block-contracts.js";
 import {
   McpPublicError,
   type McpActorContext,
@@ -120,23 +123,22 @@ export function announcementLabel(raw: string): string {
  * recorded.
  *
  * Asked of the deployment's integrations, the same value the palette and the
- * run both read, so it cannot drift from what actually happens when a tool
- * announces something. Two connected providers with none selected is also
+ * run both read, and of the rule they use to pick a provider
+ * (`activeProviderOf`), so it cannot drift from what actually happens when a
+ * tool announces something. Two connected providers with none selected is also
  * "none": nothing is sent then either, and saying "chat" would promise a
- * message nobody gets. A read that fails answers "none" for the same reason.
+ * message nobody gets.
+ *
+ * `null` when the integrations could not be read, the same null the answer's
+ * `integrations` field carries for the same read: "none" would tell a client
+ * with confidence that nobody is watching, about a deployment nobody looked at.
  */
-export async function authoringAnnouncementDelivery(
-  read: () => Promise<DeploymentIntegrations>,
-): Promise<"chat" | "none"> {
-  try {
-    return (await read()).providers.get("messaging")?.length === 1 ? "chat" : "none";
-  } catch (error) {
-    logger.warn(
-      { err: error instanceof Error ? error.message : String(error) },
-      "mcp_announcement_delivery_unknown",
-    );
-    return "none";
-  }
+export function authoringAnnouncementDelivery(
+  deployment: DeploymentIntegrations | null,
+): "chat" | "none" | null {
+  if (deployment === null) return null;
+  const active = activeProviderOf(deployment.providers.get("messaging") ?? []);
+  return active.kind === "one" ? "chat" : "none";
 }
 
 /**

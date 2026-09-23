@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { IntegrationManifest } from "@integrations/sdk";
 import type { IntegrationState } from "@shared/contracts";
@@ -55,35 +55,23 @@ vi.mock("@integrations/registry", () => ({
 vi.mock("@integrations/registry/worker", () => ({
   integrationRuntime: (id: string) =>
     id === "acmenotify"
-      ? { manifest, blocks: { acmenotify_announce: (...args: unknown[]) => executor(...args) } }
+      ? {
+          manifest,
+          capabilities: {},
+          blocks: { acmenotify_announce: (...args: unknown[]) => executor(...args) },
+        }
       : undefined,
 }));
-vi.mock("../../services/integrations/runtime.js", async () => {
-  const connectionValues = await import("../../services/integrations/connection-values.js");
-  const resolve = await import("../../services/integrations/resolve.js");
-  return {
-    buildIntegrationContext: (input: { lifetime: AbortSignal }) => ({
-      connection: { baseUrl: "https://acme.example", apiToken: "tok-secret-value" },
-      http: { fetch: () => Promise.reject(new Error("no network in this test")) },
-      log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-      signal: input.lifetime,
-    }),
-    readConnectionValues: () => ({
-      ok: true,
-      values: { baseUrl: "https://acme.example", apiToken: "tok-secret-value" },
-    }),
-    redactIntegrationText: connectionValues.redactIntegrationText,
-    secretValuesOf: () => ["tok-secret-value"],
-    readIntegrationStates: () => states(),
-    secretsKeyMaterial: () => ({ present: false }),
-    environmentReaderFrom: resolve.environmentReaderFrom,
-  };
-});
+// The real resolver reads the connection, so what is replaced is below it: the
+// database read (`stored`) and the state the resolver would derive from it
+// (`states`), which a test states outright. The values come from the
+// environment, as a deployment configured through it has them.
+vi.mock("../../services/integrations/authoring.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/integrations/authoring.js")>()),
+  readIntegrationStatesFrom: () => states(),
+}));
 vi.mock("../../db/repositories/integrations.js", () => ({
   readConnectedIntegrationConnections: () => stored(),
-}));
-vi.mock("../definition/block-contract-environment.js", () => ({
-  builtinCapabilitiesOfDeployment: () => [],
 }));
 vi.mock("../helpers/run-control-error.js", () => ({
   isRunControlError: (error: unknown) => runControl(error),
@@ -143,9 +131,15 @@ beforeEach(() => {
   runControl.mockReset();
   runControl.mockReturnValue(false);
   states.mockReset();
-  states.mockResolvedValue(new Map([["acmenotify", state()]]));
+  states.mockReturnValue(new Map([["acmenotify", state()]]));
   stored.mockReset();
   stored.mockResolvedValue(new Map());
+  vi.stubEnv("ACMENOTIFY_BASE_URL", "https://acme.example");
+  vi.stubEnv("ACMENOTIFY_TOKEN", "tok-secret-value");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("running an integration block", () => {
@@ -183,7 +177,7 @@ describe("running an integration block", () => {
   });
 
   it("reads the state live, so a disable mid-run stops the very next use", async () => {
-    states.mockResolvedValue(
+    states.mockReturnValue(
       new Map([["acmenotify", state({ enabled: false, status: "disabled", usable: false })]]),
     );
 
@@ -198,7 +192,7 @@ describe("running an integration block", () => {
   });
 
   it("stops before the executor when the configuration moved since the run started", async () => {
-    states.mockResolvedValue(
+    states.mockReturnValue(
       new Map([
         [
           "acmenotify",
@@ -281,6 +275,18 @@ describe("running an integration block", () => {
     const result = await call();
 
     expect(result.kind).toBe("error");
+  });
+
+  it("says the settings could not be read, never that the block failed, when the database does not answer", async () => {
+    // The run's own read, not the integration: reporting it as the block's
+    // failure blamed the provider for a database that was briefly away, and a
+    // throw out of a step that is never retried ended the run on it.
+    stored.mockRejectedValue(new Error("connection terminated unexpectedly"));
+
+    const result = await call();
+
+    expect(result).toEqual({ kind: "unreadable", reason: "connection terminated unexpectedly" });
+    expect(executor).not.toHaveBeenCalled();
   });
 
   it("stops a run whose integration this build no longer ships", async () => {

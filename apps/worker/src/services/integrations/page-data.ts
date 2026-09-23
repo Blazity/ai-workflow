@@ -24,10 +24,17 @@ export type IntegrationPageDataResult =
   | { readonly status: "unknown" }
   /** The page has no reader: a page that shows only what it ships itself. */
   | { readonly status: "none" }
-  /** Not connected or disabled here, or the provider was asked and failed. The reason is for a person. */
+  /**
+   * The provider was not asked, or was asked and failed; `reason` is for a
+   * person. `worker` is ours: this deployment could not read its own
+   * integration settings, so nothing is known about the provider. The causes
+   * are the ones the page contract names (`IntegrationPageData` in
+   * `@integrations/host-ui`), so a page acts on this one as on a worker that
+   * did not answer.
+   */
   | {
       readonly status: "unavailable";
-      readonly cause: "not_connected" | "provider";
+      readonly cause: "worker" | "not_connected" | "provider";
       readonly reason: string;
     };
 
@@ -53,11 +60,22 @@ export async function readIntegrationPageData(
   // and reported the wait as the provider's. The resolution is bounded by the
   // dashboard's margin above this budget (`PROVIDER_CALL_CEILING_MS`).
   const lifetime = new AbortController();
-  const { usableIntegrations } = await import("./usable.js");
-  const [usable] = await usableIntegrations({
+  const { resolveUsableIntegrations } = await import("./usable.js");
+  const resolved = await resolveUsableIntegrations({
     lifetime: lifetime.signal,
     filter: (candidate) => candidate.id === integrationId,
   });
+  if (!resolved.readable) {
+    // Not "not connected": nobody could look, and sending a person to the
+    // Connection tab for a database that was briefly away sends them to fix a
+    // connection that works.
+    return {
+      status: "unavailable",
+      cause: "worker",
+      reason: `This deployment's integration settings could not be read, so ${manifest.name} was not asked anything. Try again shortly.`,
+    };
+  }
+  const usable = resolved.usable.find((candidate) => candidate.manifest.id === integrationId);
   if (!usable) {
     // The area already says which of the three states applies and offers the
     // Connection tab; this is the same answer in the page's own words.
@@ -73,13 +91,14 @@ export async function readIntegrationPageData(
   // echoes a credential in an error body is normal, while that body is what a
   // person reads on a screen. The boundary wraps every reader the registry's
   // runtime has, so the one found above is here.
-  const read = usable.runtime.api?.[pageId] as (context: typeof usable.ctx) => Promise<JsonValue>;
+  const { ctx } = usable;
+  const read = usable.runtime.api?.[pageId] as (context: typeof ctx) => Promise<JsonValue>;
   const budget = setTimeout(
     () => lifetime.abort(new DOMException("The page read ran out of time", "TimeoutError")),
     PAGE_READ_TIMEOUT_MS,
   );
   try {
-    const value = await read(usable.ctx);
+    const value = await read(ctx);
     return { status: "ok", value };
   } catch (error) {
     const { logger } = await import("../../infra/logger.js");

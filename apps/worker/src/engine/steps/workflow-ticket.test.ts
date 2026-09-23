@@ -5,11 +5,15 @@ const fetchTicket = vi.fn();
 // user" concept is the shape every other case here runs under, and the one the
 // step has to survive.
 let getCurrentUserAccountId: (() => Promise<string>) | undefined;
+// How the tracker links its own tickets. Deliberately nothing like Jira's
+// pages, so a link core spelled itself cannot pass for the tracker's.
+let ticketUrl: ((key: string) => string | null) | undefined;
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTrackerResolution: { ok: true, adapter: {
       fetchTicket,
       ...(getCurrentUserAccountId ? { getCurrentUserAccountId } : {}),
+      ...(ticketUrl ? { ticketUrl } : {}),
     } },
   }),
 }));
@@ -31,6 +35,7 @@ describe("resolveWorkflowTicketStep", () => {
   beforeEach(() => {
     fetchTicket.mockReset();
     getCurrentUserAccountId = undefined;
+    ticketUrl = undefined;
   });
 
   it("builds PR-only context for a synthetic subject without touching Jira", async () => {
@@ -367,5 +372,48 @@ describe("resolveWorkflowTicketStep", () => {
     };
     expect(await resolveWorkflowTicketStep(entry, "AI")).toMatchObject({ identifier: "AIW-1" });
     expect(fetchTicket).toHaveBeenCalledWith("AIW-1");
+  });
+
+  it("records the page the tracker links for the ticket it read", async () => {
+    // The run keeps this link for good: its views, messages and MCP answers
+    // show it rather than whatever the tracker in force would say later.
+    fetchTicket.mockResolvedValue({ identifier: "AIW-1", trackerStatus: "Review" });
+    ticketUrl = (key) => `https://tracker.example/t/${key}`;
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+
+    const ticket = await resolveWorkflowTicketStep(correlatedEntry, "AI");
+
+    expect(ticket).toMatchObject({ identifier: "AIW-1", url: "https://tracker.example/t/AIW-1" });
+  });
+
+  it("records no page for a ticket its tracker does not link", async () => {
+    fetchTicket.mockResolvedValue({ identifier: "AIW-1", trackerStatus: "Review" });
+    ticketUrl = () => null;
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+
+    const ticket = await resolveWorkflowTicketStep(correlatedEntry, "AI");
+
+    expect(ticket).not.toHaveProperty("url");
+  });
+
+  it("records no ticket page for a pull request with no ticket", async () => {
+    ticketUrl = (key) => `https://tracker.example/t/${key}`;
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+
+    const ticket = await resolveWorkflowTicketStep(
+      {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        subjectKey: "pr:github:acme/api#42",
+        ownerToken: "owner-a",
+        definitionId: 7,
+        definitionVersion: 11,
+        scope: "any",
+        pr,
+      },
+      "AI",
+    );
+
+    expect(ticket).not.toHaveProperty("url");
   });
 });

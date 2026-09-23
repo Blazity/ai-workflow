@@ -79,6 +79,11 @@ const gitea = {
  *  back as the answer and a resolver that ignored it would look right. */
 const adapterCalls: Array<{ chosen: string; repoPath: string; baseBranch: string }> = [];
 const getPRHead = vi.fn(async () => ({ headSha: "sha", baseRef: "main", state: "open" as const }));
+/** Only Gitea lists a pull request's files: the foil that makes Forgejo's
+ *  "cannot" an answer about Forgejo rather than about the path asking. */
+const listPRFiles = vi.fn(async () => [
+  { path: "src/app.ts", additions: 2, deletions: 1, changeType: "modified" as const, patch: "@@ -1 +1,2 @@" },
+]);
 
 /** Connected only while the registry ships it, which is what a deployment is. */
 function connected() {
@@ -86,7 +91,11 @@ function connected() {
   return [usableForgejo, usableGitea].filter((entry) => ids.has(entry.manifest.id));
 }
 
-function usable(manifest: IntegrationManifest, botLogin: string) {
+function usable(
+  manifest: IntegrationManifest,
+  botLogin: string,
+  extensions: Record<string, unknown> = {},
+) {
   return {
     manifest,
     runtime: {
@@ -97,7 +106,7 @@ function usable(manifest: IntegrationManifest, botLogin: string) {
             repoPath: repository.repoPath,
             baseBranch: repository.baseBranch,
           });
-          return { getPRHead };
+          return { getPRHead, ...extensions };
         },
       },
     },
@@ -106,7 +115,7 @@ function usable(manifest: IntegrationManifest, botLogin: string) {
 }
 
 const usableForgejo = usable(forgejo, "forgejo-bot");
-const usableGitea = usable(gitea, "gitea-bot");
+const usableGitea = usable(gitea, "gitea-bot", { listPRFiles });
 
 // The connection store, not the thing under test: what a deployment has
 // connected lives in the database, and this test is about what core does with
@@ -127,7 +136,6 @@ const integrationStore = {
       ),
     };
   },
-  usableIntegrations: async () => connected(),
   checkIntegrationPin: () => ({ ok: true }),
 };
 
@@ -153,6 +161,8 @@ const { providerNestsRepositoryPaths } = await import(
   "../repository-discovery/provider-shape.js"
 );
 const { createRepositoryVcsRuntime } = await import("./vcs-runtime.js");
+const { fetchPullRequestChangeSetStep } = await import("../steps/review-change-set.js");
+const { hasPRFilesCapability } = await import("@integrations/sdk");
 const { readVcsBotLogin } = await import("../../services/integrations/vcs-bot-login.js");
 
 function repository(repoPath: string) {
@@ -259,5 +269,62 @@ describe("a version control provider core has never heard of", () => {
       baseBranch: "main",
     });
     await expect(runtime.vcs.getPRHead(7)).rejects.toThrow(/forgejo/u);
+  });
+});
+
+/**
+ * What a provider can do beyond the port is asked of it before anything is
+ * called, and the answer has to be about the provider. Core reaches a VCS
+ * adapter before its connection resolves; that deferred adapter once answered
+ * every member with a function, so every provider read as able to do
+ * everything and the call failed inside the step instead.
+ */
+describe("what a provider core has never heard of can do beyond the port", () => {
+  const changeSetOf = (provider: string) =>
+    fetchPullRequestChangeSetStep({
+      provider,
+      repoPath: "acme/api",
+      prNumber: 7,
+      prUrl: `https://example.org/acme/api/pulls/7`,
+      headRef: "feature/login",
+      headSha: "abc1234",
+      baseRef: "main",
+    });
+
+  it("reads as unable to list a pull request's files when it does not implement it", async () => {
+    shipped.manifests = [forgejo, gitea];
+    listPRFiles.mockClear();
+
+    const addition = await changeSetOf("forgejo");
+
+    expect(addition.content).toContain("forgejo cannot list pull request files");
+    expect(listPRFiles).not.toHaveBeenCalled();
+  });
+
+  it("reads as able when it does, through the same path", async () => {
+    shipped.manifests = [forgejo, gitea];
+    listPRFiles.mockClear();
+
+    const addition = await changeSetOf("gitea");
+
+    expect(listPRFiles).toHaveBeenCalledWith(7);
+    expect(addition.content).toContain("src/app.ts");
+    expect(addition.content).not.toContain("cannot list pull request files");
+  });
+
+  it("is not claimed by an adapter that has not resolved its connection yet", async () => {
+    shipped.manifests = [forgejo, gitea];
+    const runtime = createRepositoryVcsRuntime({
+      provider: "gitea",
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
+
+    // The deferred adapter cannot know, so it claims nothing beyond the port;
+    // the resolved one answers for the provider.
+    expect(hasPRFilesCapability(runtime.vcs)).toBe(false);
+    expect("listPRFiles" in runtime.vcs).toBe(false);
+    expect(typeof runtime.vcs.getPRHead).toBe("function");
+    expect(hasPRFilesCapability(await runtime.adapter())).toBe(true);
   });
 });
