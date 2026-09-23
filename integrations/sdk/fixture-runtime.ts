@@ -198,10 +198,6 @@ class FixtureRepository implements VCSAdapter {
     return false;
   }
 
-  async getPRHeadSha(prId: number): Promise<string> {
-    return (await this.getPRHead(prId)).headSha;
-  }
-
   async findPR() {
     return null;
   }

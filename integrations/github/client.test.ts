@@ -81,7 +81,7 @@ describe("every GitHub call goes through the context's HTTP", () => {
   it("reads a pull request, the installation token it needs included", async () => {
     const { vcs, paths } = connected();
 
-    await expect(vcs.getPRHeadSha(7)).resolves.toBe("4f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c");
+    await expect(vcs.getPRConflictStatus(7)).resolves.toBe(false);
     expect(paths()).toEqual([
       "POST /app/installations/22/access_tokens",
       "GET /repos/acme/api/pulls/7",
@@ -115,14 +115,13 @@ describe("every GitHub call goes through the context's HTTP", () => {
   });
 });
 
-describe("the head sha is read like the head", () => {
+describe("a pull request GitHub says is not there", () => {
   // GitHub answers 404 for a pull request that does not exist, and for one in
   // a repository the installation cannot see.
-  it("closes a pull request this installation can never read", async () => {
+  it("is closed for good through the real client", async () => {
     const { vcs } = connected();
 
     await expect(vcs.getPRHead(8)).rejects.toSatisfy(isPullRequestUnreadableError);
-    await expect(vcs.getPRHeadSha(8)).rejects.toSatisfy(isPullRequestUnreadableError);
   });
 });
 

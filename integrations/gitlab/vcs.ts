@@ -527,31 +527,6 @@ export class GitLabAdapter implements
   }
 
   /**
-   * The merge request as GitLab answers it, for every reader of one here.
-   *
-   * A merge request this token may not read answers the same way every time,
-   * and a group webhook reports every project in the group, readable or not.
-   * That, and one that no longer exists, is closed for good. A token GitLab no
-   * longer accepts (401) or one without the scope to read at all (403
-   * `insufficient_scope`) refuses every merge request: that is the
-   * connection's fault and is thrown as it came (core's copy of it carries
-   * GitLab's status, read from where the client kept it).
-   */
-  private async showMergeRequest(prId: number): Promise<GitLabMRHead> {
-    try {
-      return (await this.gl.MergeRequests.show(this.projectId, prId)) as unknown as GitLabMRHead;
-    } catch (err) {
-      if (isPullRequestRefusal(err)) {
-        throw new PullRequestUnreadableError(
-          `GitLab merge request !${prId} in ${this.projectId} cannot be read with this token`,
-          { cause: err },
-        );
-      }
-      throw err;
-    }
-  }
-
-  /**
    * One read of the merge request and its head pipeline, for the two answers
    * built from it: the head core binds a delivery against, and the manual
    * dispatch snapshot. Both used to read the merge request on their own.
@@ -562,8 +537,27 @@ export class GitLabAdapter implements
     /** The head pipeline when it failed, with the jobs that failed in it. */
     failedPipeline: { id: number; failedJobs: GitLabJob[] } | null;
   }> {
-    const mr = await this.showMergeRequest(prId);
-    const headSha = headShaOf(mr, prId);
+    let mr: GitLabMRHead;
+    try {
+      mr = (await this.gl.MergeRequests.show(this.projectId, prId)) as unknown as GitLabMRHead;
+    } catch (err) {
+      // A merge request this token may not read answers the same way every
+      // time, and a group webhook reports every project in the group, readable
+      // or not. That, and one that no longer exists, is closed for good. A
+      // token GitLab no longer accepts (401) or one without the scope to read
+      // at all (403 `insufficient_scope`) refuses every merge request: that is
+      // the connection's fault and is thrown as it came (core's copy of it
+      // carries GitLab's status, read from where the client kept it).
+      if (isPullRequestRefusal(err)) {
+        throw new PullRequestUnreadableError(
+          `GitLab merge request !${prId} in ${this.projectId} cannot be read with this token`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
+    const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
+    if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);
     const baseRef = mr.target_branch?.trim();
     if (!baseRef) throw new Error(`GitLab MR !${prId} is missing its target branch`);
     const state =
@@ -700,10 +694,6 @@ export class GitLabAdapter implements
     } catch (err) {
       this.throwWithProviderRetrySemantics(err);
     }
-  }
-
-  async getPRHeadSha(prId: number): Promise<string> {
-    return headShaOf(await this.showMergeRequest(prId), prId);
   }
 
   async listPRFiles(prId: number): Promise<PRFile[]> {
@@ -1573,14 +1563,6 @@ export class GitLabAdapter implements
     if (alreadyReported) return;
     await this.postPRComment(prId, `${body}\n\n${reviewLedgerFailureMarker(runId)}`);
   }
-}
-
-/** The merge request's head commit: `diff_refs.head_sha` when GitLab has
- *  computed the diff, its `sha` before then. */
-function headShaOf(mr: GitLabMRHead, prId: number): string {
-  const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
-  if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);
-  return headSha;
 }
 
 /** GitLab timestamps carry an offset that varies by instance, so compare instants. */

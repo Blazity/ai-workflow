@@ -254,9 +254,9 @@ port's members only. Three more things are the contract, not your choice:
   manifest (`vcs_bot_login_missing`). Your webhook reads it to leave the
   workflow's own activity out (compare with `vcsLoginsMatch`), and core
   filters again against the account it resolves.
-- **A head read fails one way.** `getPRHead` and `getPRHeadSha` throw
+- **A head read fails one way.** `getPRHead` throws
   `PullRequestUnreadableError` exactly when `isPullRequestRefusal` says this
-  connection can never read that pull request, and throw anything else as it
+  connection can never read that pull request, and throws anything else as it
   came, with the provider's answer where the client keeps it.
 
 ### Memory

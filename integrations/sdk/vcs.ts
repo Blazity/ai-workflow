@@ -245,9 +245,6 @@ export interface VCSAdapter {
   postPRComment(prId: number, body: string): Promise<{ url: string | null }>;
   getCheckRunResults(prId: number): Promise<CheckRunResult[]>;
   getPRConflictStatus(prId: number): Promise<boolean>;
-  /** Re-read the provider's authoritative current PR/MR head commit. Fails
-   *  exactly as {@link getPRHead} does. */
-  getPRHeadSha(prId: number): Promise<string>;
   findPR(branch: string): Promise<PullRequest | null>;
   getBranchSha(branch: string): Promise<string>;
   /** Return null only when the provider authoritatively reports no such branch. */

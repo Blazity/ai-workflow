@@ -971,10 +971,6 @@ export class GitHubAdapter
     return data.mergeable === false;
   }
 
-  async getPRHeadSha(prId: number): Promise<string> {
-    return (await this.readPullRequest(prId)).head.sha;
-  }
-
   async findPR(branch: string): Promise<PullRequest | null> {
     const { data } = await this.octokit.pulls.list({
       ...this.ownerRepo,

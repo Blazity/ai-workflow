@@ -110,7 +110,6 @@ const PORT_MEMBERS: Readonly<Record<keyof VCSAdapter, true>> = {
   postPRComment: true,
   getCheckRunResults: true,
   getPRConflictStatus: true,
-  getPRHeadSha: true,
   findPR: true,
   getBranchSha: true,
   getBranchShaIfExists: true,

@@ -702,25 +702,6 @@ describe("GitLabAdapter", () => {
     });
   });
 
-  describe("getPRHeadSha", () => {
-    it("returns the provider's current merge request head", async () => {
-      mockMergeRequests.show.mockResolvedValueOnce({ sha: "current-head" });
-
-      await expect(glAdapter().getPRHeadSha(42)).resolves.toBe("current-head");
-      expect(mockMergeRequests.show).toHaveBeenCalledWith("blazity/demo-app", 42);
-    });
-
-    it("closes a merge request this token can never read, as getPRHead does", async () => {
-      mockMergeRequests.show.mockRejectedValueOnce(
-        new GitLabRequestError("404 Not found", new Response(null, { status: 404 })),
-      );
-
-      const caught = await glAdapter().getPRHeadSha(42).catch((failure) => failure as Error);
-
-      expect(caught).toMatchObject({ name: "PullRequestUnreadableError" });
-    });
-  });
-
   describe("getPRComments", () => {
     it("combines discussion notes and general notes", async () => {
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([
