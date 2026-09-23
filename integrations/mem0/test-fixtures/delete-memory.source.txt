@@ -1,0 +1,6 @@
+Source URL: https://github.com/mem0ai/mem0/blob/fdfb763d6e5e5509bdb35d4ddc9ca8003f6af009/docs/openapi.json
+Raw bytes: https://raw.githubusercontent.com/mem0ai/mem0/fdfb763d6e5e5509bdb35d4ddc9ca8003f6af009/docs/openapi.json
+What it is: Mem0's 200 answer to DELETE /v1/memories/{memory_id}/ (https://docs.mem0.ai/api-reference/memory/delete-memory, which renders this OpenAPI file).
+How these bytes were made: Composed: the page shows no whole body, only the schema. The object has the schema's one documented property, message, set to its documented example value, and is serialised by JSON.stringify with two spaces.
+Retrieved: 2026-09-23
+SHA-256: 47e3790fec2415a8203cefceaddb5e146ff085e435567be76753da5adafd92e4

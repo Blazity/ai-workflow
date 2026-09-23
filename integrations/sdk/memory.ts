@@ -319,7 +319,11 @@ export type MemoryObservation =
        * Stored WHOLE, REPLACING the previous version: the next recall of this
        * notebook returns exactly this text, not this text joined to the last
        * one and not the last one. Against an engine that only adds, that is an
-       * add of the whole text followed by a delete of the previous version.
+       * add of the whole text followed by a delete of the previous version,
+       * once the add is confirmed; and when the text is what is already held,
+       * nothing at all, because an engine that drops an exact repeat would
+       * answer the add with nothing new and the delete would remove the only
+       * copy.
        *
        * Prefer a write that is done when it answers. The same run reads this
        * notebook back seconds later to distil it, and a write that is only

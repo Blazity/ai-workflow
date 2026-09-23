@@ -1,0 +1,6 @@
+{
+  "error": "400 Bad Request",
+  "details": {
+    "message": "Invalid input data. Please refer to the memory creation documentation at https://docs.mem0.ai/platform/quickstart#4-1-create-memories for correct formatting and required fields."
+  }
+}
