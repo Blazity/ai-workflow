@@ -14,6 +14,7 @@ import {
 } from "../../adapters/vcs/types.js";
 import type { SandboxProviderConfig } from "../../sandbox/manager.js";
 import { recordedPinFor } from "./recorded-pins.js";
+import { redactingPublications, VCS_PUBLICATIONS } from "./publication-redaction.js";
 
 /**
  * The connections a run started with, as far as this caller knows them.
@@ -121,10 +122,14 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
       botLogin: await getVcsBotLogin(target.provider),
     },
   } as unknown as IntegrationContext<IntegrationManifest>;
-  return (factory as unknown as (
+  const adapter = (factory as unknown as (
     context: IntegrationContext<IntegrationManifest>,
     repository: { repoPath: string; baseBranch: string },
   ) => VCSAdapter)(ctx, target);
+  // Every title, body, comment, review and status summary core publishes
+  // through it is redacted with the whole set of known secrets first: one of
+  // the publishing boundaries `publication-redaction.ts` lists.
+  return redactingPublications(adapter, VCS_PUBLICATIONS);
 }
 
 function lazyAdapter(resolve: () => Promise<VCSAdapter>): VCSAdapter {

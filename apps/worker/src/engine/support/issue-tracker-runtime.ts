@@ -23,6 +23,7 @@
  */
 import type { IntegrationConnectionPin } from "@shared/contracts";
 import { recordedPinFor } from "./recorded-pins.js";
+import { ISSUE_TRACKER_PUBLICATIONS, redactingPublications } from "./publication-redaction.js";
 import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,
@@ -204,7 +205,10 @@ export async function resolveActiveIssueTracker(
     ok: true,
     id: only.manifest.id,
     name: only.manifest.name,
-    adapter,
+    // Every comment and ticket core posts through it is redacted with the whole
+    // set of known secrets first: one of the publishing boundaries
+    // `publication-redaction.ts` lists.
+    adapter: redactingPublications(adapter, ISSUE_TRACKER_PUBLICATIONS),
     wiring: {
       projectKey: text(connection.projectKey),
       baseUrl: text(connection.baseUrl),

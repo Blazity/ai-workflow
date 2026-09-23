@@ -5,6 +5,11 @@ import type { IntegrationConnectionPin } from "@shared/contracts";
 import type { CoreMessagingDelivery } from "../support/messaging.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { type WorkflowExecutionLogEvent } from "../../run-observability/safe-execution-log.js";
+import {
+  WITHHELD_UNREDACTABLE,
+  withKnownSecretsRedacted,
+  withKnownSecretsRedactedOr,
+} from "../support/publication-redaction.js";
 import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { type AgentWorkflowInput } from "../agent-input.js";
@@ -43,20 +48,6 @@ export async function postPrLinksComment(
   }
 }
 postPrLinksComment.maxRetries = 0;
-
-/**
- * What workflow scope built, redacted with every secret the deployment knows
- * before a step stores it or posts it to the ticket. Workflow scope redacts
- * with the environment's secrets alone, and a connection an admin stored in
- * the dashboard is never in the environment. Throws when the set cannot be
- * read (services/integrations/secret-values.ts has the rule), so nothing is
- * written or posted with part of it.
- */
-async function withKnownSecretsRedacted<T>(value: T): Promise<T> {
-  const { knownSecretValues } = await import("../../services/integrations/runtime.js");
-  const { redactConfiguredSecretsInJson } = await import("../../run-observability/sanitizer.js");
-  return redactConfiguredSecretsInJson(value, await knownSecretValues());
-}
 
 /** Durable report writer kept as a workflow step so a replay/cold resume can
  * safely retry the database boundary without importing the DB client into the
@@ -346,8 +337,10 @@ async function logPhaseFailure(
 ): Promise<void> {
   "use step";
   const { logger } = await import("../../infra/logger.js");
+  // Composed in workflow scope, so only the environment half was applied.
+  const safeReason = await withKnownSecretsRedactedOr(reason, WITHHELD_UNREDACTABLE);
   logger.warn(
-    { ticketKey, phase, reason: reason.slice(0, 1_000) },
+    { ticketKey, phase, reason: safeReason.slice(0, 1_000) },
     "agent_phase_failed",
   );
 }
@@ -424,7 +417,17 @@ async function logWorkflowExecutionErrorStep(
 ): Promise<void> {
   "use step";
   const { logger } = await import("../../infra/logger.js");
-  logger.error(event, "workflow_execution_error");
+  // The detail and message were composed in workflow scope; the correlation
+  // fields are still worth a line when the texts have to be withheld.
+  const { agentProtocol: _unredactable, detail, message, ...correlation } = event;
+  logger.error(
+    await withKnownSecretsRedactedOr(event, {
+      ...correlation,
+      ...(detail !== undefined ? { detail: WITHHELD_UNREDACTABLE } : {}),
+      ...(message !== undefined ? { message: WITHHELD_UNREDACTABLE } : {}),
+    }),
+    "workflow_execution_error",
+  );
 }
 logWorkflowExecutionErrorStep.maxRetries = 0;
 
@@ -439,9 +442,11 @@ async function markTicketFailed(
   const { createAdapters } = await loadAdaptersPort();
   const { runRegistry } = await createAdapters();
   if (!owner.runId) throw new Error("Failed-ticket marking requires a bound run owner.");
+  // The mark is what keeps the ticket from being dispatched again, so it is
+  // written whatever happens to the text, which workflow scope composed.
   await runRegistry.markFailed(ticketIdentifier, {
     runId,
-    error,
+    error: await withKnownSecretsRedactedOr(error, WITHHELD_UNREDACTABLE),
     failedAt: new Date().toISOString(),
   }, {
     subjectKey: owner.subjectKey,

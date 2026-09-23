@@ -14,8 +14,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 
 const resolveUsableIntegrations = vi.fn();
+/** Every secret the deployment knows, as the source hands it over. */
+const knownSecretValues = vi.fn(async (): Promise<string[]> => []);
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
   resolveUsableIntegrations,
+  knownSecretValues,
   // The pin comparison itself is the real one. A mocked check would prove that
   // this module calls something, not that a tracker reconfigured mid-run is
   // refused.
@@ -253,6 +256,50 @@ describe("resolveActiveIssueTracker", () => {
     ]);
 
     expect(resolved).toMatchObject({ ok: true, name: "Test Tracker" });
+  });
+});
+
+// Red when: the adapter core posts through hands the provider what a block or
+// an agent wrote. An agent's summary bound into post_ticket_comment carried a
+// tracing key an admin stored in the dashboard, which is in every agent
+// sandbox by design, straight onto the ticket its author can read.
+describe("what core publishes through the tracker", () => {
+  it("takes every secret the deployment knows out of a comment before the tracker sees it", async () => {
+    const postComment = vi.fn(async () => null);
+    readable(provider("Test Tracker", { adapter: { ...adapterThatKnowsItself(), postComment } }));
+    knownSecretValues.mockResolvedValueOnce(["plainvalue4471tracer"]);
+
+    const tracker = issueTrackerOrThrow(await createAdapters());
+    await tracker.postComment("AWT-1", "Summary: tracing is set up with plainvalue4471tracer.");
+
+    expect(postComment).toHaveBeenCalledTimes(1);
+    const [, posted] = postComment.mock.calls[0] as unknown as [string, string];
+    expect(posted).not.toContain("plainvalue4471tracer");
+    expect(posted).toContain("Summary: tracing is set up with");
+  });
+
+  it("posts nothing when the secrets to redact with cannot be read", async () => {
+    const postComment = vi.fn(async () => null);
+    readable(provider("Test Tracker", { adapter: { ...adapterThatKnowsItself(), postComment } }));
+    knownSecretValues.mockRejectedValueOnce(new Error("settings unreadable"));
+
+    const tracker = issueTrackerOrThrow(await createAdapters());
+
+    await expect(tracker.postComment("AWT-1", "anything")).rejects.toThrow("settings unreadable");
+    expect(postComment).not.toHaveBeenCalled();
+  });
+
+  it("leaves what it does not publish alone, and absent what the tracker lacks", async () => {
+    const fetchTicket = vi.fn(async () => ({ identifier: "AWT-1" }));
+    readable(provider("Test Tracker", { adapter: { ...adapterThatKnowsItself(), fetchTicket } as never }));
+    knownSecretValues.mockClear();
+
+    const tracker = issueTrackerOrThrow(await createAdapters());
+    await tracker.fetchTicket("AWT-1");
+
+    expect(fetchTicket).toHaveBeenCalledWith("AWT-1");
+    expect(knownSecretValues).not.toHaveBeenCalled();
+    expect(tracker.createTicket).toBeUndefined();
   });
 });
 

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   checkIntegrationPin: vi.fn(),
   getVcsBotLogin: vi.fn(),
   loggerWarn: vi.fn(),
+  knownSecretValues: vi.fn(async (): Promise<string[]> => []),
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
@@ -26,6 +27,7 @@ vi.mock("../integrations/runtime.js", () => ({
   usableIntegrations: mocks.usableIntegrations,
   checkIntegrationPin: mocks.checkIntegrationPin,
   getVcsBotLogin: mocks.getVcsBotLogin,
+  knownSecretValues: mocks.knownSecretValues,
 }));
 
 vi.mock("../../infra/logger.js", () => ({
@@ -321,5 +323,46 @@ describe("a run whose recorded pins do not name the VCS provider", () => {
       { integrationId: "github", configFingerprint: "app-1" },
       expect.anything(),
     );
+  });
+});
+
+// Red when: the adapter core publishes through hands the provider what an agent
+// wrote. A pull request body or a review comment is agent text, and a tracing
+// key stored in the dashboard sits in every agent sandbox by design.
+describe("what core publishes through version control", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("takes every secret the deployment knows out of a pull request before the provider sees it", async () => {
+    const createPR = vi.fn(async () => ({ id: 7, url: "https://github.com/acme/api/pull/7" }));
+    resolvesTo(connected("github", { createPR }));
+    mocks.knownSecretValues.mockResolvedValueOnce(["plainvalue4471tracer"]);
+
+    const runtime = createRepositoryVcsRuntime({ provider: "github", repoPath: "acme/api", baseBranch: "main" });
+    await runtime.vcs.createPR("ai-workflow/aiw-1", "AIW-1", "Configured tracing with plainvalue4471tracer.");
+
+    expect(createPR).toHaveBeenCalledWith("ai-workflow/aiw-1", "AIW-1", expect.not.stringContaining("plainvalue4471tracer"));
+  });
+
+  it("publishes nothing when the secrets to redact with cannot be read", async () => {
+    const postPRComment = vi.fn(async () => ({ url: null }));
+    resolvesTo(connected("github", { postPRComment }));
+    mocks.knownSecretValues.mockRejectedValueOnce(new Error("settings unreadable"));
+
+    const runtime = createRepositoryVcsRuntime({ provider: "github", repoPath: "acme/api", baseBranch: "main" });
+
+    await expect(runtime.vcs.postPRComment(7, "anything")).rejects.toThrow("settings unreadable");
+    expect(postPRComment).not.toHaveBeenCalled();
+  });
+
+  it("reads without asking for the secrets", async () => {
+    const findPR = vi.fn().mockResolvedValue(null);
+    resolvesTo(connected("github", { findPR }));
+
+    const runtime = createRepositoryVcsRuntime({ provider: "github", repoPath: "acme/api", baseBranch: "main" });
+    await runtime.vcs.findPR("ai-workflow/aiw-1");
+
+    expect(mocks.knownSecretValues).not.toHaveBeenCalled();
   });
 });

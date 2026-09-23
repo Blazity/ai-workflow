@@ -542,7 +542,7 @@ async function replaySecretValues(): Promise<string[]> {
   return knownSecretValues();
 }
 
-function withKnownSecretsRedacted(
+function redactObservationsWith(
   observations: readonly SanitizedReplayObservation[],
   secrets: readonly string[],
 ): SanitizedReplayObservation[] {
@@ -580,7 +580,7 @@ async function flushV2RunObservationsStep(payload: {
     const { prepareReplayAttemptObservationPersistence } = await import(
       "../../run-observability/runtime-hooks.js"
     );
-    const observations = withKnownSecretsRedacted(
+    const observations = redactObservationsWith(
       payload.observations,
       await replaySecretValues(),
     );
@@ -640,7 +640,7 @@ async function updateV2RunObservationWaitingStep(payload: {
     const { prepareReplayAttemptWaitingPersistence } = await import(
       "../../run-observability/runtime-hooks.js"
     );
-    const observations = withKnownSecretsRedacted(
+    const observations = redactObservationsWith(
       payload.observations,
       await replaySecretValues(),
     );
@@ -708,7 +708,7 @@ async function finishV2RunObservationAttemptStep(payload: {
       "../../run-observability/runtime-hooks.js"
     );
     const secrets = await replaySecretValues();
-    const observations = withKnownSecretsRedacted(payload.observations, secrets);
+    const observations = redactObservationsWith(payload.observations, secrets);
     const outcome = redactConfiguredSecretsInJson(payload.outcome, secrets);
     const finished = await replayCaptureWithinTimeout(
       persistPreparedReplayAttempt({

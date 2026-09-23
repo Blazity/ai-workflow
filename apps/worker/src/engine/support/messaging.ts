@@ -22,6 +22,10 @@
  */
 import type { IntegrationConnectionPin, IntegrationUnavailableReason } from "@shared/contracts";
 import { recordedPinFor } from "./recorded-pins.js";
+import { withKnownSecretsRedacted } from "./publication-redaction.js";
+
+const NOTIFICATION_WITHHELD =
+  "the secrets to redact this notification with could not be read, so it was not sent";
 import { ticketUrlFor } from "./ticket-url.js";
 import type {
   MessageRetrievalFailure,
@@ -70,11 +74,27 @@ export function messagingSender(pins?: readonly IntegrationConnectionPin[]): Cor
           ...(resolved.moved ? { moved: resolved.moved } : {}),
         };
       }
+      // Redacted with every secret the deployment knows before it leaves: a
+      // failure reason carries whatever an agent printed, and the environment
+      // half workflow scope applied misses a key an admin stored in the
+      // dashboard (`publication-redaction.ts`). A set that cannot be read sends
+      // nothing, and says so, because this never throws.
+      let safeEvent: TicketEvent;
+      try {
+        safeEvent = await withKnownSecretsRedacted(event);
+      } catch (error) {
+        const { logger } = await import("../../infra/logger.js");
+        logger.warn(
+          { ticketKey, kind: event.kind, err: error instanceof Error ? error.message : String(error) },
+          "messaging_notification_withheld",
+        );
+        return { delivered: false, reason: NOTIFICATION_WITHHELD };
+      }
       const { conversationFor } = await import("./messaging-conversation.js");
       try {
         return await resolved.adapter.notifyForTicket(
           await ticketRef(ticketKey),
-          event,
+          safeEvent,
           await conversationFor(ticketKey),
         );
       } catch (error) {
