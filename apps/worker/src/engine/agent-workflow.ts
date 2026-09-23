@@ -705,6 +705,10 @@ async function agentWorkflowBody(
    */
   const notePullRequestFailure = async (reason: string): Promise<void> => {
     if (entry.kind !== "pr_trigger") return;
+    // A review comment run with the review ledger off posts nothing on the
+    // pull request, as before the ledger existed: a production decision taken
+    // after a note on MR !11, which this plain note must not undo.
+    if (entry.triggerType === "trigger_pr_review" && !runSettings.REVIEW_LEDGER_ENABLED) return;
     await postReviewLedgerFailureNoteStep({
       pr: {
         provider: entry.pr.provider,
@@ -1867,20 +1871,20 @@ async function agentWorkflowBody(
       // A review comment run with the ledger on says more: which threads it
       // owed the reviewer. A run that died before the feed existed (clone,
       // 401) still owes the reviewer the fact that it died, so it gets a
-      // variant that claims to have seen no threads. Every other run (a
-      // checks-fix, a review run with the ledger off) gets that same variant,
-      // which says nothing about threads.
+      // variant that claims to have seen no threads. Every other pull request
+      // run (a checks-fix) gets that same variant, which says nothing about
+      // threads. A review run with the ledger off posts nothing.
       const postReviewLedgerFailureNoteOnFailureExit = async (
         reason: string,
       ): Promise<void> => {
         if (ctx.entry.kind !== "pr_trigger") return;
-        // Flag off must not post a ledger note: the threads variant below is
-        // the ledger's, and only the plain failure note is posted without it.
-        if (
-          ctx.entry.triggerType !== "trigger_pr_review" ||
-          !ctx.settings.REVIEW_LEDGER_ENABLED
-        ) {
+        if (ctx.entry.triggerType !== "trigger_pr_review") {
           await notePullRequestFailure(reason);
+          return;
+        }
+        // Flag off must reproduce byte-for-byte pre-ledger behavior, and the
+        // pre-ledger run never posted a failure note on this path.
+        if (!ctx.settings.REVIEW_LEDGER_ENABLED) {
           return;
         }
         const ledger = ctx.reviewLedger;

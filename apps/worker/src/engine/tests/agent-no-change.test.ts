@@ -1078,6 +1078,29 @@ describe("postReviewLedgerFailureNoteOnFailureExit flag gate", () => {
   });
 });
 
+describe("notePullRequestFailure flag gate", () => {
+  const agentLines = readFileSync(
+    fileURLToPath(new URL("../agent-workflow.ts", import.meta.url)),
+    "utf8",
+  ).split("\n");
+
+  // The same narrow tripwire as above, for the plain failure note every other
+  // pull request run posts: a review comment run with the ledger off must
+  // still post nothing (the production decision after MR !11).
+  it("still skips a review comment run with the ledger off before posting the plain note", () => {
+    const closure = agentLines.findIndex((line) =>
+      line.includes("const notePullRequestFailure = async"),
+    );
+    expect(closure, "notePullRequestFailure is gone from agent.ts").toBeGreaterThan(-1);
+    const call = agentLines.findIndex((line, at) =>
+      at > closure && line.includes("postReviewLedgerFailureNoteStep({"),
+    );
+    const guard = agentLines.slice(closure, call).join("\n");
+    expect(guard).toMatch(/trigger_pr_review/u);
+    expect(guard).toMatch(/!runSettings\.REVIEW_LEDGER_ENABLED/u);
+  });
+});
+
 describe("planning analysis report provenance", () => {
   const agentLines = readFileSync(
     fileURLToPath(new URL("../agent-workflow.ts", import.meta.url)),
