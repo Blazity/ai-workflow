@@ -24,10 +24,17 @@ import { encryptIntegrationSecret } from "../../infra/secrets-crypto.js";
 const state = vi.hoisted(() => ({
   connections: new Map<string, unknown>(),
   settingsRows: [] as { key: string; value: unknown }[],
+  failReads: 0,
 }));
 
 vi.mock("../../db/repositories/integrations.js", () => ({
-  readConnectedIntegrationConnections: async () => state.connections,
+  readConnectedIntegrationConnections: async () => {
+    if (state.failReads > 0) {
+      state.failReads -= 1;
+      throw new Error("connection reset");
+    }
+    return state.connections;
+  },
 }));
 vi.mock("../../db/repositories/settings.js", () => ({
   readAllConnectedSettings: async () => state.settingsRows,
@@ -54,6 +61,7 @@ const CALLER = "U2147483697";
 beforeEach(() => {
   state.connections = new Map();
   state.settingsRows = [];
+  state.failReads = 0;
 });
 
 afterEach(() => {
@@ -145,6 +153,17 @@ describe("the slash command needs only what it uses", () => {
     expect(resolved.slack.ctx.connection).toEqual({ signingSecret: SIGNING_SECRET });
     const reception = await receive(resolved.slack, "cancel AWT-42");
     expect(reception.kind).toBe("run_control");
+  });
+
+  it("rides out a blink of the database, on the same retry rule as the secret set", async () => {
+    // One failed read of the connections used to answer 503 at once, while the
+    // redaction read of the same tables retried (`unreadable.ts`).
+    vi.stubEnv("SLACK_SIGNING_SECRET", SIGNING_SECRET);
+    state.failReads = 1;
+
+    const resolved = await slackForWebhook();
+
+    expect(resolved.readable && resolved.slack?.manifest.id).toBe("slack");
   });
 
   it("is not served when the signing secret is missing, whatever else is set", async () => {

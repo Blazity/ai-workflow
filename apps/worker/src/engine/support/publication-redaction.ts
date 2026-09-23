@@ -50,7 +50,7 @@ export const WITHHELD_UNREDACTABLE =
 
 /**
  * `value` with every secret the deployment knows replaced by a marker. Throws
- * `IntegrationSecretsUnreadableError` when the set cannot be read, so nothing
+ * `IntegrationSettingsUnreadableError` when the set cannot be read, so nothing
  * leaves with part of it. Strings and plain objects are redacted; anything
  * else (an abort signal handed to a provider) is passed through untouched.
  */

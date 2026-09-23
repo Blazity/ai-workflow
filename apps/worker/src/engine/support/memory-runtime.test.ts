@@ -807,10 +807,10 @@ describe("the secrets memory text carries in and out of this deployment", () => 
   });
 
   it("uses nothing it recalled when the secrets to take out cannot be read", async () => {
-    const { IntegrationSecretsUnreadableError } = await import(
+    const { IntegrationSettingsUnreadableError } = await import(
       "../../services/integrations/secret-values.js"
     );
-    knownSecretValues.mockRejectedValue(new IntegrationSecretsUnreadableError(new Error("db down")));
+    knownSecretValues.mockRejectedValue(new IntegrationSettingsUnreadableError("so the secrets they hold could not be redacted", new Error("db down")));
     readable(
       provider("Recall Engine", {
         recall: async () => ({ ok: true, held: true, entries: [], rendering: "- a fact" }),
@@ -864,10 +864,10 @@ describe("the secrets memory text carries in and out of this deployment", () => 
   it("sends nothing when the secrets to take out cannot be read", async () => {
     // Fail closed. A smaller set here is a stored secret sent to a third party
     // in the clear, and nobody would ever see that it happened.
-    const { IntegrationSecretsUnreadableError } = await import(
+    const { IntegrationSettingsUnreadableError } = await import(
       "../../services/integrations/secret-values.js"
     );
-    knownSecretValues.mockRejectedValue(new IntegrationSecretsUnreadableError(new Error("db down")));
+    knownSecretValues.mockRejectedValue(new IntegrationSettingsUnreadableError("so the secrets they hold could not be redacted", new Error("db down")));
     const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
     readable(provider("Recall Engine", { recall: vi.fn(), observe }));
 

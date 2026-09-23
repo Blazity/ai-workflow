@@ -36,10 +36,10 @@ vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
     ...actual,
     knownSecretValues: async () => {
       if (mocks.secretsUnreadable) {
-        const { IntegrationSecretsUnreadableError } = await import(
+        const { IntegrationSettingsUnreadableError } = await import(
           "../../services/integrations/secret-values.js"
         );
-        throw new IntegrationSecretsUnreadableError(new Error("db blinked"));
+        throw new IntegrationSettingsUnreadableError("so the secrets they hold could not be redacted", new Error("db blinked"));
       }
       return environmentSecretValues();
     },

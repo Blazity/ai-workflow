@@ -30,7 +30,7 @@ vi.mock("../../../services/integrations/runtime.js", async (importOriginal) => (
 }));
 
 import { execute } from "./execute.js";
-import { IntegrationSecretsUnreadableError } from "../../../services/integrations/secret-values.js";
+import { IntegrationSettingsUnreadableError } from "../../../services/integrations/secret-values.js";
 import { manifest as leakManifest } from "./manifest.js";
 import { expectOutputConformsToRegistry, makeCtx, makeInvocation, makeNode } from "../support/test-support.js";
 
@@ -437,7 +437,7 @@ describe("leak_review execute", () => {
   // configured secrets" and the diff is scanned for patterns alone.
   it("publishes nothing, and says why, when the secrets to scan for cannot be read", async () => {
     mocks.knownSecrets.mockImplementation(() => {
-      throw new IntegrationSecretsUnreadableError(new Error("connection reset"));
+      throw new IntegrationSettingsUnreadableError("so the secrets they hold could not be redacted", new Error("connection reset"));
     });
     const ctx = singleRepoCtx({
       head: "head1",

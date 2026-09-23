@@ -416,14 +416,14 @@ async function blockLeakReviewCollectStep(input: {
   // Nothing is published unscanned, so a set that cannot be read is retried,
   // spaced, within this step's retries (a blink passes on the next attempt),
   // and after the last one fails the block with a sentence that says so.
-  const { IntegrationSecretsUnreadableError, knownSecretValues } = await import(
+  const { IntegrationSettingsUnreadableError, knownSecretValues } = await import(
     "../../../services/integrations/runtime.js"
   );
   let known: string[];
   try {
     known = await knownSecretValues();
   } catch (error) {
-    if (error instanceof IntegrationSecretsUnreadableError) {
+    if (error instanceof IntegrationSettingsUnreadableError) {
       throw new RetryableError(LEAK_REVIEW_SETTINGS_UNREADABLE, { retryAfter: "5s" });
     }
     throw error;

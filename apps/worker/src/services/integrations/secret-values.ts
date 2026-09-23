@@ -21,7 +21,7 @@
  *
  * FAILURE POLICY, one for every caller: when the stored versions cannot be
  * read (after a short retry that rides out a blink), both functions below
- * throw `IntegrationSecretsUnreadableError`, and no caller catches it to carry
+ * throw `IntegrationSettingsUnreadableError`, and no caller catches it to carry
  * on with the environment half. Every caller is about to write core's own
  * tables or publish outside the process, and a smaller set there is a stored
  * secret written in the clear, silently. What each caller does instead is its
@@ -42,26 +42,14 @@ export interface SecretSourceOptions {
   readonly db?: Db;
 }
 
-/** The integration settings could not be read, so the set of secrets this
- *  deployment knows is incomplete and must not be used as if it were whole.
- *
- *  The message is fixed and the database's own words ride in `cause`: callers
- *  put this message where people read it (a ticket, a run's failure), and a
- *  driver's error text there reads like a leak and helps nobody act. The
- *  source logs the cause once, where it throws. */
-export class IntegrationSecretsUnreadableError extends Error {
-  constructor(cause: unknown) {
-    super(INTEGRATION_SECRETS_UNREADABLE, { cause });
-    this.name = "IntegrationSecretsUnreadableError";
-  }
-}
+export { IntegrationSettingsUnreadableError } from "./unreadable.js";
 
-const INTEGRATION_SECRETS_UNREADABLE =
-  "The integration settings could not be read, so the secrets they hold could not be redacted.";
+/** What could not be done when the secret set cannot be read. */
+const SECRETS_UNREADABLE = "so the secrets they hold could not be redacted";
 
 /**
  * Every secret this deployment knows: the environment's and every connected
- * integration's, deduplicated. Throws `IntegrationSecretsUnreadableError`
+ * integration's, deduplicated. Throws `IntegrationSettingsUnreadableError`
  * when the integration half cannot be read (see the failure policy above).
  */
 export async function knownSecretValues(options: SecretSourceOptions = {}): Promise<string[]> {
@@ -70,10 +58,6 @@ export async function knownSecretValues(options: SecretSourceOptions = {}): Prom
   ];
 }
 
-/** How long a failing read waits before its next attempt. Short: every caller
- *  is on a path somebody is waiting on (an MCP call, a step, a page), and this
- *  exists to ride out a database blink, not an outage. */
-const READ_RETRY_DELAYS_MS = [150, 450] as const;
 
 /**
  * The plaintext secrets every integration `include` accepts (all of them by
@@ -89,9 +73,9 @@ const READ_RETRY_DELAYS_MS = [150, 450] as const;
  *   integration off does not make a key that is still in a sandbox safe to
  *   print.
  *
- * One read of the connection tables, retried briefly (`READ_RETRY_DELAYS_MS`)
+ * One read of the connection tables, retried briefly (`readIntegrationTables`)
  * so a blink of the database does not fail a caller that would otherwise
- * succeed; a read that still fails throws `IntegrationSecretsUnreadableError`.
+ * succeed; a read that still fails throws `IntegrationSettingsUnreadableError`.
  *
  * A caller that needs a narrower set than `knownSecretValues` passes a filter
  * rather than building its own list: the clarification snapshot scan writes
@@ -163,23 +147,19 @@ async function readRetainedSecrets(
   const { readConnectedRetainedIntegrationSecrets, readRetainedIntegrationSecrets } = await import(
     "../../db/repositories/integrations.js"
   );
+  const { readIntegrationTables, IntegrationSettingsUnreadableError } = await import("./unreadable.js");
   let lastError: unknown;
-  for (let attempt = 0; attempt <= READ_RETRY_DELAYS_MS.length; attempt++) {
-    if (attempt > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, READ_RETRY_DELAYS_MS[attempt - 1]);
-      });
-    }
-    try {
-      return db ? await readRetainedIntegrationSecrets(db) : await readConnectedRetainedIntegrationSecrets();
-    } catch (error) {
-      lastError = error;
-    }
+  try {
+    return await readIntegrationTables(() =>
+      db ? readRetainedIntegrationSecrets(db) : readConnectedRetainedIntegrationSecrets(),
+    );
+  } catch (error) {
+    lastError = error;
   }
   const { logger } = await import("../../infra/logger.js");
   logger.warn(
     { err: lastError instanceof Error ? lastError.message : String(lastError) },
     "integration_secrets_unreadable",
   );
-  throw new IntegrationSecretsUnreadableError(lastError);
+  throw new IntegrationSettingsUnreadableError(SECRETS_UNREADABLE, lastError);
 }
