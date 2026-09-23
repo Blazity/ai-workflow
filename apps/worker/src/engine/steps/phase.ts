@@ -394,7 +394,7 @@ async function fetchAttachments(
   }
 
   const { createAdapters, issueTrackerOrThrow } = await loadAdaptersPort();
-  const { fetchAttachmentsWithRetry } = await import("../../sandbox/attachments.js");
+  const { downloadTicketAttachments } = await import("../../sandbox/attachments.js");
   // The attachments are the ticket's, so a run working from a ticket with no
   // tracker to download them from fails here rather than working without
   // what the ticket told it.
@@ -414,7 +414,7 @@ async function fetchAttachments(
     downloadAttachment: (url: string, opts?: { timeoutMs?: number }) => Promise<Buffer>;
   };
 
-  const result = await fetchAttachmentsWithRetry(
+  const result = await downloadTicketAttachments(
     downloader,
     attachments,
     limits,
