@@ -115,9 +115,15 @@ export function RepositoryScopeBar({
           <div className="flex min-w-0 items-center gap-2 truncate font-body text-[11px] text-neutral-700">
             <span className="shrink-0">
               <span className="text-neutral-500">Providers:</span>{" "}
-              {displayedProviders.length === 0
-                ? "No provider connected"
-                : displayedProviders.map(providerLabel).join(" + ")}
+              {displayedProviders.length > 0
+                ? displayedProviders.map(providerLabel).join(" + ")
+                : catalog.status === "loading"
+                  ? "Loading…"
+                  : catalog.status === "error"
+                    ? // The attention badge carries the reason; "none" would be a
+                      // claim nobody read.
+                      "Unknown"
+                    : "No provider connected"}
             </span>
             <span aria-hidden="true" className="text-neutral-300">
               ·

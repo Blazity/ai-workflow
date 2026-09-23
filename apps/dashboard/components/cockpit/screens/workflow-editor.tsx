@@ -22,6 +22,7 @@ import {
   type WorkflowDefinitionMeta,
   type WorkflowDefinitionTemplate,
   type WorkflowDefinitionSaveResponse,
+  type WorkflowDefinitionValidationIssue,
   type WorkflowDefinitionValidationResponse,
   type WorkflowDefinitionVersion,
   type WorkflowEdgeGeometry,
@@ -68,6 +69,7 @@ import {
 import { useWorkflowValidationController } from "@/lib/workflow-editor/use-validation-controller";
 import { useWorkflowDataCatalog } from "@/lib/workflow-editor/use-workflow-data-catalog";
 import {
+  deployUnavailableReason,
   draftDiffersFromDeployed,
   workflowDeploymentAfterSave,
   workflowEditorActions,
@@ -270,6 +272,12 @@ export function WorkflowEditorScreen({
   // the catalog snapshot the browser holds, and this is what the deploy
   // actually found, which is the answer an operator needs after the click.
   const [deployNotice, setDeployNotice] = useState<string | null>(null);
+  // Why the last Deploy deployed nothing, keyed to the graph it was said about:
+  // an edit that changes the graph makes it stale, so it stops being shown.
+  const [deployRefusal, setDeployRefusal] = useState<{
+    key: string;
+    issues: WorkflowDefinitionValidationIssue[];
+  } | null>(null);
   const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
   const [editorHistory, dispatchEditorHistory] = useReducer(
     (
@@ -581,6 +589,12 @@ export function WorkflowEditorScreen({
     structurallyValid: nodesValid(nodes),
     hasDraft: baselineDraft !== null,
   });
+  const deployDisabledTitle = deployUnavailableReason({
+    hasTrigger: nodes.some((node) => isTriggerBlockType(node.type)),
+    saveIssueCount: saveIssues.length,
+    dirty,
+    hasDraft: baselineDraft !== null,
+  });
   const canResetToDeployed =
     canEdit && deployed !== null && semanticKey !== deployedSemanticKey;
 
@@ -804,6 +818,7 @@ export function WorkflowEditorScreen({
     setBusy("deploy");
     setError(null);
     setDeployNotice(null);
+    setDeployRefusal(null);
     try {
       let immediateValidation: WorkflowDefinitionValidationResponse;
       try {
@@ -822,7 +837,10 @@ export function WorkflowEditorScreen({
         );
         return;
       }
-      if (!immediateValidation.valid) return;
+      if (!immediateValidation.valid) {
+        setDeployRefusal({ key: candidateKey, issues: immediateValidation.issues });
+        return;
+      }
       if (!editorResponseGuard.isCurrent(requestRevision)) {
         setError(
           "The workflow changed while it was being validated. Deploy again.",
@@ -852,7 +870,23 @@ export function WorkflowEditorScreen({
           return;
         }
         const saveDecision = workflowDeploymentAfterSave(immediateValidation, saved);
-        if (saveDecision.kind !== "ready") return;
+        if (saveDecision.kind !== "ready") {
+          setDeployRefusal({
+            key: `${saved.meta.id}:${semanticKeyForDefinition(saved.draft)}`,
+            issues:
+              saveDecision.kind === "invalid"
+                ? saveDecision.validation.issues
+                : [
+                    {
+                      code: "deployment",
+                      severity: "error",
+                      nodeId: null,
+                      message: saveDecision.message,
+                    },
+                  ],
+          });
+          return;
+        }
         draftRevision = saved.meta.draftRevision;
         deployedVersion = saved.meta.deployedVersion;
       }
@@ -875,6 +909,7 @@ export function WorkflowEditorScreen({
               availableValuesByNode: immediateValidation.availableValuesByNode,
             },
           });
+          setDeployRefusal({ key: candidateKey, issues: body.issues });
           return;
         }
         setError(res.errorMessage);
@@ -991,6 +1026,7 @@ export function WorkflowEditorScreen({
     // another definition's detail replaces everything it was said about, so
     // carrying it over would attach one workflow's pins to another's screen.
     setDeployNotice(null);
+    setDeployRefusal(null);
     setExpandedLegacyVersions(new Set());
     setFitSignal((signal) => signal + 1);
     if (forceRemount) setEditorGeneration((generation) => generation + 1);
@@ -1211,6 +1247,14 @@ export function WorkflowEditorScreen({
           saveIssues={saveIssues}
           saving={busy === "save"}
           error={error}
+          deployRefusal={
+            // A later validation of the same graph that passed outranks it.
+            deployRefusal !== null &&
+            deployRefusal.key === validationTargetKey &&
+            !(validationIsCurrent && validation.state.status === "valid")
+              ? deployRefusal.issues
+              : null
+          }
           validation={
             validationIsCurrent
               ? validation.state
@@ -1266,6 +1310,7 @@ export function WorkflowEditorScreen({
                   variant="success"
                   onClick={() => void deploy()}
                   disabled={!canDeploy || busy !== null}
+                  title={canDeploy ? undefined : (deployDisabledTitle ?? undefined)}
                   className="appearance-none cursor-pointer border border-emerald-600 bg-emerald-600 text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
                 >
                   {busy === "deploy" ? "Deploying…" : "Deploy"}

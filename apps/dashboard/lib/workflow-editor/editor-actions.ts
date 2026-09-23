@@ -15,6 +15,30 @@ export function workflowEditorActions(input: WorkflowEditorActionInput) {
 }
 
 /**
+ * Why Deploy is disabled, for the button's own tooltip. A disabled button that
+ * does not say why reads as broken. Mirrors `workflowEditorActions`: null
+ * exactly when `canDeploy` would be true for the same graph.
+ */
+export function deployUnavailableReason(input: {
+  hasTrigger: boolean;
+  saveIssueCount: number;
+  dirty: boolean;
+  hasDraft: boolean;
+}): string | null {
+  if (!input.hasTrigger) return "Add a trigger block before deploying.";
+  if (input.saveIssueCount === 1) {
+    return "Fix the block marked with an error before deploying.";
+  }
+  if (input.saveIssueCount > 1) {
+    return `Fix the ${input.saveIssueCount} blocks marked with an error before deploying.`;
+  }
+  if (!input.dirty && !input.hasDraft) {
+    return "Nothing to deploy: the canvas holds no change and no saved draft.";
+  }
+  return null;
+}
+
+/**
  * Independent of the canvas "dirty" flag (canvas vs. saved draft): a rollback
  * changes what is deployed without ever touching the saved draft, so the
  * draft can look saved (canvas matches it) while no longer matching what is

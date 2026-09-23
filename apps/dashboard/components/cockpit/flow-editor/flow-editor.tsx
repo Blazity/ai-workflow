@@ -77,6 +77,7 @@ import {
 import { RepositoryScopeBar } from "./repository-scope-bar";
 import { RepositoryScopeProvider } from "./repository-scope-context";
 import {
+  DeployRefusalBanner,
   groupValidationIssues,
   NodeValidationErrors,
   NodeValidationNotices,
@@ -611,10 +612,6 @@ function FlowCanvas({
     [edges],
   );
   const nodeIds = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
-  const canvasNotices = useMemo(
-    () => unavailableBlockNotices(options, nodes.map((node) => node.type)),
-    [nodes, options],
-  );
   useEffect(() => {
     setSelection((current) =>
       reconcileCanvasSelection(current, nodeIds, edgeKeys),
@@ -955,7 +952,7 @@ function FlowCanvas({
         e.preventDefault();
         onDropNode(JSON.parse(raw) as PaletteItem, toCanvas(e.clientX, e.clientY));
       }}
-      className={`flow-canvas-bg flex-1 relative overflow-hidden touch-none bg-[#FAFBFC] ${drag?.kind === "pan" ? "cursor-grabbing" : "cursor-grab"}`}
+      className={`flow-canvas-bg flex-1 min-h-0 relative overflow-hidden touch-none bg-[#FAFBFC] ${drag?.kind === "pan" ? "cursor-grabbing" : "cursor-grab"}`}
       style={{
         backgroundImage: "radial-gradient(circle, #D2D6DA 1px, transparent 1px)",
         backgroundSize: `${grid.size}px ${grid.size}px`,
@@ -1320,36 +1317,6 @@ function FlowCanvas({
         ))}
       </div>
 
-      {/* What this deployment cannot run, and where it is fixed. Sits over the
-          canvas rather than inside a node: the sentence is a paragraph and the
-          link has to be clickable, neither of which fits a draggable box. */}
-      {canvasNotices.length > 0 && (
-        <div
-          role="status"
-          onPointerDown={(e) => e.stopPropagation()}
-          className="absolute left-4 top-4 z-10 max-w-[420px] rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-2 shadow-[0_2px_6px_rgba(24,27,32,0.08)]"
-        >
-          <div className="font-mono text-[9px] font-semibold uppercase tracking-[0.05em] text-amber-900">
-            {canvasNotices.length === 1
-              ? "One step cannot run here"
-              : `${canvasNotices.length} steps cannot run here`}
-          </div>
-          <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0">
-            {canvasNotices.map((notice) => (
-              <li key={notice.type} className="font-body text-[11px] leading-[1.45] text-amber-900">
-                <span className="font-semibold">{notice.label}:</span> {notice.reason}
-              </li>
-            ))}
-          </ul>
-          <a
-            href="/integrations"
-            className="mt-1 inline-block font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-amber-900 underline"
-          >
-            Open Integrations
-          </a>
-        </div>
-      )}
-
       {/* Canvas overlays: zoom controls, mini status */}
       <div
         onPointerDown={(e) => e.stopPropagation()}
@@ -1424,6 +1391,7 @@ export function FlowEditor({
   saveIssues = [],
   saving,
   error,
+  deployRefusal = null,
   validation,
   dataCatalog,
   dataCatalogRefreshing = false,
@@ -1485,6 +1453,8 @@ export function FlowEditor({
   dataCatalog?: WorkflowDefinitionCatalogResponse | null;
   dataCatalogRefreshing?: boolean;
   dataCatalogError?: string | null;
+  /** The issues that refused the last Deploy, while they still describe the canvas. */
+  deployRefusal?: WorkflowDefinitionValidationIssue[] | null;
   onSave: () => void;
   saveLabel?: string;
   headerTitle: string;
@@ -1700,6 +1670,10 @@ export function FlowEditor({
   const nodeNames = useMemo(
     () => Object.fromEntries(nodes.map((node) => [node.id, node.name || node.id])),
     [nodes],
+  );
+  const canvasNotices = useMemo(
+    () => unavailableBlockNotices(options, nodes.map((node) => node.type)),
+    [nodes, options],
   );
 
   const paletteGroups = useMemo(
@@ -2052,6 +2026,7 @@ export function FlowEditor({
     [onCommitTransaction],
   );
   const displayedError = interactionError ?? error;
+  const [issuesOpenRequest, setIssuesOpenRequest] = useState(0);
 
   return (
     <div
@@ -2062,8 +2037,10 @@ export function FlowEditor({
       onBlurCapture={handleEditorBlurCapture}
     >
       {/* Editor toolbar */}
-      <div className="flex items-center gap-4 py-3 px-6 bg-panel border-b border-neutral-200">
-        <div className="flex items-center gap-2.5 min-w-0">
+      {/* Wraps rather than overlaps: on a phone the pills and the actions do not
+          fit one row, and a row that cannot wrap draws them over each other. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3 px-6 bg-panel border-b border-neutral-200">
+        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
           <div className="font-display font-semibold text-sm leading-[1.2] text-coal truncate">{headerTitle}</div>
           <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">{headerVersionBadge}</span>
           {headerInlineExtra}
@@ -2077,6 +2054,7 @@ export function FlowEditor({
             validation={effectiveValidation}
             nodeNames={nodeNames}
             onSelectNode={setSelectedId}
+            openIssuesRequest={issuesOpenRequest}
           />
           <div
             className="ml-1 flex items-center gap-1"
@@ -2137,7 +2115,7 @@ export function FlowEditor({
             ))}
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {headerExtra}
           {canEdit && saveIssues.length > 0 && (
             <Button
@@ -2178,9 +2156,47 @@ export function FlowEditor({
           {displayedError}
         </div>
       )}
+      {deployRefusal !== null && (
+        <DeployRefusalBanner
+          issues={deployRefusal}
+          nodeNames={nodeNames}
+          onSelectNode={setSelectedId}
+          onShowAll={() => setIssuesOpenRequest((request) => request + 1)}
+        />
+      )}
       {/* Editor body */}
       <div className="flex-1 flex min-h-0">
         {!isMobile && canEdit && <NodePalette groups={paletteGroups} onAdd={addNode} />}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* What this deployment cannot run, and where it is fixed. Docked above
+            the canvas, not floated over it: a floating box covered the very
+            blocks it names. The canvas measures its own height, so fitting the
+            workflow already leaves room for it. */}
+        {canvasNotices.length > 0 && (
+          <div
+            role="status"
+            className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-amber-300 bg-amber-50 px-4 py-2"
+          >
+            <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.05em] text-amber-900">
+              {canvasNotices.length === 1
+                ? "One step cannot run here"
+                : `${canvasNotices.length} steps cannot run here`}
+            </span>
+            <ul className="m-0 flex min-w-0 list-none flex-col gap-0.5 p-0">
+              {canvasNotices.map((notice) => (
+                <li key={notice.type} className="font-body text-[11px] leading-[1.45] text-amber-900">
+                  <span className="font-semibold">{notice.label}:</span> {notice.reason}
+                </li>
+              ))}
+            </ul>
+            <a
+              href="/integrations"
+              className="font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-amber-900 underline"
+            >
+              Open Integrations
+            </a>
+          </div>
+        )}
         <FlowCanvas
           nodes={nodes}
           edges={edges}
@@ -2209,6 +2225,7 @@ export function FlowEditor({
           onCommitTransaction={onCommitTransaction}
           onCancelTransaction={onCancelTransaction}
         />
+        </div>
         {selected && !isMobile && (
           <RepositoryScopeProvider
             scope={repositoryScope}
