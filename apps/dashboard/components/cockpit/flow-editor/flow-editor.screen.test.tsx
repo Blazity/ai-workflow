@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type {
   WorkflowBlockContract,
+  WorkflowDefinitionValidationIssue,
   WorkflowEditorOptions,
 } from "@shared/contracts";
 import { installTestDom } from "@/components/ui/test-dom";
@@ -126,10 +127,12 @@ function mountEditor({
   editorNode = node,
   editorOptions = options,
   editorValidation = validation,
+  deployRefusal = null,
 }: {
   editorNode?: FlowNodeDef;
   editorOptions?: WorkflowEditorOptions;
   editorValidation?: WorkflowValidationState;
+  deployRefusal?: WorkflowDefinitionValidationIssue[] | null;
 } = {}) {
   const dom = installTestDom();
   const container = document.createElement("div");
@@ -174,6 +177,7 @@ function mountEditor({
           saveEnabled={false}
           saving={false}
           error={null}
+          deployRefusal={deployRefusal}
           validation={editorValidation}
           onSave={() => undefined}
           headerTitle="Ticket workflow"
@@ -403,6 +407,70 @@ test("workflow editor repository scope closes from focused Escape and the visibl
       }));
     });
     assert.equal(dialog.dataset.state, "closed");
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("the notice for a block that cannot run sits above the canvas, never over its blocks", () => {
+  const mounted = mountEditor({
+    editorOptions: {
+      ...options,
+      blockRegistry: {
+        trigger_ticket_ai: {
+          ...triggerContract,
+          availability: {
+            available: false,
+            unavailableReason: "Arthur Engine is switched off on the Integrations page.",
+          },
+        },
+      },
+    } as WorkflowEditorOptions,
+  });
+  try {
+    const notice = [...mounted.container.querySelectorAll<HTMLElement>('[role="status"]')].find(
+      (element) => /cannot run here/i.test(element.textContent ?? ""),
+    );
+    const canvas = mounted.container.querySelector<HTMLElement>(".flow-canvas-bg");
+    assert.ok(notice, "the unavailable-block notice is shown");
+    assert.ok(canvas);
+    // Inside the pannable canvas it is drawn over whatever block sits at its
+    // corner, which on a small graph is the trigger and the block it names.
+    assert.equal(canvas.contains(notice), false);
+    assert.ok(notice.compareDocumentPosition(canvas) & Node.DOCUMENT_POSITION_FOLLOWING);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("a refused deploy's banner opens the full issue list and the block it names", () => {
+  const issues: WorkflowDefinitionValidationIssue[] = [
+    { code: "block_unavailable", severity: "error", nodeId: "entry", message: "Arthur Engine is switched off." },
+    { code: "unreachable", severity: "error", nodeId: null, message: "A block cannot be reached." },
+  ];
+  const mounted = mountEditor({
+    editorValidation: { ...validation, status: "invalid", issues },
+    deployRefusal: issues,
+  });
+  try {
+    const banner = mounted.container.querySelector<HTMLElement>('[role="alert"][data-error-presentation="inline"]');
+    assert.match(banner?.textContent ?? "", /Not deployed\. Ticket received: Arthur Engine is switched off\./);
+    const buttons = [...(banner?.querySelectorAll("button") ?? [])];
+    const showAll = buttons.find((button) => button.textContent === "Show all 2 issues");
+    const showBlock = buttons.find((button) => button.textContent === "Show block");
+    assert.ok(showAll);
+    assert.ok(showBlock);
+
+    const list = [...mounted.container.querySelectorAll("details")].find((details) =>
+      details.querySelector('[aria-label="Workflow validation errors"]'),
+    );
+    assert.ok(list);
+    assert.equal(list.open, false);
+    act(() => showAll.click());
+    assert.equal(list.open, true);
+
+    act(() => showBlock.click());
+    assert.ok(mounted.container.querySelector('[aria-label="Close inspector"]'));
   } finally {
     mounted.cleanup();
   }

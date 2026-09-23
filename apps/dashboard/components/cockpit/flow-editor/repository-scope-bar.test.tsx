@@ -414,3 +414,29 @@ test("the bar's attention badge separates a pin the catalog does not enable from
   assert.match(activated, /Blazity\/unlisted: not enabled in the catalog/);
   assert.doesNotMatch(activated, /Blazity\/unlisted: not in catalog/);
 });
+
+test("while the catalog loads the bar claims no provider state it has not read", () => {
+  const text = visibleText(renderBar({}, true, "loading", []));
+
+  assert.match(text, /Providers:\s+Loading/);
+  assert.doesNotMatch(text, /No provider connected/);
+});
+
+test("a catalog that failed to load does not report that no provider is connected", () => {
+  const text = visibleText(renderBar({}, true, "error", []));
+
+  assert.match(text, /Providers:\s+Unknown/);
+  assert.doesNotMatch(text, /No provider connected/);
+});
+
+test("a loaded catalog with no connected provider says so", () => {
+  const text = visibleText(renderBar({}, true, "ready", []));
+
+  assert.match(text, /Providers:\s+No provider connected/);
+});
+
+test("providers pinned on the workflow are shown while the catalog loads", () => {
+  const text = visibleText(renderBar({ providers: ["gitlab"] }, true, "loading", []));
+
+  assert.match(text, /Providers:\s+GitLab/);
+});

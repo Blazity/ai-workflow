@@ -400,3 +400,171 @@ test("a divergent legacy recovery seed does not autosave layout before semantic 
   assert.doesNotMatch(writes[0]?.url ?? "", /\/layout$/);
   await act(async () => renderer.unmount());
 });
+
+// A refused Deploy used to return without a word: the button looked dead. Each
+// test below takes one path by which the worker can refuse, and asserts what the
+// person reads afterwards and that nothing was deployed.
+
+const unavailableIssue = {
+  code: "block_unavailable",
+  severity: "error" as const,
+  nodeId: "trigger",
+  message: "Arthur Engine is switched off on the Integrations page.",
+};
+const workflowIssue = {
+  code: "unreachable",
+  severity: "error" as const,
+  nodeId: null,
+  message: "A block cannot be reached from any trigger.",
+};
+
+/** A deployed v2 workflow with a saved draft: Deploy is enabled on load. */
+function deployableDetail(): WorkflowDefinitionDetailResponse {
+  const version = {
+    definitionId: 7,
+    version: 3,
+    createdAt: "2026-09-10T00:00:00.000Z",
+    createdById: "admin",
+    createdByLabel: "Admin",
+    restoredFromVersion: null,
+    schema: "v2" as const,
+    definition: seed,
+  };
+  return {
+    meta: {
+      ...meta(7, "Availability"),
+      deployedSchema: "v2",
+      deployedVersion: 3,
+      currentVersion: 3,
+    } as WorkflowDefinitionMeta,
+    draft: seed,
+    layout: { nodes: { trigger: { x: 0, y: 0 } }, edges: {} },
+    deployed: version,
+    current: version,
+    versions: [version],
+  } as unknown as WorkflowDefinitionDetailResponse;
+}
+
+async function renderDeployable(): Promise<ReturnType<typeof create>> {
+  const detailResponse = deployableDetail();
+  let renderer!: ReturnType<typeof create>;
+  await act(async () => {
+    renderer = create(
+      <AppRouterContext.Provider value={ROUTER as never}>
+      <WorkflowEditorScreen
+        definitions={[detailResponse.meta]}
+        templates={[]}
+        initialDetail={detailResponse}
+        defaultDefinition={seed}
+        options={{
+          blockRegistry: { trigger_ticket_ai: triggerContract },
+        } as unknown as WorkflowEditorOptions}
+        liveBlocks={{
+          generatedAt: "2026-09-10T00:00:00.000Z",
+          run: null,
+        } satisfies RunBlockStatusesResponse}
+        canEdit
+        canDispatch={false}
+        actorLabel="Admin"
+      />
+      </AppRouterContext.Provider>,
+    );
+  });
+  await settle();
+  return renderer;
+}
+
+function alertText(root: ReactTestInstance): string {
+  return root
+    .findAll((node) => typeof node.type === "string" && node.props.role === "alert")
+    .map((node) => textOf(node.children))
+    .join(" | ");
+}
+
+test("a Deploy refused by validation says why, names the block, and offers every issue", async (t) => {
+  const deploys: string[] = [];
+  installFetch(async (url) => {
+    if (url.endsWith("/deploy")) {
+      deploys.push(url);
+      return Response.json({});
+    }
+    if (url.includes("/validate")) {
+      return Response.json({
+        valid: false,
+        issues: [unavailableIssue, workflowIssue],
+        nodeContracts: {},
+        availableValuesByNode: {},
+      });
+    }
+    if (url.includes("/catalog")) {
+      return Response.json({ nodeContracts: {}, catalogByNode: {} });
+    }
+    return Response.json({ profiles: [], repositories: [] });
+  });
+  t.after(() => mock.restoreAll());
+  const renderer = await renderDeployable();
+
+  const deployButton = button(renderer.root, /^Deploy$/);
+  assert.equal(deployButton.props.disabled, false);
+  await act(async () => {
+    await deployButton.props.onClick();
+  });
+  await settle();
+
+  const alert = alertText(renderer.root);
+  assert.match(alert, /Not deployed\. trigger: Arthur Engine is switched off on the Integrations page\./);
+  assert.ok(button(renderer.root, /^Show all 2 issues$/));
+  assert.ok(button(renderer.root, /^Show block$/));
+  assert.deepEqual(deploys, []);
+  await act(async () => renderer.unmount());
+});
+
+test("a Deploy the deploy endpoint refuses with issues says why instead of only colouring the pill", async (t) => {
+  installFetch(async (url) => {
+    if (url.endsWith("/deploy")) {
+      return Response.json(
+        { error: "Workflow definition is not deployable", issues: [workflowIssue] },
+        { status: 422 },
+      );
+    }
+    if (url.includes("/validate")) {
+      return Response.json({ valid: true, issues: [], nodeContracts: {}, availableValuesByNode: {} });
+    }
+    if (url.includes("/catalog")) {
+      return Response.json({ nodeContracts: {}, catalogByNode: {} });
+    }
+    return Response.json({ profiles: [], repositories: [] });
+  });
+  t.after(() => mock.restoreAll());
+  const renderer = await renderDeployable();
+
+  await act(async () => {
+    await button(renderer.root, /^Deploy$/).props.onClick();
+  });
+  await settle();
+
+  assert.match(alertText(renderer.root), /Not deployed\. A block cannot be reached from any trigger\./);
+  await act(async () => renderer.unmount());
+});
+
+test("a refusal nobody gave a reason for still says the workflow was not deployed", async (t) => {
+  installFetch(async (url) => {
+    if (url.includes("/validate")) {
+      return Response.json({ valid: false, issues: [], nodeContracts: {}, availableValuesByNode: {} });
+    }
+    if (url.includes("/catalog")) {
+      return Response.json({ nodeContracts: {}, catalogByNode: {} });
+    }
+    return Response.json({ profiles: [], repositories: [] });
+  });
+  t.after(() => mock.restoreAll());
+  const renderer = await renderDeployable();
+
+  await act(async () => {
+    await button(renderer.root, /^Deploy$/).props.onClick();
+  });
+  await settle();
+
+  assert.match(alertText(renderer.root), /Not deployed: the workflow did not pass validation\./);
+  await act(async () => renderer.unmount());
+});

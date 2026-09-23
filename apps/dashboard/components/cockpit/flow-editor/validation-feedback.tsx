@@ -1,12 +1,13 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import type {
   WorkflowDefinitionValidationIssue,
   WorkflowDefinitionValidationNotice,
 } from "@shared/contracts";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { Button } from "@/components/ui";
+import { deployRefusal } from "@/lib/workflow-editor/deploy-refusal";
 
 /** An issue or a notice: what the validator said, about a block or the workflow. */
 type Finding = WorkflowDefinitionValidationIssue | WorkflowDefinitionValidationNotice;
@@ -93,6 +94,7 @@ function FindingsPopover({
   announcement,
   nodeNames,
   onSelectNode,
+  openRequest = 0,
 }: {
   tone: Tone;
   findings: Finding[];
@@ -106,12 +108,26 @@ function FindingsPopover({
   announcement: { text: string; urgent: boolean };
   nodeNames: Record<string, string>;
   onSelectNode: (nodeId: string) => void;
+  /** Bumped by whoever wants the list open, such as a refused Deploy's "Show all". */
+  openRequest?: number;
 }) {
   const colours = TONE[tone];
   const grouped = groupValidationIssues(findings);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const summaryRef = useRef<HTMLElement>(null);
+  // A request made before this popover mounted is not a reason to open it: the
+  // popover remounts every time validation passes through "checking".
+  const handledRequest = useRef(openRequest);
+  useEffect(() => {
+    if (openRequest === handledRequest.current || !detailsRef.current) return;
+    handledRequest.current = openRequest;
+    detailsRef.current.open = true;
+    summaryRef.current?.focus();
+  }, [openRequest]);
   return (
-    <details className="group relative">
+    <details ref={detailsRef} className="group relative">
       <summary
+        ref={summaryRef}
         aria-haspopup="dialog"
         className={`cursor-pointer list-none rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] marker:content-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${colours.pill}`}
       >
@@ -193,10 +209,13 @@ export function ValidationSummary({
   validation,
   nodeNames,
   onSelectNode,
+  openIssuesRequest = 0,
 }: {
   validation: WorkflowValidationState;
   nodeNames: Record<string, string>;
   onSelectNode: (nodeId: string) => void;
+  /** Bumped to open the issues list, as a refused Deploy's "Show all" does. */
+  openIssuesRequest?: number;
 }) {
   if (validation.status === "idle") return null;
 
@@ -247,6 +266,7 @@ export function ValidationSummary({
         }}
         nodeNames={nodeNames}
         onSelectNode={onSelectNode}
+        openRequest={openIssuesRequest}
       />
       {noticeSummary}
     </>
@@ -302,4 +322,50 @@ export function NodeValidationErrors({
 /** A selected block's notices: said beside its configuration, never blocking. */
 export function NodeValidationNotices({ notices }: { notices: WorkflowDefinitionValidationNotice[] }) {
   return <NodeFindings tone="notice" heading="Worth fixing" findings={notices} />;
+}
+
+/**
+ * Said when Deploy was pressed and nothing was deployed: the first reason, in
+ * the block's own name, with a way to that block and to the full list. The
+ * list itself stays the toolbar's issues popover, so there is one list to read.
+ */
+export function DeployRefusalBanner({
+  issues,
+  nodeNames,
+  onSelectNode,
+  onShowAll,
+}: {
+  issues: readonly WorkflowDefinitionValidationIssue[];
+  nodeNames: Record<string, string>;
+  onSelectNode: (nodeId: string) => void;
+  onShowAll: () => void;
+}) {
+  const refusal = deployRefusal(issues, nodeNames);
+  const actionClass =
+    "appearance-none h-auto shrink-0 cursor-pointer border-none bg-transparent p-0 font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-red-700 underline";
+  return (
+    <div
+      role="alert"
+      data-error-presentation="inline"
+      className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-6 py-2 border-b border-red-300 bg-red-50 font-body text-[12px] text-red-700"
+    >
+      <span className="min-w-0">{refusal.sentence}</span>
+      {refusal.nodeId !== null && nodeNames[refusal.nodeId] !== undefined && (
+        <Button
+          type="button"
+          variant="text"
+          size="sm"
+          onClick={() => onSelectNode(refusal.nodeId!)}
+          className={actionClass}
+        >
+          Show block
+        </Button>
+      )}
+      {refusal.issueCount > 1 && (
+        <Button type="button" variant="text" size="sm" onClick={onShowAll} className={actionClass}>
+          {`Show all ${refusal.issueCount} issues`}
+        </Button>
+      )}
+    </div>
+  );
 }

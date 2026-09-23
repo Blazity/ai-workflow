@@ -5,6 +5,7 @@ import type {
   WorkflowDefinitionValidationResponse,
 } from "@shared/contracts";
 import {
+  deployUnavailableReason,
   draftDiffersFromDeployed,
   workflowDeploymentAfterSave,
   workflowEditorActions,
@@ -89,4 +90,25 @@ test("draftDiffersFromDeployed has nothing to compare when either side is missin
   assert.equal(draftDiffersFromDeployed(null, '{"v":6}'), false);
   assert.equal(draftDiffersFromDeployed('{"v":9}', null), false);
   assert.equal(draftDiffersFromDeployed(null, null), false);
+});
+
+test("a Deploy that cannot be pressed says why, in the order the author has to act", () => {
+  const ready = { hasTrigger: true, saveIssueCount: 0, dirty: true, hasDraft: true };
+  assert.equal(deployUnavailableReason(ready), null);
+  assert.equal(
+    deployUnavailableReason({ ...ready, hasTrigger: false, saveIssueCount: 2 }),
+    "Add a trigger block before deploying.",
+  );
+  assert.equal(
+    deployUnavailableReason({ ...ready, saveIssueCount: 1 }),
+    "Fix the block marked with an error before deploying.",
+  );
+  assert.equal(
+    deployUnavailableReason({ ...ready, saveIssueCount: 3 }),
+    "Fix the 3 blocks marked with an error before deploying.",
+  );
+  assert.equal(
+    deployUnavailableReason({ ...ready, dirty: false, hasDraft: false }),
+    "Nothing to deploy: the canvas holds no change and no saved draft.",
+  );
 });
