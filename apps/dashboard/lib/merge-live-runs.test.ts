@@ -96,3 +96,33 @@ test("an awaiting live row with a real run id overrides the bare store copy", ()
   assert.equal(merged.rows.length, 1, "no duplicate row for the same run id");
   assert.equal(merged.counts.awaiting, 1);
 });
+
+// Red when: the merge recounts only the rows it holds. The worker's list stops
+// at a page of rows but its total and counts cover the whole window, and that
+// complete count is the one the Overview's KPI tile makes too; dropping it put
+// two different numbers for one window on two screens.
+test("the merged total keeps the store's complete count and adds only the runs the live board brought", () => {
+  const stored = [run({ id: "run_a", status: "success" }), run({ id: "run_b", status: "awaiting" })];
+  const runs = runsResponse(stored);
+  runs.total = 700;
+  runs.counts = { success: 640, running: 0, awaiting: 1, failed: 59, blocked: 0 };
+  const live = liveResponse([
+    // The store's own parked row, enriched: replaces it, adds nothing.
+    run({ id: "run_b", status: "awaiting", question: "Which one?" }),
+    // A run parked days ago, outside the window the store listed.
+    run({ id: "run_old", status: "awaiting", startedAtMin: 6998 }),
+  ]);
+
+  const merged = mergeLiveRuns(runs, live);
+  assert.equal(merged.rows.length, 3);
+  assert.equal(merged.total, 701);
+  assert.deepEqual(merged.counts, { success: 640, running: 0, awaiting: 2, failed: 59, blocked: 0 });
+});
+
+test("a live row that changes a stored run's status moves it between counts, not into a second one", () => {
+  const runs = runsResponse([run({ id: "run_park", status: "running" })]);
+  const merged = mergeLiveRuns(runs, liveResponse([run({ id: "run_park", status: "awaiting" })]));
+  assert.equal(merged.total, 1);
+  assert.equal(merged.counts.running, 0);
+  assert.equal(merged.counts.awaiting, 1);
+});

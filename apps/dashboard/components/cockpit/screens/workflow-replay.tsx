@@ -7,6 +7,7 @@ import { BriefingTab } from "@/components/cockpit/agent-visibility/briefing-tab"
 import { PagedCacheProvider } from "@/components/cockpit/agent-visibility/paged";
 import { currentReplayLink, writeReplayLink, type ReplayLink } from "@/lib/agent-visibility/replay-link";
 import { apiClient } from "@/lib/api/client";
+import { readReplayLogs } from "@/lib/replay-logs";
 import {
   LIVE_POLL_MS,
   useLivePoll,
@@ -803,6 +804,87 @@ export function isScriptBlockType(
   );
 }
 
+/** The legible view a tab gives its envelope, or undefined for the raw dump:
+ *  the Logs tab always, and the Output tab of a script block. */
+export function replayEnvelopeRenderer(
+  tab: ReplayTab,
+  nodeType: WorkflowBlockType | undefined,
+): ((value: JsonValue) => React.ReactNode | null) | undefined {
+  if (tab === "logs") return renderReplayLogs;
+  if (tab === "output" && isScriptBlockType(nodeType)) return renderScriptOutput;
+  return undefined;
+}
+
+/** Legible view of an attempt's logs (`readReplayLogs`): each log under its
+ *  stream, each JSON event as its fields, text with its own line breaks. Null
+ *  when nothing in the value reads as a log, so ReplayEnvelope keeps the raw
+ *  dump; called directly for the same reason renderScriptOutput is. */
+function renderReplayLogs(value: JsonValue): React.ReactNode | null {
+  const logs = readReplayLogs(value);
+  if (!logs) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {logs.map((entry, index) => (
+        <div
+          key={index}
+          className="max-h-[360px] overflow-auto rounded-[3px] bg-neutral-1000 p-3 font-mono text-[11px] leading-[1.6] text-neutral-300"
+        >
+          {entry.stream ? (
+            <div className="mb-1.5 text-[9px] uppercase tracking-[0.06em] text-neutral-500">
+              {entry.stream}
+            </div>
+          ) : null}
+          <div className="flex flex-col gap-2">
+            {entry.lines.map((line, lineIndex) =>
+              line.kind === "text" ? (
+                <pre key={lineIndex} className="m-0 whitespace-pre-wrap break-words font-mono">
+                  {line.text}
+                </pre>
+              ) : (
+                <LogValue key={lineIndex} value={line.value} />
+              ),
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** One value of a log event: an object or a list as key and value rows, a
+ *  string as text with its own line breaks, anything else as itself. */
+function LogValue({ value }: { value: JsonValue }): React.ReactNode {
+  if (value === null) return <span className="text-neutral-500">null</span>;
+  if (typeof value === "string") {
+    return <span className="whitespace-pre-wrap break-words text-neutral-100">{value}</span>;
+  }
+  if (typeof value !== "object") return <span className="text-mariner-400">{String(value)}</span>;
+  const rows: Array<[string, JsonValue]> = Array.isArray(value)
+    ? value.map((item, index) => [String(index), item])
+    : Object.entries(value);
+  if (rows.length === 0) {
+    return <span className="text-neutral-500">{Array.isArray(value) ? "[]" : "{}"}</span>;
+  }
+  return (
+    // The key column may shrink below its longest key, and a key breaks
+    // anywhere, so a nested object on a phone wraps instead of scrolling.
+    <dl className="m-0 grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)] gap-x-3 gap-y-0.5">
+      {rows.map(([key, item]) => (
+        <React.Fragment key={key}>
+          <dt className="wrap-anywhere text-neutral-500">{key}</dt>
+          <dd
+            className={`m-0 min-w-0 ${
+              item !== null && typeof item === "object" ? "border-l border-neutral-800 pl-2" : ""
+            }`}
+          >
+            <LogValue value={item} />
+          </dd>
+        </React.Fragment>
+      ))}
+    </dl>
+  );
+}
+
 /** Legible view of run_scripts / run_pre_pr_checks output: the aggregate
  *  verdict, then results/failures/dirtied per command. Returns null when the
  *  value doesn't look like this shape at all (an older run, or a capture
@@ -1211,8 +1293,7 @@ function AttemptInspector({
           : tab === "metadata"
             ? detail?.metadata
             : null;
-  const isScriptBlock = isScriptBlockType(selectedNodeType);
-  const envelopeRender = tab === "output" && isScriptBlock ? renderScriptOutput : undefined;
+  const envelopeRender = replayEnvelopeRenderer(tab, selectedNodeType);
 
   return (
     <CkCard

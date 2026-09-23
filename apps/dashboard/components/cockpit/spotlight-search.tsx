@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import type { RunStatus } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
+import { formatAgeMinutes } from "@/lib/date-time";
 
 interface Hit {
   id: string;
@@ -289,7 +290,7 @@ export function SpotlightSearch({
                       {[
                         h.ticket,
                         h.workflowName,
-                        h.runCount > 1 ? `${h.runCount} runs` : `${h.startedAtMin}m ago`,
+                        h.runCount > 1 ? `${h.runCount} runs` : formatAgeMinutes(h.startedAtMin),
                       ]
                         .filter(Boolean)
                         .join(" · ")}
