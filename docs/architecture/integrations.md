@@ -481,12 +481,12 @@ deletes every memory under the pair. `list({ ticketKey })` lists what
 observations carrying that ticket left (store `ticketKey` where you can filter
 on it); an engine that refuses a listing without an entity filter lists under
 your namespace, never under a wildcard. Newest first, and `complete: false`
-whenever you stopped before the end. The repository page
-(`/repositories/<id>`) shows what your unfiltered `list` returns under that
-repository's subject key (`repo:<provider>:<path>`), whatever `docPath`s you
-chose, and reads and erases only those pairs. A repository whose documents
-fall past the end of a listing you cut short shows your `complete: false`
-notice instead of them, which is one more reason to list newest first.
+whenever you stopped before the end. `list({ subjectKey })` is how the
+repository page (`/repositories/<id>`) and `memory.list` show one subject's
+documents, whatever `docPath`s you chose, on a deployment that holds far more
+than one listing: honour it in the engine's query, or page until you have
+every document of that subject, because core cuts a listing that carries
+another subject's document to the asked one and reports it incomplete.
 
 This is the shape, compiled and checked with everything else on this page:
 

@@ -8,6 +8,7 @@ import {
   toHttpError,
 } from "../../../services/auth/request-context.js";
 import {
+  isUsableMemoryKeyPart,
   listMemoryDocumentSummaries,
   readMemoryDocument,
 } from "../../../services/memory/memory-documents.js";
@@ -17,8 +18,9 @@ function stringParam(value: unknown): string | undefined {
 }
 
 /** Read-only view of the agent memory kept outside the customer repository.
- *  `subjectKey` + `docPath` select one document (with content); without them
- *  the response is the listing (no content), optionally filtered by ticket. */
+ *  `subjectKey` + `docPath` select one document (with content). Anything else
+ *  is the listing (no content), narrowed to one subject by `subjectKey` alone
+ *  and to one ticket by `ticketKey`. */
 export default defineEventHandler(
   async (
     event,
@@ -61,17 +63,26 @@ export default defineEventHandler(
           },
         };
       }
-      if (subjectKey !== undefined || docPath !== undefined) {
+      if (docPath !== undefined) {
         throw createError({
           statusCode: 400,
-          statusMessage: "subjectKey and docPath must be given together",
+          statusMessage: "docPath needs the subjectKey it is stored under",
+        });
+      }
+      // Bounded like every other key part a client sends, before it reaches a
+      // provider's query.
+      if (subjectKey !== undefined && !isUsableMemoryKeyPart(subjectKey)) {
+        throw createError({
+          statusCode: 400,
+          statusMessage: "subjectKey is not a memory key the agent could have written",
         });
       }
 
       const ticketKey = stringParam(query.ticketKey);
-      const listing = await listMemoryDocumentSummaries(
-        ticketKey === undefined ? {} : { ticketKey },
-      );
+      const listing = await listMemoryDocumentSummaries({
+        ...(ticketKey === undefined ? {} : { ticketKey }),
+        ...(subjectKey === undefined ? {} : { subjectKey }),
+      });
       if (!listing.ok) {
         // An empty list would be a lie: this deployment's memory could not be
         // listed, which is not the same as holding nothing. `listable: false`

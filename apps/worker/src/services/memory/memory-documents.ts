@@ -55,9 +55,11 @@ export type MemoryErasure =
   | { readonly ok: true; readonly erased: boolean }
   | { readonly ok: false; readonly reason: string; readonly listable: boolean };
 
-/** The listing, without content, optionally narrowed to one ticket. */
+/** The listing, without content, optionally narrowed to one ticket or to one
+ *  subject (compared exactly, by the provider where it lists). */
 export async function listMemoryDocumentSummaries(options: {
   ticketKey?: string;
+  subjectKey?: string;
 }): Promise<MemoryListing> {
   const memory = await activeMemory();
   if (memory.refusal) {
@@ -65,9 +67,10 @@ export async function listMemoryDocumentSummaries(options: {
   }
   if (!memory.store) return { ok: false, reason: cannotList(memory.name), listable: false };
   try {
-    const listing = await memory.store.list(
-      options.ticketKey === undefined ? {} : { ticketKey: options.ticketKey },
-    );
+    const listing = await memory.store.list({
+      ...(options.ticketKey === undefined ? {} : { ticketKey: options.ticketKey }),
+      ...(options.subjectKey === undefined ? {} : { subjectKey: options.subjectKey }),
+    });
     return { ok: true, documents: listing.documents, complete: listing.complete };
   } catch (error) {
     return { ok: false, reason: providerFailed(memory.name, error), listable: true };

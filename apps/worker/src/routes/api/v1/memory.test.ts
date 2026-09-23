@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { createApp, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../db/client.js";
@@ -185,9 +186,57 @@ describe("GET /api/v1/memory", () => {
     expect(res.status).toBe(404);
   });
 
-  it("400s when only half of the document key is given", async () => {
+  it("400s a docPath without the subjectKey it is stored under", async () => {
     expect((await get("?docPath=nope.md")).status).toBe(400);
-    expect((await get(`?subjectKey=${encodeURIComponent(SUBJECT_KEY)}`)).status).toBe(400);
+  });
+
+  it("lists one subject's documents whatever their age on a busy deployment", async () => {
+    // A repository nobody has run on lately: its two documents are older than
+    // the hundred-and-twenty other subjects' written since, so the newest
+    // page of everything does not reach them. The repository page and
+    // memory.list ask for the subject instead of paging for it.
+    const REPO = "repo:github:acme/web";
+    for (const docPath of ["facts", "lessons"]) {
+      await upsertMemoryDocument(db, {
+        subjectKey: REPO,
+        docPath,
+        ticketKey: null,
+        content: `${docPath} of acme/web`,
+        sourceRunId: "run_old",
+      });
+    }
+    await db
+      .update(agentMemoryDocuments)
+      .set({ updatedAt: new Date("2026-01-01T00:00:00.000Z") })
+      .where(eq(agentMemoryDocuments.subjectKey, REPO));
+    for (let index = 0; index < 120; index += 1) {
+      await upsertMemoryDocument(db, {
+        subjectKey: `ticket:jira:AIW-${index}`,
+        docPath: `ai-workflow/memory/AIW-${index}.md`,
+        ticketKey: `AIW-${index}`,
+        content: "notes",
+        sourceRunId: `run_${index}`,
+      });
+    }
+
+    // The premise: the unfiltered listing is a page that does not reach them.
+    const everything = await (await get()).json();
+    expect(everything.complete).toBe(false);
+    expect(
+      everything.documents.some((d: { subjectKey: string }) => d.subjectKey === REPO),
+    ).toBe(false);
+
+    const res = await get(`?subjectKey=${encodeURIComponent(REPO)}`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.complete).toBe(true);
+    expect(
+      body.documents.map((d: { subjectKey: string; docPath: string }) => `${d.subjectKey} ${d.docPath}`),
+    ).toEqual([`${REPO} facts`, `${REPO} lessons`]);
+  });
+
+  it("400s a subjectKey no agent could have written", async () => {
+    expect((await get(`?subjectKey=${"x".repeat(1000)}`)).status).toBe(400);
   });
 
   it("401s without a session", async () => {

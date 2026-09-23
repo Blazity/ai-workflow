@@ -79,6 +79,9 @@ function listed(subjectKey: string, docPath: string): MemoryDocumentSummaryDto {
   };
 }
 
+/** The listing the page asks for: this repository's subject only. */
+const LISTING_PATH = `/api/v1/memory?${new URLSearchParams({ subjectKey: SUBJECT }).toString()}`;
+
 function readPath(subjectKey: string, docPath: string): string {
   return `/api/v1/memory?${new URLSearchParams({ subjectKey, docPath }).toString()}`;
 }
@@ -219,10 +222,9 @@ async function renderMemoryTab(t: TestContext): Promise<string> {
 function documentReads(): string[] {
   return asked
     .filter((path) => path.startsWith("/api/v1/memory?"))
-    .map((path) => {
-      const params = new URLSearchParams(path.slice(path.indexOf("?") + 1));
-      return `${params.get("subjectKey")} ${params.get("docPath")}`;
-    });
+    .map((path) => new URLSearchParams(path.slice(path.indexOf("?") + 1)))
+    .filter((params) => params.has("docPath"))
+    .map((params) => `${params.get("subjectKey")} ${params.get("docPath")}`);
 }
 
 test.beforeEach(() => {
@@ -233,7 +235,7 @@ test("reads exactly the documents the listing holds for this repository, by the 
   // The provider keeps `conventions` and `facts` for this repository and no
   // `lessons`. Other subjects' documents are in the same listing.
   answers = withRepository({
-    "/api/v1/memory": {
+    [LISTING_PATH]: {
       complete: true,
       documents: [
         listed(SUBJECT, "facts"),
@@ -254,9 +256,36 @@ test("reads exactly the documents the listing holds for this repository, by the 
   assert.doesNotMatch(text, /lessons/);
 });
 
+test("shows an older repository's documents on a busy deployment", async (t) => {
+  // A hundred newer documents of other subjects fill the newest page of
+  // everything, and this repository's are older than all of them. Asked for
+  // by subject, they are still listed whole.
+  answers = withRepository({
+    "/api/v1/memory": {
+      complete: false,
+      documents: Array.from({ length: 100 }, (_, index) =>
+        listed(`ticket:jira:AIW-${index}`, `ai-workflow/memory/AIW-${index}.md`),
+      ),
+    },
+    [LISTING_PATH]: {
+      complete: true,
+      documents: [listed(SUBJECT, "facts"), listed(SUBJECT, "lessons")],
+    },
+    [readPath(SUBJECT, "facts")]: stored(SUBJECT, "facts", "The storefront runs on Next.js."),
+    [readPath(SUBJECT, "lessons")]: stored(SUBJECT, "lessons", "Do not run the codegen twice."),
+  });
+
+  const text = await renderMemoryTab(t);
+
+  assert.match(text, /The storefront runs on Next\.js\./);
+  assert.match(text, /Do not run the codegen twice\./);
+  assert.doesNotMatch(text, /may be stored without appearing here/);
+  assert.ok(!asked.includes("/api/v1/memory"), "the page never pages through everything");
+});
+
 test("asks for no document when the listing holds none for this repository", async (t) => {
   answers = withRepository({
-    "/api/v1/memory": { complete: true, documents: [listed("repo:github:acme/api", "facts")] },
+    [LISTING_PATH]: { complete: true, documents: [listed("repo:github:acme/api", "facts")] },
   });
 
   const text = await renderMemoryTab(t);
@@ -267,7 +296,7 @@ test("asks for no document when the listing holds none for this repository", asy
 
 test("a provider that is away shows memory as not available right now, and what to do", async (t) => {
   answers = withRepository({
-    "/api/v1/memory": providerRefused(503, "Recall Engine could not answer: socket hang up"),
+    [LISTING_PATH]: providerRefused(503, "Recall Engine could not answer: socket hang up"),
   });
 
   const text = await renderMemoryTab(t);
@@ -284,7 +313,7 @@ test("a provider that is away shows memory as not available right now, and what 
 
 test("a provider that cannot list says reloading will not help", async (t) => {
   answers = withRepository({
-    "/api/v1/memory": providerRefused(
+    [LISTING_PATH]: providerRefused(
       501,
       "Recall Engine keeps this deployment's memory and cannot list what it holds, so it cannot be browsed here. Read and erase it where that provider keeps it.",
     ),
@@ -300,7 +329,7 @@ test("a provider that cannot list says reloading will not help", async (t) => {
 
 test("one read the provider could not answer is said on that document, not as erased", async (t) => {
   answers = withRepository({
-    "/api/v1/memory": { complete: true, documents: [listed(SUBJECT, "facts")] },
+    [LISTING_PATH]: { complete: true, documents: [listed(SUBJECT, "facts")] },
     [readPath(SUBJECT, "facts")]: providerRefused(503, "Built-in memory could not answer: db down"),
   });
 
@@ -312,7 +341,7 @@ test("one read the provider could not answer is said on that document, not as er
 
 test("a listing that may be partial says so, so absence is not read as proof", async (t) => {
   answers = withRepository({
-    "/api/v1/memory": { complete: false, documents: [listed("repo:github:acme/api", "facts")] },
+    [LISTING_PATH]: { complete: false, documents: [listed("repo:github:acme/api", "facts")] },
   });
 
   const text = await renderMemoryTab(t);

@@ -521,9 +521,21 @@ export interface MemoryStoreAdapter {
    * which is how a person erases everything one ticket left behind. An engine
    * that refuses a listing without an entity filter lists under the adapter's
    * own namespace (see `MemorySubject`), never under a wildcard.
+   *
+   * With `subjectKey`, ONLY the documents stored under that subject
+   * (`MemorySubject.key`, compared exactly), which is how a screen shows one
+   * repository's memory on a deployment holding far more documents than one
+   * listing carries. Honour it where you list: filter in the engine's query
+   * when it can, and when it cannot, keep paging and keep what matches until
+   * you have every document of that subject or reach `limit`; answer
+   * `complete: false` if you stopped before the end. Core checks: a listing
+   * that carries another subject's document is cut to the asked subject and
+   * reported incomplete, so ignoring the filter costs a person the documents
+   * you left out.
    */
   list(options: {
     readonly ticketKey?: string;
+    readonly subjectKey?: string;
     readonly limit?: number;
   }): Promise<MemoryStoreListing>;
   read(ref: MemoryStoredDocumentRef): Promise<MemoryStoredDocument | null>;

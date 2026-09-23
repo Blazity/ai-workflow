@@ -913,9 +913,12 @@ export const MCP_TOOL_CATALOG = {
   },
   "memory.list": {
     description:
-      "List what the agent remembered, newest first, without any of the text. Each entry is addressed by `subjectKey` (the run subject it belongs to: `ticket:<tracker>:<KEY>`, `pr:<provider>:<repo>#<n>`, `repo:<provider>:<path>`, `org:<provider>:<owner>`) and `docPath` (`facts`, `lessons`, or `ai-workflow/memory/<task>.md` for the working notebook of one piece of work). Pass `ticketKey` to narrow to one ticket. `complete` is false when this deployment's memory provider cannot promise the list is everything it holds, so an absent entry is not proof that nothing is stored; read it before concluding anything from what is missing. A deployment whose provider cannot enumerate its memory at all refuses this call rather than answering an empty list.",
+      "List what the agent remembered, newest first, without any of the text. Each entry is addressed by `subjectKey` (the run subject it belongs to: `ticket:<tracker>:<KEY>`, `pr:<provider>:<repo>#<n>`, `repo:<provider>:<path>`, `org:<provider>:<owner>`) and `docPath` (`facts`, `lessons`, or `ai-workflow/memory/<task>.md` for the working notebook of one piece of work). Pass `ticketKey` to narrow to one ticket, or `subjectKey` to list one subject's documents whatever their age (a repository is `repo:<provider>:<path>`): without it the listing is the newest page of everything, where an older repository's documents may not appear. `complete` is false when this deployment's memory provider cannot promise the list is everything it holds, so an absent entry is not proof that nothing is stored; read it before concluding anything from what is missing. A deployment whose provider cannot enumerate its memory at all refuses this call rather than answering an empty list.",
     inputSchema: z
-      .object({ ticketKey: z.string().trim().min(1).max(MEMORY_KEY_MAX_LENGTH).optional() })
+      .object({
+        ticketKey: z.string().trim().min(1).max(MEMORY_KEY_MAX_LENGTH).optional(),
+        subjectKey: z.string().trim().min(1).max(MEMORY_KEY_MAX_LENGTH).optional(),
+      })
       .strict(),
     annotations: policyFor("memory.list").annotations,
   },

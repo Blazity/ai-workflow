@@ -43,6 +43,7 @@ import type {
   MemoryRecall,
   MemoryRecallRequest,
   MemoryStoreAdapter,
+  MemoryStoreListing,
   MemoryObserveRequest,
   MemoryWrite,
 } from "@integrations/sdk";
@@ -357,7 +358,7 @@ function wrap(
     id,
     name,
     refusal: null,
-    store: adapter.store ? guardedStore(adapter.store, budget) : null,
+    store: adapter.store ? guardedStore(id, adapter.store, budget) : null,
     async recall(request) {
       try {
         const answer = await budget.spend(() => adapter.recall(request));
@@ -468,17 +469,53 @@ async function renderingWithoutKnownSecrets(
   return cleaned.value === answer.rendering ? answer : { ...answer, rendering: cleaned.value };
 }
 
-function guardedStore(store: MemoryStoreAdapter, budget: MemoryBudget): MemoryStoreAdapter {
+function guardedStore(
+  id: string,
+  store: MemoryStoreAdapter,
+  budget: MemoryBudget,
+): MemoryStoreAdapter {
   const guarded = async <T>(call: () => Promise<T>): Promise<T> => {
     const answer = await budget.spend(call);
     if (answer === SPENT) throw new Error(budget.spentReason);
     return answer;
   };
   return {
-    list: (options) => guarded(() => store.list(options)),
+    async list(options) {
+      const listing = await guarded(() => store.list(options));
+      return options.subjectKey === undefined
+        ? listing
+        : withinSubject(id, options.subjectKey, listing);
+    },
     read: (ref) => guarded(() => store.read(ref)),
     forget: (ref) => guarded(() => store.forget(ref)),
   };
+}
+
+/**
+ * A listing asked for one subject, held to it. A provider that ignored the
+ * filter answered some other slice of what it holds (typically the newest
+ * page of everything), so the documents of the asked subject it left out are
+ * unknown: what is kept is cut to that subject and reported incomplete, and
+ * the provider is named in the log, because the screen can only say "this may
+ * not be everything" and the fix is in the adapter.
+ */
+async function withinSubject(
+  id: string,
+  subjectKey: string,
+  listing: MemoryStoreListing,
+): Promise<MemoryStoreListing> {
+  const kept = listing.documents.filter((document) => document.subjectKey === subjectKey);
+  if (kept.length === listing.documents.length) return listing;
+  try {
+    const { logger } = await import("../../infra/logger.js");
+    logger.warn(
+      { provider: id, subjectKey, returned: listing.documents.length, kept: kept.length },
+      "memory_list_subject_filter_ignored",
+    );
+  } catch {
+    // The listing is still answered; the log is the only thing lost.
+  }
+  return { documents: kept, complete: false };
 }
 
 /** What a call answers instead when the budget ran out before it did. */

@@ -50,11 +50,16 @@ function memoryRefusal(error: unknown): { retryable: boolean; reason: string } |
  * document itself. A provider keeps whatever documents it keeps, under names
  * it chooses; only the subject key is core's address, so it is built by core's
  * one helper and matched exactly.
+ *
+ * Listed for this subject, not paged for it: the unfiltered listing is the
+ * newest page of every subject, and a repository nobody ran on lately is not
+ * on it. The exact match below stays as a second guard, so a worker that did
+ * not apply the filter can never put another subject's document on this tab.
  */
 async function repositoryMemory(subjectKey: string): Promise<RepositoryMemory> {
   let listing: MemoryDocumentsResponse;
   try {
-    listing = await getJSON<MemoryDocumentsResponse>("/api/v1/memory");
+    listing = await getJSON<MemoryDocumentsResponse>(withQuery("/api/v1/memory", { subjectKey }));
   } catch (error) {
     const refusal = memoryRefusal(error);
     if (refusal === null) throw error;

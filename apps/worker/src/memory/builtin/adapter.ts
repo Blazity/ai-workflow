@@ -546,15 +546,13 @@ const builtinMemoryStore: MemoryStoreAdapter = {
     // The cap belongs to the repository, so the answer does too: this store
     // passes the caller's limit through and reports back what the query found,
     // rather than keeping a second copy of the cap that could drift from it.
-    return await listConnectedMemoryDocuments(
-      options.ticketKey === undefined
-        ? options.limit === undefined
-          ? {}
-          : { limit: options.limit }
-        : options.limit === undefined
-          ? { ticketKey: options.ticketKey }
-          : { ticketKey: options.ticketKey, limit: options.limit },
-    );
+    return await listConnectedMemoryDocuments({
+      ...(options.ticketKey === undefined ? {} : { ticketKey: options.ticketKey }),
+      // In the query, before the cap: a repository whose documents are older
+      // than the newest page is still listed whole.
+      ...(options.subjectKey === undefined ? {} : { subjectKey: options.subjectKey }),
+      ...(options.limit === undefined ? {} : { limit: options.limit }),
+    });
   },
   async read(ref: MemoryStoredDocumentRef) {
     const { getConnectedMemoryDocument } = await import("../../db/repositories/memory.js");

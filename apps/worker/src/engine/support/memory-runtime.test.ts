@@ -296,6 +296,68 @@ describe("a deployment that connected one engine", () => {
     expect((await activeMemory()).store).toBeNull();
   });
 
+  it("holds a listing asked for one subject to that subject, and says an engine that ignored it is incomplete", async () => {
+    // A port-contract check core applies to every provider: an engine that
+    // ignores `subjectKey` answers the newest page of everything, so the
+    // asked subject's older documents are simply missing from it. Passing
+    // that on as complete would show a repository as having no memory.
+    const summary = (subjectKey: string, docPath: string) => ({
+      subjectKey,
+      docPath,
+      ticketKey: null,
+      bytes: 1,
+      sourceRunId: "",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    const list = vi.fn(async () => ({
+      documents: [summary("ticket:jira:AIW-1", "notebook"), summary(SUBJECT.key, "facts")],
+      complete: true,
+    }));
+    readable(
+      provider("Recall Engine", {
+        recall: vi.fn(),
+        observe: vi.fn(),
+        store: { list, read: vi.fn(), forget: vi.fn() },
+      }),
+    );
+    const store = (await activeMemory()).store;
+
+    expect(await store?.list({ subjectKey: SUBJECT.key })).toEqual({
+      documents: [summary(SUBJECT.key, "facts")],
+      complete: false,
+    });
+    expect(list).toHaveBeenCalledWith({ subjectKey: SUBJECT.key });
+    // Without a subject filter the same answer is the provider's to give.
+    expect(await store?.list({})).toMatchObject({ complete: true });
+  });
+
+  it("passes on a listing that honoured the subject filter as the engine gave it", async () => {
+    const listing = {
+      documents: [
+        {
+          subjectKey: SUBJECT.key,
+          docPath: "facts",
+          ticketKey: null,
+          bytes: 1,
+          sourceRunId: "",
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        },
+      ],
+      complete: true,
+    };
+    readable(
+      provider("Recall Engine", {
+        recall: vi.fn(),
+        observe: vi.fn(),
+        store: { list: async () => listing, read: vi.fn(), forget: vi.fn() },
+      }),
+    );
+
+    expect(await (await activeMemory()).store?.list({ subjectKey: SUBJECT.key })).toEqual(listing);
+  });
+
   it("refuses when the engine declares memory and ships no code for it", async () => {
     readable(provider("Recall Engine", null));
 
