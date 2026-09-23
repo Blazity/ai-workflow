@@ -14,6 +14,7 @@ import type { AddressInfo } from "node:net";
 import { integrationManifest } from "@integrations/registry";
 import { integrationRuntime } from "@integrations/registry/worker";
 import {
+  isPullRequestRefusal,
   IssueTrackerNotFoundError,
   readProviderFailure,
   type IntegrationManifest,
@@ -21,6 +22,7 @@ import {
 import { Octokit } from "@octokit/rest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { GitLabRequestError } from "../../../../../integrations/gitlab/client.js";
 import { buildIntegrationContext, redactedError } from "./context.js";
 
 const manifest = integrationManifest("jira") as IntegrationManifest;
@@ -601,6 +603,37 @@ describe("the copy core passes on of what a provider threw", () => {
 
   // Gitbeaker puts no status on what it throws and keeps GitLab's answer as
   // `cause.response`; GitLab answers 401 for a token it does not accept.
+  describe("what the GitLab client throws", () => {
+    const gitLabFailure = (status: number, headers: Record<string, string> = {}, description = String(status)) =>
+      redactedError(
+        new GitLabRequestError(description, new Response(null, { status, headers })),
+        (text) => text,
+      );
+
+    it("reads a token GitLab refused as refused, with its status", () => {
+      expect(readProviderFailure(gitLabFailure(401, {}, "401 Unauthorized"))).toMatchObject({
+        kind: "refused",
+        status: 401,
+      });
+    });
+
+    it("reads GitLab's spent rate limit, marked only in its headers, as no verdict", () => {
+      // GitLab marks a throttled request with RateLimit-Remaining; a copy that
+      // lost the header would read this 403 as a refused token.
+      expect(readProviderFailure(gitLabFailure(403, { "RateLimit-Remaining": "0" })).kind).toBe(
+        "no_verdict",
+      );
+    });
+
+    it("keeps the scope GitLab said the token lacks, so the merge request is not closed for it", () => {
+      const copy = gitLabFailure(403, {
+        "WWW-Authenticate": 'Bearer realm="GitLab", error="insufficient_scope"',
+      });
+
+      expect(isPullRequestRefusal(copy)).toBe(false);
+    });
+  });
+
   it("keeps a refusal whose client kept the answer on the error's cause", () => {
     const original = Object.assign(new Error("401 Unauthorized"), {
       cause: {

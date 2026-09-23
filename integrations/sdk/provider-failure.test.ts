@@ -17,7 +17,6 @@ import {
   ConnectionValueError,
   FatalError,
   IssueTrackerNotFoundError,
-  PROVIDER_VERDICT_HEADERS,
   providerAnswer,
   readProviderFailure,
   refusedOrThrow,
@@ -158,12 +157,6 @@ describe("the answer is read wherever the client kept it", () => {
       }),
     );
     assert.deepEqual(answer, { status: 403, headers: { "x-ratelimit-remaining": "0" } });
-    assert.deepEqual([...PROVIDER_VERDICT_HEADERS].sort(), [
-      "ratelimit-remaining",
-      "retry-after",
-      "www-authenticate",
-      "x-ratelimit-remaining",
-    ]);
   });
 });
 
