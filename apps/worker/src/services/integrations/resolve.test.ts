@@ -131,6 +131,31 @@ describe("the environment as the source", () => {
     expect(state.usable).toBe(false);
   });
 
+  it("is not half set by the bot login variable GitHub and GitLab both read", async () => {
+    // A deployment on GitHub alone sets VCS_BOT_LOGIN, which GitLab's manifest
+    // also declares; GitLab read Failing, "set the rest", on a deployment that
+    // never meant to use it.
+    const { integrationManifest } = await import("@integrations/registry");
+    for (const id of ["github", "gitlab"]) {
+      const state = resolveIntegrationState({
+        manifest: integrationManifest(id)!,
+        environment: environmentReaderFrom({ VCS_BOT_LOGIN: "ai-workflow-bot" }),
+        stored: null,
+        secretsKey: PRESENT,
+      });
+      expect(state.connection, id).toBe("not_connected");
+      expect(state.failure, id).toBeNull();
+    }
+    // One of its own variables beside it is still a half-set environment.
+    const github = resolveIntegrationState({
+      manifest: integrationManifest("github")!,
+      environment: environmentReaderFrom({ VCS_BOT_LOGIN: "bot", GITHUB_APP_ID: "1" }),
+      stored: null,
+      secretsKey: PRESENT,
+    });
+    expect(github.failure?.reason).toBe("environment_incomplete");
+  });
+
   it("is Not connected when the deployment sets none of its variables", () => {
     const state = resolve({ env: {} });
     expect(state.status).toBe("not_connected");
