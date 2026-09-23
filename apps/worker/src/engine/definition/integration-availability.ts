@@ -381,7 +381,7 @@ export type OneProviderChoice =
   | { readonly kind: "failing"; readonly id: string }
   | { readonly kind: "ambiguous"; readonly ids: readonly string[] };
 
-export function oneProviderChoice(
+function oneProviderChoice(
   capability: string,
   integrations: Iterable<{
     readonly id: string;

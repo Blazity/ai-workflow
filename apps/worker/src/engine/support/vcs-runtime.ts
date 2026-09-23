@@ -45,7 +45,7 @@ import { redactingPublications, VCS_PUBLICATIONS } from "./publication-redaction
  * (`engine/runtime/pr-external-resources.ts`). If that line ever appears after
  * the drain, the drain did not hold.
  */
-export type RunIntegrationPins = readonly IntegrationConnectionPin[] | undefined;
+type RunIntegrationPins = readonly IntegrationConnectionPin[] | undefined;
 
 export interface RepositoryVcsTarget {
   provider: VcsProviderKind;
