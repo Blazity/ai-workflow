@@ -1,1 +1,0 @@
-- The cockpit's activity drawer now shows an honest "Nothing here yet" state instead of sample events from providers nothing is connected to.

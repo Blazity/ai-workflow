@@ -1,1 +1,0 @@
-- A ticket's working notebook is now kept when the agent writes it from inside a repository checkout, and a run that leaves no notebook logs a warning naming every place it looked.
