@@ -1,5 +1,6 @@
 import {
   repositoryCatalogKey,
+  type IntegrationConnectionPin,
   type RunRepositoryAccess,
   type WorkflowRepositoryScope,
 } from "@shared/contracts";
@@ -58,6 +59,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
   options?: {
     workScope?: RunStartWorkScope | null;
     repositoryScope?: WorkflowRepositoryScope;
+    integrationPins?: readonly IntegrationConnectionPin[];
   },
 ): Promise<SelectedRepository[]> {
   "use step";
@@ -66,11 +68,12 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
     .filter((entry) => entry.state === "selected")
     .map((entry) => entry.repositoryKey);
   const { findConnectedRunPrSiblings } = await import("../../../db/repositories/runs.js");
-  const { createRepositoryDirectoryForProviders, filterPinnedRepositories } = await import(
+  const { filterPinnedRepositories } = await import(
     "../../../adapters/vcs/repository-directory.js",
   );
-  const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
-  const { createRepositoryVCS } = await import("../../../engine/support/vcs-runtime.js");
+  const { createRepositoryVCS, listVcsRepositories } = await import(
+    "../../../engine/support/vcs-runtime.js"
+  );
   const { logger } = await import("../../../infra/logger.js");
   const { mayRunTouchRepository } = await import(
     "../../support/repository-access.js"
@@ -89,10 +92,17 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
 
   let catalog;
   try {
-    catalog = await createRepositoryDirectoryForProviders(
-      getConfiguredVcsProviders(),
-    ).listRepositories();
+    catalog = (await listVcsRepositories({
+      integrationPins: options?.integrationPins,
+    })).repositories;
   } catch (error) {
+    // Unread settings are not a provider hiccup the review can shrug off:
+    // nothing is known about any provider, so the siblings would be dropped
+    // without a word. The run stops, saying so (prepare-workspace maps it).
+    const { isIntegrationSettingsUnreadableError } = await import(
+      "../../helpers/integration-settings-unreadable.js"
+    );
+    if (isIntegrationSettingsUnreadableError(error)) throw error;
     logger.warn(
       { runId, error: error instanceof Error ? error.message : String(error) },
       "review_sibling_repository_listing_failed",
@@ -126,6 +136,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
         provider: sibling.provider,
         repoPath: sibling.repoPath,
         baseBranch: metadata.defaultBranch,
+        integrationPins: options?.integrationPins,
       });
       const head = await vcs.getPRHead(sibling.id);
       const openBranchSha = head.state === "open" && head.headRef
@@ -228,6 +239,7 @@ export interface FetchPrContextOptions {
    *  would make one run fetch thread feeds on its first pass and not on its
    *  second. Absent reads as off, the registry default. */
   reviewLedgerEnabled?: boolean;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }
 
 /**
@@ -246,9 +258,12 @@ export interface FetchPrContextOptions {
 export function reviewLedgerFetchOptions(ctx: {
   entry: EngineCtx["entry"];
   settings: EngineCtx["settings"];
+  integrationPins?: EngineCtx["integrationPins"];
 }): FetchPrContextOptions {
-  // Only a run somebody's review comment started; see the block body below for
-  // why a checks-fix run on the same PR must not be given the ledger.
+  // The pins travel on every fetch, ledger or not: they decide WHICH provider
+  // answers, which is not a property of the trigger that started the run.
+  // Only a run somebody's review comment started gets the ledger; see the block
+  // body below for why a checks-fix run on the same PR must not be given it.
   return ctx.entry.kind === "pr_trigger" && ctx.entry.triggerType === "trigger_pr_review"
     ? {
         reviewLedgerEnabled: ctx.settings.REVIEW_LEDGER_ENABLED,
@@ -256,8 +271,9 @@ export function reviewLedgerFetchOptions(ctx: {
           provider: ctx.entry.pr.provider,
           repoPath: ctx.entry.pr.repoPath,
         },
+        integrationPins: ctx.integrationPins,
       }
-    : {};
+    : { integrationPins: ctx.integrationPins };
 }
 
 /**
@@ -297,6 +313,7 @@ export async function blockFetchPrContextsStep(
         provider: repo.provider,
         repoPath: repo.repoPath,
         baseBranch: repo.defaultBranch,
+        integrationPins: options.integrationPins,
       });
       const wantsReviewThreads =
         options.reviewLedgerEnabled === true &&

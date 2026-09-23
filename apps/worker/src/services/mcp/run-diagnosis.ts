@@ -8,7 +8,8 @@
  * codes) and a fixed, code-owned set of action phrases. No IO, no runtime
  * state.
  *
- * Three imports, on purpose. The third is isRunCompletionPending from this
+ * Three value imports, on purpose (the fourth import is type-only and is
+ * erased). The third is isRunCompletionPending from this
  * cluster's own contracts module, which is a pure predicate over three fields
  * and side-effect free: `completion_fields_pending` has to answer exactly what
  * `completionPending` answers on runs.get, runs.result and tickets.list_runs,
@@ -27,6 +28,7 @@
  * is about never letting UNTRUSTED text out, not about the import count.
  */
 
+import type { IntegrationUnavailableReason, RunFailureCode } from "@shared/contracts";
 import {
   SAFE_EXECUTION_ERROR_MESSAGES,
   WORKSPACE_GATE_NOT_RECORDED_PREFIX,
@@ -37,8 +39,10 @@ import {
 } from "../../engine/blocks/support/repository-scripts-output.js";
 import { isRunCompletionPending } from "./contracts.js";
 
+
 type RunDiagnosisCategory =
   | "completion_fields_pending"
+  | "integration_unavailable"
   | "succeeded"
   | "running"
   | "awaiting_input"
@@ -81,6 +85,15 @@ export interface DiagnoseRunInput {
   workflowId: string | null;
   usageRecorded: boolean;
   error: { code?: string; message?: string } | null;
+  /**
+   * The durable machine-readable cause, when the run recorded one
+   * (`workflow_runs.status_reason_code`, ADR-010 S4). Distinct from
+   * `error.code`, which is the execution error a block reported: this one is
+   * the answer the run itself was closed with, and it is a closed set rather
+   * than free text, which is why the rule that reads it is the only
+   * high-confidence rule in this file that looks at a failure at all.
+   */
+  failureCode?: RunFailureCode | null;
   steps: ReadonlyArray<{
     stepId: string;
     name: string;
@@ -92,6 +105,12 @@ export interface DiagnoseRunInput {
 /** Closed, code-owned action phrases per category. Never assembled from
  *  input data, so a poisoned message/log can never inject a phrase here. */
 const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
+  // Overridden per reason by INTEGRATION_UNAVAILABLE_ACTIONS below, which is
+  // where the three cases differ; this is the answer shared by all of them.
+  integration_unavailable: [
+    "An integration this workflow uses was not usable, so the run stopped instead of skipping the step.",
+    "Read system.capabilities for which integrations this deployment has and what state they are in; connecting, enabling and configuring one is a dashboard action a person has to take.",
+  ],
   completion_fields_pending: [
     "Completion fields are pending; read runs.result again before relying on pull request data.",
     "If the fields remain pending, inspect worker logs for run_completion_telemetry_persist_failed with this run id.",
@@ -381,6 +400,40 @@ interface Rule {
 }
 
 /**
+ * What a person has to do, per reason. Code-owned like every other phrase here:
+ * the run's own sentence says the same thing for a human and is never copied
+ * into an action.
+ */
+const INTEGRATION_UNAVAILABLE_ACTIONS: Record<IntegrationUnavailableReason, string[]> = {
+  disconnected: [
+    "An integration this workflow uses is no longer connected, so the run stopped at its next use of it.",
+    "Ask an admin to reconnect it on the Integrations page, then run the workflow again.",
+  ],
+  disabled: [
+    "An integration this workflow uses was disabled while the run was in flight, so the run stopped at its next use of it.",
+    "Ask an admin to enable it on the Integrations page, then run the workflow again.",
+  ],
+  reconfigured: [
+    "An integration this workflow uses was reconfigured while the run was in flight, so the run stopped rather than mixing the connection it started with and the one in force now.",
+    "Nothing is broken: run the workflow again and it will use the new connection.",
+  ],
+};
+
+/**
+ * The reason inside an `integration_unavailable.*` code, or nothing.
+ *
+ * Split off the code rather than carried separately, because the code is what
+ * the column holds and a second field would be a second thing to keep true.
+ */
+function integrationUnavailableReasonOf(
+  code: RunFailureCode | null,
+): IntegrationUnavailableReason | null {
+  const prefix = "integration_unavailable.";
+  if (!code || !code.startsWith(prefix)) return null;
+  return code.slice(prefix.length) as IntegrationUnavailableReason;
+}
+
+/**
  * Ordered classification rules; the first match wins. Order is part of the
  * contract (see module doc), so it is captured here as data rather than as an
  * if/else chain scattered through diagnoseRun.
@@ -405,6 +458,24 @@ const RULES: readonly Rule[] = [
   {
     category: "running",
     match: (input) => (input.status === "running" ? { confidence: "high", evidenceRefs: [] } : null),
+  },
+  {
+    // Ahead of every prose rule, and high confidence, because this is the one
+    // cause the run recorded as a value rather than as a sentence. A run
+    // stopped by an integration whose sentence happens to open like another
+    // category's would otherwise be diagnosed by its wording, which is exactly
+    // what the code was added to stop.
+    category: "integration_unavailable",
+    match: (input) => {
+      const reason = integrationUnavailableReasonOf(input.failureCode ?? null);
+      if (!reason) return null;
+      return {
+        confidence: "high",
+        // The code itself, which is a stable reference and not run text.
+        evidenceRefs: [input.failureCode as string, ...evidenceFrom(input)],
+        nextActions: INTEGRATION_UNAVAILABLE_ACTIONS[reason],
+      };
+    },
   },
   {
     category: "completion_fields_pending",

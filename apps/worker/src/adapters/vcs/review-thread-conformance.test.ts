@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { GitHubAdapter } from "./github.js";
-import { GitLabAdapter } from "./gitlab.js";
+import { GitHubAdapter } from "../../../../../integrations/github/vcs.js";
+import { GitLabAdapter } from "../../../../../integrations/gitlab/vcs.js";
 import type { ReviewThreadFeed, ReviewThreadSource, VCSAdapter } from "./types.js";
 import {
   REVIEW_LEDGER_MAX_WORK_ITEMS,
@@ -130,16 +130,8 @@ const mockOctokit = {
   pulls: { listReviews: vi.fn(), listCommentsForReview: vi.fn() },
 };
 
-vi.mock("../../adapters/vcs/github-auth.js", () => ({
-  buildOctokit: vi.fn(() => mockOctokit),
-}));
-
-const mockDiscussions = { all: vi.fn() };
-
-vi.mock("@gitbeaker/rest", () => ({
-  Gitlab: vi.fn(() => ({ MergeRequestDiscussions: mockDiscussions })),
-}));
-
+/** GitLab's REST API as the adapter's client reaches it: through the
+ *  context's fetch, Gitbeaker's discussion listing included. */
 const mockFetch = vi.fn();
 
 interface Provider {
@@ -163,7 +155,10 @@ const providers: Provider[] = [
       // nothing, so the scenario observes the line-anchored threads alone.
       mockOctokit.paginate.mockResolvedValue([]);
       return new GitHubAdapter({
-        auth: { appId: 1, privateKeyBase64: "a2V5", installationId: 2 },
+        octokit: mockOctokit as never,
+        // Only a skill source's snapshot download reaches the context directly.
+        http: { fetch: () => Promise.reject(new Error("no direct request expected")) },
+        appId: 1,
         owner: "test-org",
         repo: "test-repo",
         baseBranch: "main",
@@ -174,17 +169,23 @@ const providers: Provider[] = [
     name: "gitlab",
     threadId: gitlabThreadId,
     load(threads) {
-      mockDiscussions.all.mockResolvedValue(renderGitLab(threads));
-      mockFetch.mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers(),
-        json: vi.fn().mockResolvedValue({ username: BOT }),
-        text: vi.fn().mockResolvedValue(JSON.stringify({ username: BOT })),
+      mockFetch.mockImplementation(async (input: string | URL | Request) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        const body = url.includes("/discussions")
+          ? renderGitLab(threads)
+          : { username: BOT };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       });
-      vi.stubGlobal("fetch", mockFetch);
       return new GitLabAdapter({
+        http: { fetch: mockFetch },
         token: "glpat-xxxxxxxxxxxx",
         projectId: "blazity/demo-app",
         baseBranch: "main",
@@ -242,7 +243,6 @@ describe("review thread feed, one contract across providers", () => {
     vi.clearAllMocks();
     mockOctokit.graphql.mockReset();
     mockOctokit.paginate.mockReset();
-    mockDiscussions.all.mockReset();
     mockFetch.mockReset();
   });
 

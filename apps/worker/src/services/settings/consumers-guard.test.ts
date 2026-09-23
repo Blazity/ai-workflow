@@ -55,6 +55,10 @@ const COMPUTED_ENVIRONMENT_RESIDUE = [
   "engine/steps/pre-pr-checks-runner.ts:process.env[name]",
   "infra/settings-environment.ts:process.env[name]",
   "services/auth/seed-auth-env.ts:env[name]",
+  // The redaction pass covers every integration's secret connection field, and
+  // which variables those are is a manifest's answer. Naming them here instead
+  // would mean a provider added later leaking its token into a published tool
+  // result until somebody remembered this list.
 ];
 
 const WAVE_ACCESSORS = [

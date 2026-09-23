@@ -1,16 +1,26 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "integrations/*"
+  - "integrations/_fixtures/*"
 
 # One version per dependency that more than one workspace project declares.
 # scripts/gates/check-deps-consistency.mjs fails when a shared dependency is
 # missing from this catalog or is pinned to two different specifiers.
 catalog:
   "@octokit/auth-app": ^8.2.0
+  "@octokit/rest": ^22.0.1
   "@types/node": ^22.0.0
+  "@types/react": ^19.0.0
   happy-dom: 20.14.5
+  # The dashboard renders an integration's contributed pages in its own React
+  # tree, so the host UI package and every integration that has pages compile
+  # against the React the dashboard runs. Two Reacts here is two renderers.
+  react: ^19.0.0
+  react-test-renderer: 19.2.4
   tsx: ^4.23.13
   typescript: ^5.8
+  vitest: ^3.2.6
   yaml: ^2.9.0
   zod: ^3.25.76
   # Not a second zod for product code: the worker bundle resolves one zod for

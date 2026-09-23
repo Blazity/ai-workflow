@@ -1,4 +1,5 @@
 import { EXECUTION_DIAGNOSTIC_PREFIX } from "./domain";
+import type { RunFailureCode } from "./run-registry";
 
 /**
  * Which kind of cause ended a block, and therefore which safe sentence a
@@ -43,6 +44,14 @@ export interface ExecutionErrorShape {
   /** Internal context for correlated server logs. Never persist or expose it. */
   detail?: string;
   phase?: string;
+  /**
+   * The machine-readable cause, for the failures that have one. `category` is
+   * which safe sentence to lead with and is far too coarse to act on: every
+   * unreachable integration and every misconfigured repository share
+   * `configuration`. Absent means this failure carries no code, which is true
+   * of almost all of them.
+   */
+  failureCode?: RunFailureCode;
 }
 
 /**
@@ -59,6 +68,9 @@ export interface WorkflowExecutionErrorState {
   diagnosticId: string;
   nodeId: string;
   attempt: number;
+  /** Carried from the block's error so the run's durable record can hold it
+   *  beside the sentence. Absent on every failure that has no code. */
+  failureCode?: RunFailureCode;
 }
 
 /**
@@ -77,6 +89,7 @@ export function createWorkflowExecutionErrorState(
     category: error.category,
     message: error.message,
     ...(error.phase ? { phase: error.phase } : {}),
+    ...(error.failureCode ? { failureCode: error.failureCode } : {}),
     diagnosticId: `${EXECUTION_DIAGNOSTIC_PREFIX}${runId}-${nodeId}-${attempt}`,
     nodeId,
     attempt,

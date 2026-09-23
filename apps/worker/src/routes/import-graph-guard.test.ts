@@ -79,7 +79,6 @@ const ENTRIES = [
   "routes/api/dashboard-auth/sso/status.get.ts",
   "routes/api/v1/clarifications/[id]/answer.post.ts",
   "routes/api/v1/cost.get.ts",
-  "routes/api/v1/evals.get.ts",
   "routes/api/v1/harness-capabilities.get.ts",
   "routes/api/v1/harness-profiles.get.ts",
   "routes/api/v1/harness-profiles.post.ts",
@@ -103,7 +102,6 @@ const ENTRIES = [
   "routes/api/v1/json-schema/inspect.post.ts",
   "routes/api/v1/memory.delete.ts",
   "routes/api/v1/memory.get.ts",
-  "routes/api/v1/overview/eval-health.get.ts",
   "routes/api/v1/overview/kpis.get.ts",
   "routes/api/v1/prompt-library.get.ts",
   "routes/api/v1/prompt-library.post.ts",
@@ -140,7 +138,7 @@ const ENTRIES = [
   "routes/mcp-auth/login.get.ts",
   "routes/mcp-auth/login.post.ts",
   "routes/webhooks/resend.post.ts",
-  "routes/webhooks/slack.post.ts",
+  "routes/webhooks/[id].post.ts",
 ];
 
 const STEP_DIRECTIVE = /^\s*["']use step["']/mu;
@@ -230,11 +228,8 @@ function reachableStepFiles(entry: string): Set<string> {
 const STEP_GRAPH_LIMITS = {
   "routes/health.get.ts": 0,
   "routes/webhooks/custom/[endpointId].post.ts": 34,
-  "routes/webhooks/github.post.ts": 34,
-  "routes/webhooks/gitlab.post.ts": 34,
-  "routes/webhooks/jira.post.ts": 35,
   "routes/webhooks/resend.post.ts": 0,
-  "routes/webhooks/slack.post.ts": 0,
+  "routes/webhooks/[id].post.ts": 0,
 } as const;
 
 describe("app tier import graph", () => {

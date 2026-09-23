@@ -37,6 +37,9 @@ const JSON_BODY_SCHEMAS: Record<string, string[]> = {
   "api/v1/harness-skills/discover.post.ts": ["harnessSkillDiscoverBodySchema"],
   "api/v1/harness-skills/import.post.ts": ["harnessSkillImportBodySchema"],
   "api/v1/harness-skills/local.post.ts": ["harnessLocalSkillImportBodySchema"],
+  "api/v1/integrations/[id]/connection.put.ts": ["integrationConnectionSaveRequestSchema"],
+  "api/v1/integrations/[id]/enabled.patch.ts": ["integrationEnabledRequestSchema"],
+  "api/v1/integrations/[id]/source.patch.ts": ["integrationSourceRequestSchema"],
   "api/v1/invites.post.ts": ["dashboardInviteCreateRequestSchema"],
   "api/v1/json-schema/inspect.post.ts": ["jsonSchemaInspectRequestSchema"],
   "api/v1/pre-pr-checks.put.ts": ["prePrCheckSaveRequestSchema"],
@@ -85,6 +88,10 @@ const NO_JSON_BODY: Record<string, string> = {
     "reads no body: the decision is the route and the approval is named in the path, so there is nothing to send.",
   "api/v1/approvals/[id]/reject.post.ts":
     "reads no body: the decision is the route and the approval is named in the path, so there is nothing to send.",
+  "api/v1/integrations/[id]/connection.delete.ts":
+    "reads no body: forgets the stored values of the integration named in the path, and there is nothing else to say.",
+  "api/v1/integrations/[id]/test.post.ts":
+    "reads no body: tests the configuration that is live, never values the request carried, so accepting any would be a second way to connect.",
   "api/v1/invites/[inviteId]/cancel.post.ts":
     "reads no body: acts on the invite named in the path, and the action is the route rather than a field.",
   "api/v1/invites/[inviteId]/resend.post.ts":
@@ -119,16 +126,10 @@ const NO_JSON_BODY: Record<string, string> = {
     "reads another format: the MCP transport reads a byte-bounded body itself and answers a bad envelope as a JSON-RPC error, checked against the MCP contract rather than an HTTP body schema.",
   "webhooks/custom/[endpointId].post.ts":
     "reads another format: raw bytes, because the endpoint's signature is computed over exactly what arrived.",
-  "webhooks/github.post.ts":
-    "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
-  "webhooks/gitlab.post.ts":
-    "reads another format: raw bytes, because the provider's token check reads the body only after the header is trusted.",
-  "webhooks/jira.post.ts":
-    "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
   "webhooks/resend.post.ts":
     "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
-  "webhooks/slack.post.ts":
-    "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
+  "webhooks/[id].post.ts":
+    "reads another format: raw bytes, because the integration verifies a signature computed over exactly what arrived, and only it knows how.",
 };
 
 const routesRoot = import.meta.dirname;

@@ -7,17 +7,15 @@ import type {
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
-import {
-  findSettingDefinition,
-} from "@shared/contracts";
-import { buildSetupOverview } from "./overview";
+import { settingDefinition } from "@integrations/registry";
+import { buildSetupOverview, oneProviderRow, scanAgeLine } from "./overview";
 
 function entry(
   key: string,
   value: boolean | number | string | readonly string[] | null,
   overrides: Partial<SettingsEntryView> = {},
 ): SettingsEntryView {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   assert.ok(definition, `${key} is not a registry key`);
   return {
     key: key as SettingsEntryView["key"],
@@ -119,6 +117,43 @@ test("jira live mode makes issue tracker Connected", () => {
   assert.ok(issueTrackerRow);
   assert.equal(issueTrackerRow.value, "Connected");
   assert.equal(issueTrackerRow.tone, "ok");
+});
+
+test("two trackers switched on read as no provider chosen, not as the healthier one", () => {
+  // The worker uses neither of two connected trackers, a failing one included,
+  // so a row reading Connected would describe a deployment that does not exist.
+  const row = oneProviderRow(
+    "issue-tracker",
+    "Issue tracker",
+    [integration("jira", "live"), integration("linear", "down")],
+    true,
+  );
+  assert.equal(row.value, "No provider chosen");
+  assert.equal(row.tone, "bad");
+  assert.match(row.detail, /jira Integration and linear Integration are all switched on/);
+});
+
+test("one tracker failing reads as failing even when another is switched off", () => {
+  const row = oneProviderRow(
+    "issue-tracker",
+    "Issue tracker",
+    [integration("jira", "misconfigured"), integration("linear", "disabled")],
+    true,
+  );
+  assert.equal(row.value, "Needs configuration");
+  assert.equal(row.tone, "warn");
+  assert.equal(row.detail, "jira Integration. Also seen: linear Integration disabled.");
+});
+
+test("trackers that are all off or unconnected read as not configured", () => {
+  const row = oneProviderRow(
+    "issue-tracker",
+    "Issue tracker",
+    [integration("jira", "disabled")],
+    true,
+  );
+  assert.equal(row.value, "Not configured");
+  assert.equal(row.tone, "off");
 });
 
 test("github live and gitlab not-configured reports github state", () => {
@@ -532,4 +567,26 @@ test("the Settings card names the reason the bridge was ended", () => {
   assert.ok(catalogRow);
   assert.match(catalogRow.detail, /Activated by Seed on /);
   assert.match(catalogRow.detail, /reason: the catalog is complete/);
+});
+
+// Red when: the overview reads a nine-day-old scan ("GitHub down") without
+// saying how old it is (QA on production).
+test("the rows from a health scan say when it was taken, and an old one is flagged", () => {
+  const taken = "2026-09-14T10:00:00.000Z";
+  const scan = { ...healthResponse([]), generatedAt: taken };
+  const nineDaysOn = Date.parse(taken) + 9 * 24 * 60 * 60 * 1000;
+
+  const fresh = scanAgeLine(scan, Date.parse(taken) + 60 * 60 * 1000);
+  assert.deepEqual(fresh, {
+    text: "The connection rows come from the health scan of Sep 14, 2026, 10:00:00 AM UTC.",
+    stale: false,
+  });
+
+  const old = scanAgeLine(scan, nineDaysOn);
+  assert.equal(old?.stale, true);
+  assert.match(old?.text ?? "", /taken 9d ago \(Sep 14, 2026, 10:00:00 AM UTC\), so they may no longer be true/);
+
+  // Rendered on the server, where the browser's clock is unknown: when, not whether.
+  assert.equal(scanAgeLine(scan, null)?.stale, false);
+  assert.equal(scanAgeLine(null, nineDaysOn), null);
 });

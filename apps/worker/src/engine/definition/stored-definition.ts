@@ -25,6 +25,13 @@ export function parseStoredWorkflowDefinition(raw: unknown): StoredWorkflowDefin
   }
   // Not a v1 row, so it has to be a runnable one. An unreadable row throws the
   // parser's own error here, exactly as it did before v1 was retired.
+  //
+  // A block this build renamed is rewritten first, so everything downstream
+  // sees one name: the palette, the parameter schemas, the resolver, the
+  // editor and the run. The row itself is untouched until somebody publishes,
+  // which is deliberate (ADR-010): rewriting stored rows is a separate,
+  // explicitly invoked one-off, never something a read or a build migration
+  // does to a database a preview deployment shares with production.
   const parsed = parse(raw);
   if (parsed.definition === null) throw parsed.error;
   return { schema: "v2", definition: parsed.definition };

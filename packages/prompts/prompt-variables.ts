@@ -11,7 +11,7 @@ export interface PromptVariableSpec {
 export const PROMPT_VARIABLES = [
   { name: "ticket_key", description: "Ticket identifier, e.g. ABC-123." },
   { name: "ticket_title", description: "Ticket title." },
-  { name: "ticket_url", description: "URL of the ticket in the issue tracker; empty for non-ticket runs." },
+  { name: "ticket_url", description: "URL of the ticket in the issue tracker; empty for non-ticket runs and when the tracker gives no link." },
   { name: "ticket_description", description: "Ticket description (markdown)." },
   { name: "ticket_acceptance_criteria", description: "Acceptance criteria; empty when none." },
   { name: "ticket_labels", description: "Comma-separated ticket labels." },

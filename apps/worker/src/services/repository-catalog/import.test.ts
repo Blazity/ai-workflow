@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
 // worker test that touches a service stubs it.
 vi.mock("../../infra/vcs-config.js", () => ({
   env: state.env,
-  getConfiguredVcsProviders: () => [],
+  getConfiguredVcsProviders: () => [{ kind: "github" }, { kind: "gitlab" }],
   getVcsProviderConfig: () => undefined,
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
@@ -31,7 +31,7 @@ const { loadRepositoryCatalogEntries } = await import("./store.js");
 const ADMIN = { role: "admin" as const, id: "user_admin" };
 const MEMBER = { role: "member" as const, id: "user_member" };
 
-function option(repoPath: string, provider: "github" | "gitlab" = "github") {
+function option(repoPath: string, provider: string = "github") {
   const [owner, name] = repoPath.split("/");
   return {
     provider,
@@ -85,6 +85,26 @@ describe("previewRepositoryImport", () => {
 });
 
 describe("commitRepositoryImport", () => {
+  it("refuses an unshipped provider before SQL and tells the admin what to connect", async () => {
+    state.directory = {
+      repositories: [option("acme/api", "forgejo")],
+      providers: [{ provider: "forgejo", status: "ready" }],
+    } as RepositoriesResponse;
+
+    await expect(
+      commitRepositoryImport({
+        actor: ADMIN,
+        request: { repositoryKeys: ["forgejo:acme/api"], enabled: true },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message:
+        'Cannot import provider "forgejo": this build can import repositories from GitHub and GitLab.',
+    });
+
+    expect((await loadRepositoryCatalogEntries()).entries).toEqual([]);
+  });
+
   it("creates the selected rows switched off, with the provider's own casing", async () => {
     const result = await commitRepositoryImport({
       actor: ADMIN,

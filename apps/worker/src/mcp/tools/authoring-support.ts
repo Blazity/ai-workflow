@@ -1,8 +1,8 @@
+import { logger } from "../../services/mcp/app-dependencies.js";
 import {
-  logger,
-  NoopMessagingAdapter,
-  type MessagingAdapter,
-} from "../../services/mcp/app-dependencies.js";
+  activeProviderOf,
+  type DeploymentIntegrations,
+} from "../../services/workflow-definitions/block-contracts.js";
 import {
   McpPublicError,
   type McpActorContext,
@@ -117,20 +117,28 @@ export function announcementLabel(raw: string): string {
 /**
  * Whether an authoring announcement can actually reach anybody on this deployment.
  * Reported by system.capabilities, because a client is entitled to know when it is
- * unobserved: with no chat credentials configured engine/support/adapters.ts:69 hands every tool
- * the no-op adapter, and the announcement then goes nowhere. The audit row is
- * written either way, which is what keeps "none" an honest answer rather than a
- * confession that nothing is recorded.
+ * unobserved: a deployment with no messaging provider connected sends the
+ * announcement nowhere. The audit row is written either way, which is what
+ * keeps "none" an honest answer rather than a confession that nothing is
+ * recorded.
  *
- * Asked of the adapter instance rather than re-derived from the env, so it cannot
- * drift from the condition createAdapters actually branches on. A deps object built
- * by a test with no messaging at all answers "none" for the same reason.
+ * Asked of the deployment's integrations, the same value the palette and the
+ * run both read, and of the rule they use to pick a provider
+ * (`activeProviderOf`), so it cannot drift from what actually happens when a
+ * tool announces something. Two connected providers with none selected is also
+ * "none": nothing is sent then either, and saying "chat" would promise a
+ * message nobody gets.
+ *
+ * `null` when the integrations could not be read, the same null the answer's
+ * `integrations` field carries for the same read: "none" would tell a client
+ * with confidence that nobody is watching, about a deployment nobody looked at.
  */
 export function authoringAnnouncementDelivery(
-  messaging: MessagingAdapter | undefined,
-): "chat" | "none" {
-  if (!messaging || messaging instanceof NoopMessagingAdapter) return "none";
-  return "chat";
+  deployment: DeploymentIntegrations | null,
+): "chat" | "none" | null {
+  if (deployment === null) return null;
+  const active = activeProviderOf(deployment.providers.get("messaging") ?? []);
+  return active.kind === "one" ? "chat" : "none";
 }
 
 /**
@@ -145,8 +153,9 @@ export function authoringAnnouncementDelivery(
  * prompt body or a graph belongs in neither.
  *
  * Every caller-supplied label inside `what` must already have been through
- * announcementLabel above. The adapter's note branch defangs broadcast tokens in
- * the whole string (format.ts:165), which stops a channel-wide ping and NOTHING
+ * announcementLabel above. The Slack renderer's note branch defangs broadcast
+ * tokens in the whole string (`integrations/slack/format.ts`), which stops a
+ * channel-wide ping and NOTHING
  * else: it leaves `<url|label>`, `<@user>` and newlines intact, so an unsanitized
  * name can forge a clickable link or a second line inside this message. That is
  * enforced at the interpolation sites rather than here, because the deep links the

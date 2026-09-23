@@ -8,6 +8,7 @@ import {
   type RepositoryCatalogEntry,
 } from "./catalog.js";
 import { exclusionRecoveryNotes, unnamedRecoveryNotes } from "../work-scope/context.js";
+import { exampleRepositoryPath } from "../../repository-map/repository-path-example.js";
 import { replyThatDecidesCandidates } from "../support/clarification-comment-format.js";
 import { isGuessEntry, isUnnamedInAnswer } from "../work-scope/decide.js";
 import {
@@ -15,6 +16,7 @@ import {
   workScopeUnnamedWhy,
 } from "../work-scope/refusal-sentence.js";
 import {
+  repositoryCatalogProviderSchema,
   repositoryKeySchema,
   type RepositoryKey,
   type WorkScopeActor,
@@ -32,7 +34,7 @@ const discoveryResultSchema = z
       .array(
         z
           .object({
-            provider: z.enum(["github", "gitlab"]),
+            provider: repositoryCatalogProviderSchema,
             repoPath: z.string().min(1),
             rationale: z.string().trim().min(1).max(500),
           })
@@ -160,7 +162,7 @@ export function discoveryLeftOutAddition(
 }
 
 type ProposedRepository = {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   rationale: string;
 };
@@ -698,7 +700,7 @@ function nothingLeftToStartFrom(
     "Not naming a repository is not choosing it,",
     "so this run has no repository to work on.",
     commentPathIsTaken
-      ? `Write the full path of each repository this ticket should work on in a comment on this ticket, as ${repositoryKeys[0] ?? "github:owner/repo"}, and start a new run.`
+      ? `Write the full path of each repository this ticket should work on in a comment on this ticket, as ${repositoryKeys[0] ?? exampleRepositoryPath("owner/repo")}, and start a new run.`
       : "Select the repositories this ticket should work on in this work's repository list, through the work scope API or the work_scope.edit tool, and start a new run.",
   ].join(" ");
 }

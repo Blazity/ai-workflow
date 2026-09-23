@@ -264,3 +264,50 @@ test("v2 additional-input authoring rejects unsafe path segments", () => {
     assert.equal(canAddV2AdditionalInputName(name, existingNames), false, name);
   }
 });
+
+test("an unbound input with a default says where its value comes from, and is not flagged required", () => {
+  // A screen whose text input is left unbound still screens something; an
+  // author who cannot see that reads the empty choice as "nothing" and binds
+  // the description alone, which silently stops screening the comments.
+  const screenContract: WorkflowBlockContract = {
+    ...contract,
+    inputs: {
+      content: {
+        required: true,
+        schema: { type: "string" },
+        defaultFromSubject: ["description", "comments"],
+      },
+    },
+    additionalInputs: [],
+  };
+  const unbound = renderToStaticMarkup(
+    <V2BindingFields
+      node={{ ...node, inputs: {}, additionalInputs: [] }}
+      contract={screenContract}
+      availableValues={availableValues}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  // The run's, not the ticket's: the same graph can be started by a delivery
+  // to a webhook, which has no ticket to promise anything about.
+  assert.match(unbound, /Not bound, so it uses the run&#x27;s description and comments/);
+  assert.match(unbound, /From the run&#x27;s description and comments/);
+  assert.doesNotMatch(unbound, />Required</);
+
+  const bound = renderToStaticMarkup(
+    <V2BindingFields
+      node={{
+        ...node,
+        inputs: { content: { kind: "reference", reference: "steps.planning.output.plan" } },
+        additionalInputs: [],
+      }}
+      contract={screenContract}
+      availableValues={availableValues}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+  assert.doesNotMatch(bound, /Not bound, so it uses/);
+});

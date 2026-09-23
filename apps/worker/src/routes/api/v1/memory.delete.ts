@@ -35,8 +35,17 @@ export default defineEventHandler(
         });
       }
 
-      const deleted = await eraseMemoryDocument(subjectKey, docPath);
-      if (!deleted) {
+      const erasure = await eraseMemoryDocument(subjectKey, docPath);
+      if (!erasure.ok) {
+        // Never 404. Answering "not found" for a provider that could not be
+        // reached tells somebody their data is already gone when nobody
+        // deleted anything.
+        throw createError({
+          statusCode: erasure.listable ? 503 : 501,
+          statusMessage: erasure.reason,
+        });
+      }
+      if (!erasure.erased) {
         throw createError({
           statusCode: 404,
           statusMessage: "Memory document not found",

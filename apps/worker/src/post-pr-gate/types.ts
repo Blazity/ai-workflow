@@ -1,5 +1,5 @@
 import type {
-  VCSAdapter,
+  VcsIntegrationAdapter,
   CheckRunAnnotation,
 } from "../adapters/vcs/types.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
@@ -47,8 +47,12 @@ export interface PostPrGateStepContext {
   diff: string | null;
   files: PostPrGateFile[] | null;
   adapters: {
-    vcs: VCSAdapter;
-    issueTracker: IssueTrackerAdapter;
+    /** Resolved, not deferred: the steps ask what the provider implements
+     *  (`hasPRFilesCapability`), which only a resolved adapter can answer. */
+    vcs: VcsIntegrationAdapter;
+    /** Absent on a deployment with no usable issue tracker. The gate runs on
+     *  the pull request either way, and no step reads it today. */
+    issueTracker?: IssueTrackerAdapter;
   };
 }
 

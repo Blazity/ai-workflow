@@ -3,7 +3,9 @@ import type { Db } from "../db/client.js";
 import { agentMemoryDocuments } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
+  DEFAULT_MEMORY_LIST_LIMIT,
   MAX_MEMORY_DOCUMENT_BYTES,
+  MEMORY_DOCUMENT_TOO_LARGE,
   deleteMemoryDocument,
   getMemoryDocument,
   listMemoryDocuments,
@@ -111,6 +113,25 @@ describe("agent memory document store", () => {
     ).rejects.toThrow(/size limit/);
 
     expect(await countRows()).toBe(0);
+  });
+
+  it("marks the size refusal as one retrying will never get past", async () => {
+    // A caller catching this far from here cannot tell it from a database that
+    // was away, and the two mean opposite things: one is worth another attempt,
+    // the other will be refused every time. The distill pays for a model call
+    // before each attempt, so guessing wrong costs money.
+    const refusal = await upsertMemoryDocument(db, {
+      subjectKey: SUBJECT_KEY,
+      docPath: DOC_PATH,
+      ticketKey: "AIW-177",
+      content: "x".repeat(MAX_MEMORY_DOCUMENT_BYTES + 1),
+      sourceRunId: "run_1",
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect((refusal as { code?: unknown }).code).toBe(MEMORY_DOCUMENT_TOO_LARGE);
   });
 
   it("accepts a null ticket key for PR-triggered runs", async () => {
@@ -368,7 +389,7 @@ describe("deleteMemoryDocument", () => {
 
     await deleteMemoryDocument(db, SUBJECT_KEY, DOC_PATH);
 
-    expect((await listMemoryDocuments(db)).map((row) => row.docPath)).toEqual([
+    expect((await listMemoryDocuments(db)).documents.map((row) => row.docPath)).toEqual([
       "blazebot/memory/AIW-9.md",
     ]);
   });
@@ -392,7 +413,7 @@ describe("listMemoryDocuments", () => {
       { subjectKey: "ticket:jira:AIW-3", docPath: "c.md", ticketKey: "AIW-3", content: "three" },
     ]);
 
-    const rows = await listMemoryDocuments(db);
+    const { documents: rows } = await listMemoryDocuments(db);
     expect(rows.map((row) => row.docPath)).toEqual(["c.md", "b.md", "a.md"]);
     expect(rows[0]?.subjectKey).toBe("ticket:jira:AIW-3");
     expect(rows[0]?.ticketKey).toBe("AIW-3");
@@ -407,7 +428,7 @@ describe("listMemoryDocuments", () => {
       { subjectKey: SUBJECT_KEY, docPath: DOC_PATH, ticketKey: "AIW-177", content: "secret" },
     ]);
 
-    const [row] = await listMemoryDocuments(db);
+    const [row] = (await listMemoryDocuments(db)).documents;
     expect(row).toBeDefined();
     expect(row).not.toHaveProperty("content");
   });
@@ -419,9 +440,9 @@ describe("listMemoryDocuments", () => {
       { subjectKey: "pr:github:acme/web#12", docPath: "pr.md", ticketKey: null, content: "pr" },
     ]);
 
-    const rows = await listMemoryDocuments(db, { ticketKey: "AIW-2" });
+    const { documents: rows } = await listMemoryDocuments(db, { ticketKey: "AIW-2" });
     expect(rows.map((row) => row.docPath)).toEqual(["b.md"]);
-    expect(await listMemoryDocuments(db, { ticketKey: "AIW-404" })).toEqual([]);
+    expect((await listMemoryDocuments(db, { ticketKey: "AIW-404" })).documents).toEqual([]);
   });
 
   it("respects the requested limit", async () => {
@@ -431,13 +452,55 @@ describe("listMemoryDocuments", () => {
       { subjectKey: "ticket:jira:AIW-3", docPath: "c.md", ticketKey: "AIW-3", content: "three" },
     ]);
 
-    expect((await listMemoryDocuments(db, { limit: 2 })).map((row) => row.docPath)).toEqual([
-      "c.md",
-      "b.md",
-    ]);
+    expect(
+      (await listMemoryDocuments(db, { limit: 2 })).documents.map((row) => row.docPath),
+    ).toEqual(["c.md", "b.md"]);
     // Nonsense limits fall back to the default instead of returning nothing.
-    expect(await listMemoryDocuments(db, { limit: 0 })).toHaveLength(3);
-    expect(await listMemoryDocuments(db, { limit: -5 })).toHaveLength(3);
-    expect(await listMemoryDocuments(db, { limit: 1.5 })).toHaveLength(3);
+    expect((await listMemoryDocuments(db, { limit: 0 })).documents).toHaveLength(3);
+    expect((await listMemoryDocuments(db, { limit: -5 })).documents).toHaveLength(3);
+    expect((await listMemoryDocuments(db, { limit: 1.5 })).documents).toHaveLength(3);
+  });
+
+  it("says a listing the limit cut short is not everything", async () => {
+    // The whole point of `complete`. A caller answering an erasure request off
+    // a capped listing, or an agent concluding a fact was forgotten because it
+    // is not in the table, is reading absence as proof, and absence past the
+    // cap proves nothing.
+    await seed([
+      { subjectKey: "ticket:jira:AIW-1", docPath: "a.md", ticketKey: "AIW-1", content: "one" },
+      { subjectKey: "ticket:jira:AIW-2", docPath: "b.md", ticketKey: "AIW-2", content: "two" },
+      { subjectKey: "ticket:jira:AIW-3", docPath: "c.md", ticketKey: "AIW-3", content: "three" },
+    ]);
+
+    const cut = await listMemoryDocuments(db, { limit: 2 });
+    expect(cut.documents).toHaveLength(2);
+    expect(cut.complete).toBe(false);
+
+    // Exactly the limit is NOT short, and it is the case the naive "did I get
+    // `limit` rows" check gets wrong.
+    const exact = await listMemoryDocuments(db, { limit: 3 });
+    expect(exact.documents).toHaveLength(3);
+    expect(exact.complete).toBe(true);
+
+    expect((await listMemoryDocuments(db)).complete).toBe(true);
+  });
+
+  it("says so when the DEFAULT cap cut the listing, which is what the screen uses", async () => {
+    // Neither the memory screen nor the memory.list tool passes a limit, so
+    // this is the cap every reader of that table actually runs under. Before
+    // this, a deployment past it saw a short table and an MCP client saw
+    // `complete: true`, with nothing anywhere saying the list stopped.
+    const documents = Array.from({ length: DEFAULT_MEMORY_LIST_LIMIT + 1 }, (_unused, index) => ({
+      subjectKey: `ticket:jira:AIW-${index}`,
+      docPath: `${index}.md`,
+      ticketKey: `AIW-${index}`,
+      content: "x",
+      sourceRunId: `run_${index}`,
+    }));
+    for (const document of documents) await upsertMemoryDocument(db, document);
+
+    const listing = await listMemoryDocuments(db);
+    expect(listing.documents).toHaveLength(DEFAULT_MEMORY_LIST_LIMIT);
+    expect(listing.complete).toBe(false);
   });
 });

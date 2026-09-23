@@ -20,7 +20,7 @@ describe("resolveVcsBotLogin", () => {
   it("trims and case-normalizes a provider-specific login", () => {
     expect(
       resolveVcsBotLogin("github", ["github"], {
-        github: "  GitHub-App[Bot]  ",
+        byProvider: { github: "  GitHub-App[Bot]  " },
       }),
     ).toBe("github-app");
   });
@@ -28,13 +28,13 @@ describe("resolveVcsBotLogin", () => {
   it("treats whitespace-only values as unset and falls back only when unambiguous", () => {
     expect(
       resolveVcsBotLogin("gitlab", ["gitlab"], {
-        gitlab: "   ",
+        byProvider: { gitlab: "   " },
         legacy: "  Legacy-Bot  ",
       }),
     ).toBe("legacy-bot");
     expect(
       resolveVcsBotLogin("github", ["github"], {
-        github: "   ",
+        byProvider: { github: "   " },
         legacy: "   ",
       }),
     ).toBeUndefined();

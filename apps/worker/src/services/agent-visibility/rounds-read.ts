@@ -57,12 +57,17 @@ import {
 } from "./pages.js";
 import type { PageBounds } from "./briefing-read.js";
 import { serveSafeText } from "./serve-safe.js";
+import { knownSecretValues } from "../integrations/index.js";
 
 export interface RoundReads {
   questions(subjectKey: string): Promise<ClarificationQuestionRow[]>;
   deliveries(clarificationIds: readonly string[]): Promise<ClarificationAnswerDeliveryRow[]>;
   trail(subjectKey: string): Promise<SubjectTrailRow[]>;
   audiences(runIds: readonly string[]): Promise<Map<string, string | null>>;
+  /** Every secret the deployment knows, which everything served is redacted
+   *  with. Throws when the integration settings cannot be read, and the read
+   *  serves nothing rather than text redacted with part of the set. */
+  knownSecrets(): Promise<string[]>;
 }
 
 export function roundReadsOf(db: Db): RoundReads {
@@ -71,6 +76,7 @@ export function roundReadsOf(db: Db): RoundReads {
     deliveries: (ids) => listClarificationAnswerDeliveryRows(db, ids),
     trail: (subjectKey) => listSubjectClarificationTrailRows(db, subjectKey),
     audiences: (runIds) => readRunReadAudiences(db, runIds),
+    knownSecrets: () => knownSecretValues({ db }),
   };
 }
 
@@ -79,6 +85,7 @@ export const connectedRoundReads: RoundReads = {
   deliveries: listConnectedClarificationAnswerDeliveryRows,
   trail: listConnectedSubjectClarificationTrailRows,
   audiences: readConnectedRunReadAudiences,
+  knownSecrets: () => knownSecretValues(),
 };
 
 export interface AssembledRounds {
@@ -163,7 +170,7 @@ export async function assembleSubjectRounds(
     reads.trail(input.subjectKey),
   ]);
   const readable = new Set(questions.map((row) => row.clarificationId));
-  const safe = serveSafeText();
+  const safe = serveSafeText(await reads.knownSecrets());
   const rows: ClarificationRoundRows = {
     questions: questions.map((row) => ({
       clarificationId: row.clarificationId,

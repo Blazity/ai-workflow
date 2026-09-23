@@ -16,8 +16,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 
-import type { MessagingAdapter, TicketEvent } from "../../adapters/messaging/types.js";
-import type { Adapters } from "../../engine/support/adapters.js";
+import type { MessagingSender, TicketEvent } from "../../adapters/messaging/types.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
@@ -29,6 +28,7 @@ import {
 import { BUILT_IN_PROMPT_SLUG_BY_NAME } from "@shared/prompts";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerPromptAuthoringTools } from "./prompt-authoring.js";
 
 const ORG_ID = "org-execute";
@@ -55,7 +55,7 @@ const WRITE_ONLY: ReadonlySet<McpScope> = new Set(["prompts:write"]);
 // Substituted for the real Slack adapter. Typed off the adapter's own interface, so
 // a signature change here is a compile error rather than a test that keeps asserting
 // against a call nobody makes any more.
-const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>();
+const notifyForTicket = vi.fn<MessagingSender["notifyForTicket"]>();
 
 const headReadBarrier = vi.hoisted(() => ({
   enabled: false,
@@ -94,7 +94,7 @@ beforeEach(async () => {
   promptId = await seedPrompt("team-review-guide", "Team review guide", SEEDED_BODY);
   builtInPromptId = await builtInPrompt();
   notifyForTicket.mockReset();
-  notifyForTicket.mockResolvedValue(undefined);
+  notifyForTicket.mockResolvedValue({ delivered: true });
 });
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -138,7 +138,7 @@ async function connectedClient(actor: Partial<McpActorContext> = { scopes: WRITE
     server,
     depsFor(db, () => now, {
       actor: actorFor(actor),
-      adapters: { messaging: { notifyForTicket } } as unknown as Adapters,
+      adapters: adaptersFor("not_connected", { messaging: { notifyForTicket } }),
     }),
   );
   const client = new Client({ name: "prompt-authoring-test-client", version: "1.0.0" });
@@ -321,7 +321,7 @@ describe("prompts.update", () => {
   // failure that reads as "nothing was written" and must not buy a second version
   // out of the retry such an answer would provoke.
   it("keeps the stored version and the answer when the announcement fails", async () => {
-    notifyForTicket.mockRejectedValue(new Error("slack is down"));
+    notifyForTicket.mockRejectedValue(new Error("the chat provider is down"));
     const client = await connectedClient();
 
     const result = await update(client);

@@ -12,6 +12,7 @@
  * is the only module that answers it from the process environment, so a test
  * binds a deployment it declares without loading the environment at all.
  */
+import { integrationLlmTarget, integrationLlmUnavailable } from "./integration-llm.js";
 import {
   BLOCK_CATALOG,
   BLOCK_TYPE_SPECS,
@@ -30,6 +31,16 @@ import {
   resolvedOutput,
   workflowBlockDefinitionIssue,
 } from "./block-registry.js";
+import {
+  coreBlockCapabilities,
+  coreCapabilityIssue,
+  integrationBlockAvailability,
+  type DeploymentIntegrations,
+} from "./integration-availability.js";
+import {
+  integrationBlockContract,
+  integrationBlockContracts,
+} from "./integration-block-contract.js";
 
 export interface WorkflowBlockRegistryContext {
   agentProviders: { claude: boolean; codex: boolean };
@@ -37,9 +48,16 @@ export interface WorkflowBlockRegistryContext {
   defaultAgent: { provider: "claude" | "codex"; model: string };
   vcsProviders: VcsProviderKind[];
   vcsBotIdentities: VcsProviderKind[];
-  slackConfigured: boolean;
-  arthurConfigured: boolean;
   webhookTriggerConfigured: boolean;
+  /**
+   * What this deployment's integrations let a workflow do.
+   *
+   * The rules below that name a provider are the ones for providers the plan
+   * has not moved out yet (ADR-010, stages S8 to S12); each of those stages
+   * deletes its own. Everything an integration contributes is decided from
+   * this field and the registry, so adding an integration edits no core file.
+   */
+  integrations: DeploymentIntegrations;
 }
 
 const vcsBlocks = new Set<WorkflowBlockType>([
@@ -80,44 +98,49 @@ function availabilityFor(
   params: Record<string, WorkflowParamValue>,
   context: WorkflowBlockRegistryContext,
 ): WorkflowBlockAvailability {
+  // An integration's block first, and from data alone: its integration's state
+  // and the capabilities it declared. Core writes no rule for one and learns
+  // nothing about the provider behind it.
+  const fromIntegration = integrationBlockAvailability(type, context.integrations, {
+    coreOwnsType: coreOwnsBlockType(type),
+  });
+  if (fromIntegration) {
+    if (!fromIntegration.available) return fromIntegration;
+    // The one credential rule core applies to an integration block: the model
+    // it reaches through `ctx.llm` is paid for with this deployment's key. Asked
+    // through the rule the block step applies (`integration-llm.ts`), whose
+    // answer does not depend on the run's preferred provider, so the default
+    // profile standing in for the run here cannot make it disagree.
+    const block = context.integrations.blocks.get(type)?.block;
+    if (block?.requires?.llm !== true) return fromIntegration;
+    const preferred = context.defaultAgent;
+    const target = integrationLlmTarget(
+      preferred,
+      { claude: preferred.model, codex: preferred.model },
+      context.llmProviders,
+    );
+    return target ? fromIntegration : unavailable(integrationLlmUnavailable(block.ui.label));
+  }
   const definitionIssue = workflowBlockDefinitionIssue(type, params);
   if (definitionIssue) return unavailable(definitionIssue);
-  if (type === "send_slack_message" && !context.slackConfigured) {
-    return unavailable("Slack messaging is not configured.");
-  }
-  if (type === "investigate" && !context.slackConfigured) {
-    // An absent selection means both providers on (the param's own default), so
-    // only a list that omits Slack opts out.
-    const providers: unknown = params.providers;
-    const slackEnabled = Array.isArray(providers)
-      ? providers.includes("slack")
-      : true;
-    if (slackEnabled) {
-      return unavailable(
-        "Slack messaging is not configured; turn off the Slack provider for a Jira-only investigation.",
-      );
-    }
-  }
-  if (type === "arthur_injection_check" && !context.arthurConfigured) {
-    return unavailable("Arthur Engine is not configured.");
+  // What this core block needs is stated once, in integration-availability, and
+  // read here, by the run's pin and by the dispatch blocker alike. A second
+  // statement is how a palette and a run come to disagree.
+  for (const capability of coreBlockCapabilities(type, params).required) {
+    const issue = coreCapabilityIssue(capability, context.integrations);
+    if (!issue) continue;
+    return unavailable(
+      type === "investigate"
+        ? `${issue} Turn off that provider on this block for an issue-tracker-only investigation.`
+        : issue,
+    );
   }
   if (type === "trigger_webhook" && !context.webhookTriggerConfigured) {
     return unavailable("Webhook trigger encryption is not configured.");
   }
   const selectedProviders = Array.isArray(params.providers)
-    ? params.providers.filter(
-      (provider): provider is VcsProviderKind => provider === "github" || provider === "gitlab",
-    )
+    ? params.providers.filter((provider): provider is VcsProviderKind => typeof provider === "string")
     : [];
-  if (
-    type === "trigger_pr_review" &&
-    selectedProviders.includes("gitlab") &&
-    !(Array.isArray(params.on) && params.on.includes("commented"))
-  ) {
-    return unavailable(
-      'GitLab review triggers must include "commented"; GitLab does not emit a reliable changes-requested review event.',
-    );
-  }
   if (vcsBlocks.has(type) && context.vcsProviders.length === 0) {
     return unavailable("No version-control provider is configured.");
   }
@@ -131,52 +154,38 @@ function availabilityFor(
     );
   }
   if (type === "trigger_pr_review") {
-    const states = Array.isArray(params.on) ? params.on : [];
+    const states = Array.isArray(params.on)
+      ? params.on.filter((state): state is string => typeof state === "string")
+      : [];
+    // The providers this trigger can hear from: the ones it names that are
+    // connected, or every connected one when it names none.
+    const effectiveProviders = selectedProviders.length > 0
+      ? selectedProviders.filter((provider) => context.vcsProviders.includes(provider))
+      : context.vcsProviders;
+    const unreported = unreportedReviewStatesIssue(states, effectiveProviders, context);
+    if (unreported) return unavailable(unreported);
     if (states.includes("commented")) {
-      const missingBotIdentities = selectedProviders.filter(
-        (provider) =>
-          context.vcsProviders.includes(provider) &&
-          !context.vcsBotIdentities.includes(provider),
+      const missingBotIdentities = effectiveProviders.filter(
+        (provider) => !context.vcsBotIdentities.includes(provider),
       );
       if (missingBotIdentities.length > 0) {
-        const variables = missingBotIdentities.map((provider) =>
-          provider === "github" ? "GITHUB_BOT_LOGIN" : "GITLAB_BOT_LOGIN",
-        );
-        const label = missingBotIdentities[0] === "github" ? "GitHub" : "GitLab";
         return unavailable(
-          context.vcsProviders.length === 1
-            ? `Commented ${label} review triggers require ${variables[0]} (or VCS_BOT_LOGIN in a single-provider deployment) to prevent recursive bot reviews.`
-            : missingBotIdentities.length === 1
-              ? `Commented review triggers require a configured ${variables[0]} to prevent recursive bot reviews.`
-              : `Commented review triggers require configured ${variables.join(" and ")} values to prevent recursive bot reviews.`,
+          `Commented review triggers require a bot username for ${missingBotIdentities.join(", ")} to prevent recursive bot reviews. Configure it on the Integrations page.`,
         );
       }
     }
   }
   if (type === "call_llm") {
-    const explicitProvider: LlmProvider | undefined =
+    const provider: LlmProvider | undefined =
       params.provider === "claude" || params.provider === "codex"
         ? params.provider
         : undefined;
-    const explicitModel =
+    const model =
       typeof params.model === "string" && params.model.trim() !== ""
         ? params.model.trim()
         : undefined;
-    const runtimeProvider =
-      explicitModel === undefined
-        ? (explicitProvider ?? context.defaultAgent.provider)
-        : explicitProvider;
-    const requested = resolveLlmProvider(
-      explicitModel ?? context.defaultAgent.model,
-      runtimeProvider,
-    );
-    if (!context.llmProviders[requested]) {
-      return unavailable(
-        requested === "codex"
-          ? "Codex API credentials are not configured for Call LLM."
-          : "Claude API credentials are not configured for Call LLM.",
-      );
-    }
+    const issue = directLlmIssue("Call LLM", { provider, model }, context);
+    if (issue) return unavailable(issue);
   }
   if (agentBlocks.has(type)) {
     const requested =
@@ -194,11 +203,90 @@ function availabilityFor(
   return available;
 }
 
+/**
+ * Why a block that calls a model directly (with an API key, rather than
+ * through an agent's harness) cannot do so on this deployment, or null.
+ *
+ * Asked by `call_llm`, whose provider and model are its own parameters or the
+ * run's default. An integration block's `ctx.llm` has a rule of its own
+ * (`integration-llm.ts`), because it falls back to the other provider rather
+ * than fail. A credential an agent harness accepts is
+ * not always one a direct call does (a Claude OAuth token, which
+ * `llmProviders` leaves out), so a block offered without asking this would
+ * publish a workflow whose first model call is refused. With no model named,
+ * the run's default provider and model are the ones the call uses.
+ */
+function directLlmIssue(
+  label: string,
+  choice: { readonly provider?: LlmProvider; readonly model?: string },
+  context: WorkflowBlockRegistryContext,
+): string | null {
+  const runtimeProvider =
+    choice.model === undefined ? (choice.provider ?? context.defaultAgent.provider) : choice.provider;
+  const requested = resolveLlmProvider(choice.model ?? context.defaultAgent.model, runtimeProvider);
+  if (context.llmProviders[requested]) return null;
+  return requested === "codex"
+    ? `Codex API credentials are not configured for ${label}.`
+    : `Claude API credentials are not configured for ${label}.`;
+}
+
+/**
+ * Why a review trigger could never start a run, when none of its providers
+ * reports a review in any state it waits for; null when one does.
+ *
+ * Each provider's states come from its own manifest (`webhook.reviewStates`),
+ * so the sentence names the provider and what it does report: GitLab delivers
+ * a merge request note and nothing else, and a trigger waiting only for
+ * "changes_requested" there would sit silent with nothing on any screen.
+ */
+function unreportedReviewStatesIssue(
+  states: readonly string[],
+  providers: readonly string[],
+  context: WorkflowBlockRegistryContext,
+): string | null {
+  // Judged only against a manifest this build ships: a provider nothing is
+  // declared for is the providers check's business, above, not a silent "no".
+  const reported = providers.flatMap((provider) => {
+    const presence = context.integrations.byId.get(provider);
+    return presence ? [{ name: presence.name, states: presence.reviewStates }] : [];
+  });
+  if (states.length === 0 || reported.length === 0) return null;
+  if (reported.some((provider) => provider.states.some((state) => states.includes(state)))) {
+    return null;
+  }
+  const quoted = (list: readonly string[]) => list.map((state) => `"${state}"`).join(" or ");
+  const phrases = reported.map((provider) =>
+    provider.states.length > 0
+      ? `${provider.name} reports a review only as ${quoted(provider.states)}`
+      : `${provider.name} reports no reviews`,
+  );
+  return `${phrases.join("; ")}, so a trigger waiting for ${quoted(states)} would never start a run.`;
+}
+
+/**
+ * Whether core's own catalog owns this block type.
+ *
+ * A stored definition may name a type this build does not ship, because an
+ * integration was removed since it was published. Asking the catalog rather
+ * than trusting the type is what lets that node be answered instead of
+ * crashing a lookup that assumes every type is core's.
+ */
+function coreOwnsBlockType(type: WorkflowBlockType): boolean {
+  return Object.prototype.hasOwnProperty.call(blockContractDefinitions, type);
+}
+
 export function resolveWorkflowBlockContract(
   type: WorkflowBlockType,
   params: Record<string, WorkflowParamValue>,
   context: WorkflowBlockRegistryContext,
 ): WorkflowBlockContract {
+  if (!coreOwnsBlockType(type)) {
+    return integrationBlockContract(
+      type,
+      context.integrations,
+      availabilityFor(type, params, context),
+    );
+  }
   const definition = blockContractDefinitions[type];
   const catalog = BLOCK_CATALOG[type];
   const defaults = defaultsForContext(type, catalog.defaults, context);
@@ -226,11 +314,20 @@ export function resolveWorkflowBlockContract(
   };
 }
 
+/**
+ * Every block this deployment offers: core's catalog plus the blocks the
+ * integrations in this build contribute.
+ *
+ * An integration's block is listed whether or not it is usable, carrying its
+ * availability, because the palette is where an author learns that the block
+ * exists and what is missing. A build that ships no such integration lists
+ * none, so an author is never offered a block nothing here could run.
+ */
 export function buildWorkflowBlockRegistry(
   context: WorkflowBlockRegistryContext,
 ): Record<WorkflowBlockType, WorkflowBlockContract> {
-  return Object.fromEntries(
-    (Object.keys(blockContractDefinitions) as WorkflowBlockType[]).map((type) => [
+  return Object.fromEntries([
+    ...(Object.keys(blockContractDefinitions) as WorkflowBlockType[]).map((type) => [
       type,
       resolveWorkflowBlockContract(
         type,
@@ -238,22 +335,38 @@ export function buildWorkflowBlockRegistry(
         context,
       ),
     ]),
-  ) as Record<WorkflowBlockType, WorkflowBlockContract>;
+    ...integrationBlockContracts(context.integrations, (type, params) =>
+      availabilityFor(type, params, context),
+    ),
+  ]) as Record<WorkflowBlockType, WorkflowBlockContract>;
 }
 
+/**
+ * A block's defaults on this deployment.
+ *
+ * A review trigger starts on the shared default states unless no connected
+ * provider reports any of them. Then it starts on the states they do report:
+ * on a deployment whose only version control is GitLab, "changes_requested"
+ * would place a block that is refused the moment it lands.
+ */
 function defaultsForContext(
   type: WorkflowBlockType,
   defaults: Record<string, WorkflowParamValue>,
   context: WorkflowBlockRegistryContext,
 ): Record<string, WorkflowParamValue> {
-  if (
-    type === "trigger_pr_review" &&
-    !context.vcsProviders.includes("github") &&
-    context.vcsProviders.includes("gitlab")
-  ) {
-    return { ...defaults, providers: ["gitlab"], on: ["commented"] };
+  if (type !== "trigger_pr_review") return defaults;
+  const states = Array.isArray(defaults.on) ? defaults.on : [];
+  const reported = [
+    ...new Set(
+      context.vcsProviders.flatMap(
+        (provider) => context.integrations.byId.get(provider)?.reviewStates ?? [],
+      ),
+    ),
+  ];
+  if (reported.length === 0 || states.some((state) => reported.includes(state as string))) {
+    return defaults;
   }
-  return defaults;
+  return { ...defaults, on: reported };
 }
 
 /**

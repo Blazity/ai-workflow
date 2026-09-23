@@ -8,13 +8,13 @@ import {
 } from "../../sandbox/repo-workspace.js";
 
 interface FixCommitRef extends Record<string, JsonValue> {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   sha: string;
 }
 
 export interface FixConflictRef extends Record<string, JsonValue> {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   files: string[];
 }

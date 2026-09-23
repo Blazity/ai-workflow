@@ -60,9 +60,18 @@ vi.mock("../../../../services/auth/request-context.js", () => ({
     throw error;
   },
 }));
-vi.mock("../../../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({ runRegistry: {} }),
-}));
+// A deployment with no issue tracker connected, which is legitimate since S12
+// and must still be able to stop a run: the cancel moves a ticket back only
+// when there is a board to move it on. The adapters are built the way
+// `createAdapters` builds them, so a route that read the throwing getter would
+// answer 500 here.
+vi.mock("../../../../engine/support/adapters.js", async (importOriginal) => {
+  const { adaptersFor } = await import("../../../../test-support/issue-tracker.js");
+  return {
+    ...(await importOriginal<typeof import("../../../../engine/support/adapters.js")>()),
+    createAdapters: () => adaptersFor("not_connected", { runRegistry: {} }),
+  };
+});
 vi.mock("../../../../engine/pre-pr-checks/store.js", () => ({
   dashboardUserLabel: vi.fn(async () => "Operator"),
 }));

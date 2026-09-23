@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 
 type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 type ProfileRouteContext = { params: Promise<{ id: string }> };
@@ -43,7 +44,7 @@ async function forward(
       headers: { "cache-control": "no-store" },
     });
   } catch (error) {
-    if (isWorkerTimeoutError(error)) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json(
         { error: "Worker request timed out" },
         { status: 504, headers: { "cache-control": "no-store" } },
@@ -51,12 +52,6 @@ async function forward(
     }
     throw error;
   }
-}
-
-function isWorkerTimeoutError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; name?: unknown };
-  return candidate.name === "TimeoutError" || candidate.code === 23;
 }
 
 function jsonMutation(

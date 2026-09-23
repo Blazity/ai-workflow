@@ -143,7 +143,7 @@ test("all v2 comment and notification prose fields use canonical value authoring
       },
     },
     {
-      type: "send_slack_message",
+      type: "send_message",
       params: {
         message: "{{data:steps.entry.output.ticketKey}}",
         sendOn: "always",

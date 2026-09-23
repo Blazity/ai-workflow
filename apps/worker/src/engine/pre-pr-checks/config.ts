@@ -1,5 +1,6 @@
 import {
   findExtendsCycle,
+  repositoryCatalogProviderSchema,
   repositoryScriptGroupNameSchema,
   sortedGroupNames,
 } from "@shared/contracts";
@@ -8,7 +9,7 @@ import { z } from "zod";
 // Repository check configuration is consumed directly by engine blocks.
 
 interface PrePrCheckRepositoryConfig {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   /**
    * Provisioning commands run before this repository's checks: toolchain
@@ -31,7 +32,7 @@ export const prePrCheckConfigSchema = z
     repositories: z.array(
       z
         .object({
-          provider: z.enum(["github", "gitlab"]),
+          provider: repositoryCatalogProviderSchema,
           repoPath: z.string().trim().min(1),
           // No .min(1): a repository without provisioning is the normal case,
           // and every config stored before this field omits the key entirely.
@@ -76,7 +77,7 @@ interface RepoScriptsGroupConfig {
 }
 
 export interface RepoScriptsRepositoryConfig {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string; // trimmed, min 1
   setup?: string[]; // default []
   env?: string[]; // default []; NAMES of worker env vars, each /^[A-Z][A-Z0-9_]*$/
@@ -129,7 +130,7 @@ const repoScriptsGroupsSchema = z
     message: "groups must contain at least one entry",
   });
 
-const repoScriptsProviderSchema = z.enum(["github", "gitlab"]);
+const repoScriptsProviderSchema = repositoryCatalogProviderSchema;
 const repoScriptsRepoPathSchema = z.string().trim().min(1);
 const repoScriptsSetupSchema = z.array(repoScriptsCommandSchema).default([]);
 const repoScriptsTimeoutMinutesSchema = z.number().int().min(1);

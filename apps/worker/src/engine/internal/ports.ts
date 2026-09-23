@@ -4,15 +4,13 @@ export async function loadEnvironmentPort() {
     get env() {
       return environment.env;
     },
-    get getConfiguredVcsProviders() {
-      return environment.getConfiguredVcsProviders;
-    },
   };
 }
 
 export async function loadAdaptersPort() {
   const { createAdapters } = await import("../support/adapters.js");
-  return { createAdapters };
+  const { issueTrackerIfConnected, issueTrackerOrThrow } = await import("../support/connected-issue-tracker.js");
+  return { createAdapters, issueTrackerIfConnected, issueTrackerOrThrow };
 }
 
 export async function loadActiveRunOwnerPort() {

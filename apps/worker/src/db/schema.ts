@@ -4,6 +4,7 @@ export * from "./schema/agent-visibility.js";
 export * from "./schema/definitions.js";
 export * from "./schema/dispatch.js";
 export * from "./schema/harness.js";
+export * from "./schema/integrations.js";
 export * from "./schema/mcp.js";
 export * from "./schema/post-pr.js";
 export * from "./schema/pre-pr.js";

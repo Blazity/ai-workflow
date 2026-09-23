@@ -23,6 +23,9 @@ import {
 } from "../services/mcp/index.js";
 import { getRequestSettingsSnapshot } from "../services/settings/index.js";
 import { getRequestRepositoryCatalogSnapshot } from "../services/repository-catalog/index.js";
+import { connectedDeploymentIntegrations } from "../services/workflow-definitions/block-contracts.js";
+import { readCapabilityOverview } from "../services/capabilities/index.js";
+import { knownSecretValues } from "../services/integrations/index.js";
 import {
   betterAuthBaseUrl,
   mcpSettings,
@@ -192,10 +195,15 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
 
   const server = createMcpServer({
     services,
-    adapters: createAdapters(),
+    adapters: await createAdapters(),
     actor,
     settings,
     loadRepositoryCatalog: () => getRequestRepositoryCatalogSnapshot(event),
+    // The connected read, named here where a reader can see that this call may
+    // touch a database. The tools take the value.
+    loadDeploymentIntegrations: () => connectedDeploymentIntegrations(),
+    loadCapabilityOverview: (deployment) => readCapabilityOverview(deployment),
+    loadKnownSecrets: () => knownSecretValues(),
     requestId,
     traceId: requestId,
     now: () => new Date(),

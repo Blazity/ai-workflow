@@ -16,6 +16,7 @@ import type {
   BlockOutput,
   ExecutionErrorCategory,
   ExecutionErrorShape,
+  RunFailureCode,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
 import {
@@ -135,6 +136,8 @@ export function executionError(
     diagnostic?: AgentProtocolDiagnostic;
     /** Captured output and structured provider errors to classify and surface. */
     evidence?: FailureEvidence;
+    /** The machine-readable cause, for the few failures that have one. */
+    failureCode?: RunFailureCode;
   } = {},
 ): Extract<BlockExecutionResult, { kind: "execution_error" }> {
   const category = options.category ?? "unknown";
@@ -153,6 +156,7 @@ export function executionError(
       detail,
       ...(options.diagnostic ? { diagnostic: options.diagnostic } : {}),
       ...(options.phase ? { phase: options.phase } : {}),
+      ...(options.failureCode ? { failureCode: options.failureCode } : {}),
     },
   };
 }

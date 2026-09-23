@@ -14,8 +14,9 @@ import type {
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
 import {
-  BLOCK_TYPE_SPECS,
+  isStorableWorkflowBlockType,
   isHarnessProfileReference,
+  repositoryCatalogProviderSchema,
   isSafeWorkflowInputName,
   isV2AgentBlockType,
   isWorkflowAddressablePathSegment,
@@ -36,8 +37,9 @@ const bindingInputName = z.custom<string>(
   { message: "Input name contains an empty or unsafe path segment." },
 );
 
-const vcsProviders = z.enum(["github", "gitlab"]);
-export const vcsProviderSelection = z.array(vcsProviders).min(1);
+// A provider is an integration id, by the catalog's one rule.
+const vcsProviders = repositoryCatalogProviderSchema;
+export const vcsProviderSelection = z.array(vcsProviders);
 
 const executionBudgetsSchema = z
   .object({
@@ -49,7 +51,7 @@ const executionBudgetsSchema = z
 
 const MAX_PINNED_REPOSITORIES = 8;
 
-// At least one slash, more allowed for nested GitLab group paths. Stricter than
+// At least one slash, with more allowed for nested provider paths. Stricter than
 // REPO_PATH_RE in the worker's lib/repo-allowlist.ts: this also rejects inner
 // whitespace, which neither provider permits in a path. Duplicated rather than
 // imported on purpose, because repo-allowlist.ts pulls in the pino logger and
@@ -288,12 +290,13 @@ export const v2BranchConfigurationSchema = z
 const workflowDefinitionV2NodeSchema = z
   .object({
     id: nodeId,
-    type: z.custom<WorkflowBlockType>(
-      (type) =>
-        typeof type === "string" &&
-        Object.prototype.hasOwnProperty.call(BLOCK_TYPE_SPECS, type),
-      { message: "Unknown workflow block type." },
-    ),
+    // A core block type, or one an integration contributes. Whether this
+    // build can actually run it is the engine's question, answered by name in
+    // the block's contract; refusing it here would make a definition published
+    // while the integration existed unreadable rather than unrunnable.
+    type: z.custom<WorkflowBlockType>((type) => isStorableWorkflowBlockType(type), {
+      message: "Unknown workflow block type.",
+    }),
     name: z.string().optional(),
     x: coordinate,
     y: coordinate,

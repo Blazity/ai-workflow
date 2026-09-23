@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React, { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { installTestDom } from "./test-dom";
 import { Switch } from "./switch";
 
@@ -54,4 +55,13 @@ test("Switch toggles by click, Space, and Enter", () => {
     container.remove();
     dom.restore();
   }
+});
+
+// Red when: the switch's hit area is only as tall as its 18 px track (QA),
+// below the 24 px minimum target size.
+test("the switch is at least 24 px tall to hit, whatever its track", () => {
+  const html = renderToStaticMarkup(
+    <Switch checked onCheckedChange={() => {}} aria-label="Let workflows use Demo" />,
+  );
+  assert.match(html, /role="switch"[^>]*class="[^"]*min-h-\[24px\]/);
 });

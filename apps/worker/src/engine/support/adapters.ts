@@ -1,22 +1,37 @@
 import type { VcsProviderKind } from "@shared/contracts";
-import { env } from "../../infra/vcs-config.js";
-import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
-import { ChatSDKAdapter } from "../../adapters/messaging/chatsdk.js";
-import { NoopMessagingAdapter } from "../../adapters/messaging/noop.js";
 import { createConnectedPostgresRunRegistry } from "../../db/repositories/active-runs.js";
+import {
+  resolveActiveIssueTracker,
+  type ResolvedIssueTracker,
+} from "./issue-tracker-runtime.js";
 import { createRepositoryVCS } from "./vcs-runtime.js";
-import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../../adapters/vcs/types.js";
-import type { MessagingAdapter } from "../../adapters/messaging/types.js";
+import type { MessagingSender } from "../../adapters/messaging/types.js";
+import type { IntegrationConnectionPin } from "@shared/contracts";
+import { messagingSender } from "./messaging.js";
 import type {
   RunRegistryAdapter,
   ThreadStore,
 } from "../../adapters/run-registry/types.js";
 
 export interface Adapters {
-  issueTracker: IssueTrackerAdapter;
+  /**
+   * The deployment's issue tracker, or the refusal (nothing connected, two
+   * connected and none selected, settings unreadable) with its reason.
+   *
+   * Data rather than a getter that throws, because no tracker is a state a
+   * deployment is allowed to be in (D9), and what it means depends on the
+   * caller: a manual dispatch of a ticket refuses, a pull request dispatch
+   * never needed one, the live run list titles its rows by subject key instead.
+   * A getter made every caller "cannot work without one" by default, and the
+   * ones that could were found one incident at a time. The type makes each
+   * caller say which it is: `issueTrackerIfConnected` for work that is
+   * optional, `issueTrackerOrThrow` for work that is not
+   * (`connected-issue-tracker.ts`).
+   */
+  issueTrackerResolution: ResolvedIssueTracker;
   vcs: VCSAdapter;
-  messaging: MessagingAdapter;
+  messaging: MessagingSender;
   runRegistry: RunRegistryAdapter & ThreadStore;
 }
 
@@ -52,7 +67,6 @@ const vcsWithoutRepository: VCSAdapter = {
   postPRComment: refuseWithoutRepository,
   getCheckRunResults: refuseWithoutRepository,
   getPRConflictStatus: refuseWithoutRepository,
-  getPRHeadSha: refuseWithoutRepository,
   findPR: refuseWithoutRepository,
   getBranchSha: refuseWithoutRepository,
   getBranchShaIfExists: refuseWithoutRepository,
@@ -60,31 +74,66 @@ const vcsWithoutRepository: VCSAdapter = {
   // Present and refusing rather than absent: a caller that checks for this
   // optional method would otherwise quietly take its "provider cannot do it"
   // path and never learn that it forgot to name a repository.
-  getLatestCheckRuns: refuseWithoutRepository,
   listReviewThreads: refuseWithoutRepository,
   settleReviewThread: refuseWithoutRepository,
   postRunFailureNote: refuseWithoutRepository,
 };
 
-export function createAdapters(vcsTarget?: VcsAdapterTarget): Adapters {
+/**
+ * ASYNCHRONOUS since S12, and the reason is worth keeping.
+ *
+ * The issue tracker used to be constructed here from environment variables, so
+ * this could be synchronous. It is an integration's connection now, and
+ * reading a connection is a database read. The alternative was a proxy that
+ * resolved on first use, which would have kept every caller unchanged at the
+ * cost of making the eighteen "can this tracker do X" checks in core answer
+ * yes for a tracker that cannot: see `issue-tracker-runtime.ts`.
+ *
+ * A deployment with no usable tracker gets adapters all the same, with the
+ * refusal in `issueTrackerResolution`, and that matters because no tracker is
+ * a legitimate state now. Most callers of this function want the run registry,
+ * the VCS adapter or the messaging sender and never touch the tracker; throwing
+ * here would take the run list, the capacity snapshot and every notification
+ * down with the tracker. This is NOT the proxy the paragraph above rejects:
+ * there is no tracker object to inspect until a caller has one, so a "can this
+ * tracker do X" check never answers for a tracker that cannot do it.
+ */
+export async function createAdapters(
+  vcsTarget?: VcsAdapterTarget,
+  /**
+   * What the run recorded about its integrations when it started. Given, the
+   * messaging adapter refuses to deliver through a provider that moved under
+   * the run; omitted, it follows the deployment as it is now, which is what a
+   * notification wants.
+   */
+  integrationPins?: readonly IntegrationConnectionPin[],
+): Promise<Adapters> {
   const runRegistry = createConnectedPostgresRunRegistry();
   let vcs: VCSAdapter | undefined;
-  const messaging: MessagingAdapter =
-    env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID
-      ? new ChatSDKAdapter({
-          slackToken: env.CHAT_SDK_SLACK_TOKEN,
-          channelId: env.CHAT_SDK_CHANNEL_ID,
-          botName: env.CHAT_SDK_BOT_NAME,
-          jiraBaseUrl: env.JIRA_BASE_URL,
-          threadStore: runRegistry,
-        })
-      : new NoopMessagingAdapter();
-  const adapters = {
-    issueTracker: new JiraAdapter({
-      baseUrl: env.JIRA_BASE_URL,
-      apiToken: env.JIRA_API_TOKEN,
-      projectKey: env.JIRA_PROJECT_KEY,
+  // Which provider carries a message is the deployment's answer, read at each
+  // call rather than here: disabling an integration is the kill switch an admin
+  // reaches for, and an adapter built once would keep posting for as long as
+  // this process lived.
+  const messaging = messagingSender(integrationPins);
+  // The resolution answers a refusal for the states it knows about (nothing
+  // connected, two connected, settings unreadable). An UNEXPECTED throw is a
+  // different thing, and before this it left `createAdapters` entirely: the
+  // poller calls this before its first phase, so a module that failed to load
+  // inside the resolution killed the whole tick rather than the ticket phases.
+  // It lands on the same answer as every other refusal now, carrying what
+  // threw, so a caller that never touches the tracker is unaffected and one
+  // that does is told.
+  const tracker = await resolveActiveIssueTracker(integrationPins).catch(
+    (error): ResolvedIssueTracker => ({
+      ok: false,
+      refusal: "unreadable",
+      reason: `This deployment's issue tracker could not be resolved (${
+        error instanceof Error ? error.message : String(error)
+      }).`,
     }),
+  );
+  const adapters = {
+    issueTrackerResolution: tracker,
     get vcs() {
       // No target, no adapter. Every production reader of this getter builds
       // its adapters from a pull request or a repository it is already holding
@@ -100,6 +149,7 @@ export function createAdapters(vcsTarget?: VcsAdapterTarget): Adapters {
         provider: target.provider,
         repoPath: target.repoPath,
         baseBranch: target.baseBranch,
+        integrationPins,
       });
       return vcs;
     },

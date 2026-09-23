@@ -42,6 +42,7 @@ import {
   type V2StepsRecord,
 } from "@shared/workflow-graph";
 import { SCHEDULER_DEPENDENCIES } from "../../engine/definition/scheduler-dependencies.js";
+import { MESSAGING_CONNECTED } from "../../engine/definition/messaging-deployment.fixture.js";
 
 /**
  * Turns a workflow definition into an executable specification. The scenario
@@ -148,9 +149,8 @@ const SNAPSHOT_REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-scenario" },
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const SNAPSHOT_CONTRACT_RESOLVER = createWorkflowBlockContractResolver(

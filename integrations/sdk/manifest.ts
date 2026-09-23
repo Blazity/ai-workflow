@@ -1,0 +1,501 @@
+import type { z } from "zod";
+import type {
+  BlockUiHints,
+  WorkflowBlockAdditionalInputContract,
+  WorkflowBlockInputContract,
+  WorkflowParamValue,
+  WorkflowValueSchema,
+} from "@shared/contracts";
+import type { ProvidedCapabilityId } from "./capabilities";
+
+/**
+ * The manifest is what core may know about an integration without running any
+ * of its code: the editor, the dashboard, the health page and the Workflow
+ * DevKit's flow bundle all read it. It is plain data, so a manifest file
+ * imports only this package and never a Node module.
+ */
+export interface IntegrationManifest {
+  /**
+   * Lowercase letters and digits, starting with a letter, 3 to 32 long:
+   * `jira`, `slack`. It names the package (`@integrations/<id>`), the webhook
+   * URL (`/webhooks/<id>`) and the screen (`/integrations/<id>`), and it
+   * prefixes every block type. Words core already uses are refused; see
+   * `RESERVED_INTEGRATION_IDS`.
+   */
+  readonly id: string;
+  /** Display name on the card, the palette group and the sidebar. */
+  readonly name: string;
+  /** One line: what this is, for someone deciding whether to connect it. */
+  readonly description: string;
+  readonly docsUrl?: string;
+  readonly connection: IntegrationConnection;
+  /**
+   * Operator settings this integration reads: behaviour an admin decides, as
+   * opposed to what it takes to reach the provider (see `IntegrationSetting`).
+   */
+  readonly settings?: readonly IntegrationSetting[];
+  /** The capabilities this integration can serve. Each needs an adapter in the runtime. */
+  readonly capabilities: readonly ProvidedCapabilityId[];
+  /** How this provider's repository paths and links are shaped, for a `vcs` integration. */
+  readonly repositories?: IntegrationRepositoryShape;
+  /**
+   * What this integration's webhook reports, as data, so core can check a
+   * workflow against it without running the integration.
+   */
+  readonly webhook?: IntegrationWebhookManifest;
+  readonly blocks: readonly IntegrationBlockManifest[];
+  /** Screens of its own, shown as tabs next to the core Connection tab. */
+  readonly pages: readonly IntegrationPage[];
+  /** At least one. Each needs a probe in the runtime. */
+  readonly health: readonly IntegrationHealthCheck[];
+  /**
+   * Whether this integration needs a handle created once per run and shared by
+   * every use of it in that run (see `run-state.ts`). Declaring it requires
+   * `beginRun` in the runtime, and it is what tells core to create the state
+   * at the run's first use of this integration: an integration that does not
+   * declare it is never asked for one.
+   */
+  readonly runState?: boolean;
+}
+
+export interface IntegrationConnection {
+  readonly fields: readonly ConnectionField[];
+  /**
+   * This integration needs nothing configured to work: it is usable on every
+   * deployment where it is enabled, with or without its optional fields.
+   *
+   * Explicit, because the alternative is silent. Core treats a connection
+   * whose every field is optional as complete from the start, so without this
+   * flag a manifest that forgot to mark a field required would be Connected
+   * on every deployment, and a memory integration like that would replace the
+   * built-in store everywhere. Conformance therefore requires at least one
+   * required field unless this is `true`, and refuses it beside a required
+   * field, which would be a contradiction.
+   */
+  readonly connectionless?: true;
+}
+
+/**
+ * The two facts about a provider's repositories that core cannot work out and
+ * cannot do without.
+ *
+ * Both exist because core used to branch on the name `github` for them, in
+ * three places: whether a pasted link belongs to this provider, where a
+ * repository path ends inside that link, and whether an operator's
+ * `owner/name` is well formed. A fourth provider would have had to be added to
+ * each branch, which is exactly the shape this contract exists to remove.
+ *
+ * A provider that declares neither is treated as the general case: any host,
+ * and a path that may nest.
+ */
+export interface IntegrationRepositoryShape {
+  /**
+   * The public host whose links name this provider, lowercase and without a
+   * scheme (`github.com`). Omitted by a provider that is self-hosted, whose
+   * host an admin configures as a connection field instead: core reads that
+   * field's default the same way.
+   */
+  readonly host?: string;
+  /**
+   * Whether a repository path may be deeper than `owner/name`. GitLab groups
+   * nest, so a path there is two segments or more and a link has to be cut at
+   * the first segment that starts a file or a ref. GitHub's never nest, so the
+   * path is exactly the first two segments whatever follows them.
+   */
+  readonly nestedPaths?: boolean;
+  /**
+   * What this provider calls a change request, and how a person references
+   * one. Core used to know that GitLab says `MR !12` where GitHub says
+   * `PR #12`; on GitLab `#12` names issue 12, so the wrong prefix points at
+   * something else. Omitted means `PR` and `#`.
+   *
+   * Core reads it in one place, `changeRequestNaming` in
+   * `@integrations/registry`: the dashboard's links call it, and core stamps
+   * its answer on every pull request it hands a messaging integration
+   * (`RunPullRequest.reference`), so a chat message and the run view name one
+   * change request the same way.
+   */
+  readonly changeRequest?: IntegrationChangeRequestShape;
+}
+
+/** How one provider's change requests are named and linked. */
+export interface IntegrationChangeRequestShape {
+  /** What a person calls one: `PR`, `MR`. */
+  readonly noun: string;
+  /** The character a reference to one starts with: `#`, `!`. */
+  readonly referencePrefix: string;
+  /**
+   * A path segment every link to one carries, such as `/-/merge_requests/`.
+   * It names a change request recorded with its link and no provider this
+   * build ships: every gate run, every run from before the provider was
+   * stored, and a row whose provider was since removed. Omit it when the
+   * provider's links have no path of their own; such a row then reads as
+   * `PR` and `#`.
+   */
+  readonly linkSegment?: string;
+}
+
+/** How a version-control provider reports a review. */
+export type VcsReviewState = "changes_requested" | "commented";
+
+export interface IntegrationWebhookManifest {
+  /**
+   * For a `vcs` integration: the states its webhook reports a review in. A
+   * review trigger that waits only for states none of its providers report
+   * would never start a run, so core refuses it and quotes this list. GitLab
+   * delivers a merge request note and nothing else, so it reports only
+   * `commented`. Omitted means the webhook reports no review at all.
+   */
+  readonly reviewStates?: readonly VcsReviewState[];
+  /**
+   * The connection fields this webhook reads, when that is fewer than the
+   * whole connection.
+   *
+   * Core serves `/webhooks/<id>` while the integration is enabled and these
+   * fields have values in the active source, even when the rest of the
+   * connection is incomplete or its test failed, and the webhook's
+   * `ctx.connection` then holds exactly these fields, each present. Slack's
+   * slash command is the case: it verifies with the signing secret and answers
+   * through Slack's `response_url`, so a deployment that registered only the
+   * command needs no bot token and no channel.
+   *
+   * Omitted means the webhook needs the whole connection, Connected: a
+   * webhook that goes on to call the provider (a tracker reading the ticket, a
+   * VCS reading the pull request) must not be served by half a connection.
+   */
+  readonly requires?: readonly string[];
+  /**
+   * What this webhook answers, as the person who set it up calls it:
+   * `/ai-workflow slash command`. Required with `requires`, because that is
+   * when the integration's card has to say it is answered while the rest of
+   * the integration is not (or refused while the rest is Connected).
+   */
+  readonly label?: string;
+}
+
+/**
+ * One operator setting: behaviour an admin decides, such as who may run a
+ * chat command, as opposed to what it takes to reach the provider.
+ *
+ * It is not a connection field, and the difference is what happens when it
+ * changes. A connection value belongs to one source (environment or stored)
+ * and a run pins it, so editing one stops runs in flight with `reconfigured`
+ * and switching the source replaces it. A setting is stored once for the
+ * deployment, the same whichever source the connection uses, and it is read
+ * when it is used and never pinned: adding a colleague to an allowlist changes
+ * nothing for a run already posting.
+ *
+ * Core stores, validates, versions and shows it with every other setting (the
+ * dashboard Settings page, the MCP `settings.*` tools, the settings history),
+ * under the key `integrationSettingKey` derives: `SLACK_ALLOWED_USER_IDS` for
+ * Slack's `allowedUserIds`. Integration code reads it as `ctx.settings.<key>`,
+ * on the context its webhook receives, read when the request arrives.
+ *
+ * One kind today, a list of strings, because that is what the one setting an
+ * integration has needs. A switch, a number or a single value is added the day
+ * an integration reads one, with the rule for reading its variable.
+ */
+export interface IntegrationSetting {
+  /** The value's key in `ctx.settings`, in camelCase. */
+  readonly key: string;
+  /** What it decides and what an empty value means, for the Settings page,
+   *  which puts the integration's name in front of it: say "User ids", not
+   *  "Slack user ids". */
+  readonly description: string;
+  readonly type: "string-list";
+  /** What it holds while nobody stored a value and `env` is unset. */
+  readonly default: readonly string[];
+  /**
+   * A variable read while nothing is stored, for a setting that was an
+   * environment variable before it was a setting, so a deployment that set it
+   * keeps its value with nothing to import. A stored value shadows it. The
+   * list is read as comma separated, each entry trimmed, empties dropped.
+   */
+  readonly env?: string;
+}
+
+/**
+ * The key an integration's setting is stored and served under: the id and the
+ * key in UPPER_SNAKE_CASE, joined, so `slack` and `allowedUserIds` are
+ * `SLACK_ALLOWED_USER_IDS`. The id prefix keeps two integrations apart, and an
+ * id has no underscore, so the prefix cannot be read two ways.
+ */
+export function integrationSettingKey(integrationId: string, key: string): string {
+  const words = key.replace(/([a-z0-9])([A-Z])/gu, "$1_$2");
+  return `${integrationId}_${words}`.toUpperCase();
+}
+
+/**
+ * One value the integration needs to connect: a site URL, an account, a token.
+ *
+ * A connection has one source at a time, chosen per integration: the
+ * environment variables its fields name, or values an admin stored from the
+ * dashboard. Values never mix across the two. With nothing stored, the
+ * environment is the source when every required field has its variable set.
+ */
+export interface ConnectionField {
+  /** The value's key in `ctx.connection`, in camelCase. */
+  readonly key: string;
+  readonly label: string;
+  readonly description?: string;
+  /**
+   * The environment variable that carries the value when the environment is
+   * the source. Every field names one, so a deployment configured through its
+   * environment keeps working without anyone touching the dashboard.
+   */
+  readonly env: string;
+  /**
+   * A secret is write-only. It reaches this integration's own server code and
+   * nothing else: never an API response, an MCP result, the browser or a log
+   * line. It has no default and every field must state it, because a token
+   * shown back on a screen is the mistake this flag exists to prevent.
+   */
+  readonly secret: boolean;
+  /**
+   * Whether this value decides WHICH account, workspace or site the connection
+   * points at, rather than only proving who is calling.
+   *
+   * It changes nothing for a non-secret field, whose value a run already pins.
+   * It exists for a secret that carries both meanings: a Slack bot token names
+   * a workspace as much as it authenticates, so replacing it with a token for
+   * another workspace is a different connection, not a rotation, and a run that
+   * followed it would post into the wrong company's channels. Marking the field
+   * puts a digest of its value into what a run pins, so that swap stops the run
+   * with `reconfigured`.
+   *
+   * The cost is that rotating such a field also stops runs in flight. Prefer a
+   * non-secret field that names the account (a workspace id, a site URL) and
+   * leave the token unmarked; mark the secret only when the provider gives you
+   * nothing else to identify the account by.
+   */
+  readonly identity?: boolean;
+  /** Absent means required: the connection is incomplete without it. */
+  readonly optional?: boolean;
+  /**
+   * Optional in the environment and required in values stored from the
+   * dashboard. For a value deployments already run without, so a new rule on
+   * the environment would turn a working deployment Failing on the deploy,
+   * but whose absence breaks a whole path silently: without GitHub's or
+   * GitLab's webhook secret every delivery is refused while the card reads
+   * Connected. A save that leaves it empty is refused, naming the field.
+   */
+  readonly requiredWhenStored?: boolean;
+  /** Used when the source leaves the field unset. A secret has none. */
+  readonly default?: string;
+  /**
+   * How the value is checked and entered. `integer` reaches `ctx.connection`
+   * as a number and everything else as a string. `multiline` is text such as a
+   * PEM key, entered in a text area; the others are entered on one line. What
+   * each accepts is `connectionValueProblem`'s to say.
+   */
+  readonly format?: "text" | "multiline" | "url" | "integer";
+}
+
+/**
+ * Whether a field needs a value for the connection to be complete, read from
+ * the given source: not optional and without a default, or, in stored values,
+ * `requiredWhenStored`. The one rule the resolver, a save and the form use.
+ */
+export function connectionFieldRequired(
+  field: Pick<ConnectionField, "optional" | "default" | "requiredWhenStored">,
+  source: "environment" | "stored",
+): boolean {
+  if (source === "stored" && field.requiredWhenStored === true) return true;
+  return field.optional !== true && field.default === undefined;
+}
+
+/** Why a value cannot be what its field's `format` says it is. */
+export type ConnectionValueProblem = "line_break" | "not_a_url" | "not_an_integer";
+
+/**
+ * What is wrong with a value for its field, or null when nothing is: the one
+ * definition of what a field's `format` (and being secret) allows. Core applies
+ * it to every value it resolves or saves, and conformance to a manifest's
+ * defaults.
+ *
+ * It refuses ONLY WHAT COULD NEVER HAVE WORKED. A value that works today is
+ * running on some deployment, and a rule that refuses it turns that
+ * integration Failing on the deploy that brings the rule, with nobody having
+ * changed anything. So:
+ *
+ * - `url`: an address a request can go to, http or https. The URL parser drops
+ *   tabs and line breaks inside an address, as `fetch` does, so those pass.
+ * - `integer`: whatever `Number()` reads as a whole number that is not
+ *   negative ("123", "+123", "123.0", "1e3", "0x7b"), which is exactly what
+ *   core hands the integration, and what `z.coerce.number()` accepted before
+ *   this rule existed. A GitHub client id where the App id belongs is not.
+ * - a secret that is one line (anything but `multiline`) holds no line break
+ *   inside it: it goes into a header, which cannot carry one, or it is a
+ *   signing key the provider shows on one line.
+ * - anything else, nothing. A value that is never sent (a project key, a bot
+ *   login compared with an author) may hold a line break and still work, and
+ *   the one that does end up in a header is refused by `ctx.http` when sent.
+ */
+export function connectionValueProblem(
+  value: string,
+  field: Pick<ConnectionField, "format" | "secret">,
+): ConnectionValueProblem | null {
+  if (field.format === "url") return isWebAddress(value) ? null : "not_a_url";
+  if (field.format === "integer") return isWholeNumber(value) ? null : "not_an_integer";
+  if (field.secret && field.format !== "multiline" && /[\r\n]/u.test(value)) return "line_break";
+  return null;
+}
+
+function isWebAddress(value: string): boolean {
+  if (!URL.canParse(value)) return false;
+  const { protocol } = new URL(value);
+  return protocol === "https:" || protocol === "http:";
+}
+
+function isWholeNumber(value: string): boolean {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0;
+}
+
+/** A probe the health page runs against the active connection. */
+export interface IntegrationHealthCheck {
+  /** Unique within the integration; the runtime's probe has the same key. */
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  /**
+   * A failing critical check makes the integration's section on the health
+   * page Down; a failing check that is not critical makes it Degraded. Neither
+   * changes whether the integration is usable: that is the connection's status
+   * alone, so a probe never stops a run.
+   */
+  readonly critical: boolean;
+}
+
+/**
+ * A screen of the integration's own: one horizontal tab in its area, at
+ * `/integrations/<integration id>/<page id>`. The component is the one
+ * `dashboard.tsx` declares under the same id (`@integrations/host-ui`), and
+ * what it shows comes from the runtime's `api[<page id>]`.
+ */
+export interface IntegrationPage {
+  /** Lowercase words joined by hyphens. `connection` is the core tab and is refused. */
+  readonly id: string;
+  readonly label: string;
+  /**
+   * Dashboard paths this screen had before it moved into the integration's
+   * area, each one lowercase segment such as `/evals`. The dashboard answers
+   * each with a permanent redirect to this page, so bookmarks and links already
+   * posted keep working. Only a screen that moved out of core has any; a page
+   * written for the integration has none.
+   */
+  readonly legacyPaths?: readonly string[];
+}
+
+/**
+ * An integration block: a core block manifest (see `BlockManifest` in
+ * `@shared/contracts`) without the parts core decides for every integration
+ * block, plus what the block declares about its output and its needs.
+ *
+ * Core decides: the category (always an action), the palette group (the
+ * integration), and the execution (one step of the generic integration step).
+ * An integration block is exactly one step, so waiting for a person, looping
+ * or sleeping stays in core and is reached through a capability.
+ */
+export interface IntegrationBlockManifest {
+  /**
+   * `<integration id>_<name>` in snake_case, for example `slack_research`. It
+   * is the string stored in workflow definitions, so renaming it orphans them.
+   */
+  readonly type: string;
+  /** Parameters an author sets in the editor. Written with the `z` this package exports. */
+  readonly paramsSchema: z.ZodTypeAny;
+  readonly contract: {
+    /** Output ports; a block with one outcome has `["out"]`. */
+    readonly ports: readonly [string, ...string[]];
+    /** Whether an author may wire a failure path. */
+    readonly allowsFailurePort: boolean;
+  };
+  readonly ui: Omit<BlockUiHints, "group">;
+  readonly defaults?: Readonly<Record<string, WorkflowParamValue>>;
+  /** Values bound from upstream blocks, in the block catalog's type language. */
+  readonly inputs?: Readonly<Record<string, WorkflowBlockInputContract>>;
+  readonly additionalInputs?: readonly WorkflowBlockAdditionalInputContract[];
+  readonly output: IntegrationBlockOutput;
+  readonly requires?: IntegrationBlockRequirements;
+}
+
+export interface IntegrationBlockOutput {
+  /** Fields next to `status` that downstream blocks may bind. */
+  readonly properties: Readonly<Record<string, WorkflowValueSchema>>;
+  /** Fields always present when the block continues through a normal port. */
+  readonly required?: readonly string[];
+  /** Every value `status` can take; a branch downstream can test for each. */
+  readonly statusVariants: readonly [string, ...string[]];
+  /**
+   * Fields a published graph must read, for a block whose output is something
+   * the run has to act on rather than information it may use: a screen's
+   * verdict, say. Publishing refuses a graph in which no node reads one,
+   * naming the block, because a verdict nobody looks at lets the run carry on
+   * whatever it says. `status` or a key of `properties`.
+   */
+  readonly mustRead?: readonly string[];
+}
+
+/**
+ * What the block needs besides its own integration's connection. The editor
+ * offers the block only while each need is met, and the executor's context
+ * carries exactly these: a capability or `llm` the block did not declare is
+ * absent from its context type.
+ */
+export interface IntegrationBlockRequirements {
+  readonly capabilities?: readonly ProvidedCapabilityId[];
+  /** The block calls `ctx.llm`, so it needs a model core can call. */
+  readonly llm?: boolean;
+}
+
+/**
+ * Everything the runtime's types are built from is a literal: the id, each
+ * block type, each connection field key. A manifest that widened one of them,
+ * usually by annotating a block `: IntegrationBlockManifest` or by building
+ * the array elsewhere, would silently switch every later check off: a missing
+ * executor and a misspelled connection field would both compile. These types
+ * turn that into a refusal at the manifest, where the mistake is.
+ */
+type LiteralNames<M extends IntegrationManifest> = string extends M["id"]
+  ? "The integration id must be a literal, so write it in the manifest rather than through a widened type"
+  : string extends M["blocks"][number]["type"]
+    ? "Every block type must be a literal, so declare blocks with defineIntegrationBlock rather than annotating them : IntegrationBlockManifest"
+    : string extends M["connection"]["fields"][number]["key"]
+      ? "Every connection field key must be a literal, so write the fields in the manifest rather than through a widened type"
+      : M extends { readonly settings: readonly { readonly key: infer K }[] }
+        ? string extends K
+          ? "Every setting key must be a literal, so write the settings in the manifest rather than through a widened type"
+          : LiteralRequires<M>
+        : LiteralRequires<M>;
+
+type LiteralRequires<M extends IntegrationManifest> = M extends {
+  readonly webhook: { readonly requires: readonly (infer K)[] };
+}
+  ? string extends K
+    ? "Every field webhook.requires names must be a literal, so write the list in the manifest rather than through a widened type"
+    : unknown
+  : unknown;
+
+type LiteralBlockName<B extends IntegrationBlockManifest> = string extends B["type"]
+  ? "A block type must be a literal, so write it here rather than through a widened type"
+  : unknown;
+
+/**
+ * Declares an integration. Returns the manifest unchanged; the `const` type
+ * parameter keeps ids, field keys and block types as literals, which is what
+ * types the runtime against this manifest. Conformance, not this function,
+ * checks the values.
+ */
+export function defineIntegration<const M extends IntegrationManifest>(
+  manifest: M & LiteralNames<M>,
+): M {
+  return manifest;
+}
+
+/** Declares one block in its own file with the same literal inference. */
+export function defineIntegrationBlock<const B extends IntegrationBlockManifest>(
+  block: B & LiteralBlockName<B>,
+): B {
+  return block;
+}

@@ -12,7 +12,7 @@
 
 [runtime: Runtime data]
   ticket                           96  ticket ref=AIW-512  "Ticket"
-  attachments                     192  attachment ref=AIW-512  "Ticket attachments"
+  attachments                     187  attachment ref=AIW-512  "Ticket attachments"
   description                     143  ticket ref=AIW-512  "Ticket description"
   acceptance-criteria             104  ticket ref=AIW-512  "Acceptance criteria"
   comments                         13  ticket ref=AIW-512  "Ticket comments"
@@ -37,5 +37,5 @@
   repository-map-rest:1            60  repository_catalog ref=github:acme/docs  "Repository github:acme/docs"
   repository-map-closed           151  platform  "Every other repository"
   pre-sandbox:1                   179  pre_sandbox  "Pre-sandbox: Repositories left out"
-  repository-access-protocol     1646  platform  "Repository Access Protocol"
+  repository-access-protocol     1645  platform  "Repository Access Protocol"
   resolution-check                899  platform  "Resolution Check"

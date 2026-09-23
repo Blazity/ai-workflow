@@ -8,7 +8,11 @@
  * archived definition as absent.
  */
 import { defaultWorkflowDefinitionV2 } from "../../engine/definition/default.js";
-import { RETIRED_SCHEMA_MESSAGE, type SettingsSnapshot } from "@shared/contracts";
+import {
+  RETIRED_SCHEMA_MESSAGE,
+  type SettingsSnapshot,
+  type WorkflowDefinition,
+} from "@shared/contracts";
 import {
   buildWorkflowEditorOptions,
   fetchAvailableModels,
@@ -31,6 +35,7 @@ import {
 } from "../../engine/stored-definition-reads.js";
 import { readConnectedWorkflowDefinitionDraft } from "../../engine/definition-draft-read.js";
 import { blockContractsFor } from "./block-contracts.js";
+import type { DeploymentIntegrations } from "../../engine/definition/integration-availability.js";
 
 export interface WorkflowDefinitionsOverview {
   definitions: WorkflowDefinitionRow[];
@@ -46,6 +51,36 @@ export interface WorkflowDefinitionDetail {
   versionRows: WorkflowDefinitionVersionRow[];
 }
 
+export interface EnabledDeployedWorkflowDefinition {
+  id: number;
+  name: string;
+  /** The deployed version, whose graph `definition` is. */
+  version: number;
+  definition: WorkflowDefinition;
+}
+
+/**
+ * Enabled definitions and the exact immutable graph selected for new runs.
+ * Drafts, archived rows, disabled definitions and retired deployments do not
+ * belong in a change-impact warning about work this deployment can start.
+ */
+export async function readEnabledDeployedWorkflowDefinitions(): Promise<
+  EnabledDeployedWorkflowDefinition[]
+> {
+  const rows = (await listConnectedWorkflowDefinitions()).filter(
+    (row) => row.enabled && row.deployedVersion !== null && row.deployedSchema === "v2",
+  );
+  const deployed = await Promise.all(
+    rows.map((row) => readConnectedDeployedWorkflowDefinitionVersion(row.id)),
+  );
+  return rows.flatMap((row, index) => {
+    const version = deployed[index];
+    return version?.schema === "v2"
+      ? [{ id: row.id, name: row.name, version: row.deployedVersion!, definition: version.definition }]
+      : [];
+  });
+}
+
 /**
  * Everything the editor needs before it can show anything: the definitions, the
  * choices a block may offer, and the two seeds (templates and the default) a
@@ -55,13 +90,18 @@ export interface WorkflowDefinitionDetail {
  */
 export async function readWorkflowDefinitionsOverview(
   settings: SettingsSnapshot,
+  /** Taken, not read: the palette carries every integration's blocks and says
+   *  which are usable, and the route names where that state came from. */
+  integrations: DeploymentIntegrations,
 ): Promise<WorkflowDefinitionsOverview> {
   const agentKind = defaultBuiltinHarnessProfile().harness.provider;
   const storedDefinitions = await listConnectedWorkflowDefinitions();
-  const [models, ticketStatuses, profileReference, deployments] = await Promise.all([
+  const [models, ticketStatuses, profileReference, blockContracts, deployments] =
+    await Promise.all([
     fetchAvailableModels(),
     fetchTicketStatuses(),
     currentSystemHarnessProfileReference(),
+    blockContractsFor(undefined, integrations),
     Promise.all(storedDefinitions.map((row) =>
       row.deployedVersion === null
         ? null
@@ -89,7 +129,7 @@ export async function readWorkflowDefinitionsOverview(
       settings,
       models,
       ticketStatuses,
-      blockContractsFor().blockRegistry(),
+      blockContracts.blockRegistry(),
     ),
   };
 }

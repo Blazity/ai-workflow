@@ -25,7 +25,7 @@ import {
 
 /** Would this dispatch start, and what would it start against? No run, no
  *  claim, no ticket transition. */
-export function preflightTriggerDispatch(input: {
+export async function preflightTriggerDispatch(input: {
   definitionId: number;
   triggerNodeId: string;
   dispatchInput: ManualDispatchInput;
@@ -33,7 +33,7 @@ export function preflightTriggerDispatch(input: {
   repositoryCatalog: RepositoryCatalogSnapshot;
 }): Promise<ManualDispatchPreflightResponse> {
   return preflightConnectedManualWorkflow({
-    adapters: createAdapters(),
+    adapters: await createAdapters(),
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.dispatchInput,
@@ -57,7 +57,7 @@ export async function dispatchTriggerManually(input: {
     userId: input.actorId,
   });
   return dispatchConnectedManualWorkflow({
-    adapters: createAdapters(),
+    adapters: await createAdapters(),
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     request: input.request,

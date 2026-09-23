@@ -43,7 +43,7 @@ export function serializeRepositoryCatalogEntry(
   return {
     id: row.id,
     ...(scriptGroupCount === undefined ? {} : { scriptGroupCount }),
-    provider: row.provider === "gitlab" ? "gitlab" : "github",
+    provider: row.provider,
     path: row.path,
     displayName: row.displayName,
     defaultBranch: row.defaultBranch,

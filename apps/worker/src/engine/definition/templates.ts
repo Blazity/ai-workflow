@@ -179,11 +179,10 @@ function reviewFixAfterPrDefinition(
       column: 0,
       row: 0,
       configuration: {
-        providers: ["github", "gitlab"],
+        providers: [],
         scope: "workflow_owned",
         checkNames: ["CI"],
-        githubAppSlugs: ["github-actions"],
-        gitlabPipelineSources: ["merge_request_event"],
+        trustedProducers: [],
       },
     },
     {
@@ -193,8 +192,13 @@ function reviewFixAfterPrDefinition(
       column: 0,
       row: 1,
       configuration: {
-        providers: ["github"],
-        on: ["changes_requested"],
+        // Every provider, like the other triggers in this template: pinning one
+        // made the template useless on a deployment that ships another, and the
+        // scope below is what actually narrows this trigger.
+        providers: [],
+        // Both states, because GitLab reports a review only as a comment: a
+        // template waiting for "request changes" alone never fires there.
+        on: ["changes_requested", "commented"],
         scope: "workflow_owned",
       },
     },
@@ -536,7 +540,7 @@ function webhookTicketTriageDefinition(
     },
     {
       id: "notify",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Notify team",
       column: 5,
       row: 1,
@@ -547,7 +551,7 @@ function webhookTicketTriageDefinition(
     },
     {
       id: "notify-no-code",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Notify team (no code change)",
       column: 4,
       row: 0,
@@ -632,12 +636,12 @@ function supportInvestigationDefinition(
     {
       id: "investigate",
       type: "investigate",
-      name: "Gather Jira and Slack evidence",
+      name: "Gather ticket and chat evidence",
       column: 1,
       configuration: {
-        providers: ["jira", "slack"],
-        slackChannels: ["C_SUPPORT"],
-        slackLookbackDays: 30,
+        sources: ["issue_tracker", "chat"],
+        chatChannels: ["C_SUPPORT"],
+        chatLookbackDays: 30,
         maxResults: 10,
       },
     },
@@ -754,7 +758,7 @@ function supportInvestigationDefinition(
     },
     {
       id: "notify-code",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Notify approved fix",
       column: 12,
       row: -1,
@@ -774,7 +778,7 @@ function supportInvestigationDefinition(
     },
     {
       id: "notify-non-code",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Share non-code summary",
       column: 5,
       row: 1,
@@ -1034,7 +1038,7 @@ function reviewedTicketDefinition(
     },
     {
       id: "exhausted-message",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Report unresolved review findings",
       column: 8,
       row: 2,
@@ -1099,7 +1103,7 @@ function reviewedTicketDefinition(
  * The failure check text is FIXED, not bound to the review summary.
  *
  * `complete_pr_check` details reaches GitHub as a check-run TITLE sliced to 200
- * characters, plain text with no markdown, and GitLab as a commit-status
+ * characters, plain text with no markdown, and providers with a status
  * description clamped to 255. The review summary is markdown, is as long as the
  * findings make it, and opens with agent-authored material, so through that clamp
  * a client read a truncated fragment of it as the whole verdict. The review itself
@@ -1125,7 +1129,7 @@ function postPrReviewDefinition(
       name: "PR ready for review",
       column: 0,
       row: -1,
-      configuration: { providers: ["github", "gitlab"], scope: "any" },
+      configuration: { providers: [], scope: "any" },
     },
     {
       id: "trigger-updated",
@@ -1133,7 +1137,7 @@ function postPrReviewDefinition(
       name: "PR updated",
       column: 0,
       row: 1,
-      configuration: { providers: ["github", "gitlab"], scope: "any" },
+      configuration: { providers: [], scope: "any" },
     },
     {
       id: "create-check",
@@ -1289,7 +1293,7 @@ function postPrAutofixDefinition(
       column: 0,
       row: -1,
       configuration: {
-        providers: ["github", "gitlab"],
+        providers: [],
         scope: "workflow_owned",
       },
     },
@@ -1300,7 +1304,7 @@ function postPrAutofixDefinition(
       column: 0,
       row: 1,
       configuration: {
-        providers: ["github", "gitlab"],
+        providers: [],
         scope: "workflow_owned",
       },
     },
@@ -1421,7 +1425,7 @@ function postPrAutofixDefinition(
     ),
     {
       id: "exhausted-message",
-      type: "send_slack_message",
+      type: "send_message",
       name: "Report unresolved review findings",
       column: 8,
       row: 1,
@@ -1563,7 +1567,7 @@ export function workflowDefinitionTemplates({
       id: "support-investigation",
       name: "Support investigation (Zendesk + Sentry)",
       description:
-        "Normalizes Zendesk and Sentry webhooks, gathers Jira and Slack evidence, routes non-code cases to a response summary, and gates approved code fixes before workspace preparation.",
+        "Normalizes Zendesk and Sentry webhooks, gathers issue tracker and chat evidence, routes non-code cases to a response summary, and gates approved code fixes before workspace preparation.",
       definition: supportInvestigationDefinition(provider, profileReference),
     },
   ];

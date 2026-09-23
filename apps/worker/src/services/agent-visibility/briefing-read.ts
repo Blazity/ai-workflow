@@ -78,6 +78,7 @@ import {
   type AgentVisibilityPage,
   type AgentVisibilityUnreadable,
 } from "./pages.js";
+import { knownSecretValues } from "../integrations/index.js";
 import { serveSafeText } from "./serve-safe.js";
 
 /**
@@ -255,6 +256,10 @@ export interface BriefingReads {
   runSummary(runId: string): Promise<AgentBriefingRunSummary | null>;
   briefing(input: { runId: string; briefingId: number }): Promise<AgentBriefingRow | null>;
   text(sha256: string): Promise<string | null>;
+  /** Every secret the deployment knows, which everything served is redacted
+   *  with. Throws when the integration settings cannot be read, and the read
+   *  serves nothing rather than text redacted with part of the set. */
+  knownSecrets(): Promise<string[]>;
 }
 
 export function briefingReadsOf(db: Db): BriefingReads {
@@ -265,6 +270,7 @@ export function briefingReadsOf(db: Db): BriefingReads {
     runSummary: (runId) => readAgentBriefingRunSummary(db, runId),
     briefing: (input) => readAgentBriefingIndexRow(db, input),
     text: (sha256) => readAgentBriefingText(db, sha256),
+    knownSecrets: () => knownSecretValues({ db }),
   };
 }
 
@@ -275,6 +281,7 @@ export const connectedBriefingReads: BriefingReads = {
   runSummary: readConnectedAgentBriefingRunSummary,
   briefing: readConnectedAgentBriefingIndexRow,
   text: readConnectedAgentBriefingText,
+  knownSecrets: () => knownSecretValues(),
 };
 
 /** Everything a read of this run needs before it reads anything of it. */
@@ -767,7 +774,7 @@ async function describeRunAttempts(
     reads.runSummary(input.runId),
   ]);
   const now = input.now ?? new Date();
-  const safe = serveSafeText();
+  const safe = serveSafeText(await reads.knownSecrets());
   const described = groupAttempts(overviews, attempts).map((entry, position) =>
     describeAttempt(entry, position, run, runSummary, now, safe),
   );

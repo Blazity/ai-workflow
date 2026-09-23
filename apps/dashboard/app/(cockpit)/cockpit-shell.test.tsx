@@ -47,6 +47,18 @@ let storedTweaks: string | null = null;
  *  navigates away from it. */
 let confirmAnswer = true;
 const confirmPrompts: string[] = [];
+/** The browser's history, as far as the Back guard reads it. */
+const history = {
+  state: { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: ["repositories"] } as unknown,
+  pushed: [] as Array<{ data: unknown; url: string | URL | null | undefined }>,
+  pushState(data: unknown, _unused: string, url?: string | URL | null) {
+    this.pushed.push({ data, url });
+    this.state = data;
+  },
+};
+const locationStub = { href: "http://localhost/repositories" };
+/** Capturing popstate listeners, the only kind the shell registers. */
+const popstateListeners = new Set<(event: Event) => void>();
 /** Every request the mounted tree made, so a guard that has to run BEFORE one
  *  can be shown to have done so. */
 const fetched: string[] = [];
@@ -68,11 +80,15 @@ const doc = {
     getItem: () => storedTweaks,
     setItem: () => {},
   },
-  addEventListener: (event: string, cb: () => void) => {
-    if (event === "focus") focusListeners.add(cb);
+  history,
+  location: locationStub,
+  addEventListener: (event: string, cb: (event: Event) => void) => {
+    if (event === "focus") focusListeners.add(cb as () => void);
+    if (event === "popstate") popstateListeners.add(cb);
   },
-  removeEventListener: (event: string, cb: () => void) => {
-    if (event === "focus") focusListeners.delete(cb);
+  removeEventListener: (event: string, cb: (event: Event) => void) => {
+    if (event === "focus") focusListeners.delete(cb as () => void);
+    if (event === "popstate") popstateListeners.delete(cb);
   },
   dispatchEvent: () => true,
   confirm: (message: string) => {
@@ -440,8 +456,12 @@ test("returning to the tab restores the refresh cycle, not a single refresh", (t
 // ── The LIVE badge ──────────────────────────────────────────────────────────
 
 test("health never polls and explains why the shared live control is disabled", (t) => {
+  // System health is a tab of the Settings area now. The shell used to read
+  // the first path segment and compare it to "health", which stopped matching
+  // the moment the screen moved, and started polling a screen whose every
+  // refresh contacts every configured provider. The path below is the real one.
   beginTest(t, { livePolling: true });
-  const { refreshes, root } = mountShell(t, "/health", <div>Health</div>);
+  const { refreshes, root } = mountShell(t, "/settings/health", <div>Health</div>);
 
   advance(60_000);
 
@@ -536,6 +556,54 @@ function makeDirty(root: ReactTestInstance): void {
     button.props.onClick();
   });
 }
+
+/**
+ * The browser's Back: the URL has already moved, then popstate reaches the
+ * capturing listeners, and the router only if none of them stopped it.
+ */
+function pressBrowserBack(): { reachedRouter: boolean } {
+  locationStub.href = "http://localhost/runs";
+  let stopped = false;
+  const event = { stopImmediatePropagation: () => { stopped = true; } } as unknown as Event;
+  act(() => {
+    for (const listener of popstateListeners) {
+      if (!stopped) listener(event);
+    }
+  });
+  return { reachedRouter: !stopped };
+}
+
+test("the browser's Back from an unsaved draft asks, and a no puts the screen's address back", (t) => {
+  // A phone's back gesture is the main way off a screen, and it threw a
+  // pasted token away with no word: only the in-page links asked.
+  locationStub.href = "http://localhost/repositories";
+  history.pushed.length = 0;
+  const { root } = draftScreen(t);
+  makeDirty(root);
+
+  confirmAnswer = false;
+  const back = pressBrowserBack();
+
+  assert.deepEqual(confirmPrompts, ["Discard unsaved changes?"]);
+  assert.equal(back.reachedRouter, false, "the router never saw the Back");
+  assert.deepEqual(
+    history.pushed.map((entry) => entry.url),
+    ["http://localhost/repositories"],
+    "the screen's own address is put back",
+  );
+});
+
+test("the browser's Back from a clean screen is the router's, and nobody is asked", (t) => {
+  locationStub.href = "http://localhost/repositories";
+  history.pushed.length = 0;
+  draftScreen(t);
+
+  const back = pressBrowserBack();
+
+  assert.deepEqual(confirmPrompts, []);
+  assert.equal(back.reachedRouter, true);
+  assert.deepEqual(history.pushed, []);
+});
 
 test("navigating away from a clean screen is not interrupted", (t) => {
   const { root, pushes } = draftScreen(t);
@@ -715,4 +783,50 @@ test("a settings form with nothing typed in it never interrupts a navigation", (
   navigateTo(root, "runs");
   assert.deepEqual(pushes, ["/runs"]);
   assert.deepEqual(confirmPrompts, []);
+});
+
+// ── The sidebar's own freshness ─────────────────────────────────────────────
+
+test("a sidebar refresh refused over unsaved work says so instead of going quiet", (t) => {
+  // The sidebar carries one entry per connected integration, so a colleague
+  // connecting one has to reach this tab. The refresh that would deliver it
+  // re-runs every server component on screen and empties a form somebody is
+  // half way through, so it is refused while the cockpit holds unsaved work.
+  // A refused refresh with nothing said leaves a sidebar that is quietly
+  // wrong, which is worse than one that flickers.
+  beginTest(t);
+  const { refreshes, root } = mountShell(t, "/settings", <div>Settings</div>);
+  t.after(resetUnsavedSettings);
+  act(() => {
+    trackUnsavedSettings("settings:agent", true);
+  });
+
+  // Coming back to a tab twice in a few seconds is one arrival, so the signal
+  // is only due once the gap has passed.
+  advance(20_000);
+  const before = refreshes.length;
+  act(() => {
+    for (const listener of Array.from(focusListeners)) listener();
+  });
+  assert.equal(refreshes.length, before, "a dirty form must not be refreshed away");
+  assert.equal(
+    root.findAll((node) => node.props["data-stale-nav-notice"] !== undefined).length,
+    2,
+    "the desktop topbar and the mobile header both say the sidebar is behind",
+  );
+
+  // With nothing to lose, the refresh happens and there is nothing to say.
+  act(() => {
+    trackUnsavedSettings("settings:agent", false);
+  });
+  const { refreshes: clean, root: cleanRoot } = mountShell(t, "/runs", <div>Runs</div>);
+  advance(20_000);
+  act(() => {
+    for (const listener of Array.from(focusListeners)) listener();
+  });
+  assert.ok(clean.length > 0, "a cockpit with nothing typed takes the refresh");
+  assert.equal(
+    cleanRoot.findAll((node) => node.props["data-stale-nav-notice"] !== undefined).length,
+    0,
+  );
 });

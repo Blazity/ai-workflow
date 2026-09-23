@@ -10,8 +10,10 @@ import type {
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
+import { integrationManifest } from "@integrations/registry";
 import { apiClient } from "@/lib/api/client";
 import { SetupOverview } from "@/app/(cockpit)/settings/setup-overview";
+import { STALE_SCAN_AFTER_HOURS } from "@/lib/settings/overview";
 import { SettingsCadenceNotice } from "@/app/(cockpit)/settings/settings-cadence-notice";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, isOlderThanHours } from "@/lib/date-time";
@@ -36,19 +38,66 @@ const GROUPS: Array<{
     label: "Platform extensions",
     description: "Optional integrations that add notifications, traces, and remote tools.",
   },
+  {
+    id: "integrations",
+    label: "Integrations",
+    description:
+      "Providers connected on this deployment. Each brings its own connection and its own checks.",
+  },
 ];
 
+/**
+ * The sections to draw, in this order, from the scan alone.
+ *
+ * A group with nothing in it is left out: a deployment that connected no
+ * integration should read exactly as it did before there were any. A group this
+ * build does not know still gets a section, because a stored scan may come from
+ * a build that shipped one, and a row nobody drew is a row nobody can fix.
+ */
+function sectionsOf(integrations: SystemHealthIntegration[]): Array<{
+  id: string;
+  label: string;
+  description: string;
+  rows: SystemHealthIntegration[];
+}> {
+  const known = GROUPS.map((group) => ({
+    ...group,
+    rows: integrations.filter((integration) => integration.group === group.id),
+  }));
+  const knownIds = new Set(GROUPS.map((group) => group.id));
+  const unknown = [
+    ...new Set(
+      integrations
+        .map((integration) => integration.group)
+        .filter((group) => !knownIds.has(group)),
+    ),
+  ].map((group) => ({
+    id: group,
+    label: titleCase(group),
+    description: "Reported by the build that ran this scan.",
+    rows: integrations.filter((integration) => integration.group === group),
+  }));
+  return [...known, ...unknown].filter((section) => section.rows.length > 0);
+}
+
+function titleCase(value: string): string {
+  const words = value.replace(/[-_]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * What a CORE section is, in core's own words.
+ *
+ * An integration is not in here and cannot be: it describes itself in its
+ * manifest, and a line written here would be core's opinion of a package it
+ * knows nothing about, kept up to date by nobody.
+ */
 const DESCRIPTIONS: Record<string, string> = {
   database: "Stores workflow state, ownership, traces, and dashboard data.",
-  jira: "Authenticates the account, checks the project, and verifies the webhook registration.",
-  github: "Checks App auth, repository access, webhook configuration, and the latest delivery separately.",
-  gitlab: "Checks API access, projects, and sends a real test delivery through the project webhook.",
   agent: "Authenticates the active provider and checks the configured model when possible.",
   "dashboard-auth": "Presence-checks auth settings; this request already proves session enforcement.",
   sso: "Checks OIDC discovery; client credentials are presence-checked.",
   email: "Checks Resend sender readiness and the delivery-status webhook registration.",
-  slack: "Checks bot auth, real message delivery to the configured channel, and recent slash-command signatures.",
-  arthur: "Reads the task API used by traces, evaluations, and guardrails.",
   mcp: "Checks that the enabled remote tool contract contains tools.",
   "custom-webhooks": "Aggregates active custom endpoints, deliveries, and rejection counters.",
 };
@@ -92,15 +141,33 @@ const STATUS: Record<
     dot: "bg-neutral-500",
     badge: "border-neutral-300 bg-neutral-100 text-neutral-700",
   },
+  // Somebody turned this off on purpose. It is not an outage and not a gap in
+  // the configuration, so it carries no warning colour.
+  disabled: {
+    label: "Disabled",
+    dot: "bg-neutral-400",
+    badge: "border-neutral-300 bg-neutral-100 text-neutral-600",
+  },
 };
 
+/** A scan from another build may carry a word this one has no entry for. The
+ *  screen says so instead of throwing while somebody reads it mid-incident. */
+const UNKNOWN_STATUS = {
+  label: "Unknown",
+  dot: "bg-neutral-400",
+  badge: "border-neutral-300 bg-neutral-100 text-neutral-600",
+};
+
+function statusOf(mode: SystemHealthMode): { label: string; dot: string; badge: string } {
+  return STATUS[mode] ?? UNKNOWN_STATUS;
+}
+
 const SCAN_TIMEOUT_MS = 15_000;
-const STALE_SCAN_AFTER_HOURS = 24;
 
 /**
  * Nothing is fetched on mount and nothing polls: the only request this screen
  * ever makes is the POST behind the Scan button, and the worker runs every
- * probe (including the GitLab test delivery) inside that one request.
+ * probe inside that one request.
  */
 export function HealthScreen({
   initialData = null,
@@ -208,7 +275,7 @@ export function HealthScreen({
 
       {scanIsStale && data ? (
         <div role="note" className="mb-5 rounded-sm border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-neutral-800">
-          This scan is older than 24 hours. Run a new scan before treating these results as current.
+          {`This scan is older than ${STALE_SCAN_AFTER_HOURS} hours. Run a new scan before treating these results as current.`}
         </div>
       ) : null}
 
@@ -233,40 +300,38 @@ export function HealthScreen({
         </div>
       ) : (
         <div className="grid gap-4">
-          {GROUPS.map((group) => {
-            const integrations = data.integrations.filter(
-              (integration) => integration.group === group.id,
-            );
-            return (
-              <section
-                key={group.id}
-                aria-labelledby={`health-group-${group.id}`}
-                className="overflow-hidden rounded-[4px] border border-neutral-200 bg-panel"
-              >
-                <div className="border-b border-neutral-200 bg-neutral-100 px-4 py-3">
-                  <h2
-                    id={`health-group-${group.id}`}
-                    className="font-display text-[15px] font-semibold tracking-[-0.01em] text-neutral-900"
-                  >
-                    {group.label}
-                  </h2>
-                  <p className="mt-0.5 font-body text-[11px] leading-4 text-neutral-600">
-                    {group.description}
-                  </p>
-                </div>
-                <ol className="m-0 list-none p-0">
-                  {integrations.map((integration, index) => (
-                    <HealthRow
-                      key={integration.id}
-                      integration={integration}
-                      first={index === 0}
-                      last={index === integrations.length - 1}
-                    />
-                  ))}
-                </ol>
-              </section>
-            );
-          })}
+          {sectionsOf(data.integrations).map((group) => (
+            <section
+              key={group.id}
+              aria-labelledby={`health-group-${group.id}`}
+              className="overflow-hidden rounded-[4px] border border-neutral-200 bg-panel"
+            >
+              <div className="border-b border-neutral-200 bg-neutral-100 px-4 py-3">
+                <h2
+                  id={`health-group-${group.id}`}
+                  className="font-display text-[15px] font-semibold tracking-[-0.01em] text-neutral-900"
+                >
+                  {group.label}
+                </h2>
+                <p className="mt-0.5 font-body text-[11px] leading-4 text-neutral-600">
+                  {group.description}
+                </p>
+              </div>
+              <ol className="m-0 list-none p-0">
+                {group.rows.map((integration, index) => (
+                  <HealthRow
+                    // Group and id: an integration owns its id, and a build that
+                    // shipped one called `github` would otherwise collide with
+                    // core's own row.
+                    key={`${integration.group}:${integration.id}`}
+                    integration={integration}
+                    first={index === 0}
+                    last={index === group.rows.length - 1}
+                  />
+                ))}
+              </ol>
+            </section>
+          ))}
         </div>
       )}
     </div>
@@ -295,7 +360,7 @@ function HealthRow({
   last: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const status = STATUS[integration.mode];
+  const status = statusOf(integration.mode);
   const checks = integration.checks ?? [];
   // Variable names appear once: on the provider while collapsed, and on the
   // checks once expanded, unless every check needs the same set, in which case
@@ -325,8 +390,22 @@ function HealthRow({
             )}
           </div>
           <p className="mt-0.5 font-body text-[11px] leading-4 text-neutral-600">
-            {DESCRIPTIONS[integration.id] ?? "Deployment integration."}
+            {/* An integration describes itself in its manifest, and the scan
+                carries that line: core knows nothing about it to write here.
+                The registry answers for a scan that predates the manifest, so
+                a section stored by an older build reads as itself rather than
+                as "Deployment integration." the day its provider moved out of
+                core. Only then a core section's own line. */}
+            {integration.description ??
+              integrationManifest(integration.id)?.description ??
+              DESCRIPTIONS[integration.id] ??
+              "Deployment integration."}
           </p>
+          {reasonOf(integration) && (
+            <p className="mt-1 font-body text-[11px] leading-4 text-neutral-800">
+              {reasonOf(integration)}
+            </p>
+          )}
           {integration.ping && (
             <div className="mt-1 font-mono text-[9px] text-neutral-500">
               {integration.ping.latencyMs} ms
@@ -350,7 +429,9 @@ function HealthRow({
               onClick={() => setExpanded((value) => !value)}
               className="rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] text-neutral-700 hover:bg-app-bg"
             >
-              {expanded ? "Hide checks" : `${checks.length} checks`}
+              {expanded
+                ? "Hide checks"
+                : `${checks.length} ${checks.length === 1 ? "check" : "checks"}`}
             </Button>
           </div>
         </div>
@@ -380,7 +461,7 @@ function HealthCheckRow({
   check: SystemHealthCheck;
   showEnvVars: boolean;
 }) {
-  const status = STATUS[check.mode];
+  const status = statusOf(check.mode);
   return (
     <li className="grid gap-2 rounded-[3px] bg-app-bg px-3 py-2 sm:grid-cols-[minmax(180px,0.9fr)_minmax(220px,1.2fr)_auto] sm:items-start">
       <div>
@@ -427,6 +508,35 @@ function EnvVarChips({ names, panel = false }: { names: string[]; panel?: boolea
     </>
   );
 }
+
+/**
+ * The one sentence a row that is not healthy owes the person reading it: what
+ * happened, or what to do about it. It is the first check that carries one, so
+ * the reason comes from the scan and never from a rule written here.
+ */
+function reasonOf(integration: SystemHealthIntegration): string | undefined {
+  if (integration.mode === "live" || integration.mode === "configured") return undefined;
+  // The check that decided the row, which is not always one in the row's own
+  // mode: a Degraded integration is usually degraded because one of its checks
+  // is Down, and "Degraded" with no sentence leaves an operator nothing to do.
+  const worst = [...(integration.checks ?? [])]
+    .filter((check) => check.message && SEVERITY[check.mode] > 0)
+    .sort((left, right) => SEVERITY[right.mode] - SEVERITY[left.mode])[0];
+  return worst?.message;
+}
+
+/** How much a check's state asks of the person reading it. Zero means nothing
+ *  is wrong, so those checks never speak for a row. */
+const SEVERITY: Record<SystemHealthMode, number> = {
+  down: 5,
+  misconfigured: 4,
+  degraded: 3,
+  disabled: 2,
+  "not-configured": 1,
+  mock: 1,
+  live: 0,
+  configured: 0,
+};
 
 function sameSet(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;

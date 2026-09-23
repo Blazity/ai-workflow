@@ -1,0 +1,33 @@
+{
+  "name": "@integrations/host-ui",
+  "description": "The UI the host lends an integration's dashboard pages: a small set of presentational primitives built on the cockpit's own tokens, plus the contract a package uses to declare its pages. An integration imports this instead of the dashboard's internal @/components/ui, and the boundaries gate holds it to that.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"*.test.ts\" \"*.test.tsx\""
+  },
+  "dependencies": {
+    "@integrations/sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "react": "catalog:",
+    "react-test-renderer": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  }
+}

@@ -25,28 +25,28 @@ vi.mock("@vercel/sandbox", () => ({
   },
 }));
 vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({ teamId: "team" }) }));
+// What a provider hands a sandbox to push with. Each provider states its own
+// host and its own git user, which is the whole reason the publisher asks
+// rather than assuming: the two below authenticate a push differently.
 vi.mock("../engine/support/vcs-runtime.js", () => ({
-  createRepositoryVcsRuntime: vi.fn((target: { provider: "github" | "gitlab" }) =>
-    target.provider === "gitlab"
-      ? {
-          config: {
-            kind: "gitlab",
+  createRepositoryVcsRuntime: vi.fn((target: { provider: "github" | "gitlab" }) => ({
+    provider: target.provider,
+    repoPath: "repoPath" in target ? (target as { repoPath: string }).repoPath : "",
+    baseBranch: "",
+    vcs: { getBranchSha: mocks.getBranchSha, getPRHead: mocks.getPrHead },
+    credentials: async () =>
+      target.provider === "gitlab"
+        ? {
             host: "https://gitlab.com",
-            auth: { token: "glpat" },
-          },
-          getToken: async () => "gitlab-token",
-          vcs: { getBranchSha: mocks.getBranchSha, getPRHead: mocks.getPrHead },
-        }
-      : {
-          config: {
-            kind: "github",
+            authUser: "oauth2",
+            token: "gitlab-token",
+          }
+        : {
             host: "https://github.com",
-            auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
+            authUser: "x-access-token",
+            token: await mocks.getToken(),
           },
-          getToken: mocks.getToken,
-          vcs: { getBranchSha: mocks.getBranchSha, getPRHead: mocks.getPrHead },
-        },
-  ),
+  })),
 }));
 vi.mock("../infra/vcs-config.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
 vi.mock("../engine/support/adapters.js", () => ({
@@ -297,6 +297,32 @@ describe("trusted workspace publisher", () => {
       expect(result.repositories.map((repo) => repo.failureKind)).toEqual([undefined, undefined]);
       expect(result.repositories[0]).toMatchObject({ pushed: true, pushedHead: "after" });
       expect(result.repositories[1]).toMatchObject({ pushed: true, pushedHead: "after" });
+    });
+
+    // Gone, or no longer readable by this connection: asking again cannot
+    // change that, and a retry of this step redoes the sandbox, the clone and
+    // the bundle import. So the step returns, which the DevKit does not retry.
+    it("fails the pending repository as a preflight, once, when the source pull request cannot be read", async () => {
+      const { PullRequestUnreadableError } = await import("@integrations/sdk");
+      mocks.getPrHead.mockRejectedValue(new PullRequestUnreadableError("GitHub PR #7 cannot be read"));
+
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: twoRepos,
+        sourcePullRequest,
+        ...owner,
+      });
+
+      expect(mocks.getPrHead).toHaveBeenCalledOnce();
+      expect(result.repositories[1]).toMatchObject({
+        pushed: false,
+        failureKind: "preflight_failed",
+        error: "GitHub PR #7 cannot be read",
+      });
+      const pushes = mocks.publisherCommand.mock.calls.filter(([, args]) =>
+        (args as string[]).includes("push"),
+      );
+      expect(pushes).toEqual([]);
     });
 
     it("still refuses to publish when somebody else pushed to it", async () => {

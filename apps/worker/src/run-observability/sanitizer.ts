@@ -9,6 +9,7 @@ import type {
   WorkflowReplayLayoutSnapshot,
 } from "@shared/contracts";
 import { normalizeWorkflowDefinitionLayout } from "@shared/contracts";
+import { secretForms } from "./configured-secrets.js";
 
 export const REPLAY_FIELD_MAX_BYTES = 64 * 1024;
 export const REPLAY_ATTEMPT_MAX_BYTES = 256 * 1024;
@@ -411,11 +412,81 @@ export function redactConfiguredSecretsInText(
   secrets: readonly string[],
 ): string {
   return redactConfiguredSecrets(input, {
-    configuredSecrets: [...secrets].sort(
-      (left, right) => right.length - left.length,
-    ),
+    configuredSecrets: secretForms(secrets),
     redactions: {},
   });
+}
+
+/**
+ * Configured-secret redaction over a value that was already sanitized, for the
+ * step that writes or publishes what workflow scope built.
+ *
+ * Workflow scope can only redact with the environment's secrets: it cannot
+ * read a stored integration connection, and must not be handed one. So a value
+ * it built crosses into a step having missed every secret an admin stored in
+ * the dashboard, and the step applies the whole set (`knownSecretValues`)
+ * before the value reaches a table or a provider. Strings and object keys are
+ * redacted; everything else is kept as it is. Returns the same reference when
+ * nothing matched, so a clean value costs no copy.
+ */
+export function redactConfiguredSecretsInJson<T>(value: T, secrets: readonly string[]): T {
+  return redactJsonWith(value, {
+    configuredSecrets: secretForms(secrets),
+    redactions: {},
+  });
+}
+
+/**
+ * The same pass over a replay envelope, keeping its metadata true: the new
+ * redactions are counted beside the ones workflow scope made, and the stored
+ * size is measured again because a marker is not the length of what it hides.
+ */
+export function redactConfiguredSecretsInEnvelope(
+  envelope: ReplaySanitizedEnvelope,
+  secrets: readonly string[],
+): ReplaySanitizedEnvelope {
+  const context = {
+    configuredSecrets: secretForms(secrets),
+    redactions: {} as Partial<Record<ReplayRedactionClass, number>>,
+  };
+  const value = redactJsonWith(envelope.value, context);
+  const added = context.redactions.configured_secret ?? 0;
+  if (added === 0) return envelope;
+  const redactions = { ...envelope.metadata.redactions };
+  addRedaction(redactions, "configured_secret", added);
+  return {
+    value,
+    metadata: { ...envelope.metadata, redactions, storedBytes: jsonBytes(value) },
+  };
+}
+
+function redactJsonWith<T>(
+  value: T,
+  context: Pick<TraversalContext, "configuredSecrets" | "redactions">,
+): T {
+  if (context.configuredSecrets.length === 0) return value;
+  if (typeof value === "string") {
+    return redactConfiguredSecrets(value, context) as T;
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const output = value.map((item) => {
+      const next = redactJsonWith(item, context);
+      if (next !== item) changed = true;
+      return next;
+    });
+    return (changed ? output : value) as T;
+  }
+  if (value === null || typeof value !== "object" || !isPlainRecord(value)) return value;
+  let changed = false;
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const nextKey = redactConfiguredSecrets(key, context);
+    const nextItem = redactJsonWith(item, context);
+    if (nextKey !== key || nextItem !== item) changed = true;
+    output[nextKey] = nextItem;
+  }
+  return (changed ? output : value) as T;
 }
 
 function redactConfiguredSecrets(
@@ -940,9 +1011,7 @@ export function sanitizeReplayValue(
   options: SanitizeReplayValueOptions = {},
 ): ReplaySanitizedEnvelope {
   const context: TraversalContext = {
-    configuredSecrets: [...(options.secrets ?? [])].sort(
-      (left, right) => right.length - left.length,
-    ),
+    configuredSecrets: secretForms(options.secrets ?? []),
     maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
     maxNodes: options.maxNodes ?? DEFAULT_MAX_NODES,
     maxInputBytes: options.maxInputBytes ?? DEFAULT_MAX_INPUT_BYTES,

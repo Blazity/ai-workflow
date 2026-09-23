@@ -1,3 +1,4 @@
+import { INTEGRATION_ID } from "@shared/contracts";
 import { utf8Bytes } from "./content.js";
 
 /**
@@ -55,9 +56,10 @@ export const MAX_ROUTING_LABEL_CHARS = 100;
  * shaped like "..", a bare name, or anything that would not parse back as the
  * entry that was written. A label can never be read as a repository either,
  * because a label that matched this pattern would still be on the label side of
- * the last separator.
+ * the last separator. The provider half is an integration id, held to
+ * `INTEGRATION_ID` below rather than to a pattern of its own.
  */
-const REPOSITORY_PATTERN = /^(github|gitlab):([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)$/;
+const REPOSITORY_PATTERN = /^([^:]+):([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)$/;
 
 /**
  * Corroborating ticket identifiers, anchored at the end of the line. Kept to a
@@ -83,7 +85,7 @@ export interface RepoRoutingEntry {
   /** Ticket label, single-lined, trimmed and length-capped. Matched case
    *  insensitively, because trackers are not consistent about label case. */
   label: string;
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   /**
    * Distinct tickets whose human answer produced this exact label-to-repository
@@ -325,7 +327,7 @@ function routableRepository(
   value: string,
 ): Pick<RepoRoutingEntry, "provider" | "repoPath"> | null {
   const match = REPOSITORY_PATTERN.exec(value);
-  if (!match) return null;
+  if (!match || !INTEGRATION_ID.test(match[1]!)) return null;
   const repoPath = match[2]!;
   if (repoPath.split("/").some((segment) => segment === "." || segment === "..")) {
     return null;

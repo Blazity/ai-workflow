@@ -64,7 +64,7 @@ const LEGACY_VARIABLE_CASES: Array<[
   ["post_ticket_comment", { body: "{{ticket_title}}" }, "post_ticket_comment body contains an unresolved placeholder."],
   ["post_pr_comment", { body: "{{pr_url}}" }, "post_pr_comment body contains an unresolved placeholder."],
   ["complete_pr_check", { details: "{{run_id}}" }, "complete_pr_check details contains an unresolved placeholder."],
-  ["send_slack_message", { message: "{{pr_url}}" }, "send_slack_message message contains an unresolved placeholder."],
+  ["send_message", { message: "{{pr_url}}" }, "send_message message contains an unresolved placeholder."],
   ["human_question", { questions: ["Fine?", "Review {{plan_markdown}}?"] }, "human_question questions contains an unresolved placeholder."],
   ["call_llm", { prompt: "Use {{plan}}" }, "call_llm prompt contains an unresolved placeholder."],
   ["call_llm", { prompt: "Summarize.", system: "You work on {{unknown}}." }, "call_llm system contains an unresolved placeholder."],
@@ -199,6 +199,31 @@ describe("v2 prompt runtime boundaries", () => {
       // one pass, so the {{ticket_key}} inside the title stays as written.
       expect(resolveOpenPrTitle({}, {}, vars)).toBe(
         "[AIW-124] Rename {{ticket_key}} helper",
+      );
+    });
+  });
+
+  describe("the ticket link in a pull request body", () => {
+    it("shows the key without a link when the run has no link for its ticket", () => {
+      // A tracker that gives no links, or a run resumed across the deploy that
+      // moved the link onto the ticket snapshot: `[AIW-124]()` renders as a
+      // link to the pull request itself.
+      const vars = { ticket_key: "AIW-124", ticket_url: "", change_summary: "Renamed it." };
+      expect(resolveOpenPrBody({}, {}, vars)).toBe(
+        "**Ticket:** AIW-124\n\n## What changed\nRenamed it.",
+      );
+      expect(resolveOpenPrBody({ body: "See [AIW-124]() and [docs](https://docs.example)." }, {}, vars))
+        .toBe("See AIW-124 and [docs](https://docs.example).");
+    });
+
+    it("keeps the link when there is one", () => {
+      const vars = {
+        ticket_key: "AIW-124",
+        ticket_url: "https://tracker.example/t/AIW-124",
+        change_summary: "Renamed it.",
+      };
+      expect(resolveOpenPrBody({}, {}, vars)).toBe(
+        "**Ticket:** [AIW-124](https://tracker.example/t/AIW-124)\n\n## What changed\nRenamed it.",
       );
     });
   });

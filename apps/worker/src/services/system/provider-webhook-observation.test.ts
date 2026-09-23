@@ -6,20 +6,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@vercel/functions", () => ({ waitUntil: state.waitUntil }));
-vi.mock("../../infra/vcs-config.js", () => ({
-  env: {
-    GITHUB_WEBHOOK_SECRET: "github-secret",
-    GITLAB_WEBHOOK_SECRET: "gitlab-secret",
-    JIRA_WEBHOOK_SECRET: "jira-secret",
-    SLACK_SIGNING_SECRET: "slack-secret",
-    RESEND_WEBHOOK_SECRET: "resend-secret",
-  },
-}));
-vi.mock("./observations.js", () => ({
-  recordSystemHealthObservation: state.record,
-  systemHealthObservationScope: (secret: string | undefined) =>
-    `scope:${secret ?? "unconfigured"}`,
-}));
+vi.mock("./observations.js", () => ({ recordWebhookDelivery: state.record }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 
 const { observeProviderWebhook } = await import("./provider-webhook-observation.js");
@@ -32,18 +19,22 @@ describe("provider webhook health observations", () => {
 
   it("defers the database write outside the webhook response path", () => {
     expect(
-      observeProviderWebhook("github", "accepted", "deferred-test"),
+      observeProviderWebhook("email", "accepted", "deferred-test"),
     ).toBeUndefined();
     expect(state.record).toHaveBeenCalledOnce();
-    expect(state.record).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "scope:github-secret" }),
-    );
+    // The shared pair decides the check and the deployment scope, exactly as
+    // for an integration's webhook; nothing here derives one from a secret.
+    expect(state.record).toHaveBeenCalledWith({
+      integrationId: "email",
+      outcome: "accepted",
+      reason: "deferred-test",
+    });
     expect(state.waitUntil).toHaveBeenCalledOnce();
   });
 
   it("samples repeated unauthenticated failures instead of amplifying writes", () => {
-    observeProviderWebhook("gitlab", "rejected", "throttle-test");
-    observeProviderWebhook("gitlab", "rejected", "throttle-test");
+    observeProviderWebhook("email", "rejected", "throttle-test");
+    observeProviderWebhook("email", "rejected", "throttle-test");
 
     expect(state.record).toHaveBeenCalledOnce();
     expect(state.waitUntil).toHaveBeenCalledOnce();
@@ -55,7 +46,7 @@ describe("provider webhook health observations", () => {
     });
 
     expect(() =>
-      observeProviderWebhook("slack", "rejected", "failure-test"),
+      observeProviderWebhook("email", "rejected", "failure-test"),
     ).not.toThrow();
     expect(state.waitUntil).not.toHaveBeenCalled();
   });

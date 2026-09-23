@@ -16,6 +16,7 @@ import { agentBriefingTexts, agentBriefings, workflowRuns } from "../../db/schem
 import { createTestDb } from "../../db/test-db.js";
 import { captureSkippedSend } from "../../engine/agent-visibility/capture.js";
 import { noteAgentBriefingLoss } from "../../run-observability/agent-briefings.js";
+import { createVisibilityDetector } from "../../run-observability/visibility-detector.js";
 import { planTextBriefing } from "../../engine/agent-visibility/plan.js";
 import {
   briefingReadsOf,
@@ -698,6 +699,11 @@ describe("the attempts of a run", () => {
     const outcome = await captureSkippedSend(capture, "the wrapper could not be made executable", {
       db: stallsOnce(db),
       timeoutMs: 50,
+      // The stall under test is the write's. Left to the default, the skip path
+      // first reads the deployment's secret set, which on a machine with no
+      // database fails only after its own short retry, and that wait (not the
+      // stalled write) would be what the 50 ms budget measured.
+      sanitize: createVisibilityDetector({ secrets: [] }),
     });
 
     expect(outcome).toEqual({ outcome: "timed_out" });

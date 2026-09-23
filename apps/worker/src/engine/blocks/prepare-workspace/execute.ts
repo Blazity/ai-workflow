@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { repositoryCatalogProviderSchema } from "@shared/contracts";
 import type {
+  IntegrationConnectionPin,
   RunRepositoryAccess,
   SettingsSnapshot,
   WorkflowDefinitionNode,
@@ -18,6 +20,7 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../../sandbox/repo-workspace.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
+import { isIntegrationSettingsUnreadableError } from "../../helpers/integration-settings-unreadable.js";
 // Pure, contracts-only: a static import pulls in nothing a dynamic one would
 // have kept out, and the classifier is needed in catch blocks that are not
 // inside a step and cannot await an import without swallowing the error.
@@ -33,6 +36,8 @@ import { hydrateWorkspaceMemoryStep } from "../../steps/memory-steps.js";
 import { captureDefaultBranchFilesStep } from "../../steps/repo-memory-steps.js";
 import { seedRepoMemoryStep } from "../../steps/repo-seed-steps.js";
 import { invalidateWorkspaceGate } from "../../steps/workspace-gate.js";
+import { agentTracingRun } from "../../support/integration-run-state.js";
+import type { AgentTracingRun } from "../../support/integration-tracing.js";
 import { emitRepositoryWorkflowObservation } from "../../../run-observability/agent-observations.js";
 import {
   blockFetchPrContextsStep,
@@ -91,6 +96,7 @@ interface PreSandboxTicketContext {
   repositoryScope?: WorkflowRepositoryScope;
   repositoryAccess: RunRepositoryAccess;
   settings: SettingsSnapshot;
+  integrationPins?: readonly IntegrationConnectionPin[];
   /** The record, the policy and the actor this run decides its repositories
    *  with. All three or none: absent puts the whole selection on the path it
    *  took before the record existed. */
@@ -169,7 +175,7 @@ const approvedRepositoryScopeSchema = z.object({
   repositories: z
     .array(
       z.object({
-        provider: z.enum(["github", "gitlab"]),
+        provider: repositoryCatalogProviderSchema,
         repoPath: z.string().min(1),
         defaultBranch: z.string().min(1),
         researchBranch: z.string().min(1),
@@ -187,6 +193,7 @@ async function blockApprovedRepositoryScopeStep(
   scope: ApprovedRepositoryScope,
   pinnedScope: WorkflowRepositoryScope | null,
   repositories: RunRepositoryAccess,
+  integrationPins?: readonly IntegrationConnectionPin[],
 ): Promise<SelectedRepository[]> {
   "use step";
   const parsed = approvedRepositoryScopeSchema.safeParse(scope);
@@ -196,21 +203,22 @@ async function blockApprovedRepositoryScopeStep(
     );
   }
   scope = parsed.data;
-  const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
-  const { createRepositoryDirectoryForProviders, isRepositoryWithinPinnedScope } =
-    await import("../../../adapters/vcs/repository-directory.js");
-  const { createRepositoryVCS } = await import("../../support/vcs-runtime.js");
+  const { isRepositoryWithinPinnedScope } = await import(
+    "../../../adapters/vcs/repository-directory.js"
+  );
+  const { createRepositoryVCS, listVcsRepositories } = await import(
+    "../../support/vcs-runtime.js"
+  );
   const { filterRunRepositories, mayRunTouchRepository, repositoryNotEnabledMessage } =
     await import("../../support/repository-access.js");
   const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
     "../../../db/repositories/runs.js"
   );
-  const available = filterRunRepositories(
-    repositories,
-    await createRepositoryDirectoryForProviders(
-      getConfiguredVcsProviders(),
-    ).listRepositories(),
-  );
+  const listing = await listVcsRepositories({
+    neededProviders: new Set(scope.repositories.map((repository) => repository.provider)),
+    integrationPins,
+  });
+  const available = filterRunRepositories(repositories, listing.repositories);
   const byKey = new Map(
     available.map((repository) => [
       `${repository.provider}:${repository.repoPath.toLowerCase()}`,
@@ -266,6 +274,7 @@ async function blockApprovedRepositoryScopeStep(
         provider: current.provider,
         repoPath: current.repoPath,
         baseBranch: current.defaultBranch,
+        integrationPins,
       }).getBranchShaIfExists(approved.researchBranch);
     } catch (error) {
       throw new Error(
@@ -306,71 +315,35 @@ async function blockApprovedRepositoryScopeStep(
 }
 blockApprovedRepositoryScopeStep.maxRetries = 0;
 
-async function blockPrepareWorkspaceEnsureArthurTaskStep(
-  taskName: string,
-): Promise<string | null> {
-  "use step";
-  const { env } = await import("../../../infra/vcs-config.js");
-  if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) return null;
-
-  const { logger } = await import("../../../infra/logger.js");
-  const { ArthurClient } = await import("../../../sandbox/arthur-client.js");
-  const client = ArthurClient.fromTraceEndpoint(
-    env.GENAI_ENGINE_TRACE_ENDPOINT,
-    env.GENAI_ENGINE_API_KEY,
-  );
-  try {
-    const task = await client.ensureTaskForTicket(taskName);
-    logger.info({ taskId: task.id, taskName: task.name }, "arthur_task_created");
-    return task.id;
-  } catch (err) {
-    if (isRunControlError(err)) throw err;
-    logger.warn({ err: (err as Error).message, taskName }, "arthur_task_create_failed");
-    return null;
-  }
-}
-blockPrepareWorkspaceEnsureArthurTaskStep.maxRetries = 0;
-
-/** Ensure all sandboxes created by the run share its Arthur task when tracing
- * is configured, including repository-free Planning/Generic sandboxes. */
-export async function ensureArthurTask(
-  ctx: Parameters<BlockExecuteFn>[2],
-): Promise<string | null> {
-  if (ctx.arthur.taskId) return ctx.arthur.taskId;
-  const taskId = await blockPrepareWorkspaceEnsureArthurTaskStep(ctx.ticket.identifier);
-  ctx.arthur.taskId = taskId;
-  return taskId;
-}
-
 async function blockPrepareWorkspaceProvisionStep(
   subjectKey: string,
   ownerToken: string,
   branchName: string,
   selectedRepositories: WorkspaceRepositoryInput[],
-  arthurTaskId: string | null,
+  /** The run as its tracing providers see it, with their states. */
+  tracingRun: AgentTracingRun,
   requiredAgents: WorkspaceAgentRuntime[],
   access: "read" | "write",
   /** The run's job timeout, from the settings snapshot it started with. */
   jobTimeoutMs: number,
   checksCeilingMs: number,
+  integrationPins?: readonly import("@shared/contracts").IntegrationConnectionPin[],
 ): Promise<
   | { ok: true; sandboxId: string; workspaceManifest: WorkspaceManifest }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
+  /**
+   * This deployment's integration settings could not be read, before any
+   * sandbox existed. Ours, and a retry of the run is the fix; see
+   * `workspaceSettingsUnreadable`.
+   */
+  | { ok: false; settingsUnreadable: true }
 > {
   "use step";
   const { env } = await import("../../../infra/vcs-config.js");
   const { SandboxManager } = await import("../../../sandbox/manager.js");
   const { createAgentAdapter } = await import("../../../sandbox/agents/index.js");
   const { buildSandboxProviderConfigs } = await import("../../support/vcs-runtime.js");
-
-  const arthur =
-    env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
-      ? {
-          apiKey: env.GENAI_ENGINE_API_KEY,
-          taskId: arthurTaskId,
-          endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-        }
-      : undefined;
+  const { agentTracingPlans } = await import("../../support/integration-tracing.js");
 
   for (const { kind, runtime } of requiredAgents) {
     const spec = createAgentAdapter(kind, runtime?.cliSpec).cliSpec;
@@ -413,6 +386,7 @@ async function blockPrepareWorkspaceProvisionStep(
   }
 
   const configureOptsFor = async ({
+    kind,
     model,
     runtime,
   }: WorkspaceAgentRuntime) => {
@@ -422,7 +396,7 @@ async function blockPrepareWorkspaceProvisionStep(
         codexApiKey: env.CODEX_API_KEY,
         codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
         model,
-        arthur,
+        tracing: await agentTracingPlans({ harness: kind, run: tracingRun }),
       };
     }
     return {
@@ -446,10 +420,32 @@ async function blockPrepareWorkspaceProvisionStep(
     )),
   );
 
-  const manager = new SandboxManager({
-    providers: await buildSandboxProviderConfigs(
+  // Read before anything is provisioned, and inside this step on purpose: the
+  // configs carry the providers' credentials, which must never become a
+  // recorded step result, and this step creates a sandbox, so it is never
+  // retried. A read that failed is therefore answered here, as ours, rather
+  // than thrown out as a sandbox fault.
+  let providers: Awaited<ReturnType<typeof buildSandboxProviderConfigs>>;
+  try {
+    providers = await buildSandboxProviderConfigs(
       selectedRepositories.map((repo) => repo.provider),
-    ),
+      integrationPins,
+    );
+  } catch (error) {
+    const { IntegrationSettingsUnreadableError } = await import(
+      "../../../services/integrations/runtime.js"
+    );
+    if (!(error instanceof IntegrationSettingsUnreadableError)) throw error;
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn(
+      { subjectKey, err: error.message, reason: String(error.cause) },
+      "prepare_workspace_settings_unreadable",
+    );
+    return { ok: false, settingsUnreadable: true };
+  }
+
+  const manager = new SandboxManager({
+    providers,
     // The run's own budget plus the checks phase's, because the checks run in
     // THIS sandbox and no longer spend the run's duration. Sizing the lifetime
     // from JOB_TIMEOUT_MS alone would kill the sandbox under a batch that is
@@ -469,7 +465,7 @@ async function blockPrepareWorkspaceProvisionStep(
       {
         onCreated: async (sandboxId) => {
           const { createAdapters } = await import("../../support/adapters.js");
-          await createAdapters().runRegistry.registerSandbox(
+          await (await createAdapters()).runRegistry.registerSandbox(
             subjectKey,
             ownerToken,
             sandboxId,
@@ -511,7 +507,8 @@ blockPrepareWorkspaceProvisionStep.maxRetries = 0;
 async function blockInstallPromotedWorkspaceAgentsStep(
   sandboxId: string,
   requiredAgents: WorkspaceAgentRuntime[],
-  arthurTaskId: string | null,
+  /** The run as its tracing providers see it, with their states. */
+  tracingRun: AgentTracingRun,
 ): Promise<
   | { ok: true }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -527,15 +524,7 @@ async function blockInstallPromotedWorkspaceAgentsStep(
   const { isAgentRuntimeError } = await import(
     "../../../sandbox/agents/runtime-error.js"
   );
-
-  const arthur =
-    env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
-      ? {
-          apiKey: env.GENAI_ENGINE_API_KEY,
-          taskId: arthurTaskId,
-          endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-        }
-      : undefined;
+  const { agentTracingPlans } = await import("../../support/integration-tracing.js");
 
   try {
     const sandbox = await Sandbox.get({
@@ -569,7 +558,7 @@ async function blockInstallPromotedWorkspaceAgentsStep(
         codexApiKey: env.CODEX_API_KEY,
         codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
         model,
-        arthur,
+        tracing: await agentTracingPlans({ harness: kind, run: tracingRun }),
       });
     }
     return { ok: true };
@@ -597,7 +586,7 @@ async function blockPrepareWorkspaceRegisterSandboxStep(
 ): Promise<void> {
   "use step";
   const { createAdapters } = await import("../../support/adapters.js");
-  const { runRegistry } = createAdapters();
+  const { runRegistry } = await createAdapters();
   await runRegistry.registerSandbox(subjectKey, ownerToken, sandboxId);
 }
 
@@ -639,11 +628,11 @@ export function requiredAgentsForDefinition(input: {
 /**
  * prepare_workspace: select repositories (pre-sandbox phase for ticket entries,
  * the PR's repository for pr_trigger entries), provision read-only checkouts,
- * fetch PR contexts, ensure the run's Arthur task, provision one sandbox with
+ * fetch PR contexts, provision one sandbox with
  * every agent CLI the definition can need, and register it for cleanup.
  * Mutates ctx.sandboxId, ctx.workspaceManifest, ctx.selectedRepositories,
- * ctx.repositoryContexts, ctx.preSandboxAdditions, and ctx.arthur.taskId (see
- * the EngineCtx mutation contract).
+ * ctx.repositoryContexts and ctx.preSandboxAdditions (see the EngineCtx
+ * mutation contract).
  */
 /**
  * How long a sandbox that may host a check batch is allowed to live.
@@ -994,6 +983,7 @@ export async function ensureWorkspace(
         scope,
         ctx.repositoryScope ?? null,
         ctx.repositories,
+        ctx.integrationPins,
       );
       approvedBaselineByKey = new Map(
         scope.repositories.map((repository) => [
@@ -1011,6 +1001,7 @@ export async function ensureWorkspace(
         // and a retried step must not append to an append-only trail.
         {
           workScope: ctx.workScope ?? null,
+          integrationPins: ctx.integrationPins,
           ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
         },
       );
@@ -1131,6 +1122,7 @@ export async function ensureWorkspace(
         run: { branchName: ctx.branchName },
         repositoryAccess: ctx.repositories,
         settings: ctx.settings,
+        ...(ctx.integrationPins ? { integrationPins: ctx.integrationPins } : {}),
         ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
         // The record, its policy and this run's identity travel together. All
         // three or none: the selection decides nothing without a policy to
@@ -1323,6 +1315,7 @@ export async function ensureWorkspace(
     const repositoryContexts = await blockFetchPrContextsStep(
       selected,
       ctx.repositories,
+      { integrationPins: ctx.integrationPins },
     );
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
       (context) => {
@@ -1354,7 +1347,8 @@ export async function ensureWorkspace(
       },
     );
 
-    const arthurTaskId = await ensureArthurTask(ctx);
+    // No invocation: the workspace belongs to the run, not to one node.
+    const tracingRun = await agentTracingRun(ctx);
 
     const requiredAgents = requiredAgentsForDefinition({
       nodes: ctx.definitionNodes,
@@ -1377,7 +1371,7 @@ export async function ensureWorkspace(
       const installedAgents = await blockInstallPromotedWorkspaceAgentsStep(
         discoverySandboxId,
         requiredAgents,
-        arthurTaskId,
+        tracingRun,
       );
       if (!installedAgents.ok) {
         return agentProtocolExecutionError(installedAgents.failure);
@@ -1396,13 +1390,17 @@ export async function ensureWorkspace(
         ctx.entry.ownerToken,
         ctx.branchName,
         workspaceRepositories,
-        arthurTaskId,
+        tracingRun,
         requiredAgents,
         "read",
         ctx.settings.JOB_TIMEOUT_MS,
         checksCeilingMs,
       );
-      if (!provisioned.ok) return agentProtocolExecutionError(provisioned.failure);
+      if (!provisioned.ok) {
+        return "settingsUnreadable" in provisioned
+          ? workspaceSettingsUnreadable()
+          : agentProtocolExecutionError(provisioned.failure);
+      }
       ({ sandboxId, workspaceManifest } = provisioned);
     }
     // The manager registered this sandbox immediately after external creation,
@@ -1426,7 +1424,7 @@ export async function ensureWorkspace(
     // this guard keeps even a step-boundary error from failing the block, which
     // is already fully provisioned at this point.
     try {
-      await hydrateWorkspaceMemoryStep({
+      const hydrated = await hydrateWorkspaceMemoryStep({
         sandboxId,
         subjectKey: ctx.entry.subjectKey,
         ticketKey: ctx.entry.ticketKey ?? null,
@@ -1434,7 +1432,22 @@ export async function ensureWorkspace(
         workspaceManifest,
         runId: ctx.runId,
       });
+      // For teardown: a file the agent started without the stored notebook
+      // must not be stored over it.
+      ctx.workspaceNotebookRecalled = hydrated.recalled;
+      // Recorded on the run, not only in the log: a workspace that started
+      // without the notebook an earlier run left is indistinguishable, from
+      // the run view, from the first run on a ticket.
+      if (hydrated.unavailable !== undefined) {
+        await emitRepositoryWorkflowObservation(execution?.observations, {
+          event: "memory_unavailable",
+          where: "hydrate",
+          reason: hydrated.unavailable,
+        });
+      }
     } catch (err) {
+      // Whatever happened, nothing says what was stored.
+      ctx.workspaceNotebookRecalled = false;
       if (isRunControlError(err)) throw err;
       // Memory is an optimization; the workspace is ready either way.
     }
@@ -1459,11 +1472,18 @@ export async function ensureWorkspace(
         workflowOwnedBranch: repository.workflowOwnedBranch?.branchName ?? null,
       }));
       try {
-        await seedRepoMemoryStep({
+        const seeded = await seedRepoMemoryStep({
           sandboxId,
           runId: ctx.runId,
           repositories: memoryRepositories,
         });
+        if (seeded.unavailable !== undefined) {
+          await emitRepositoryWorkflowObservation(execution?.observations, {
+            event: "memory_unavailable",
+            where: "seed",
+            reason: seeded.unavailable,
+          });
+        }
       } catch (err) {
         if (isRunControlError(err)) throw err;
         // Memory is an optimization; the workspace is ready either way.
@@ -1478,6 +1498,7 @@ export async function ensureWorkspace(
         ctx.defaultBranchFiles = await captureDefaultBranchFilesStep({
           sandboxId,
           runId: ctx.runId,
+          integrationPins: ctx.integrationPins,
           repositories: memoryRepositories,
         });
       } catch (err) {
@@ -1516,12 +1537,30 @@ export async function ensureWorkspace(
   } catch (err) {
     if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
     propagateInvocationInterruption(err);
+    // The approved scope's recheck and a review's sibling lookup list the
+    // repositories inside their steps; unread settings there are ours, not the
+    // sandbox's, and not a moved repository that needs a replan.
+    if (isIntegrationSettingsUnreadableError(err)) return workspaceSettingsUnreadable();
     const detail = err instanceof Error ? err.message : String(err);
     // Same rule as the pre-sandbox halt above: the approved-scope refusal and
     // the PR-context refusal both reach this catch, neither is a sandbox fault,
     // and both are finished sentences that lead rather than being clamped.
     return executionError(detail, catalogRefusalExecutionOptions(detail, "sandbox"));
   }
+}
+
+/**
+ * Workspace preparation stopped because this deployment's integration
+ * settings could not be read, whether reading the providers' credentials or
+ * listing the repositories. `engine`, like an integration block's unread
+ * settings: no sandbox was created and no provider was asked, so neither the
+ * sandbox nor a provider is the one to blame, and a retry of the run asks
+ * again. The database's words are in the step's log line, not here.
+ */
+function workspaceSettingsUnreadable(): BlockExecutionResult {
+  const message =
+    "The workspace could not be prepared: this run could not read the deployment's integration settings. Nothing was concluded about any repository; retry the run.";
+  return executionError(message, { category: "engine", message });
 }
 
 /**
@@ -1560,6 +1599,7 @@ export async function promoteWorkspaceWrites(
         runId: ctx.runId,
       },
       repositoryAccess: ctx.repositories,
+      integrationPins: ctx.integrationPins,
     });
     const manifestByKey = new Map(
       ctx.workspaceManifest.repositories.map((repository) => [
@@ -1578,6 +1618,7 @@ export async function promoteWorkspaceWrites(
     ctx.repositoryContexts = await blockFetchPrContextsStep(
       ctx.selectedRepositories,
       ctx.repositories,
+      { integrationPins: ctx.integrationPins },
     );
     await emitRepositoryWorkflowObservation(execution?.observations, {
       event: "scope",

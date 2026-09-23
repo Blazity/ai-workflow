@@ -503,6 +503,7 @@ describe("mixed-provider research workspace", () => {
       {
         kind: "gitlab" as const,
         host: "https://gitlab.com",
+        authUser: "oauth2",
         getToken: vi.fn().mockResolvedValue("gitlab-token"),
         commitAuthor: "ai-workflow-blazity",
         commitEmail: "ai-workflow@blazity.com",

@@ -7,6 +7,7 @@ import {
   replayAttemptEnvelopeBytes,
   sanitizeReplayGraphSnapshot,
   sanitizeReplayLayoutSnapshot,
+  redactConfiguredSecretsInText,
   sanitizeReplayValue,
 } from "./sanitizer.js";
 
@@ -522,6 +523,22 @@ describe("sanitizeReplayValue", () => {
         },
       ),
     ).toBeNull();
+  });
+});
+
+describe("configured secrets in the run log", () => {
+  const PEM = [
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "MIIEowIBAAKCAQEAx7Qk9mZyJ4pQ0m1nZ9wP",
+    "q8R2s3T4u5V6w7X8y9Z0a1B2c3D4e5F6g7H8",
+    "-----END RSA PRIVATE KEY-----",
+  ].join("\n");
+  const PEM_LINE = "q8R2s3T4u5V6w7X8y9Z0a1B2c3D4e5F6g7H8";
+  it("takes out a PEM key written JSON-escaped and one line of it, as every redactor does", () => {
+    const escaped = redactConfiguredSecretsInText(`{"key":"${JSON.stringify(PEM).slice(1, -1)}"}`, [PEM]);
+    expect(escaped).not.toContain(PEM_LINE);
+    const quoted = redactConfiguredSecretsInText(`bad line ${PEM_LINE}`, [PEM]);
+    expect(quoted).not.toContain(PEM_LINE);
   });
 });
 

@@ -41,10 +41,11 @@ import { executionError, WORKSPACE_GATE_NOT_RECORDED_PREFIX, type StepsRecord } 
 import { formatExecutionErrorForUser, WorkflowExecutionError } from "./helpers/execution-error.js";
 import { executeV2Graph, V2_PRODUCTION_SCHEDULER_BOUNDS, type V2BlockExecutor, type V2SchedulerCheckpoint, type V2SchedulerHooks } from "@shared/workflow-graph";
 import { buildV2ReplayGraphSnapshot, createV2RunObservationHooks, type V2RunObservationHooks } from "../run-observability/runtime-hooks.js";
-import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
+import { environmentSecretValues } from "../run-observability/configured-secrets.js";
 import { emitAgentInvocationObservations, emitRepositoryWorkflowObservation, emitTimedOutAgentInvocationObservations } from "../run-observability/agent-observations.js";
 import { persistWorkspaceMemoryStep } from "./steps/memory-steps.js";
 import { distillRepoMemoryStep, loadRepoMemorySourcesStep } from "./steps/repo-memory-steps.js";
+import type { EffectivePromptMemorySource } from "./helpers/effective-prompt.js";
 import { resolveAgentInput } from "./helpers/resolve-agent-input.js";
 import { assembleReviewChangeSetAddition, pullRequestChangeSetTarget } from "./steps/review-change-set.js";
 import { sanitizeReplayAttemptOutcome, sanitizeReplayGraphSnapshot, sanitizeReplayValue } from "../run-observability/sanitizer.js";
@@ -80,6 +81,7 @@ import { resolveReviewFeedbackInput } from "./helpers/review-feedback.js";
 import { workspaceRepositoryAccess, type WorkspaceManifest, type WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
 import { ensureWorkspace, maybePromoteGenericAgentWorkspace, maybePromoteTicketWorkspaceWrites, promoteWorkspaceWrites, requiredAgentsForDefinition, researchDeclaredNoWritesGuard } from "./blocks/prepare-workspace/execute.js";
 import { prepareHarnessAgentInvocationStep } from "./blocks/agent-sandbox.js";
+import { agentTracingRun } from "./support/integration-run-state.js";
 import { recoverScriptDriftFromSteps } from "./blocks/finalize-workspace/execute.js";
 import { resolveCallLlmTarget } from "./blocks/call-llm/execute.js";
 import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
@@ -89,10 +91,16 @@ import { isRepositoryScriptsRefusal, repositoryScriptFailureEntry, repositoryScr
 import { RunBudgetError, addElapsed, checksCeilingErrorDetail, createRunBudgetState, isChecksCeilingExceededError, isDurationAbortError, isV2InvocationCancelledError, observeRunBudget, propagateInvocationInterruption, recordBudgetUsage, runBudgetFailureFromError, type RunBudgetAttribution, type RunBudgetHooks, type RunBudgetLimits, type RunBudgetFailure, type RunBudgetObservation, type RunBudgetState } from "./helpers/run-budget.js";
 import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
-import { createWorkflowExecutionErrorState, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
+import {
+  executeIntegrationBlock,
+  isIntegrationBlockType,
+} from "./blocks/integration-block.js";
+import { canonicalizeWorkflowBlockTypes, canonicalWorkflowBlockType, createWorkflowExecutionErrorState, integrationUnavailableFailureCode, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE, runStatusReasonParts } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
-import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
+import type { CoreMessagingDelivery } from "./support/messaging.js";
+import type { BlockOutput, BlockRunState, RunPullRequest, RunStatusReason, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAnswerReading, WorkScopeAskedRepository } from "@shared/contracts";
 import type { RunWorkScopeWrite } from "./work-scope/apply-plans.js";
+import type { LoadedWorkflowPlan } from "./steps/definition-step.js";
 import type { RepositoryCatalogEntry } from "./repository-discovery/catalog.js";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
@@ -102,7 +110,7 @@ import { loadClarificationHistoryStep, logClarificationHistoryFailure, parkForCl
 import { prePrChecksFailureMessage } from "./steps/repository-failure.js";
 import { type SanitizedReplayObservation, captureV2RunObservationStartStep, closeTerminalPrChecksStep, finishV2RunObservationAttemptStep, flushV2RunObservationsStep, markV2RunObservationUnavailableStep, persistRunTelemetryBestEffort, recordBlockStatusesStep, resolveClarificationDecisionObservation, startV2RunObservationAttemptStep, updateV2RunObservationWaitingStep } from "./steps/telemetry.js";
 import { resolveAgentTicketInput, resolveImplementationPlanInput, selectEntryTriggerNode, triggerOutputWithTicketContext, triggerTypeFor } from "./helpers/trigger-input.js";
-import { appendClarificationRound, blockRunStateSummary, buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, buildPromptVariables, implementationChangeSummary, optionalPricedModelsForRun, promptOverride, publicationPrForTelemetry, repoMemoryDistillTarget, resolveOpenPrBody, resolveOpenPrTitle, resolveRunPriceLookup, resolveSlackMessageInput, resolveTicketStatusInput, resolveV2PromptConfiguration, reviewAgentExecutionResult, shouldPromoteResearchWriteScope, soleActiveBlockId, v2OpenPrRepositoriesProvenanceIssue, v2TerminalBlockResult } from "./helpers/prompt-output.js";
+import { appendClarificationRound, blockRunStateSummary, buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, buildPromptVariables, implementationChangeSummary, optionalPricedModelsForRun, promptOverride, publicationPrForTelemetry, repoMemoryDistillTarget, resolveOpenPrBody, resolveOpenPrTitle, resolveRunPriceLookup, resolveMessageInput, resolveTicketStatusInput, resolveV2PromptConfiguration, reviewAgentExecutionResult, shouldPromoteResearchWriteScope, soleActiveBlockId, v2OpenPrRepositoriesProvenanceIssue, v2TerminalBlockResult } from "./helpers/prompt-output.js";
 import { checksBudgetObserver, definitionRequestsRepairCycles, errorMessage, failureExitPhase, isRepositoryScriptsFailurePhase, nodeCanRecordGate, recoverLatestRepositoryScriptsFailureFromSteps, repositoryScriptsFailureComment, truncateError } from "./helpers/repository-failure.js";
 import { postReviewLedgerFailureNoteStep, readLedgerEvidenceFileStep, settleReviewLedgerThreads } from "./steps/review-ledger.js";
 import { applyReviewLedgerGate, buildResolutionEvidenceComment, pendingPrCheckIntent, pendingReviewFeedbackSentence, resolveNoChangeAction, resolvePendingReviewFeedback, reviewLedgerOutputFields, reviewLedgerRepoLocalPath, runLedgerEvidenceSecondPass, settledAnswerCount, toLedgerGuardWorkItems, toReviewThreadDispositions, unsettledWorkItemAliases } from "./helpers/review-ledger.js";
@@ -356,32 +364,38 @@ export interface RetiredWorkflowFailureDeps {
   ticketKey: string | undefined;
   cleanupClarifications(): Promise<void>;
   markRunFailed(): Promise<void>;
-  recordFailureReason(reason: string): Promise<void>;
+  /** The durable record, which is the one place the machine-readable code goes. */
+  recordFailureReason(reason: RunStatusReason): Promise<void>;
   logFailure(reason: string): Promise<void>;
   commentFailure(reason: string): Promise<void>;
   moveTicket(): Promise<void>;
-  notifyTicket(reason: string): Promise<void>;
+  /** Whether it was delivered is deliberately ignored: a notification must
+   *  never change what a run reports. */
+  notifyTicket(reason: string): Promise<unknown>;
 }
 
 /** The concrete standard failure exit for a run that stops before it can do its
  * work: a retired plan, and a ticket run whose catalog enables no repository at
  * all. It records the run state and reason before provider side effects,
  * preserves the Jira comment path (AIW-254), and returns the durable workflow
- * outcome. The reason is a plain string because there is more than one of them
- * now; each caller owns its own sentence. */
+ * outcome. Each caller owns its own sentence; a caller whose failure also has a
+ * machine-readable cause hands the pair, and only the durable record sees the
+ * code. Everything a person reads - the log line, the ticket comment, the
+ * notification - gets the sentence and nothing else. */
 export async function runRetiredWorkflowFailureExit(
-  reason: string,
+  reason: RunStatusReason,
   deps: RetiredWorkflowFailureDeps,
 ): Promise<"failed"> {
+  const sentence = runStatusReasonParts(reason).text;
   await deps.cleanupClarifications();
   await deps.markRunFailed();
   await deps.recordFailureReason(reason);
   const { handleWorkflowFailureExit } = await import("./runtime/workflow-failure-exit.js");
   await handleWorkflowFailureExit(deps.ticketKey, {
-    logFailure: () => deps.logFailure(reason),
-    commentFailure: () => deps.commentFailure(reason),
+    logFailure: () => deps.logFailure(sentence),
+    commentFailure: () => deps.commentFailure(sentence),
     moveTicket: deps.moveTicket,
-    notifyTicket: () => deps.notifyTicket(reason),
+    notifyTicket: () => deps.notifyTicket(sentence),
   });
   return "failed";
 }
@@ -424,6 +438,31 @@ type NotifyPhase = "research" | "impl" | "review" | "pre-pr-checks" | "push";
 
 function phaseKey(base: string, attempt: number): string {
   return attempt <= 1 ? base : `${base} #${attempt}`;
+}
+
+/**
+ * The loaded plan with every renamed block type replaced by the name this
+ * build knows, in the graph the scheduler walks and in the node list the
+ * engine reads from.
+ *
+ * The plan arrives from a step, so a run that suspended before the rename
+ * replays the recorded shape rather than re-reading the database. That path
+ * bypasses both places a definition is normally canonicalised, and every
+ * consumer that indexes by type (the scheduler, the output validator, the
+ * parameter schemas) would then be handed a name with no contract behind it.
+ */
+function canonicalPlanBlockTypes<T extends LoadedWorkflowPlan | null | undefined>(plan: T): T {
+  if (!plan) return plan;
+  const definition = canonicalizeWorkflowBlockTypes(plan.definition) as typeof plan.definition;
+  const nodes = plan.nodes.map((node) =>
+    node.type === canonicalWorkflowBlockType(node.type)
+      ? node
+      : { ...node, type: canonicalWorkflowBlockType(node.type) },
+  );
+  if (definition === plan.definition && nodes.every((node, index) => node === plan.nodes[index])) {
+    return plan;
+  }
+  return { ...plan, definition, nodes } as T;
 }
 
 export async function reconcileRunBudgetErrorAtBoundary(
@@ -534,6 +573,7 @@ async function agentWorkflowBody(
     runStartHasNoEnabledRepository,
     runStartRepositoryAccess,
     runStartSettings,
+    runStartTracker,
     runStartWorkScope,
   } = await import("./steps/run-start-settings.js");
   // Which subject's work scope this run freezes, decided by the CALLER rather
@@ -561,6 +601,11 @@ async function agentWorkflowBody(
   const budgetStartedAtMs = await readRunBudgetClockStep();
 
   const { env } = await import("./harness-profiles/model-env.js");
+  // The board this run works against, frozen when it started: the columns are
+  // operator settings and the transitions are the tracker's wiring, and a run
+  // that began against one board finishes against that board even if an admin
+  // reconnects the tracker while it is in flight.
+  const runTracker = runStartTracker(runStart);
   const {
     assembleResearchPlanContext,
     assembleImplementationContext,
@@ -578,21 +623,21 @@ async function agentWorkflowBody(
   const { openPullRequestsForPublication } = await import("./steps/workspace-publication.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
   const { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
-  // The column names come from the run's snapshot; the two transition ids stay
-  // on `env` because they are not registry keys (a Jira transition id is a
-  // board's internal identifier, not an operator setting).
+  // The column names come from the run's settings snapshot and the transition
+  // ids from its tracker wiring. A board that can be moved by status name
+  // configures neither, and then the target is the column name alone.
   const backlogMoveTarget = (): IssueTrackerMoveTarget =>
-    env.JIRA_BACKLOG_TRANSITION_ID
+    runTracker.backlogTransitionId
       ? {
           name: runSettings.COLUMN_BACKLOG,
-          transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+          transitionId: runTracker.backlogTransitionId,
         }
       : runSettings.COLUMN_BACKLOG;
   const aiReviewMoveTarget = (): IssueTrackerMoveTarget =>
-    env.JIRA_AI_REVIEW_TRANSITION_ID
+    runTracker.aiReviewTransitionId
       ? {
           name: runSettings.COLUMN_AI_REVIEW,
-          transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID,
+          transitionId: runTracker.aiReviewTransitionId,
         }
       : runSettings.COLUMN_AI_REVIEW;
 
@@ -606,6 +651,15 @@ async function agentWorkflowBody(
   const { resolveWorkflowTicketStep } = await import("./steps/workflow-ticket.js");
   const ticket = await resolveWorkflowTicketStep(entry, runSettings.COLUMN_AI);
   if (!ticket) return;
+  // Where a person opens what this run is about, for every record the run
+  // writes: the ticket's page as its tracker linked it when the run read it,
+  // or the pull request the run was started for. The workflow cannot ask a
+  // tracker, so the link rides with the ticket rather than being spelled here.
+  const subjectUrl: string | null = entry.ticketKey
+    ? (ticket.url ?? null)
+    : entry.kind === "pr_trigger"
+      ? entry.pr.prUrl
+      : null;
 
   let clarificationsReconciled = false;
   const cleanupClarifications = async (): Promise<void> => {
@@ -626,7 +680,7 @@ async function agentWorkflowBody(
    * telemetry that one records for a definition problem: this is a
    * configuration refusal with one sentence to give and nothing to diagnose.
    */
-  const failBeforeWork = async (reason: string): Promise<"failed"> =>
+  const failBeforeWork = async (reason: RunStatusReason): Promise<"failed"> =>
     await runRetiredWorkflowFailureExit(reason, {
       ticketKey: entry.ticketKey ?? undefined,
       cleanupClarifications,
@@ -690,11 +744,7 @@ async function agentWorkflowBody(
           status: "failed",
           ticketKey: entry.ticketKey ?? null,
           ticketTitle: ticket.title,
-          ticketUrl: entry.ticketKey
-            ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
-            : entry.kind === "pr_trigger"
-              ? entry.pr.prUrl
-              : null,
+          ticketUrl: subjectUrl,
           model: null,
           totals: computeUsageTotals({}, {}, undefined, undefined, {}),
           budgetFailure: null,
@@ -751,7 +801,14 @@ async function agentWorkflowBody(
     retire: failRetiredDefinition,
   });
   if (loadedPlan === "failed") return loadedPlan;
-  const plan = loadedPlan;
+  // A run suspended before this build replays this step's recorded result, and
+  // that plan's nodes still carry the type this build renamed. Stored rows and
+  // submitted candidates are canonicalised where they enter the build, but a
+  // replayed step result enters through neither, so the scheduler and the
+  // output validator would be handed a type the block registry has no contract
+  // for and the run would die after its block had already run. One
+  // canonicalisation here covers the fresh run and the replay alike.
+  const plan = canonicalPlanBlockTypes(loadedPlan);
   if (!plan) {
     console.warn(
       `No runnable workflow definition for trigger ${entryTriggerType}; skipping run for ${ticket.identifier}`,
@@ -802,6 +859,18 @@ async function agentWorkflowBody(
     workflowNeedsRepositoryAccess(plan.definition.nodes)
   ) {
     return await failBeforeWork(NO_ENABLED_REPOSITORY_MESSAGE);
+  }
+
+  // An integration this graph uses is disconnected, disabled or failing. The
+  // run stops here with one sentence on the ticket rather than at the block,
+  // after a workspace and an agent invocation nobody needed. The check is the
+  // run-start read frozen into the plan, so a run that replays takes the same
+  // branch it took the first time.
+  if (plan.integrationBlocker) {
+    return await failBeforeWork({
+      text: plan.integrationBlocker.message,
+      code: integrationUnavailableFailureCode(plan.integrationBlocker.reason),
+    });
   }
 
   const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
@@ -900,11 +969,7 @@ async function agentWorkflowBody(
       subjectKey: entry.subjectKey,
       ticketKey: entry.ticketKey ?? null,
       ticketTitle: ticket.title,
-      ticketUrl: entry.ticketKey
-        ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
-        : entry.kind === "pr_trigger"
-          ? entry.pr.prUrl
-          : null,
+      ticketUrl: subjectUrl,
       definitionVersion: plan.version,
       definitionId: plan.definitionId,
       blockStatuses: { ...blockStatuses },
@@ -915,15 +980,20 @@ async function agentWorkflowBody(
       // watching at the time; the same question asked a week later needs the
       // answer beside the run, not in a log retention window.
       repositoryAccess: runRepositories,
+      integrationPins: plan.integrationPins,
     }).catch(() => {});
   await writeBlockStatuses();
   let v2RunObservation: V2RunObservationHooks | null = null;
   {
     const replayCaptureStartedAt = await readRunBudgetClockStep();
     const definition = plan.definition;
+    // Every replay value below is redacted twice: here with the environment's
+    // secrets, which is all workflow scope can see, and again by the capture
+    // step that writes it with every secret the deployment knows, including a
+    // connection stored in the dashboard (telemetry.ts, knownSecretValues).
     const replayGraph = sanitizeReplayGraphSnapshot(
       buildV2ReplayGraphSnapshot(definition),
-      configuredReplaySecrets(),
+      environmentSecretValues(),
     );
     const capture = replayGraph
       ? await captureV2RunObservationStartStep({
@@ -936,7 +1006,7 @@ async function agentWorkflowBody(
             {
               harnesses: harnessManifests,
             },
-            { secrets: configuredReplaySecrets() },
+            { secrets: environmentSecretValues() },
           ),
         })
       : null;
@@ -983,7 +1053,7 @@ async function agentWorkflowBody(
             observations.push({
               kind: observation.kind,
               envelope: sanitizeReplayValue(observation.value, {
-                secrets: configuredReplaySecrets(),
+                secrets: environmentSecretValues(),
                 retain:
                   observation.kind === "log" ? "tail" : "head",
               }),
@@ -1016,7 +1086,7 @@ async function agentWorkflowBody(
             const outcome =
               sanitizeReplayAttemptOutcome(
                 finish.outcome,
-                configuredReplaySecrets(),
+                environmentSecretValues(),
               ) ?? {
                 kind: finish.outcome.kind,
                 status: "unavailable",
@@ -1254,11 +1324,14 @@ async function agentWorkflowBody(
       definitionId: plan.definitionId,
       definitionVersion: plan.version,
       definitionNodes: plan.nodes,
+      // Frozen with the definition, by the same step. Absent on a plan replayed
+      // from before this shipped, which then compares nothing, exactly as it
+      // did before.
+      ...(plan.integrationPins ? { integrationPins: plan.integrationPins } : {}),
+      integrationLlmDefaults: { provider: runDefaultKind, model: defaultModel, models: modelDefaults },
       entry,
       ticket,
-      ticketUrl: entry.ticketKey
-        ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
-        : "",
+      ticketUrl: entry.ticketKey ? (ticket.url ?? "") : "",
       changeSummary: "",
       ...(clarificationHistory && clarificationHistory.length > 0
         ? { clarifications: clarificationHistory }
@@ -1297,9 +1370,7 @@ async function agentWorkflowBody(
         backlog: backlogMoveTarget(),
         aiReview: aiReviewMoveTarget(),
       },
-      arthur: {
-        taskId: null,
-      },
+      integrationRunStates: null,
       checksCeilingMs: null,
       prePrChecksFailureMessage,
       observeBudget: (requireRemainingDuration = true, attribution, observedAtMs?: number) =>
@@ -1348,7 +1419,10 @@ async function agentWorkflowBody(
         : null;
       if (changeSetTarget) {
         ctx.preSandboxAdditions.review.push(
-          await assembleReviewChangeSetAddition(changeSetTarget),
+          await assembleReviewChangeSetAddition({
+            ...changeSetTarget,
+            integrationPins: ctx.integrationPins,
+          }),
         );
       }
 
@@ -1580,8 +1654,9 @@ async function agentWorkflowBody(
             const { restoreClarificationSandboxStep } = await import(
               "./steps/clarification-snapshot-steps.js"
             );
-            const { ensureArthurTask, ensureChecksCeiling, sandboxLifetimeMs } =
-              await import("./blocks/prepare-workspace/execute.js");
+            const { ensureChecksCeiling, sandboxLifetimeMs } = await import(
+              "./blocks/prepare-workspace/execute.js"
+            );
             const requiredAgents = requiredAgentsForDefinition({
               nodes: plan.nodes,
               defaultKind: runDefaultKind,
@@ -1615,7 +1690,8 @@ async function agentWorkflowBody(
                 restoredCeilingMs,
               ),
               agents: requiredAgents,
-              arthurTaskId: await ensureArthurTask(ctx),
+              // No invocation: a restored sandbox is the run's, not one node's.
+              tracingRun: await agentTracingRun(ctx),
             });
             ctx.sandboxId = restored.sandboxId;
             invalidateWorkspaceGate(ctx);
@@ -1736,6 +1812,7 @@ async function agentWorkflowBody(
             baseRef: ctx.entry.pr.baseRef,
             prNumber: ctx.entry.pr.prNumber,
           },
+          integrationPins: ctx.integrationPins,
           runId: workflowRunId,
           reason,
           // Naming threads is only honest when the run had some to owe.
@@ -1776,8 +1853,8 @@ async function agentWorkflowBody(
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
         await postReviewLedgerFailureNoteOnFailureExit(reason);
         // The ticket comment, and only the ticket comment, carries the script
-        // evidence beside the reason. The run header, the run list and Slack
-        // keep the reason alone: they read one bounded string each and AIW-254
+        // evidence beside the reason. The run header, the run list and the
+        // messaging notification keep the reason alone: they read one bounded string each and AIW-254
         // pins them to the same one.
         const comment = repositoryScriptsFailureComment(
           reason,
@@ -2097,8 +2174,10 @@ async function agentWorkflowBody(
           sandboxId,
           ctx.runDefaultKind,
           defaultModel,
-          ctx.arthur.taskId,
-          { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG },
+          await agentTracingRun(ctx),
+          {
+            organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG,
+          },
         );
         if (!prepared.ok) return agentProtocolBlockError(prepared);
         const guard = await setCommitGuardStep(
@@ -2618,6 +2697,7 @@ async function agentWorkflowBody(
           },
           ctx.repositories,
           ctx.settings.JOB_TIMEOUT_MS,
+          ctx.integrationPins,
           // An attach is the outcome that changes an entry, and this step
           // cannot retry, so the whole decision rides it.
           takePendingWorkScopeWrite(),
@@ -2664,6 +2744,7 @@ async function agentWorkflowBody(
           },
           ctx.repositories,
           ctx.settings.JOB_TIMEOUT_MS,
+          ctx.integrationPins,
         );
         return attached.manifest;
       };
@@ -2781,6 +2862,9 @@ async function agentWorkflowBody(
         // Substitute {{variables}} into prompt-bearing params per execution: the
         // run context (research plan, publication, selected repos) mutates
         // mid-run, so each block sees the values current at its turn.
+        // The plan reaching the scheduler is already canonical, including a
+        // replayed one (canonicalPlanBlockTypes), so this node's type is the
+        // name this build knows.
         const node = rawNode;
         await materializeHumanDecisions();
         if (
@@ -2802,7 +2886,13 @@ async function agentWorkflowBody(
           execution,
         );
         if (genericPromotion) return genericPromotion;
-        const blockExecute = BLOCK_EXECUTORS[node.type];
+        // Core's generated table first, then the one generic executor every
+        // integration block runs through. The table is generated from core's
+        // own block directories and is keyed by block type, so it can hold
+        // neither a per-integration entry nor a name core may not write.
+        const blockExecute =
+          BLOCK_EXECUTORS[node.type] ??
+          (isIntegrationBlockType(node.type) ? executeIntegrationBlock : undefined);
         if (blockExecute) {
           const result = await blockExecute(
             node,
@@ -2889,6 +2979,7 @@ async function agentWorkflowBody(
                   },
                   ctx.repositories,
                   ctx.settings.JOB_TIMEOUT_MS,
+                  ctx.integrationPins,
                 );
               },
               fetchContexts: async (repositories) => {
@@ -2950,8 +3041,11 @@ async function agentWorkflowBody(
               sandboxId,
               kind,
               model,
-              ctx.arthur.taskId,
-              { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
+              await agentTracingRun(ctx, { nodeId: node.id, attempt: invocationAttempt }),
+              {
+                organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG,
+               runtime,
+              },
             );
             if (!researchRuntime.ok) {
               return agentProtocolBlockError(researchRuntime);
@@ -3336,7 +3430,7 @@ async function agentWorkflowBody(
                 repositoryExpansion: ctx.repositoryExpansion,
                 researchResult: research,
                 usage: researchTotals,
-                jiraApplicable: Boolean(entry.ticketKey),
+                ticketApplicable: Boolean(entry.ticketKey),
                 noChangeNeededOverride: true,
               });
               const analysisReportPersisted = ctx.analysisReport
@@ -3476,7 +3570,7 @@ async function agentWorkflowBody(
               repositoryExpansion: ctx.repositoryExpansion,
               researchResult: research,
               usage: researchTotals,
-              jiraApplicable: Boolean(entry.ticketKey),
+              ticketApplicable: Boolean(entry.ticketKey),
             });
             const analysisReportPersisted = ctx.analysisReport
               ? await recordRunAnalysisReportBestEffort(ctx.analysisReport)
@@ -3581,8 +3675,11 @@ async function agentWorkflowBody(
                 sandboxId,
                 kind,
                 model,
-                ctx.arthur.taskId,
-                { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
+                await agentTracingRun(ctx, { nodeId: node.id, attempt: invocationAttempt }),
+                {
+                  organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG,
+                 runtime,
+                },
               );
             if (!implementationRuntime.ok) {
               return agentProtocolBlockError(implementationRuntime);
@@ -3804,7 +3901,7 @@ async function agentWorkflowBody(
               ownerToken: ctx.entry.ownerToken,
               agentKind: kind,
               model,
-              arthurTaskId: ctx.arthur.taskId,
+              tracingRun: await agentTracingRun(ctx, { nodeId: node.id, attempt: invocationAttempt }),
               jobTimeoutMs: ctx.settings.JOB_TIMEOUT_MS,
               runtime,
               // The session memory document lives outside the repository now, so
@@ -3854,8 +3951,11 @@ async function agentWorkflowBody(
                 sandboxId,
                 kind,
                 model,
-                ctx.arthur.taskId,
-                { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
+                await agentTracingRun(ctx, { nodeId: node.id, attempt: invocationAttempt }),
+                {
+                  organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG,
+                 runtime,
+                },
               );
               if (!reviewRuntime.ok) {
                 return agentProtocolBlockError(reviewRuntime);
@@ -4061,7 +4161,6 @@ async function agentWorkflowBody(
                   price: priceLookup?.(repairModel) ?? null,
                 },
                 runtime: repairRuntime,
-                arthurTaskId: ctx.arthur.taskId,
               });
             } catch (err) {
               if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
@@ -4159,6 +4258,7 @@ async function agentWorkflowBody(
               title: prTitle,
               body: prBody,
               repositoryAccess: ctx.repositories,
+              integrationPins: ctx.integrationPins,
               sourcePullRequest:
                 ctx.entry.kind === "pr_trigger"
                   ? {
@@ -4265,22 +4365,60 @@ async function agentWorkflowBody(
             return { kind: "next", output: buildOpenPrSuccessOutput(publication.prs) };
           }
 
-          case "send_slack_message": {
+          case "send_message": {
             // node.params.message carries its {{data:...}} tokens resolved by
             // resolveV2PromptConfiguration in executeV2Block.
-            const message = resolveSlackMessageInput(node.params, resolvedInputs);
+            const message = resolveMessageInput(node.params, resolvedInputs);
             const sendOn = node.params.sendOn === "always" ? "always" : "pr_ready";
+            // `ok` means the message arrived. Anything else is `skipped` with
+            // the reason, which is what an author branching off `skipped` acts
+            // on: a block that reported a clean send for a message nobody ever
+            // saw is worse than no block at all.
+            // `undefined` is what a run suspended before this deploy replays:
+            // `notifyTicket` recorded nothing back when a notification was
+            // fire and forget. Such a run reported `ok` then, and reporting it
+            // now is the only answer that keeps its remaining branches on the
+            // path they were already taking.
+            // A block is not a notification. When the provider this run pinned
+            // moved under it, the honest answer is to stop with what an admin
+            // can act on, not to report a message that went somewhere nobody
+            // expects. Every other failure is `skipped` with its reason.
+            const sent = (delivery: CoreMessagingDelivery | undefined): BlockExecutionResult => {
+              if (!delivery || delivery.delivered) {
+                return { kind: "next", output: { status: "ok" } };
+              }
+              if (delivery.moved) {
+                const text = `Send message could not run: ${delivery.reason}.`;
+                return executionError(text, {
+                  category: "configuration",
+                  message: text,
+                  failureCode: integrationUnavailableFailureCode(delivery.moved),
+                });
+              }
+              return { kind: "next", output: { status: "skipped", reason: delivery.reason } };
+            };
 
             if (sendOn === "always") {
-              // Standalone message: post it as a thread note whenever this block
-              // runs, independent of any PR. Empty message is a no-op.
-              if (!message) return { kind: "next", output: { status: "skipped" } };
-              await notifyTicket(ticket.identifier, { kind: "note", text: message }, transitionOwner);
-              return { kind: "next", output: { status: "ok" } };
+              // A message of its own, posted whenever this block runs and
+              // independent of any pull request. Nothing to say is nothing sent.
+              if (!message) {
+                return {
+                  kind: "next",
+                  output: { status: "skipped", reason: "the message is empty, so there was nothing to send" },
+                };
+              }
+              return sent(
+                await notifyTicket(
+                  ticket.identifier,
+                  { kind: "note", text: message },
+                  transitionOwner,
+                  plan.integrationPins,
+                ),
+              );
             }
 
-            // Default "pr_ready": ride along with the PR-ready card, only once a PR
-            // has been published.
+            // Default "pr_ready": ride along with the published pull requests,
+            // and only once there are some.
             const publication = ctx.publication;
             const publishedPrs = publicationPrsForTelemetry(publication);
             if (publication?.status === "published" && publishedPrs) {
@@ -4291,15 +4429,22 @@ async function agentWorkflowBody(
                 activeModel,
                 phaseModels,
               );
-              await notifyTicket(ticket.identifier, {
-                kind: "pr_ready",
-                prs: publishedPrs,
-                usageReport,
-                ...(message ? { extraText: message } : {}),
-              }, transitionOwner);
-              return { kind: "next", output: { status: "ok" } };
+              return sent(
+                await notifyTicket(ticket.identifier, {
+                  kind: "pr_ready",
+                  prs: publishedPrs,
+                  usageReport,
+                  ...(message ? { extraText: message } : {}),
+                }, transitionOwner, plan.integrationPins),
+              );
             }
-            return { kind: "next", output: { status: "skipped" } };
+            return {
+              kind: "next",
+              output: {
+                status: "skipped",
+                reason: "no pull request has been published in this run yet",
+              },
+            };
           }
 
           case "update_ticket_status": {
@@ -4473,12 +4618,10 @@ async function agentWorkflowBody(
           // a "use step" invocation writes a durable step record even when its
           // body returns immediately, and with the flag off the compiled prompt
           // must be identical to a build without the feature.
-          let memorySources: Awaited<
-            ReturnType<typeof loadRepoMemorySourcesStep>
-          > = [];
+          let memorySources: EffectivePromptMemorySource[] = [];
           if (runSettings.ENABLE_REPO_MEMORY && ctx.workspaceManifest) {
             try {
-              memorySources = await loadRepoMemorySourcesStep({
+              const loaded = await loadRepoMemorySourcesStep({
                 repositories: ctx.workspaceManifest.repositories.map(
                   (repository) => ({
                     provider: repository.provider,
@@ -4486,6 +4629,23 @@ async function agentWorkflowBody(
                   }),
                 ),
               });
+              // A run suspended before S13 replays this step's STORED result,
+              // which was the array itself. Reading `.sources` off it would
+              // hand the prompt compiler `undefined` OUTSIDE the catch below,
+              // so both shapes are accepted here and the older one reads as
+              // "memory answered", which it did.
+              memorySources = Array.isArray(loaded) ? loaded : loaded.sources;
+              // On the run, not only in the log. A prompt compiled without what
+              // the repository knows produces an agent that behaves as if it
+              // had never seen the repository, and nothing else on the run
+              // separates that from a repository with nothing stored.
+              if (!Array.isArray(loaded) && loaded.unavailable !== undefined) {
+                await emitRepositoryWorkflowObservation(invocation.observations, {
+                  event: "memory_unavailable",
+                  where: "prompt",
+                  reason: loaded.unavailable,
+                });
+              }
             } catch (error) {
               if (isRunControlError(error)) throw error;
               // Unlike repository instructions, unreadable memory must not fail
@@ -4845,6 +5005,34 @@ async function agentWorkflowBody(
         runOutcome = walk.outcome === "ended" ? "awaiting" : "success";
       }
     } finally {
+      /**
+       * A memory refusal at teardown, on the run rather than only inside the
+       * step that hit it.
+       *
+       * NOT `emitRepositoryWorkflowObservation`, which is what the hydrate,
+       * seed and prompt refusals use. That channel is scoped to a block
+       * attempt, and by the time this runs the walk is over: `onNodeFinish`
+       * has deleted every capture (`run-observability/runtime-hooks.ts:506`)
+       * and `observationHooksFor` answers with an emit that returns without
+       * writing (`:592-598`). Emitting here would look exactly like recording
+       * it and would record nothing, which is the failure this whole area is
+       * about.
+       *
+       * So it goes to the run's log, keyed by the run id, which is what the
+       * two teardown refusals below had NO trace of before: the step logged
+       * under its own child logger and the caller threw the answer away.
+       * `console.error` and not the pino logger because this is workflow
+       * scope, which admits no Node builtin at module scope, and it is the
+       * same choice the pr-check cleanup below makes for the same reason.
+       *
+       * What this still does NOT do is put the sentence on the run row, where
+       * somebody opening the run tomorrow would find it. No column on
+       * `workflow_runs` can carry it today and inventing a use for one that
+       * means something else would be worse than a log line.
+       */
+      const reportMemoryRefusal = (event: string, detail: string): void => {
+        console.error(event, workflowRunId, entry.subjectKey, truncateError(detail));
+      };
       // Capture the memory document before the sandbox that holds it is gone.
       // Failed and canceled runs learn things too, so this is not gated on the
       // outcome; nothing here may prevent the teardown below. Only the latest
@@ -4852,14 +5040,23 @@ async function agentWorkflowBody(
       // its earlier iterations, which is the same thing that happens today.
       try {
         if (ctx.sandboxId && ctx.workspaceManifest) {
-          await persistWorkspaceMemoryStep({
+          const captured = await persistWorkspaceMemoryStep({
             sandboxId: ctx.sandboxId,
             subjectKey: ctx.entry.subjectKey,
             ticketKey: ctx.entry.ticketKey ?? null,
             taskId: ctx.ticket.identifier,
             workspaceManifest: ctx.workspaceManifest,
             runId: ctx.runId,
+            ...(ctx.workspaceNotebookRecalled === undefined
+              ? {}
+              : { notebookRecalled: ctx.workspaceNotebookRecalled }),
           });
+          if (captured.unavailable !== undefined) {
+            reportMemoryRefusal("memory_capture_unavailable", captured.unavailable);
+          }
+          if (captured.withheld !== undefined) {
+            reportMemoryRefusal("memory_capture_withheld", captured.withheld);
+          }
         }
       } catch {
         // Best effort: the step already logs, teardown must still run.
@@ -4946,6 +5143,9 @@ async function agentWorkflowBody(
                 Math.min(90_000, Math.floor(budget.remainingDurationMs)),
               ),
             });
+            if (distilled.unavailable !== undefined) {
+              reportMemoryRefusal("memory_distill_unavailable", distilled.unavailable);
+            }
             // Only a step that reached the provider costs anything. The step
             // says so directly rather than having the skip reasons enumerated
             // here, where every reason added later would silently drop the cost;
@@ -5074,6 +5274,7 @@ async function agentWorkflowBody(
           : "Workflow failed before the PR check was completed.";
       const cleanup = await closeTerminalPrChecksStep({
         runId: workflowRunId,
+        integrationPins: plan.integrationPins,
         intent: pendingPrCheckIntent({
           category: terminalExecutionError?.category,
           budgetMetric: terminalBudgetFailure?.metric,
@@ -5127,11 +5328,7 @@ async function agentWorkflowBody(
         status: runOutcome,
         ticketKey: entry.ticketKey ?? null,
         ticketTitle: ticket.title,
-        ticketUrl: entry.ticketKey
-          ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
-          : entry.kind === "pr_trigger"
-            ? entry.pr.prUrl
-            : null,
+        ticketUrl: subjectUrl,
         model: activeModel ?? null,
         totals: computeUsageTotals(
           runPhaseUsages,
@@ -5147,6 +5344,7 @@ async function agentWorkflowBody(
           ? {
               message: formatExecutionErrorForUser(terminalExecutionError),
               code: terminalExecutionError.diagnosticId,
+              failureCode: terminalExecutionError.failureCode ?? null,
             }
           : null,
         harnessManifests,

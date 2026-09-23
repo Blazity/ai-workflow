@@ -37,9 +37,11 @@ import type {
 } from "@shared/contracts";
 import { builtinHarnessProfileReference } from "@shared/harness";
 import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
-import { workflowDefinitionV2Schema } from "@shared/workflow-graph";
+import { parse } from "@shared/workflow-graph";
 import { workflowDefinitionTemplates } from "../engine/definition/templates.js";
 import { testBlockData, testDeploymentIssues } from "./block-contracts.js";
+import { NO_INTEGRATIONS } from "../engine/definition/integration-availability.js";
+import { MESSAGING_CONNECTED } from "../engine/definition/messaging-deployment.fixture.js";
 
 /** Everything configured, so a fixture reports only what its graph earns. */
 const fullContext: WorkflowBlockRegistryContext = {
@@ -48,9 +50,8 @@ const fullContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 /** Nothing configured, which is the only way to observe the availability rule
@@ -61,9 +62,8 @@ const bareContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: [],
   vcsBotIdentities: [],
-  slackConfigured: false,
-  arthurConfigured: false,
   webhookTriggerConfigured: false,
+  integrations: NO_INTEGRATIONS,
 };
 
 const contexts = { full: fullContext, bare: bareContext } as const;
@@ -133,11 +133,20 @@ function snapshotDefinitions(): CorpusEntry[] {
     .sort()
     .map((file) => ({
       fixture: `snapshot/${file}`,
-      definition: workflowDefinitionV2Schema.parse(
-        JSON.parse(readFileSync(resolve(directory, file), "utf8")),
-      ) as WorkflowDefinition,
+      // Through the package reader, not the schema: a committed snapshot is a
+      // graph somebody stored, and production reads one with `parse`, renamed
+      // block types settled and all.
+      definition: parseStoredSnapshot(file, readFileSync(resolve(directory, file), "utf8")),
       context: "full" as const,
     }));
+}
+
+function parseStoredSnapshot(file: string, contents: string): WorkflowDefinition {
+  const parsed = parse(JSON.parse(contents));
+  if (parsed.definition === null) {
+    throw new Error(`Snapshot ${file} is not a valid workflow definition.`);
+  }
+  return parsed.definition;
 }
 
 function templateDefinitions(): CorpusEntry[] {
@@ -555,7 +564,7 @@ function brokenDefinitions(): CorpusEntry[] {
         node("ask-llm", "call_llm", {
           configuration: { prompt: "hello", outputSchema: '{"type":"string"}' },
         }),
-        node("slack", "send_slack_message", {
+        node("slack", "send_message", {
           configuration: { channel: "#general", message: "hi" },
         }),
       ],

@@ -8,8 +8,15 @@ import {
   isRunRecordedSucceeded,
 } from "../../db/repositories/runs.js";
 
-export const PREMATURE_AI_REVIEW_CANCELLATION_REASON =
-  "Jira AI Review transition before durable PR publication evidence";
+/**
+ * Why a run was cancelled when its ticket reached the review column before any
+ * of its work was published. A person reads it on the ticket, so it names the
+ * tracker they moved it in; the name comes from that tracker's own manifest
+ * rather than being written here.
+ */
+export function prematureAiReviewCancellationReason(trackerName: string): string {
+  return `${trackerName} AI Review transition before durable PR publication evidence`;
+}
 
 export type AiReviewRunDecision = "retain" | "cancel" | "lookup_failed";
 

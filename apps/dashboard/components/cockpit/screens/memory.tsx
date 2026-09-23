@@ -55,18 +55,45 @@ export function MemoryScreen({
   canDelete = false,
   settings = [],
   canEditSettings = false,
+  complete = true,
+  unavailable = null,
+  selectedUnavailable = null,
 }: {
   documents: MemoryDocumentSummaryDto[];
   /** The document key taken from the URL, or null on the plain listing. */
   selection: DocumentKey | null;
   /** The selected document, or null when the key no longer resolves. */
   selected: MemoryDocumentDto | null;
+  /**
+   * Why THIS document could not be read, in the provider's own words, or null
+   * when it could. Separate from `unavailable` above because the listing and a
+   * single read fail independently: a provider that answers the listing and
+   * fails one read leaves the table intact and only this card unanswered.
+   *
+   * Set, the card says the read failed. It NEVER falls through to "this
+   * document is no longer stored", which is a deletion nobody made and sends a
+   * person looking for who made it.
+   */
+  selectedUnavailable?: string | null;
   /** Owners and admins only, mirroring the worker's role rule. */
   canDelete?: boolean;
   /** Every resolved setting; empty when the settings read failed. */
   settings?: readonly SettingsEntryView[];
   /** canEditSettings(role) on the worker, mirrored here to gate the panel. */
   canEditSettings?: boolean;
+  /**
+   * False when the provider keeping this deployment's memory cannot promise
+   * the listing is everything it holds. A hosted engine pages and caps what it
+   * enumerates, so absence here is not proof.
+   */
+  complete?: boolean;
+  /**
+   * Why the listing could not be read at all, in the provider's own words.
+   * Set, the table says so; it NEVER falls through to "nothing remembered
+   * yet", because a person who reads that for a store nobody could read
+   * concludes the agent forgot everything.
+   */
+  unavailable?: string | null;
 }) {
   const router = useRouter();
   const [deleteState, setDeleteState] = useState<DeleteState | null>(null);
@@ -119,8 +146,16 @@ export function MemoryScreen({
           Agent memory
         </div>
         <h2 className="m-0 font-display text-2xl font-medium leading-[1.2] text-neutral-900">
-          {visible.length} {visible.length === 1 ? "document" : "documents"}
+          {unavailable
+            ? "Memory could not be read"
+            : `${visible.length} ${visible.length === 1 ? "document" : "documents"}`}
         </h2>
+        {!unavailable && !complete ? (
+          <p className="m-0 font-body text-[13px] text-neutral-500">
+            This deployment&apos;s memory provider cannot promise this is everything it
+            holds, so a document missing here may still be stored.
+          </p>
+        ) : null}
       </div>
 
       {features && memorySettings.length > 0 ? (
@@ -142,7 +177,12 @@ export function MemoryScreen({
           title={selection.docPath}
           action={
             <div className="flex items-center gap-2">
-              {canDelete && selected && pending?.phase !== "deleted" ? (
+              {/* A read that failed does not take the button away. Somebody
+                  who came here to erase a document does not stop wanting that
+                  because the preview is missing, and the route answers
+                  honestly: it refuses with the provider's own sentence rather
+                  than reporting a deletion that did not happen. */}
+              {canDelete && (selected || selectedUnavailable) && pending?.phase !== "deleted" ? (
                 pending ? (
                   <>
                     <span className="font-mono text-[11px] text-neutral-700">
@@ -199,6 +239,24 @@ export function MemoryScreen({
             <div className="py-6 text-center font-body text-[13px] text-neutral-500">
               Deleted from the store. A later run can learn this again.
             </div>
+          ) : selectedUnavailable ? (
+            // Ahead of the empty preview below, and that order is the point: an
+            // unanswered read must never reach the sentence that says this was
+            // deleted. Nothing was deleted, and the text is still there as far
+            // as anybody here knows.
+            <div className="flex flex-col items-center gap-1 py-6 text-center font-body text-[13px] text-neutral-500">
+              <span>
+                This document could not be read, so it is not shown. It is still
+                stored as far as this page knows: nothing was deleted.
+              </span>
+              <span className="font-mono text-[11px] text-neutral-700">
+                {selectedUnavailable}
+              </span>
+              {/* The delete button stays available here, so its refusal has to
+                  land somewhere a person looks. Without this the click would
+                  fail in silence. */}
+              {pending?.error ? <InlineError>{pending.error}</InlineError> : null}
+            </div>
           ) : selected ? (
             <div className="flex flex-col gap-2">
               <div className="font-mono text-[11px] text-neutral-500">
@@ -236,7 +294,11 @@ export function MemoryScreen({
           <span className="hidden lg:block text-right">Source run</span>
         </div>
 
-        {visible.length === 0 ? (
+        {unavailable ? (
+          <div className="px-4 py-10 text-center font-body text-[13px] text-neutral-500">
+            {unavailable}
+          </div>
+        ) : visible.length === 0 ? (
           <div className="px-4 py-10 text-center font-body text-[13px] text-neutral-500">
             Nothing remembered yet. Documents appear here once a run writes to its memory.
           </div>

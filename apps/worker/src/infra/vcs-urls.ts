@@ -5,12 +5,11 @@ export function buildCloneUrl(config: { host: string; repoPath: string }): strin
 }
 
 export function buildVcsUrls(
-  config: { kind: "github" | "gitlab"; repoPath: string; host: string },
+  config: { repoPath: string; host: string; authUser?: string },
 ) {
-  const authUser = config.kind === "gitlab" ? "oauth2" : "x-access-token";
   return {
     cloneUrl: buildCloneUrl(config),
-    authUser,
+    authUser: config.authUser ?? "x-access-token",
   };
 }
 

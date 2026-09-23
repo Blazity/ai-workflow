@@ -6,8 +6,6 @@ const mocks = vi.hoisted(() => ({
     CODEX_API_KEY: "codex-key",
     CODEX_CHATGPT_OAUTH_TOKEN: undefined,
     JOB_TIMEOUT_MS: 120_000,
-    GENAI_ENGINE_API_KEY: undefined,
-    GENAI_ENGINE_TRACE_ENDPOINT: undefined,
     DASHBOARD_ORG_SLUG: "test-org",
   } as Record<string, unknown>,
   sandboxCreate: vi.fn(),
@@ -141,7 +139,6 @@ describe("ensureAgentSandbox", () => {
       sandboxId: null,
       agentSandboxIds: {},
       sandboxIds: new Set(),
-      arthur: { taskId: "task-1" },
     });
     const runtime = makeHarnessRuntime(
       "generic",
@@ -249,7 +246,7 @@ describe("ensureAgentSandbox", () => {
         "scratch-1",
         "claude",
         runtime.manifest.model.id,
-        null,
+        { runId: "run_test", subjectKey: "AWT-1", states: {} },
         { organizationSlug: "ai-workflow", runtime },
       ),
     ).resolves.toEqual({ ok: true, value: undefined });

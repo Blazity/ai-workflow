@@ -151,6 +151,7 @@ export interface SettleReviewLedgerStepInput {
   provider: VcsProviderKind;
   repoPath: string;
   baseBranch: string;
+  integrationPins?: readonly import("@shared/contracts").IntegrationConnectionPin[];
 }
 
 /**
@@ -191,6 +192,7 @@ export async function settleReviewLedgerStep(
       provider: input.provider,
       repoPath: input.repoPath,
       baseBranch: input.baseBranch,
+      integrationPins: input.integrationPins,
     }),
     ...(evidenceStillPresent
       ? {

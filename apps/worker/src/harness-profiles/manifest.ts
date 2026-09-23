@@ -21,15 +21,6 @@ export {
   isRecognisedModel as isRecognisedHarnessModel,
 } from "@shared/harness";
 
-const HARNESS_CREDENTIAL_IDS = [
-  "anthropic",
-  "openai",
-  "github",
-  "gitlab",
-  "jira",
-  "slack",
-] as const;
-
 export const HARNESS_PROVIDER_CONTRACTS = {
   claude: {
     packageName: "@anthropic-ai/claude-code",
@@ -130,9 +121,7 @@ const draftManifestSchema = z
       .max(100),
     tools: z.array(z.enum(HARNESS_TOOL_IDS)).max(HARNESS_TOOL_IDS.length),
     mcpIntegrations: z.array(z.string()).max(0),
-    credentialReferences: z
-      .array(z.enum(HARNESS_CREDENTIAL_IDS))
-      .max(HARNESS_CREDENTIAL_IDS.length),
+    credentialReferences: z.array(boundedString(80)).max(20),
   })
   .strict()
   .superRefine((manifest, context) => {
@@ -397,9 +386,7 @@ const draftManifestV2Schema = z
       .max(100),
     tools: z.array(z.enum(HARNESS_TOOL_IDS)).max(HARNESS_TOOL_IDS.length),
     mcpIntegrations: z.array(z.string()).max(0),
-    credentialReferences: z
-      .array(z.enum(HARNESS_CREDENTIAL_IDS))
-      .max(HARNESS_CREDENTIAL_IDS.length),
+    credentialReferences: z.array(boundedString(80)).max(20),
   })
   .strict()
   .superRefine((manifest, context) => {

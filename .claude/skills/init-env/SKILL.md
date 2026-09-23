@@ -135,7 +135,7 @@ Invoke the `init-jira` subskill via the Skill tool. It detects state and runs ph
 
 ## Step 3 — Invoke `init-vcs`
 
-Invoke `init-vcs`. It asks **github or gitlab** and emits a single paste-template for the chosen provider. Cross-field rule (`env.ts`) enforced by construction — only the chosen branch's keys are emitted.
+Invoke `init-vcs`. It asks **github, gitlab or both** and emits a paste-template per chosen provider. No variable picks the provider: each repository record names the one that serves it.
 
 → **Stop. Ask:** *"VCS configured. Ready for Step 4: agent runtime?"*
 
@@ -358,8 +358,9 @@ Skipped (see SETUP.md for the full how-to):
   - Arthur AI tracing — SETUP.md §12. Set GENAI_ENGINE_API_KEY and
     GENAI_ENGINE_TRACE_ENDPOINT to enable per-run tracing and the
     prompt-injection check.
-  - GitLab swap — SETUP.md §12. Flip VCS_KIND=gitlab and provide
-    GITLAB_TOKEN + GITLAB_PROJECT_ID (+ GITLAB_HOST for self-hosted).
+  - GitLab alongside or instead of GitHub: SETUP.md §12. Provide
+    GITLAB_TOKEN (+ GITLAB_HOST for self-hosted), or connect GitLab on the
+    Integrations page, then import its repositories on the Repositories page.
   - CI / GitHub Actions — SETUP.md §11. The `e2e` GitHub environment
     needs the prod env vars plus E2E_BASE_URL, E2E_GITHUB_APP_ID,
     E2E_GITHUB_APP_PRIVATE_KEY (base64 PEM), E2E_GITHUB_INSTALLATION_ID,

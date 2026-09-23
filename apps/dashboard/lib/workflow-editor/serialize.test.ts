@@ -494,7 +494,7 @@ test("omits empty model and message params and undefined name", () => {
   const nodes = flowNodes([
     { id: "planning", type: "planning_agent", x: 0, y: 0, params: { model: "" } },
     { id: "review", type: "review_agent", x: 0, y: 0, params: { model: "claude-opus-4" } },
-    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: { message: "" } },
+    { id: "slack", type: "send_message", x: 0, y: 0, params: { message: "" } },
     { id: "checks", type: "run_pre_pr_checks", x: 0, y: 0, params: { maxFixCycles: 0 } },
   ]);
 
@@ -502,7 +502,7 @@ test("omits empty model and message params and undefined name", () => {
   assertSerializedNodes(out.nodes, [
     { id: "planning", type: "planning_agent", x: 0, y: 0, params: {} },
     { id: "review", type: "review_agent", x: 0, y: 0, params: { model: "claude-opus-4" } },
-    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: {} },
+    { id: "slack", type: "send_message", x: 0, y: 0, params: {} },
     { id: "checks", type: "run_pre_pr_checks", x: 0, y: 0, params: { maxFixCycles: 0 } },
   ]);
   assert.equal("name" in out.nodes[0], false);
@@ -554,13 +554,6 @@ test("drops retired bespoke reference params while retaining supported arrays", 
       y: 0,
       params: { planFromStep: "plan" },
     },
-    {
-      id: "arthur",
-      type: "arthur_injection_check",
-      x: 0,
-      y: 0,
-      params: { contentFromStep: "plan" },
-    },
     { id: "rc", type: "run_checks", x: 0, y: 0, params: { commands: [] } },
   ]);
 
@@ -574,7 +567,6 @@ test("drops retired bespoke reference params while retaining supported arrays", 
       params: {},
     },
     { id: "approval", type: "send_plan_approval", x: 0, y: 0, params: {} },
-    { id: "arthur", type: "arthur_injection_check", x: 0, y: 0, params: {} },
     { id: "rc", type: "run_checks", x: 0, y: 0, params: {} },
   ]);
 });
@@ -667,13 +659,13 @@ test("never emits provider for non-agent node types", () => {
       y: 0,
       params: { target: "ai_review", provider: "codex" },
     },
-    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: { message: "hi", provider: "claude" } },
+    { id: "slack", type: "send_message", x: 0, y: 0, params: { message: "hi", provider: "claude" } },
   ]);
 
   const out = serializeWorkflowDefinition(nodes, []);
   assertSerializedNodes(out.nodes, [
     { id: "status", type: "update_ticket_status", x: 0, y: 0, params: { target: "ai_review" } },
-    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: { message: "hi" } },
+    { id: "slack", type: "send_message", x: 0, y: 0, params: { message: "hi" } },
   ]);
 });
 
@@ -785,4 +777,26 @@ test("changing a v2 pin changes the semantic definition", () => {
   );
 
   assert.notDeepEqual(after, before);
+});
+
+test("an integration's block keeps its own params instead of taking the editor down", () => {
+  // The param-key allowlist is keyed by the block types core owns, and an
+  // integration's type is storable without being in it. Reading the table
+  // directly threw "BLOCK_PARAM_KEYS[node.type] is not iterable" on the first
+  // render after such a block reached the canvas, which replaced the whole
+  // editor with the client-error screen.
+  const nodes = flowNodes([
+    {
+      id: "echo",
+      type: "demo_echo" as FlowNodeDef["type"],
+      name: "Demo echo",
+      x: 10,
+      y: 20,
+      params: { message: "hello", limit: 3, blank: "   " },
+    },
+  ]);
+
+  const definition = serializeWorkflowDefinition(nodes, []) as WorkflowDefinitionV2;
+
+  assert.deepEqual(definition.nodes[0]?.configuration, { message: "hello", limit: 3 });
 });

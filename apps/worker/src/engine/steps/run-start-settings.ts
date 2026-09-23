@@ -26,6 +26,7 @@
  * precedent for a step reading a db repository directly is
  * `loadPrePrCheckConfigStep` in `engine/blocks/pre-pr-checks.ts`.
  */
+import type { IssueTrackerRefusal } from "../support/issue-tracker-runtime.js";
 import {
   defaultSettingsSnapshot,
   resolveSettingsSnapshot,
@@ -121,6 +122,37 @@ export interface RunStartSettings {
    *  on the whole path it took before this field existed; there is no default
    *  that pretends one was. */
   workScope?: RunStartWorkScope;
+  /**
+   * How this deployment's issue tracker is wired, frozen with the settings.
+   *
+   * ABSENT MEANS NO WIRING WAS RECORDED, which is a result stored before this
+   * field existed or a run that started with no tracker connected. Absent, a
+   * ticket is moved by the name of the column and nothing else, which is what
+   * a board without configured transition ids already did, so absence is the
+   * behaviour of the simplest working deployment rather than a guess.
+   *
+   * It is frozen here for the same reason the columns are. Until S12 the
+   * transition ids were environment variables read at the moment of each move,
+   * so a redeploy could change where a run in flight put its ticket. They are
+   * an integration's connection now, and a run that started against one board
+   * finishes against that board.
+   */
+  tracker?: RunStartTracker;
+}
+
+/**
+ * The board wiring a run froze at its start: the transition ids its moves use.
+ *
+ * It no longer carries the tracker's Site URL. How a ticket is linked is the
+ * tracker's own answer, recorded with the run's ticket (`WorkflowTicket.url`),
+ * and no deployed build ever read the field from here, so there is nothing to
+ * roll back to. A result recorded while it was still written carries it and
+ * is read as before: the extra key is ignored.
+ */
+export interface RunStartTracker {
+  backlogTransitionId?: string;
+  aiTransitionId?: string;
+  aiReviewTransitionId?: string;
 }
 
 /**
@@ -188,10 +220,26 @@ export async function loadRunStartSettingsStep(input: {
     },
     "run_start_settings",
   );
+  // A deployment with no issue tracker connected is a legitimate state, and a
+  // run can be about a pull request rather than a ticket, so this read must
+  // not stop the run start. What it could not read is recorded as absent, and
+  // the callers that need a ticket refuse with their own sentence.
+  const tracker = await readTrackerWiring((reason, refusal) =>
+    // Frozen for the whole run: every ticket link is then empty and every
+    // move falls back to a bare column name, so the run's start says why.
+    // Nothing connected is a legitimate state; the other refusals are not,
+    // and look the same everywhere else.
+    (refusal === "not_connected" ? logger.info.bind(logger) : logger.warn.bind(logger))(
+      { subjectKey, reason, refusal },
+      "run_start_tracker_wiring_absent",
+    ),
+  );
+
   return {
     version: 1,
     settings: snapshot,
     repositories,
+    ...(tracker ? { tracker } : {}),
     ...(subjectKey === null
       ? {}
       : {
@@ -227,6 +275,48 @@ loadRunStartSettingsStep.maxRetries = 3;
  */
 export function runStartSettings(stored: RunStartSettings): SettingsSnapshot {
   return { ...defaultSettingsSnapshot(), ...stored.settings };
+}
+
+/**
+ * The tracker wiring a stored run-start result means.
+ *
+ * Pure, so the workflow body may call it, which is also why absence cannot be
+ * resolved here: reading the connection is a database read and this tier has
+ * no database.
+ *
+ * ABSENT IS NOT NOTHING. A run suspended before S12 replays a result with no
+ * wiring, so every transition id is missing and every move target it builds is
+ * a bare column name. On a board that localizes its transition names, moving
+ * by name finds no transition and the ticket is stranded at the end of a run
+ * that otherwise worked. The bare name is completed against the current board
+ * in `steps/ticket-transition-step.ts`, which runs in the worker and can read
+ * the connection.
+ */
+export function runStartTracker(stored: RunStartSettings): RunStartTracker {
+  return stored.tracker ?? {};
+}
+
+async function readTrackerWiring(
+  absent: (reason: string, refusal: IssueTrackerRefusal) => void,
+): Promise<RunStartTracker | undefined> {
+  const { resolveActiveIssueTracker } = await import(
+    "../support/issue-tracker-runtime.js"
+  );
+  const resolved = await resolveActiveIssueTracker().catch((error: unknown) => ({
+    ok: false as const,
+    refusal: "unreadable" as const,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+  if (!resolved.ok) {
+    absent(resolved.reason, resolved.refusal);
+    return undefined;
+  }
+  const { backlogTransitionId, aiTransitionId, aiReviewTransitionId } = resolved.wiring;
+  return {
+    ...(backlogTransitionId ? { backlogTransitionId } : {}),
+    ...(aiTransitionId ? { aiTransitionId } : {}),
+    ...(aiReviewTransitionId ? { aiReviewTransitionId } : {}),
+  };
 }
 
 /**

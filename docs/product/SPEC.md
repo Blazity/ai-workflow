@@ -103,16 +103,20 @@ All paths below are relative to `apps/worker/src/` unless stated otherwise.
    - Transitions can be pinned with `JIRA_BACKLOG_TRANSITION_ID` / `JIRA_AI_REVIEW_TRANSITION_ID`
      (recommended when Jira localizes transition names).
 
-4. **Messaging Adapter** (`adapters/messaging/chatsdk.ts`)
-   - Built on the [`vercel/chat`](https://github.com/vercel/chat) abstraction (`chat` +
-     `@chat-adapter/slack`). Slack is the only wired adapter; Teams is not supported.
+4. **Messaging** (a capability, served by an integration: `integrations/slack/**`)
+   - Core calls `MessagingSender` (`engine/support/messaging.ts`), which resolves the connected
+     provider on every call and never throws; which conversation a ticket owns stays core's row.
+     Slack is the provider this build ships; another one needs no change here.
    - Maintains a live-status parent message per ticket with a threaded audit log, and attaches a
      token/cost usage report to `pr_ready` notifications.
-   - Optional — when `CHAT_SDK_SLACK_TOKEN` / `CHAT_SDK_CHANNEL_ID` are unset a no-op adapter is
-     used.
-   - A separate Slack slash command `/ai-workflow` (`routes/webhooks/slack.post.ts`, signature
-     verified via `SLACK_SIGNING_SECRET`, allow-listed via `SLACK_ALLOWED_USER_IDS`) supports
-     `help`, `list`, `status <KEY>`, `cancel <KEY>`, and registry-inspection subcommands.
+   - Optional — with no provider connected, the messaging blocks refuse in the editor and run
+     notifications are dropped with a logged reason. Slack is configured from the Integrations
+     page or from `CHAT_SDK_SLACK_TOKEN` / `CHAT_SDK_CHANNEL_ID`, which are required together.
+   - The Slack slash command `/ai-workflow` answers at the same URL through the generic webhook
+     route (`routes/webhooks/[id].post.ts`); the integration verifies the signature
+     (`SLACK_SIGNING_SECRET`, allow-listed via `SLACK_ALLOWED_USER_IDS`) and core runs the
+     command. It supports `help`, `list`, `status <KEY>`, `cancel <KEY>`, and registry-inspection
+     subcommands.
 
 5. **VCS Adapters** (`adapters/vcs/github.ts`, `adapters/vcs/gitlab.ts`)
    - GitHub via Octokit with **GitHub App auth** (installation tokens, bot commit identity);
@@ -232,16 +236,18 @@ validation includes cross-field rules for VCS provider completeness, commit auth
 provider credentials, SSO, and Resend dependencies. Missing or invalid required config fails
 startup with a clear error. The full reference lives in `SETUP.md`; the groups are:
 
-- **Issue tracker:** `ISSUE_TRACKER_KIND` (`jira`), `JIRA_BASE_URL`, `JIRA_API_TOKEN`,
-  `JIRA_PROJECT_KEY`, the three board column settings, optional
-  `JIRA_BACKLOG_TRANSITION_ID` / `JIRA_AI_REVIEW_TRANSITION_ID`, `JIRA_WEBHOOK_SECRET`.
-- **VCS:** `VCS_KIND` (`github` | `gitlab`), GitHub App vars (`GITHUB_APP_ID`,
-  `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`), GitLab vars
-  (`GITLAB_TOKEN`, `GITLAB_HOST`), and per-provider webhook secrets. Repository
-  profiles own the default branch. Legacy single-repo `GITHUB_OWNER`/`GITHUB_REPO`
-  is still honored as a fallback.
-- **Messaging:** `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID`, `CHAT_SDK_BOT_NAME` (default
-  `ai-workflow`), `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_USER_IDS`. (There is no `CHAT_SDK_API_KEY`.)
+- **Issue tracker:** `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`, optional
+  `JIRA_BACKLOG_TRANSITION_ID` / `JIRA_AI_REVIEW_TRANSITION_ID` and `JIRA_WEBHOOK_SECRET`,
+  which seed the Jira integration's connection, plus the three board column settings.
+- **VCS:** GitHub App vars (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
+  `GITHUB_INSTALLATION_ID`), GitLab vars (`GITLAB_TOKEN`, `GITLAB_HOST`) which
+  seed the GitLab integration's connection, and per-provider webhook secrets.
+  There is no deployment-wide provider selector: a repository carries its own
+  provider. Repository profiles own the default branch. Legacy single-repo
+  `GITHUB_OWNER`/`GITHUB_REPO` is still honored as a fallback.
+- **Messaging:** `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID`, `SLACK_SIGNING_SECRET`,
+  `SLACK_ALLOWED_USER_IDS`. (There is no `CHAT_SDK_API_KEY`. The bot's display name is
+  whatever the Slack app is called; `CHAT_SDK_BOT_NAME` was retired in S9.)
 - **Agent:** Harness profiles own provider and model. The credentials required are those of the
   providers your harness profiles use: `ANTHROPIC_API_KEY` for Claude profiles and
   `CODEX_API_KEY` or `CODEX_CHATGPT_OAUTH_TOKEN` for Codex profiles. The Codex pricing feed
@@ -525,7 +531,7 @@ not configured. Swapping platforms means wiring another `@chat-adapter/*`.
 
 ### 11.4 Adapter Registration
 
-Active adapters are chosen via env (`ISSUE_TRACKER_KIND`, `VCS_KIND`, presence of Slack config).
+Active adapters are the integrations a deployment has connected and enabled (ADR-010): the one issue tracker, the version control provider each repository names, and the messaging integration.
 GitHub and GitLab can be active simultaneously; repository selection spans both providers.
 
 ## 12. Context Assembly

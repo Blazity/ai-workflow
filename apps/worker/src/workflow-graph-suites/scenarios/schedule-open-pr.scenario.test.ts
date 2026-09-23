@@ -10,6 +10,7 @@ import {
 import { workflowDefinitionV2Schema } from "@shared/workflow-graph";
 import { executorRunsOf, expectStartsAfterFinishOf } from "./assertions.js";
 import { createScenario, type Scenario } from "./harness.js";
+import { MESSAGING_CONNECTED } from "../../engine/definition/messaging-deployment.fixture.js";
 
 /**
  * The committed `schedule-open-pr-v1` snapshot as an executable specification.
@@ -50,9 +51,8 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-scenario" },
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);

@@ -106,50 +106,6 @@ export function deploymentSettings(): {
   };
 }
 
-/**
- * Every configured credential, for the redaction pass that runs over anything a
- * tool is about to publish. A value that is not set is not a secret to redact,
- * so unset entries are dropped rather than turning into an empty-string match
- * that would redact everything.
- */
-export function configuredSecretValues(): string[] {
-  return [
-    env.JIRA_API_TOKEN,
-    env.GITHUB_APP_PRIVATE_KEY,
-    env.GITLAB_TOKEN,
-    env.CHAT_SDK_SLACK_TOKEN,
-    env.SLACK_SIGNING_SECRET,
-    env.ANTHROPIC_API_KEY,
-    env.CODEX_API_KEY,
-    env.CODEX_CHATGPT_OAUTH_TOKEN,
-    env.GENAI_ENGINE_API_KEY,
-    env.VERCEL_TOKEN,
-    env.CRON_SECRET,
-    env.JIRA_WEBHOOK_SECRET,
-    env.GITHUB_WEBHOOK_SECRET,
-    env.GITLAB_WEBHOOK_SECRET,
-    env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
-    env.BETTER_AUTH_SECRET,
-    env.SSO_CLIENT_SECRET,
-    env.RESEND_API_KEY,
-    env.RESEND_WEBHOOK_SECRET,
-  ].filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
-}
-
-/**
- * The evaluation trace backend. Both halves are optional and a caller that has
- * only one of them cannot call anything, so they travel together.
- */
-export function evaluationTraceSettings(): {
-  endpoint?: string;
-  apiKey?: string;
-} {
-  return {
-    endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-    apiKey: env.GENAI_ENGINE_API_KEY,
-  };
-}
-
 /** The secret the OAuth flow cookie is signed with. */
 export function betterAuthSecret(): string {
   return env.BETTER_AUTH_SECRET;

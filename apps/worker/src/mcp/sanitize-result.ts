@@ -3,6 +3,10 @@ import { Buffer } from "node:buffer";
 import { canonicalJson, hashCanonicalJson } from "./canonical-json.js";
 import { MCP_CONTRACT_HASH } from "./contract-artifact.js";
 import { McpPublicError, type McpEnvelope, type SanitizeOptions } from "./contracts.js";
+import {
+  INTEGRATION_VARIABLE_PATTERNS,
+  INTEGRATION_VARIABLE_PLACEHOLDER,
+} from "./integration-redaction.js";
 
 // Re-exported, not redefined. The hash is computed in contract-artifact.ts over the
 // real published surface (every tool's name, description, input schema and
@@ -60,6 +64,13 @@ function sanitizeString(
   for (const secret of secrets) {
     value = replaceCounted(value, secret, "[REDACTED]", redactions);
   }
+  // Names, not values, and a different placeholder for that reason. A model
+  // that knows which variable to ask a person for is the hole ADR-010 decision
+  // 15 closes; see integration-redaction.ts for why the floor is here and not
+  // only at the places this surface composes its own sentences.
+  for (const pattern of INTEGRATION_VARIABLE_PATTERNS) {
+    value = replaceCounted(value, pattern, INTEGRATION_VARIABLE_PLACEHOLDER, redactions);
+  }
   value = replaceCounted(value, ANSI_SEQUENCE, "", redactions);
   value = replaceCounted(value, CONTROL_BYTES, "", redactions);
   return value;
@@ -106,6 +117,21 @@ function sanitizeValue(
     return null;
   }
   return input;
+}
+
+/**
+ * The same floor for the message a tool refuses with. An error never travels in
+ * an envelope (the SDK forwards `error.message` as it is), and several refusals
+ * carry words somebody else wrote: a memory provider's reason, a dispatch
+ * blocker naming an integration. So the message passes through exactly what
+ * the data does, the secrets this call resolved included.
+ */
+export function sanitizeMcpText(input: string, secrets: readonly string[]): string {
+  return sanitizeString(
+    input,
+    secrets.filter((secret) => secret.length > 0),
+    { value: 0 },
+  );
 }
 
 export function sanitizeMcpData<T>(data: T, options: SanitizeOptions): McpEnvelope<T> {

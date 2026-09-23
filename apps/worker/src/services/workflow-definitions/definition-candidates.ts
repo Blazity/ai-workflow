@@ -13,6 +13,7 @@ import type {
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { blockContractsFor } from "./block-contracts.js";
+import type { DeploymentIntegrations } from "../../engine/definition/integration-availability.js";
 import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from "./policy-operations.js";
 import {
   analyzeWorkflowV2Catalog,
@@ -35,6 +36,10 @@ export type WorkflowDefinitionCandidateParse =
 export function parseWorkflowDefinitionCandidate(
   candidate: unknown,
 ): WorkflowDefinitionCandidateParse {
+  // A block this build renamed is accepted under its old name and stored under
+  // the new one. The sender is an editor tab somebody opened before the deploy,
+  // or a client written against the old catalog; refusing them would break
+  // authoring for the length of a browser session (ADR-010).
   const parsed = parse(candidate);
   if (parsed.definition !== null) return { ok: true, definition: parsed.definition };
   return {
@@ -47,9 +52,11 @@ export function parseWorkflowDefinitionCandidate(
 
 /** Validate a candidate the editor holds but has not saved. An unparseable
  *  candidate is a validation result, not a bad request: the editor renders the
- *  issues in the same panel either way. */
-export async function validateWorkflowDefinitionDraftCandidate(candidate: unknown) {
-  const validation = await validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(candidate);
+ *  issues in the same panel either way. The definition it belongs to is what
+ *  the tracker's query rule compares against, so a template the deployed
+ *  version already runs comes back as a notice rather than an issue. */
+export async function validateWorkflowDefinitionDraftCandidate(candidate: unknown, definitionId: number) {
+  const validation = await validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(candidate, definitionId);
   return validation.response;
 }
 
@@ -59,6 +66,12 @@ export async function validateWorkflowDefinitionDraftCandidate(candidate: unknow
 export function analyzeWorkflowDefinitionCatalog(
   _settings: SettingsSnapshot,
   definition: WorkflowDefinitionV2,
+  // Taken, not read. The fields an integration block promises downstream have
+  // to appear in the catalog the editor binds from, so this needs the real
+  // state; the route is what says where that state comes from, because the
+  // route is what knows this request may touch a database.
+  integrations: DeploymentIntegrations,
 ): WorkflowDefinitionCatalogResponse {
-  return analyzeWorkflowV2Catalog(blockContractsFor().analyzeValues(definition));
+  const contracts = blockContractsFor(undefined, integrations);
+  return analyzeWorkflowV2Catalog(contracts.analyzeValues(definition));
 }

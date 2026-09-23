@@ -34,24 +34,14 @@ export function TriggerPrChecksFailedFields(props: BlockRendererProps) {
                 onChange={(value) => onChange("params.ignoreCheckNames", value ?? [])}
               />
             </ConfigField>
-            <ConfigField label="Trusted GitHub App slugs">
+            <ConfigField label="Trusted check producers">
               <ArrayTextarea
-                key={`${node.id}:githubAppSlugs`}
-                value={node.params.githubAppSlugs}
+                key={`${node.id}:trustedProducers`}
+                value={node.params.trustedProducers}
                 disabled={!canEdit}
                 mono
-                placeholder="github-actions"
-                onChange={(value) => onChange("params.githubAppSlugs", value)}
-              />
-            </ConfigField>
-            <ConfigField label="Trusted GitLab pipeline sources">
-              <ArrayTextarea
-                key={`${node.id}:gitlabPipelineSources`}
-                value={node.params.gitlabPipelineSources}
-                disabled={!canEdit}
-                mono
-                placeholder="merge_request_event"
-                onChange={(value) => onChange("params.gitlabPipelineSources", value)}
+                placeholder="ci-system"
+                onChange={(value) => onChange("params.trustedProducers", value ?? [])}
               />
             </ConfigField>
             <ConfigField label="Max fix attempts per PR">
@@ -65,9 +55,9 @@ export function TriggerPrChecksFailedFields(props: BlockRendererProps) {
             </ConfigField>
             <ConfigNote>
               Leave the check names empty to react to every failing check, or list names to
-              narrow it to those. GitHub defaults to the github-actions App; GitLab defaults to
-              merge-request pipelines. Ignored check names never start a run even when they
-              fail. Max fix attempts per PR caps how many automatic fix attempts one pull
+              narrow it to those. Leave trusted producers empty to use the provider's trusted
+              default, or list producer identities to restrict it. Ignored check names never
+              start a run even when they fail. Max fix attempts per PR caps how many automatic fix attempts one pull
               request may receive before the loop stops.
             </ConfigNote>
             <TriggerRateLimitFields

@@ -1,7 +1,6 @@
 // THIS FILE IS GENERATED. DO NOT EDIT.
 // Run pnpm run gen:blocks to update.
 
-import { manifest as arthurInjectionCheckManifest } from "../blocks/arthur-injection-check/manifest.js";
 import { manifest as branchManifest } from "../blocks/branch/manifest.js";
 import { manifest as callLlmManifest } from "../blocks/call-llm/manifest.js";
 import { manifest as completePrCheckManifest } from "../blocks/complete-pr-check/manifest.js";
@@ -25,8 +24,8 @@ import { manifest as reviewAgentManifest } from "../blocks/review-agent/manifest
 import { manifest as runChecksManifest } from "../blocks/run-checks/manifest.js";
 import { manifest as runPrePrChecksManifest } from "../blocks/run-pre-pr-checks/manifest.js";
 import { manifest as runScriptsManifest } from "../blocks/run-scripts/manifest.js";
+import { manifest as sendMessageManifest } from "../blocks/send-message/manifest.js";
 import { manifest as sendPlanApprovalManifest } from "../blocks/send-plan-approval/manifest.js";
-import { manifest as sendSlackMessageManifest } from "../blocks/send-slack-message/manifest.js";
 import { manifest as terminateManifest } from "../blocks/terminate/manifest.js";
 import { manifest as transformManifest } from "../blocks/transform/manifest.js";
 import { manifest as triggerPlanApprovedManifest } from "../blocks/trigger-plan-approved/manifest.js";
@@ -42,7 +41,6 @@ import { manifest as triggerWebhookManifest } from "../blocks/trigger-webhook/ma
 import { manifest as updateTicketStatusManifest } from "../blocks/update-ticket-status/manifest.js";
 
 export const BLOCK_PARAM_SCHEMAS = {
-  arthur_injection_check: arthurInjectionCheckManifest.paramsSchema,
   branch: branchManifest.paramsSchema,
   call_llm: callLlmManifest.paramsSchema,
   complete_pr_check: completePrCheckManifest.paramsSchema,
@@ -66,8 +64,8 @@ export const BLOCK_PARAM_SCHEMAS = {
   run_checks: runChecksManifest.paramsSchema,
   run_pre_pr_checks: runPrePrChecksManifest.paramsSchema,
   run_scripts: runScriptsManifest.paramsSchema,
+  send_message: sendMessageManifest.paramsSchema,
   send_plan_approval: sendPlanApprovalManifest.paramsSchema,
-  send_slack_message: sendSlackMessageManifest.paramsSchema,
   terminate: terminateManifest.paramsSchema,
   transform: transformManifest.paramsSchema,
   trigger_plan_approved: triggerPlanApprovedManifest.paramsSchema,
@@ -85,7 +83,6 @@ export const BLOCK_PARAM_SCHEMAS = {
 
 export const paramsSchemas = BLOCK_PARAM_SCHEMAS;
 
-export const arthurInjectionCheckParams = BLOCK_PARAM_SCHEMAS.arthur_injection_check;
 export const branchParams = BLOCK_PARAM_SCHEMAS.branch;
 export const callLlmParams = BLOCK_PARAM_SCHEMAS.call_llm;
 export const completePrCheckParams = BLOCK_PARAM_SCHEMAS.complete_pr_check;
@@ -109,8 +106,8 @@ export const reviewAgentParams = BLOCK_PARAM_SCHEMAS.review_agent;
 export const runChecksParams = BLOCK_PARAM_SCHEMAS.run_checks;
 export const runPrePrChecksParams = BLOCK_PARAM_SCHEMAS.run_pre_pr_checks;
 export const runScriptsParams = BLOCK_PARAM_SCHEMAS.run_scripts;
+export const sendMessageParams = BLOCK_PARAM_SCHEMAS.send_message;
 export const sendPlanApprovalParams = BLOCK_PARAM_SCHEMAS.send_plan_approval;
-export const sendSlackMessageParams = BLOCK_PARAM_SCHEMAS.send_slack_message;
 export const terminateParams = BLOCK_PARAM_SCHEMAS.terminate;
 export const transformParams = BLOCK_PARAM_SCHEMAS.transform;
 export const triggerPlanApprovedParams = BLOCK_PARAM_SCHEMAS.trigger_plan_approved;

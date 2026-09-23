@@ -24,7 +24,7 @@ export {
 } from "../../run-observability/agent-briefings.js";
 export {
   BRIEFING_REDACTS_PERSONAL_DATA,
-  configuredVisibilityDetector,
+  knownSecretsVisibilityDetector,
   createVisibilityDetector,
   redactForStorage,
 } from "../../run-observability/visibility-detector.js";

@@ -27,7 +27,7 @@ describe("resolvePromptReferencesInNodes", () => {
     }));
     const nodes = [
       node("planning_agent", { prompt: "Plan: {{prompt:1}}", model: "{{prompt:1}}" }),
-      node("send_slack_message", { message: "Message: {{prompt:1}}" }),
+      node("send_message", { message: "Message: {{prompt:1}}" }),
       node("run_checks", { commands: ["echo {{prompt:1}}"] }),
     ];
 
@@ -111,14 +111,14 @@ describe("resolvePromptReferencesInNodes", () => {
 
     it("resolves data tokens a referenced body carries when a non-agent block runs", async () => {
       const { text } = await expand(
-        "send_slack_message",
+        "send_message",
         "message",
         "Shipped {{data:steps.entry.output.ticketKey}} on {{data:run.branchName}}",
       );
 
       expect(
         resolveV2PromptConfiguration(
-          v2Node("send_slack_message", { message: text }),
+          v2Node("send_message", { message: text }),
           bindingContext,
         ),
       ).toEqual({
@@ -128,16 +128,16 @@ describe("resolvePromptReferencesInNodes", () => {
     });
 
     it("refuses a legacy variable a referenced body carries on a non-agent block", async () => {
-      const { text } = await expand("send_slack_message", "message", "Shipped {{ticket_key}}");
+      const { text } = await expand("send_message", "message", "Shipped {{ticket_key}}");
 
       expect(
         resolveV2PromptConfiguration(
-          v2Node("send_slack_message", { message: text }),
+          v2Node("send_message", { message: text }),
           bindingContext,
         ),
       ).toEqual({
         ok: false,
-        issue: "send_slack_message message contains an unresolved placeholder.",
+        issue: "send_message message contains an unresolved placeholder.",
       });
     });
 

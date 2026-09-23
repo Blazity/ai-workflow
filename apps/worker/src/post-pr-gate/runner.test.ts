@@ -8,7 +8,11 @@ import type {
   VCSAdapter,
 } from "../adapters/vcs/types.js";
 
-const gateStatusRef: GateStatusRef = { provider: "gitlab", name: "gate", headSha: "sha1" };
+const gateStatusRef = {
+  provider: "gitlab",
+  name: "gate",
+  headSha: "sha1",
+} as unknown as GateStatusRef;
 
 const config: PostPrGateConfig = {
   postPrGate: {
@@ -48,7 +52,6 @@ function vcsAdapter(methods: Partial<GateStatusCapableVCS & RichGateStatusCapabl
     postPRComment: vi.fn(),
     getCheckRunResults: vi.fn(),
     getPRConflictStatus: vi.fn(),
-    getPRHeadSha: vi.fn(),
     findPR: vi.fn(),
     getBranchSha: vi.fn(),
     getBranchShaIfExists: vi.fn(),

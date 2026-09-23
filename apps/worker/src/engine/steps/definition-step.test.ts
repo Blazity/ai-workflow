@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { connectedIssueTracker } from "../../test-support/issue-tracker.js";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 
@@ -11,10 +12,18 @@ vi.mock("../../infra/vcs-config.js", () => ({
     GITHUB_INSTALLATION_ID: 2,
     CHAT_SDK_SLACK_TOKEN: "slack-token",
     CHAT_SDK_CHANNEL_ID: "channel",
-    GENAI_ENGINE_API_KEY: "arthur-key",
-    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
   },
 }));
+// This deployment's integrations, stated. The plan load reads them inside the
+// step so a run carries the connection it started with; this file is about
+// which definition the step picks, so it says "none" in one line rather than
+// standing up a database to find out.
+vi.mock("../../services/integrations/runtime.js", () => ({
+  readIntegrationStates: async () => new Map(),
+}));
+// A deployment with a tracker connected, which is what a ticket trigger
+// needs to exist at all. The choice of tracker is proved elsewhere.
+vi.mock("../support/issue-tracker-runtime.js", () => connectedIssueTracker());
 vi.mock("../../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
 
 const mockGetCurrentVersion = vi.fn();
@@ -78,8 +87,6 @@ async function resetEnv() {
     GITHUB_INSTALLATION_ID: 2,
     CHAT_SDK_SLACK_TOKEN: "slack-token",
     CHAT_SDK_CHANNEL_ID: "channel",
-    GENAI_ENGINE_API_KEY: "arthur-key",
-    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
   });
 }
 
@@ -250,7 +257,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
       "run_pre_pr_checks",
       "finalize_workspace",
       "open_pr",
-      "send_slack_message",
+      "send_message",
       "update_ticket_status",
     ]);
     expect(mockGetEnabled).toHaveBeenCalledWith("trigger_ticket_ai");

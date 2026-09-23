@@ -14,7 +14,7 @@ import { engineCanaryScope } from "./engine-canary-scope.ts";
  * every prefix the code selects on.
  */
 const SETUP_DOC = "SETUP.md";
-const SETUP_SECTION_HEADING = "### Behavioural PR gate (engine-canary)";
+const SETUP_SECTION_HEADING = "### Engine canary (on demand)";
 const SCOPE_SOURCE = "scripts/ci/engine-canary-scope.ts";
 
 /**
@@ -113,7 +113,7 @@ test("SETUP.md names every prefix that selects the engine canary", async () => {
   assert.deepEqual(
     missing,
     [],
-    `the "${SETUP_SECTION_HEADING}" section of ${SETUP_DOC} does not name ${missing.join(", ")}. A prefix in the code that the document does not name tells a reader configuring a deployment that their change will skip the canary when it will not`,
+    `the "${SETUP_SECTION_HEADING}" section of ${SETUP_DOC} does not name ${missing.join(", ")}. A prefix in the code that the document does not name tells a reader deciding on the run-canary label that their change does not need the canary when it does`,
   );
 });
 

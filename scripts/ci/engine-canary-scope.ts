@@ -70,7 +70,7 @@ const CANARY_PREFIXES = [
   // deployment commit and the database identity before any canary write.
   "scripts/ci/engine-canary",
   // The job that runs all of it: its steps, its target validation, its queue.
-  ".github/workflows/ci.yml",
+  ".github/workflows/engine-canary.yml",
   // The three dependency inputs, and they are here on purpose rather than by
   // accident. Twice this project shipped a production outage that exists only
   // in the deployed bundle and that no test in this repository can see: Nitro

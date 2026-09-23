@@ -13,6 +13,8 @@ import {
   type McpToolDependencies,
 } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
+import { agentFacingDeploymentIntegrations } from "../integration-facts.js";
+import { redactIntegrationVariableNames } from "../integration-redaction.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
@@ -72,6 +74,15 @@ const BLOCKER_ERRORS: Record<ManualDispatchBlockerCode, PublicBlockerError> = {
     retryable: true,
     effectNotApplied: false,
   },
+  // An integration this workflow uses is disconnected, disabled or failing.
+  // Not retryable and nothing was applied: no repetition of this dispatch
+  // succeeds until an admin changes a connection in the dashboard, which is
+  // what the message tells the agent to ask for.
+  integration_unavailable: {
+    code: "VALIDATION_FAILED",
+    retryable: false,
+    effectNotApplied: true,
+  },
 };
 
 /** Domain blockers carry messages the dashboard already shows to people, so
@@ -84,7 +95,10 @@ function throwPublicDispatchError(error: unknown): never {
     const mapped = BLOCKER_ERRORS[error.code];
     throw new McpPublicError(
       mapped.code,
-      error.message,
+      // An error message never travels through the envelope sanitizer, so the
+      // floor is applied here: a dispatch refusal can carry the deployment
+      // sentence for an unusable integration.
+      redactIntegrationVariableNames(error.message),
       mapped.retryable,
       mapped.retryAfterMs,
       mapped.effectNotApplied,
@@ -163,6 +177,14 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
           let preflight: ManualDispatchPreflightResponse;
           try {
             preflight = await deps.services.preflightManualDispatch({
+              // The agent-facing view of the same deployment: the verdict is the
+              // one the dashboard reaches, and the sentence is the one a model
+              // may read. Passing the raw state would leave the blocker naming
+              // the variable an admin has to set, and it would depend on the
+              // envelope sanitizer to take it back out.
+              integrations:
+                (await agentFacingDeploymentIntegrations(deps.loadDeploymentIntegrations)) ??
+                undefined,
               adapters: deps.adapters,
               definitionId: input.definitionId,
               triggerNodeId: input.triggerNodeId,

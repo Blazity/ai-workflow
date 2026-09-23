@@ -1,16 +1,20 @@
 import { z } from "zod";
+import { readProviderFailure } from "@integrations/sdk";
 import type { TicketSummary } from "../../../adapters/issue-tracker/types.js";
 import type {
-  RetrievalFailureReason,
-  SlackSearchResult,
-} from "../../../adapters/messaging/slack-search.js";
+  MessageRetrievalFailure,
+  MessageSearchMatch,
+  MessageSearchOutcome,
+} from "../../../adapters/messaging/types.js";
+import type { Adapters } from "../../support/adapters.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { resolveCallLlmTarget } from "../call-llm/execute.js";
 import { planLlmBriefing } from "../../agent-visibility/block.js";
 import { recordSendBriefing, type AgentBriefingCapture } from "../../agent-visibility/plan.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
+import { investigateSources } from "./manifest.js";
 
-const DEFAULT_SLACK_LOOKBACK_DAYS = 30;
+const DEFAULT_CHAT_LOOKBACK_DAYS = 30;
 const DEFAULT_MAX_RESULTS = 10;
 const MAX_KEYWORDS = 10;
 
@@ -19,30 +23,6 @@ const MAX_KEYWORDS = 10;
  *  rest. Also the answer to "do not copy unrestricted conversation history into
  *  prompts": the prompt sees at most maxResults bounded snippets. */
 const MAX_EXCERPT_CHARS = 500;
-
-/** A template may contain nested clauses, but it must not close a parenthesis
- * it did not open. Otherwise an authored `) OR (project = OTHER` branch can
- * escape the configured project scope because JQL gives AND higher precedence
- * than OR. Parentheses inside quoted strings are data, not structure. */
-function hasBalancedJqlStructure(clause: string): boolean {
-  let depth = 0;
-  let quoted = false;
-  for (let index = 0; index < clause.length; index += 1) {
-    const char = clause[index];
-    if (quoted) {
-      if (char === "\\") index += 1;
-      else if (char === '"') quoted = false;
-      continue;
-    }
-    if (char === '"') quoted = true;
-    else if (char === "(") depth += 1;
-    else if (char === ")") {
-      depth -= 1;
-      if (depth < 0) return false;
-    }
-  }
-  return depth === 0 && !quoted;
-}
 
 /** The verdicts the theory call may return. insufficient_data is among them on
  *  purpose: with no evidence and a vague ticket, "I cannot tell" is the honest
@@ -100,12 +80,12 @@ const theoryResultSchema = z.object({
  */
 type InvestigateEvidence = {
   ref: string;
-  source: "jira" | "slack";
+  source: "issue_tracker" | "chat";
   title: string;
   excerpt: string;
-  /** Reporter display name, or the Slack user id. */
+  /** Reporter display name, or the chat user id. */
   author: string;
-  /** Jira project key, or the Slack channel id. */
+  /** Issue tracker project key, or the chat channel id. */
   origin: string;
   /** ISO 8601, empty when the provider reports none. */
   timestamp: string;
@@ -114,15 +94,16 @@ type InvestigateEvidence = {
 };
 
 /**
- * Why some evidence is missing, per provider and (for Slack) per channel. The
- * companion to `partial`: `partial` says WHICH provider is incomplete, this says
- * why, so "the bot was never invited to #support" is distinguishable from "Slack
- * timed out" and from "searched, found nothing" (both lists empty).
+ * Why some evidence is missing, per source and, for chat, per channel. The
+ * companion to `partial`: `partial` says WHICH source is incomplete, this
+ * says why, so "the bot was never invited to #support" is distinguishable from
+ * "the provider timed out" and from "searched, found nothing" (both lists
+ * empty).
  */
 type RetrievalGap = {
-  provider: "jira" | "slack";
-  reason: RetrievalFailureReason;
-  /** The Slack channel the gap is about, empty when the whole provider failed. */
+  provider: "issue_tracker" | "chat";
+  reason: MessageRetrievalFailure;
+  /** The channel the gap is about, empty when the whole source failed. */
   scope: string;
 };
 
@@ -133,12 +114,13 @@ function truncateExcerpt(text: string): string {
     : `${collapsed.slice(0, MAX_EXCERPT_CHARS)}…`;
 }
 
-/** Jira hit -> normalized evidence. Slack's ts is a unix seconds string, Jira's
- *  updated is already ISO, so only Slack needs converting. */
-function jiraEvidence(ticket: TicketSummary): InvestigateEvidence {
+/** Issue tracker hit -> normalized evidence. Chat's ts is a unix seconds
+ *  string, the tracker's updated is already ISO, so only chat needs
+ *  converting. */
+function trackerEvidence(ticket: TicketSummary): InvestigateEvidence {
   return {
-    ref: `jira:${ticket.key}`,
-    source: "jira",
+    ref: `issue_tracker:${ticket.key}`,
+    source: "issue_tracker",
     title: `${ticket.key} ${ticket.summary}`.trim(),
     excerpt: truncateExcerpt(
       ticket.status === "" ? ticket.excerpt : `[${ticket.status}] ${ticket.excerpt}`,
@@ -150,38 +132,24 @@ function jiraEvidence(ticket: TicketSummary): InvestigateEvidence {
   };
 }
 
-function slackEvidence(
-  match: SlackSearchResult["matches"][number],
-): InvestigateEvidence {
+function chatEvidence(match: MessageSearchMatch): InvestigateEvidence {
   const text = truncateExcerpt(match.text);
-  // oxlint-disable-next-line unicorn/prefer-number-coercion -- Preserve numeric-prefix parsing for Slack timestamps.
-  const seconds = Number.parseFloat(match.ts);
   return {
-    ref: `slack:${match.channel}/${match.ts}`,
-    source: "slack",
-    // Slack messages have no title; the opening of the message is the closest
+    ref: `chat:${match.channel}/${match.id}`,
+    source: "chat",
+    // Chat messages have no title; the opening of the message is the closest
     // honest thing, and the excerpt carries the rest.
     title: text.length <= 80 ? text : `${text.slice(0, 80)}…`,
     excerpt: text,
     author: match.author,
     origin: match.channel,
-    timestamp: Number.isFinite(seconds)
-      ? new Date(seconds * 1000).toISOString()
-      : "",
-    link: match.permalink,
+    timestamp: match.postedAt,
+    link: match.url,
   };
 }
 
-/** Enabled providers, mirroring the dashboard's investigateProviders. An absent
- *  or unreadable list means both are on: the schema defaults it that way, and a
- *  node whose selection cannot be read should investigate everything rather than
- *  silently investigate nothing. */
-function resolveProviders(raw: unknown): { jira: boolean; slack: boolean } {
-  if (!Array.isArray(raw)) return { jira: true, slack: true };
-  return { jira: raw.includes("jira"), slack: raw.includes("slack") };
-}
 
-function resolveSlackChannels(raw: unknown): string[] {
+function resolveChatChannels(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter(
     (channel): channel is string =>
@@ -189,42 +157,15 @@ function resolveSlackChannels(raw: unknown): string[] {
   );
 }
 
-function jqlLiteral(value: string): string {
-  return value.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-/**
- * Compose the Jira query. The tenant's configured project is ANDed in FIRST and
- * unconditionally, so no combination of keywords or template can reach a project
- * the deployment was not configured for: an authored template narrows inside
- * that project and cannot widen past it (a template naming another project
- * yields an empty result set rather than that project's tickets).
- *
- * Keywords become an OR'd text clause. Both the template and the keywords are
- * optional, but the project scope never is, there is no unscoped form of this
- * query.
- */
-export function buildInvestigateJql(
-  projectKey: string,
-  keywords: string[],
-  template?: string,
-): string {
-  const clauses = [`project = "${jqlLiteral(projectKey)}"`];
-  const authored = template?.trim() ?? "";
-  if (authored !== "" && hasBalancedJqlStructure(authored)) clauses.push(authored);
-  const keywordClause = keywords
-    .map(jqlLiteral)
-    .filter((keyword) => keyword !== "")
-    .map((keyword) => `text ~ "${keyword}"`)
-    .join(" OR ");
-  if (keywordClause !== "") clauses.push(keywordClause);
-  return clauses.map((clause) => `(${clause})`).join(" AND ");
-}
-
-const GAP_REASON_PROSE: Record<RetrievalFailureReason, string> = {
+const GAP_REASON_PROSE: Record<MessageRetrievalFailure, string> = {
   permission: "no access",
   timeout: "timed out",
   unavailable: "unavailable",
+  // The deployment has a messaging provider that cannot search, or none at
+  // all. Neither is an error: the investigation says what it could not read
+  // and reasons from what it has.
+  unsupported: "this deployment's messaging provider cannot search messages",
+  not_connected: "no messaging provider is connected",
 };
 
 /**
@@ -237,10 +178,10 @@ export function describeRetrievalGaps(gaps: readonly RetrievalGap[]): string {
   const parts = gaps.map((gap) => {
     const where =
       gap.scope === ""
-        ? gap.provider === "jira"
-          ? "Jira"
-          : "Slack"
-        : `Slack channel ${gap.scope}`;
+        ? gap.provider === "issue_tracker"
+          ? "the issue tracker"
+          : "chat"
+        : `chat channel ${gap.scope}`;
     return `${where} (${GAP_REASON_PROSE[gap.reason]})`;
   });
   return `Not searched: ${parts.join("; ")}.`;
@@ -332,87 +273,103 @@ blockInvestigateKeywordsStep.maxRetries = 0;
 type ProviderOutcome<T> =
   | { status: "disabled" }
   | { status: "ok"; value: T }
-  | { status: "failed"; reason: RetrievalFailureReason };
+  | { status: "failed"; reason: MessageRetrievalFailure };
 
 /**
- * Coarse class for a tracker error, from what the adapter actually throws: a
- * refused credential is somebody's configuration to fix, an abort is a timeout,
- * anything else is treated as an outage. The status code is read out of the
- * adapter's message because that is where it puts it; misreading it costs a
- * wrong label on a gap, never a wrong classification of the ticket.
+ * Coarse class for a tracker error, from what the adapter actually throws: an
+ * abort is a timeout, a provider that answered and said no (the SDK's
+ * `readProviderFailure`, read from the `status` the client puts on its errors)
+ * is somebody's configuration to fix, and anything else is an outage.
+ *
+ * Under that rule a 400 or a 404 from a search reads as "permission", because
+ * it is the provider refusing what it was sent rather than failing to answer.
  */
-export function classifyJiraFailure(error: unknown): RetrievalFailureReason {
+export function classifyTrackerFailure(error: unknown): MessageRetrievalFailure {
   const name = error instanceof Error ? error.name : "";
   if (name === "TimeoutError" || name === "AbortError") return "timeout";
-  const status = /Jira API error: (\d{3})/.exec(
-    error instanceof Error ? error.message : "",
-  )?.[1];
-  return status === "401" || status === "403" ? "permission" : "unavailable";
+  return readProviderFailure(error).kind === "refused" ? "permission" : "unavailable";
 }
 
-async function searchJiraProvider(input: {
-  /** The one project this deployment may search. Resolved by the caller from the
-   *  tenant configuration, never from block params. */
-  projectKey: string;
+async function searchTrackerSource(adapters: Adapters, input: {
   keywords: string[];
   template?: string;
   maxResults: number;
 }): Promise<ProviderOutcome<TicketSummary[]>> {
   try {
-    // Fail closed: with no configured project there is no scope to search
-    // within, and searching every project the credential can reach is exactly
-    // what must not happen.
-    if (input.projectKey === "") return { status: "failed", reason: "permission" };
-    const { createAdapters } = await import("../../support/adapters.js");
-    const { issueTracker } = createAdapters();
-    if (typeof issueTracker.searchTicketSummaries !== "function") {
-      // The configured tracker cannot serve summary search at all, which is a
-      // capability gap rather than an outage, but reads the same to the caller:
-      // no Jira evidence this run.
+    const { issueTrackerIfConnected } = await import("../../support/connected-issue-tracker.js");
+    const issueTracker = issueTrackerIfConnected(adapters);
+    if (!issueTracker || typeof issueTracker.findTickets !== "function") {
+      // No usable tracker, or one that cannot serve keyword search at all:
+      // a capability gap rather than an outage, but it reads the same to the
+      // caller, no tracker evidence this run.
       return { status: "failed", reason: "unavailable" };
     }
-    const value = await issueTracker.searchTicketSummaries(
-      buildInvestigateJql(input.projectKey, input.keywords, input.template),
-      input.maxResults,
-    );
+    const value = await issueTracker.findTickets({
+      keywords: input.keywords,
+      limit: input.maxResults,
+      ...(input.template ? { providerQuery: input.template } : {}),
+    });
     return { status: "ok", value };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return { status: "failed", reason: classifyJiraFailure(err) };
+    return { status: "failed", reason: classifyTrackerFailure(err) };
   }
 }
 
-async function searchSlackProvider(input: {
-  /** Bot token from the tenant configuration, resolved by the caller. */
-  token: string | undefined;
+/**
+ * Why the connected tracker would not run the block's query template, or null
+ * when it would or when there is no one tracker to ask.
+ *
+ * The tracker's adapter drops a template its own rule refuses rather than
+ * send a query that fails, and says nothing, so this asks the same rule first
+ * and the run can say what it searched with. A save refuses such a template
+ * only when an author writes it; one that was live before the rule existed
+ * still reaches here, and so does one saved while no single tracker was
+ * usable. With no tracker resolved the search itself reports that as its gap,
+ * so this stays out of the way rather than fail the block.
+ */
+async function queryTemplateRefusal(
+  template: string,
+): Promise<{ trackerId: string; trackerName: string; problem: string } | null> {
+  try {
+    const { resolveActiveIssueTracker } = await import("../../support/issue-tracker-runtime.js");
+    const tracker = await resolveActiveIssueTracker();
+    if (!tracker.ok) return null;
+    const { integrationRuntime } = await import("@integrations/registry/worker");
+    const problem = integrationRuntime(tracker.id)?.issueTrackerQueryRule?.problem(template.trim()) ?? null;
+    return problem === null ? null : { trackerId: tracker.id, trackerName: tracker.name, problem };
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    return null;
+  }
+}
+
+/**
+ * What people said, through the `messaging` capability.
+ *
+ * The capability answers rather than throws, and a provider that cannot search
+ * at all is one of its answers, so this block never has to know which chat
+ * product a deployment uses or whether it has one.
+ */
+async function searchChatProvider(adapters: Adapters, input: {
   channels: string[];
   keywords: string[];
   lookbackDays: number;
   maxResults: number;
-}): Promise<ProviderOutcome<SlackSearchResult>> {
-  // Missing credentials or scope are configuration gaps, not clean searches:
-  // nothing will change until somebody configures the token and channels.
-  if (!input.token || input.channels.length === 0) {
-    return { status: "failed", reason: "permission" };
-  }
+}): Promise<ProviderOutcome<Extract<MessageSearchOutcome, { ok: true }>>> {
+  // No channels named is a configuration gap, not a clean search: nothing will
+  // change until somebody names one.
+  if (input.channels.length === 0) return { status: "failed", reason: "permission" };
   try {
-    const { searchSlackChannels, classifySlackFailure } = await import(
-      "../../../adapters/messaging/slack-search.js"
-    );
-    try {
-      const value = await searchSlackChannels({
-        token: input.token,
-        channels: input.channels,
-        keywords: input.keywords,
-        lookbackDays: input.lookbackDays,
-        maxResults: input.maxResults,
-        now: new Date(),
-      });
-      return { status: "ok", value };
-    } catch (err) {
-      if (isRunControlError(err)) throw err;
-      return { status: "failed", reason: classifySlackFailure(err) };
-    }
+    const outcome = await adapters.messaging.searchMessages({
+      channels: input.channels,
+      keywords: input.keywords,
+      lookbackDays: input.lookbackDays,
+      maxResults: input.maxResults,
+    });
+    return outcome.ok
+      ? { status: "ok", value: outcome }
+      : { status: "failed", reason: outcome.reason };
   } catch (err) {
     if (isRunControlError(err)) throw err;
     return { status: "failed", reason: "unavailable" };
@@ -429,62 +386,126 @@ async function searchSlackProvider(input: {
  * evidence AND no gap: not searching is not the same as failing to search.
  */
 async function blockInvestigateRetrievalStep(input: {
-  jira: { keywords: string[]; template?: string; maxResults: number } | null;
-  slack: {
+  issueTracker: { keywords: string[]; template?: string; maxResults: number } | null;
+  chat: {
     channels: string[];
     keywords: string[];
     lookbackDays: number;
     maxResults: number;
   } | null;
-}): Promise<{ evidence: InvestigateEvidence[]; gaps: RetrievalGap[] }> {
+}): Promise<{
+  evidence: InvestigateEvidence[];
+  gaps: RetrievalGap[];
+  /** Set when the tracker would not run the query template. Absent on a
+   *  journal written before it existed, which ran every template it had. */
+  queryTemplateNote?: string;
+}> {
   "use step";
-  // Both providers' credentials and the Jira project scope come from here, one
-  // read, so no block param can influence what either provider is allowed to
-  // reach.
-  const { env } = await import("../../../infra/vcs-config.js");
-  const [jira, slack] = await Promise.all([
-    input.jira === null
+  // Every secret the deployment knows, read BEFORE anything is searched:
+  // ticket and chat evidence is text other people wrote, and a token pasted
+  // into it must not ride out in this step's durable result. A set that
+  // cannot be read is the one failure this block used to turn into a failed
+  // run; it degrades the way a provider failure does instead, into gaps for
+  // each source it was asked to search, and no evidence at all.
+  const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
+  let secrets: string[];
+  try {
+    secrets = await knownSecretValues();
+  } catch (error) {
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      "investigate_evidence_withheld",
+    );
+    return {
+      evidence: [],
+      gaps: [
+        ...(input.issueTracker ? [{ provider: "issue_tracker" as const, reason: "unavailable" as const, scope: "" }] : []),
+        ...(input.chat ? [{ provider: "chat" as const, reason: "unavailable" as const, scope: "" }] : []),
+      ],
+    };
+  }
+
+  // A template the tracker would not run is left out here, in view, rather
+  // than dropped by its adapter unseen. Without it the search narrows by the
+  // keywords alone; with no keywords either there is nothing to narrow by,
+  // and a whole-project search would hand the theory unrelated tickets as
+  // evidence, so the tracker is not searched (the same rule the block applies
+  // to a ticket that yields no keywords and has no template).
+  const refusal =
+    input.issueTracker?.template === undefined
+      ? null
+      : await queryTemplateRefusal(input.issueTracker.template);
+  let trackerSearch = input.issueTracker;
+  let queryTemplateNote: string | undefined;
+  if (refusal !== null && input.issueTracker !== null) {
+    const { keywords, maxResults } = input.issueTracker;
+    trackerSearch = keywords.length > 0 ? { keywords, maxResults } : null;
+    queryTemplateNote =
+      trackerSearch === null
+        ? `${refusal.trackerName} would not run this block's query template and the ticket gave no keywords, so the issue tracker was not searched. ${refusal.problem}`
+        : `${refusal.trackerName} would not run this block's query template, so the issue tracker was searched by the ticket's keywords alone. ${refusal.problem}`;
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn(
+      { tracker: refusal.trackerId, problem: refusal.problem, searched: trackerSearch !== null },
+      "investigate_query_template_not_run",
+    );
+  }
+  // The issue tracker scopes its own search from its connection; no block
+  // param can widen what it is allowed to reach. The chat side has no
+  // credential to fetch: it goes through the messaging capability, which
+  // resolves whichever provider this deployment connected.
+  // One bundle for both sources. Each `await createAdapters()` opens a run registry
+  // connection, and two searches in one step asking twice is a connection
+  // nobody needed.
+  // Resolved only when there is something to search with it. A block that
+  // enabled no source, or whose keywords came back empty, used to open a
+  // registry connection anyway and hand both searches an adapter bundle
+  // neither would use; on a deployment that cannot resolve one, that threw
+  // between investigate's two model calls and the second send never happened.
+  const adapters =
+    trackerSearch === null && input.chat === null
+      ? null
+      : await (await import("../../support/adapters.js")).createAdapters();
+  const [issueTracker, chat] = await Promise.all([
+    trackerSearch === null || adapters === null
       ? Promise.resolve<ProviderOutcome<TicketSummary[]>>({ status: "disabled" })
-      : searchJiraProvider({
-          ...input.jira,
-          projectKey: env.JIRA_PROJECT_KEY?.trim() ?? "",
-        }),
-    input.slack === null
-      ? Promise.resolve<ProviderOutcome<SlackSearchResult>>({ status: "disabled" })
-      : searchSlackProvider({ ...input.slack, token: env.CHAT_SDK_SLACK_TOKEN }),
+      : searchTrackerSource(adapters, trackerSearch),
+    input.chat === null || adapters === null
+      ? Promise.resolve<ProviderOutcome<Extract<MessageSearchOutcome, { ok: true }>>>({
+          status: "disabled",
+        })
+      : searchChatProvider(adapters, input.chat),
   ]);
 
   const evidence: InvestigateEvidence[] = [];
   const gaps: RetrievalGap[] = [];
 
-  if (jira.status === "ok") evidence.push(...jira.value.map(jiraEvidence));
-  if (jira.status === "failed") {
-    gaps.push({ provider: "jira", reason: jira.reason, scope: "" });
+  if (issueTracker.status === "ok") evidence.push(...issueTracker.value.map(trackerEvidence));
+  if (issueTracker.status === "failed") {
+    gaps.push({ provider: "issue_tracker", reason: issueTracker.reason, scope: "" });
   }
 
-  if (slack.status === "ok") {
-    evidence.push(...slack.value.matches.map(slackEvidence));
-    for (const skip of slack.value.skipped) {
-      gaps.push({ provider: "slack", reason: skip.reason, scope: skip.channel });
+  if (chat.status === "ok") {
+    evidence.push(...chat.value.matches.map(chatEvidence));
+    for (const skip of chat.value.skipped) {
+      gaps.push({ provider: "chat", reason: skip.reason, scope: skip.channel });
     }
   }
-  if (slack.status === "failed") {
-    gaps.push({ provider: "slack", reason: slack.reason, scope: "" });
+  if (chat.status === "failed") {
+    gaps.push({ provider: "chat", reason: chat.reason, scope: "" });
   }
 
   const { redactConfiguredSecretsInText } = await import(
     "../../../run-observability/sanitizer.js"
   );
-  const { configuredReplaySecrets } = await import(
-    "../../../run-observability/configured-secrets.js"
-  );
-  const secrets = configuredReplaySecrets();
   return {
     evidence: evidence.map((item) => Object.assign({}, item, {
       title: redactConfiguredSecretsInText(item.title, secrets),
       excerpt: redactConfiguredSecretsInText(item.excerpt, secrets),
     })),
     gaps,
+    ...(queryTemplateNote === undefined ? {} : { queryTemplateNote }),
   };
 }
 blockInvestigateRetrievalStep.maxRetries = 0;
@@ -512,9 +533,10 @@ blockInvestigateTheoryStep.maxRetries = 0;
 
 /**
  * investigate: retrieval-augmented ticket triage. Keywords come from one LLM
- * call, Jira and Slack are searched with them (each provider degrades
- * independently into the partial list), and a second LLM call turns ticket +
- * evidence into a classification and theory for a downstream human decision.
+ * call, the issue tracker and chat are searched with them (each source
+ * degrades independently into the partial list), and a second LLM call turns
+ * ticket + evidence into a classification and theory for a downstream human
+ * decision.
  * The block never mutates the ticket: the graph must terminate every path with
  * a ticket mutation or human_question, otherwise the trigger poller reruns
  * this block on every poll.
@@ -543,19 +565,28 @@ export const execute: BlockExecuteFn = async (
     };
   }
 
-  const providers = resolveProviders(block.params.providers);
+  // Every param falls back to its pre-rename name: a recorded plan from
+  // before this rename hands the block the old words, and a definition the
+  // one-off rewrite has not reached still stores them (see
+  // RENAMED_WORKFLOW_BLOCK_PARAMS in @shared/contracts).
+  const sources = investigateSources(block.params);
   const maxResults =
     typeof block.params.maxResults === "number"
       ? block.params.maxResults
       : DEFAULT_MAX_RESULTS;
-  const slackLookbackDays =
-    typeof block.params.slackLookbackDays === "number"
-      ? block.params.slackLookbackDays
-      : DEFAULT_SLACK_LOOKBACK_DAYS;
-  const jiraJqlTemplate =
-    typeof block.params.jiraJqlTemplate === "string" &&
-    block.params.jiraJqlTemplate.trim() !== ""
-      ? block.params.jiraJqlTemplate
+  const chatChannelsParam = block.params.chatChannels ?? block.params.slackChannels;
+  const chatLookbackDaysParam =
+    block.params.chatLookbackDays ?? block.params.slackLookbackDays;
+  const chatLookbackDays =
+    typeof chatLookbackDaysParam === "number"
+      ? chatLookbackDaysParam
+      : DEFAULT_CHAT_LOOKBACK_DAYS;
+  const issueTrackerQueryTemplateParam =
+    block.params.issueTrackerQueryTemplate ?? block.params.jiraJqlTemplate;
+  const issueTrackerQueryTemplate =
+    typeof issueTrackerQueryTemplateParam === "string" &&
+    issueTrackerQueryTemplateParam.trim() !== ""
+      ? issueTrackerQueryTemplateParam
       : undefined;
   const { provider, model } = resolveCallLlmTarget(
     block.params,
@@ -587,28 +618,29 @@ export const execute: BlockExecuteFn = async (
     });
 
     // Nothing to look for means no search at all, which is not a gap. The
-    // project scope is NOT decided here: the step reads it from the tenant's
-    // configuration, so no param can widen it.
-    const searchJira =
-      providers.jira && (keywords.length > 0 || jiraJqlTemplate !== undefined);
-    const slackChannels = providers.slack
-      ? resolveSlackChannels(block.params.slackChannels)
-      : [];
+    // project scope is NOT decided here: the tracker source scopes its own
+    // search from its connection, so no param can widen it.
+    const searchTracker =
+      sources.issueTracker &&
+      (keywords.length > 0 || issueTrackerQueryTemplate !== undefined);
+    const chatChannels = sources.chat ? resolveChatChannels(chatChannelsParam) : [];
 
     const retrieval = await blockInvestigateRetrievalStep({
-      jira: searchJira
+      issueTracker: searchTracker
         ? {
             keywords,
-            ...(jiraJqlTemplate === undefined ? {} : { template: jiraJqlTemplate }),
+            ...(issueTrackerQueryTemplate === undefined
+              ? {}
+              : { template: issueTrackerQueryTemplate }),
             maxResults,
           }
         : null,
-      slack:
-        providers.slack
+      chat:
+        sources.chat
           ? {
-              channels: slackChannels,
+              channels: chatChannels,
               keywords,
-              lookbackDays: slackLookbackDays,
+              lookbackDays: chatLookbackDays,
               maxResults,
             }
           : null,
@@ -645,10 +677,12 @@ export const execute: BlockExecuteFn = async (
 
     // The gaps go into the prose too, not only the structured field: the human
     // deciding on this theory usually reads it through human_question, which
-    // renders the theory and nothing else.
-    const gapNote = describeRetrievalGaps(gaps);
-    const theory =
-      gapNote === "" ? theoryResult.theory : `${theoryResult.theory}\n\n${gapNote}`;
+    // renders the theory and nothing else. So does a query template the
+    // tracker would not run: without it the evidence is not what the block's
+    // author asked to be searched.
+    const theory = [theoryResult.theory, retrieval.queryTemplateNote ?? "", describeRetrievalGaps(gaps)]
+      .filter((part) => part !== "")
+      .join("\n\n");
 
     return {
       kind: "next",

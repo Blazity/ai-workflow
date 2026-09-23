@@ -7,6 +7,7 @@ import type { WorkflowBlockRegistryContext } from "./block-contract-resolver.js"
 import { testBlockData } from "../../test-support/block-contracts.js";
 import { workflowDefinitionTemplate } from "./templates.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
+import { MESSAGING_CONNECTED } from "./messaging-deployment.fixture.js";
 
 const migrationsDir = fileURLToPath(new URL("../../../drizzle/", import.meta.url));
 const migrationFiles = readdirSync(migrationsDir)
@@ -19,9 +20,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const blockData = testBlockData(registryContext);

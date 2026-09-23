@@ -1,5 +1,13 @@
-import type { RunAnalysisReport, RunDetail, RunPullRequest, RunStep } from "@shared/contracts";
+import type {
+  RunAnalysisReport,
+  RunDetail,
+  RunFailureCode,
+  RunPullRequest,
+  RunStep,
+} from "@shared/contracts";
+import { isRunFailureCode } from "@shared/contracts";
 import type { Db } from "../../db/types.js";
+import { ticketLinkFor, type TicketLinks } from "../../engine/support/ticket-url.js";
 import {
   readConnectedRunDetailRow,
   readConnectedRunRefsRow,
@@ -61,14 +69,31 @@ function phasesToSteps(phases: unknown, base: Date): RunStep[] {
 export interface FetchRunDetailFromDbOptions {
   db: Db;
   runId: string;
-  jiraBaseUrl: string;
+  /** How the active tracker links a ticket (`issueTrackerTicketLinks`). */
+  ticketLinks: TicketLinks;
+  /** Every secret the deployment knows (`knownSecretValues`), which the
+   *  persisted step errors are redacted with on the way out. */
+  secrets: readonly string[];
 }
 
+/**
+ * `failureCode` travels BESIDE the run rather than inside it, which is what
+ * ADR-010 decided in S4: the durable column is the machine's answer, the
+ * dashboard payload is built field by field and does not carry it, and MCP is
+ * its first consumer. A field on RunDetail would have put it into every client
+ * of the run detail route on the way to one reader.
+ */
 function mapRunDetailRow(
   row: NonNullable<Awaited<ReturnType<typeof readRunDetailRow>>>,
-  jiraBaseUrl: string,
-): { run: RunDetail; steps: RunStep[]; hasRealSteps: boolean; analysisReport: RunAnalysisReport | null } {
-  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
+  ticketLinks: TicketLinks,
+  secrets: readonly string[],
+): {
+  run: RunDetail;
+  steps: RunStep[];
+  hasRealSteps: boolean;
+  analysisReport: RunAnalysisReport | null;
+  failureCode: RunFailureCode | null;
+} {
   const base = row.startedAt ?? row.createdAt ?? row.firstSeenAt;
   const status = coerceStatus(row.status);
   const run: RunDetail = {
@@ -78,7 +103,7 @@ function mapRunDetailRow(
     status,
     ticket: row.ticketKey ?? "",
     ticketTitle: row.ticketTitle ?? row.ticketKey ?? "",
-    ticketUrl: row.ticketUrl ?? (row.ticketKey ? `${tenantOrigin}/browse/${row.ticketKey}` : ""),
+    ticketUrl: ticketLinkFor(row.ticketUrl, row.ticketKey, ticketLinks) ?? "",
     prNumber: row.prNumber,
     prUrl: row.prUrl,
     prs: row.prs,
@@ -100,31 +125,40 @@ function mapRunDetailRow(
   };
   const persisted = Array.isArray(row.steps) ? (row.steps as RunStep[]) : null;
   const analysisReport = parseStoredRunAnalysisReport(row.analysisReport);
+  // Null for every run that failed before the column existed, and null means
+  // "this failure carries no code", never "unknown failure".
+  const failureCode = isRunFailureCode(row.statusReasonCode) ? row.statusReasonCode : null;
   if (persisted && persisted.length > 0) {
-    const safePersisted = sanitizeRunSteps(persisted) ?? [];
+    const safePersisted = sanitizeRunSteps(persisted, null, secrets) ?? [];
     const steps = TERMINAL.has(run.status)
       ? normalizeFinishedSteps(safePersisted, run.completedAt)
       : safePersisted;
-    return { run, steps, hasRealSteps: true, analysisReport };
+    return { run, steps, hasRealSteps: true, analysisReport, failureCode };
   }
-  return { run, steps: phasesToSteps(row.phases, base), hasRealSteps: false, analysisReport };
+  return {
+    run,
+    steps: phasesToSteps(row.phases, base),
+    hasRealSteps: false,
+    analysisReport,
+    failureCode,
+  };
 }
 
 export async function fetchRunDetailFromDb(opts: FetchRunDetailFromDbOptions) {
   const row = await readRunDetailRow(opts.db, opts.runId);
-  return row ? mapRunDetailRow(row, opts.jiraBaseUrl) : null;
+  return row ? mapRunDetailRow(row, opts.ticketLinks, opts.secrets) : null;
 }
 
 export async function fetchConnectedRunDetailFromDb(
   opts: Omit<FetchRunDetailFromDbOptions, "db">,
 ) {
   const row = await readConnectedRunDetailRow(opts.runId);
-  return row ? mapRunDetailRow(row, opts.jiraBaseUrl) : null;
+  return row ? mapRunDetailRow(row, opts.ticketLinks, opts.secrets) : null;
 }
 
 function mapRunRefs(
   row: NonNullable<Awaited<ReturnType<typeof readRunRefsRow>>>,
-  jiraBaseUrl: string,
+  ticketLinks: TicketLinks,
 ): {
   ticketKey: string | null;
   ticketUrl: string | null;
@@ -134,19 +168,15 @@ function mapRunRefs(
   prs: RunPullRequest[] | null;
   statusReason: string | null;
 } {
-  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
-  return {
-    ...row,
-    ticketUrl: row.ticketUrl ?? (row.ticketKey ? `${tenantOrigin}/browse/${row.ticketKey}` : null),
-  };
+  return { ...row, ticketUrl: ticketLinkFor(row.ticketUrl, row.ticketKey, ticketLinks) };
 }
 
-export async function fetchRunRefs(db: Db, runId: string, jiraBaseUrl: string) {
+export async function fetchRunRefs(db: Db, runId: string, ticketLinks: TicketLinks) {
   const row = await readRunRefsRow(db, runId);
-  return row ? mapRunRefs(row, jiraBaseUrl) : null;
+  return row ? mapRunRefs(row, ticketLinks) : null;
 }
 
-export async function fetchConnectedRunRefs(runId: string, jiraBaseUrl: string) {
+export async function fetchConnectedRunRefs(runId: string, ticketLinks: TicketLinks) {
   const row = await readConnectedRunRefsRow(runId);
-  return row ? mapRunRefs(row, jiraBaseUrl) : null;
+  return row ? mapRunRefs(row, ticketLinks) : null;
 }

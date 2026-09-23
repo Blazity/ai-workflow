@@ -74,7 +74,9 @@ function mismatchesOf<T>(
   current: (input: T) => string,
 ): string[] {
   const pinned = (text: string) =>
-    withoutStageSevenRewrites(withoutReviewSiblingSection(withoutRepositorySection(text)));
+    withoutIntegrationRenames(
+      withoutStageSevenRewrites(withoutReviewSiblingSection(withoutRepositorySection(text))),
+    );
   return mismatchesOfRaw(rows, (input) => pinned(oracle(input)), (input) => pinned(current(input)));
 }
 
@@ -172,6 +174,35 @@ function withoutReviewSiblingSection(text: string): string {
  * somewhere else, or wrote it twice, would leave the second copy in the
  * comparison.
  */
+/**
+ * THE SECOND DECLARED CHANGE: core stopped naming the tracker.
+ *
+ * The issue tracker is a capability now, so a deployment can run Jira, Linear
+ * or something written next month, and a prompt that says "the Jira ticket"
+ * lies to the model on every one of them. The base commit predates that, so
+ * this rewrites the base's wording to the live one for the comparison and
+ * nothing else: the sentence is anchored to its own line, so a second copy or
+ * a moved one would still show up as a mismatch.
+ */
+function withoutIntegrationRenames(text: string): string {
+  return text
+    .replace(
+      "The following files from the Jira ticket are available in",
+      "The following files from the ticket are available in",
+    )
+    // And the evidence example lost its em dash, which this repository writes
+    // nowhere.
+    .replace("src/auth.ts:42 \u2014", "src/auth.ts:42,")
+    // Its provider is no longer written into the sentence either. The base
+    // taught every deployment `github:`, which on a deployment with GitLab and
+    // no GitHub asks a model for evidence under a provider it cannot reach; the
+    // live example takes the provider from the repositories the run is holding.
+    // Only the provider is freed here, so the path, the file, the line and the
+    // words around them stay pinned, and which provider it picks is proved by
+    // `repository-map/repository-path-example.test.ts`.
+    .replace(/`[a-z0-9-]+:acme\/api src\/auth\.ts:42/, "`<provider>:acme/api src/auth.ts:42");
+}
+
 function withoutStageSevenRewrites(text: string): string {
   return text
     .replace(

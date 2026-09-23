@@ -43,7 +43,7 @@ const state = vi.hoisted(() => ({
     MAX_CONCURRENT_AGENTS: 4,
   },
   requireMcpActor: vi.fn(),
-  createAdapters: vi.fn<() => Record<string, unknown>>(() => ({})),
+  createAdapters: vi.fn<() => unknown>(() => ({})),
   fetchTicket: vi.fn(),
   // The outbound half of an authoring write: the same adapter the platform tells
   // people about runs through. Faked at the adapter, not at the tool, so what the
@@ -55,11 +55,22 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../infra/vcs-config.js", () => ({ env: state.env }));
+// The issue tracker's credential is an INTEGRATION's connection field since
+// S12, and an integration reads the real environment rather than core's
+// validated module. Core no longer names that variable anywhere, so the only
+// way to give this deployment an environment-sourced tracker token, which is
+// what the redaction tests below are about, is to put it in the environment.
+process.env.JIRA_BASE_URL = state.env.JIRA_BASE_URL;
+process.env.JIRA_API_TOKEN = state.env.JIRA_API_TOKEN;
+process.env.JIRA_PROJECT_KEY = "AIW";
 // The one seam that cannot be crossed in a test: a token is minted by an OAuth
 // client we do not have. Everything downstream of the actor is real.
 vi.mock("./request-context.js", () => ({ requireMcpActor: state.requireMcpActor }));
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../engine/support/adapters.js", () => ({ createAdapters: state.createAdapters }));
+vi.mock("../engine/support/adapters.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../engine/support/adapters.js")>()),
+  createAdapters: state.createAdapters,
+}));
 // Seam S3, as in tools/workflows.test.ts: the dispatch domain owns its own rules
 // and its own tests. Faking it is what makes "exactly one service call" visible.
 vi.mock("../services/manual-dispatch/service.js", () => ({
@@ -70,6 +81,8 @@ vi.mock("../services/manual-dispatch/service.js", () => ({
 }));
 
 import type { Db } from "../db/client.js";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import { adaptersFor } from "../test-support/issue-tracker.js";
 import { createTestDb } from "../db/test-db.js";
 import {
   mcpAuditEvents,
@@ -172,6 +185,9 @@ const PUBLISHED = [
   "runs.briefing",
   "workflows.node_briefing",
   "work_scope.edit",
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ];
 
 const READ_ANNOTATIONS = {
@@ -335,6 +351,17 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   // takes a repository away from every later run on the subject: destructive,
   // and closed world because no run is started and no ticket moved.
   "work_scope.edit": DEPLOYMENT_CONFIG_ANNOTATIONS,
+  // Reading what the agent remembered changes nothing.
+  "memory.list": READ_ANNOTATIONS,
+  "memory.get": READ_ANNOTATIONS,
+  // A hard delete of one document, reaching whichever provider keeps this
+  // deployment's memory, which may not be this deployment's own database.
+  "memory.forget": {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
 };
 
 const DOMAINS = [
@@ -347,6 +374,7 @@ const DOMAINS = [
   "repositories",
   "settings",
   "work_scope",
+  "memory",
 ];
 
 // The committed artifact, read as a file. This is the independent source for the
@@ -603,12 +631,19 @@ beforeEach(async () => {
     }
     return resolved;
   });
+  // Messaging comes from a connected integration now, and this deployment
+  // connects Slack the way an upgraded one does: through the variables it
+  // already had. Without it the announcement a successful authoring write
+  // sends would reach nobody, which is what `authoringAnnouncements` reports.
+  vi.stubEnv("CHAT_SDK_SLACK_TOKEN", "xoxb-test");
+  vi.stubEnv("CHAT_SDK_CHANNEL_ID", "C1");
   state.fetchTicket.mockResolvedValue(BENIGN_TICKET);
   state.notifyForTicket.mockResolvedValue(undefined);
-  state.createAdapters.mockImplementation(() => ({
-    issueTracker: { fetchTicket: state.fetchTicket },
-    messaging: { notifyForTicket: state.notifyForTicket },
-  }));
+  state.createAdapters.mockImplementation(() =>
+    adaptersFor({ fetchTicket: state.fetchTicket } as unknown as IssueTrackerAdapter, {
+      messaging: { notifyForTicket: state.notifyForTicket },
+    }),
+  );
   state.preflightManualDispatch.mockReset();
   state.dispatchManualWorkflow.mockReset();
   await db().delete(mcpAuditEvents);
@@ -905,10 +940,10 @@ describe("A. the client cycle and the published surface", () => {
       contractHash: SNAPSHOT.contractHash,
       deploymentClass: "dedicated-worker",
       enabledDomains: DOMAINS,
-      // A messaging adapter is configured for this deployment, so the announcement a
-      // successful authoring write sends can actually reach somebody. The honest
-      // "none" is what a deployment with no chat credentials reports, where
-      // engine/support/adapters.ts:81 hands every tool the no-op adapter.
+      // One connected integration serves messaging here, so the announcement a
+      // successful authoring write sends can actually reach somebody. The
+      // honest "none" is what a deployment with none connected reports, and
+      // also what two connected providers with none selected report.
       authoringAnnouncements: "chat",
     });
     // The envelope's own hash and the one inside the payload are produced by two
@@ -1633,7 +1668,7 @@ describe("F. protocol edges", () => {
 
   // KNOWN: an ungated request still builds the whole tool server. Only
   // tools/call and tools/list pass through gateRequest, so initialize and
-  // notifications/initialized fall straight to createMcpServer(createAdapters()),
+  // notifications/initialized fall straight to createMcpServer(await createAdapters()),
   // which registers every tool and constructs the Jira, messaging and
   // run-registry adapters for a request that can never reach a handler. It is
   // cheap today (createAdapters does no I/O and keeps `vcs` behind a lazy
@@ -1748,9 +1783,19 @@ describe("G. nothing leaks", () => {
     // emptied out is not a redaction, it is a lost diagnosis.
     expect(reason).toContain("Push rejected while using");
     expect(reason).toContain("[REDACTED");
-    // At least one replacement was made by THIS layer's secrets list, which is
-    // the only pass that knows about the configured Jira token.
-    expect(envelope.meta.redactions).toBeGreaterThanOrEqual(1);
+    // Redacted with a LABEL, which is the run observability pass rather than
+    // this one. Since S12 the tracker's credential is an integration
+    // connection field read from the environment, so that earlier pass holds
+    // it too and there is nothing left for the envelope pass to replace. This
+    // used to assert that the envelope pass made the replacement, on the
+    // premise that it was "the only pass that knows about the configured Jira
+    // token"; that premise was already false on any deployment whose token
+    // comes from its environment, which is every deployment that has not moved
+    // its connection into the dashboard. What must hold is that the value is
+    // gone by the time anything leaves, whichever pass took it out, and that
+    // the sentence is still a diagnosis afterwards.
+    expect(reason).not.toContain(CONFIGURED_SECRET);
+    expect(reason).not.toContain(GITHUB_TOKEN);
     expect(await auditText()).not.toContain(CONFIGURED_SECRET);
   });
 

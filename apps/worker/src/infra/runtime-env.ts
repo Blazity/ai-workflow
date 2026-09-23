@@ -1,5 +1,6 @@
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
+import { isValidIntegrationSecretsKey } from "./secrets-key-format.js";
 
 // Environment parsing is infrastructure; higher tiers consume these resolved values.
 
@@ -11,56 +12,27 @@ export const env = createEnv({
     throw new Error(`Invalid environment variables:\n${details}`);
   },
   server: {
-    // Issue Tracker
-    ISSUE_TRACKER_KIND: z.literal("jira").default("jira"),
-    JIRA_BASE_URL: z.string().url(),
-    JIRA_API_TOKEN: z.string().min(1),
-    JIRA_PROJECT_KEY: z.string().min(1),
-
-    JIRA_BACKLOG_TRANSITION_ID: z.string().min(1).optional(),
-    JIRA_AI_TRANSITION_ID: z.string().min(1).optional(),
-    JIRA_AI_REVIEW_TRANSITION_ID: z.string().min(1).optional(),
+    // The issue tracker's site, credentials, project and transitions left this
+    // file in S12: they are the connection of the integration serving the
+    // `issue_tracker` capability, which reads the same variable names, so a
+    // deployment configured through its environment needs no change. A
+    // deployment with no tracker connected at all now boots, which it could
+    // not before; the loud failure a required project key used to give at boot
+    // is the tracker's own `project` health check.
 
     // VCS
-    VCS_KIND: z.enum(["github", "gitlab"]).optional(),
-    // Login of the bot's own VCS account. When set, PR reviews authored by it
-    // are ignored so the bot does not trigger a run off its own review. The
-    // provider-specific values take precedence in mixed-provider deployments.
+    // Login of the bot's own automation account, for a deployment with exactly
+    // one version control provider. Every provider's own variables belong to
+    // its integration; this one is declared here because it spans them, and it
+    // is read through whichever integration claims it as `legacyBotLogin`,
+    // never directly. See RESERVED_ENVIRONMENT_VARIABLES in the SDK.
     VCS_BOT_LOGIN: z.string().trim().min(1).optional(),
-    GITHUB_BOT_LOGIN: z.string().trim().min(1).optional(),
-    GITLAB_BOT_LOGIN: z.string().trim().min(1).optional(),
-    // GitHub VCS — App auth (no PAT). Private key is base64-encoded PEM so it
-    // round-trips cleanly through the Vercel env UI without newline-escaping.
-    GITHUB_APP_ID: z.coerce.number().int().positive().optional(),
-    GITHUB_APP_PRIVATE_KEY: z.string().min(1).optional(),
-    GITHUB_INSTALLATION_ID: z.coerce.number().int().positive().optional(),
-    GITHUB_OWNER: z.string().min(1).optional(),
-    GITHUB_REPO: z.string().min(1).optional(),
-
-    // GitLab VCS
-    GITLAB_TOKEN: z.string().min(1).optional(),
-    GITLAB_PROJECT_ID: z.string().min(1).optional(),
-    /** Base URL for self-hosted GitLab. Defaults to https://gitlab.com. */
-    GITLAB_HOST: z.string().url().default("https://gitlab.com"),
-
-    // Messaging — Slack is optional. When token+channel are unset, a no-op
-    // messaging adapter is used and workflow runs proceed silently.
-    CHAT_SDK_SLACK_TOKEN: z.string().min(1).optional(),
-    CHAT_SDK_CHANNEL_ID: z.string().min(1).optional(),
-    CHAT_SDK_BOT_NAME: z.string().default("ai-workflow"),
-
-    // Slack slash commands — required only if you register the /ai-workflow
-    // slash command. When unset, /webhooks/slack rejects all requests.
-    SLACK_SIGNING_SECRET: z.string().min(1).optional(),
-    /** Comma-separated list of Slack user IDs allowed to invoke slash commands. Empty = anyone. */
-    SLACK_ALLOWED_USER_IDS: z.string().optional(),
 
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
     // Optional overrides for the git identity used inside the sandbox.
-    // - GitHub: when both are unset, the identity is derived from the App so
-    //   commits render with the App's avatar and the `[bot]` badge in the UI.
-    // - GitLab: defaults to `ai-workflow-blazity` / `ai-workflow@blazity.com`.
+    // When both are unset the identity comes from the version control
+    //   provider's own automation account, so commits render as that account.
     // Both must be set together to take effect; setting only one is an error.
     COMMIT_AUTHOR: z.string().min(1).optional(),
     COMMIT_EMAIL: z.string().min(1).optional(),
@@ -75,12 +47,6 @@ export const env = createEnv({
       .url()
       .default("https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"),
     CODEX_PRICING_TTL_MS: z.coerce.number().int().positive().default(3_600_000),
-
-    // Arthur AI Engine (optional: both required together). Enables the
-    // in-sandbox tracer and the prompt-injection check. One task per run is
-    // auto-created, so there is no static GENAI_ENGINE_TASK_ID.
-    GENAI_ENGINE_API_KEY: z.string().min(1).optional(),
-    GENAI_ENGINE_TRACE_ENDPOINT: z.string().url().optional(),
 
     // Remote MCP server
     MCP_SERVER_VERSION: z
@@ -110,21 +76,15 @@ export const env = createEnv({
     // Cron
     CRON_SECRET: z.string().min(1).optional(),
 
-    // Jira Webhook
-    JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
-
-    // GitHub Webhook
-    GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
-
-    // GitLab Webhook
-    GITLAB_WEBHOOK_SECRET: z.string().min(1).optional(),
-
     // Webhook trigger blocks: 32-byte AES-256-GCM key (64 hex chars) that
     // encrypts per-endpoint signing secrets at rest. Intentionally optional:
     // without it the Webhook trigger is simply unavailable in the editor, and
     // making it required would break the boot of every deployment that does not
     // use the feature.
     WEBHOOK_TRIGGER_ENCRYPTION_KEY: z.string().min(1).optional(),
+    /** Encrypts the connection secrets an admin stores from the dashboard. Its
+     *  own key, never the webhook key: see infra/secrets-crypto.ts. */
+    INTEGRATION_SECRETS_KEY: z.string().min(1).optional(),
 
     // Neon Postgres (run registry + post-PR gate store) — auto-injected by
     // the Neon Vercel Marketplace integration, one branch per environment.
@@ -163,71 +123,18 @@ export const env = createEnv({
   emptyStringAsUndefined: true,
 });
 
-function hasAnyGithubProviderCredential(): boolean {
-  return Boolean(env.GITHUB_APP_ID || env.GITHUB_APP_PRIVATE_KEY || env.GITHUB_INSTALLATION_ID);
-}
-
-function isGithubProviderConfigured(): boolean {
-  return Boolean(env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID);
-}
-
 // Cross-field validation — fail fast at startup instead of at first workflow
 // step. Provider credentials are intentionally optional at the schema level:
-// a deployment may configure GitHub, GitLab, or both.
+// provider credentials are intentionally optional at the schema level because
+// integration-owned providers validate their own connection settings.
 {
-  const hasAnyGithubCredential = hasAnyGithubProviderCredential();
-  const hasGithubProvider = isGithubProviderConfigured();
-  const hasGitLabProvider = Boolean(env.GITLAB_TOKEN);
-
-  if (hasAnyGithubCredential && !hasGithubProvider) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  GitHub provider requires GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_INSTALLATION_ID",
-    );
-  }
-  if ((env.GITHUB_OWNER && !env.GITHUB_REPO) || (!env.GITHUB_OWNER && env.GITHUB_REPO)) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  GITHUB_OWNER and GITHUB_REPO must be set together for legacy single-repo config",
-    );
-  }
-  if (env.VCS_KIND === "github" && !hasGithubProvider) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  VCS_KIND=github requires GitHub provider credentials",
-    );
-  }
-  if (env.VCS_KIND === "gitlab" && !hasGitLabProvider) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  VCS_KIND=gitlab requires GITLAB_TOKEN",
-    );
-  }
-  if (!hasGithubProvider && !hasGitLabProvider) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  At least one VCS provider must be configured",
-    );
-  }
-  if (hasGithubProvider && !env.GITHUB_WEBHOOK_SECRET) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  GitHub provider requires GITHUB_WEBHOOK_SECRET",
-    );
-  }
-  if (hasGitLabProvider && !env.GITLAB_WEBHOOK_SECRET) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  GitLab provider requires GITLAB_WEBHOOK_SECRET",
-    );
-  }
   if (
     (env.COMMIT_AUTHOR && !env.COMMIT_EMAIL) ||
     (!env.COMMIT_AUTHOR && env.COMMIT_EMAIL)
   ) {
     throw new Error(
       "Invalid environment variables:\n" +
-        "  COMMIT_AUTHOR and COMMIT_EMAIL must be set together (or both omitted to auto-derive on GitHub)",
+        "  COMMIT_AUTHOR and COMMIT_EMAIL must be set together (or both omitted, to take the automation account of the version control provider)",
     );
   }
   const ssoKeys = [
@@ -264,6 +171,16 @@ function isGithubProviderConfigured(): boolean {
     throw new Error(
       "Invalid environment variables:\n" +
         "  WEBHOOK_TRIGGER_ENCRYPTION_KEY must be 64 hex characters (a 32-byte AES-256 key)",
+    );
+  }
+  // Refused at boot rather than at the moment an admin presses Save: a key that
+  // cannot decrypt is the same as no key, and finding that out while connecting
+  // an integration would look like the credential being wrong. The rule comes
+  // from the module the cipher reads it from, so the two cannot drift.
+  if (env.INTEGRATION_SECRETS_KEY && !isValidIntegrationSecretsKey(env.INTEGRATION_SECRETS_KEY)) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  INTEGRATION_SECRETS_KEY must be 64 hex characters (a 32-byte AES-256 key)",
     );
   }
 }

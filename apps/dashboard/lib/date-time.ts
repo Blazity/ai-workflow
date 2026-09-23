@@ -1,6 +1,20 @@
+/**
+ * One zone, named, wherever a screen is rendered. A page rendered on the
+ * server formats in the server's zone (UTC on Vercel) and a client component in
+ * the browser's, so the same test time read two hours apart on the
+ * Integrations list and the connection page, with no zone to tell why. UTC
+ * with its name is the one both sides agree on, and renders the same text on
+ * the server and in the browser.
+ */
 const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  dateStyle: "medium",
-  timeStyle: "medium",
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+  timeZone: "UTC",
+  timeZoneName: "short",
 });
 const MINUTES_PER_HOUR = 60;
 const HOURS_PER_DAY = 24;

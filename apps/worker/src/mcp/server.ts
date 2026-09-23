@@ -3,6 +3,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { mcpSettings } from "../services/settings/runtime-settings.js";
 import type { McpToolDependencies } from "./contracts.js";
 import { executeMcpRead } from "./execute-tool.js";
+import {
+  deploymentCapabilityFacts,
+  deploymentIntegrationFacts,
+  readDeploymentIntegrationsForFacts,
+} from "./integration-facts.js";
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";
 import { MCP_ENABLED_DOMAINS, registerCatalogTool } from "./tool-catalog.js";
 import { authoringAnnouncementDelivery } from "./tools/authoring-support.js";
@@ -14,6 +19,7 @@ import { registerRunControlTools } from "./tools/run-control.js";
 import { registerRunStatsTools } from "./tools/run-stats.js";
 import { registerRunLogsTool, registerRunTools } from "./tools/runs.js";
 import { registerSettingsTools } from "./tools/settings.js";
+import { registerMemoryTools } from "./tools/memory.js";
 import { registerWorkScopeTools } from "./tools/work-scope.js";
 import { registerBriefingTools } from "./tools/briefings.js";
 import { registerTicketWriteTools } from "./tools/ticket-write.js";
@@ -43,20 +49,41 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
       deps,
       toolName: "system.capabilities",
       targetRefs: [],
-      operation: async () => ({
-        protocolVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
-        serverVersion: mcpSettings(deps.settings).serverVersion,
-        contractHash: MCP_CONTRACT_HASH,
-        deploymentClass: "dedicated-worker",
-        enabledDomains: [...MCP_ENABLED_DOMAINS],
-        readScopes: [...deps.actor.scopes].filter((scope) => scope === "mcp:read"),
-        // Whether a successful prompts.update or workflows.publish reaches a person:
-        // "none" means no chat channel is configured, so the announcement those tools
-        // send goes nowhere and the audit row is the whole record. Published because
-        // a client is entitled to know it is unobserved, and an operator running the
-        // smoke client is entitled to find that out before an incident does.
-        authoringAnnouncements: authoringAnnouncementDelivery(deps.adapters?.messaging),
-      }),
+      operation: async () => {
+        // One read of this deployment's integrations for every field below
+        // that depends on them, so one call describes one moment. Null when it
+        // failed, and each of those fields then says "could not be read"
+        // rather than "none".
+        const deployment = await readDeploymentIntegrationsForFacts(
+          deps.loadDeploymentIntegrations,
+        );
+        return {
+          protocolVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
+          serverVersion: mcpSettings(deps.settings).serverVersion,
+          contractHash: MCP_CONTRACT_HASH,
+          deploymentClass: "dedicated-worker",
+          enabledDomains: [...MCP_ENABLED_DOMAINS],
+          readScopes: [...deps.actor.scopes].filter((scope) => scope === "mcp:read"),
+          // Whether a successful prompts.update or workflows.publish reaches a person:
+          // "none" means no chat channel is configured, so the announcement those tools
+          // send goes nowhere and the audit row is the whole record. Published because
+          // a client is entitled to know it is unobserved, and an operator running the
+          // smoke client is entitled to find that out before an incident does.
+          // Null when the integrations could not be read.
+          authoringAnnouncements: authoringAnnouncementDelivery(deployment),
+          // Which integrations this build ships, what state each is in, and which
+          // blocks that lets an agent use. Read-only, and read afresh on every
+          // call: ADR-010 decision 15 keeps connecting, testing, enabling and
+          // configuring an integration in the dashboard, so a token never travels
+          // through a model's context, and this is the half an agent needs to
+          // build a workflow that can actually run here.
+          integrations: deploymentIntegrationFacts(deployment),
+          // Which provider serves each capability, the built-in memory store
+          // included: the answer the Integrations page shows, with every
+          // sentence an admin reads replaced by the one an agent may.
+          capabilities: await deploymentCapabilityFacts(deployment, deps.loadCapabilityOverview),
+        };
+      },
     });
     envelope.meta.trust = "system";
     return {
@@ -82,6 +109,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerSettingsTools(server, deps);
   registerWorkScopeTools(server, deps);
   registerBriefingTools(server, deps);
+  registerMemoryTools(server, deps);
 
   return server;
 }

@@ -35,8 +35,6 @@ vi.mock("../infra/vcs-config.js", () => ({
     ANTHROPIC_API_KEY: "anthropic-key",
     CODEX_API_KEY: "codex-key",
     CODEX_CHATGPT_OAUTH_TOKEN: undefined,
-    GENAI_ENGINE_API_KEY: undefined,
-    GENAI_ENGINE_TRACE_ENDPOINT: undefined,
   },
 }));
 vi.mock("./credentials.js", () => ({
@@ -172,7 +170,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
     });
 
@@ -255,7 +253,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
     });
 
@@ -288,7 +286,7 @@ describe("disposable review workspace", () => {
         ownerToken: "owner-1",
         agentKind: "codex",
         model: "gpt-5",
-        arthurTaskId: null,
+        tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
         jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(/not clean after setup/i);
@@ -326,7 +324,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
@@ -389,7 +387,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
@@ -420,7 +418,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
@@ -443,7 +441,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
       memoryTaskId: "../../etc/AIW-120",
     });
@@ -477,7 +475,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
@@ -498,7 +496,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
@@ -518,7 +516,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
     });
 
@@ -544,7 +542,7 @@ describe("disposable review workspace", () => {
         ownerToken: "owner-1",
         agentKind: "codex",
         model: "gpt-5",
-        arthurTaskId: null,
+        tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
         jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(
@@ -566,7 +564,7 @@ describe("disposable review workspace", () => {
         ownerToken: "owner-1",
         agentKind: "claude",
         model: "claude",
-        arthurTaskId: null,
+        tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
         jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow("install failed");
@@ -651,7 +649,7 @@ describe("disposable review workspace", () => {
       ownerToken: "owner-1",
       agentKind: "codex",
       model: "gpt-5",
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
       jobTimeoutMs: 120_000,
     });
 
@@ -684,7 +682,7 @@ describe("disposable review workspace", () => {
         ownerToken: "owner-1",
         agentKind: "codex",
         model: "gpt-5",
-        arthurTaskId: null,
+        tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
         jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(/path is invalid/i);
@@ -704,7 +702,7 @@ describe("disposable review workspace", () => {
         ownerToken: "owner-1",
         agentKind: "codex",
         model: "gpt-5",
-        arthurTaskId: null,
+        tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
         jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(/path is invalid/i);
@@ -724,7 +722,7 @@ describe("disposable review workspace", () => {
         ownerToken: "owner-1",
         agentKind: "codex",
         model: "gpt-5",
-        arthurTaskId: null,
+        tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
         jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(/path is duplicated/i);

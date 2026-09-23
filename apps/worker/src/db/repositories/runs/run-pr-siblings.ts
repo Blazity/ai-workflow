@@ -17,7 +17,8 @@ function isRunPullRequest(value: unknown): value is RunPullRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
   return (
-    (candidate.provider === "github" || candidate.provider === "gitlab") &&
+    typeof candidate.provider === "string" &&
+    candidate.provider.length > 0 &&
     typeof candidate.repoPath === "string" &&
     typeof candidate.id === "number" &&
     typeof candidate.url === "string"
@@ -32,7 +33,7 @@ function isRunPullRequest(value: unknown): value is RunPullRequest {
  */
 export async function findRunPrSiblings(input: {
   db: Db;
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   prNumber: number;
 }): Promise<RunPrSiblingLookup> {

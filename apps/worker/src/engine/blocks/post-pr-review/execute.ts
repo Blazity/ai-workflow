@@ -3,7 +3,7 @@ import {
   normalizeReviewResultsInput,
 } from "../../helpers/review-results.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
-import type { ReviewResult } from "@shared/contracts";
+import type { IntegrationConnectionPin, ReviewResult } from "@shared/contracts";
 import type { WorkflowOwnedBranchRecord } from "../../../db/repositories/runs.js";
 import { prSubjectKey } from "../../support/subject-key.js";
 import {
@@ -47,6 +47,7 @@ export async function postPrReviewStep(
     attempt: number;
     activationScope: string;
     reviewResults: ReviewResult[];
+    integrationPins?: readonly IntegrationConnectionPin[];
   },
 ) {
   "use step";
@@ -74,6 +75,7 @@ export async function postPrReviewStep(
     attempt: args.attempt,
     activationScope: args.activationScope,
     reviewResults: args.reviewResults,
+    integrationPins: args.integrationPins,
   });
 }
 postPrReviewStep.maxRetries = 0;
@@ -111,6 +113,7 @@ export const execute: BlockExecuteFn = async (
       attempt: execution?.attempt ?? 1,
       activationScope: execution?.activationScopeId ?? "root",
       reviewResults: normalized.value,
+      integrationPins: ctx.integrationPins,
     });
     return { kind: "next", output: { status: "ok", ...result } };
   } catch (error) {

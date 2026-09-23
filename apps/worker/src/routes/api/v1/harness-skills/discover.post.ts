@@ -12,7 +12,7 @@ import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
 import { DashboardAuthError } from "@shared/contracts";
 import { HarnessSkillImportError } from "../../../../services/harness/harness-errors.js";
 import {
-  discoverGitHubSkillSource,
+  discoverRepositorySkillSource,
 } from "../../../../services/harness/skill-sources.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 
@@ -41,7 +41,7 @@ export default defineEventHandler(
       if (!parsed.ok) {
         throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
-      return await discoverGitHubSkillSource(parsed.value.source);
+      return await discoverRepositorySkillSource(parsed.value.source);
     } catch (error) {
       toHarnessSkillHttpError(error);
     }

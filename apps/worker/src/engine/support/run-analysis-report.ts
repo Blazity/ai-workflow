@@ -14,7 +14,7 @@ import { parseStoredRunAnalysisReport } from "../../db/repositories/runs/analysi
 export { parseStoredRunAnalysisReport };
 import type { PhaseUsage } from "../../sandbox/agents/types.js";
 import type { PriceLookup, UsageTotals } from "../../sandbox/usage.js";
-import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
+import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { scrubForPublication } from "../../infra/publication-scrub.js";
 
@@ -22,7 +22,7 @@ const REPORT_MAX_BYTES = 64 * 1024;
 const COMMENT_MAX_BYTES = 20_000;
 const OMITTED = "… omitted; open the full run report";
 
-type Provider = "github" | "gitlab";
+type Provider = string;
 
 interface ManifestRepository {
   provider: Provider;
@@ -87,7 +87,7 @@ interface AnalysisInputBase {
   phaseModels?: Record<string, string>;
   priceLookup?: PriceLookup;
   model?: string;
-  jiraApplicable?: boolean;
+  ticketApplicable?: boolean;
 }
 
 export interface BuildResearchAnalysisReportInput extends AnalysisInputBase {}
@@ -174,7 +174,9 @@ function safeRequestList(values: unknown): RunAnalysisRepositoryRequest[] {
   const requests = values
     .filter((value): value is Record<string, unknown> => !!value && typeof value === "object")
     .map((value): RunAnalysisRepositoryRequest => ({
-      provider: value.provider === "gitlab" ? "gitlab" : "github",
+      // What the model wrote, or nothing. Filling in a provider it did not name
+      // would put a repository under one this deployment may not even ship.
+      provider: typeof value.provider === "string" ? value.provider : "",
       repoPath: typeof value.repoPath === "string" ? limitUtf8(safeModelText(value.repoPath), 512) : "unknown",
       rationale: limitUtf8(safeModelText(value.rationale), 1_200),
     }))
@@ -209,7 +211,7 @@ function mapRepositories(input: BuildResearchAnalysisReportInput): RunAnalysisRe
   return repos
     .filter((repo): repo is ManifestRepository => !!repo && typeof repo.repoPath === "string")
     .map((repo) => ({
-      provider: repo.provider === "gitlab" ? "gitlab" : "github",
+      provider: repo.provider,
       repoPath: repo.repoPath,
       defaultBranch: repo.defaultBranch ?? "unknown",
       researchBranch: repo.researchBranch ?? repo.branchName ?? repo.defaultBranch ?? "unknown",
@@ -238,12 +240,19 @@ function aggregateMetadata(
   };
 }
 
+/**
+ * The environment's secrets only, because these builders run in workflow
+ * scope, which cannot read a connection stored in the dashboard. That is a
+ * first pass, not the last: the one step that stores a report and the one that
+ * posts it to the ticket (steps/ticket-analysis.ts) redact it again with every
+ * secret the deployment knows before it leaves.
+ */
 function sanitizeBundle(bundle: Record<string, unknown>): {
   value: Record<string, unknown>;
   metadata: ReplaySanitizationMetadata;
 } {
   const envelope = sanitizeReplayValue(bundle, {
-    secrets: configuredReplaySecrets(),
+    secrets: environmentSecretValues(),
     maxBytes: REPORT_MAX_BYTES,
   });
   if (
@@ -441,7 +450,7 @@ export function buildResearchAnalysisReport(input: BuildResearchAnalysisReportIn
     publication: null,
     usage: { research: usage, publication: null, final: null },
     jira: {
-      research: emptyDelivery(input.jiraApplicable === false ? "not_applicable" : "pending"),
+      research: emptyDelivery(input.ticketApplicable === false ? "not_applicable" : "pending"),
       pullRequest: emptyDelivery("not_applicable"),
     },
     sanitization: sanitized.metadata,
@@ -526,7 +535,8 @@ export function withAnalysisPublication(
     rationales: report.repositories.map((repository) => repository.rationale),
   };
   const summaryEnvelope = sanitizeReplayValue(safeSummary, {
-    secrets: configuredReplaySecrets(),
+    // Workflow scope: see sanitizeBundle for why this is the first pass only.
+    secrets: environmentSecretValues(),
     // Leave enough room for JSON escaping (including control characters) and
     // sanitizer metadata before the publication bundle applies its exact
     // combined-byte bound.

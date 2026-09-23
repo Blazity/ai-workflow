@@ -9,7 +9,7 @@ const repositoryKey = z
   .trim()
   .toLowerCase()
   .max(207)
-  .regex(/^(?:github|gitlab):[^/\s]+(?:\/[^/\s]+)+$/u);
+  .regex(/^[a-z][a-z0-9]{2,31}:[^/\s]+(?:\/[^/\s]+)+$/u);
 const repositoryPolicy = z
   .object({
     candidates: z.discriminatedUnion("kind", [
@@ -29,13 +29,28 @@ const repositoryPolicy = z
     expansion: z.enum(["attach", "ask_once", "never"]),
   })
   .strict();
+/**
+ * The review states this trigger waits for when a workflow names none: the
+ * explicit "request changes" only. A plain comment is opt-in, because it needs
+ * the automation account to be known (or the workflow answers its own review)
+ * and because GitLab reports nothing else. The schema, dispatch, the block
+ * registry the palette seeds a new node from, and the generated block catalog
+ * the dashboard's editor falls back to all read it here. The starter template
+ * does not: it names both states on purpose, because a template waiting for
+ * "request changes" alone never fires on GitLab.
+ */
+export const DEFAULT_REVIEW_TRIGGER_STATES = [
+  "changes_requested",
+] satisfies ("changes_requested" | "commented")[];
+
 const paramsSchema = z
   .object({
-    providers: z.array(z.enum(["github", "gitlab"])).min(1).default(["github"]),
+    // `INTEGRATION_ID`, copied: see `trigger-provider-rule-sync.test.ts`.
+    providers: z.array(z.string().trim().regex(/^[a-z][a-z0-9]{2,31}$/u)).default([]),
     on: z
       .array(z.enum(["changes_requested", "commented"]))
       .min(1)
-      .default(["changes_requested"]),
+      .default([...DEFAULT_REVIEW_TRIGGER_STATES]),
     scope: z.enum(["workflow_owned", "any"]).default("workflow_owned"),
     maxRunsPerPr: z.number().int().min(1).max(30).default(10),
     rateLimitMax: z.number().int().min(1).optional(),
@@ -62,8 +77,8 @@ export const manifest = {
     softColor: "#FBECEC",
   },
   defaults: {
-    providers: ["github"],
-    on: ["changes_requested"],
+    providers: [],
+    on: DEFAULT_REVIEW_TRIGGER_STATES,
     scope: "workflow_owned",
     maxRunsPerPr: 10,
   },

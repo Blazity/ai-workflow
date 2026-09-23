@@ -1,7 +1,9 @@
 import { z } from "zod";
 import type { BlockManifest } from "@shared/contracts";
 
-const vcsProviderSelection = z.array(z.enum(["github", "gitlab"])).min(1);
+// `INTEGRATION_ID` from @shared/contracts, copied because a manifest may import
+// it only as a type; `trigger-provider-rule-sync.test.ts` holds the copies equal.
+const vcsProviderSelection = z.array(z.string().trim().regex(/^[a-z][a-z0-9]{2,31}$/u));
 // The trigger's optional repository policy. Kept in step by hand with
 // `triggerRepositoryPolicySchema` in @shared/contracts, which a manifest may
 // import only as a type. Deliberately no default.
@@ -10,7 +12,7 @@ const repositoryKey = z
   .trim()
   .toLowerCase()
   .max(207)
-  .regex(/^(?:github|gitlab):[^/\s]+(?:\/[^/\s]+)+$/u);
+  .regex(/^[a-z][a-z0-9]{2,31}:[^/\s]+(?:\/[^/\s]+)+$/u);
 const repositoryPolicy = z
   .object({
     candidates: z.discriminatedUnion("kind", [
@@ -32,7 +34,7 @@ const repositoryPolicy = z
   .strict();
 const paramsSchema = z
   .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    providers: vcsProviderSelection.default([]),
     scope: z.enum(["workflow_owned", "any"]).default("any"),
     rateLimitMax: z.number().int().min(1).optional(),
     rateLimitWindow: z.enum(["minute", "hour", "day", "month"]).optional(),
@@ -57,7 +59,7 @@ export const manifest = {
     color: "#D14343",
     softColor: "#FBECEC",
   },
-  defaults: { providers: ["github", "gitlab"], scope: "any" },
+  defaults: { providers: [], scope: "any" },
   inputs: {},
   execution: "graph",
 } satisfies BlockManifest;

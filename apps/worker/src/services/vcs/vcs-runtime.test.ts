@@ -1,116 +1,455 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * Resolving the version control provider a repository is on, now that every
+ * provider is an integration and core has no adapter of its own left.
+ *
+ * The two cases that used to be different, "a provider core ships" and "a
+ * provider an integration ships", are one case, which is the point of the
+ * stage. What is still worth pinning here is the behaviour around that: which
+ * credentials a sandbox gets, what happens when one provider is unreachable,
+ * and that a run pinned to a connection it started with refuses to carry on
+ * through a different one.
+ */
 const mocks = vi.hoisted(() => ({
-  getConfiguredVcsProviders: vi.fn(),
-  getVcsProviderConfig: vi.fn(),
-  getVcsToken: vi.fn(),
-  getBotIdentity: vi.fn(),
-  createVCSForRepository: vi.fn(),
+  resolveUsableIntegrations: vi.fn(),
+  checkIntegrationPin: vi.fn(),
   loggerWarn: vi.fn(),
+  knownSecretValues: vi.fn(async (): Promise<string[]> => []),
 }));
 
-vi.mock("../../infra/vcs-config.js", () => ({
-  env: {},
-  getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
-  getVcsProviderConfig: mocks.getVcsProviderConfig,
-}));
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
-vi.mock("../../adapters/vcs/github-auth.js", () => ({
-  getBotIdentity: mocks.getBotIdentity,
-  getVcsToken: mocks.getVcsToken,
-}));
-
-vi.mock("../../adapters/vcs/create-vcs.js", () => ({
-  createVCSForRepository: mocks.createVCSForRepository,
+vi.mock("../integrations/runtime.js", async () => ({
+  resolveUsableIntegrations: mocks.resolveUsableIntegrations,
+  checkIntegrationPin: mocks.checkIntegrationPin,
+  knownSecretValues: mocks.knownSecretValues,
+  // The real refusal, so what a caller catches is the class it would catch.
+  IntegrationSettingsUnreadableError: (await import("../integrations/usable.js"))
+    .IntegrationSettingsUnreadableError,
 }));
 
 vi.mock("../../infra/logger.js", () => ({
-  logger: {
-    warn: mocks.loggerWarn,
-  },
+  logger: { warn: mocks.loggerWarn },
 }));
 
-import { buildSandboxProviderConfigs, createRepositoryVcsRuntime } from "./vcs-runtime.js";
+import type { IntegrationManifest } from "@integrations/sdk";
+import type { IntegrationState } from "@shared/contracts";
+import { deploymentIntegrations } from "../../engine/definition/integration-availability.js";
+import { integrationPinsFor } from "../../engine/definition/integration-run.js";
+import {
+  buildSandboxProviderConfigs,
+  createManualDispatchPrReader,
+  createRepositoryVcsRuntime,
+  listVcsRepositories,
+  resolveConfiguredPullRequestUrl,
+} from "./vcs-runtime.js";
+import { IntegrationSettingsUnreadableError } from "../integrations/usable.js";
+
+function connected(
+  id: string,
+  adapter: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    manifest: { id, name: id, capabilities: ["vcs"] },
+    runtime: { capabilities: { vcs: () => adapter } },
+    ctx: { connection: {} },
+  };
+}
+
+function resolvesTo(...entries: Array<Record<string, unknown>>): void {
+  mocks.resolveUsableIntegrations.mockImplementation(
+    async ({ filter }: { filter?: (manifest: { id: string }) => boolean } = {}) => {
+      const usable = entries.filter(
+        (entry) => !filter || filter(entry.manifest as { id: string }),
+      );
+      return {
+        readable: true,
+        usable,
+        states: new Map(
+          usable.map((entry) => [(entry.manifest as { id: string }).id, { usable: true }]),
+        ),
+        connectionFailures: new Map(),
+      };
+    },
+  );
+}
+
+/** The database did not answer when the settings were read. */
+function settingsUnreadable(): void {
+  mocks.resolveUsableIntegrations.mockResolvedValue({
+    readable: false,
+    reason: "connection terminated unexpectedly",
+  });
+}
+
+function githubLike(): Record<string, unknown> {
+  return {
+    sandboxCredentials: async () => ({
+      host: "https://github.com",
+      authUser: "x-access-token",
+      token: "ghs-token",
+      commitAuthor: "ai-workflow[bot]",
+      commitEmail: "7+ai-workflow[bot]@users.noreply.github.com",
+    }),
+  };
+}
 
 describe("buildSandboxProviderConfigs", () => {
-  it("resolves commit identity only for provider kinds needed by the run", async () => {
-    mocks.getConfiguredVcsProviders.mockReturnValue([
-      {
-        kind: "github",
-        auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-        host: "https://github.com",
-        legacyBaseBranch: "main",
-      },
-      {
-        kind: "gitlab",
-        token: "glpat",
-        host: "https://gitlab.example.com",
-        legacyBaseBranch: "main",
-      },
-    ]);
-    mocks.getBotIdentity.mockRejectedValue(new Error("github identity should not be resolved"));
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-    const configs = await buildSandboxProviderConfigs(new Set(["gitlab"]));
+  it("hands a sandbox the credentials of a provider it knows nothing else about", async () => {
+    // The repository path is empty here, because the caller wants the
+    // connection rather than a repository. An adapter that refused an empty
+    // path would leave the run with no credentials to push with and nothing
+    // but a warning in a log to say why.
+    resolvesTo(connected("github", githubLike()));
+
+    const configs = await buildSandboxProviderConfigs(new Set(["github"]));
 
     expect(configs).toEqual([
       expect.objectContaining({
-        kind: "gitlab",
-        host: "https://gitlab.example.com",
-        commitAuthor: "ai-workflow-blazity",
-        commitEmail: "ai-workflow@blazity.com",
+        kind: "github",
+        host: "https://github.com",
+        authUser: "x-access-token",
+        commitAuthor: "ai-workflow[bot]",
       }),
     ]);
-    expect(mocks.getBotIdentity).not.toHaveBeenCalled();
   });
 
-  it("keeps other provider configs when one provider identity lookup fails", async () => {
-    mocks.getConfiguredVcsProviders.mockReturnValue([
-      {
-        kind: "github",
-        auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-        host: "https://github.com",
-        legacyBaseBranch: "main",
-      },
-      {
-        kind: "gitlab",
-        token: "glpat",
-        host: "https://gitlab.example.com",
-        legacyBaseBranch: "main",
-      },
-    ]);
-    mocks.getBotIdentity.mockRejectedValue(new Error("github unavailable"));
+  it("resolves only the providers the run needs", async () => {
+    const unwanted = vi.fn();
+    resolvesTo(
+      connected("github", githubLike()),
+      connected("gitlab", { sandboxCredentials: unwanted }),
+    );
+
+    const configs = await buildSandboxProviderConfigs(new Set(["github"]));
+
+    expect(configs.map((config) => config.kind)).toEqual(["github"]);
+    expect(unwanted).not.toHaveBeenCalled();
+  });
+
+  it("keeps the other providers when one cannot answer", async () => {
+    resolvesTo(
+      connected("github", githubLike()),
+      connected("gitlab", {
+        sandboxCredentials: async () => {
+          throw new Error("gitlab unavailable");
+        },
+      }),
+    );
 
     const configs = await buildSandboxProviderConfigs();
 
-    expect(configs).toEqual([
-      expect.objectContaining({
-        kind: "gitlab",
-        host: "https://gitlab.example.com",
-      }),
-    ]);
+    expect(configs.map((config) => config.kind)).toEqual(["github"]);
     expect(mocks.loggerWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "github", err: "github unavailable" }),
+      expect.objectContaining({ provider: "gitlab", err: "gitlab unavailable" }),
       "sandbox_provider_identity_resolution_failed",
     );
   });
 
-  it("memoizes the repository VCS adapter per runtime", () => {
-    const provider = {
-      kind: "github",
-      auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-      host: "https://github.com",
-      legacyBaseBranch: "main",
-    };
-    mocks.getVcsProviderConfig.mockReturnValue(provider);
-    mocks.createVCSForRepository.mockReturnValue({ kind: "vcs" });
+  it("says so when a provider ships no way to push", async () => {
+    resolvesTo(connected("github", {}));
+
+    await expect(buildSandboxProviderConfigs()).resolves.toEqual([]);
+    expect(mocks.loggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "github" }),
+      "sandbox_provider_identity_resolution_failed",
+    );
+  });
+});
+
+describe("settings that could not be read", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("fails the sandbox loudly rather than building it with no credentials to push with", async () => {
+    // An empty list here used to be the whole answer: the sandbox started
+    // with no version control credentials and the run failed minutes later at
+    // its first clone, blaming the provider for a database that was away.
+    settingsUnreadable();
+
+    await expect(buildSandboxProviderConfigs(new Set(["github"]))).rejects.toBeInstanceOf(
+      IntegrationSettingsUnreadableError,
+    );
+  });
+
+  it("refuses to say no provider recognises a pull request URL nobody could check", async () => {
+    settingsUnreadable();
+
+    const refusal = resolveConfiguredPullRequestUrl(new URL("https://github.com/acme/api/pull/42"));
+
+    await expect(refusal).rejects.toBeInstanceOf(IntegrationSettingsUnreadableError);
+    await expect(refusal).rejects.toThrow(/could not be read, so the pull request URL could not be matched/);
+  });
+
+  it("refuses to list repositories rather than answer an empty listing", async () => {
+    // An empty listing read, to every caller, as "nothing connected" or "your
+    // repository is gone".
+    settingsUnreadable();
+
+    const listing = listVcsRepositories();
+
+    await expect(listing).rejects.toBeInstanceOf(IntegrationSettingsUnreadableError);
+    await expect(listing).rejects.toThrow(/so no repository could be listed/);
+  });
+
+  it("says the same when building the provider's adapter reads them again and that read fails", async () => {
+    // Manual dispatch matches the URL on one read and reads the pull request
+    // through an adapter built on a second. A plain error from the second read
+    // was filed as the provider being unreachable.
+    settingsUnreadable();
+
+    const reading = createManualDispatchPrReader({ provider: "github", repoPath: "acme/api" })
+      .getManualDispatchPullRequest(42);
+
+    await expect(reading).rejects.toBeInstanceOf(IntegrationSettingsUnreadableError);
+    await expect(reading).rejects.toThrow(/so version control provider github could not be used/);
+  });
+});
+
+describe("createRepositoryVcsRuntime", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("builds the adapter once per runtime, however often it is called", async () => {
+    const getPRHead = vi.fn().mockResolvedValue({ headSha: "sha" });
+    const vcs = vi.fn(() => ({ getPRHead }));
+    mocks.resolveUsableIntegrations.mockResolvedValue({
+      readable: true,
+      usable: [{
+        manifest: { id: "github", name: "GitHub", capabilities: ["vcs"] },
+        runtime: { capabilities: { vcs } },
+        ctx: { connection: {} },
+      }],
+      states: new Map([["github", { usable: true }]]),
+    });
 
     const runtime = createRepositoryVcsRuntime({
       provider: "github",
       repoPath: "acme/api",
       baseBranch: "main",
     });
+    await runtime.vcs.getPRHead(7);
+    await runtime.vcs.getPRHead(7);
 
-    expect(runtime.vcs).toBe(runtime.vcs);
-    expect(mocks.createVCSForRepository).toHaveBeenCalledTimes(1);
+    expect(vcs).toHaveBeenCalledTimes(1);
+    expect(getPRHead).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a provider no integration in this build serves", async () => {
+    resolvesTo();
+
+    const runtime = createRepositoryVcsRuntime({
+      provider: "subversion",
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
+
+    await expect(runtime.vcs.findPR("ai/AIW-1")).rejects.toThrow(/subversion/u);
+  });
+
+  it("refuses a later call when the connection the run pinned was reconfigured", async () => {
+    const vcs = vi.fn();
+    mocks.resolveUsableIntegrations.mockResolvedValue({
+      readable: true,
+      usable: [{
+        manifest: { id: "gitlab", name: "GitLab", capabilities: ["vcs"] },
+        runtime: { capabilities: { vcs } },
+        ctx: { connection: {} },
+      }],
+      states: new Map([["gitlab", { usable: true }]]),
+    });
+    mocks.checkIntegrationPin.mockReturnValue({ ok: false, reason: "reconfigured" });
+
+    const runtime = createRepositoryVcsRuntime({
+      provider: "gitlab",
+      repoPath: "acme/api",
+      baseBranch: "main",
+      integrationPins: [{ integrationId: "gitlab", configFingerprint: "old-host" }],
+    });
+
+    await expect(runtime.vcs.findPR("ai/AIW-100")).rejects.toThrow(
+      "Version control provider GitLab moved after this run started (reconfigured). Start a new run.",
+    );
+    expect(vcs).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A run suspended across the deploy that widened what a run pins.
+ *
+ * Pins are a recorded step result and replay unchanged, so a run started on
+ * the earlier build comes back holding what that build pinned. For an agent
+ * plus send_message graph that was its chat provider alone. Its next version
+ * control call used to read GitHub's absence from that set as GitHub having
+ * moved, and stopped the run with a sentence about a change nobody made.
+ */
+describe("a run whose recorded pins do not name the VCS provider", () => {
+  const chatOnly = [{ integrationId: "slack", configFingerprint: "workspace-1" }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("works on the repository against the provider as it is now", async () => {
+    const findPR = vi.fn().mockResolvedValue(null);
+    resolvesTo(connected("github", { findPR }));
+
+    const runtime = createRepositoryVcsRuntime({
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+      integrationPins: chatOnly,
+    });
+
+    await expect(runtime.vcs.findPR("ai-workflow/aiw-1")).resolves.toBeNull();
+    expect(findPR).toHaveBeenCalledTimes(1);
+    expect(mocks.checkIntegrationPin).not.toHaveBeenCalled();
+  });
+
+  it("still lists that provider's repositories", async () => {
+    resolvesTo(
+      connected("github", {
+        listRepositories: async () => [{ provider: "github", path: "acme/api" }],
+      }),
+    );
+
+    const listed = await listVcsRepositories({ integrationPins: chatOnly });
+
+    expect(listed.failures).toEqual([]);
+    expect(listed.repositories).toEqual([{ provider: "github", path: "acme/api" }]);
+  });
+
+  it("compares the pin a run started today records for the same graph", async () => {
+    // The other half: a run started on this build pins version control for an
+    // agent block, so the same call is held to the connection it started with.
+    const manifest = (id: string, capability: string): IntegrationManifest =>
+      ({
+        id,
+        name: id,
+        description: "",
+        connection: { fields: [] },
+        capabilities: [capability],
+        blocks: [],
+        pages: [],
+        health: [],
+      }) as unknown as IntegrationManifest;
+    const state = (id: string, fingerprint: string): IntegrationState =>
+      ({
+        integrationId: id,
+        enabled: true,
+        source: "environment",
+        status: "connected",
+        connection: "connected",
+        verification: { state: "never_tested" },
+        failure: null,
+        usable: true,
+        environment: { setVariables: [], missingVariables: [], complete: true },
+        stored: { latestVersion: 0, activeVersion: null, missingFields: [], complete: false, prepared: null },
+        pin: { integrationId: id, configFingerprint: fingerprint },
+        secretsKeyAvailable: true,
+      }) as IntegrationState;
+    const pins = integrationPinsFor(
+      [{ type: "trigger_ticket_ai" }, { type: "implementation_agent" }, { type: "send_message" }],
+      deploymentIntegrations({
+        manifests: [manifest("github", "vcs"), manifest("slack", "messaging")],
+        states: new Map([
+          ["github", state("github", "app-1")],
+          ["slack", state("slack", "workspace-1")],
+        ]),
+      }),
+    );
+    const findPR = vi.fn().mockResolvedValue(null);
+    resolvesTo(connected("github", { findPR }));
+    mocks.checkIntegrationPin.mockReturnValue({ ok: true });
+
+    const runtime = createRepositoryVcsRuntime({
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+      integrationPins: pins,
+    });
+
+    await expect(runtime.vcs.findPR("ai-workflow/aiw-1")).resolves.toBeNull();
+    expect(mocks.checkIntegrationPin).toHaveBeenCalledWith(
+      { integrationId: "github", configFingerprint: "app-1" },
+      expect.anything(),
+    );
+  });
+});
+
+// Red when: the adapter core publishes through hands the provider what an agent
+// wrote. A pull request body or a review comment is agent text, and a tracing
+// key stored in the dashboard sits in every agent sandbox by design.
+describe("what core publishes through version control", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("takes every secret the deployment knows out of a pull request before the provider sees it", async () => {
+    const createPR = vi.fn(async () => ({ id: 7, url: "https://github.com/acme/api/pull/7" }));
+    resolvesTo(connected("github", { createPR }));
+    mocks.knownSecretValues.mockResolvedValueOnce(["plainvalue4471tracer"]);
+
+    const runtime = createRepositoryVcsRuntime({ provider: "github", repoPath: "acme/api", baseBranch: "main" });
+    await runtime.vcs.createPR("ai-workflow/aiw-1", "AIW-1", "Configured tracing with plainvalue4471tracer.");
+
+    expect(createPR).toHaveBeenCalledWith("ai-workflow/aiw-1", "AIW-1", expect.not.stringContaining("plainvalue4471tracer"));
+  });
+
+  it("publishes nothing when the secrets to redact with cannot be read", async () => {
+    const postPRComment = vi.fn(async () => ({ url: null }));
+    resolvesTo(connected("github", { postPRComment }));
+    mocks.knownSecretValues.mockRejectedValueOnce(new Error("settings unreadable"));
+
+    const runtime = createRepositoryVcsRuntime({ provider: "github", repoPath: "acme/api", baseBranch: "main" });
+
+    await expect(runtime.vcs.postPRComment(7, "anything")).rejects.toThrow("settings unreadable");
+    expect(postPRComment).not.toHaveBeenCalled();
+  });
+
+  it("reads without asking for the secrets", async () => {
+    const findPR = vi.fn().mockResolvedValue(null);
+    resolvesTo(connected("github", { findPR }));
+
+    const runtime = createRepositoryVcsRuntime({ provider: "github", repoPath: "acme/api", baseBranch: "main" });
+    await runtime.vcs.findPR("ai-workflow/aiw-1");
+
+    expect(mocks.knownSecretValues).not.toHaveBeenCalled();
+  });
+});
+
+describe("createManualDispatchPrReader", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Asked through the deferred adapter, every member is a function, so a
+  // provider without this one used to fail only at the call, reported to the
+  // person as the provider being unreachable.
+  it("tells a provider that cannot read pull requests apart from one that is down", async () => {
+    resolvesTo(connected("github", githubLike()));
+
+    await expect(
+      createManualDispatchPrReader({ provider: "github", repoPath: "acme/api" })
+        .getManualDispatchPullRequest(7),
+    ).rejects.toMatchObject({ name: "ManualDispatchUnsupportedError", provider: "github" });
+  });
+
+  it("reads the pull request through the provider that can", async () => {
+    const getManualDispatchPullRequest = vi.fn().mockResolvedValue({ prNumber: 7 });
+    resolvesTo(connected("github", { ...githubLike(), getManualDispatchPullRequest }));
+
+    await expect(
+      createManualDispatchPrReader({ provider: "github", repoPath: "acme/api" })
+        .getManualDispatchPullRequest(7),
+    ).resolves.toEqual({ prNumber: 7 });
+    expect(getManualDispatchPullRequest).toHaveBeenCalledWith(7);
   });
 });

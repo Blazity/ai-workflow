@@ -42,10 +42,12 @@ export type {
 } from "./definition-candidates.js";
 export {
   activeWorkflowDefinitionExists,
+  readEnabledDeployedWorkflowDefinitions,
   readWorkflowDefinitionDetail,
   readWorkflowDefinitionsOverview,
 } from "./definition-reads.js";
 export type {
+  EnabledDeployedWorkflowDefinition,
   WorkflowDefinitionDetail,
   WorkflowDefinitionsOverview,
 } from "./definition-reads.js";

@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { SkillValidationError } from "@shared/skills";
-import {
-  githubSkillSource,
-  type GitHubSkillRepository,
-  type GitHubSkillTreeEntry,
-} from "./github-skills.js";
+import type {
+  RepositorySkillSource,
+  RepositorySkillTreeEntry,
+} from "@integrations/sdk";
+import { repositorySkillSource } from "./repository-skills.js";
 import { localSkillSource } from "./local-skills.js";
 
 const COMMIT = "1".repeat(40);
@@ -15,7 +15,7 @@ const TREE = "2".repeat(40);
 const BLOB = "3".repeat(40);
 const roots: string[] = [];
 
-class FixtureRepository implements GitHubSkillRepository {
+class FixtureRepository implements RepositorySkillSource {
   constructor(private readonly document: Buffer) {}
 
   getDefaultBranch(): Promise<string> {
@@ -27,7 +27,7 @@ class FixtureRepository implements GitHubSkillRepository {
   }
 
   getTree(): Promise<{
-    entries: GitHubSkillTreeEntry[];
+    entries: RepositorySkillTreeEntry[];
     truncated: boolean;
   }> {
     return Promise.resolve({
@@ -71,7 +71,7 @@ it("normalizes the same valid manifest through both source reads", async () => {
   const repository = new FixtureRepository(document);
   const directory = fixtureDirectory(document);
   const [githubDiscovery, localDiscovery] = await Promise.all([
-    githubSkillSource.discover({ repository, source: "acme/skills/skills" }),
+    repositorySkillSource.discover({ repository, source: "acme/skills/skills" }),
     localSkillSource.discover({ directory }),
   ]);
   expect(
@@ -80,7 +80,7 @@ it("normalizes the same valid manifest through both source reads", async () => {
     localDiscovery.map(({ name, description }) => ({ name, description })),
   );
 
-  const github = await githubSkillSource.read(githubDiscovery[0]!.snapshot, {
+  const github = await repositorySkillSource.read(githubDiscovery[0]!.snapshot, {
     repository,
   });
   const local = await localSkillSource.read(localDiscovery[0]!.snapshot);
@@ -96,7 +96,7 @@ it("surfaces the same package error for malformed manifests", async () => {
     "---\nname: BAD NAME\ndescription: Review rules\n---\n",
   );
   const reads = [
-    githubSkillSource.read(
+    repositorySkillSource.read(
       {
         owner: "acme",
         repository: "skills",
@@ -135,7 +135,7 @@ it.each([
       const document = Buffer.from(
         "---\nname: review-rules\ndescription: Review rules\n---\n",
       );
-      return githubSkillSource.read(
+      return repositorySkillSource.read(
         {
           owner: "acme",
           repository: "skills",

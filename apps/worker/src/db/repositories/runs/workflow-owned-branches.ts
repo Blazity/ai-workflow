@@ -2,7 +2,7 @@ import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { getDb, type Db } from "../../client.js";
 import { workflowOwnedBranches } from "../../schema.js";
 
-type VcsProvider = "github" | "gitlab";
+type VcsProvider = string;
 
 export interface WorkflowOwnedBranchRecord {
   ticketKey: string;

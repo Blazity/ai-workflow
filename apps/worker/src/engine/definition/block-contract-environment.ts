@@ -17,44 +17,41 @@ import {
   createWorkflowBlockContractResolver,
   type WorkflowBlockRegistryContext,
 } from "./block-contract-resolver.js";
+import { NO_INTEGRATIONS, type DeploymentIntegrations } from "./integration-availability.js";
 
 /**
- * The deployment as its credentials describe it: which agents, LLMs, VCS
- * providers and integrations this process can actually reach.
+ * The deployment as its environment describes it: which agents and LLMs this
+ * process has credentials for, and whether webhook trigger secrets can be
+ * sealed.
  *
- * Credentials only. Provider and model belong to a Harness Profile and are
- * added by `workflowBlockRegistryContext` below.
+ * Credentials only. Provider and model belong to a Harness Profile, and every
+ * provider an integration serves (version control included) comes from the
+ * integrations the caller read; `workflowBlockRegistryContext` below adds both.
  */
-function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAgent"> {
-  const vcsProviders: WorkflowBlockRegistryContext["vcsProviders"] = [];
-  if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID) {
-    vcsProviders.push("github");
-  }
-  if (env.GITLAB_TOKEN) vcsProviders.push("gitlab");
+function deploymentCapabilities(): Omit<
+  WorkflowBlockRegistryContext,
+  "defaultAgent" | "vcsProviders" | "vcsBotIdentities" | "integrations"
+> {
   return {
     agentProviders: {
       claude: Boolean(env.ANTHROPIC_API_KEY),
       codex: Boolean(env.CODEX_API_KEY || env.CODEX_CHATGPT_OAUTH_TOKEN),
     },
-    llmProviders: {
-      claude: Boolean(
-        env.ANTHROPIC_API_KEY && !env.ANTHROPIC_API_KEY.startsWith("sk-ant-oat"),
-      ),
-      codex: Boolean(env.CODEX_API_KEY),
-    },
-    vcsProviders,
-    vcsBotIdentities: vcsProviders.filter((provider) =>
-      Boolean(
-        resolveVcsBotLogin(provider, vcsProviders, {
-          github: env.GITHUB_BOT_LOGIN,
-          gitlab: env.GITLAB_BOT_LOGIN,
-          legacy: env.VCS_BOT_LOGIN,
-        }),
-      ),
-    ),
-    slackConfigured: Boolean(env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID),
-    arthurConfigured: Boolean(env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT),
+    llmProviders: directLlmCredentials(),
     webhookTriggerConfigured: Boolean(env.WEBHOOK_TRIGGER_ENCRYPTION_KEY),
+  };
+}
+
+/**
+ * Which providers this deployment can call a model on directly, with an API
+ * key. A Claude OAuth token (`sk-ant-oat`) is an agent harness's credential and
+ * is refused by the API, so it does not count. One home: the editor's gates and
+ * the integration block step both read it.
+ */
+export function directLlmCredentials(): { claude: boolean; codex: boolean } {
+  return {
+    claude: Boolean(env.ANTHROPIC_API_KEY && !env.ANTHROPIC_API_KEY.startsWith("sk-ant-oat")),
+    codex: Boolean(env.CODEX_API_KEY),
   };
 }
 
@@ -65,13 +62,42 @@ function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAg
  * A caller resolving a specific node passes its resolved profile. Definition
  * authoring and other callers without a node use the one code-owned built-in
  * default profile selected by `@shared/harness`.
+ *
+ * `integrations` is read from the database, which this tier cannot reach, so
+ * the caller that can passes it (`services/workflow-definitions/block-contracts.ts`).
+ * Omitting it declares a deployment with no integration rather than one whose
+ * integrations nobody looked up, so a caller who forgets offers no integration
+ * block instead of offering one that cannot run.
  */
 export function workflowBlockRegistryContext(
   profile: Pick<HarnessProfileManifest, "harness" | "model"> =
     defaultBuiltinHarnessProfile(),
+  integrations: DeploymentIntegrations = NO_INTEGRATIONS,
 ): WorkflowBlockRegistryContext {
+  const deployment = deploymentCapabilities();
+  // Every version control provider is an integration since S11, so the ones
+  // this deployment has are the usable integrations that serve it.
+  const vcsProviders = [...(integrations.providers.get("vcs") ?? [])];
+  const soleProvider = vcsProviders.length === 1 ? vcsProviders[0] : undefined;
+  // Whether a provider has an automation account is the integration resolver's
+  // answer and only its answer. Reading the environment a second time here
+  // would disagree with it the moment a connection moved to stored values, and
+  // the editor would offer a trigger the run then refuses.
+  const byProvider = Object.fromEntries(vcsProviders.map((provider) => [
+    provider,
+    integrations.botIdentityProviders.has(provider) ? "configured" : undefined,
+  ]));
+  const legacy = soleProvider && integrations.legacyBotIdentityProviders.has(soleProvider)
+    ? "configured"
+    : undefined;
+  const vcsBotIdentities = vcsProviders.filter((provider) => Boolean(
+    resolveVcsBotLogin(provider, vcsProviders, { byProvider, legacy }),
+  ));
   return {
-    ...deploymentCapabilities(),
+    ...deployment,
+    vcsProviders,
+    vcsBotIdentities,
+    integrations,
     defaultAgent: {
       provider: profile.harness.provider,
       model: profile.model.id,
@@ -82,6 +108,9 @@ export function workflowBlockRegistryContext(
 /** The resolver for the deployment and optional profile described above. */
 export function workflowBlockContractResolver(
   profile?: Pick<HarnessProfileManifest, "harness" | "model">,
+  integrations?: DeploymentIntegrations,
 ): WorkflowBlockContractResolver {
-  return createWorkflowBlockContractResolver(workflowBlockRegistryContext(profile));
+  return createWorkflowBlockContractResolver(
+    workflowBlockRegistryContext(profile, integrations),
+  );
 }

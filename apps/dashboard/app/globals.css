@@ -1,5 +1,26 @@
 @import "tailwindcss";
 
+/*
+ * The pages integrations contribute, and the host UI package they are built
+ * from, live outside this app. Tailwind scans the project it is compiled in
+ * and nothing else, so without these an integration's page would render with
+ * its markup intact and none of its classes defined: styled in development
+ * where some other screen happened to use the same utility, unstyled in
+ * production. Arbitrary values are the part that fails first, because nothing
+ * else generates them.
+ *
+ * The dashboard entries only, never a whole package. A worker entry holds
+ * provider payloads and secrets-shaped strings, and a README holds prose;
+ * scanning either lets a string in server code decide what CSS this app ships.
+ * So the convention an integration follows is: page code is `dashboard.tsx`,
+ * or files under `dashboard/` beside it.
+ */
+@source "../../../integrations/*/dashboard.tsx";
+@source "../../../integrations/*/dashboard/**/*.tsx";
+@source "../../../integrations/_fixtures/*/dashboard.tsx";
+@source "../../../integrations/_fixtures/*/dashboard/**/*.tsx";
+@source "../../../integrations/host-ui/*.tsx";
+
 @font-face {
   font-family: Manrope;
   src: url("/fonts/Manrope.ttf") format("truetype-variations");
@@ -152,6 +173,29 @@ body {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/*
+ * A scrollable column that says so.
+ *
+ * The sidebar fits a 1080 tall screen and does not fit an 800 tall one once a
+ * few integrations are connected, and macOS hides its overlay scrollbar until
+ * somebody scrolls, so Settings and the integrations under it would sit below
+ * an unhinted fold. These are the classic scrolling shadows: the two `local`
+ * layers are painted on the content and slide away with it, the two `scroll`
+ * layers stay put, so an edge is visible exactly while there is more content
+ * past it and invisible when there is not. No JavaScript and no measuring, so
+ * it cannot disagree with the real scroll state.
+ */
+.ck-scroll-cue {
+  background:
+    linear-gradient(var(--color-panel) 30%, rgb(255 255 255 / 0)) top / 100% 14px no-repeat local,
+    linear-gradient(rgb(255 255 255 / 0), var(--color-panel) 70%) bottom / 100% 14px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgb(24 27 32 / 0.12), rgb(24 27 32 / 0)) top / 100% 6px
+      no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgb(24 27 32 / 0.12), rgb(24 27 32 / 0)) bottom /
+      100% 6px no-repeat scroll;
+  background-color: var(--color-panel);
 }
 
 @keyframes ck-pulse {

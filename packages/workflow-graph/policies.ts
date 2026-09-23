@@ -26,6 +26,7 @@
 import type { z } from "zod";
 import {
   WORKFLOW_SCHEMA_VERSION,
+  canonicalizeWorkflowBlockTypes,
   workflowDefinitionSchemaVersionOf,
   type WorkflowDefinition,
   type WorkflowDefinitionValidationIssue,
@@ -99,9 +100,16 @@ export type WorkflowGraphParseResult =
  *
  * The worker's `stored-definition.ts` settles the retired schema before calling
  * this, so anything this refuses is a graph today's build cannot read at all.
+ *
+ * Renamed block types are settled HERE rather than at each read site. Every
+ * caller reads a graph somebody else stored (a definition row, a committed
+ * snapshot, a candidate being published), so a call site that forgot would turn
+ * a working stored workflow into "this build has no such block". One reader,
+ * one rename table.
  */
 export function parse(input: unknown): WorkflowGraphParseResult {
-  const parsed = workflowDefinitionV2Schema.safeParse(input);
+  const graph = canonicalizeWorkflowBlockTypes(input);
+  const parsed = workflowDefinitionV2Schema.safeParse(graph);
   if (parsed.success) {
     return { definition: parsed.data as WorkflowDefinition, issues: [], error: null };
   }
@@ -112,7 +120,7 @@ export function parse(input: unknown): WorkflowGraphParseResult {
   return {
     definition: null,
     get issues() {
-      issues ??= schemaIssues(input, parsed.error);
+      issues ??= schemaIssues(graph, parsed.error);
       return issues;
     },
     error: parsed.error,

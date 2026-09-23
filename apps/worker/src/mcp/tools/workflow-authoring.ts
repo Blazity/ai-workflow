@@ -18,7 +18,8 @@ import {
   validateWorkflowDefinitionCandidate,
 } from "../../services/mcp/app-dependencies.js";
 import { pinnedRepositoriesNotEnabled } from "../../services/repository-catalog/index.js";
-import { blockContractsFor } from "../../services/workflow-definitions/block-contracts.js";
+import { agentFacingBlockContracts } from "../integration-facts.js";
+import { redactIntegrationVariableNames } from "../integration-redaction.js";
 import {
   runnableDefinitionOf,
   WorkflowDefinitionStoreError,
@@ -97,7 +98,64 @@ type SaveDraftData = {
   // draft is where the pin is chosen and the publish is where it starts being
   // acted on, and an operator reading the audit trail backwards wants both.
   pinnedRepositoriesNotEnabled: string[];
+  /**
+   * What the editor's own validation says about this graph, and why not.
+   *
+   * The draft is STORED either way, exactly as the editor stores one that is
+   * not yet deployable (ADR-010 decision 15: workflow authoring over MCP gets
+   * the same issue as the editor). Refusing it here would leave an agent unable
+   * to build a graph in steps toward an integration a person has yet to
+   * connect, and would make this surface disagree with the editor about the
+   * same graph.
+   *
+   * What must be impossible is reading a success without the reason it cannot
+   * ship, so this sits beside the revision an agent came for rather than behind
+   * a second call. The issues are the editor's own, with the integration named
+   * in each message.
+   *
+   * It is NOT a promise about workflows.publish, and the name is the closest
+   * honest one rather than an exact one. `validateWorkflowDefinitionCandidate`
+   * resolves no pinned Harness Profile versions, while the deploy gate does, so
+   * a graph pinning a version this deployment cannot resolve reads deployable
+   * here and is refused there. Making this call database-bound would close that
+   * gap and open a worse one: it would answer differently from the editor's own
+   * draft save, which runs exactly this function (validate.post.ts), and "MCP
+   * and the editor never disagree about one graph" is the rule this stage is
+   * built on. The two are reconciled by teaching that one function about
+   * profiles, which is the engine's call and not this stage's.
+   */
+  deployable: boolean;
+  deploymentIssues: SaveDraftIssue[];
+  /**
+   * How many issues there were, which is not always how many are listed.
+   *
+   * An agent that fixed the fifty it was shown, saved again and met fifty more
+   * would have no way to learn there had ever been a cap; it would read each
+   * round as new damage it had just caused. So the count is reported even when
+   * nothing was dropped.
+   */
+  deploymentIssueCount: number;
 };
+
+/** One editor issue, as an agent reads it: where in the graph, and what to fix. */
+type SaveDraftIssue = {
+  code: string;
+  severity: string;
+  /** The node the issue belongs to, when the walk could attach one. */
+  nodeId: string | null;
+  /** A JSON pointer into the graph the agent sent, which is how it finds the
+   *  thing to fix. Null for an issue about the definition as a whole. */
+  path: string | null;
+  message: string;
+};
+
+/**
+ * Enough for every node of a graph to have one thing wrong with it and then
+ * some, and bounded so a pathological definition cannot push this response past
+ * the envelope's byte budget, where the whole `data` would be replaced by a
+ * digest and the agent would lose the revision it came for.
+ */
+const MAX_REPORTED_DEPLOYMENT_ISSUES = 50;
 
 type PublishData = {
   definitionId: number;
@@ -355,9 +413,28 @@ function publishAnnouncement(publish: {
  * pointer into the graph the agent sent, which is the only way it can find the
  * block to fix. Nothing else of the failure travels: no file, no query, no stack. */
 function issueText(issues: readonly WorkflowDefinitionValidationIssue[]): string {
-  return issues
-    .map((issue) => (issue.path ? `${issue.path}: ${issue.message}` : issue.message))
-    .join("; ");
+  // Redacted, because a publish is refused with the issues the deployment gate
+  // raised and that gate resolves contracts for an admin: its sentence for an
+  // unusable integration names the variable that is missing, and an error
+  // message does not travel through the envelope sanitizer.
+  return redactIntegrationVariableNames(
+    issues
+      .map((issue) => (issue.path ? `${issue.path}: ${issue.message}` : issue.message))
+      .join("; "),
+  );
+}
+
+/** The same issues as structured rows, for a save that stored the draft anyway. */
+function reportableIssues(
+  issues: readonly WorkflowDefinitionValidationIssue[],
+): SaveDraftIssue[] {
+  return issues.slice(0, MAX_REPORTED_DEPLOYMENT_ISSUES).map((issue) => ({
+    code: issue.code,
+    severity: issue.severity,
+    nodeId: issue.nodeId ?? null,
+    path: issue.path ?? null,
+    message: issue.message,
+  }));
 }
 
 /** Over the canonical JSON of the graph, the same rule the payload hash and the
@@ -391,14 +468,24 @@ function throwPublicStoreError(error: unknown): never {
     );
   }
   if (error instanceof WorkflowDefinitionStoreError) {
-    if (error.statusCode === 400) throw refusal("VALIDATION_FAILED", error.message);
+    // Redacted for the reason issueText is: policy-operations.ts builds a 400
+    // from the deployment issues it resolved for an ADMIN, so the message can
+    // name the variable an integration is missing. Unreachable only while
+    // workflows.create seeds a null graph, which is not a property to rely on.
+    if (error.statusCode === 400) {
+      throw refusal("VALIDATION_FAILED", redactIntegrationVariableNames(error.message));
+    }
     if (error.statusCode === 409 && error.message === RETIRED_SCHEMA_MESSAGE) {
       throw refusal("VALIDATION_FAILED", RETIRED_SCHEMA_MESSAGE);
     }
-    if (error.statusCode === 404) throw refusal("NOT_FOUND", error.message);
+    if (error.statusCode === 404) {
+      throw refusal("NOT_FOUND", redactIntegrationVariableNames(error.message));
+    }
     // Retryable because the message says which conflict it is: a draft that moved
     // on is worth re-reading and re-sending, an archived definition is not.
-    if (error.statusCode === 409) throw refusal("CONFLICT", error.message, true);
+    if (error.statusCode === 409) {
+      throw refusal("CONFLICT", redactIntegrationVariableNames(error.message), true);
+    }
   }
   throw error;
 }
@@ -490,7 +577,13 @@ export function registerWorkflowAuthoringTools(
           // authority on a legal graph is applied, and the store then parses the
           // same schema again before it stores anything.
           //
-          const contracts = blockContractsFor();
+          // Connected, so a graph the dashboard accepts is not refused here for
+          // carrying a block of an integration this deployment has connected.
+          // Agent-facing, so the issue a model reads back names the integration
+          // and the page to fix it on, never the variable to paste a value into.
+          const contracts = agentFacingBlockContracts(
+            await deps.loadDeploymentIntegrations(),
+          );
           const candidate = validateWorkflowDefinitionCandidate(
             input.definition,
             contracts.resolveContract,
@@ -560,6 +653,9 @@ export function registerWorkflowAuthoringTools(
             draftRevision: saved.draftRevision,
             graphHash: graphDigest(stored.definition),
             pinnedRepositoriesNotEnabled: notEnabled,
+            deployable: candidate.response.issues.length === 0,
+            deploymentIssues: reportableIssues(candidate.response.issues),
+            deploymentIssueCount: candidate.response.issues.length,
           };
         },
       });

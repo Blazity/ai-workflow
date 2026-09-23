@@ -3,11 +3,7 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const rawMoveAllowed = new Set([
-  "adapters/issue-tracker/jira.ts",
-  "services/run-lifecycle/cancel-run.ts",
   "engine/support/ticket-transition.ts",
-  // Dependency callback name only; this module never receives an issue tracker.
-  "workflows/workflow-failure-exit.ts",
 ]);
 
 describe("ticket transition routing", () => {

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition } from "@integrations/registry";
 import type { SettingsEntryView } from "@shared/contracts";
 
 import { Button, CkChip, Input, type ChipTone } from "@/components/ui";
@@ -24,7 +24,7 @@ import {
   settingsDraftFrom,
   type SettingsDraft,
 } from "@/lib/settings/patch";
-import { trackUnsavedSettings } from "@/lib/settings/unsaved";
+import { useUnsavedWork } from "@/lib/settings/use-unsaved-work";
 
 import { SettingControl } from "./setting-control";
 import { SettingHistory } from "./setting-history";
@@ -40,7 +40,7 @@ type Message = { tone: "ok" | "error"; text: string };
 /** What the registry falls back to, said once per field so the placeholder is
  *  free to say "required" instead of showing a value nobody typed. */
 function defaultNote(entry: SettingsEntryView): string {
-  const definition = findSettingDefinition(entry.key);
+  const definition = settingDefinition(entry.key);
   if (definition?.default === null) {
     return "No default: this setting is unset until a value is given.";
   }
@@ -166,24 +166,12 @@ export function SettingsGroupForm({
   const patch = buildSettingsPatch(saved, draft);
   const changedCount = Object.keys(patch).length;
   const dirty = changedCount > 0;
-  // The shell asks the module below before every router.push, and the browser
-  // asks the listener below before a tab close. Back and forward are left to
+  // The shell asks the registry before every router.push, and the browser
+  // asks this form's listener before a tab close. Back and forward are left to
   // the Repository scripts sentinel: one sentinel per dirty form would stack up
   // to ten of them on the Settings page, and pushing history entries nobody
   // asked for is worse than the gap it would close.
-  useEffect(() => trackUnsavedSettings(formId, dirty), [formId, dirty]);
-
-  useEffect(() => {
-    if (!dirty || typeof window === "undefined") return;
-    const w = window;
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      // Legacy prompt trigger, still required by Chrome and Edge before 119.
-      event.returnValue = true;
-    };
-    w.addEventListener("beforeunload", onBeforeUnload);
-    return () => w.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
+  useUnsavedWork(formId, dirty);
 
   function discard() {
     setDraft(settingsDraftFrom(saved));
@@ -255,7 +243,7 @@ export function SettingsGroupForm({
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="m-0 font-display text-[15px] font-medium text-coal">{title}</h3>
           <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
-            {stored} of {saved.length} stored
+            {stored} of {saved.length} {saved.length === 1 ? "setting" : "settings"} here stored
           </span>
         </div>
         <p className="m-0 mt-1 font-body text-[11px] text-neutral-600">

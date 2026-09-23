@@ -19,7 +19,7 @@
  * failing the read: the rest of the round is still worth showing, and a person
  * who sees the marker knows the text exists and why it is not here.
  */
-import { configuredVisibilityDetector, redactForStorage } from "../../run-observability/visibility-detector.js";
+import { createVisibilityDetector, redactForStorage } from "../../run-observability/visibility-detector.js";
 import type { VisibilitySanitizer } from "@shared/agent-visibility";
 
 const UNSERVABLE_TEXT = "[REDACTED: this text could not be made safe to serve]";
@@ -37,6 +37,9 @@ function serveSafeTextWith(detect: VisibilitySanitizer): (text: string) => strin
   };
 }
 
-export function serveSafeText(): (text: string) => string {
-  return serveSafeTextWith(configuredVisibilityDetector());
+/** `secrets` is every secret the deployment knows, which the read model asks
+ *  its store for (`knownSecrets` on its reads): a token an admin stored in the
+ *  dashboard is not in the environment for this module to find. */
+export function serveSafeText(secrets: readonly string[]): (text: string) => string {
+  return serveSafeTextWith(createVisibilityDetector({ secrets }));
 }

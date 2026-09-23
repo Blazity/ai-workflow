@@ -396,3 +396,100 @@ test("cancelling the confirmation deletes nothing", (t) => {
   assert.equal(buttons(root, "Confirm delete").length, 0);
   assert.equal(rowPaths(root).length, 2);
 });
+
+test("a provider that could not be read never reads as an empty store", (t) => {
+  // The one wrong answer this screen can give. Somebody opening it after a
+  // provider went away must not be told the agent has forgotten everything:
+  // they would go looking for a deletion nobody made.
+  const { root } = renderScreen(t, {
+    documents: [],
+    selection: null,
+    selected: null,
+    unavailable: "Recall Engine could not answer: socket hang up",
+  });
+
+  const text = screenText(root);
+  assert.match(text, /Recall Engine could not answer: socket hang up/);
+  assert.match(text, /Memory could not be read/);
+  assert.doesNotMatch(text, /Nothing remembered yet/);
+});
+
+test("an incomplete listing says so, so absence is not read as proof", (t) => {
+  // A hosted engine pages and caps what it enumerates, so a document missing
+  // from this table may still be stored. Somebody erasing on request has to
+  // know that before they report the erasure done.
+  const { root } = renderScreen(t, {
+    selection: null,
+    selected: null,
+    complete: false,
+  });
+
+  assert.match(screenText(root), /cannot promise this is everything it\s+holds/);
+});
+
+test("a document the provider could not answer for is never reported as gone", (t) => {
+  // The listing succeeded and one read did not, which is the only way to reach
+  // this card with nothing to show. Reading "no longer stored" here sends
+  // somebody looking for the deletion that took it, and there was none.
+  const { root } = renderScreen(t, {
+    selected: null,
+    selectedUnavailable: "Built-in memory could not answer: socket hang up",
+  });
+
+  const text = screenText(root);
+  assert.doesNotMatch(text, /This document is no longer stored/);
+  assert.match(text, /could not be read/);
+  assert.match(text, /nothing was deleted/);
+  assert.match(text, /Built-in memory could not answer: socket hang up/);
+});
+
+test("a document that really is gone still says so", (t) => {
+  // The other half of the pair: the 404 the worker answers for a pair that
+  // names nothing has to keep its own sentence, or the fix above has only
+  // traded one wrong answer for another.
+  const { root } = renderScreen(t, { selected: null });
+
+  const text = screenText(root);
+  assert.match(text, /This document is no longer stored/);
+  assert.doesNotMatch(text, /could not be read/);
+});
+
+test("a complete listing with nothing in it is still the empty state", (t) => {
+  const { root } = renderScreen(t, {
+    documents: [],
+    selection: null,
+    selected: null,
+  });
+
+  const text = screenText(root);
+  assert.match(text, /Nothing remembered yet/);
+  assert.doesNotMatch(text, /cannot promise this is everything/);
+});
+
+test("a document the provider could not answer for can still be erased, and a refusal says why", async (t) => {
+  // Somebody opens this page to erase a document, not to read it. Taking the
+  // action away because the preview is missing leaves them with no button and
+  // no sentence, which reads as "you are not allowed to". The route refuses
+  // honestly, so the button may stay and the refusal has to land on screen.
+  const { root } = renderScreen(
+    t,
+    {
+      canDelete: true,
+      selected: null,
+      selectedUnavailable: "Built-in memory could not answer: socket hang up",
+    },
+    () => Response.json({ statusMessage: "Acme Memory is away" }, { status: 503 }),
+  );
+
+  act(() => {
+    button(root, "Delete").props.onClick();
+  });
+  await act(async () => {
+    button(root, "Confirm delete").props.onClick();
+  });
+  await settle();
+
+  const text = screenText(root);
+  assert.match(text, /Acme Memory is away/);
+  assert.doesNotMatch(text, /Deleted from the store/);
+});

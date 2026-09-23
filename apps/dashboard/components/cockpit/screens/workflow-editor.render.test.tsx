@@ -10,7 +10,21 @@ import type {
   WorkflowDefinitionMeta,
   WorkflowEditorOptions,
 } from "@shared/contracts";
+import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
+
 import { WorkflowEditorScreen } from "./workflow-editor";
+
+// The editor refreshes its block registry through the app router when an
+// integration is connected or switched off somewhere else, so rendering it
+// needs a router mounted.
+const ROUTER = {
+  refresh: () => {},
+  push: () => {},
+  replace: () => {},
+  back: () => {},
+  forward: () => {},
+  prefetch: () => {},
+};
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -246,6 +260,7 @@ test("retired list status wins and a legacy JSON toggle resets across a definiti
   let renderer!: ReturnType<typeof create>;
   await act(async () => {
     renderer = create(
+      <AppRouterContext.Provider value={ROUTER as never}>
       <WorkflowEditorScreen
         definitions={[first.meta, second.meta]}
         templates={[]}
@@ -261,7 +276,8 @@ test("retired list status wins and a legacy JSON toggle resets across a definiti
         canEdit
         canDispatch={false}
         actorLabel="Admin"
-      />,
+      />
+      </AppRouterContext.Provider>,
     );
   });
   await settle();
@@ -342,6 +358,7 @@ test("a divergent legacy recovery seed does not autosave layout before semantic 
   let renderer!: ReturnType<typeof create>;
   await act(async () => {
     renderer = create(
+      <AppRouterContext.Provider value={ROUTER as never}>
       <WorkflowEditorScreen
         definitions={[legacy.meta]}
         templates={[]}
@@ -358,7 +375,8 @@ test("a divergent legacy recovery seed does not autosave layout before semantic 
         canDispatch={false}
         actorLabel="Admin"
         initialNodeId="trigger"
-      />,
+      />
+      </AppRouterContext.Provider>,
     );
   });
 

@@ -9,8 +9,14 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+// Both provider-backed calls this block makes: an adapter for one repository,
+// and the listing that turns a recorded key back into a checkout.
 vi.mock("../../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
+  listVcsRepositories: async () => ({
+    repositories: await mocks.listRepositories(),
+    failures: [],
+  }),
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: mocks.getDb }));
@@ -23,21 +29,10 @@ vi.mock("../../../db/repositories/runs.js", () => ({
   findConnectedRunPrSiblings: mocks.findRunPrSiblings,
 }));
 
+// The pin filter beside the listing is pure and is exactly what the step
+// applies to the work scope record, so that module stays entirely real.
 
-// Partial: the pin filter in the same module is pure and is exactly what the
-// step applies to the work scope record, so it stays real. Only the
-// network-backed directory is stubbed.
-vi.mock("../../../adapters/vcs/repository-directory.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../adapters/vcs/repository-directory.js")>()),
-  createRepositoryDirectoryForProviders: () => ({
-    listRepositories: mocks.listRepositories,
-  }),
-}));
-
-vi.mock("../../../infra/vcs-config.js", () => ({
-  getConfiguredVcsProviders: () => [{ kind: "github" }, { kind: "gitlab" }],
-  env: {},
-}));
+vi.mock("../../../infra/vcs-config.js", () => ({ env: {} }));
 
 vi.mock("../../../infra/logger.js", () => ({
   logger: { warn: mocks.warn },
@@ -466,6 +461,41 @@ describe("PR trigger multi-repo review selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
+  });
+
+  it("stops rather than drop the siblings when the settings could not be read", async () => {
+    // A listing failure is shrugged off (the review goes on with the primary
+    // repository); unread settings are not a listing failure, and dropping the
+    // siblings then was silent.
+    const pr = makePrPayload();
+    mocks.findRunPrSiblings.mockResolvedValue({
+      status: "siblings",
+      runId: "implementation-run",
+      current: { provider: pr.provider, repoPath: pr.repoPath, id: pr.prNumber, url: pr.prUrl, headSha: pr.headSha },
+      siblings: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/api-contract",
+          id: 13,
+          url: "https://gitlab.test/acme/api-contract/-/merge_requests/13",
+          headSha: "published-sha",
+        },
+      ],
+    });
+    const { IntegrationSettingsUnreadableError } = await import(
+      "../../../services/integrations/usable.js"
+    );
+    mocks.listRepositories.mockRejectedValue(
+      new IntegrationSettingsUnreadableError("so no repository could be listed", "connection terminated"),
+    );
+    mocks.createRepositoryVCS.mockReturnValue({
+      getPRHead: vi.fn().mockResolvedValue({ state: "open", headRef: pr.headRef, headSha: pr.headSha }),
+      getBranchShaIfExists: vi.fn().mockResolvedValue("sha"),
+    });
+
+    await expect(
+      blockPrTriggerRepositoriesWithSiblingsStep("review-run", pr, UNRESTRICTED),
+    ).rejects.toBeInstanceOf(IntegrationSettingsUnreadableError);
   });
 
   it("adds a sibling PR as read-only context at its current head", async () => {

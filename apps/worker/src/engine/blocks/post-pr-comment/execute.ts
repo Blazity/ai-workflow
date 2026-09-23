@@ -1,4 +1,4 @@
-import type { RunRepositoryAccess } from "@shared/contracts";
+import type { IntegrationConnectionPin, RunRepositoryAccess } from "@shared/contracts";
 import type { VcsProvider } from "../../../adapters/vcs/repository-directory.js";
 import type { PullRequestHead } from "../../../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../../../db/repositories/active-runs.js";
@@ -35,6 +35,7 @@ async function blockPostPrCommentStep(
   body: string,
   owner: ActiveRunOwner,
   repositoryAccess: RunRepositoryAccess,
+  integrationPins?: readonly IntegrationConnectionPin[],
 ): Promise<PostPrCommentsResult> {
   "use step";
   const { assertConnectedActiveRunOwner } = await import("../../../db/repositories/active-runs.js");
@@ -68,6 +69,7 @@ async function blockPostPrCommentStep(
         provider: target.provider,
         repoPath: target.repoPath,
         baseBranch: target.baseBranch,
+        integrationPins,
       });
       const current = await vcs.getPRHead(target.prId);
       assertCurrentPrCommentTarget(target, current);
@@ -262,7 +264,7 @@ export const execute: BlockExecuteFn = async (
       subjectKey: ctx.entry.subjectKey,
       ownerToken: ctx.entry.ownerToken,
       runId: ctx.runId,
-    }, ctx.repositories);
+    }, ctx.repositories, ctx.integrationPins);
     if (errors.length > 0) {
       const detail = errors.join("; ").slice(0, 500);
       return executionError(detail, catalogRefusalExecutionOptions(detail, "provider"));

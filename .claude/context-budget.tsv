@@ -1,6 +1,6 @@
 # path	ceiling_bytes	reason
 # Lowering a ceiling is always fine; raising one needs a reason in column 3.
-AGENTS.md	8192	Router loaded into every session and every subagent.
+AGENTS.md	8448	Router loaded into every session and every subagent. Raised from 8192 on 2026-09-22: the integration guide's route and the read-current-docs rule every agent follows.
 CLAUDE.md	64	Only the @AGENTS.md import.
 apps/worker/AGENTS.md	4096	Loaded whole on the first read of any worker file.
 apps/worker/CLAUDE.md	64	Only the @AGENTS.md import.

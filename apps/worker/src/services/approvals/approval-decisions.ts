@@ -22,6 +22,7 @@ import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import { resolveConnectedAwaitingRun } from "../../db/repositories/runs/telemetry.js";
 import { maxConcurrentAgents } from "../settings/index.js";
 import { createAdapters } from "../../engine/support/adapters.js";
+import { issueTrackerIfConnected } from "../../engine/support/connected-issue-tracker.js";
 import { dispatchPlanApproved } from "./dispatch.js";
 
 /**
@@ -37,6 +38,11 @@ export type ApprovalDecisionOutcome =
   | { kind: "ticket_gone" }
   | { kind: "definition_gone" }
   | { kind: "run_in_flight" }
+  /** Approving starts a run on the plan's ticket, and no tracker is usable to
+   *  read it from. Nothing was decided; the plan is still pending (or still
+   *  approved and waiting for its run, on a retry). `retryable` when the
+   *  settings could not be read, rather than nothing being there. */
+  | { kind: "issue_tracker_unavailable"; message: string; retryable: boolean }
   | { kind: "decided"; approval: ApprovalRequest; runId: string | null };
 
 /**
@@ -70,12 +76,25 @@ export async function approveApproval(
   const approver = isDispatchRetry
     ? { id: row.decidedById ?? actor.userId, label: row.decidedByLabel ?? label }
     : decider;
-  const adapters = createAdapters();
+  const adapters = await createAdapters();
+  // Refused before anything is decided or claimed: the approved plan becomes a
+  // run on its ticket, and a run cannot start from a ticket nobody can read.
+  const tracker = adapters.issueTrackerResolution;
+  if (!tracker.ok) {
+    return {
+      kind: "issue_tracker_unavailable",
+      message: tracker.refusal === "unreadable"
+        ? "This deployment's integration settings could not be read, so the plan's ticket could not be reached and nothing was decided. Try again shortly."
+        : tracker.reason,
+      retryable: tracker.refusal === "unreadable",
+    };
+  }
+  const issueTracker = tracker.adapter;
 
   // Cheap existence check before reserving anything: a deleted ticket can
   // never run, so auto-reject and tell the caller it is gone.
   try {
-    await adapters.issueTracker.fetchTicket(row.ticketKey);
+    await issueTracker.fetchTicket(row.ticketKey);
   } catch (err) {
     if (err instanceof IssueTrackerNotFoundError) {
       // Before the decision wins, a gone ticket makes the request
@@ -98,7 +117,7 @@ export async function approveApproval(
   try {
     result = await dispatchPlanApproved({
       runRegistry: adapters.runRegistry,
-      issueTracker: adapters.issueTracker,
+      issueTracker,
       approval: row,
       actor: approver,
       maxConcurrentAgents: maxConcurrentAgents(settings),
@@ -137,7 +156,7 @@ export async function approveApproval(
   // answer-core.ts), and the helper is a no-op unless the row is awaiting.
   await resolveConnectedAwaitingRun(row.runId).catch(() => {});
 
-  await adapters.issueTracker
+  await issueTracker
     .postComment(row.ticketKey, `Plan approved by ${approver.label}, implementation started.`)
     .catch(() => {});
 
@@ -170,8 +189,11 @@ export async function rejectApproval(
   // the clarification path (clarifications/answer-core.ts).
   await resolveConnectedAwaitingRun(row.runId).catch(() => {});
 
-  const { issueTracker } = createAdapters();
-  await issueTracker.postComment(row.ticketKey, `Plan rejected by ${label}.`).catch(() => {});
+  // Best-effort, like the approval's comment: no tracker leaves the decision
+  // on the dashboard alone.
+  await issueTrackerIfConnected(await createAdapters())
+    ?.postComment(row.ticketKey, `Plan rejected by ${label}.`)
+    .catch(() => {});
 
   return { kind: "decided", approval: serializeApproval(decided), runId: null };
 }

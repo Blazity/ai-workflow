@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "AI Workflow · Cockpit",
   description:
-    "Blazity AI Workflow observability: Vercel Workflow runs, Arthur Engine evals & traces, and AI Gateway cost.",
+    "Blazity AI Workflow observability: Vercel Workflow runs, agent traces and evaluations from the integrations you connect, and AI Gateway cost.",
 };
 
 export default function RootLayout({

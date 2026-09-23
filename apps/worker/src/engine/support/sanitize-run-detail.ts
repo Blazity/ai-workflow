@@ -6,9 +6,13 @@ import type {
 import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
 
 // Sanitization is shared by engine telemetry and service response assembly.
+//
+// `secrets` is every function's to take and never a default: each caller holds
+// the set for the request or step it runs in (`knownSecretValues`), and a
+// default read here would be the environment's alone, which is the hole a
+// connection stored in the dashboard fell through.
 
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
-import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
 import {
   isDiagnosticId,
   sanitizeFailureMessage,
@@ -26,12 +30,11 @@ const QUOTED_DIAGNOSTIC_ID = new RegExp(
 export function sanitizeRunError(
   error: string | RunError | null | undefined,
   fallback: string,
+  secrets: readonly string[],
 ): RunError | null {
   if (!error) return null;
   const normalized = typeof error === "string" ? { message: error } : error;
-  const sanitized = sanitizeReplayValue(normalized.message, {
-    secrets: configuredReplaySecrets(),
-  });
+  const sanitized = sanitizeReplayValue(normalized.message, { secrets });
   // The message-sized bound, not the snippet one, on both the run and the step
   // path. What arrives here is normally an already-composed message: the lead
   // sentence, the parenthesised cause snippet and the diagnostic ID.
@@ -76,20 +79,21 @@ export function sanitizeRunError(
 
 export function sanitizeRunSteps(
   steps: RunStep[] | null,
-  runError: RunError | null = null,
+  runError: RunError | null,
+  secrets: readonly string[],
 ): RunStep[] | null {
   if (!steps) return null;
   // Same whole-ID check as sanitizeRunError, not a prefix test: one predicate
   // for every place a diagnostic ID is trusted.
   const diagnosticRunError =
     runError?.code !== undefined && isDiagnosticId(runError.code)
-      ? sanitizeRunError(runError, "Workflow execution failed.")
+      ? sanitizeRunError(runError, "Workflow execution failed.", secrets)
       : null;
   return steps.map((step) => ({
     ...step,
     error: step.error
       ? diagnosticRunError ??
-        sanitizeRunError(step.error, "Workflow step failed.")
+        sanitizeRunError(step.error, "Workflow step failed.", secrets)
       : null,
   }));
 }
@@ -119,15 +123,16 @@ function fallbackTerminalError(run: RunDetail): RunError | null {
 export function sanitizeRunDetailForResponse(input: {
   run: RunDetail;
   steps: RunStep[];
+  secrets: readonly string[];
 }): {
   run: RunDetail;
   steps: RunStep[];
 } {
   const error =
-    sanitizeRunError(input.run.error, "Workflow execution failed.") ??
+    sanitizeRunError(input.run.error, "Workflow execution failed.", input.secrets) ??
     fallbackTerminalError(input.run);
   return {
     run: { ...input.run, error },
-    steps: sanitizeRunSteps(input.steps) ?? [],
+    steps: sanitizeRunSteps(input.steps, null, input.secrets) ?? [],
   };
 }

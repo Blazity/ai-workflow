@@ -16,6 +16,7 @@ import {
 import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
 import { testBlockContractResolver } from "../test-support/block-contracts.js";
+import { MESSAGING_CONNECTED } from "../engine/definition/messaging-deployment.fixture.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -23,9 +24,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const resolveContract = testBlockContractResolver(registryContext);
@@ -533,7 +533,7 @@ describe("v2 authoring catalog", () => {
         [
           node("trigger", "trigger_ticket_ai"),
           node("open", "open_pr"),
-          node("message", "send_slack_message"),
+          node("message", "send_message"),
         ],
         [
           { id: "to-open", from: "trigger", to: "open" },

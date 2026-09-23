@@ -3,7 +3,28 @@ import { getDb, type Db } from "../client.js";
 import { agentMemoryDocuments } from "../schema.js";
 
 export const MAX_MEMORY_DOCUMENT_BYTES = 256 * 1024;
-const DEFAULT_MEMORY_LIST_LIMIT = 100;
+
+/**
+ * Stamped on the size refusal below, and read by a catch that is nowhere near
+ * this module.
+ *
+ * A property rather than an exported class on purpose: the only reader is a
+ * `catch` inside a `"use step"`, where every import is deferred, and a catch
+ * that has to `await import` a module in order to name the error it just
+ * caught can fail cold on exactly the path that is already going wrong.
+ *
+ * It exists because the two failures a caller can get out of a write mean
+ * opposite things. A database that could not be reached is worth retrying; a
+ * document that is bigger than this store will ever accept is not, and
+ * reporting the second as the first sends a caller back to spend a model call
+ * on an answer that will be refused again.
+ */
+export const MEMORY_DOCUMENT_TOO_LARGE = "memory_document_too_large";
+/** The cap a listing runs under when the caller names none, which is every
+ *  caller today: neither the memory screen nor the `memory.list` tool passes a
+ *  limit. Exported so a test can name the same number the query uses rather
+ *  than hard-coding a copy that drifts. */
+export const DEFAULT_MEMORY_LIST_LIMIT = 100;
 const MAX_MEMORY_LIST_LIMIT = 200;
 
 export interface MemoryDocument {
@@ -14,8 +35,13 @@ export interface MemoryDocument {
   version: number;
 }
 
-/** A listed document without its body, so a listing never ships the content. */
-export interface MemoryDocumentSummary {
+/**
+ * A listed document without its body, so a listing never ships the content.
+ *
+ * Local since S13: the built-in provider is the only caller, and it answers in
+ * the SDK's own `MemoryStoredSummary`, so nothing outside this file names it.
+ */
+interface MemoryDocumentSummary {
   subjectKey: string;
   docPath: string;
   ticketKey: string | null;
@@ -27,7 +53,25 @@ export interface MemoryDocumentSummary {
 
 export interface ListMemoryDocumentsOptions {
   ticketKey?: string;
+  /** Only this subject's documents, compared exactly. Applied in the query,
+   *  before the cap, so a subject whose documents are older than the newest
+   *  page is still listed whole. */
+  subjectKey?: string;
   limit?: number;
+}
+
+/**
+ * A page of the listing, and whether it is the whole of it.
+ *
+ * `complete` is answered HERE because the cap is decided here. A caller that
+ * gets bare rows cannot tell a store holding exactly this many documents from
+ * one whose listing the cap cut short, and answering "this is everything" for
+ * the second is how somebody reports an erasure done on a document that is
+ * still stored.
+ */
+export interface MemoryDocumentListing {
+  documents: MemoryDocumentSummary[];
+  complete: boolean;
 }
 
 export interface UpsertMemoryDocumentInput {
@@ -79,13 +123,18 @@ export async function getMemoryDocument(
 export async function listMemoryDocuments(
   db: Db,
   options: ListMemoryDocumentsOptions = {},
-): Promise<MemoryDocumentSummary[]> {
+): Promise<MemoryDocumentListing> {
   const requested = options.limit;
   const limit =
     requested !== undefined && Number.isInteger(requested) && requested > 0
       ? Math.min(requested, MAX_MEMORY_LIST_LIMIT)
       : DEFAULT_MEMORY_LIST_LIMIT;
-  return db
+  // One row past the cap, asked for and never returned. It is the only thing
+  // that separates a store holding exactly `limit` documents from one the cap
+  // cut short, and the probe is applied AFTER the clamp above so it still works
+  // at MAX_MEMORY_LIST_LIMIT, where clamping the probe itself would make the
+  // largest listing the one that can never admit it is partial.
+  const rows = await db
     .select({
       subjectKey: agentMemoryDocuments.subjectKey,
       docPath: agentMemoryDocuments.docPath,
@@ -97,9 +146,14 @@ export async function listMemoryDocuments(
     })
     .from(agentMemoryDocuments)
     .where(
-      options.ticketKey === undefined
-        ? undefined
-        : eq(agentMemoryDocuments.ticketKey, options.ticketKey),
+      and(
+        options.ticketKey === undefined
+          ? undefined
+          : eq(agentMemoryDocuments.ticketKey, options.ticketKey),
+        options.subjectKey === undefined
+          ? undefined
+          : eq(agentMemoryDocuments.subjectKey, options.subjectKey),
+      ),
     )
     // Primary key as the tie-break, so documents written inside one timestamp
     // still come back in a stable order.
@@ -108,7 +162,10 @@ export async function listMemoryDocuments(
       asc(agentMemoryDocuments.subjectKey),
       asc(agentMemoryDocuments.docPath),
     )
-    .limit(limit);
+    .limit(limit + 1);
+  return rows.length > limit
+    ? { documents: rows.slice(0, limit), complete: false }
+    : { documents: rows, complete: true };
 }
 
 /**
@@ -153,8 +210,11 @@ export async function upsertMemoryDocument(
   // which forbids Node builtins at module scope.
   const bytes = new TextEncoder().encode(input.content).byteLength;
   if (bytes > MAX_MEMORY_DOCUMENT_BYTES) {
-    throw new Error(
-      `${input.subjectKey} ${input.docPath} exceeds the memory document size limit (${bytes} > ${MAX_MEMORY_DOCUMENT_BYTES})`,
+    throw Object.assign(
+      new Error(
+        `${input.subjectKey} ${input.docPath} exceeds the memory document size limit (${bytes} > ${MAX_MEMORY_DOCUMENT_BYTES})`,
+      ),
+      { code: MEMORY_DOCUMENT_TOO_LARGE },
     );
   }
   const values = {

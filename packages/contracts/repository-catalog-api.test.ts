@@ -166,14 +166,14 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
     expect(silent.ok && silent.value.enabled).toBe(undefined);
   });
 
-  it("refuses a provider the worker cannot talk to", () => {
+  it("accepts a safe open provider id for registry-aware service validation", () => {
     expect(
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "bitbucket",
         path: "acme/api",
         reason: REASON,
       }).ok,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("refuses a path that is not owner/name", () => {

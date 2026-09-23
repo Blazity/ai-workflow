@@ -16,6 +16,13 @@ import type {
   HarnessSkillImportRequest,
   HarnessSkillImportResponse,
   HarnessSkillRefreshResponse,
+  IntegrationConnectionSaveRequest,
+  IntegrationImpactPreviewRequest,
+  IntegrationImpactPreviewResponse,
+  IntegrationMutationResponse,
+  IntegrationSource,
+  IntegrationVersionConflict,
+  IntegrationsListResponse,
   JsonSchemaAuthoringInspectionResponse,
   ManualDispatchInput,
   ManualDispatchPreflightResponse,
@@ -450,6 +457,62 @@ export const apiClient = {
       requestJson<HarnessSkillImportResponse>(
         "/api/harness-skills/local",
         jsonInit("POST", body),
+      ),
+  },
+
+  integrations: {
+    list: (options?: BrowserRequestOptions) =>
+      requestJson<IntegrationsListResponse>("/api/integrations", {
+        cache: "no-store",
+        ...options,
+      }),
+    /** The 409 naming the version the integration actually sits at is the
+     *  answer to `expectedVersion`, not a failure: a second tab is told that
+     *  somebody else saved and keeps what was typed, so the body is read as
+     *  data rather than as an error message. */
+    save: (id: string, body: IntegrationConnectionSaveRequest) =>
+      requestJson<
+        IntegrationMutationResponse | IntegrationVersionConflict,
+        IntegrationVersionConflict
+      >(
+        `/api/integrations/${encodeURIComponent(id)}/connection`,
+        // The command is said out loud. The route no longer infers a write
+        // from its absence, so a preview that lost this field is refused
+        // rather than carried out.
+        jsonInit("PUT", { ...body, preview: "write" }),
+        (status) => status === 200 || status === 409,
+      ),
+    /** Read the named workflows and live runs before a connection change. The
+     *  existing connection transport carries this read-only preview so the
+     *  candidate secret never appears in a URL or leaves the authenticated
+     *  request path. */
+    previewImpact: (id: string, body: IntegrationImpactPreviewRequest) =>
+      requestJson<IntegrationImpactPreviewResponse>(
+        `/api/integrations/${encodeURIComponent(id)}/connection`,
+        jsonInit("PUT", body),
+      ),
+    /** Tests what is live, whichever source it comes from, and carries no body:
+     *  a test of values the request supplied would prove nothing about the
+     *  connection a run will use. */
+    test: (id: string) =>
+      requestJson<IntegrationMutationResponse>(
+        `/api/integrations/${encodeURIComponent(id)}/test`,
+        { method: "POST" },
+      ),
+    setEnabled: (id: string, enabled: boolean) =>
+      requestJson<IntegrationMutationResponse>(
+        `/api/integrations/${encodeURIComponent(id)}/enabled`,
+        jsonInit("PATCH", { enabled }),
+      ),
+    setSource: (id: string, source: IntegrationSource) =>
+      requestJson<IntegrationMutationResponse>(
+        `/api/integrations/${encodeURIComponent(id)}/source`,
+        jsonInit("PATCH", { source }),
+      ),
+    disconnect: (id: string) =>
+      requestJson<IntegrationMutationResponse>(
+        `/api/integrations/${encodeURIComponent(id)}/connection`,
+        { method: "DELETE" },
       ),
   },
 

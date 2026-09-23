@@ -1,17 +1,19 @@
 import type { PRFile } from "../../adapters/vcs/types.js";
 import type { PreSandboxPromptAddition } from "../../sandbox/context.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
+import type { IntegrationConnectionPin } from "@shared/contracts";
 
 /** The pull request a review run must judge. Serializable, so it survives the
  *  step boundary. */
 export interface PullRequestChangeSetTarget {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   prNumber: number;
   prUrl: string;
   headRef: string;
   headSha: string;
   baseRef: string;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }
 
 const PULL_REQUEST_CHANGE_SET_TITLE = "Pull request change set";
@@ -92,12 +94,13 @@ export async function fetchPullRequestChangeSetStep(
   target: PullRequestChangeSetTarget,
 ): Promise<PreSandboxPromptAddition> {
   "use step";
-  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
+  const { resolveRepositoryVCS } = await import("../support/vcs-runtime.js");
   const { hasPRFilesCapability } = await import("../../adapters/vcs/types.js");
-  const vcs = createRepositoryVCS({
+  const vcs = await resolveRepositoryVCS({
     provider: target.provider,
     repoPath: target.repoPath,
     baseBranch: target.baseRef,
+    integrationPins: target.integrationPins,
   });
   if (!hasPRFilesCapability(vcs)) {
     // Permanent for this provider, so render it here rather than throwing into

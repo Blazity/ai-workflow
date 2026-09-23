@@ -52,7 +52,7 @@
     },
     {
       "id": "notify",
-      "type": "send_slack_message",
+      "type": "send_message",
       "x": 700,
       "y": 340,
       "configuration": {},

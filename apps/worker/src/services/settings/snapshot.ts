@@ -13,8 +13,12 @@
  * from inside the engine, which ADR-001 forbids from importing a service, so
  * the rule has to sit in the package both tiers may import or it would exist
  * twice and drift. This file is the service-tier composition of it: read the
- * rows, hand in this deployment's environment.
+ * rows, hand in this deployment's environment and the settings the
+ * integrations of this build declare, which an entry point resolves beside
+ * core's (a webhook reads them from this snapshot; a run does not, and its
+ * own snapshot at run start leaves them out).
  */
+import { integrationSettingDefinitions } from "@integrations/registry";
 import {
   resolveSettingsSnapshot,
   type SettingsResolution,
@@ -33,7 +37,8 @@ export type { SettingsResolution };
  * from the environment. Used by test fixtures that do not open a database.
  */
 export function settingsSnapshotFromEnvironment(): SettingsSnapshot {
-  return resolveSettingsSnapshot(new Map(), settingsEnvironment).snapshot;
+  return resolveSettingsSnapshot(new Map(), settingsEnvironment, integrationSettingDefinitions)
+    .snapshot;
 }
 
 /**
@@ -44,7 +49,7 @@ export function settingsSnapshotFromEnvironment(): SettingsSnapshot {
 export async function loadSettingsResolution(): Promise<SettingsResolution> {
   const rows = await readAllConnectedSettings();
   const stored = new Map(rows.map((row) => [row.key, row.value]));
-  return resolveSettingsSnapshot(stored, settingsEnvironment);
+  return resolveSettingsSnapshot(stored, settingsEnvironment, integrationSettingDefinitions);
 }
 
 /** The snapshot one entry point loads and hands down. One database read. */
@@ -70,5 +75,6 @@ export async function loadSettingsSnapshotOn(db: Db): Promise<SettingsSnapshot> 
   return resolveSettingsSnapshot(
     new Map(rows.map((row) => [row.key, row.value])),
     settingsEnvironment,
+    integrationSettingDefinitions,
   ).snapshot;
 }

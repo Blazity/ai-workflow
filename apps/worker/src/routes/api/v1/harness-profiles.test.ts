@@ -12,9 +12,9 @@ import type { Db } from "../../../db/client.js";
 import { member, organization, user } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import type {
-  GitHubSkillRepository,
-  GitHubSkillTreeEntry,
-} from "../../../harness-profiles/github-skills.js";
+  RepositorySkillSource,
+  RepositorySkillTreeEntry,
+} from "@integrations/sdk";
 
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
@@ -39,8 +39,13 @@ vi.mock("../../../services/auth/auth-instance.js", () => ({
     },
   },
 }));
-vi.mock("../../../harness-profiles/configured-github-skills.js", () => ({
-  createConfiguredGitHubSkillRepository: () => state.repository,
+// The routes reach a provider only through the version-control capability, so
+// standing in for that resolution is what keeps these tests off the network.
+vi.mock("../../../services/vcs/vcs-runtime.js", () => ({
+  resolveRepositorySkillSource: async () => ({
+    provider: "github",
+    source: state.repository,
+  }),
 }));
 
 const listGet = (await import("./harness-profiles.get.js")).default;
@@ -75,11 +80,11 @@ const COMMIT_SHA = "1".repeat(40);
 const TREE_SHA = "2".repeat(40);
 const SKILL_SHA = "a".repeat(40);
 
-class ApiSkillRepository implements GitHubSkillRepository {
+class ApiSkillRepository implements RepositorySkillSource {
   readonly skill = Buffer.from(
     "---\nname: review-rules\ndescription: Review rules\n---\n# Rules\n",
   );
-  readonly entries: GitHubSkillTreeEntry[] = [
+  readonly entries: RepositorySkillTreeEntry[] = [
     {
       path: "skills/review-rules/SKILL.md",
       mode: "100644",
@@ -98,7 +103,7 @@ class ApiSkillRepository implements GitHubSkillRepository {
   }
 
   async getTree(): Promise<{
-    entries: GitHubSkillTreeEntry[];
+    entries: RepositorySkillTreeEntry[];
     truncated: boolean;
   }> {
     return { entries: this.entries, truncated: false };

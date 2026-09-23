@@ -20,6 +20,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { triggerRepositoryPolicySchema } from "@shared/contracts";
 import { BLOCK_PARAM_SCHEMAS as MANIFEST_PARAM_SCHEMAS } from "../definition/params.generated.js";
+import { PROVIDER_ID_PROBES } from "../../test-support/provider-id-probes.js";
 
 /** The nine trigger types whose manifest carries a hand-written
  *  `repositoryPolicy` copy. `trigger_plan_approved` deliberately has none
@@ -202,6 +203,11 @@ const CORPUS: { name: string; input: unknown }[] = [
     name: "undefined",
     input: undefined,
   },
+  // The provider half of a key is the integration id rule, at its edges.
+  ...PROVIDER_ID_PROBES.map((provider) => ({
+    name: `listed with provider ${JSON.stringify(provider)}`,
+    input: listed([`${provider}:acme/api`]),
+  })),
 ];
 
 describe("trigger repository policy: manifest copies vs the contract", () => {

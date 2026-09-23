@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { glob, readFile, readdir, stat } from "node:fs/promises";
 import test from "node:test";
 import {
   candidateDiff,
   assertCandidate,
+  INTEGRATION_SDK_SEAM_TESTS,
   listDirectory,
   namesDiff,
   parseArgs,
@@ -64,7 +65,10 @@ const GRAPH_PACK =
   "pnpm --dir apps/worker exec vitest run " +
   [...WORKFLOW_TESTS, ...WORKFLOW_GRAPH_TESTS].join(" ");
 const PACKAGES = ["pnpm run test:packages", "pnpm run test:packages:zod4"];
+const REGISTRY = "pnpm run gen:integrations --check";
 const GRAPH_ZOD4 = "pnpm --filter @shared/workflow-graph run test:zod4";
+const SDK_SEAM =
+  "pnpm --dir apps/worker exec vitest run " + INTEGRATION_SDK_SEAM_TESTS.join(" ");
 const SDK = "pnpm run test:workflow-sdk";
 const GATES = "pnpm run gates";
 const BLOCK_CATALOG = "pnpm run gen:blocks --check";
@@ -190,6 +194,10 @@ test("scope table selects only exact narrow commands", () => {
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
     [["packages/conditions/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
     [["packages/costs/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
+    [["integrations/sdk/index.ts"], ["pnpm run typecheck", SDK_SEAM, REGISTRY, ...PACKAGES, GATES]],
+    [["integrations/sdk/conformance.test.ts"], ["pnpm run typecheck", SDK_SEAM, REGISTRY, ...PACKAGES, GATES]],
+    [["integrations/_fixtures/demo/manifest.ts"], ["pnpm run typecheck", SDK_SEAM, REGISTRY, ...PACKAGES, GATES]],
+    [["scripts/gates/generate-integration-registry/render.ts"], ["pnpm run test:ci", REGISTRY, GATES]],
     [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, ...PACKAGES, GATES]],
     [["packages/workflow-graph/v2-branch.ts"], ["pnpm run typecheck", ...WB.slice(1), GRAPH_PACK, SDK, ...PACKAGES, GRAPH_ZOD4, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
@@ -211,8 +219,21 @@ test("scope table selects only exact narrow commands", () => {
     [[".codex/hooks/context-budget-guard.mjs"], ["pnpm run test:ci"]],
     [["apps/worker/.agents/skills/workflow/SKILL.md"], ["pnpm run gate:docs-status"]],
     [[".dependency-cruiser.cjs"], [GATES]],
+    [["scripts/gates/boundaries.mjs"], ["pnpm run test:ci", GATES]],
   ];
   for (const [paths, expected] of rows) assert.deepEqual(commands(paths), expected, paths.join(","));
+});
+
+test("an integration package change is a known scope that runs the SDK's own suites and its seam in the worker", () => {
+  const planned = plan(["integrations/sdk/capabilities.ts"]);
+  assert.equal(planned.status, "READY");
+  assert.deepEqual(planned.errors, []);
+  assert.equal(planned.scopes.includes("integrations"), true);
+  const shown = new Set(planned.commands.map(show));
+  for (const command of ["pnpm run typecheck", ...PACKAGES, SDK_SEAM, REGISTRY]) {
+    assert.equal(shown.has(command), true, command);
+  }
+  assert.deepEqual(commands(["integrations/sdk/NOTES.md"]), ["pnpm run gate:docs-status"]);
 });
 
 test("a workflow graph package change plans the worker guards and the suites that import the package", () => {
@@ -287,6 +308,47 @@ test("directory discovery includes test variants, direct tests, safety prefixes,
   );
 });
 
+const DASHBOARD = "apps/dashboard";
+
+async function dashboardTestFiles(directory = DASHBOARD): Promise<string[]> {
+  const found: string[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    // A dot directory and the dependency tree hold no suite of ours, and
+    // pnpm links the second one, so descending it would leave the package.
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const path = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) found.push(...(await dashboardTestFiles(path)));
+    else if (/\.test\.tsx?$/.test(entry.name)) found.push(path.slice(DASHBOARD.length + 1));
+  }
+  return found.sort();
+}
+
+/**
+ * The dashboard runs on `node --test`, which reads its positionals as globs:
+ * a path is not a path. `app/api/users/[userId]/role/route.test.ts` arrived as
+ * a character class, matched nothing, and the run reported zero tests and
+ * exited green, so that file never ran and nobody could tell.
+ *
+ * Counting what the planned commands reach against what is on disk is what
+ * makes the next path shape nobody predicted fail instead of disappear.
+ */
+test("the plan reaches every dashboard test file that is on disk", async () => {
+  const onDisk = await dashboardTestFiles();
+  assert.ok(onDisk.length >= 100, `walked ${onDisk.length} test files, expected the suite`);
+
+  const reached = new Set<string>();
+  for (const relative of onDisk) {
+    const command = plan([`${DASHBOARD}/${relative}`]).commands.find((cmd) =>
+      cmd.includes("--test"),
+    );
+    assert.ok(command, `no dashboard run planned for ${relative}`);
+    for (const pattern of command.slice(command.indexOf("--test") + 1)) {
+      for await (const file of glob(pattern, { cwd: DASHBOARD })) reached.add(file);
+    }
+  }
+  assert.deepEqual([...reached].sort(), onDisk);
+});
+
 test("fixed tests and overlapping changed tests deduplicate into one process", () => {
   const path = "apps/worker/src/engine/definition/block-registry.test.ts";
   const repo: Repo = { exists: (candidate) => candidate === path, list: () => [] };
@@ -344,17 +406,26 @@ test("the package test scripts name every package that owns the script they run"
   const root = JSON.parse(await readFile("package.json", "utf8")) as {
     scripts: Record<string, string>;
   };
-  const manifests = await Promise.all(
-    (await readdir("packages", { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && existsSync(`packages/${entry.name}/package.json`))
-      .map(async (entry) => {
-        const file = `packages/${entry.name}/package.json`;
-        return JSON.parse(await readFile(file, "utf8")) as {
-          name: string;
-          scripts?: Record<string, string>;
-        };
-      }),
-  );
+  // Integration packages are workspace packages too: a package there that owns
+  // a test script and is missing from the root list would never run in CI.
+  const roots = ["packages", "integrations"];
+  const manifests = (
+    await Promise.all(
+      roots.map(async (root) =>
+        Promise.all(
+          (await readdir(root, { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory() && existsSync(`${root}/${entry.name}/package.json`))
+            .map(async (entry) => {
+              const file = `${root}/${entry.name}/package.json`;
+              return JSON.parse(await readFile(file, "utf8")) as {
+                name: string;
+                scripts?: Record<string, string>;
+              };
+            }),
+        ),
+      ),
+    )
+  ).flat();
   assert.ok(manifests.length >= 7, "every workspace package carries a package.json");
 
   const owners = (script: string) =>
@@ -373,6 +444,51 @@ test("the package test scripts name every package that owns the script they run"
       `${key} must not count a missing script as a pass`,
     );
   }
+});
+
+/**
+ * A package listed above can still run less than it holds. `node --test` runs
+ * what its globs match and reports "tests 0" with exit 0 when they match
+ * nothing, so a test beside page code in `dashboard/`, in a `test/` folder or
+ * named `.test.tsx` under a `"*.test.ts"` script never runs, and a test broken
+ * on purpose stays green. vitest finds nested files on its own, so only the
+ * node runner's globs are read here, the same way the runner reads them.
+ */
+test("every test file in a package is one its own test script runs", async () => {
+  const directories = (
+    await Promise.all(
+      ["packages", "integrations"].map(async (root) =>
+        (await readdir(root, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory() && existsSync(`${root}/${entry.name}/package.json`))
+          .map((entry) => `${root}/${entry.name}`),
+      ),
+    )
+  ).flat();
+  let checked = 0;
+  for (const directory of directories) {
+    const script = (JSON.parse(await readFile(`${directory}/package.json`, "utf8")) as {
+      scripts?: Record<string, string>;
+    }).scripts?.test;
+    if (!script || !/\s--test\s/u.test(script)) continue;
+    checked += 1;
+    const patterns = [...script.matchAll(/"([^"]+)"/gu)].map((match) => match[1]!);
+    const run = new Set<string>();
+    for await (const file of glob(patterns, { cwd: directory })) run.add(file);
+    const held: string[] = [];
+    for await (const file of glob("**/*.test.{ts,tsx,mts,js,mjs}", {
+      cwd: directory,
+      exclude: (name) => name === "node_modules",
+    })) {
+      held.push(file);
+    }
+    assert.ok(held.length > 0, `${directory} has a test script and no test file, so its run proves nothing`);
+    assert.deepEqual(
+      held.filter((file) => !run.has(file)).sort(),
+      [],
+      `${directory}'s test script (${script}) does not run these files. Use "!(node_modules)/**/*.test.{ts,tsx}" "*.test.{ts,tsx}", as integrations/_template does.`,
+    );
+  }
+  assert.ok(checked >= 5, "no package runs node --test, so this proves nothing");
 });
 
 const TYPECHECK: Cmd = ["pnpm", "run", "typecheck"];

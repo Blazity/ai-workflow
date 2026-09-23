@@ -49,10 +49,10 @@ export async function executePostPrGatePhase(
   input: RunPostPrGateInput,
 ): Promise<PostPrGateRunSummary> {
   const { context, config, gateStatusRefs, registry, logger } = input;
-  if (!hasGateStatusCapability(context.adapters.vcs)) {
+  const vcs = context.adapters.vcs;
+  if (!hasGateStatusCapability(vcs)) {
     throw new Error("VCS adapter does not support gate statuses");
   }
-  const vcs = context.adapters.vcs as typeof context.adapters.vcs & GateStatusCapableVCS;
 
   const steps = config.postPrGate.steps;
   if (steps.length !== gateStatusRefs.length) {

@@ -40,15 +40,21 @@ vi.mock("../../infra/vcs-config.js", () => ({
     MCP_AUDIT_RETENTION_DAYS: 365,
     ANTHROPIC_API_KEY: "sk-ant-test",
     CODEX_API_KEY: "sk-codex-test",
-    GITHUB_APP_ID: 1,
-    GITHUB_APP_PRIVATE_KEY: "private-key",
-    GITHUB_INSTALLATION_ID: 2,
-    GITLAB_TOKEN: "gitlab-token",
   },
 }));
 
-import type { MessagingAdapter, TicketEvent } from "../../adapters/messaging/types.js";
-import type { Adapters } from "../../engine/support/adapters.js";
+// GitHub configured the way a deployment configures it: the connection resolves
+// from these variables, and that is what makes `vcs` a capability this build
+// serves. Without it a graph pinning a repository is refused at publish, which
+// is correct and is not what the pinning cases below are about.
+Object.assign(process.env, {
+  GITHUB_APP_ID: "1",
+  GITHUB_APP_PRIVATE_KEY: "private-key",
+  GITHUB_INSTALLATION_ID: "2",
+  GITHUB_WEBHOOK_SECRET: "webhook-secret",
+});
+
+import type { MessagingSender, TicketEvent } from "../../adapters/messaging/types.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
@@ -60,6 +66,7 @@ import {
 } from "../../db/schema.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import {
   activatedRepositoryCatalog,
   unactivatedRepositoryCatalog,
@@ -109,7 +116,7 @@ const NOT_ENABLED_REPO = "acme/private-infrastructure";
 // Substituted for the real Slack adapter. Typed off the adapter's own interface, so
 // a signature change here is a compile error rather than a test that keeps asserting
 // against a call nobody makes any more.
-const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>();
+const notifyForTicket = vi.fn<MessagingSender["notifyForTicket"]>();
 
 // A name an agent could pick after reading a ticket it does not trust: a Slack link
 // whose label claims something the platform never said, a mention, a second line
@@ -189,7 +196,7 @@ beforeEach(async () => {
   now = new Date("2026-08-12T12:00:00.000Z");
   definitionId = await seedDefinition("Seeded workflow");
   notifyForTicket.mockReset();
-  notifyForTicket.mockResolvedValue(undefined);
+  notifyForTicket.mockResolvedValue({ delivered: true });
   probe.scheduleReadFails = false;
 });
 
@@ -230,7 +237,7 @@ async function connectedClient(
   const server = new McpServer({ name: "workflow-authoring-test", version: "0.1.0" });
   const toolDeps = depsFor(db, () => now, {
     actor: actorFor(actor),
-    adapters: { messaging: { notifyForTicket } } as unknown as Adapters,
+    adapters: adaptersFor("not_connected", { messaging: { notifyForTicket } }),
     loadRepositoryCatalog,
   });
   registerWorkflowAuthoringTools(server, toolDeps);
@@ -488,12 +495,22 @@ describe("workflows.save_draft", () => {
     const result = await saveDraft(client);
 
     expect(result.isError).not.toBe(true);
+    // The whole response shape, pinned: the contract hash covers tool names,
+    // descriptions, input schemas and annotations, so nothing else would notice
+    // a field appearing or disappearing here.
     expect(dataOf(result)).toEqual({
       definitionId,
       draftRevision: 1,
       graphHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       // This graph pins nothing, and the catalog is not activated either.
       pinnedRepositoriesNotEnabled: [],
+      // Nothing about this deployment stops this graph from going live, and the
+      // flag says so rather than being absent when there is nothing to report.
+      deployable: true,
+      deploymentIssues: [],
+      // Always present, so an agent that fixed a capped list of issues can tell
+      // "there were more" from "these are all of them".
+      deploymentIssueCount: 0,
     });
     // A draft is inert, so nobody is told about one: the channel hears about the
     // publish that makes a graph the platform's instruction, not about the writing.
@@ -957,7 +974,7 @@ describe("workflows.publish", () => {
   // second deployment out of the retry that answer would provoke.
   it("keeps a published deployment and its answer when the announcement fails", async () => {
     await seedDraft(definitionId, 1, graph());
-    notifyForTicket.mockRejectedValue(new Error("slack is down"));
+    notifyForTicket.mockRejectedValue(new Error("the chat provider is down"));
     const client = await connectedClient();
 
     const result = await publish(client);
@@ -1163,7 +1180,7 @@ describe("workflows.publish", () => {
   // a completed deployment past the wrapper's deadline and answer TIMEOUT about it.
   it("answers a publish whose announcement never settles, and not as a timeout", async () => {
     await seedDraft(definitionId, 1, graph());
-    notifyForTicket.mockReturnValue(new Promise<void>(() => {}));
+    notifyForTicket.mockReturnValue(new Promise(() => {}));
     const client = await connectedClient();
 
     const result = await publish(client);

@@ -6,7 +6,6 @@ import { createTestDb } from "../../db/test-db.js";
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
   env: { ANTHROPIC_API_KEY: "anthropic-key" } as Record<string, string>,
-  providers: [] as unknown[],
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -15,19 +14,16 @@ const mocks = vi.hoisted(() => ({
   userLabel: vi.fn(async () => "Admin"),
 }));
 
-vi.mock("../../infra/vcs-config.js", () => ({
-  env: state.env,
-  getConfiguredVcsProviders: () => state.providers,
-  getVcsProviderConfig: () => state.providers[0],
-}));
+vi.mock("../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../infra/llm.js", () => ({
   generateProviderText: mocks.generateProviderText,
 }));
-vi.mock("../../adapters/vcs/create-vcs.js", () => ({
-  createVCS: vi.fn(),
-  createVCSForRepository: vi.fn(),
-  createRepositoryProfileSource: vi.fn(() => ({ loadProfile: mocks.loadProfile })),
+// The one provider call this path makes: reading what a repository says
+// about itself. Which integration answers is resolved inside, and the
+// suggestion is the same whichever one it was.
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
+  loadRepositoryVcsProfile: mocks.loadProfile,
 }));
 vi.mock("../auth/index.js", () => ({
   getConnectedDashboardUserLabel: mocks.userLabel,
@@ -101,9 +97,6 @@ beforeEach(async () => {
   resetRepositorySuggestionsInFlightForTests();
   mocks.userLabel.mockResolvedValue("Admin");
   mocks.loadProfile.mockResolvedValue(BUNDLE);
-  state.providers = [
-    { kind: "github", auth: { appId: 1, privateKeyBase64: "cGVt", installationId: 2 } },
-  ];
   db = await createTestDb();
   state.db = db;
   const saved = await upsertRepositoryProfile(db, {
@@ -535,8 +528,16 @@ describe("suggestRepositoryProfile", () => {
     ).resolves.toMatchObject({ model: "claude-haiku-4-5" });
   });
 
-  it("records a failure when the repository's provider is not configured here", async () => {
-    state.providers = [];
+  it("records a failure when no integration in this build serves the repository's provider", async () => {
+    // The sentence the resolver actually raises, copied from
+    // `resolveIntegrationAdapter`: it is what an admin reads on the row, and it
+    // has to name the provider rather than say "the provider".
+    mocks.loadProfile.mockRejectedValue(
+      new Error(
+        "No integration in this build serves version control for github." +
+          " The repository's provider has to be one this deployment ships.",
+      ),
+    );
 
     await expect(
       suggestRepositoryProfile({ actor: ADMIN, repositoryId }),
@@ -544,7 +545,7 @@ describe("suggestRepositoryProfile", () => {
 
     const rows = await listRepositorySuggestions(db, repositoryId);
     expect(rows[0]).toMatchObject({ outcome: "failed" });
-    expect(rows[0]?.error).toContain("no github provider is configured");
+    expect(rows[0]?.error).toContain("serves version control for github");
   });
 
   it("gives a member 403 before anything is read or spent", async () => {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RunRepositoryAccess } from "@shared/contracts";
+import type { IntegrationConnectionPin, RunRepositoryAccess } from "@shared/contracts";
 import type { RepositoryVcsRuntime } from "../support/vcs-runtime.js";
 import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../../infra/vcs-urls.js";
 import type { ReviewLedgerGuardSummary } from "../helpers/review-ledger.js";
@@ -68,6 +68,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   runId: string;
   /** Which repositories this run may publish to, frozen at its start. */
   repositoryAccess: RunRepositoryAccess;
+  integrationPins?: readonly IntegrationConnectionPin[];
   /** The run's job timeout, from the settings it started with. */
   jobTimeoutMs: number;
   sourcePullRequest?: import("../helpers/source-pull-request.js").SourcePullRequestIdentity;
@@ -84,6 +85,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   const { assertOpenSourcePullRequest, isSourcePullRequestRepository } = await import(
     "../helpers/source-pull-request.js"
   );
+  const { isPullRequestUnreadableError } = await import("@integrations/sdk");
 
   const source = await Sandbox.get({
     sandboxId: input.sourceSandboxId,
@@ -263,6 +265,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       provider: repo.provider,
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
+      integrationPins: input.integrationPins,
     });
     const memoryFailure = await verifyPublishedMemoryScope(
       source,
@@ -366,7 +369,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   });
   try {
     const { createAdapters } = await import("../support/adapters.js");
-    const { runRegistry } = createAdapters();
+    const { runRegistry } = await createAdapters();
     await runRegistry.registerSandbox(
       input.subjectKey,
       input.ownerToken,
@@ -384,11 +387,12 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         provider: item.repo.provider,
         repoPath: item.repo.repoPath,
         baseBranch: item.repo.defaultBranch,
+        integrationPins: input.integrationPins,
       });
-      const token = await runtime.getToken();
-      const urls = buildVcsUrls({ ...runtime.config, repoPath: item.repo.repoPath });
-      const cloneUrl = buildCloneUrl({ host: runtime.config.host, repoPath: item.repo.repoPath });
-      const authArgs = gitAuthArgs(urls.authUser, token);
+      const credentials = await runtime.credentials();
+      const urls = buildVcsUrls({ ...credentials, repoPath: item.repo.repoPath });
+      const cloneUrl = buildCloneUrl({ host: credentials.host, repoPath: item.repo.repoPath });
+      const authArgs = gitAuthArgs(urls.authUser, credentials.token);
       const checkoutPath = `/vercel/sandbox/publisher/${index}`;
       item.authArgs = authArgs;
       item.cloneUrl = cloneUrl;
@@ -493,6 +497,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
           provider: input.sourcePullRequest.provider,
           repoPath: input.sourcePullRequest.repoPath,
           baseBranch: input.sourcePullRequest.baseRef,
+          integrationPins: input.integrationPins,
         }).vcs
       : null;
     // Prepare marks a repository as already pushed exactly when the branch
@@ -526,9 +531,21 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         continue;
       }
       if (input.sourcePullRequest && sourceVcs && expectedSourceHead) {
+        let sourceHead;
+        try {
+          sourceHead = await sourceVcs.getPRHead(input.sourcePullRequest.prId);
+        } catch (error) {
+          // The pull request this run answers is gone, or this connection may
+          // no longer read it. Asking again cannot change that, and a retry of
+          // this step redoes the sandbox, the clone and the bundle import, so
+          // the repository fails here as a preflight, which is not retried.
+          if (!isPullRequestUnreadableError(error)) throw error;
+          failPrepared(item, error.message, "preflight_failed");
+          continue;
+        }
         assertOpenSourcePullRequest(
           { ...input.sourcePullRequest, headSha: expectedSourceHead },
-          await sourceVcs.getPRHead(input.sourcePullRequest.prId),
+          sourceHead,
         );
       }
       const push = await publisher.runCommand("git", [
@@ -544,6 +561,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         provider: item.repo.provider,
         repoPath: item.repo.repoPath,
         baseBranch: item.repo.defaultBranch,
+        integrationPins: input.integrationPins,
       });
       const providerHead = await readBranchShaAfterWrite(runtime.vcs, item.repo.branchName);
       if (providerHead !== item.result.targetHead) {
@@ -718,13 +736,13 @@ async function verifyPublishedMemoryScope(
   const resolveBaseBranchTip = async (): Promise<string | null> => {
     if (baseTipResolved) return baseTip;
     baseTipResolved = true;
-    const token = await runtime.getToken();
-    const { authUser } = buildVcsUrls({ ...runtime.config, repoPath: repo.repoPath });
-    const cloneUrl = buildCloneUrl({ host: runtime.config.host, repoPath: repo.repoPath });
+    const credentials = await runtime.credentials();
+    const { authUser } = buildVcsUrls({ ...credentials, repoPath: repo.repoPath });
+    const cloneUrl = buildCloneUrl({ host: credentials.host, repoPath: repo.repoPath });
     const fetched = await source.runCommand("git", [
       "-C",
       repo.localPath,
-      ...gitAuthArgs(authUser, token),
+      ...gitAuthArgs(authUser, credentials.token),
       "fetch",
       "--no-tags",
       cloneUrl,

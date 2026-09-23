@@ -49,6 +49,17 @@ export const WORKFLOW_GRAPH_TESTS = [
   "src/workflow-graph-suites/workspace-access.test.ts",
 ] as const;
 
+/**
+ * The worker's side of the seam with @integrations/sdk: the port files that
+ * re-export the SDK and the DevKit behaviour the SDK's FatalError relies on.
+ * A change under integrations/ plans them, since the SDK's own suites cannot
+ * see the worker.
+ */
+export const INTEGRATION_SDK_SEAM_TESTS = [
+  "src/adapters/issue-tracker/types.test.ts",
+  "src/adapters/vcs/types.test.ts",
+] as const;
+
 export const WORKTREE_DIFF = ["git", "diff", "--check"] as const satisfies Cmd;
 export const STAGED_WORKTREE_DIFF = ["git", "diff", "--cached", "--check"] as const satisfies Cmd;
 export const candidateDiff = (merge: string, candidate: string): Cmd =>
@@ -75,6 +86,7 @@ const C = {
   mcp: ["pnpm", "--dir", "apps/worker", "run", "mcp:contract:check"],
   mcpZod4: ["pnpm", "--dir", "apps/worker", "run", "test:zod4"],
   blockCatalog: ["pnpm", "run", "gen:blocks", "--check"],
+  integrationRegistry: ["pnpm", "run", "gen:integrations", "--check"],
   ci: ["pnpm", "run", "test:ci"],
   workflowSdk: ["pnpm", "run", "test:workflow-sdk"],
   packages: ["pnpm", "run", "test:packages"],
@@ -109,7 +121,11 @@ const RELEASE_WORKFLOWS = new Set([
   ".github/workflows/sync-artur-release.yml",
   ".github/workflows/release-artur.yml",
 ]);
-const FIXED_TESTS = new Set<string>([...WORKFLOW_TESTS, ...WORKFLOW_GRAPH_TESTS]);
+const FIXED_TESTS = new Set<string>([
+  ...WORKFLOW_TESTS,
+  ...WORKFLOW_GRAPH_TESTS,
+  ...INTEGRATION_SDK_SEAM_TESTS,
+]);
 const TEST = /\.(?:test|spec)\.tsx?$/;
 export function listDirectory(
   directory: string,
@@ -149,10 +165,14 @@ const isCi = (path: string) =>
   path.startsWith(".github/") ||
   path.startsWith(".githooks/") ||
   path.startsWith("scripts/ci/") ||
+  // A gate's own tests live under scripts/ci/, so editing a gate without
+  // running them is how a gate stops testing what it says it tests.
+  path.startsWith("scripts/gates/") ||
   path.startsWith(".claude/hooks/") ||
   path === ".claude/context-budget.tsv" ||
   path.startsWith(".codex/") ||
   ROOT_CI.has(path);
+const isIntegration = (path: string) => path.startsWith("integrations/");
 const isWorkflowGraph = (path: string) =>
   path.startsWith("packages/workflow-graph/");
 const isProduct = (path: string) =>
@@ -185,6 +205,16 @@ const isWorkflowSdkSubject = (path: string) =>
   (path.startsWith("apps/worker/workflow-sdk-tests/") &&
     !path.startsWith("apps/worker/workflow-sdk-tests/divergence/"));
 
+/**
+ * What decides the integration registries: any integration package, and the
+ * generator and registry files themselves. A change to one of them without a
+ * regeneration is a stale registry, which is what `--check` catches.
+ */
+const isIntegrationRegistrySource = (path: string) =>
+  isIntegration(path) ||
+  path === "scripts/gates/generate-integration-registry.ts" ||
+  path.startsWith("scripts/gates/generate-integration-registry/");
+
 const isBlockCatalogSource = (path: string) =>
   path.startsWith("apps/worker/src/engine/blocks/") ||
   path.startsWith("apps/worker/src/engine/definition/") ||
@@ -200,6 +230,7 @@ const isKnownPath = (path: string) =>
   path.startsWith("apps/worker/") ||
   path.startsWith("apps/dashboard/") ||
   path.startsWith("packages/") ||
+  isIntegration(path) ||
   path.startsWith("scripts/") ||
   ROOT_TYPE.has(path) ||
   GATE_CONFIG.has(path);
@@ -217,6 +248,15 @@ function discoveredTests(path: string, repo: Repo): string[] {
     .map((name) => `${directory}/${name}`)
     .filter(repo.exists);
 }
+
+/**
+ * `node --test` reads every positional as a glob, so a Next dynamic segment
+ * such as `[userId]` arrives as a character class and matches nothing: the run
+ * collects zero files, reports zero tests and exits green. Node's glob has no
+ * backslash escape, so each magic character is wrapped in a class of its own,
+ * which is the form it does understand.
+ */
+const globLiteral = (path: string): string => path.replace(/[?*()[\]{}]/g, "[$&]");
 
 export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   if (paths.length === 0) {
@@ -239,6 +279,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
       !isDocs(path) &&
       (path.startsWith("apps/") ||
         path.startsWith("packages/") ||
+        isIntegration(path) ||
         path.startsWith("scripts/")),
     ) ||
     any(paths, (path) => GATE_CONFIG.has(path));
@@ -249,13 +290,16 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const worker = any(paths, (path) => path.startsWith("apps/worker/") && !isDocs(path));
   const dashboard = any(paths, (path) => path.startsWith("apps/dashboard/") && !isDocs(path));
   const shared = any(paths, (path) => path.startsWith("packages/") && !isDocs(path));
+  const integrations = any(paths, (path) => isIntegration(path) && !isDocs(path));
   const workflowSdk = any(paths, isWorkflowSdkSubject);
   const blockCatalog = any(paths, isBlockCatalogSource);
+  const integrationRegistry = any(paths, isIntegrationRegistrySource);
   const gates = any(paths, (path) =>
     isProduct(path) ||
     (!isDocs(path) &&
       (path.startsWith("apps/") ||
         path.startsWith("packages/") ||
+        isIntegration(path) ||
         path.startsWith("scripts/"))) ||
     GATE_CONFIG.has(path),
   );
@@ -264,6 +308,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const workerTests = new Set<string>([
     ...(product ? WORKFLOW_TESTS : []),
     ...(any(paths, isWorkflowGraph) ? WORKFLOW_GRAPH_TESTS : []),
+    ...(integrations ? INTEGRATION_SDK_SEAM_TESTS : []),
   ]);
   const dashboardTests = new Set<string>();
   const docs = any(paths, (path) => isDocs(path) && !isSkill(path) && !isRelease(path));
@@ -286,11 +331,13 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   }
 
   const scopes = [rootType && "root-package-or-lock", worker && "worker",
-    dashboard && "dashboard", shared && "shared", product && "product-workflow",
+    dashboard && "dashboard", shared && "shared", integrations && "integrations",
+    product && "product-workflow",
     ci && "ci", release && "release-notes", skills && "skills",
     gates && "gates",
     workerTests.size > 0 && "worker-tests", dashboardTests.size > 0 && "dashboard-tests",
     workflowSdk && "workflow-sdk",
+    integrationRegistry && "integration-registry",
   ].filter((scope): scope is string => Boolean(scope));
   const commands: Cmd[] = [];
   const seen = new Set<string>();
@@ -302,7 +349,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     }
   };
 
-  if (rootType || shared) add(C.rootType);
+  if (rootType || shared || integrations) add(C.rootType);
   else {
     if (workerBaseline) add(C.workerType);
     if (dashboard) add(C.dashboardType);
@@ -327,6 +374,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   }
   if (workflowSdk) add(C.workflowSdk);
   if (blockCatalog) add(C.blockCatalog);
+  if (integrationRegistry) add(C.integrationRegistry);
   if (dashboardTests.size > 0) {
     add([
       "pnpm",
@@ -338,14 +386,14 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
       "--import",
       "tsx",
       "--test",
-      ...[...dashboardTests].map((path) => `./${path}`),
+      ...[...dashboardTests].map((path) => globLiteral(`./${path}`)),
     ]);
   }
   // Nothing else runs a package's own tests: the worker vitest run and the
-  // dashboard node runner never reach packages/*. The zod 4 pass runs the same
-  // files again against the zod the worker bundle resolves, which is not the
-  // one the workspace pins.
-  if (shared) {
+  // dashboard node runner never reach packages/* or integrations/*. The zod 4
+  // pass runs the same files again against the zod the worker bundle resolves,
+  // which is not the one the workspace pins.
+  if (shared || integrations) {
     add(C.packages);
     add(C.packagesZod4);
     if (any(paths, isWorkflowGraph)) add(C.workflowGraphZod4);

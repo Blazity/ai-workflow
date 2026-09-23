@@ -24,7 +24,6 @@ import { createTestDb } from "../../db/test-db.js";
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
   env: { ANTHROPIC_API_KEY: "anthropic-key" } as Record<string, string>,
-  providers: [] as unknown[],
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -35,17 +34,16 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../infra/vcs-config.js", () => ({
   env: state.env,
-  getConfiguredVcsProviders: () => state.providers,
-  getVcsProviderConfig: () => state.providers[0],
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../infra/llm.js", () => ({
   generateProviderText: mocks.generateProviderText,
 }));
-vi.mock("../../adapters/vcs/create-vcs.js", () => ({
-  createVCS: vi.fn(),
-  createVCSForRepository: vi.fn(),
-  createRepositoryProfileSource: vi.fn(() => ({ loadProfile: mocks.loadProfile })),
+// The one provider call this path makes: reading what a repository says
+// about itself. Which integration answers is resolved inside, and the
+// suggestion is the same whichever one it was.
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
+  loadRepositoryVcsProfile: mocks.loadProfile,
 }));
 vi.mock("../auth/index.js", () => ({
   getConnectedDashboardUserLabel: mocks.userLabel,
@@ -86,9 +84,6 @@ beforeEach(async () => {
   resetRepositorySuggestionsInFlightForTests();
   mocks.userLabel.mockResolvedValue("Admin");
   mocks.loadProfile.mockResolvedValue(EMPTY_BUNDLE);
-  state.providers = [
-    { kind: "github", auth: { appId: 1, privateKeyBase64: "cGVt", installationId: 2 } },
-  ];
   db = await createTestDb();
   state.db = db;
   const saved = await upsertRepositoryProfile(db, {

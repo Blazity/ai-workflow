@@ -683,7 +683,14 @@ describe("executeMcpMutation", () => {
 
     const audits = await db.select().from(mcpAuditEvents);
     expect(audits.map((row) => row.outcome)).toEqual(["attempted"]);
-    expect(loggerMock.warn).not.toHaveBeenCalled();
+    // The point of the assertion is that a lost audit row is raised rather than
+    // logged and swallowed. Lines about anything else on this path (the
+    // redaction set could not read a database this test never gave it) are not
+    // that, so the check names the event it is about.
+    const auditWarnings = loggerMock.warn.mock.calls.filter(
+      (call: unknown[]) => call[1] !== "integration_secrets_unreadable",
+    );
+    expect(auditWarnings).toEqual([]);
   });
 
   it("rates and audits before acquiring idempotency, then replays without operating twice", async () => {

@@ -64,6 +64,39 @@ beforeEach(async () => {
 });
 
 describe("loadRunStartSettingsStep", () => {
+  // The wiring is frozen for the whole run, so a run that starts without it
+  // has no ticket links and moves by bare column name to its end. It used to
+  // start so in silence, whether nothing was connected or the settings could
+  // not be read.
+  it("says why a run starts without the tracker's wiring", async () => {
+    const { logger } = await import("../../infra/logger.js");
+
+    const stored = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
+
+    expect(stored.tracker).toBeUndefined();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining("No issue tracker is connected") }),
+      "run_start_tracker_wiring_absent",
+    );
+  });
+
+  it("freezes the board's transition ids and nothing that names the site", async () => {
+    // The Site URL used to ride along "for a rollback" to a build that was
+    // never deployed. Links are the tracker's own answer, recorded with the
+    // run's ticket.
+    vi.stubEnv("JIRA_BASE_URL", "https://acme.atlassian.net");
+    vi.stubEnv("JIRA_API_TOKEN", "jira-token-value");
+    vi.stubEnv("JIRA_PROJECT_KEY", "AWT");
+    vi.stubEnv("JIRA_AI_TRANSITION_ID", "21");
+    try {
+      const stored = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
+
+      expect(stored.tracker).toEqual({ aiTransitionId: "21" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("resolves the snapshot from stored rows", async () => {
     const result = await loadRunStartSettingsStep({ workScopeSubjectKey: null });
 

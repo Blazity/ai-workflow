@@ -13,7 +13,25 @@ const mocks = vi.hoisted(() => ({
   unregisterSandbox: vi.fn(),
   configure: vi.fn(),
   recordSnapshot: vi.fn(),
+  integrationSecretValues: vi.fn(),
 }));
+
+/**
+ * What this deployment has connected: a tracing provider, whose key is in every
+ * agent sandbox by design (ADR-010, decision 7), and an issue tracker, whose
+ * token never is. The source applies the caller's filter the way the real one
+ * does (services/integrations/secret-values.test.ts holds that part).
+ */
+const CONNECTED = [
+  { capabilities: ["agent_tracing"], secret: "integration-fresh" },
+  { capabilities: ["issue_tracker"], secret: "tracker-token-fresh" },
+];
+function connectedSecretValues(options?: {
+  include?: (manifest: { capabilities: string[] }) => boolean;
+}): string[] {
+  const include = options?.include ?? (() => true);
+  return CONNECTED.filter((entry) => include(entry)).map((entry) => entry.secret);
+}
 
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: { get: mocks.get, create: mocks.create },
@@ -38,9 +56,23 @@ vi.mock("../../infra/vcs-config.js", () => ({
     ANTHROPIC_API_KEY: "anthropic-fresh",
     CODEX_API_KEY: "codex-fresh",
     CODEX_CHATGPT_OAUTH_TOKEN: undefined,
-    GENAI_ENGINE_API_KEY: "arthur-fresh",
-    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/api/v1/traces",
   },
+}));
+// A tracing integration's key is inside the sandbox by design, so the scan has
+// to cover it too, and core no longer knows its variable name: it asks the
+// connected integrations. That is the seam this stands in for.
+vi.mock("../../services/integrations/runtime.js", async () => ({
+  integrationSecretValues: (options?: unknown) => mocks.integrationSecretValues(options),
+  // Nothing is connected in this test, so a restored sandbox is configured
+  // with no tracing at all.
+  resolveUsableIntegrations: async () => ({
+    readable: true,
+    usable: [],
+    states: new Map(),
+    connectionFailures: new Map(),
+  }),
+  // The real rule: tracing compares each tracer's pin with it.
+  checkIntegrationPin: (await import("../../services/integrations/resolve.js")).checkIntegrationPin,
 }));
 vi.mock("../../db/repositories/clarification-hooks.js", () => ({
   recordConnectedHookClarificationSnapshot: (...args: unknown[]) =>
@@ -66,6 +98,82 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       },
     });
     mocks.recordSnapshot.mockResolvedValue(undefined);
+    mocks.integrationSecretValues.mockImplementation(async (options) =>
+      connectedSecretValues(options as Parameters<typeof connectedSecretValues>[0]),
+    );
+  });
+
+  /** A running source sandbox whose scan passes, with its calls recorded. */
+  function runningSource() {
+    const writeFiles = vi.fn(async () => undefined);
+    const runCommand = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: async () => "",
+      stderr: async () => "",
+    }));
+    const snapshot = vi.fn(async () => ({
+      snapshotId: "snap-1",
+      sourceSandboxId: "sbx-source",
+      expiresAt: new Date("2026-07-24T00:00:00.000Z"),
+      status: "created",
+    }));
+    mocks.get
+      .mockResolvedValueOnce({ sandboxId: "sbx-source", status: "running", writeFiles, runCommand, snapshot })
+      .mockResolvedValue({ sandboxId: "sbx-source", status: "stopped" });
+    return { writeFiles, runCommand, snapshot };
+  }
+
+  const snapshotInput = {
+    subjectKey: "ticket:jira:AIW-96",
+    ownerToken: "owner-parked",
+    clarificationId: "clar-1",
+    sandboxId: "sbx-source",
+    snapshotRequestedAt: "2026-07-17T00:00:00.000Z",
+    timeoutMs: 10_000,
+    pollIntervalMs: 0,
+  };
+
+  function decodedPatterns(writeFiles: ReturnType<typeof vi.fn>): string[] {
+    const [[files]] = writeFiles.mock.calls as unknown as [[Array<{ content: Buffer }>]];
+    return (JSON.parse(String(files[0]?.content)) as string[]).map((value) =>
+      Buffer.from(value, "base64").toString("utf8"),
+    );
+  }
+
+  // Red when: the scan asks for every connected integration's secret. Its
+  // patterns are written INTO the sandbox, so a tracker token, a GitHub App
+  // private key or any other credential the sandbox never held would be handed
+  // to whatever the agent left running there, by the scan itself.
+  it("writes into the sandbox only what the sandbox was handed: agent keys and the tracing key", async () => {
+    const { writeFiles } = runningSource();
+
+    await snapshotClarificationSandboxStep(snapshotInput);
+
+    const patterns = decodedPatterns(writeFiles);
+    expect(patterns).toEqual(expect.arrayContaining(["anthropic-fresh", "integration-fresh"]));
+    expect(patterns).not.toContain("tracker-token-fresh");
+  });
+
+  // Red when: settings that cannot be read are treated as "nothing connected",
+  // and the snapshot is taken with the tracing key never scanned for.
+  it("takes no snapshot when the integration settings cannot be read", async () => {
+    const { writeFiles, snapshot } = runningSource();
+    const unreadable = new Error("integration settings unreadable");
+    mocks.integrationSecretValues.mockRejectedValue(unreadable);
+
+    const failure = await snapshotClarificationSandboxStep(snapshotInput).catch(
+      (error: unknown) => error,
+    );
+
+    // Its own sentence, so an operator does not read a settings outage as the
+    // sandbox refusing the pattern file, and the cause beside it.
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(
+      "clarification credential scan could not be prepared: the integration settings could not be read",
+    );
+    expect((failure as Error).cause).toBe(unreadable);
+    expect(writeFiles).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
   });
 
   it("scrubs credentials, snapshots for seven days, and polls until the source stopped", async () => {
@@ -114,13 +222,13 @@ describe("clarification sandbox snapshot Workflow steps", () => {
     );
     expect(sanitizationScript).toContain("agent-env*.sh");
     expect(sanitizationScript).toContain("snapshot_home");
-    expect(sanitizationScript).toContain("arthur");
+    expect(sanitizationScript).toContain("aiw-tracing");
     expect(sanitizationScript).toContain("/tmp/aiw-harness");
     expect(sanitizationScript).toContain("credentials.sh");
     expect(sanitizationScript).toContain("CREDENTIAL_FOUND");
     expect(sanitizationScript).not.toContain("anthropic-fresh");
     expect(sanitizationScript).not.toContain("codex-fresh");
-    expect(sanitizationScript).not.toContain("arthur-fresh");
+    expect(sanitizationScript).not.toContain("integration-fresh");
     expect(events).toEqual(["patterns", "sanitize", "snapshot"]);
     expect(mocks.get).toHaveBeenCalledTimes(3);
     expect(mocks.unregisterSandbox).toHaveBeenCalledWith(
@@ -164,7 +272,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
         Buffer.from("anthropic-fresh").toString("base64"),
         Buffer.from("anthropic-fresh").toString("hex"),
         "codex-fresh",
-        "arthur-fresh",
+        "integration-fresh",
       ]),
     );
     expect(mocks.recordSnapshot).toHaveBeenCalledWith(
@@ -361,7 +469,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
         { kind: "codex", model: "gpt-5-codex" },
         { kind: "claude", model: "claude-opus" },
       ],
-      arthurTaskId: "arthur-task",
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
     });
 
     expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -401,7 +509,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       ownerToken: "owner-successor",
       timeoutMs: 900_000,
       agents: [{ kind: "codex", model: "gpt-5-codex" }],
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
     })).rejects.toThrow("credential setup failed");
     expect(stop).toHaveBeenCalledWith({ blocking: true });
     expect(mocks.unregisterSandbox).toHaveBeenCalledWith(
@@ -424,7 +532,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       ownerToken: "owner-successor",
       timeoutMs: 900_000,
       agents: [{ kind: "codex", model: "gpt-5-codex" }],
-      arthurTaskId: null,
+      tracingRun: { runId: "run_test", subjectKey: "AWT-1", states: {} },
     })).rejects.toThrow(/cleanup unconfirmed.*stopping/i);
 
     expect(stop).toHaveBeenCalledWith({ blocking: true });

@@ -2,10 +2,12 @@ import type { Run } from "@shared/contracts";
 import type { Db } from "../../db/types.js";
 import { listAwaitingRunRows } from "../../db/repositories/runs.js";
 import { attributeRunModel } from "./attribute-run-model.js";
+import { ticketLinkFor, type TicketLinks } from "../../engine/support/ticket-url.js";
 
 export interface CollectAwaitingRunsOptions {
   db?: Db;
-  jiraBaseUrl: string;
+  /** How the active tracker links a ticket, for a run that recorded no link. */
+  ticketLinks: TicketLinks;
   now: Date;
 }
 
@@ -32,8 +34,7 @@ export interface CollectAwaitingRunsOptions {
 export async function collectAwaitingRuns(
   opts: CollectAwaitingRunsOptions,
 ): Promise<Run[]> {
-  const { db, jiraBaseUrl, now } = opts;
-  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
+  const { db, ticketLinks, now } = opts;
 
   const rows = await listAwaitingRunRows(db);
 
@@ -56,8 +57,7 @@ export async function collectAwaitingRuns(
       guardrailHits: null,
       ticketTitle: r.ticketTitle ?? r.ticketKey ?? "",
       prNumber: r.prNumber,
-      ticketUrl:
-        r.ticketUrl ?? (r.ticketKey ? `${tenantOrigin}/browse/${r.ticketKey}` : ""),
+      ticketUrl: ticketLinkFor(r.ticketUrl, r.ticketKey, ticketLinks) ?? "",
       prUrl: r.prUrl,
       prs: r.prs,
     };

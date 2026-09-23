@@ -22,10 +22,11 @@ import { isAgentRuntimeError } from "./agents/protocol.js";
 import type { ResolvedHarnessRuntime } from "./harness-runtime.js";
 
 export interface SandboxProviderConfig {
-  kind: "github" | "gitlab";
+  kind: string;
   /** Resolves a fresh, short-lived token at the moment of use. */
   getToken: () => Promise<string>;
   host: string;
+  authUser?: string;
   commitAuthor: string;
   commitEmail: string;
 }

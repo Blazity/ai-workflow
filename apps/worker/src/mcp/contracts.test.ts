@@ -80,7 +80,10 @@ describe("MCP public contracts", () => {
       "work_scope.get",
       "work_scope.edit",
       "runs.briefing",
-  "workflows.node_briefing",
+      "workflows.node_briefing",
+      "memory.list",
+      "memory.get",
+      "memory.forget",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

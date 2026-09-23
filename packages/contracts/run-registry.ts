@@ -1,3 +1,5 @@
+import type { IntegrationUnavailableReason } from "./api.js";
+
 export interface FailedTicketMeta {
   runId: string;
   error: string;
@@ -173,4 +175,74 @@ export interface ThreadStore {
   setParent(ticketKey: string, messageId: string): Promise<void>;
   /** Removes the entry. Used after Slack reports the parent message no longer exists. */
   clearParent(ticketKey: string): Promise<void>;
+}
+
+/**
+ * The machine-readable why of a failed run.
+ *
+ * `statusReason` is the sentence a human reads and it is copy: we rewrite it
+ * whenever the wording can be clearer, and a reader that matched on it would
+ * break the first time we did, silently and in the direction of "this run
+ * failed for no reason I recognise". So a failure that has a machine-readable
+ * cause records this code beside the prose. The prose is not replaced and not
+ * derived from the code: they answer different readers.
+ *
+ * Closed on purpose. Membership is a type, so a code nobody agreed to cannot be
+ * written without failing the typecheck, and `isRunFailureCode` refuses one that
+ * arrives as a string from outside the build.
+ *
+ * Every member is spelled `family.case`, because the first question a reader
+ * asks is the family ("was this an integration being unavailable?") and only
+ * then the case.
+ *
+ * Null is not a member and never means "unknown failure": it means this failure
+ * carries no code, which is true of every run that failed before this column
+ * existed and of every failure nobody has given a code yet.
+ */
+export const RUN_FAILURE_CODES = [
+  "integration_unavailable.disconnected",
+  "integration_unavailable.disabled",
+  "integration_unavailable.reconfigured",
+] as const;
+
+export type RunFailureCode = (typeof RUN_FAILURE_CODES)[number];
+
+export function isRunFailureCode(value: unknown): value is RunFailureCode {
+  return (
+    typeof value === "string" && (RUN_FAILURE_CODES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The code for a run stopped because an integration it pinned was unusable.
+ *
+ * The template literal is the whole guarantee: a fourth member of
+ * `IntegrationUnavailableReason` produces a string that is not in
+ * `RUN_FAILURE_CODES`, and this stops compiling until someone adds the row.
+ */
+export function integrationUnavailableFailureCode(
+  reason: IntegrationUnavailableReason,
+): RunFailureCode {
+  return `integration_unavailable.${reason}`;
+}
+
+/**
+ * What a run records as its "why": a bare sentence, or that sentence with the
+ * code beside it.
+ *
+ * One value rather than two fields, so a code can never be recorded without the
+ * sentence it explains. There is no way to spell that.
+ */
+export type RunStatusReason =
+  | string
+  | { readonly text: string; readonly code: RunFailureCode };
+
+/** The two columns a `RunStatusReason` writes, for the one place that writes them. */
+export function runStatusReasonParts(reason: RunStatusReason): {
+  text: string;
+  code: RunFailureCode | null;
+} {
+  return typeof reason === "string"
+    ? { text: reason, code: null }
+    : { text: reason.text, code: reason.code };
 }

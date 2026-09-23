@@ -1,0 +1,4 @@
+Source URL: https://docs.gitlab.com/user/project/integrations/webhook_events/#complete-payload-example
+GitLab source revision: https://gitlab.com/gitlab-org/gitlab/-/blob/457f8f752b242fad728176d6231fe4910210c956/doc/user/project/integrations/webhook_events.md
+Retrieved: 2026-09-21
+SHA-256: bf574be24690c6a19daf51e51a821607311d49c96c6ab68215d613d570e26baf

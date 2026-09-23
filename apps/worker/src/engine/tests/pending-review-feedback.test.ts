@@ -1,3 +1,7 @@
+import {
+  reviewFindingMarker as buildReviewFindingMarker,
+  reviewHeadMarker as buildReviewHeadMarker,
+} from "@integrations/sdk";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -101,29 +105,13 @@ const humanComment = {
 };
 
 /**
- * The review pass's own markers, read out of the adapter that writes them
- * rather than copied here. Copied, they would keep passing after the family was
- * renamed, and this test would go on proving that the predicate handles a
- * marker nothing emits any more.
+ * The review pass's own markers, from the builders every provider writes them
+ * with rather than copied here. Copied, they would keep passing after the
+ * family was renamed, and this test would go on proving that the predicate
+ * handles a marker nothing emits any more.
  */
-function markerWrittenBy(relativePath: string, family: string): string {
-  const source = readFileSync(
-    fileURLToPath(new URL(relativePath, import.meta.url)),
-    "utf8",
-  );
-  const found = source.match(new RegExp(`<!--\\s*${family}[^>]*-->`));
-  if (!found) throw new Error(`${relativePath} no longer writes a ${family} marker`);
-  return found[0].replace(/\$\{[^}]*\}/g, "abc123");
-}
-
-const reviewFindingMarker = markerWrittenBy(
-  "../../adapters/vcs/github.ts",
-  "ai-workflow-review-finding:",
-);
-const reviewHeadMarker = markerWrittenBy(
-  "../../adapters/vcs/github.ts",
-  "ai-workflow-review-head:",
-);
+const reviewFindingMarker = buildReviewFindingMarker("abc123");
+const reviewHeadMarker = buildReviewHeadMarker("abc123");
 
 /** What post_pr_comment leaves behind on every workflow-owned pull request. */
 const ourOwnNote = {

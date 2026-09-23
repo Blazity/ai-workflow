@@ -15,6 +15,7 @@
 import type {
   HarnessProfileManifest,
   HarnessProfileReference,
+  IntegrationState,
   VcsProviderKind,
   WorkflowBlockContract,
   WorkflowBlockContractResolver,
@@ -23,7 +24,16 @@ import type {
 } from "@shared/contracts";
 import { isHarnessProfileReference } from "@shared/contracts";
 import { resolveBuiltinHarnessProfile } from "@shared/harness";
+import { integrationManifests } from "@integrations/registry";
+import { trackerQueryRuleFor, type TrackerQueryRule } from "./tracker-query-templates.js";
 import { workflowBlockRegistryContext } from "../../engine/definition/block-contract-environment.js";
+import {
+  activeProviderOf,
+  deploymentIntegrations,
+  NO_INTEGRATIONS,
+  type DeploymentIntegrations,
+} from "../../engine/definition/integration-availability.js";
+import { readIntegrationStates } from "../integrations/index.js";
 import type { Db } from "../../db/types.js";
 import {
   dashboardOrganizationId,
@@ -38,7 +48,7 @@ import {
   createWorkflowBlockContractResolver,
 } from "../../engine/definition/block-contract-resolver.js";
 import {
-  BLOCK_PARAMS_SCHEMAS,
+  blockParamsSchemasFor,
   type BlockParamsSchemas,
 } from "../../engine/definition/block-params-schemas.js";
 import {
@@ -63,6 +73,13 @@ export interface RequestBlockContracts {
   /** Every block type's parameter schema, composed in `engine/definition`. */
   blockParamsSchemas: BlockParamsSchemas;
   /**
+   * The connected tracker's rule for a query an author typed, or null when no
+   * single tracker is usable. Not part of the schemas above: whether it may
+   * refuse a template depends on what the deployed version already runs, which
+   * a per-type schema cannot see (`tracker-query-templates.ts`).
+   */
+  trackerQueryRule: TrackerQueryRule | null;
+  /**
    * Which VCS providers this deployment has credentials for. The definition's
    * repository pin belongs to no block, so its check cannot go through the
    * resolver and takes this list instead. Stage 4 moves that check into the
@@ -82,19 +99,79 @@ export interface RequestBlockContracts {
 }
 
 /**
+ * What this deployment's integrations are in a state to do, read once.
+ *
+ * Read here rather than anywhere a contract is resolved: the resolver stays
+ * pure and one request sees one deployment. Nothing is cached between
+ * requests, because disabling an integration is the kill switch an admin
+ * reaches for, and on Vercel the next request lands on a warm invocation where
+ * a module-level cache would keep the block running until the instance
+ * recycled.
+ */
+/**
+ * Re-exported so the layers above services can name the value they are handed.
+ * The type lives in the engine, which the app tier may not import (the
+ * boundaries gate), and passing it around without being able to name it is how
+ * it ended up being read behind everyone's back in the first place.
+ */
+export type { DeploymentIntegrations };
+/** And the rule for reading who serves a single-provider capability in it,
+ *  for the same layers, so none of them states that rule a second time. */
+export { activeProviderOf };
+
+export async function connectedDeploymentIntegrations(): Promise<DeploymentIntegrations> {
+  // A build that ships no integration has nothing to read and no block to
+  // decide about, so it asks the database nothing. That is every deployment
+  // until the first integration lands. It is a shortcut, not the reason the
+  // callers below work without a database: each of them is handed its state.
+  if (integrationManifests.length === 0) return NO_INTEGRATIONS;
+  return deploymentIntegrationsFrom(await readIntegrationStates());
+}
+
+/**
+ * The assembly, over states somebody else read.
+ *
+ * Pure, and the only place this build's manifests and a deployment's states
+ * are put together. Every entry point above ends here, so "what this build
+ * offers" has one answer however the state was obtained.
+ */
+function deploymentIntegrationsFrom(
+  states: Map<string, IntegrationState>,
+): DeploymentIntegrations {
+  return deploymentIntegrations({ manifests: integrationManifests, states });
+}
+
+/** The same, for a caller holding its own database handle. Goes through the
+ *  one derivation in `services/integrations`, never a second one. */
+async function deploymentIntegrationsOn(db: Db): Promise<DeploymentIntegrations> {
+  if (integrationManifests.length === 0) return NO_INTEGRATIONS;
+  const { readIntegrationStatesOn } = await import("../integrations/index.js");
+  return deploymentIntegrationsFrom(await readIntegrationStatesOn(db));
+}
+
+/**
  * The block data for a caller that knows which Harness Profile is in force.
  * Callers without one use the code-owned built-in default profile.
+ *
+ * `integrations` is required and has no default. It used to default to
+ * `NO_INTEGRATIONS`, which reads as "this deployment has none" and is a
+ * different statement from "nobody asked": the caller that forgot got a palette
+ * missing every integration block and no way to notice. Deciding with no
+ * integration state is still allowed, in one word - `NO_INTEGRATIONS` - and the
+ * word is now at the call site where a reader can see it.
  */
 export function blockContractsFor(
-  profile?: Pick<HarnessProfileManifest, "harness" | "model">,
+  profile: Pick<HarnessProfileManifest, "harness" | "model"> | undefined,
+  integrations: DeploymentIntegrations,
 ): RequestBlockContracts {
-  const context = workflowBlockRegistryContext(profile);
+  const context = workflowBlockRegistryContext(profile, integrations);
   const resolveContract = createWorkflowBlockContractResolver(context);
   let registry: Record<WorkflowBlockType, WorkflowBlockContract> | null = null;
   return {
     resolveContract,
     analyzeValues: createWorkflowValueAnalyzer(resolveContract, JSON_SCHEMA_SUPPORT),
-    blockParamsSchemas: BLOCK_PARAMS_SCHEMAS,
+    blockParamsSchemas: blockParamsSchemasFor(integrations),
+    trackerQueryRule: trackerQueryRuleFor(integrations),
     configuredVcsProviders: context.vcsProviders,
     blockRegistry: () => (registry ??= buildWorkflowBlockRegistry(context)),
   };
@@ -106,7 +183,7 @@ export function blockContractsFor(
  * such caller uses the one code-owned built-in default profile.
  */
 export async function connectedBlockContracts(): Promise<RequestBlockContracts> {
-  return blockContractsFor();
+  return blockContractsFor(undefined, await connectedDeploymentIntegrations());
 }
 
 /** The database-bound half also resolves each exact custom profile pin. A node
@@ -114,7 +191,7 @@ export async function connectedBlockContracts(): Promise<RequestBlockContracts> 
  *  keeps the code-owned built-in default selected by the model catalog. */
 export async function blockContractsOn(db: Db): Promise<RequestBlockContracts> {
   let organizationId: Promise<string> | null = null;
-  const contracts = blockContractsFor();
+  const contracts = blockContractsFor(undefined, await deploymentIntegrationsOn(db));
   return {
     ...contracts,
     resolveHarnessProfiles: (definition) =>

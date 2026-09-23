@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { settingDefinition } from "@integrations/registry";
 import {
   SETTINGS_REGISTRY,
-  findSettingDefinition,
   type SettingsEntryView,
 } from "@shared/contracts";
 import {
@@ -17,7 +17,7 @@ function entry(
   value: boolean | number | string | readonly string[] | null,
   overrides: Partial<SettingsEntryView> = {},
 ): SettingsEntryView {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   assert.ok(definition, `${key} is not a registry key`);
   return {
     key: key as SettingsEntryView["key"],
@@ -32,12 +32,33 @@ function entry(
   };
 }
 
-test("SETTINGS_GROUP_ORDER matches the order groups first appear in SETTINGS_REGISTRY", () => {
+test("SETTINGS_GROUP_ORDER is core's groups in registry order, then the integrations' panel", () => {
   const derived: string[] = [];
   for (const definition of SETTINGS_REGISTRY) {
     if (!derived.includes(definition.group)) derived.push(definition.group);
   }
-  assert.deepEqual(SETTINGS_GROUP_ORDER, derived);
+  // Every setting an integration declares follows core's registry
+  // (`settingDefinitions`), and they share one panel.
+  assert.deepEqual(SETTINGS_GROUP_ORDER, [...derived, "integrations"]);
+});
+
+test("an integration's setting is panelled under Integrations, where an operator changes it", () => {
+  const groups = groupSettings([
+    entry("MAX_CONCURRENT_AGENTS", 3),
+    {
+      key: "SLACK_ALLOWED_USER_IDS",
+      value: ["U01"],
+      default: [],
+      source: "environment",
+      group: "integrations",
+      description: "Slack: who may run the slash command.",
+      appliesToRunsInFlight: "immediate",
+      lastVersion: null,
+    },
+  ]);
+  const integrations = groups.find((group) => group.id === "integrations");
+  assert.equal(integrations?.label, "Integrations");
+  assert.deepEqual(integrations?.entries.map((row) => row.key), ["SLACK_ALLOWED_USER_IDS"]);
 });
 
 test("groupSettings returns panels in registry order", () => {

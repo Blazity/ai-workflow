@@ -56,6 +56,7 @@ function within(path, prefix) {
 }
 
 const clusterRoot = tierMap.serviceClusterRoot ?? null;
+const workspaceRoots = ["apps", ...tierMap.packageRoots];
 
 export function serviceCluster(path) {
   if (!clusterRoot || !path.startsWith(`${clusterRoot}/`)) return null;
@@ -116,10 +117,14 @@ function hasStepDirective(root, path) {
 
 export function classify(root, path) {
   if (tierPatterns.testing.some((pattern) => pattern.test(path))) return "testing";
+  // A package tier carries the root it came from. Labelling every package
+  // `packages/<name>` made the integration SDK read as `packages/sdk`, a name a
+  // real package could take one day, and it flattened the fixtures nested a
+  // level deeper. packageRoots is ordered longest first so the nested root wins.
   for (const packageRoot of tierMap.packageRoots) {
     if (!within(path, packageRoot)) continue;
     const packageName = path.slice(packageRoot.length + 1).split("/")[0];
-    return packageName ? `packages/${packageName}` : null;
+    return packageName ? `${packageRoot}/${packageName}` : null;
   }
   for (const tier of tierMap.classificationOrder) {
     if (tier === "testing") continue;
@@ -136,23 +141,98 @@ export function classify(root, path) {
   return null;
 }
 
-function allowed(from, to, toPath) {
+// A tier pattern is either a tier name or `<root>/*`, which reads as "any
+// package under that root". A rule keyed by the exact tier wins over one keyed
+// by a pattern, so `integrations/registry` can be allowed more than every other
+// integration is.
+function matchesTier(pattern, tier) {
+  return pattern === tier || (pattern.endsWith("/*") && within(tier, pattern.slice(0, -2)));
+}
+
+function matchesAny(patterns, tier) {
+  return (patterns ?? []).some((pattern) => matchesTier(pattern, tier));
+}
+
+function isPackageTier(tier) {
+  return tierMap.packageRoots.some((root) => within(tier, root));
+}
+
+function packageEdgesFor(tier) {
+  if (tierMap.packageEdges[tier]) return tierMap.packageEdges[tier];
+  const pattern = Object.keys(tierMap.packageEdges)
+    .filter((key) => key.endsWith("/*") && matchesTier(key, tier))
+    .toSorted((left, right) => right.length - left.length)[0];
+  return pattern ? tierMap.packageEdges[pattern] : [];
+}
+
+export function allowed(from, to, toPath) {
   if (from === to) return true;
   if (from === "testing") return true;
   if (to === "testing") return false;
   if (tierMap.edgeExceptions[`${from}->${to}`]?.includes(toPath)) return true;
-  if (from.startsWith("packages/")) {
-    const fromPackage = from.slice("packages/".length);
-    const toPackage = to.startsWith("packages/") ? to.slice("packages/".length) : null;
-    return [...tierMap.packageEdges.default, ...(tierMap.packageEdges[fromPackage] ?? [])]
-      .includes(toPackage);
-  }
-  if (to.startsWith("packages/")) {
-    const toPackage = to.slice("packages/".length);
+  if (isPackageTier(from)) return matchesAny(packageEdgesFor(from), to);
+  if (isPackageTier(to)) {
+    // Core reaches an integration only through the generated registry, and the
+    // SDK, which is types. Everything else under integrations/ is a provider.
+    if (!matchesAny(tierMap.corePackageTargets, to)) return false;
     return tierMap.packageConsumers.includes(from) ||
-      ((tierMap.restrictedPackageConsumers ?? {})[from] ?? []).includes(toPackage);
+      matchesAny((tierMap.restrictedPackageConsumers ?? {})[from], to);
   }
   return (tierMap.allowedEdges[from] ?? []).includes(to);
+}
+
+/**
+ * Why an edge is refused, in the words the person who hits it needs. Without
+ * it the report says `engine->integrations/jira` and leaves them to guess what
+ * to import instead.
+ */
+export function edgeReason(from, to) {
+  const rule = (tierMap.edgeReasons ?? []).find(
+    (candidate) =>
+      (!candidate.from || candidate.from === "*" || matchesTier(candidate.from, from)) &&
+      (!candidate.to || candidate.to === "*" || matchesTier(candidate.to, to)),
+  );
+  return rule?.reason ?? null;
+}
+
+const forbiddenImports = (tierMap.forbiddenImports ?? []).map((rule) => ({
+  from: new RegExp(rule.from),
+  to: new RegExp(rule.to),
+  reason: rule.reason,
+}));
+
+/**
+ * Rules the tier graph cannot express, because they are about which bundle a
+ * file ends up in rather than which layer it belongs to. Returns the rule that
+ * refuses the edge, or null.
+ */
+export function forbiddenImport(fromPath, toPath) {
+  return forbiddenImports.find((rule) => rule.from.test(fromPath) && rule.to.test(toPath)) ?? null;
+}
+
+const forbiddenSpecifiers = (tierMap.forbiddenSpecifiers ?? []).map((rule) => ({
+  from: new RegExp(rule.from),
+  specifier: new RegExp(rule.specifier),
+  reason: rule.reason,
+}));
+
+/**
+ * Rules about what a file may WRITE, not about what it reaches.
+ *
+ * A tier rule needs a resolved path, and the import this exists to refuse has
+ * none: `@/components/ui` is the dashboard's own tsconfig alias, so from a file
+ * outside `apps/` it resolves to nothing and every rule keyed on the target
+ * skips it. An edge the gate cannot resolve is an edge it cannot refuse, which
+ * is exactly the hole an integration reaching into the dashboard would sit in.
+ * Matched against the specifier as written. Returns the rule, or null.
+ */
+export function forbiddenSpecifier(fromPath, specifier) {
+  if (typeof specifier !== "string") return null;
+  return (
+    forbiddenSpecifiers.find(
+      (rule) => rule.from.test(fromPath) && rule.specifier.test(specifier),
+    ) ?? null
+  );
 }
 
 function increment(counts, key) {
@@ -246,17 +326,30 @@ function resolveTsconfigPath(root, fromPath, specifier, cache) {
   return null;
 }
 
+function withSourceExtension(root, path) {
+  if (sourceExtension.test(path)) return path;
+  for (const suffix of [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", "/index.ts", "/index.tsx"]) {
+    if (existsSync(join(root, path + suffix))) return path + suffix;
+  }
+  return path;
+}
+
 function resolvedDependencyPath(root, source, fromPath, dependency, packageDirectories, tsconfigCache) {
   const resolved = dependency.resolved || dependency.module;
   if (!resolved) return null;
   if (isAbsolute(resolved)) return workspacePath(resolved, root);
-  if (resolved.startsWith("apps/") || resolved.startsWith("packages/")) {
+  // Every root the gate classifies, not a hand-written pair of them: a path
+  // under a root this list forgets resolves to nothing, and an edge the gate
+  // cannot resolve is an edge it cannot refuse.
+  if (workspaceRoots.some((prefix) => resolved.startsWith(`${prefix}/`))) {
     return workspacePath(resolve(root, resolved), root);
   }
   for (const [name, directory] of packageDirectories) {
     if (dependency.module !== name && !dependency.module?.startsWith(`${name}/`)) continue;
     const subpath = dependency.module.slice(name.length + 1);
-    return subpath ? `${directory}/${subpath}` : directory;
+    // A package subpath carries no extension, and a rule about which file a
+    // bundle may reach needs the file, not the specifier.
+    return subpath ? withSourceExtension(root, `${directory}/${subpath}`) : directory;
   }
   const tsconfigPath = resolveTsconfigPath(root, fromPath, dependency.module, tsconfigCache);
   if (tsconfigPath) return tsconfigPath;
@@ -321,6 +414,8 @@ function dependencyCounts(root, config) {
   requireScan(modules.length, "modules", `the dependency-cruiser report for ${inputs.join(", ")}`, boundaryInvariant);
   const counts = new Map();
   const forbiddenEdges = [];
+  const bundleViolations = [];
+  const specifierViolations = [];
   const unknown = new Set();
   const deepImports = new Set();
   const packageDirectories = workspacePackageDirectories(root);
@@ -331,6 +426,16 @@ function dependencyCounts(root, config) {
     const fromTier = classify(root, fromPath);
     if (!fromTier) unknown.add(fromPath);
     for (const dependency of module.dependencies ?? []) {
+      // Before resolution, because the specifiers this refuses are the ones
+      // that resolve to nothing from where they were written.
+      const specifierRule = forbiddenSpecifier(fromPath, dependency.module);
+      if (specifierRule) {
+        specifierViolations.push({
+          from: fromPath,
+          specifier: dependency.module,
+          reason: specifierRule.reason,
+        });
+      }
       const toPath = resolvedDependencyPath(
         root,
         module.source,
@@ -351,6 +456,8 @@ function dependencyCounts(root, config) {
       if (!dependency.dynamic && crossClusterDeepImport(fromPath, toPath)) {
         deepImports.add(JSON.stringify([fromPath, toPath]));
       }
+      const bundleRule = forbiddenImport(fromPath, toPath);
+      if (bundleRule) bundleViolations.push({ from: fromPath, to: toPath, reason: bundleRule.reason });
     }
   }
   return {
@@ -358,6 +465,12 @@ function dependencyCounts(root, config) {
     moduleCount: modules.length,
     report,
     unknown: [...unknown].sort(),
+    bundleViolations: bundleViolations.toSorted((left, right) =>
+      `${left.from}\0${left.to}`.localeCompare(`${right.from}\0${right.to}`),
+    ),
+    specifierViolations: specifierViolations.toSorted((left, right) =>
+      `${left.from}\0${left.specifier}`.localeCompare(`${right.from}\0${right.specifier}`),
+    ),
     deepImports: [...deepImports].toSorted().map((entry) => JSON.parse(entry)),
     forbiddenEdges: forbiddenEdges.toSorted((left, right) =>
       `${left.pair}\0${left.from}\0${left.to}`.localeCompare(`${right.pair}\0${right.from}\0${right.to}`),
@@ -446,6 +559,8 @@ function main() {
     moduleCount,
     report,
     unknown,
+    bundleViolations,
+    specifierViolations,
     deepImports,
     forbiddenEdges,
   } = dependencyCounts(root, config);
@@ -482,12 +597,24 @@ function main() {
     console.log("Unknown paths");
     for (const path of unknown) console.log(path);
   }
+  console.log(`Imports across a bundle boundary  ${bundleViolations.length}`);
+  for (const { from, to, reason } of bundleViolations) {
+    console.log(`${from} must not import ${to}: ${reason}`);
+  }
+  console.log(`Refused import specifiers  ${specifierViolations.length}`);
+  for (const { from, specifier, reason } of specifierViolations) {
+    console.log(`${from} must not import "${specifier}": ${reason}`);
+  }
   const failed = unknown.length > 0 || Object.values(tierPairs).some((count) => count > 0) ||
-    hasFileCycles(fileCycles) ||
+    hasFileCycles(fileCycles) || bundleViolations.length > 0 ||
+    specifierViolations.length > 0 ||
     deepImportDrift.added.length > 0 || deepImportDrift.stale.length > 0;
   if (failed || printEdges) {
     console.log("Forbidden edges");
-    for (const { from, to, pair } of forbiddenEdges) console.log(`${from} -> ${to}  (${pair})`);
+    for (const { from, to, pair } of forbiddenEdges) {
+      const reason = edgeReason(...pair.split("->"));
+      console.log(`${from} -> ${to}  (${pair})${reason ? `\n  ${reason}` : ""}`);
+    }
     console.log("File cycles");
     for (const cycle of fileCycles) console.log(cycle.join(" -> "));
     console.log("Cross-cluster deep import edges");

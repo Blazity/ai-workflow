@@ -40,9 +40,12 @@ vi.mock("../../infra/llm.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/llm.js")>()),
   generateProviderText: suggestion.generateProviderText,
 }));
-vi.mock("../../adapters/vcs/create-vcs.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../adapters/vcs/create-vcs.js")>()),
-  createRepositoryProfileSource: () => ({ loadProfile: suggestion.loadProfile }),
+// The profile read reaches a provider, so it is mocked at the capability the
+// suggestion path calls rather than at any one provider's client. The target is
+// passed through, so a case can hand the call back to the real resolver.
+vi.mock("../../engine/support/vcs-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../engine/support/vcs-runtime.js")>()),
+  loadRepositoryVcsProfile: (...args: unknown[]) => suggestion.loadProfile(...args),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 // The provider listing is the one thing the import half cannot do from a test
@@ -1460,21 +1463,35 @@ describe("repositories.suggest", () => {
     const id = await seedRepository({ path: "acme/api", enabled: true });
     const client = await connectedClient();
 
-    // Nothing is configured to read a repository from, so the profile source
-    // half of the call fails: a 502 from the service carrying a symbolic
-    // constant, never a provider's own prose.
+    // Nothing is connected that can read this repository: the test database
+    // holds no integration connection and the mocked environment names no
+    // GitHub variable. The real resolver is what finds that out, so the profile
+    // source half of the call fails the way production fails.
+    const actual = await vi.importActual<typeof import("../../engine/support/vcs-runtime.js")>(
+      "../../engine/support/vcs-runtime.js",
+    );
+    suggestion.loadProfile.mockImplementation(
+      actual.loadRepositoryVcsProfile as (...args: unknown[]) => unknown,
+    );
+
     const result = await client.callTool({
       name: "repositories.suggest",
       arguments: { repositoryId: id, idempotencyKey: KEY_ONE },
     });
 
-    expect(errorOf(result)).toMatchObject({
+    // A 502 from the service carrying a symbolic constant, retryable because
+    // connecting the provider cures it. The reason says which half failed and
+    // names the provider, and never a variable or a secret.
+    const error = errorOf(result);
+    expect(error).toMatchObject({
       code: "DEPENDENCY_UNAVAILABLE",
       message: "profile_source_failed",
       retryable: true,
-      failureReason:
-        "profile source: no github provider is configured on this deployment",
     });
+    expect(error.failureReason).toMatch(/^profile source: /);
+    expect(error.failureReason).toContain("github");
+    expect(error.failureReason).not.toMatch(/[A-Z][A-Z0-9]*_[A-Z0-9_]+/);
+    expect(error.failureReason).not.toContain("anthropic-key");
     // The failed attempt is still recorded, because it is what the hourly
     // budget counts and what the cost page reads.
     const rows = await db.select().from(repositorySuggestions);

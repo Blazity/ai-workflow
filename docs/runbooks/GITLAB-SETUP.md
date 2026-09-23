@@ -1,24 +1,30 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-21
 
 # GitLab.com setup
 
 This is a GitLab.com setup guide for the token-based ai-workflow integration. Self-managed GitLab is not the scope of this guide.
 
-## Required environment variables
+## Where the values go
 
-Set these on the worker deployment:
+GitLab is an integration, so an admin can enter every value below in the dashboard under **Integrations → GitLab → Connection**, and the source switches from the environment to the stored connection. Until they do, the environment is the source and the variable names are the ones in this guide.
+
+There is no variable that selects GitLab as "the" provider: a repository carries its own provider, so a deployment can run GitHub, GitLab or both.
+
+## Required values
+
+Set these on the worker deployment, or enter them on the Integrations page:
 
 ```bash
 GITLAB_TOKEN=<project access token or bot PAT>
 GITLAB_WEBHOOK_SECRET=<random secret>
 ```
 
-Optional legacy single-repo defaults:
+Optional:
 
 ```bash
-GITLAB_PROJECT_ID=<namespace/project path>
-VCS_KIND=gitlab
+GITLAB_HOST=<self-managed base URL, defaults to https://gitlab.com>
+GITLAB_PROJECT_ID=<namespace/project path, legacy single-repo default>
 ```
 
 Required when an enabled `trigger_pr_review` includes `commented`:
@@ -37,7 +43,7 @@ override it.
 
 You can configure GitHub and GitLab in the same deployment. Provider credentials are additive.
 
-Redeploy the worker after changing environment variables.
+Redeploy the worker after changing environment variables. A value entered on the Integrations page takes effect without a redeploy.
 
 ## Create the token
 

@@ -5,14 +5,18 @@ export type {
   PrTriggerPayload,
   PrTriggerType,
   SupportCase,
+  TrackerTicketEvent,
   TriggerEvent,
   WebhookTriggerEntry,
   WebhookVerifiedWith,
 } from "./trigger-events";
+export * from "./run-control";
 export * from "./block-catalog.generated";
 export * from "./block-contract-resolver";
 export * from "./api";
 export * from "./workflow-graph";
+export * from "./integration-id";
+export * from "./subject-default";
 export * from "./workflow-layout";
 export * from "./prompt-references";
 export * from "./prompt-slots";
@@ -26,12 +30,14 @@ export * from "./repository-catalog-api";
 export * from "./repository-scripts";
 export * from "./repository-script-group";
 export * from "./work-scope";
+export * from "./subject-keys";
 export * from "./run-analysis";
 export * from "./execution-error";
 export * from "./agent-protocol-diagnostic";
 export * from "./request-parsing";
 export * from "./requests-dashboard-auth";
 export * from "./requests-harness";
+export * from "./requests-integrations";
 export * from "./requests-json-schema";
 export * from "./requests-pre-pr-checks";
 export * from "./requests-prompt-library";

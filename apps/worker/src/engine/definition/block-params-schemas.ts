@@ -34,7 +34,6 @@ import {
   postTicketCommentParams,
   postPrCommentParams,
   humanQuestionParams,
-  arthurInjectionCheckParams,
   leakReviewParams,
   sendPlanApprovalParams,
 } from "./params.generated.js";
@@ -45,6 +44,9 @@ import {
   v2LoopConfiguration,
   vcsProviderSelection,
 } from "@shared/workflow-graph";
+import type { DeploymentIntegrations } from "./integration-availability.js";
+import { MAX_TRUSTED_PRODUCERS } from "../blocks/trigger-pr-checks-failed/manifest.js";
+import { DEFAULT_REVIEW_TRIGGER_STATES } from "../blocks/trigger-pr-review/manifest.js";
 
 const emptyParams = z.object({}).strict();
 const agentParams = z
@@ -75,7 +77,7 @@ const triggerRepositoryPolicyParams = {
 
 const v2TriggerPrCreatedConfiguration = z
   .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    providers: vcsProviderSelection.default([]),
     scope: prTriggerScope.default("workflow_owned"),
     ...triggerRateLimitParams,
     ...triggerRepositoryPolicyParams,
@@ -83,29 +85,27 @@ const v2TriggerPrCreatedConfiguration = z
   .strict();
 const v2TriggerPrReadyConfiguration = z
   .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    providers: vcsProviderSelection.default([]),
     scope: prTriggerScope.default("any"),
     ...triggerRateLimitParams,
     ...triggerRepositoryPolicyParams,
   })
   .strict();
 const v2TriggerPrUpdatedConfiguration = v2TriggerPrReadyConfiguration;
+// Definitions saved before S10 carry two per-provider producer filters instead
+// of `trustedProducers`. They are upgraded where a graph enters this build
+// (`canonicalizeWorkflowBlockTypes` in `@shared/contracts`), so this schema only
+// ever sees the one list, whichever path read the graph.
 const v2TriggerPrChecksFailedConfiguration = z
   .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    providers: vcsProviderSelection.default([]),
     scope: prTriggerScope.default("workflow_owned"),
     checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
     ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
-    githubAppSlugs: z
+    trustedProducers: z
       .array(z.string().trim().min(1).max(100))
-      .min(1)
-      .max(20)
-      .default(["github-actions"]),
-    gitlabPipelineSources: z
-      .array(z.string().trim().min(1).max(100))
-      .min(1)
-      .max(20)
-      .default(["merge_request_event"]),
+      .max(MAX_TRUSTED_PRODUCERS)
+      .default([]),
     maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
     ...triggerRateLimitParams,
     ...triggerRepositoryPolicyParams,
@@ -113,8 +113,8 @@ const v2TriggerPrChecksFailedConfiguration = z
   .strict();
 const v2TriggerPrReviewConfiguration = z
   .object({
-    providers: vcsProviderSelection.default(["github"]),
-    on: z.array(reviewStates).min(1).default(["changes_requested"]),
+    providers: vcsProviderSelection.default([]),
+    on: z.array(reviewStates).min(1).default([...DEFAULT_REVIEW_TRIGGER_STATES]),
     scope: prTriggerScope.default("workflow_owned"),
     maxRunsPerPr: z.number().int().min(1).max(30).default(10),
     ...triggerRateLimitParams,
@@ -123,7 +123,7 @@ const v2TriggerPrReviewConfiguration = z
   .strict();
 const v2TriggerPrMergedConfiguration = z
   .object({
-    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    providers: vcsProviderSelection.default([]),
     scope: prTriggerScope.default("workflow_owned"),
     ...triggerRateLimitParams,
     ...triggerRepositoryPolicyParams,
@@ -254,7 +254,7 @@ const v2OpenPrConfiguration = z
 const v2UpdateTicketStatusConfiguration = z
   .object({ target: z.string().trim().min(1).max(200) })
   .strict();
-const v2SendSlackMessageConfiguration = z
+const v2SendMessageConfiguration = z
   .object({
     message: z.string().trim().max(2000).optional(),
     sendOn: z.enum(["pr_ready", "always"]).optional(),
@@ -345,10 +345,9 @@ export const BLOCK_PARAMS_SCHEMAS = {
   create_pr_check: v2CreatePrCheckConfiguration,
   complete_pr_check: v2CompletePrCheckConfiguration,
   post_pr_review: emptyParams,
-  send_slack_message: v2SendSlackMessageConfiguration,
+  send_message: v2SendMessageConfiguration,
   send_plan_approval: sendPlanApprovalParams,
   human_question: humanQuestionParams,
-  arthur_injection_check: arthurInjectionCheckParams,
   leak_review: leakReviewParams,
   loop: v2LoopConfiguration,
   terminate: v2TerminateConfiguration,
@@ -357,3 +356,23 @@ export const BLOCK_PARAMS_SCHEMAS = {
 } satisfies Record<WorkflowBlockType, z.ZodTypeAny>;
 
 export type BlockParamsSchemas = typeof BLOCK_PARAMS_SCHEMAS;
+
+/**
+ * The parameter schemas one request validates against: core's, plus the schema
+ * each integration block declared in its own manifest.
+ *
+ * Built per request rather than at module load, because which integration
+ * blocks exist is a property of the build and which are usable is a property
+ * of the deployment, and the same request has to answer both from one read.
+ */
+export function blockParamsSchemasFor(
+  integrations: DeploymentIntegrations,
+): BlockParamsSchemas {
+  if (integrations.blocks.size === 0) return BLOCK_PARAMS_SCHEMAS;
+  return {
+    ...BLOCK_PARAMS_SCHEMAS,
+    ...Object.fromEntries(
+      [...integrations.blocks].map(([type, entry]) => [type, entry.block.paramsSchema]),
+    ),
+  } as BlockParamsSchemas;
+}

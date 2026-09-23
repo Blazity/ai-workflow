@@ -45,6 +45,7 @@ vi.mock("../../engine/support/vcs-runtime.js", () => ({
 import {
   finalizeWorkspacePublication,
   openPullRequestsForPublication,
+  verifySourcePullRequestStep,
   type FinalizedBranch,
 } from "./workspace-publication.js";
 import { WorkspaceGateError } from "./workspace-gate.js";
@@ -569,5 +570,39 @@ describe("workspace publication", () => {
 
     expect(result).toMatchObject({ status: "failed", reason: expect.stringContaining("exact source PR/MR #7") });
     expect(mocks.recordPr).not.toHaveBeenCalled();
+  });
+});
+
+describe("verifySourcePullRequestStep", () => {
+  const source = {
+    provider: "github" as const,
+    repoPath: "acme/api",
+    prId: 7,
+    headSha: "trigger-head",
+    baseRef: "main",
+  };
+
+  beforeEach(() => {
+    mocks.getPrHead.mockReset();
+  });
+
+  // The pull request that started the run is gone or forbidden now, and stays
+  // so: fatal, which the DevKit does not retry, rather than three more reads.
+  it("fails once, fatally, for a source pull request this connection cannot read", async () => {
+    const { PullRequestUnreadableError } = await import("@integrations/sdk");
+    mocks.getPrHead.mockRejectedValue(new PullRequestUnreadableError("GitHub PR #7 cannot be read"));
+
+    await expect(verifySourcePullRequestStep(source)).rejects.toMatchObject({
+      name: "FatalError",
+      message: "GitHub PR #7 cannot be read",
+    });
+    expect(mocks.getPrHead).toHaveBeenCalledOnce();
+  });
+
+  it("leaves any other failure to the DevKit's retries", async () => {
+    const outage = Object.assign(new Error("Bad Gateway"), { status: 502 });
+    mocks.getPrHead.mockRejectedValue(outage);
+
+    await expect(verifySourcePullRequestStep(source)).rejects.toBe(outage);
   });
 });

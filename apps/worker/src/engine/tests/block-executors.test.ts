@@ -6,7 +6,7 @@ import {
   INLINE_EXECUTED_BLOCK_TYPES,
 } from "../blocks/executors.generated.js";
 import { detachScratchSandboxesForClarification, planningClarificationResult } from "../agent-workflow.js";
-import { blockTypesMissingExecutor, implementationChangeSummary, resolveOpenPrBody, resolveOpenPrTitle, resolveSlackMessageInput, resolveTicketStatusInput } from "../helpers/prompt-output.js";
+import { blockTypesMissingExecutor, implementationChangeSummary, resolveOpenPrBody, resolveOpenPrTitle, resolveMessageInput, resolveTicketStatusInput } from "../helpers/prompt-output.js";
 
 // Exhaustiveness guard for BLOCK_EXECUTORS and INLINE_EXECUTED_BLOCK_TYPES
 // (engine/blocks/executors.generated.ts:24 and :44), through blockTypesMissingExecutor
@@ -14,7 +14,6 @@ import { blockTypesMissingExecutor, implementationChangeSummary, resolveOpenPrBo
 describe("block executor exhaustiveness", () => {
   it("keeps map, inline, and graph execution sets exact", () => {
     const mapTypes = [
-      "arthur_injection_check",
       "call_llm",
       "complete_pr_check",
       "create_pr_check",
@@ -39,7 +38,7 @@ describe("block executor exhaustiveness", () => {
       "prepare_workspace",
       "review_agent",
       "run_pre_pr_checks",
-      "send_slack_message",
+      "send_message",
       "update_ticket_status",
     ];
     const graphTypes = [
@@ -99,7 +98,7 @@ describe("block executor exhaustiveness", () => {
   });
 
   it("prefers resolved Slack messages and ticket targets over static params", () => {
-    expect(resolveSlackMessageInput({ message: " static " }, { message: " bound " })).toBe(
+    expect(resolveMessageInput({ message: " static " }, { message: " bound " })).toBe(
       "bound",
     );
     expect(resolveTicketStatusInput({ target: "ai_review" }, { target: "backlog" })).toBe(

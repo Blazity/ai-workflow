@@ -1,7 +1,6 @@
 // THIS FILE IS GENERATED. DO NOT EDIT.
 // Run pnpm run gen:blocks to update.
 
-import { execute as arthurInjectionCheckExecute } from "./arthur-injection-check/execute.js";
 import { execute as callLlmExecute } from "./call-llm/execute.js";
 import { execute as completePrCheckExecute } from "./complete-pr-check/execute.js";
 import { execute as createPrCheckExecute } from "./create-pr-check/execute.js";
@@ -22,7 +21,6 @@ import type { BlockExecuteFn } from "./support/types.js";
 import type { WorkflowBlockType } from "@shared/contracts";
 
 export const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
-  arthur_injection_check: arthurInjectionCheckExecute,
   call_llm: callLlmExecute,
   complete_pr_check: completePrCheckExecute,
   create_pr_check: createPrCheckExecute,
@@ -48,6 +46,6 @@ export const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
   "prepare_workspace",
   "review_agent",
   "run_pre_pr_checks",
-  "send_slack_message",
+  "send_message",
   "update_ticket_status",
 ];
