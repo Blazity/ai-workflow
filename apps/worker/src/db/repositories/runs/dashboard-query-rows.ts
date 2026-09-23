@@ -2,6 +2,7 @@ import { and, count, eq, sql, type SQL } from "drizzle-orm";
 import type { RunPullRequest } from "@shared/contracts";
 import { getDb, type Db } from "../../client.js";
 import { workflowRuns } from "../../schema.js";
+import { runWorkflowLabel } from "./workflow-label.js";
 
 export interface DashboardRunRow {
   runId: string;
@@ -27,7 +28,7 @@ export interface DashboardRunRow {
 const runColumns = {
   runId: workflowRuns.runId,
   workflowId: workflowRuns.workflowId,
-  workflowName: workflowRuns.workflowName,
+  workflowName: runWorkflowLabel,
   status: workflowRuns.status,
   statusReason: workflowRuns.statusReason,
   ticketKey: workflowRuns.ticketKey,
