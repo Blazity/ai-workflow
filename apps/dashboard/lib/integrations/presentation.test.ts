@@ -267,6 +267,48 @@ test("values saved beside a working environment are said to be stored, tested an
   assert.doesNotMatch(testOutcomeLines({ ok: true }, beside, "test").join(" "), /not in use/);
 });
 
+/** The last health scan, holding one entry for the Demo integration. */
+function scanWith(mode: string, checks: { label: string; mode: string; message?: string }[] = []) {
+  return {
+    generatedAt: "2026-09-23T09:00:00.000Z",
+    summary: {
+      total: 1, live: 0, down: 1, notConfigured: 0, criticalDown: 0,
+      checksTotal: 0, checksLive: 0, checksDown: 0, checksDegraded: 0,
+    },
+    integrations: [
+      {
+        id: "demo", label: "Demo", group: "execution", envVars: [], critical: false,
+        mode, ping: null,
+        checks: checks.map((check, index) => ({
+          id: `c${index}`, description: "", critical: true, envVars: [], evidenceSource: "probe", ...check,
+        })),
+      },
+    ],
+  } as never;
+}
+
+// Red when: a card reads Connected beside a fresh scan that found the
+// integration down, with nothing to say they disagree (QA, Arthur).
+test("a Connected card says when the latest health scan found it down, naming the check", () => {
+  const rendered = statusDetailLines(
+    integration(),
+    scanWith("down", [{ label: "Auth", mode: "down", message: "timeout after 4005 ms" }]),
+  ).join(" ");
+  assert.match(
+    rendered,
+    /The health scan of Sep 23, 2026, 9:00:00 AM UTC found Demo down \(Auth: timeout after 4005 ms\)\. The status here comes from the values in use and the last test; press Test to check again\./,
+  );
+});
+
+test("a scan that agrees, or a card that is not Connected, adds no line", () => {
+  assert.doesNotMatch(statusDetailLines(integration(), scanWith("live")).join(" "), /health scan/);
+  assert.doesNotMatch(statusDetailLines(integration(), null).join(" "), /health scan/);
+  const failing = integration({
+    state: state({ status: "failing", connection: "failing", usable: false, failure: { reason: "credential_rejected", message: "401" } }),
+  });
+  assert.doesNotMatch(statusDetailLines(failing, scanWith("down")).join(" "), /health scan/);
+});
+
 test("a save that failed its test is reported as stored and not in use", () => {
   const lines = statusDetailLines(
     integration({

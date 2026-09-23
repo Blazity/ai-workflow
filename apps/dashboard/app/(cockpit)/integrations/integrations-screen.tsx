@@ -2,6 +2,7 @@ import type {
   IntegrationCapabilityDto,
   IntegrationDto,
   IntegrationWriteAccess,
+  SystemHealthResponse,
 } from "@shared/contracts";
 
 import { IntegrationChangeRefresh } from "@/components/cockpit/integration-change-refresh";
@@ -55,10 +56,12 @@ function IntegrationCard({
   integration,
   canManage,
   availability,
+  scan,
 }: {
   integration: IntegrationDto;
   canManage: boolean;
   availability?: BlockAvailability;
+  scan: SystemHealthResponse | null;
 }) {
   const chip = statusChip(integration.state);
   const href = `/integrations/${encodeURIComponent(integration.id)}/connection`;
@@ -83,7 +86,7 @@ function IntegrationCard({
             {integration.description}
           </p>
           <div className="mt-1 flex flex-col gap-[2px]">
-            {statusDetailLines(integration).map((line, index) => (
+            {statusDetailLines(integration, scan).map((line, index) => (
               <span key={index} className="font-body text-[11px] text-neutral-500 break-words">
                 {line}
               </span>
@@ -250,6 +253,7 @@ export function IntegrationsScreen({
   available,
   availability,
   capabilities = "unreadable",
+  scan = null,
 }: {
   integrations: readonly IntegrationDto[];
   writes: IntegrationWriteAccess;
@@ -261,6 +265,8 @@ export function IntegrationsScreen({
   availability?: BlockAvailability;
   /** Who serves each capability, or why the worker did not say. */
   capabilities?: readonly IntegrationCapabilityDto[] | CapabilitiesUnread;
+  /** The last stored health scan, when this role could read one. */
+  scan?: SystemHealthResponse | null;
 }) {
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
@@ -321,6 +327,7 @@ export function IntegrationsScreen({
               integration={integration}
               canManage={canManage}
               availability={availability}
+              scan={scan}
             />
           ))}
         </ul>

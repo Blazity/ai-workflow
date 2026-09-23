@@ -15,6 +15,7 @@ import type {
   IntegrationImpactPreviewResponse,
   IntegrationState,
   IntegrationVerification,
+  SystemHealthResponse,
 } from "@shared/contracts";
 import type { IntegrationConnectionSaveRequest } from "@shared/contracts";
 import { INTEGRATION_PROVIDER_WAIT_MS } from "@shared/contracts";
@@ -377,9 +378,15 @@ export function storesValues(integration: IntegrationDto): boolean {
  * Ordered by what an admin does next. A refusal comes first because it is the
  * only line that asks for an afternoon; the rest is context for it.
  */
-export function statusDetailLines(integration: IntegrationDto): string[] {
+export function statusDetailLines(
+  integration: IntegrationDto,
+  /** The last stored health scan, when this role could read one. */
+  scan: SystemHealthResponse | null = null,
+): string[] {
   const state = integration.state;
   const lines: string[] = [];
+  const disagreement = scanDisagreementLine(integration, scan);
+  if (disagreement) lines.push(disagreement);
 
   if (state.status === "disabled") {
     lines.push(
@@ -477,6 +484,38 @@ export function nothingToDisconnectLine(integration: IntegrationDto): string {
     ? "This connection lives in the deployment's environment variables, so it is changed by changing them and switched off with the control above."
     : `There is nothing to disconnect: nothing configures ${integration.name} on this deployment yet.`;
 }
+
+/**
+ * What a card says when the latest health scan disagrees with it.
+ *
+ * Decision (QA, Arthur on production): the card's status is the resolver's,
+ * from the values in use and the last connection test, and it stays so; a
+ * health probe is a separate, later or earlier, observation. When the card
+ * says Connected and the last scan found the integration down, degraded or
+ * misconfigured, the card says so in one line, naming the scan's time and its
+ * first failing check, rather than silently reading green beside a red Health
+ * page. The other way round (card failing, probe live) says nothing: the
+ * card's failure already names its reason and the fix.
+ */
+export function scanDisagreementLine(
+  integration: IntegrationDto,
+  scan: SystemHealthResponse | null,
+): string | null {
+  if (!scan || integration.state.status !== "connected") return null;
+  const entry = scan.integrations.find((candidate) => candidate.id === integration.id);
+  if (!entry || !(entry.mode in SCAN_DISAGREES)) return null;
+  const failing = entry.checks.find((check) => check.mode in SCAN_DISAGREES && check.message);
+  const why = failing ? ` (${failing.label}: ${readableProviderText(failing.message!)})` : "";
+  return `The health scan of ${formatDateTime(scan.generatedAt)} found ${integration.name} ${
+    SCAN_DISAGREES[entry.mode as keyof typeof SCAN_DISAGREES]
+  }${why}. The status here comes from the values in use and the last test; press Test to check again.`;
+}
+
+const SCAN_DISAGREES = {
+  down: "down",
+  degraded: "degraded",
+  misconfigured: "in need of configuration",
+} as const;
 
 /**
  * The hint under a connection field.

@@ -13,6 +13,7 @@ import type {
   IntegrationSource,
   IntegrationVersionConflict,
   IntegrationWriteAccess,
+  SystemHealthResponse,
 } from "@shared/contracts";
 
 import { useCockpit } from "@/components/cockpit/context";
@@ -221,11 +222,14 @@ export function ConnectionScreen({
   integration: initialIntegration,
   writes,
   canManage,
+  scan = null,
 }: {
   integration: IntegrationDto;
   writes: IntegrationWriteAccess;
   /** canManageIntegrations(role): owners and admins. */
   canManage: boolean;
+  /** The last stored health scan, when this role could read one. */
+  scan?: SystemHealthResponse | null;
 }) {
   const router = useRouter();
   const [integration, setIntegration] = useState(initialIntegration);
@@ -609,7 +613,7 @@ export function ConnectionScreen({
         </div>
         <p className="m-0 font-body text-[13px] text-neutral-600">{integration.description}</p>
         <div className="flex flex-col gap-[2px] mt-1">
-          {statusDetailLines(integration).map((line, index) => (
+          {statusDetailLines(integration, scan).map((line, index) => (
             <span key={index} className="font-body text-[12px] text-neutral-500 break-words">
               {line}
             </span>
