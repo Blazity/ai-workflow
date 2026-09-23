@@ -5,6 +5,7 @@ import {
   SETTINGS_CADENCE_NOTICE,
   appliesToNote,
   displaySettingValue,
+  fallbackSentence,
   formatSettingActor,
   formatSettingTimestamp,
   settingIssuesFromMessage,
@@ -118,12 +119,18 @@ test("appliesToNote sends a key the worker reads from its environment to the dep
 });
 
 test("the standing notice states the read cadence instead of claiming the worker ignores the store", () => {
-  assert.match(SETTINGS_CADENCE_NOTICE, /stored and read/);
+  assert.match(SETTINGS_CADENCE_NOTICE, /stored setting is read/);
   assert.match(SETTINGS_CADENCE_NOTICE, /per request, cron tick and MCP call/);
   assert.match(SETTINGS_CADENCE_NOTICE, /applies immediately or to the next run/);
   // The sentence this banner used to carry, contradicted by stage B1.
   assert.doesNotMatch(SETTINGS_CADENCE_NOTICE, /still reads most settings from its environment/);
   assert.doesNotMatch(SETTINGS_CADENCE_NOTICE, /consumers stages/);
+});
+
+test("the standing notice makes no claim about the page it is on", () => {
+  // System health mounts it too, and saves nothing: "Values saved here" read
+  // there like a warning about something the page had just done.
+  assert.doesNotMatch(SETTINGS_CADENCE_NOTICE, /saved here/i);
 });
 
 test("the resolved value label does not claim a value is in force", () => {
@@ -141,10 +148,37 @@ test("formatSettingTimestamp rewrites a valid ISO timestamp", () => {
 });
 
 test("formatSettingActor names the seed migration and otherwise says which user", () => {
-  // The store keeps a user id, not a display name, so the label says so rather
-  // than passing an opaque string off as a person's name.
+  // Without a label (a worker from before the field) the id is all there is,
+  // so the text says it is one rather than passing it off as a name.
   assert.equal(formatSettingActor("migration"), "by the seed migration");
   assert.equal(formatSettingActor("usr_42"), "by user usr_42");
+});
+
+test("formatSettingActor names the person the worker resolved, not their user id", () => {
+  // QA read "by user A2FzRCBJ5e0eMggEB4N8D2pcWASWphDW" in the history.
+  assert.equal(
+    formatSettingActor("A2FzRCBJ5e0eMggEB4N8D2pcWASWphDW", "admin@blazity.com"),
+    "by admin@blazity.com",
+  );
+  // The worker echoes the id when no user has it: a deleted account.
+  assert.equal(formatSettingActor("usr_gone", "usr_gone"), "by user usr_gone");
+  assert.equal(formatSettingActor("migration", "migration"), "by the seed migration");
+});
+
+test("fallbackSentence says what takes over and where it comes from", () => {
+  assert.equal(
+    fallbackSentence({ value: 3, source: "default" }, undefined),
+    "3 takes over: the built-in default.",
+  );
+  assert.equal(
+    fallbackSentence({ value: ["U01"], source: "environment" }, "SLACK_ALLOWED_USER_IDS"),
+    "U01 takes over, from the environment variable SLACK_ALLOWED_USER_IDS.",
+  );
+  // A worker from before the field: say what we know, not a value we do not.
+  assert.equal(
+    fallbackSentence(undefined, undefined),
+    "The environment variable or, without one, the built-in default takes over.",
+  );
 });
 
 test("displaySettingValue returns not set for null", () => {

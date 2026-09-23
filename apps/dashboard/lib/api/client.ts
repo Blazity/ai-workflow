@@ -60,6 +60,8 @@ import type {
   ScheduleResumeResponse,
   SettingsPatchRequest,
   SettingsPatchResponse,
+  SettingsResetRequest,
+  SettingsResetResponse,
   SettingsVersionsResponse,
   SystemHealthResponse,
   WebhookDeliveriesResponse,
@@ -794,8 +796,21 @@ export const apiClient = {
         `/api/settings?key=${encodeURIComponent(key)}`,
         options,
       ),
+    /** A 409 carries `SettingsVersionConflict` as its error body (read it
+     *  with `isSettingsVersionConflict`): somebody changed a key of this patch
+     *  after the form loaded it, and nothing was stored. */
     update: (body: SettingsPatchRequest) =>
-      requestJson<SettingsPatchResponse>("/api/settings", jsonInit("PATCH", body)),
+      requestJson<SettingsPatchResponse>(
+        "/api/settings",
+        jsonInit("PATCH", body),
+      ),
+    /** Remove one stored value, handing the key back to its environment
+     *  variable or default. Owner only; a 409 is the same conflict as above. */
+    reset: (body: SettingsResetRequest) =>
+      requestJson<SettingsResetResponse>(
+        "/api/settings/reset",
+        jsonInit("POST", body),
+      ),
   },
 
   systemHealth: {
