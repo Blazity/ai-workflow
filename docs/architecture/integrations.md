@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-22
+Last-verified: 2026-09-23
 
 # Writing an integration
 
@@ -200,11 +200,22 @@ block's query template is written in the tracker's own language, so a runtime
 that serves `issue_tracker` carries `issueTrackerQueryRule: { problem(query) }`
 (`IssueTrackerQueryRule`), required by the type and by conformance: why the
 tracker would not run the query, in a sentence for the author, or `null`.
-Core asks it when a definition is saved, without a connection, and only while
-exactly one tracker is connected; your adapter's `findTickets` must use a
-`providerQuery` exactly when this finds no problem with it, so the two cannot
-disagree (Jira's `findTickets` calls the same function). A tracker with no
-query language says so here rather than accepting a query it would ignore.
+Your adapter's `findTickets` must use a `providerQuery` exactly when this
+finds no problem with it, so the two cannot disagree (Jira's `findTickets`
+calls the same function). A tracker with no query language says so here
+rather than accepting a query it would ignore. Core asks it without a
+connection, and only while exactly one tracker is connected, in two places:
+
+- **When a definition is saved or deployed**, it refuses a template the rule
+  refuses, unless the deployed version already runs that same template. That
+  one the editor shows as a notice, which never blocks Deploy, and rolling
+  back, restoring or enabling a version does not ask at all: a rule newer
+  than a stored template never takes away what runs today
+  (`apps/worker/src/services/workflow-definitions/tracker-query-templates.ts`).
+- **When the investigate block runs**, before it searches. A template the
+  rule refuses is left out, the search narrows by the ticket's keywords alone
+  (or does not run when there are none), and the block's theory says so in a
+  sentence, with a warning in the log.
 
 **A block uses a capability by requiring it**, not by serving it. List it in
 the block's `requires.capabilities` and the editor offers the block only
@@ -863,8 +874,12 @@ page is a real one.
   the package). The registry generator compiles `dashboard.tsx` and the files
   it imports against what a browser has, so `process` (in the cockpit's
   server, this deployment's environment and every secret it runs with),
-  `Buffer`, `require` and `globalThis` are refused with the file and line that
-  use them. Comments and a local binding of the same name are not. There are
+  `Buffer` and `require` are refused with the file and line that use them,
+  and so are `globalThis`, `eval` and `Function`, which reach a global by a
+  name the check cannot read. So is an import of one of Node's own modules by
+  its bare name (`"process"`, `"fs"`), which the `node:` rule above does not
+  see, and a `declare` statement, which would describe a global the page is
+  not given. Comments and a local binding of the same name are not. There are
   no dialogs, no internal links and no form controls: pages have no write seam
   yet.
 - **A page that moved here from core keeps its old address.** Declare the
@@ -1034,7 +1049,7 @@ approach for a network-free double of your own.
 | If you | What breaks, and when you find out |
 |---|---|
 | Import a Node module or a provider SDK into `manifest.ts`, directly or through a file it imports | The Workflow DevKit's flow bundle fails the Vercel build, and nothing local would notice. `pnpm run gen:integrations` refuses it first, naming the import. |
-| Use a global the Workflow DevKit's VM lacks in `manifest.ts` or a file it imports (`Buffer`, `EventTarget`, `setTimeout`, `fetch`, `process`, `globalThis`), or one it makes differ (`Date`, `Math.random`) | Conformance and the typecheck run in Node and pass; the deployed workflow throws a ReferenceError, hits a stub that throws, or reads a value the dashboard does not see. `pnpm run gen:integrations` refuses it first: it compiles the manifest's files against the language plus what the VM provides (`WORKFLOW_VM_GLOBALS` in `scripts/gates/generate-integration-registry/graph-globals.ts`, held to the pinned DevKit by a test) and names each use with its line. A type that mentions `Buffer`, or a local named `process`, is not a use. |
+| Use a global the Workflow DevKit's VM lacks in `manifest.ts` or a file it imports (`Buffer`, `EventTarget`, `setTimeout`, `fetch`, `process`), one it makes differ (`Date`, `Math.random`, and `crypto`, whose `randomUUID` and `getRandomValues` it seeds), or one that reaches past the check (`globalThis`, `eval`, `Function`, a `declare` statement) | Conformance and the typecheck run in Node and pass; the deployed workflow throws a ReferenceError, hits a stub that throws, or reads a value the dashboard does not see. `pnpm run gen:integrations` refuses it first: it compiles the manifest's files against the language plus what the VM provides (`WORKFLOW_VM_GLOBALS` in `scripts/gates/generate-integration-registry/graph-globals.ts`, held to the pinned DevKit by a test) and names each use with its line. A type that mentions `Buffer`, or a local named `process`, is not a use. |
 | Put `"use step"` or `"use workflow"` in integration code | A step's identity is its module path plus its function name (the DevKit's id is `step//<module path>//<function>`), so a step inside your package would strand every run suspended in it the day the package moved or was renamed. Conformance refuses the directive in any file of the package. |
 | Put your provider's word into a shared type, or core's code | The next provider cannot implement the port without inventing a meaning for your word, and core grows a branch on your name. The core-reference gate fails on any core file that spells a shipped integration's id, its package names and the identifiers built from it included (`jira-client`, `JiraAdapter`). |
 | Pick an id core source already spells | The core-reference gate fails your first run on every core file that spells it where no allowlist row covers it (the rule is quoted under "From nothing to a connected integration"). `new:integration` refuses such an id and names the files. |
