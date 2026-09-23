@@ -65,6 +65,23 @@ export interface RunPullRequest {
    * itself, and an integration cannot, because it may not import one.
    */
   reference?: string;
+  /**
+   * What a person calls it on its provider (`PR`, `MR`), stamped with
+   * `reference` from the same answer, so a sentence and the link inside it
+   * never name one change request two ways.
+   */
+  noun?: string;
+}
+
+/**
+ * What to call a set of pull requests in a sentence: their stamped noun when
+ * they share one (`MR`), each distinct noun joined with a slash when a run
+ * opened them on two providers (`PR/MR`), and `PR` where nothing stamped one,
+ * as `pullRequestRef` falls back to `#id`.
+ */
+export function pullRequestNoun(prs: ReadonlyArray<Pick<RunPullRequest, "noun">>): string {
+  const nouns = [...new Set(prs.map((pr) => pr.noun ?? "PR"))];
+  return nouns.length === 0 ? "PR" : nouns.join("/");
 }
 
 /**

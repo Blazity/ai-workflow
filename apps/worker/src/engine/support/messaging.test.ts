@@ -110,10 +110,10 @@ describe("messagingSender", () => {
     });
   });
 
-  it("hands the provider each pull request with the reference its own provider uses", async () => {
-    // A GitLab team read `#12` in the channel, which is issue 12 there, while
-    // the run view said `MR !12`. The integration cannot ask the registry, so
-    // core stamps the reference before the event leaves.
+  it("hands the provider each pull request with the reference and the noun its own provider uses", async () => {
+    // A GitLab team read `PR ready (#12)` in the channel, `#12` being issue 12
+    // there, while the run view said `MR !12`. The integration cannot ask the
+    // registry, so core stamps both from the one answer before the event leaves.
     const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>(async () => ({
       delivered: true,
     }));
@@ -138,6 +138,7 @@ describe("messagingSender", () => {
       "!12",
       "#7",
     ]);
+    expect(sent.kind === "pr_ready" ? sent.prs.map((pr) => pr.noun) : null).toEqual(["MR", "PR"]);
   });
 
   // Red when: the sender hands the provider the reason workflow scope built,

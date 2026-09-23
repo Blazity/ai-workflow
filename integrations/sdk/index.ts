@@ -150,6 +150,7 @@ export {
  * render both.
  */
 export {
+  pullRequestNoun,
   pullRequestRef,
   pullRequestRepoLabels,
   type RunControlAnswer,
