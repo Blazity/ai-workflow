@@ -48,6 +48,8 @@ export type ImpactStop = IntegrationImpactPreviewResponse["stops"];
 export interface ImpactDefinitionInput {
   readonly id: number;
   readonly name: string;
+  /** The deployed version, whose graph `definition` is. */
+  readonly version: number;
   readonly definition: WorkflowDefinition;
 }
 
@@ -90,6 +92,8 @@ function unmeasuredCapabilitiesOf(capabilities: readonly string[]): string[] {
 /** One run the preview weighs: what the registry row says about it. */
 export interface InFlightRun {
   readonly definitionId: number | null;
+  /** The version the run started on; null on a row that recorded none. */
+  readonly definitionVersion: number | null;
   readonly status: string | null;
   /** What the run recorded about its integrations at its start. */
   readonly integrationPins: readonly IntegrationConnectionPin[] | null;
@@ -117,8 +121,18 @@ export interface InFlightRun {
  * no pins, or with no pin for the integration, compares nothing and is not
  * counted.
  *
- * Only runs on enabled definitions are weighed, because theirs are the graphs
- * read here; a run started on a definition switched off since is not counted.
+ * Only runs on enabled definitions are weighed; a run started on a definition
+ * switched off since is not counted.
+ *
+ * THE GRAPH READ HERE IS THE VERSION DEPLOYED NOW, and a run keeps the version
+ * it started on. Only a run on that version is narrowed by its graph and its
+ * repository scope. Any other run (an older version, or a row that recorded
+ * none) is judged by what it recorded at its start instead: its pins, one per
+ * integration its own graph reached. So a workflow moved to GitLab still
+ * counts its runs in flight on the GitHub version when GitHub is turned off.
+ * A run that recorded no pins at all is counted for `unusable`, since nothing
+ * says it does not reach the integration, and not for `reconfigured`, which
+ * needs a pin to compare.
  */
 export function runsThatMayStop(input: {
   readonly runs: readonly InFlightRun[];
@@ -126,7 +140,11 @@ export function runsThatMayStop(input: {
   readonly stops: ImpactStop;
   /** The fingerprint in force now, which a run pinned to it would miss. */
   readonly currentFingerprint: string;
-  readonly definitions: ReadonlyMap<number, WorkflowDefinition>;
+  /** Every enabled definition, with the version deployed now. */
+  readonly definitions: ReadonlyMap<
+    number,
+    { readonly version: number; readonly definition: WorkflowDefinition }
+  >;
   readonly integrations: DeploymentIntegrations;
 }): number {
   if (input.stops === "none") return 0;
@@ -134,13 +152,18 @@ export function runsThatMayStop(input: {
   const capabilities = integrations.byId.get(integrationId)?.capabilities ?? [];
   return input.runs.filter((run) => {
     if (run.status !== "running" && run.status !== "awaiting") return false;
-    const definition =
+    const deployed =
       run.definitionId === null ? undefined : input.definitions.get(run.definitionId);
-    if (!definition) return false;
+    if (!deployed) return false;
+    const pin = run.integrationPins?.find((candidate) => candidate.integrationId === integrationId);
+    if (run.definitionVersion !== deployed.version) {
+      if (input.stops === "unusable") return run.integrationPins === null || pin !== undefined;
+      return pin !== undefined && pin.configFingerprint === input.currentFingerprint;
+    }
+    const definition = deployed.definition;
     if (input.stops === "unusable") {
       return definitionMayReach(definition, integrationId, integrations);
     }
-    const pin = run.integrationPins?.find((candidate) => candidate.integrationId === integrationId);
     if (!pin || pin.configFingerprint !== input.currentFingerprint) return false;
     const ownBlock = definition.nodes.some(
       (node) => integrations.blocks.get(node.type)?.integrationId === integrationId,
@@ -239,7 +262,15 @@ export async function summarizeIntegrationImpact(input: {
           integrationId: input.integrationId,
           stops: input.stops,
           currentFingerprint: input.currentFingerprint,
-          definitions: new Map(using.map((entry) => [entry.id, entry.definition])),
+          // Every enabled definition, not only the ones whose deployed graph
+          // reaches it: a run on an older version may reach what the version
+          // deployed now does not.
+          definitions: new Map(
+            input.definitions.map((entry) => [
+              entry.id,
+              { version: entry.version, definition: entry.definition },
+            ]),
+          ),
           integrations: input.integrations,
         });
   return {
@@ -505,6 +536,7 @@ async function readInFlightRuns(): Promise<readonly InFlightRun[]> {
   }
   return rows.map((row) => ({
     definitionId: row!.definitionId,
+    definitionVersion: row!.definitionVersion,
     status: row!.status,
     integrationPins: row!.integrationPins,
   }));

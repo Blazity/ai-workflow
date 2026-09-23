@@ -54,6 +54,8 @@ export interface WorkflowDefinitionDetail {
 export interface EnabledDeployedWorkflowDefinition {
   id: number;
   name: string;
+  /** The deployed version, whose graph `definition` is. */
+  version: number;
   definition: WorkflowDefinition;
 }
 
@@ -74,7 +76,7 @@ export async function readEnabledDeployedWorkflowDefinitions(): Promise<
   return rows.flatMap((row, index) => {
     const version = deployed[index];
     return version?.schema === "v2"
-      ? [{ id: row.id, name: row.name, definition: version.definition }]
+      ? [{ id: row.id, name: row.name, version: row.deployedVersion!, definition: version.definition }]
       : [];
   });
 }

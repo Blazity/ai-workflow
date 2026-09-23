@@ -105,12 +105,20 @@ function definition(types: string[], repositoryScope?: WorkflowRepositoryScope):
   };
 }
 
+/** The version every definition in these tests has deployed now. */
+const DEPLOYED = 3;
+
 function pinned(...pins: Array<[string, string]>): readonly IntegrationConnectionPin[] {
   return pins.map(([integrationId, configFingerprint]) => ({ integrationId, configFingerprint }));
 }
 
-function run(definitionId: number, pins: readonly IntegrationConnectionPin[] | null, status = "running"): InFlightRun {
-  return { definitionId, status, integrationPins: pins };
+function run(
+  definitionId: number,
+  pins: readonly IntegrationConnectionPin[] | null,
+  status = "running",
+  definitionVersion: number | null = DEPLOYED,
+): InFlightRun {
+  return { definitionId, definitionVersion, status, integrationPins: pins };
 }
 
 describe("which enabled workflows use an integration", () => {
@@ -120,7 +128,7 @@ describe("which enabled workflows use an integration", () => {
       changesFingerprint: true,
       stops: "reconfigured",
       currentFingerprint: "acmechat-now",
-      definitions: [{ id: 7, name: "Deploy announcements", definition: definition(["acmechat_announce"]) }],
+      definitions: [{ id: 7, name: "Deploy announcements", version: DEPLOYED, definition: definition(["acmechat_announce"]) }],
       integrations: deploymentIntegrations({
         manifests: [chatWithBlock],
         states: new Map([["acmechat", state("acmechat")]]),
@@ -138,7 +146,7 @@ describe("which enabled workflows use an integration", () => {
       changesFingerprint: false,
       stops: "none",
       currentFingerprint: "acmechat-now",
-      definitions: [{ id: 9, name: "Tell release channel", definition: definition(["send_message"]) }],
+      definitions: [{ id: 9, name: "Tell release channel", version: DEPLOYED, definition: definition(["send_message"]) }],
       integrations: deploymentIntegrations({
         manifests: [chat],
         states: new Map([["acmechat", state("acmechat")]]),
@@ -187,19 +195,21 @@ describe("a version control provider, which a workflow reaches through the repos
   });
   const agentWork = ["prepare_workspace", "open_pr"];
   const definitions = [
-    { id: 1, name: "Any repository", definition: definition(agentWork) },
-    { id: 2, name: "GitLab only", definition: definition(agentWork, { providers: ["gitlab"] }) },
+    { id: 1, name: "Any repository", version: DEPLOYED, definition: definition(agentWork) },
+    { id: 2, name: "GitLab only", version: DEPLOYED, definition: definition(agentWork, { providers: ["gitlab"] }) },
     {
       id: 3,
       name: "One GitLab repository",
+      version: DEPLOYED,
       definition: definition(agentWork, {
         repositories: [{ provider: "gitlab", repoPath: "acme/api" }],
       }),
     },
-    { id: 4, name: "Hub only", definition: definition(agentWork, { providers: ["acmehub"] }) },
+    { id: 4, name: "Hub only", version: DEPLOYED, definition: definition(agentWork, { providers: ["acmehub"] }) },
     {
       id: 5,
       name: "GitLab work, Hub labels",
+      version: DEPLOYED,
       definition: definition([...agentWork, "acmehub_label"], { providers: ["gitlab"] }),
     },
   ];
@@ -235,6 +245,41 @@ describe("a version control provider, which a workflow reaches through the repos
     expect(impact.inFlightRuns).toBe(3);
   });
 
+  it("still counts the runs on an older version when the version deployed now moved off the provider", async () => {
+    // The workflow was moved to GitLab after these runs started on its Hub
+    // version. Narrowed by today's scope, turning Hub off promised that none
+    // of them would stop. Each run is judged by what it recorded at its start.
+    const hubPin = pinned(["acmehub", "acmehub-now"]);
+    const impact = await summarizeIntegrationImpact({
+      integrationId: "acmehub",
+      changesFingerprint: false,
+      stops: "unusable",
+      currentFingerprint: "acmehub-now",
+      definitions: [
+        {
+          id: 7,
+          name: "Moved to GitLab",
+          version: DEPLOYED,
+          definition: definition(agentWork, { providers: ["gitlab"] }),
+        },
+      ],
+      integrations,
+      readInFlightRuns: async () => [
+        // On the version deployed now: its scope rules Hub out.
+        run(7, hubPin, "running", DEPLOYED),
+        // On the Hub version, and it pinned Hub at its start.
+        run(7, hubPin, "running", DEPLOYED - 1),
+        // On an older version that never reached Hub.
+        run(7, pinned(["gitlab", "gitlab-now"]), "running", DEPLOYED - 1),
+        // Recorded nothing at all, so nothing says it does not reach Hub.
+        run(7, null, "awaiting", null),
+      ],
+    });
+
+    expect(impact.enabledDefinitions).toEqual([]);
+    expect(impact.inFlightRuns).toBe(2);
+  });
+
   it("rules a provider out the way repository selection does, when both lists are set", async () => {
     // A scope naming GitLab as its provider and a Hub repository selects
     // nothing on Hub: repository selection intersects the two, and the preview
@@ -248,6 +293,7 @@ describe("a version control provider, which a workflow reaches through the repos
         {
           id: 6,
           name: "Contradictory scope",
+          version: DEPLOYED,
           definition: definition(agentWork, {
             providers: ["gitlab"],
             repositories: [{ provider: "acmehub", repoPath: "acme/api" }],
@@ -278,7 +324,7 @@ describe("a Jira change, in front of every ticket run in flight", () => {
       changesFingerprint: stops === "reconfigured",
       stops,
       currentFingerprint: "jira-now",
-      definitions: [{ id: 1, name: "Ticket to PR", definition: ticketWorkflow }],
+      definitions: [{ id: 1, name: "Ticket to PR", version: DEPLOYED, definition: ticketWorkflow }],
       integrations: deploymentIntegrations({
         manifests: [jira],
         states: new Map([["jira", state("jira")]]),
@@ -326,7 +372,9 @@ describe("runs a config edit may stop", () => {
       integrationId,
       stops: "reconfigured",
       currentFingerprint: `${integrationId}-now`,
-      definitions: new Map(definitions),
+      definitions: new Map(
+        definitions.map(([id, definition]) => [id, { version: DEPLOYED, definition }]),
+      ),
       integrations,
     });
 
@@ -409,8 +457,8 @@ describe("runs a config edit may stop", () => {
           run(1, pins, "awaiting"),
           run(1, pins, "success"),
           run(1, pins, "failed"),
-          { definitionId: 1, status: null, integrationPins: pins },
-          { definitionId: null, status: "running", integrationPins: pins },
+          { definitionId: 1, definitionVersion: DEPLOYED, status: null, integrationPins: pins },
+          { definitionId: null, definitionVersion: null, status: "running", integrationPins: pins },
         ],
         [[1, definition(["send_message"])]],
         "acmechat",
