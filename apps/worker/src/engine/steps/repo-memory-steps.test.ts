@@ -1644,6 +1644,36 @@ describe("distillRepoMemoryStep", () => {
     expect(mocks.logWarn).not.toHaveBeenCalledWith(expect.anything(), "repo_memory_write_refused");
   });
 
+  it("takes a secret known since out of what is stored, and still retracts a fact the run quotes", async () => {
+    // A value can be stored before it is a known secret. Once it is known, the
+    // next write takes it out of what the store already holds, and a run that
+    // disproved such a fact still retracts it by quoting it as it was shown.
+    const SECRET = "tok-7f3a9c2e1b";
+    const heldFact = `Deploys read ${SECRET} from the vault`;
+    const disproved = `The staging key is ${SECRET}`;
+    await storeRepoDocument("facts", [heldFact, disproved]);
+    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: ["Package manager is pnpm"],
+          lessons: [],
+          contradictedFacts: [disproved],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect(await distillRepoMemoryStep(input)).toMatchObject({ written: 1 });
+    const content = (await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts"))?.content ?? "";
+    expect(content).not.toContain(SECRET);
+    const items = ((await readRepoItems("facts")) ?? []).map((item) => item.text);
+    expect(items).toContain("Deploys read [REDACTED:configured_secret] from the vault");
+    expect(items).toContain("Package manager is pnpm");
+    expect(items.some((text) => text.startsWith("The staging key is"))).toBe(false);
+  });
+
   it("removes a stored fact the run proved false", async () => {
     await storeRepoDocument("facts", ["Package manager is yarn", "Node 18 is required"]);
     respond({
