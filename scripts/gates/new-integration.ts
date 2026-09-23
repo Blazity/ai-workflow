@@ -91,6 +91,9 @@ function renames(id: string, name: string): Array<[RegExp, string]> {
     [/\bexample_/gu, `${id}_`],
     [/\bEXAMPLE_/gu, `${id.toUpperCase()}_`],
     [/\bExample\b/gu, name],
+    // The block's palette tile: the template's initial would otherwise mark
+    // every scaffolded block "E" until somebody noticed.
+    [/\bglyph: "E"/gu, `glyph: "${name.charAt(0).toUpperCase()}"`],
   ];
 }
 
