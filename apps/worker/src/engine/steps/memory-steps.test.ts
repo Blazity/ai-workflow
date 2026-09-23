@@ -193,8 +193,8 @@ describe("hydrateWorkspaceMemoryStep", () => {
     const sandbox = fakeSandbox();
 
     expect(await hydrateWorkspaceMemoryStep(target)).toMatchObject({ written: true });
-    const written = (sandbox.writeFiles.mock.calls[0]?.[0] as Array<{ content: Buffer }>)[0]
-      ?.content;
+    const files = (sandbox.writeFiles.mock.calls[0]?.[0] ?? []) as Array<{ content: Buffer }>;
+    const written = files[0]?.content;
     expect(written?.byteLength).toBeLessThanOrEqual(MEMORY_NOTEBOOK_MAX_BYTES);
     expect(written?.toString("utf8").endsWith(`\n${MEMORY_CUT_MARKER}`)).toBe(true);
     expect(written?.toString("utf8").startsWith(paragraph)).toBe(true);
