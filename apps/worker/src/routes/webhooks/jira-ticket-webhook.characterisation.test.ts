@@ -1,5 +1,7 @@
 /**
- * What `POST /webhooks/jira` DOES, pinned across the S12 rewrite.
+ * What `POST /webhooks/jira` DOES, pinned from the S12 rewrite on. Written
+ * with that rewrite rather than committed before it, so it holds today's
+ * behaviour and does not prove the old route's.
  *
  * Every payload here is recorded bytes from a real Jira Cloud delivery, kept in
  * `integrations/jira/test-fixtures` with its source URL, its retrieval date and
