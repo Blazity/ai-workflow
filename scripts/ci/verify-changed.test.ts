@@ -446,6 +446,51 @@ test("the package test scripts name every package that owns the script they run"
   }
 });
 
+/**
+ * A package listed above can still run less than it holds. `node --test` runs
+ * what its globs match and reports "tests 0" with exit 0 when they match
+ * nothing, so a test beside page code in `dashboard/`, in a `test/` folder or
+ * named `.test.tsx` under a `"*.test.ts"` script never runs, and a test broken
+ * on purpose stays green. vitest finds nested files on its own, so only the
+ * node runner's globs are read here, the same way the runner reads them.
+ */
+test("every test file in a package is one its own test script runs", async () => {
+  const directories = (
+    await Promise.all(
+      ["packages", "integrations"].map(async (root) =>
+        (await readdir(root, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory() && existsSync(`${root}/${entry.name}/package.json`))
+          .map((entry) => `${root}/${entry.name}`),
+      ),
+    )
+  ).flat();
+  let checked = 0;
+  for (const directory of directories) {
+    const script = (JSON.parse(await readFile(`${directory}/package.json`, "utf8")) as {
+      scripts?: Record<string, string>;
+    }).scripts?.test;
+    if (!script || !/\s--test\s/u.test(script)) continue;
+    checked += 1;
+    const patterns = [...script.matchAll(/"([^"]+)"/gu)].map((match) => match[1]!);
+    const run = new Set<string>();
+    for await (const file of glob(patterns, { cwd: directory })) run.add(file);
+    const held: string[] = [];
+    for await (const file of glob("**/*.test.{ts,tsx,mts,js,mjs}", {
+      cwd: directory,
+      exclude: (name) => name === "node_modules",
+    })) {
+      held.push(file);
+    }
+    assert.ok(held.length > 0, `${directory} has a test script and no test file, so its run proves nothing`);
+    assert.deepEqual(
+      held.filter((file) => !run.has(file)).sort(),
+      [],
+      `${directory}'s test script (${script}) does not run these files. Use "!(node_modules)/**/*.test.{ts,tsx}" "*.test.{ts,tsx}", as integrations/_template does.`,
+    );
+  }
+  assert.ok(checked >= 5, "no package runs node --test, so this proves nothing");
+});
+
 const TYPECHECK: Cmd = ["pnpm", "run", "typecheck"];
 const TEST_CI: Cmd = ["pnpm", "run", "test:ci"];
 const RUN_GATES: Cmd = ["pnpm", "run", "gates"];

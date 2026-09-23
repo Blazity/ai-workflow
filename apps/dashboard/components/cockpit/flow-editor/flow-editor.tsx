@@ -18,6 +18,7 @@ import type {
   WorkflowDefinitionCatalogResponse,
   WorkflowDefinitionV2,
   WorkflowDefinitionValidationIssue,
+  WorkflowDefinitionValidationNotice,
   WorkflowEdgeGeometry,
   WorkflowEditorOptions,
   WorkflowExecutionBudgets,
@@ -78,6 +79,7 @@ import { RepositoryScopeProvider } from "./repository-scope-context";
 import {
   groupValidationIssues,
   NodeValidationErrors,
+  NodeValidationNotices,
   validationDescriptionId,
   ValidationSummary,
 } from "./validation-feedback";
@@ -1691,6 +1693,10 @@ export function FlowEditor({
     () => groupValidationIssues(effectiveValidation.issues),
     [effectiveValidation.issues],
   );
+  const validationNoticesByNode = useMemo(
+    () => groupValidationIssues(effectiveValidation.notices ?? []).byNode,
+    [effectiveValidation.notices],
+  );
   const nodeNames = useMemo(
     () => Object.fromEntries(nodes.map((node) => [node.id, node.name || node.id])),
     [nodes],
@@ -2219,6 +2225,7 @@ export function FlowEditor({
               valuesRefreshing={dataCatalogRefreshing}
               valuesError={dataCatalogError}
               validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
+              validationNotices={validationNoticesByNode[selected.id] ?? []}
               canEdit={canEdit}
               locked={selectedLocked}
               onChange={updateSelected}
@@ -2258,6 +2265,7 @@ export function FlowEditor({
                   valuesRefreshing={dataCatalogRefreshing}
                   valuesError={dataCatalogError}
                   validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
+                  validationNotices={validationNoticesByNode[selected.id] ?? []}
                   canEdit={canEdit}
                   locked={selectedLocked}
                   onChange={updateSelected}
@@ -2349,6 +2357,7 @@ function NodeConfig({
   valuesRefreshing,
   valuesError,
   validationIssues,
+  validationNotices,
   canEdit,
   locked,
   onChange,
@@ -2375,6 +2384,7 @@ function NodeConfig({
   valuesRefreshing: boolean;
   valuesError?: string | null;
   validationIssues: WorkflowDefinitionValidationIssue[];
+  validationNotices: WorkflowDefinitionValidationNotice[];
   canEdit: boolean;
   locked: boolean;
   onChange: (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => void;
@@ -2469,6 +2479,7 @@ function NodeConfig({
           </div>
         )}
         <NodeValidationErrors nodeId={node.id} issues={validationIssues} />
+        <NodeValidationNotices notices={validationNotices} />
         {node.type !== "branch" && (
           <PromptAuthoringProvider
             availableValues={availableValues}

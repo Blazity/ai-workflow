@@ -41,25 +41,6 @@ export function investigateSources(
   };
 }
 
-function hasBalancedJqlStructure(clause: string): boolean {
-  let depth = 0;
-  let quoted = false;
-  for (let index = 0; index < clause.length; index += 1) {
-    const char = clause[index];
-    if (quoted) {
-      if (char === "\\") index += 1;
-      else if (char === '"') quoted = false;
-      continue;
-    }
-    if (char === '"') quoted = true;
-    else if (char === "(") depth += 1;
-    else if (char === ")") {
-      depth -= 1;
-      if (depth < 0) return false;
-    }
-  }
-  return depth === 0 && !quoted;
-}
 const paramsSchema = z
   .object({
     sources: z
@@ -73,13 +54,11 @@ const paramsSchema = z
       .trim()
       .min(1)
       .max(1000)
-      .refine(hasBalancedJqlStructure, "Query template has unbalanced parentheses or quotes")
       .optional(),
     maxResults: z.number().int().min(1).max(MAX_RESULTS_CEILING).optional(),
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:/-]+$/u).optional(),
   })
   .strict();
-
 
 export const manifest = {
   type: "investigate",

@@ -49,7 +49,7 @@ it on a matching read, other agents open it themselves.
 | `worker-database`, `workflow-steps` | migrations, Drizzle, auth invariants; `"use step"` files and their fixtures |
 | `workflow-graph`, `zod-bundle`, `contracts-requests` | the graph package and the worker's definition half; schemas the bundle runs; request bodies |
 | `worker-mcp`, `worker-observability`, `agent-visibility` | the MCP server; logging, telemetry, the runs API; what a send gave a model |
-| `adapters`, `sandbox-agents`, `arthur-engine`, `e2e-tests` | Jira, VCS and chat adapters; sandboxed coding agents; the Arthur client; end-to-end suites |
+| `adapters`, `memory`, `sandbox-agents`, `arthur-engine`, `e2e-tests` | tracker, VCS and chat integrations; memory; sandboxed coding agents; the Arthur client; end-to-end suites |
 | `dashboard-ui`, `dashboard-settings`, `dashboard-repositories` | the dashboard |
 
 ## How to work here

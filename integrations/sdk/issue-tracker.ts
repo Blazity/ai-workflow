@@ -5,8 +5,8 @@
  *
  * Moved from `apps/worker/src/adapters/issue-tracker/types.ts`, which
  * re-exports every name, so no core caller changed. The provider-specific
- * leftovers in this port (a JQL query string, Jira transition ids, a Node
- * `Buffer`) are listed as debt in ADR-010 with the stage that removes each.
+ * leftovers still in this port (a transition id named after Jira's, a Node
+ * `Buffer`) are listed as debt in ADR-010 with what removes each.
  */
 export interface TicketContent {
   id: string;
@@ -53,6 +53,31 @@ export interface TicketContent {
   trackerStatus: string;
   trackerStatusId?: string;
   attachments: TicketAttachment[];
+}
+
+/**
+ * How a tracker reads a query a workflow author typed (the `providerQuery` of
+ * `findTickets`), answered without a connection: a pure function of the text,
+ * the same for every account and every project.
+ *
+ * The query is written in the tracker's own language, so only the tracker can
+ * say whether it would run it. Core asks when a definition is saved, and the
+ * author hears there about a query the adapter would otherwise drop at run
+ * time, when the block searches without it and nobody is told. It is the
+ * adapter's own rule, so `findTickets` must use a query exactly when this
+ * finds no problem with it.
+ *
+ * Not a method of the adapter, for the reason `VcsHandleIdentity` is not: an
+ * adapter is per connection and core reaches one lazily, while saving a
+ * definition must not wait on a tracker being reachable.
+ */
+export interface IssueTrackerQueryRule {
+  /**
+   * Why this tracker would not run the query, as one or two sentences for the
+   * person who wrote it, or `null` when it would. A tracker with no query
+   * language says so here rather than accepting a query it will ignore.
+   */
+  problem(query: string): string | null;
 }
 
 export class IssueTrackerNotFoundError extends Error {

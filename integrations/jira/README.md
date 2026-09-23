@@ -11,9 +11,9 @@ Jira's webhook when one changes.
   approval are core's, and they are the same for the next tracker.
 - `worker.ts` is the runtime: the connection test, the capability factory and
   the three health checks (Account access, Project access, Webhook
-  registration). Project access is where the worker's old boot failure went: a
-  project key that names nothing used to stop the worker, and now reads Down
-  with the value to fix.
+  registration). Project access is where core's old Jira probe went: a project
+  key that names nothing boots fine (it always did, the old variables only had
+  to be present) and reads Down here with the value to fix.
 - `test-fixtures/` holds recorded Jira deliveries, each with its source URL,
   its retrieval date and its SHA-256 beside it.
 

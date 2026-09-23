@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-22
+Last-verified: 2026-09-23
 
 # ADR-010: Integrations
 
@@ -68,7 +68,11 @@ What constrains the answer, all true today:
    (browser, workflow scope, server) tolerate different code.
 3. **Registration is generated.** The block catalog generator grows into an
    integration generator that writes committed registries, with `--check`
-   inside `build`. Reason: a hand-kept list is the drift this plan removes.
+   in CI, in the worker's `build` and `build:ci` and in the dashboard's
+   `build`. The worker runs it, like every static check, before
+   `pnpm db:migrate`, so a stale registry stops a deploy before it migrates
+   the production database. Reason: a hand-kept list is the drift this plan
+   removes.
 4. **No runtime code loading.** Integrations are compiled in; a deployment
    decides which are connected. Reason: the DevKit would not find step code
    installed at runtime, and loading third-party code at runtime is a security
@@ -102,7 +106,7 @@ What constrains the answer, all true today:
 
    | Capability | Port | Cardinality | Designed |
    |---|---|---|---|
-   | `issue_tracker` | `IssueTrackerAdapter` | one active | S0 (moved) |
+   | `issue_tracker` | `IssueTrackerAdapter`, plus `IssueTrackerQueryRule` on the runtime | one active | S0 (moved) |
    | `vcs` | `VCSAdapter`, plus `VcsHandleIdentity` on the runtime | many, chosen per repository | S0 (moved) |
    | `messaging` | `MessagingAdapter` | one active | S0 (moved) |
    | `memory` | reserved | one active | S13 |
@@ -185,9 +189,10 @@ What constrains the answer, all true today:
     integration written from the guide would otherwise pass conformance and
     fail on import.
 20. **Fixtures stay out of production**: the test integration lives in
-    `integrations/_fixtures/*` and is generated only under a build flag that
-    CI and the demo set. Reason: a fixture must never appear to production or
-    the Arthur tenant.
+    `integrations/_fixtures/*` and reaches a registry only when a developer
+    generates one locally with the fixture flag. No deployment sets it, and
+    neither does CI. Reason: a fixture must never appear to production or the
+    Arthur tenant.
 21. **Memory is the capability core can serve itself.** The built-in store is
     a core module registered as the provider of `memory` (decision 10), and a
     deployment that has connected no memory integration gets it. Connecting
@@ -383,13 +388,17 @@ These were open to the S1 executor. Each is a two-way door.
   to add to the registry's `package.json` and no lockfile change, so adding an
   integration is a folder and one command.
 - **The fixture flag is `INTEGRATION_FIXTURES`, read at generation time.** The
-  committed registry is the one generated without it, so a production build
-  carries no import of `integrations/_fixtures` at all; CI and demo regenerate
-  with it. A runtime branch would bundle the fixture as dead code, and a
-  package export condition would ask Nitro, Next and the DevKit bundler to
-  agree on a custom resolve condition. `gen:integrations --check` runs in CI
-  without the flag, so a fixture that reached the committed registry fails
-  there.
+  committed registry is the one generated without it, so a build carries no
+  import of `integrations/_fixtures` at all. No deployment and no CI job sets
+  it: it is a local option for a developer who wants the fixture in a local
+  registry, and the tests that need the fixture call the generator with
+  `includeFixtures` directly. A runtime branch would bundle the fixture as dead
+  code, and a package export condition would ask Nitro, Next and the DevKit
+  bundler to agree on a custom resolve condition. `gen:integrations --check`
+  compares the registry generated without fixtures whatever the flag says, so
+  a shell or a Vercel project that still exports it cannot fail a build, and a
+  fixture that reached the committed registry fails in CI, in the worker's
+  `build` and `build:ci` and in the dashboard's `build`.
 - **A directory under `integrations/` without a manifest is refused, not
   skipped**, apart from `sdk` and `registry`, which the generator names. A
   half-written integration that quietly disappears from the registry is the
@@ -403,22 +412,49 @@ These were open to the S1 executor. Each is a two-way door.
   the same rule. A Node module hidden one file away would fail only the Vercel
   build.
 - **The core-reference gate is its own script**, `scripts/gates/core-references.mjs`,
-  with `scripts/gates/core-references.json` beside it. Core is
-  `apps/worker/src`, the dashboard's `app`, `components` and `lib`, and
-  `packages`; `scripts/` is release and gate tooling, where the Arthur tenant
-  repository is not the Arthur provider, and `changelog/` and `docs/` are
-  prose. A mention is a case-insensitive substring of the id in the path or in
-  the source with comments stripped: `"github"`, `GITHUB_TOKEN` and
-  `githubClient` are one coupling written three ways, and a boundary rule that
-  caught those while sparing `githubusercontent` is a rule nobody could
-  predict. Comments are prose, so they do not count. Test files are not
-  scanned: a test cannot create production coupling, it exercises core code
-  that still names a provider, and it changes with its subject in S8 to S12;
-  listing several hundred of them would churn on every test edit and get the
-  gate switched off. A row may carry `incidental: true` when its files spell an
-  id by accident, such as a CSS keyword or a URL; the gate keeps it listed and
-  never reports it as stale, because such a hit comes and goes with ordinary
-  edits and a failure on one could not be acted on.
+  with `scripts/gates/core-references.json` beside it. Core is `apps/worker`,
+  `apps/dashboard` and `packages`, each whole, as git lists them (tracked
+  files and untracked ones `.gitignore` does not hide), so a config file at an
+  app's root (the dashboard's `next.config.ts`, its middleware) is read the
+  day it lands and a local build's output under `.vercel/` never is; the
+  allowlist names what inside the apps is not core (applied migrations,
+  operations scripts, end-to-end suites, static files).
+  `scripts/` is release and gate tooling, where the Arthur tenant repository
+  is not the Arthur provider, and `changelog/` and `docs/` are prose. A
+  mention is one word that starts with the id, or consecutive words that
+  join to exactly the id, in any case, in the path or in one piece of what
+  the source spells: an identifier, a string, template or regular expression
+  literal, or the text of its JSX. Words split at punctuation and at case
+  changes, so `"github"`, `GITHUB_TOKEN`, `githubClient`, `GitHub` and
+  `git hub` are one coupling written five ways, and a provider's own package
+  that runs the id into more letters (`mem0ai`, `@notionhq/client`,
+  `jira-client`) is a mention too, while the letters `sEntry` inside
+  `scriptsEntry` and the words `Team settings` are not (until 2026-09-22 the
+  rule was a plain substring, which refused an integration called sentry
+  over 32 files that never named it; for one day after that it was whole
+  words only, which let `mem0ai` through; for one more day a join could end
+  inside a word, so `Team settings` spelled teams and `as an alternative`
+  asana). The rule is one sentence, `MENTION_RULE` in
+  the gate, which the gate prints with every failure, the scaffold with every
+  refusal and the integration guide quotes. A core file that does not parse
+  fails the gate rather than being read by the parser's error recovery.
+  Comments are prose, so they do not count, and the TypeScript parser
+  decides what a comment is, so a `//` inside a URL is still code (until
+  2026-09-22 a hand-written stripper read it as a comment and hid what
+  followed). The text of a `className` or `style` attribute does not count
+  either: `ease-linear` and `linear-gradient(...)` are CSS, not a dependency
+  on a provider called linear, while a comparison written inside such an
+  attribute still counts. Test files are not scanned: a test cannot create
+  production coupling, it exercises core code that still names a provider,
+  and it changes with its subject in S8 to S12; listing several hundred of
+  them would churn on every test edit and get the gate switched off. A row may
+  carry `incidental: true` when its files spell an id by accident, such as a
+  URL on `github.com` that is not the GitHub provider; the gate keeps it listed and never reports it as
+  stale, because such a hit comes and goes with ordinary edits and a failure
+  on one could not be acted on. The scaffold (`pnpm run new:integration`)
+  asks the gate's own question before it writes a package, so it refuses an
+  id exactly where the gate would fail once that id ships, and an id core
+  spells only under an allowlist row is accepted.
 - **Allowlist rows carry no counts, and a stale row fails.** The gate's job is
   to stop a new file, a new package or a new area of core learning a provider,
   and to make S8 to S12 shrink the list. A count per file would turn every
@@ -2826,6 +2862,7 @@ names the stage, what was added, and why the context or a port needed it.
 |---|---|---|---|
 | 2026-09-23 | review fixes | `ConnectionValueError`, `connectionValueProblem` and `ConnectionValueProblem`; `malformed` on a connection test's refusal and on `ProviderFailure`; the failure reason `value_malformed` in `@shared/contracts` | A value that cannot form a request (a token with a line break inside it, a site address without `https://`, an App id that is not a number, a PEM block missing a line) was filed as the provider being unreachable, because Node refuses it with an error that carries no status, so a card stayed Connected while every request failed, and the error quoted the value. It is a verdict about the value. What a field's `format` allows is the SDK's rule (`connectionValueProblem`, the one conformance already applies to a manifest's defaults), and it REFUSES ONLY WHAT COULD NEVER HAVE WORKED, because main deploys itself and a value running today that a new rule refuses turns that integration Failing on the deploy: a `url` has to be an http or https address (a line break inside one is dropped by the URL parser, as `fetch` drops it); an `integer` is whatever `Number()` reads as a whole number that is not negative, which is what `z.coerce.number()` accepted before ("+123", "123.0", "0x7b"); a one-line secret holds no line break, since it goes into a header or is a signing key a provider shows on one line; and nothing else is checked, since a setting that is never sent (Slack's allowlist, read as comma separated) may hold a line break and work. The characterization tests in `services/integrations/main-values.test.ts` feed the forms main's parsers accepted, each citing the main line. Core applies it wherever values are read (the resolved status, so a card reads Failing before anyone presses Test, and the values a run and a test receive); `ctx.http` refuses a header value no request can carry before sending, with a `ConnectionValueError` that names the field and never the value; and `refusedOrThrow` answers any of these, a URL the platform could not parse and key data WebCrypto rejected included, as `{ ok: false, reason, malformed: true }`, which core files as `value_malformed`. Additive: an optional field on the refusal and a reason only core assigns. |
 | 2026-09-23 | review fixes | `NESTED_ADAPTER_MEMBERS` and `NestedAdapterRole` | Core redacts what integration code throws at one boundary (`redactingRuntime` in `services/integrations/usable.ts`), and that boundary missed an adapter reached through a port member: `vcs.skillSource()` returns a skill source running on GitHub's own Octokit. The members that return or hold another adapter are now named per port (`vcs.skillSource` returns one, `memory.store` holds one), typed against the ports so a misspelt member does not compile, and the boundary follows exactly those, the async results included; any other value a port hands over is data and passes untouched. A port that grows such a member lists it in the same change. The boundary covers every capability adapter, `beginRun`, each page reader and `webhook.receive` and `deliver`; the rest redacts where it is called: the connection test in `services/integrations/authoring.ts`, health probes in `services/system/integration-health.ts`, blocks in `engine/steps/integration-block-step.ts`, and the webhook route until it calls `usable.runtime.webhook` rather than the registry's. Additive. |
+| 2026-09-22 | S12 | `IssueTrackerQueryRule`, carried by a tracker's runtime as `issueTrackerQueryRule`, required exactly when the manifest declares `issue_tracker`; conformance codes `issue_tracker_query_rule_missing` and `issue_tracker_query_rule_undeclared` | The investigate block's query template is written in the tracker's own language, and core kept a copy of JQL's quoting to check it at save time. The copy knew only double quotes, so it refused valid JQL (`summary ~ 'fix)'`) and saved templates Jira's adapter then dropped at run time, when the block searched without them and nobody was told. The rule is the tracker's: a pure function of the text, reached without a connection (the shape `VcsHandleIdentity` set), which the adapter applies before it sends a query and core asks only when exactly one usable tracker is connected: on save and deploy it refuses a template the deployed version does not already run (one it runs comes back as a validation notice, and rollback, restore and enable do not ask, so the rule never takes away what a stored definition runs today), and the investigate block asks it again before it searches and says in its theory when it left a template out. Not additive for a tracker, whose runtime must now carry it: Jira and the SDK fixture do in the same change, and no manifest field changes. |
 | 2026-09-22 | S11 | `PullRequestUnreadableError`, `isPullRequestRefusal` and `providerAnswerOf`, documented on `VCSAdapter.getPRHead`: a head read throws the error exactly when this connection can never read that pull request (a 404, or a 403 that is neither a rate limit nor a missing scope or permission: `WWW-Authenticate` naming `insufficient_scope`, GitLab's `insufficient_scope`, GitHub's `Resource not accessible by`), and every provider classifies with the one predicate; GitHub counts only a 404, because its 403 on a pull request is always the installation's permission or SAML. A refused credential is thrown with the provider's status on it, which core's redacted copy keeps. `VcsHandleIdentity.recordedCheckHandle` became optional, with a removal point: it goes once no queued or failed trigger delivery of the pre-handle shape is left (the counting query is in the S11 drain note of `docs/plans/2026-09-18-integrations.md`) and no run started before the handle deploy is in flight. `sameHandle` is documented to compare by value | The head read used the Workflow DevKit's `FatalError` for "cannot read", which also covered a refused credential: a token that expired closed every delivery for good and dropped every queued trigger, when fixing the connection would have served them. A 401 is now thrown as it came and stays retryable. `isPullRequestRefusal` is a call to `readProviderFailure` narrowed to the statuses that can name one resource, so which answer is a refusal and which 403 is a rate limit is decided in one place. `recordedCheckHandle` exists for rows only GitHub and GitLab ever wrote, so a new provider need not implement it. Handles are stored as JSON and compared after a round trip, and the SDK fixture compared them by reference, which binds no failed check. Additive for a provider: an integration that implemented `recordedCheckHandle` keeps working, and one that throws `FatalError` from `getPRHead` has its delivery retried instead of closed. |
 | 2026-09-22 | S11 | `sameHandle` moved off `VCSAdapter` onto `VcsHandleIdentity`, beside the new `recordedCheckHandle`; a vcs integration's runtime carries it as `vcsHandles`, required exactly when the manifest declares `vcs`. It replaces `recordedCheckIdentity` and `readRecordedCheckIdentity`, added earlier on this branch and never released | Core reaches a VCS adapter lazily and forwards each member as a Promise once the connection resolves, so the synchronous `sameHandle` came back as a Promise, which reads as `true`: every failed check compared equal to every other, and a GitLab failure from a superseded pipeline would have started a fix on the pipeline that replaced it. Comparing two handles needs no connection, so it is the provider's, and core calls it directly. `VCSAdapter` is asynchronous throughout now, and core's deferred adapter type leaves out any synchronous member, so one added later does not compile through it. Not additive for a provider: each vcs runtime adds `vcsHandles` and drops the adapter method, which is why it landed with the only two. |
 | 2026-09-22 | review fixes | `readProviderFailure`, `refusedOrThrow` and `ProviderFailure` (`provider-failure.ts`) | Which failure is a refused configuration and which is a provider that gave no verdict was decided by each integration, and GitHub, GitLab, Jira and Slack all caught every error and returned `{ ok: false }`, so an outage during a Test turned a working card Failing; the template taught a 5xx as a refusal. The rule now has one home: a 4xx other than 408, 425 (RFC 8470: retry it) and 429 refuses, except a 403 that is a rate limit (GitHub's REST documents a spent limit as 403 or 429, marked by `retry-after`, by `x-ratelimit-remaining: 0`, or for a secondary limit only by its message, which is read the way `@octokit/plugin-throttling` reads it, `/\bsecondary rate\b/i`); `FatalError` and `IssueTrackerNotFoundError` refuse; and everything else is no verdict and throws. A host that does not resolve (`getaddrinfo ENOTFOUND`) stays no verdict on purpose, because a VPN that is down says the same about a host that exists; core names the host and the field it came from instead. The header signals live on the provider's original error, so the rule is read inside the integration, before core's redacted copy (which keeps `status` but not the response) exists. Provider vocabulary on top of HTTP (a Slack error code) stays the integration's to translate into those two meanings. Additive. |

@@ -129,7 +129,7 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 8. Import the repository on the Repositories page. The catalog records the
    provider's default branch; an explicit profile value overrides it.
 
-> The legacy `GITHUB_TOKEN` PAT path was removed: GitHub needs the App vars above. `apps/worker/src/infra/runtime-env.ts` enforces this at boot, including `GITHUB_WEBHOOK_SECRET`.
+> The legacy `GITHUB_TOKEN` PAT path was removed: GitHub needs the App vars above. They are the GitHub integration's connection fields (`integrations/github/manifest.ts`), not boot requirements: a deployment with only some of them set still starts, and the GitHub card on the Integrations page reads Failing and names the missing variable.
 
 **GitLab:**
 
@@ -141,7 +141,7 @@ For GitLab.com single-project setup, see [`docs/GITLAB-SETUP.md`](./docs/runbook
 4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`.
 5. Import the repository on the Repositories page. The catalog records the
    provider's default branch; an explicit profile value overrides it.
-6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`apps/worker/src/infra/runtime-env.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
+6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`integrations/gitlab/manifest.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
 
 ### 2.3 Slack
 
@@ -408,6 +408,8 @@ If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/runbooks/GITHUB-APP-SETUP.md
 For GitLab.com, configure the project webhook instead: see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md). The webhook URL is `https://<your-vercel-domain>/webhooks/gitlab`, the **Secret token** field must match `GITLAB_WEBHOOK_SECRET`, and **Merge request events**, **Pipeline events** (the **Pipeline Hook**), and **Comments** (the **Note Hook**) are required. Pipeline events drive `trigger_pr_checks_failed`; Comments can drive only the `commented` variant of `trigger_pr_review`. GitLab Request Changes, with or without a summary, is unsupported until GitLab emits a reliable event that distinguishes that transition. Do not use GitLab's newer **Signing token** flow until the worker implements signing-token verification.
 
 For GitHub, verify from the App's **Advanced → Recent Deliveries** tab: opening a pull request on the target repo produces a `pull_request` delivery that answers 2xx. With a deployed definition carrying a PR trigger, the run appears in the dashboard and its checks appear on the PR head SHA under the `AI Workflow /` prefix. With no PR-triggered definition deployed, a 2xx answer and an `ignored` reason in the runtime log is the correct outcome.
+
+**At capacity.** When this deployment is at its run limit, a GitHub or GitLab delivery is answered 2xx with the reason `at_capacity` in the body, not 5xx: GitHub never redelivers a failed delivery by itself, and GitLab switches a webhook off after a few consecutive failures, which would lose every later event. The delivery therefore reads as successful in the provider's log, nobody redelivers it, and nothing dispatches it again later; the reason in the stored response body is the only record that a run did not start. A custom webhook endpoint answers 503 instead, because its caller keeps no delivery log and retrying is what it should do.
 
 For GitLab.com, verify by opening or updating an `ai-workflow/*` merge request and checking that the webhook delivery succeeds; when a deployed definition claims the merge request, its checks appear on the MR head commit as `AI Workflow / ...` commit statuses. See the smoke checklist in [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
 
@@ -867,7 +869,7 @@ The tracer travels with the integration as `integrations/arthur/tracer.generated
 
 ### GitLab alongside (or instead of) GitHub
 
-GitLab is an integration. An admin connects it in the dashboard (Integrations → GitLab → Connection), or leaves the environment as the source by setting `GITLAB_TOKEN`, `GITLAB_WEBHOOK_SECRET` and optionally `GITLAB_PROJECT_ID`. There is no deployment-wide choice of provider to make: a repository carries its own provider, so provider credentials are additive and `GITHUB_*` vars may be removed if you want GitLab alone. To run BOTH providers in one deployment, keep the GitHub App vars and connect GitLab beside them, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`, which is accepted only when one provider is configured. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. For GitLab.com setup, see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
+GitLab is an integration. An admin connects it in the dashboard (Integrations → GitLab → Connection), or leaves the environment as the source by setting `GITLAB_TOKEN`, `GITLAB_WEBHOOK_SECRET` and optionally `GITLAB_PROJECT_ID`. There is no deployment-wide choice of provider to make: a repository carries its own provider, so provider credentials are additive and `GITHUB_*` vars may be removed if you want GitLab alone. To run BOTH providers in one deployment, keep the GitHub App vars and connect GitLab beside them, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`, which is accepted only when one provider is configured. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. One connection per integration means one GitLab host per deployment: a repository's identity does not record its host, so pointing an existing deployment at a second GitLab instance would retarget the repositories it already has. For GitLab.com setup, see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
 
 ### Webhook trigger
 
@@ -1047,7 +1049,7 @@ candidate with any retired name from being promoted. Remove every named
 variable from each deployment environment, then redeploy:
 
 ```text
-DASHBOARD_ORG_NAME, GITHUB_BASE_BRANCH,
+DASHBOARD_ORG_NAME, GITHUB_BASE_BRANCH, GITLAB_BASE_BRANCH,
 MAX_CONCURRENT_AGENTS, JOB_TIMEOUT_MS, V2_MAX_BLOCK_CONCURRENCY,
 POLL_INTERVAL_MS, ATTACHMENT_MAX_FILE_SIZE_MB,
 ATTACHMENT_MAX_TOTAL_SIZE_MB, ATTACHMENT_MAX_COUNT,
@@ -1065,6 +1067,12 @@ Three settings remain deployment-owned and may stay in the environment:
 `DASHBOARD_ORG_SLUG`, `MCP_ALLOW_PUBLIC_DCR`, and
 `PRE_PR_CHECKS_ALLOWED_ENV`. They are marked `requiresRedeploy`; a stored row
 does not override them, and changing one takes effect only after redeploying.
+
+Three names are read by nothing and are not refused at boot, so remove them at
+leisure: `VCS_KIND` (each repository names its version control provider),
+`ISSUE_TRACKER_KIND` (the issue tracker is the connected issue tracker
+integration) and `CHAT_SDK_BOT_NAME` (Slack posts under the Slack app's own
+name; rename the app to change it).
 
 `AGENT_ALLOWED_REPOS` is not part of the boot refusal because some existing
 production environments still carry it. It has been unused since H2 and may be

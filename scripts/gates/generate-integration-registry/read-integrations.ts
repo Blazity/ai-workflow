@@ -10,12 +10,13 @@ import {
 import { readManifests } from "../generate-block-catalog/read-manifests.js";
 import { compareCodePoints } from "../generate-block-catalog/types.js";
 import {
-  assertDashboardReadsNoEnvironment,
+  assertDashboardUsesBrowserGlobals,
   assertManifestIsPureData,
 } from "./manifest-imports.js";
+import { INTEGRATION_BLOCK_TYPE, INTEGRATION_ID } from "../../../packages/contracts/integration-id.js";
+import { integrationBlockPortsIssue } from "../../../integrations/sdk/block-ports.js";
 import {
   FIXTURES_DIRECTORY,
-  INTEGRATION_ID,
   NON_INTEGRATION_DIRECTORIES,
   type GeneratorOptions,
   type IntegrationRecord,
@@ -99,12 +100,6 @@ function blockObject(
   );
 }
 
-/** The whole stored block type, not only its prefix. The rule is the one
- *  `isStorableWorkflowBlockType` enforces when a definition carrying the type
- *  is parsed, so a manifest that generates cleanly and is then unstorable is
- *  refused here, where the mistake is. */
-const BLOCK_TYPE = /^[a-z][a-z0-9]{2,31}_[a-z0-9]+(?:_[a-z0-9]+)*$/u;
-
 function blockPorts(
   block: ts.ObjectLiteralExpression,
   printed: string,
@@ -143,21 +138,17 @@ function blockTypes(
         `${printed}: the block type "${type}" must start with "${id}_", so a stored definition says which integration a block belongs to.`,
       );
     }
-    if (!BLOCK_TYPE.test(type)) {
+    // The whole stored block type, not only its prefix: the rule a definition
+    // carrying the type is parsed with, so a manifest that generates cleanly
+    // and is then unstorable is refused here, where the mistake is.
+    if (!INTEGRATION_BLOCK_TYPE.test(type)) {
       throw new Error(
         `${printed}: the block type "${type}" must be lowercase words joined by underscores. ` +
           "A definition carrying any other shape cannot be parsed, so it would generate here and fail at the editor.",
       );
     }
-    const ports = blockPorts(object, printed);
-    if (ports.length !== 1 || ports[0] !== "out") {
-      throw new Error(
-        `${printed}: the block "${type}" declares ports ${JSON.stringify(ports)}; an integration block has exactly one port named "out". ` +
-          "The workflow graph reads a block's ports from the generated core catalog, which holds no integration block, so it resolves every one of them to a single port named \"out\": " +
-          "a second port would be offered in the editor, refused at publish as an unknown port, and would silently propagate to nothing at run time. " +
-          "Stage S8 lifts this by teaching the graph a manifest's ports (ADR-010, \"What the engine decides\"). Until then, branch on the block's status output instead.",
-      );
-    }
+    const portsIssue = integrationBlockPortsIssue(type, blockPorts(object, printed));
+    if (portsIssue !== null) throw new Error(`${printed}: ${portsIssue}`);
     return type;
   });
 }
@@ -260,7 +251,7 @@ function readManifest(
         "Declare the pages in manifest.pages, or delete the entry.",
     );
   }
-  if (hasDashboard) assertDashboardReadsNoEnvironment(directory, dashboardPath, root);
+  if (hasDashboard) assertDashboardUsesBrowserGlobals(directory, dashboardPath, root);
 
   return {
     directory: localPath(root, directory),

@@ -231,6 +231,14 @@ export interface IntegrationPage {
   /** Lowercase words joined by hyphens. `connection` is the core tab and is refused. */
   readonly id: string;
   readonly label: string;
+  /**
+   * Dashboard paths this screen had before it moved into the integration's
+   * area, each one lowercase segment such as `/evals`. The dashboard answers
+   * each with a permanent redirect to this page, so bookmarks and links already
+   * posted keep working. Only a screen that moved out of core has any; a page
+   * written for the integration has none.
+   */
+  readonly legacyPaths?: readonly string[];
 }
 
 /**

@@ -11,12 +11,14 @@ import {
 import {
   validateWorkflowDefinitionDraftCandidate,
 } from "../../../../../services/workflow-definitions/definition-candidates.js";
+import { parseDefinitionId } from "../../workflow-definitions.get.js";
 
 export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionValidationResponse | undefined> => {
     try {
       setResponseHeader(event, "Cache-Control", "private, no-store");
       await requireDashboardActor(event);
+      const id = parseDefinitionId(event);
       const parsed = parseRequestBody(
         workflowDefinitionCandidateRequestSchema,
         (await readBody(event).catch(() => null)) ?? {},
@@ -24,7 +26,7 @@ export default defineEventHandler(
       if (!parsed.ok) {
         throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
-      return await validateWorkflowDefinitionDraftCandidate(parsed.value.definition);
+      return await validateWorkflowDefinitionDraftCandidate(parsed.value.definition, id);
     } catch (error) {
       if (error instanceof Error && "statusCode" in error) throw error;
       toHttpError(error);

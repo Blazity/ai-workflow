@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-22
+Last-verified: 2026-09-23
 
 # Writing an integration
 
@@ -66,11 +66,31 @@ from the repository root.
    may not do").
 2. **Create the package.** `pnpm run new:integration -- <id> --name "Display Name"`
    copies `integrations/_template` to `integrations/<id>` with the template's
-   names replaced. It refuses, before writing anything, an id the SDK
-   reserves, one an integration already has, and one that core source already
-   spells, because the core-reference gate would fail your first run on every
-   such spelling. The last one is common: `acme` appears in core's examples, so
-   pick something core does not contain.
+   names replaced, a `test` script and a first test included. It refuses,
+   before writing anything, an id the SDK reserves, one an integration
+   already has, and one that core source already spells where no allowlist
+   row covers it, because the core-reference gate would fail your first run
+   on every such file. What the gate reads as core, and what it counts as
+   spelling an id, in the words it prints with every failure and the
+   scaffold with every refusal:
+
+   > Core is apps/worker, apps/dashboard, packages, as git lists them, minus
+   > every path matching an `exclude` pattern in
+   > scripts/gates/core-references.json.
+   >
+   > Core spells a provider id where one word starts with it, or where
+   > consecutive words join to exactly the id, in any case, in a file's path
+   > or in one identifier, string, template, regular expression or piece of
+   > JSX text; words split at punctuation and at case changes, so
+   > GITHUB_TOKEN, githubClient, GitHub, jira-client and mem0ai each spell
+   > their id, while scriptsEntry does not spell sentry and Team settings
+   > does not spell teams. Comments and the text of a className or style
+   > attribute are not read.
+
+   The refusal names the files. Where one is not about your provider (sample
+   data, a URL on a host that merely starts with the word), add the id to an
+   allowlist row with the reason and run the scaffold again; otherwise pick
+   another id. `acme` appears in core's examples, so it is refused.
 3. **Install and register it.** `pnpm install` links the new workspace package
    and adds it to the lockfile; `pnpm run gen:integrations` adds it to the
    generated registries in `integrations/registry`. From here the worker, the
@@ -138,7 +158,9 @@ That is a statement about what is **handed**, not about what is **reachable**.
 Your worker code runs in the worker's process and your pages run in the
 dashboard's, as Server Components. Nothing is sandboxed: global `fetch`,
 `process.env` and any dependency your package declares are there without an
-import from us. Integration code is trusted build-time code that we review
+import from us. The registry generator refuses some of them in what you write
+(Node's globals in a manifest's files, `process` in a page's, see below), but
+that is a check on your source, not a sandbox. Integration code is trusted build-time code that we review
 like our own, and the rules on this page exist so that it does not couple
 itself to our runtime by accident, not to stop code that means harm.
 
@@ -160,7 +182,7 @@ context and returns the port's adapter.
 
 | Capability | Port (in `integrations/sdk`) | Providers at once | Served today by | Read first |
 |---|---|---|---|---|
-| `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`) | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. |
+| `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueryRule` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. |
 | `vcs` | `VCSAdapter` (`vcs.ts`) | many, chosen per repository | GitHub, GitLab | `integrations/gitlab`: a provider chosen per repository, self-hosted, with nested paths. `integrations/github`: a credential that is not a token (an App id, an installation id and a private key, read in `auth.ts`). A `vcs` manifest also declares `repositories` (host and whether paths nest). |
 | `messaging` | `MessagingAdapter` (`messaging.ts`) | one | Slack | `integrations/slack`: one active provider, run notifications in one thread per ticket, a slash command. |
 | `memory` | `MemoryAdapter` (`memory.ts`) | one | built-in, in core | `apps/worker/src/memory/builtin/adapter.ts`, and "Memory" below. |
@@ -172,6 +194,28 @@ enabled integrations serve the same `one` capability, core refuses to guess:
 every use answers with a sentence naming both, and nothing is sent, read or
 written through either. There is no control to choose between them yet; an
 admin disables the one they do not want.
+
+**A tracker also says how it reads a query an author typed.** The investigate
+block's query template is written in the tracker's own language, so a runtime
+that serves `issue_tracker` carries `issueTrackerQueryRule: { problem(query) }`
+(`IssueTrackerQueryRule`), required by the type and by conformance: why the
+tracker would not run the query, in a sentence for the author, or `null`.
+Your adapter's `findTickets` must use a `providerQuery` exactly when this
+finds no problem with it, so the two cannot disagree (Jira's `findTickets`
+calls the same function). A tracker with no query language says so here
+rather than accepting a query it would ignore. Core asks it without a
+connection, and only while exactly one tracker is connected, in two places:
+
+- **When a definition is saved or deployed**, it refuses a template the rule
+  refuses, unless the deployed version already runs that same template. That
+  one the editor shows as a notice, which never blocks Deploy, and rolling
+  back, restoring or enabling a version does not ask at all: a rule newer
+  than a stored template never takes away what runs today
+  (`apps/worker/src/services/workflow-definitions/tracker-query-templates.ts`).
+- **When the investigate block runs**, before it searches. A template the
+  rule refuses is left out, the search narrows by the ticket's keywords alone
+  (or does not run when there are none), and the block's theory says so in a
+  sentence, with a warning in the log.
 
 **A block uses a capability by requiring it**, not by serving it. List it in
 the block's `requires.capabilities` and the editor offers the block only
@@ -659,6 +703,11 @@ In the manifest:
   the editor, only through MCP or an imported definition. Take what an author
   must choose as an **input** they bind, and keep parameters to what has a
   sensible default, written both in the schema and in `defaults`.
+  Conformance parses `defaults` with `paramsSchema` under both zod majors and
+  refuses a default the schema rejects, because a new node starts with it and
+  nothing in the editor could fix it. It also refuses a `z.record` keyed by an
+  enum or a literal, which zod 3 reads as every key optional and zod 4 as every
+  key required: write `z.object` with each key optional instead.
 - **`contract.ports`** is exactly `["out"]`. A second port would be offered in
   the editor, refused at publish and propagate to nothing at run time, so the
   generator and conformance both refuse it. Branch on `status` instead.
@@ -822,11 +871,24 @@ page is a real one.
   (`next/headers`) or moves the person (`next/navigation`), `node:*` reaches
   the filesystem, and `server-only` declares a module part of our server. The
   boundaries gate refuses all four in `dashboard.tsx` (and `@/` anywhere in
-  the package). The registry generator refuses any read of the deployment's
-  environment in `dashboard.tsx` and in the files it imports. It matches the
-  source text, comments included, so do not write the expression down even in
-  a comment. There are no dialogs, no internal links and no form controls:
-  pages have no write seam yet.
+  the package). The registry generator compiles `dashboard.tsx` and the files
+  it imports against what a browser has, so `process` (in the cockpit's
+  server, this deployment's environment and every secret it runs with),
+  `Buffer` and `require` are refused with the file and line that use them,
+  and so are `globalThis`, `eval` and `Function`, which reach a global by a
+  name the check cannot read. So is an import of one of Node's own modules by
+  its bare name (`"process"`, `"fs"`), which the `node:` rule above does not
+  see, and a `declare` statement, which would describe a global the page is
+  not given. Comments and a local binding of the same name are not. There are
+  no dialogs, no internal links and no form controls: pages have no write seam
+  yet.
+- **A page that moved here from core keeps its old address.** Declare the
+  paths it used to live at in the page's `legacyPaths` (Arthur's Evals page
+  declares `["/evals"]`). The dashboard builds a permanent redirect to the page
+  from each one in `next.config.ts`, so bookmarks and links in old messages
+  keep working. Each is one lowercase segment, and conformance refuses
+  anything else or a path declared twice; the dashboard's own tests refuse one
+  that a live screen serves or another page already claims.
 - **Import the manifest with `import type`** in `dashboard.tsx`, so its zod
   schemas never reach the browser, and declare the pages with
   `defineIntegrationDashboard<typeof manifest>({ pages })`: a declared page
@@ -918,17 +980,19 @@ test("says the deployment was never given a secret, rather than that the sender 
 });
 ```
 
-To run it, the package needs `tsx` in its `devDependencies` and a `test`
-script (`node --import tsx --test "*.test.ts"`), as Slack and Arthur have;
-GitHub, GitLab and Jira use `vitest run` instead. Add `test:zod4` too, and
-`zod4` to your `devDependencies`, so your own schemas run under the zod
-production loads:
-`node --import tsx --import ../../packages/zod4-alias.mjs --test "*.test.ts"`.
-Then add `--filter @integrations/<id>` to the root `test:packages` and
+The scaffold ships the runner and a first test (`worker.test.ts`): a `test`
+script, `node --import tsx --test "!(node_modules)/**/*.test.{ts,tsx}" "*.test.{ts,tsx}"`,
+and `test:zod4`, the same files under the zod production loads through
+`../../packages/zod4-alias.mjs`, with `tsx` and `zod4` in `devDependencies`.
+Keep both globs: Node's runner reads a bare `"*.test.ts"` as the package root
+only, so a test beside page code in `dashboard/` would never run and a test
+broken on purpose would stay green. GitHub, GitLab and Jira use `vitest run`
+instead, which finds nested files on its own. Then add
+`--filter @integrations/<id>` to the root `test:packages` and
 `test:packages:zod4` scripts in `package.json`: those lists are what CI runs,
 and `scripts/ci/verify-changed.test.ts` fails when a package that owns a
-`test` script is missing from them. A `test` script with no test file fails
-under `vitest run`, so add the script with the first test.
+`test` script is missing from them, when a test file in a package is one its
+script does not run, and when a package has a `test` script and no test.
 
 ### Recorded payloads
 
@@ -973,18 +1037,22 @@ deployment and redeploy. The integration then reads Connected (environment),
 its card and pages appear, the health page runs your probes, and a workflow
 can use your blocks. Removing the variables and redeploying is how you
 disconnect it there. `integrations/_fixtures/demo` is a provider with no
-network at all, registered only when `INTEGRATION_FIXTURES` is set at
-generation time (CI and demo set it, production never does); copy its
-approach for a demo of your own.
+network at all, registered only in a registry a developer generates locally
+with `INTEGRATION_FIXTURES=1 pnpm run gen:integrations`. No deployment and no
+CI job sets that flag, the committed registry is the one generated without it,
+and `gen:integrations --check` compares against that whatever the flag says;
+tests that need the fixture ask the generator for it directly. Copy its
+approach for a network-free double of your own.
 
 ## Things you may not do, and what happens if you do
 
 | If you | What breaks, and when you find out |
 |---|---|
 | Import a Node module or a provider SDK into `manifest.ts`, directly or through a file it imports | The Workflow DevKit's flow bundle fails the Vercel build, and nothing local would notice. `pnpm run gen:integrations` refuses it first, naming the import. |
+| Use a global the Workflow DevKit's VM lacks in `manifest.ts` or a file it imports (`Buffer`, `EventTarget`, `setTimeout`, `fetch`, `process`), one it makes differ (`Date`, `Math.random`, and `crypto`, whose `randomUUID` and `getRandomValues` it seeds), or one that reaches past the check (`globalThis`, `eval`, `Function`, a `declare` statement) | Conformance and the typecheck run in Node and pass; the deployed workflow throws a ReferenceError, hits a stub that throws, or reads a value the dashboard does not see. `pnpm run gen:integrations` refuses it first: it compiles the manifest's files against the language plus what the VM provides (`WORKFLOW_VM_GLOBALS` in `scripts/gates/generate-integration-registry/graph-globals.ts`, held to the pinned DevKit by a test) and names each use with its line. A type that mentions `Buffer`, or a local named `process`, is not a use. |
 | Put `"use step"` or `"use workflow"` in integration code | A step's identity is its module path plus its function name (the DevKit's id is `step//<module path>//<function>`), so a step inside your package would strand every run suspended in it the day the package moved or was renamed. Conformance refuses the directive in any file of the package. |
-| Put your provider's word into a shared type, or core's code | The next provider cannot implement the port without inventing a meaning for your word, and core grows a branch on your name. The core-reference gate fails on any spelling of a shipped integration's id in core source. |
-| Pick an id core source already spells | The core-reference gate fails your first run on every file that contains it. `new:integration` refuses such an id. |
+| Put your provider's word into a shared type, or core's code | The next provider cannot implement the port without inventing a meaning for your word, and core grows a branch on your name. The core-reference gate fails on any core file that spells a shipped integration's id, its package names and the identifiers built from it included (`jira-client`, `JiraAdapter`). |
+| Pick an id core source already spells | The core-reference gate fails your first run on every core file that spells it where no allowlist row covers it (the rule is quoted under "From nothing to a connected integration"). `new:integration` refuses such an id and names the files. |
 | Parse with a zod feature zod 4 changed | Production fails at the first parse while every local test passes. |
 | Test a webhook against bytes you signed yourself | The provider's first real delivery is refused, discovered from its delivery log. |
 | Return `{ ok: false }` from `testConnection` for a timeout or a 5xx | A provider blip while an admin presses Test marks the connection Failing and stops every run until somebody presses Test again. |

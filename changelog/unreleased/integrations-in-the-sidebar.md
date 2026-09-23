@@ -1,3 +1,2 @@
-- The sidebar now says what belongs to the product and what belongs to an integration: the usual groups, a line, and then Integrations with one entry for each integration that is connected and switched on. Groups fold away if you want the room, and an integration you disconnect leaves the list.
-- Opening an integration lands in its own area, with tabs across the top for the screens it brings and for Connection, which is unchanged.
-- System health and Users moved under Settings, as tabs. The old links keep working.
+- The sidebar separates the product from its integrations: the usual groups, then Integrations with one entry for each connected, switched-on integration, opening its own area with tabs for its screens and for Connection. Groups fold away when you want the room.
+- System health and Users are tabs under Settings, and their old links keep working.

@@ -56,10 +56,6 @@ CHAT_SDK_CHANNEL_ID=<value>
 SLACK_SIGNING_SECRET=<value>
 ```
 
-If non-default bot name:
-```bash
-```
-
 If restricting slash commands to specific users:
 ```bash
 SLACK_ALLOWED_USER_IDS=U0123,U4567

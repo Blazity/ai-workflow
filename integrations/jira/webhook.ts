@@ -25,8 +25,7 @@ type JiraContext = IntegrationContext<typeof manifest>;
  * Until S12 this file's ancestor did all of it: 792 lines that verified an
  * HMAC and then dispatched, resumed and cancelled runs directly. The behaviour
  * that mattered is pinned by recorded deliveries in
- * `apps/worker/src/routes/webhooks/jira-ticket-webhook.characterisation.test.ts`,
- * which passed against that code unedited and passes against this.
+ * `apps/worker/src/routes/webhooks/jira-ticket-webhook.characterisation.test.ts`.
  */
 export const webhook: IntegrationWebhook<typeof manifest> = {
   receive: async (request, ctx) => {

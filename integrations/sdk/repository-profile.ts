@@ -1,10 +1,11 @@
 /**
  * What one repository says about itself, as the suggestion reads it.
  *
- * An interface plus its bound, with no provider in it: the GitHub and GitLab
- * implementations sit beside this file and answer the same shape, so the
- * suggestion service never branches on a provider and a third provider is a
- * new file rather than a new `if`.
+ * An interface plus its bound, with no provider in it: each version control
+ * integration implements it in its own package (`profile-source.ts` in
+ * integrations/github and integrations/gitlab) and answers the same shape, so
+ * the suggestion service never branches on a provider and a third provider is
+ * a new file rather than a new `if`.
  *
  * The bound is the point of the file. Everything here is fed to a model in one
  * call, and a monorepo's CI directory alone can run to hundreds of kilobytes,

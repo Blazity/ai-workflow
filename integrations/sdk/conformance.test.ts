@@ -153,11 +153,23 @@ test("a health check may not be called connection, which core adds itself", () =
 });
 
 test("a block type is the integration id, an underscore and a snake_case name", () => {
-  for (const type of ["lookup", "other_lookup", "acme_Lookup", "acme_", "acmelookup"]) {
+  for (const type of ["lookup", "other_lookup", "acme_Lookup", "acme_", "acmelookup", "acme__lookup"]) {
     const { manifest, runtime } = validIntegration();
     manifest.blocks[0].type = type;
     runtime.blocks = { [type]: runtime.blocks.acme_lookup };
     hasIssue(manifest, runtime, "block_type_invalid", "blocks[0].type");
+  }
+});
+
+test("a block type storage accepts is not refused here", () => {
+  // A stored definition may carry `acme_2fa_check` (isStorableWorkflowBlockType)
+  // and the registry generator registers it, so conformance refusing it would
+  // be a third rule for the same string, and the strictest one would win in CI.
+  for (const type of ["acme_2fa_check", "acme_lookup_v2"]) {
+    const { manifest, runtime } = validIntegration();
+    manifest.blocks[0].type = type;
+    runtime.blocks = { [type]: runtime.blocks.acme_lookup };
+    assert.deepEqual(codes(manifest, runtime), [], type);
   }
 });
 
@@ -195,7 +207,7 @@ test("a one-argument z.record is refused under the zod production resolves", () 
   // is what the production bundle loads. Only the zod 4 run can see it: under
   // zod 3 the one-argument form builds the same schema as the two-argument one.
   manifest.blocks[0].paramsSchema = z.object({
-    headers: z.record(z.string()),
+    headers: z.record(z.string()).optional(),
   });
   if (zodMajor === 4) {
     hasIssue(manifest, runtime, "block_params_schema_one_argument_record", "blocks[0].paramsSchema.headers");
@@ -204,10 +216,69 @@ test("a one-argument z.record is refused under the zod production resolves", () 
   }
 });
 
+test("a record keyed by an enum is refused under either zod, because the two disagree on it", () => {
+  // zod 3 reads z.record(z.enum([...]), v) as a partial record and zod 4 as an
+  // exhaustive one, so `{}` parses in the tests and fails in production. The
+  // check has to fire in both runs: the zod 3 run is the one a developer sees.
+  const { manifest, runtime } = validIntegration();
+  manifest.blocks[0].paramsSchema = z.object({
+    limits: z.record(z.enum(["daily", "weekly"]), z.number()).optional(),
+  });
+  hasIssue(manifest, runtime, "block_params_schema_enum_record", "blocks[0].paramsSchema.limits");
+});
+
+test("a block's defaults parse against its own params schema", () => {
+  // A new node starts with its defaults and the editor has no form for an
+  // integration block's parameters, so defaults the schema refuses make a
+  // block nobody can save.
+  const { manifest, runtime } = validIntegration();
+  manifest.blocks[0].paramsSchema = z.object({ limit: z.number().int().max(50) });
+  manifest.blocks[0].defaults = { limit: 500 };
+  hasIssue(manifest, runtime, "block_defaults_invalid", "blocks[0].defaults");
+
+  const absent = validIntegration();
+  absent.manifest.blocks[0].paramsSchema = z.object({ channel: z.string() });
+  hasIssue(absent.manifest, absent.runtime, "block_defaults_invalid", "blocks[0].defaults");
+});
+
+test("repositories belongs to a vcs integration and names a bare lowercase host", () => {
+  const without = validIntegration();
+  without.manifest.repositories = { nestedPaths: true };
+  hasIssue(without.manifest, without.runtime, "repositories_invalid", "repositories");
+
+  for (const host of ["https://git.acme.test", "Git.Acme.test", "git.acme.test/"]) {
+    const { manifest, runtime } = validIntegration();
+    manifest.capabilities = ["messaging", "vcs"];
+    runtime.capabilities.vcs = () => ({});
+    manifest.repositories = { host };
+    hasIssue(manifest, runtime, "repositories_invalid", "repositories.host");
+  }
+
+  const valid = validIntegration();
+  valid.manifest.capabilities = ["messaging", "vcs"];
+  valid.runtime.capabilities.vcs = () => ({});
+  valid.manifest.repositories = { host: "git.acme.test:8443", nestedPaths: true };
+  assert.deepEqual(codes(valid.manifest, valid.runtime), []);
+});
+
+test("identity marks a secret, and only a boolean", () => {
+  const plain = validIntegration();
+  plain.manifest.connection.fields[0].identity = true;
+  hasIssue(plain.manifest, plain.runtime, "connection_identity_not_secret", "connection.fields[0].identity");
+
+  const typo = validIntegration();
+  typo.manifest.connection.fields[1].identity = "yes";
+  hasIssue(typo.manifest, typo.runtime, "manifest_invalid", "connection.fields[1].identity");
+
+  const valid = validIntegration();
+  valid.manifest.connection.fields[1].identity = true;
+  assert.deepEqual(codes(valid.manifest, valid.runtime), []);
+});
+
 test("a two-argument z.record nested anywhere passes", () => {
   const { manifest, runtime } = validIntegration();
   manifest.blocks[0].paramsSchema = z.object({
-    nested: z.array(z.object({ labels: z.record(z.string(), z.string()).optional() })),
+    nested: z.array(z.object({ labels: z.record(z.string(), z.string()).optional() })).optional(),
   });
   assert.deepEqual(codes(manifest, runtime), []);
 });
@@ -362,6 +433,27 @@ test("a page id is a lowercase slug and never the core connection tab", () => {
   hasIssue(twice.manifest, twice.runtime, "duplicate", "pages[1].id");
 });
 
+test("a page's legacy path is one lowercase segment, declared once", () => {
+  // The dashboard turns each into a permanent redirect ahead of its own
+  // routes, so a path with a second segment, a query or a capital letter is
+  // one nobody's bookmark holds, and a path declared twice is a redirect that
+  // cannot say where it goes.
+  const valid = validIntegration();
+  valid.manifest.pages[0].legacyPaths = ["/overview-old"];
+  assert.deepEqual(issues(valid.manifest, valid.runtime), []);
+
+  for (const path of ["overview", "/Overview", "/a/b", "/a?x=1", "/", "/-a"]) {
+    const { manifest, runtime } = validIntegration();
+    manifest.pages[0].legacyPaths = [path];
+    hasIssue(manifest, runtime, "page_legacy_path_invalid", "pages[0].legacyPaths[0]");
+  }
+  const twice = validIntegration();
+  twice.manifest.pages[0].legacyPaths = ["/old"];
+  twice.manifest.pages.push({ id: "second", label: "Second", legacyPaths: ["/old"] });
+  twice.runtime.api = {};
+  hasIssue(twice.manifest, twice.runtime, "duplicate", "pages[1].legacyPaths[0]");
+});
+
 test("a webhook slot with nothing to receive a request is refused", () => {
   // The slot was reserved until S9 designed it. Declaring it now means core
   // routes `/webhooks/<id>` here, so a slot that cannot receive anything is an
@@ -385,6 +477,19 @@ test("run state is declared and served together", () => {
   const servedOnly = validIntegration();
   servedOnly.runtime.beginRun = async () => ({ taskId: "t1" });
   hasIssue(servedOnly.manifest, servedOnly.runtime, "run_state_undeclared", "runtime.beginRun");
+});
+
+test("a tracker says how it reads an authored query, and only a tracker does", () => {
+  const tracker = validIntegration();
+  tracker.manifest.capabilities = ["messaging", "issue_tracker"];
+  tracker.runtime.capabilities = { ...tracker.runtime.capabilities, issue_tracker: () => ({}) };
+  hasIssue(tracker.manifest, tracker.runtime, "issue_tracker_query_rule_missing", "runtime.issueTrackerQueryRule");
+  tracker.runtime.issueTrackerQueryRule = { problem: () => null };
+  assert.ok(!codes(tracker.manifest, tracker.runtime).includes("issue_tracker_query_rule_missing"));
+
+  const notATracker = validIntegration();
+  notATracker.runtime.issueTrackerQueryRule = { problem: () => null };
+  hasIssue(notATracker.manifest, notATracker.runtime, "issue_tracker_query_rule_undeclared", "runtime.issueTrackerQueryRule");
 });
 
 test("a field a graph must read is one the block's output declares", () => {

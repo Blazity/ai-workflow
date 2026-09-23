@@ -63,6 +63,7 @@ import {
 } from "@/lib/workflow-editor/layout-save";
 import {
   type WorkflowValidationState,
+  validationStateOf,
 } from "@/lib/workflow-editor/validation-controller";
 import { useWorkflowValidationController } from "@/lib/workflow-editor/use-validation-controller";
 import { useWorkflowDataCatalog } from "@/lib/workflow-editor/use-workflow-data-catalog";
@@ -728,12 +729,7 @@ export function WorkflowEditorScreen({
       setValidation({
         key: savedValidationKey,
         state: res.validation
-          ? {
-              status: res.validation.valid ? "valid" : "invalid",
-              issues: res.validation.issues,
-              nodeContracts: res.validation.nodeContracts,
-              availableValuesByNode: res.validation.availableValuesByNode,
-            }
+          ? validationStateOf(res.validation)
           : {
               status: "error",
               issues: [

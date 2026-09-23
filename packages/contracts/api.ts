@@ -785,6 +785,14 @@ export interface WorkflowDefinitionCatalogResponse {
 export interface WorkflowDefinitionValidationResponse {
   valid: boolean;
   issues: WorkflowDefinitionValidationIssue[];
+  /**
+   * What the graph does that would be refused if it were written now, but
+   * that the deployed version already does. Shown to the person editing and
+   * never counted against `valid`: refusing it would block every other edit,
+   * and a rollback or re-enable, over something that already runs. Absent when
+   * there is nothing to say.
+   */
+  notices?: WorkflowDefinitionValidationNotice[];
   /** Parameter-resolved contracts for the exact candidate graph. */
   nodeContracts: Record<string, WorkflowBlockContract>;
   /** Worker-owned v2 data-flow catalog, keyed by consuming block id. */
@@ -796,6 +804,15 @@ export interface WorkflowDefinitionValidationIssue {
   severity: "error";
   nodeId: string | null;
   /** JSON Pointer identifying the offending value when one is available. */
+  path?: string;
+  message: string;
+}
+
+/** One entry of `WorkflowDefinitionValidationResponse.notices`: said, never blocking. */
+export interface WorkflowDefinitionValidationNotice {
+  code: string;
+  nodeId: string | null;
+  /** JSON Pointer identifying the value it is about. */
   path?: string;
   message: string;
 }
