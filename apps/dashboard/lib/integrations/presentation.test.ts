@@ -309,6 +309,30 @@ test("a scan that agrees, or a card that is not Connected, adds no line", () => 
   assert.doesNotMatch(statusDetailLines(failing, scanWith("down")).join(" "), /health scan/);
 });
 
+// Red when: turning a tracing integration off says a run "may stop, or go on
+// without it" beside "fails naming it at its next use" (QA, Arthur): tracing
+// never stops a run.
+test("switching off an integration says per capability what a run in flight does", () => {
+  const tracing = integration({ name: "Arthur", capabilities: ["agent_tracing"], blocks: [] });
+  const tracingSaid = [
+    ...disableConsequence(tracing),
+    ...integrationImpactLines(tracing, null, "disable"),
+  ].join(" ");
+  assert.match(tracingSaid, /a run in flight goes on untraced, and is not stopped/i);
+  assert.doesNotMatch(tracingSaid, /may stop, or go on|fails naming/);
+
+  const tracker = integration({ name: "Jira", capabilities: ["issue_tracker"], blocks: [] });
+  const trackerSaid = disableConsequence(tracker).join(" ");
+  assert.match(trackerSaid, /A run in flight that uses its issue tracker fails naming Jira at its next use of it/);
+  assert.doesNotMatch(trackerSaid, /goes on/);
+
+  const mixed = integration({ name: "Hub", capabilities: ["messaging", "agent_tracing"], blocks: [] });
+  assert.match(
+    disableConsequence(mixed).join(" "),
+    /uses its messaging fails naming Hub at its next use of it\. Losing only the rest never stops a run: it goes on untraced\./,
+  );
+});
+
 test("a save that failed its test is reported as stored and not in use", () => {
   const lines = statusDetailLines(
     integration({
@@ -548,7 +572,7 @@ test("disconnecting with nothing else configured says everything using it stops"
 
 test("disabling says runs fail and that the stored values survive it", () => {
   const lines = disableConsequence(integration());
-  assert.match(lines.join(" "), /A run that uses Demo fails naming it/);
+  assert.match(lines.join(" "), /A run in flight that uses Demo's blocks and its messaging fails naming Demo/);
   assert.match(lines.join(" "), /enabling it again finds exactly these values/);
 });
 

@@ -684,7 +684,7 @@ test("turning the integration off asks first, and says what it costs", async (t)
 
   assert.equal(sent.length, 0, "nothing is switched off before the consequence is read");
   const rendered = text(root);
-  assert.match(rendered, /fails naming it at its next use/);
+  assert.match(rendered, /fails naming Demo at its next use of it/);
   assert.match(rendered, /enabling it again finds exactly these values/);
 
   await press(button(root, "Turn it off"));
@@ -725,8 +725,7 @@ test("turning it off names the workflows that use it and the runs that stop, tho
   const rendered = text(root);
   assert.match(rendered, /Enabled workflows using Demo: Deploy announcements/);
   assert.match(rendered, /11 runs in flight may stop/);
-  assert.match(rendered, /a run in flight that uses its messaging may stop, or go on without it/);
-  assert.match(rendered, /fails naming it at its next use/);
+  assert.match(rendered, /a run in flight that uses Demo's blocks and its messaging fails naming Demo at its next use of it/);
 
   await press(button(root, "Turn it off, 11 runs may stop"));
   assert.equal(sent.length, 2);
@@ -1036,7 +1035,7 @@ test("turning off an integration with no blocks says nothing about blocks, and n
 
   const rendered = text(root);
   assert.doesNotMatch(rendered, /blocks grey out/);
-  assert.match(rendered, /a run in flight that uses its issue tracker may stop, or go on without it/);
+  assert.match(rendered, /a run in flight that uses its issue tracker fails naming Tracker at its next use of it/);
   assert.match(rendered, /3 runs in flight may stop/);
 });
 

@@ -780,7 +780,7 @@ export function disableConsequence(integration: IntegrationDto): string[] {
           `${name}'s blocks grey out in the workflow editor at once, each carrying the reason, and publishing a workflow that uses one is refused.`,
         ]
       : []),
-    `A run that uses ${name} fails naming it at its next use. A step already running finishes.`,
+    `${capitalized(inFlightWithout(integration))} A step already running finishes.`,
     "Nothing stored is touched, so enabling it again finds exactly these values.",
   ];
 }
@@ -858,11 +858,11 @@ function impactReasonLine(
       case "save":
         return `The worker could not determine whether these values change the connection runs already in flight are using. If they do, a run that checks the one it started with may stop at its next use of ${name} instead of following the edit.`;
       case "disconnect":
-        return `The worker could not determine what disconnecting leaves. A run in flight may stop, or go on without ${name}, at its next use of ${name}.`;
+        return `The worker could not determine what disconnecting leaves. If nothing else configures ${name}, ${inFlightWithout(integration)}`;
       case "source":
         return `The worker could not determine whether the two sources hold the same connection. If they differ, a run that checks the one it started with may stop at its next use of ${name}.`;
       case "disable":
-        return `Turning ${name} off is read at every use, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`;
+        return `Turning ${name} off is read at every use, so ${inFlightWithout(integration)}`;
     }
   }
   switch (impact.stops) {
@@ -877,8 +877,8 @@ function impactReasonLine(
         : `This deployment's environment configures ${name} with the same values, so disconnecting stops no run in flight.`;
     case "unusable":
       return action === "disable"
-        ? `Turning ${name} off is read at every use, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`
-        : `Nothing else configures ${name} after this, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`;
+        ? `Turning ${name} off is read at every use, so ${inFlightWithout(integration)}`
+        : `Nothing else configures ${name} after this, so ${inFlightWithout(integration)}`;
     case "reconfigured": {
       const change =
         action === "save"
@@ -924,10 +924,43 @@ function workflowsUsing(integration: IntegrationDto): string {
 }
 
 /** "that uses its issue tracker", or "that uses it" for one with no capability. */
-function usingItsCapabilities(integration: IntegrationDto): string {
-  return integration.capabilities.length === 0
-    ? "that uses it"
-    : `that uses its ${andList(integration.capabilities.map((id) => capabilityLabel(id).toLowerCase()))}`;
+/**
+ * What a run in flight does once the integration is gone, capability by
+ * capability, as the end of a sentence. Tracing never stops a run (it goes on
+ * untraced) and memory never does (it goes on without memory, and says why);
+ * everything else a run needs from the integration, its blocks included, fails
+ * the run naming it at its next use. "May stop, or go on without it" was true
+ * of neither case and contradicted the line beside it.
+ */
+function inFlightWithout(integration: IntegrationDto): string {
+  const name = integration.name;
+  const stopping = [
+    ...(integration.blocks.length > 0 ? [`${name}'s blocks`] : []),
+    ...integration.capabilities
+      .filter((id) => !(id in GOES_ON_WITHOUT))
+      .map((id) => `its ${capabilityLabel(id).toLowerCase()}`),
+  ];
+  const goingOn = integration.capabilities
+    .filter((id) => id in GOES_ON_WITHOUT)
+    .map((id) => GOES_ON_WITHOUT[id as keyof typeof GOES_ON_WITHOUT]);
+  if (stopping.length === 0 && goingOn.length === 0) {
+    return `a run in flight that uses ${name} fails naming it at its next use.`;
+  }
+  const stops = `a run in flight that uses ${andList(stopping)} fails naming ${name} at its next use of it.`;
+  if (goingOn.length === 0) return stops;
+  const continues = `a run in flight goes on ${andList(goingOn)}, and is not stopped.`;
+  if (stopping.length === 0) return continues;
+  return `${stops} Losing only the rest never stops a run: it goes on ${andList(goingOn)}.`;
+}
+
+/** The capabilities whose loss a run rides out, and how it goes on. */
+const GOES_ON_WITHOUT = {
+  agent_tracing: "untraced",
+  memory: "without memory",
+} as const;
+
+function capitalized(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
 /**
