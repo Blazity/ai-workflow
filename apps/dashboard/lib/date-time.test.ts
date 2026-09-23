@@ -3,6 +3,14 @@ import test from "node:test";
 
 import { formatAgeMinutes, formatDateTime, isOlderThanHours } from "./date-time";
 
+// Red when: the same instant reads differently on a server-rendered page and
+// a client component (QA: two hours apart between /integrations and the
+// connection page), or when no zone is named.
+test("formatDateTime names its zone and does not depend on where it runs", () => {
+  const formatted = formatDateTime("2026-08-21T13:56:30.000Z");
+  assert.equal(formatted, "Aug 21, 2026, 1:56:30 PM UTC");
+});
+
 test("formatDateTime uses one readable month-first format", () => {
   const formatted = formatDateTime("2026-08-21T13:56:30.000Z");
   assert.match(formatted, /Aug 21, 2026/);

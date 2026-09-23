@@ -8,7 +8,7 @@ import type {
   SystemHealthResponse,
 } from "@shared/contracts";
 import { settingDefinition } from "@integrations/registry";
-import { buildSetupOverview, oneProviderRow } from "./overview";
+import { buildSetupOverview, oneProviderRow, scanAgeLine } from "./overview";
 
 function entry(
   key: string,
@@ -567,4 +567,26 @@ test("the Settings card names the reason the bridge was ended", () => {
   assert.ok(catalogRow);
   assert.match(catalogRow.detail, /Activated by Seed on /);
   assert.match(catalogRow.detail, /reason: the catalog is complete/);
+});
+
+// Red when: the overview reads a nine-day-old scan ("GitHub down") without
+// saying how old it is (QA on production).
+test("the rows from a health scan say when it was taken, and an old one is flagged", () => {
+  const taken = "2026-09-14T10:00:00.000Z";
+  const scan = { ...healthResponse([]), generatedAt: taken };
+  const nineDaysOn = Date.parse(taken) + 9 * 24 * 60 * 60 * 1000;
+
+  const fresh = scanAgeLine(scan, Date.parse(taken) + 60 * 60 * 1000);
+  assert.deepEqual(fresh, {
+    text: "The connection rows come from the health scan of Sep 14, 2026, 10:00:00 AM UTC.",
+    stale: false,
+  });
+
+  const old = scanAgeLine(scan, nineDaysOn);
+  assert.equal(old?.stale, true);
+  assert.match(old?.text ?? "", /taken 9d ago \(Sep 14, 2026, 10:00:00 AM UTC\), so they may no longer be true/);
+
+  // Rendered on the server, where the browser's clock is unknown: when, not whether.
+  assert.equal(scanAgeLine(scan, null)?.stale, false);
+  assert.equal(scanAgeLine(null, nineDaysOn), null);
 });

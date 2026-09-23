@@ -163,7 +163,7 @@ const definition: IntegrationRuntimeDefinition<SlackManifest> = {
       message:
         delivery.health.status === "degraded"
           ? `Connected to ${team}. ${delivery.health.message}`
-          : `Connected to ${team}, and the configured channel accepts messages.`,
+          : `Connected to ${team}, and the configured channel accepts messages: a message was scheduled there and deleted before it was sent.`,
     };
   },
 

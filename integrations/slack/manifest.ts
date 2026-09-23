@@ -91,7 +91,7 @@ export const manifest = defineIntegration({
       id: "channel",
       label: "Configured channel delivery",
       description:
-        "The bot can deliver to the configured channel, proved the way a real notification would.",
+        "Schedules a message in the configured channel and deletes it before it is sent, so nobody sees it: delivery is proved the way a real notification would be.",
       critical: true,
     },
   ],

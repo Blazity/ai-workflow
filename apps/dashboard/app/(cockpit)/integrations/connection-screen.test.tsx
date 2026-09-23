@@ -436,9 +436,77 @@ test("a deployment with no secrets key disables the secret field and names the v
   });
   const secret = inputs(root).find((node) => node.props.type === "password");
   assert.equal(secret?.props.disabled, true);
-  assert.match(text(root), /Set INTEGRATION_SECRETS_KEY on this deployment/);
+  assert.match(text(root), /INTEGRATION_SECRETS_KEY/);
   const url = inputs(root).find((node) => node.props.type === "url");
   assert.equal(url?.props.disabled, false, "the non-secret fields are unaffected");
+});
+
+// Red when: with no key, Save and test stays enabled and nothing explains the
+// key, so an admin types a token, presses save and meets a refusal (QA, prod).
+test("with no secrets key and a required secret unstored, saving is off and the key is explained with a link", (t) => {
+  const root = render(t, {
+    integration: integration({
+      fields: [URL_FIELD, { ...TOKEN_FIELD, storedSecretSet: false }],
+      state: state({ secretsKeyAvailable: false }),
+    }),
+  });
+  assert.equal(button(root, "Save and test").props.disabled, true);
+  const rendered = text(root);
+  assert.match(rendered, /this deployment has no INTEGRATION_SECRETS_KEY, the key that encrypts the credentials saved here/);
+  assert.match(rendered, /An admin sets it on the deployment/);
+  const link = root.find((node) => node.type === "a" && text(node).includes("Open SETUP.md"));
+  assert.match(String(link.props.href), /SETUP\.md#integration-secrets$/);
+});
+
+test("with no secrets key but the secret already stored, saving other values stays possible", (t) => {
+  const root = render(t, {
+    integration: integration({
+      fields: [URL_FIELD, TOKEN_FIELD],
+      state: state({ secretsKeyAvailable: false }),
+    }),
+  });
+  assert.equal(button(root, "Save and test").props.disabled, false);
+  assert.match(text(root), /An admin sets it on the deployment/);
+});
+
+// Red when: a provider nobody connected reads "Environment variables · in
+// use", "lives in the deployment's environment variables" and a switch saying
+// "Workflows may use it" (QA, Mem0 on production).
+test("a provider nobody connected claims no source in use and no usable switch", (t) => {
+  const root = render(t, {
+    integration: integration({
+      name: "Mem0",
+      fields: [{ ...URL_FIELD, storedValue: undefined }, { ...TOKEN_FIELD, storedSecretSet: false }],
+      state: state({
+        source: "environment",
+        status: "not_connected",
+        connection: "not_connected",
+        usable: false,
+        environment: { setVariables: [], missingVariables: ["DEMO_API_TOKEN"], complete: false },
+        stored: { latestVersion: 0, activeVersion: null, missingFields: [], complete: false, prepared: null },
+      }),
+    }),
+  });
+  const rendered = text(root);
+  assert.doesNotMatch(rendered, /· in use/);
+  assert.doesNotMatch(rendered, /lives in the/);
+  assert.doesNotMatch(rendered, /Workflows may use it/);
+  assert.match(rendered, /Not connected, so no workflow can use Mem0 yet/);
+  assert.match(rendered, /nothing configures Mem0 on this deployment yet/);
+  assert.equal(root.findAll((node) => node.props?.role === "switch").length, 0);
+});
+
+test("an environment that configures the provider is still said to be in use", (t) => {
+  const root = render(t, {
+    integration: integration({
+      state: state({
+        source: "environment",
+        environment: { setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"], missingVariables: [], complete: true },
+      }),
+    }),
+  });
+  assert.match(text(root), /Environment variables\s+· in use/);
+  assert.ok(root.findAll((node) => node.props?.role === "switch").length > 0);
 });
 
 test("a deployment that does not own its database offers no write control at all", (t) => {
@@ -616,7 +684,7 @@ test("turning the integration off asks first, and says what it costs", async (t)
 
   assert.equal(sent.length, 0, "nothing is switched off before the consequence is read");
   const rendered = text(root);
-  assert.match(rendered, /fails naming it at its next use/);
+  assert.match(rendered, /fails naming Demo at its next use of it/);
   assert.match(rendered, /enabling it again finds exactly these values/);
 
   await press(button(root, "Turn it off"));
@@ -657,8 +725,7 @@ test("turning it off names the workflows that use it and the runs that stop, tho
   const rendered = text(root);
   assert.match(rendered, /Enabled workflows using Demo: Deploy announcements/);
   assert.match(rendered, /11 runs in flight may stop/);
-  assert.match(rendered, /a run in flight that uses its messaging may stop, or go on without it/);
-  assert.match(rendered, /fails naming it at its next use/);
+  assert.match(rendered, /a run in flight that uses Demo's blocks and its messaging fails naming Demo at its next use of it/);
 
   await press(button(root, "Turn it off, 11 runs may stop"));
   assert.equal(sent.length, 2);
@@ -968,7 +1035,7 @@ test("turning off an integration with no blocks says nothing about blocks, and n
 
   const rendered = text(root);
   assert.doesNotMatch(rendered, /blocks grey out/);
-  assert.match(rendered, /a run in flight that uses its issue tracker may stop, or go on without it/);
+  assert.match(rendered, /a run in flight that uses its issue tracker fails naming Tracker at its next use of it/);
   assert.match(rendered, /3 runs in flight may stop/);
 });
 

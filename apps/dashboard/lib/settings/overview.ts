@@ -17,6 +17,7 @@ import { capabilityLabel, integrationsProviding } from "@integrations/registry";
 import { activationDetail, activationValue } from "@/lib/repository-catalog/activation";
 
 import { groupSettings, storedRowCount } from "./groups";
+import { formatAgeMinutes, formatDateTime, isOlderThanHours } from "../date-time";
 import { settingLabel } from "./format";
 
 /** How a row reads at a glance. `unknown` means nothing was observed. */
@@ -35,6 +36,32 @@ interface SetupOverviewStoredRow {
   readonly label: string;
   readonly stored: number;
   readonly total: number;
+}
+
+/** Past this age a health scan is flagged as not current. One number for the
+ *  Health page and the setup overview on Settings. */
+export const STALE_SCAN_AFTER_HOURS = 24;
+
+/**
+ * Where the rows that come from the health scan say they come from, and
+ * whether that scan is too old to trust: the Settings page showed a nine-day
+ * old "GitHub down" as if it were today's. Null when there is no scan to date.
+ * `nowMs` is the caller's clock, so a server render that cannot know the
+ * browser's time passes null and says only when the scan was taken.
+ */
+export function scanAgeLine(
+  scan: SystemHealthResponse | null,
+  nowMs: number | null,
+): { readonly text: string; readonly stale: boolean } | null {
+  if (!scan) return null;
+  const taken = formatDateTime(scan.generatedAt);
+  const stale = nowMs !== null && isOlderThanHours(scan.generatedAt, STALE_SCAN_AFTER_HOURS, nowMs);
+  if (!stale) return { text: `The connection rows come from the health scan of ${taken}.`, stale: false };
+  const age = formatAgeMinutes((nowMs - Date.parse(scan.generatedAt)) / 60_000);
+  return {
+    text: `The connection rows come from a health scan taken ${age} (${taken}), so they may no longer be true. Run a new scan on the Health page.`,
+    stale: true,
+  };
 }
 
 export interface SetupOverview {

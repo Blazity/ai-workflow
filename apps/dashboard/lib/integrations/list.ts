@@ -1,9 +1,14 @@
 import "server-only";
 import { cache } from "react";
 
-import type { IntegrationsListResponse } from "@shared/contracts";
+import type {
+  IntegrationsListResponse,
+  SystemHealthLastScanResponse,
+  SystemHealthResponse,
+} from "@shared/contracts";
 
 import { authAwareFallback, getJSON } from "@/lib/api/server";
+import { ForbiddenError } from "@/lib/auth/errors";
 
 /**
  * The integrations list, read once per request.
@@ -24,5 +29,22 @@ export const readIntegrationsList = cache(
   async (): Promise<IntegrationsListResponse | null> =>
     getJSON<IntegrationsListResponse>("/api/v1/integrations").catch((error) =>
       authAwareFallback(error, (): IntegrationsListResponse | null => null),
+    ),
+);
+
+/**
+ * The last stored health scan, for the line a card adds when the scan and the
+ * card's own status disagree; null when there is none, when this role may not
+ * read it (a member) or when the worker did not answer. The cards stand without
+ * it, so no failure here is raised.
+ */
+export const readLatestHealthScan = cache(
+  async (): Promise<SystemHealthResponse | null> =>
+    getJSON<SystemHealthLastScanResponse>("/api/v1/system/health").then(
+      (response) => response.scan,
+      (error) =>
+        error instanceof ForbiddenError
+          ? null
+          : authAwareFallback(error, (): SystemHealthResponse | null => null),
     ),
 );

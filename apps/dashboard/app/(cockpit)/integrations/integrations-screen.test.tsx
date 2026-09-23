@@ -143,6 +143,9 @@ test("an environment-configured deployment is told so and asked to do nothing", 
   assert.match(rendered, /Connected/);
   assert.match(rendered, /Values come from this deployment's environment variables/);
   assert.match(rendered, /Nothing has ever tested these values/);
+  // No capability the list does not have, and none of the codebase's words.
+  assert.doesNotMatch(rendered, /a coding agent\./);
+  assert.doesNotMatch(rendered, /\bcore\b/);
   assert.doesNotMatch(
     rendered,
     /\bNot connected\b/,
@@ -166,7 +169,7 @@ test("a fresh deployment is told what each integration needs and offered Connect
   const rendered = text(root);
   assert.match(rendered, /Not connected/);
   assert.match(rendered, /Nothing configures it on this deployment yet/);
-  assert.match(rendered, /It needs Site URL/);
+  assert.match(rendered, /It needs its Site URL/);
   assert.ok(rendered.includes("Connect"), "the card offers the action that fixes it");
 });
 
@@ -207,7 +210,7 @@ test("a disconnected integration is offered Connect again, because nothing is st
     ],
   });
   const rendered = text(root);
-  assert.match(rendered, /Nothing configures it on this deployment yet\. It needs Site URL/);
+  assert.match(rendered, /Nothing configures it on this deployment yet\. It needs its Site URL/);
   assert.deepEqual(
     root
       .findAll((node) => node.type === "a")
