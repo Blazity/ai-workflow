@@ -460,17 +460,45 @@ export function fieldHint(
   const environment = field.envSet
     ? `${field.env} is set on this deployment.`
     : `${field.env} is not set on this deployment.`;
+  // What the field is comes first for a secret too: "Nothing is stored yet"
+  // alone left the admin guessing which token, from where.
+  const withDescription = (sentence: string) =>
+    [field.description, sentence, environment].filter(Boolean).join(" ");
   if (!field.secret) return [field.description, environment].filter(Boolean).join(" ");
   if (!state.secretsKeyAvailable) {
-    return `Set INTEGRATION_SECRETS_KEY on this deployment before storing a secret here. ${environment}`;
+    return withDescription("It cannot be stored here until INTEGRATION_SECRETS_KEY is set, see above.");
   }
-  if (clearing) {
-    return `The stored value will be removed when this is saved. ${environment}`;
-  }
+  if (clearing) return withDescription("The stored value will be removed when this is saved.");
   if (field.storedSecretSet) {
-    return `A value is stored. Leave this blank to keep it, or type a new one to replace it. ${environment}`;
+    return withDescription("A value is stored. Leave this blank to keep it, or type a new one to replace it.");
   }
-  return `Nothing is stored yet. What you type is encrypted and never shown again. ${environment}`;
+  return withDescription("Nothing is stored yet. What you type is encrypted and never shown again.");
+}
+
+/** Where SETUP.md explains the key stored secrets are encrypted with. */
+export const SECRETS_KEY_SETUP_URL =
+  "https://github.com/Blazity/ai-workflow/blob/main/SETUP.md#integration-secrets";
+
+/**
+ * What the connection screen says when this deployment cannot store a secret
+ * (no `INTEGRATION_SECRETS_KEY`), or null when it can or the integration has no
+ * secret. `blocksSave` is true when a required secret has no stored value and
+ * its field is locked: a save could only fail, so the button is off and this
+ * sentence says why.
+ */
+export function secretsKeyNotice(
+  integration: IntegrationDto,
+): { readonly text: string; readonly blocksSave: boolean } | null {
+  if (integration.state.secretsKeyAvailable) return null;
+  const secrets = integration.fields.filter((field) => field.secret);
+  if (secrets.length === 0) return null;
+  const blocked = secrets.filter((field) => !field.optional && !field.storedSecretSet);
+  const text =
+    "Secrets cannot be stored from this page yet: this deployment has no INTEGRATION_SECRETS_KEY, the key that encrypts the credentials saved here. An admin sets it on the deployment (see Integration secrets in SETUP.md)" +
+    (blocked.length > 0
+      ? `, and until then ${integration.name} needs its ${andList(blocked.map((field) => field.label))} from the deployment's environment variables.`
+      : ".");
+  return { text, blocksSave: blocked.length > 0 };
 }
 
 export interface ConnectionFormInput {

@@ -436,9 +436,37 @@ test("a deployment with no secrets key disables the secret field and names the v
   });
   const secret = inputs(root).find((node) => node.props.type === "password");
   assert.equal(secret?.props.disabled, true);
-  assert.match(text(root), /Set INTEGRATION_SECRETS_KEY on this deployment/);
+  assert.match(text(root), /INTEGRATION_SECRETS_KEY/);
   const url = inputs(root).find((node) => node.props.type === "url");
   assert.equal(url?.props.disabled, false, "the non-secret fields are unaffected");
+});
+
+// Red when: with no key, Save and test stays enabled and nothing explains the
+// key, so an admin types a token, presses save and meets a refusal (QA, prod).
+test("with no secrets key and a required secret unstored, saving is off and the key is explained with a link", (t) => {
+  const root = render(t, {
+    integration: integration({
+      fields: [URL_FIELD, { ...TOKEN_FIELD, storedSecretSet: false }],
+      state: state({ secretsKeyAvailable: false }),
+    }),
+  });
+  assert.equal(button(root, "Save and test").props.disabled, true);
+  const rendered = text(root);
+  assert.match(rendered, /this deployment has no INTEGRATION_SECRETS_KEY, the key that encrypts the credentials saved here/);
+  assert.match(rendered, /An admin sets it on the deployment/);
+  const link = root.find((node) => node.type === "a" && text(node).includes("Open SETUP.md"));
+  assert.match(String(link.props.href), /SETUP\.md#integration-secrets$/);
+});
+
+test("with no secrets key but the secret already stored, saving other values stays possible", (t) => {
+  const root = render(t, {
+    integration: integration({
+      fields: [URL_FIELD, TOKEN_FIELD],
+      state: state({ secretsKeyAvailable: false }),
+    }),
+  });
+  assert.equal(button(root, "Save and test").props.disabled, false);
+  assert.match(text(root), /An admin sets it on the deployment/);
 });
 
 test("a deployment that does not own its database offers no write control at all", (t) => {

@@ -32,6 +32,8 @@ import {
   disconnectConsequence,
   enableConsequence,
   fieldHint,
+  SECRETS_KEY_SETUP_URL,
+  secretsKeyNotice,
   integrationImpactConfirmLabel,
   integrationImpactLines,
   missingRequiredFields,
@@ -589,6 +591,7 @@ export function ConnectionScreen({
 
   const environmentRefusal = sourceSwitchRefusal(integration, "environment");
   const storedRefusal = sourceSwitchRefusal(integration, "stored");
+  const keyNotice = secretsKeyNotice(integration);
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8 max-w-[840px]">
@@ -657,6 +660,22 @@ export function ConnectionScreen({
         }
       >
         <div className="flex flex-col gap-3">
+          {keyNotice && (
+            <p
+              role="note"
+              className="m-0 rounded-[3px] border border-neutral-300 bg-neutral-50 px-3 py-2 font-body text-[12px] text-neutral-700"
+            >
+              {keyNotice.text}{" "}
+              <a
+                href={SECRETS_KEY_SETUP_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-neutral-900 underline"
+              >
+                Open SETUP.md
+              </a>
+            </p>
+          )}
           {integration.fields.length === 0 && (
             <p className="m-0 font-body text-[12px] text-neutral-600">
               This integration needs no values.
@@ -724,7 +743,13 @@ export function ConnectionScreen({
         {writable && (
           <div className="flex flex-col gap-2">
             <div className="flex flex-wrap gap-2">
-              <Button variant="primary" loading={busy === "save"} disabled={busy !== null} onClick={save}>
+              <Button
+                variant="primary"
+                loading={busy === "save"}
+                disabled={busy !== null || keyNotice?.blocksSave === true}
+                title={keyNotice?.blocksSave ? keyNotice.text : undefined}
+                onClick={save}
+              >
                 Save and test
               </Button>
               <Button

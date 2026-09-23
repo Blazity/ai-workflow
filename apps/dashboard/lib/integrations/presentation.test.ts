@@ -305,6 +305,20 @@ test("without the secrets key a secret field says which variable to set, before 
   assert.match(hint, /INTEGRATION_SECRETS_KEY/);
 });
 
+test("a secret field says what it is before its state, like every other field", () => {
+  // Red when: a secret's description is dropped and the admin reads only
+  // "Nothing is stored yet" under a field named "API key" (QA, Mem0).
+  const described = { ...TOKEN_FIELD, description: "From Settings, API keys, in your Demo account." };
+  for (const hint of [
+    fieldHint(described, state(), false),
+    fieldHint({ ...described, storedSecretSet: true }, state(), false),
+    fieldHint(described, state({ secretsKeyAvailable: false }), false),
+    fieldHint({ ...described, storedSecretSet: true }, state(), true),
+  ]) {
+    assert.match(hint, /^From Settings, API keys, in your Demo account\. /);
+  }
+});
+
 test("a secret marked for erasure says so rather than saying blank keeps it", () => {
   const hint = fieldHint({ ...TOKEN_FIELD, storedSecretSet: true }, state(), true);
   assert.match(hint, /will be removed/);
