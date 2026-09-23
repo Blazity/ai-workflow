@@ -1,18 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { integrationManifests } from "@integrations/registry";
 import { environmentSecretValues, secretForms } from "./configured-secrets.js";
 
 describe("environmentSecretValues", () => {
-  it("includes every non-empty secret-named value, including short values", () => {
+  it("always includes a credential main listed by name, however short", () => {
+    const warn = vi.fn();
     expect(
-      environmentSecretValues({
-        API_TOKEN: "abc",
-        DATABASE_PASSWORD: "pw",
-        OAUTH_SECRET: "x",
-        EMPTY_SECRET: "",
-        PUBLIC_URL: "https://example.com",
-      }),
-    ).toEqual(["abc", "pw", "x"]);
+      environmentSecretValues({ JIRA_API_TOKEN: "abc", CRON_SECRET: "x", EMPTY_SECRET: "" }, warn),
+    ).toEqual(["abc", "x"]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  // Red when: a value a person chose, found only by its variable's name, is
+  // cut out of every PR body, Jira comment and Slack message because it is a
+  // common word.
+  it("skips a short value found only by its name, and says so once naming the variable, never the value", () => {
+    const warn = vi.fn();
+    const environment = {
+      DASHBOARD_AUTH_PASSWORD: "admin",
+      DATABASE_PASSWORD: "correct-horse-battery",
+      PUBLIC_URL: "https://example.com",
+    };
+    expect(environmentSecretValues(environment, warn)).toEqual(["correct-horse-battery"]);
+    environmentSecretValues(environment, warn);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith("DASHBOARD_AUTH_PASSWORD");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("admin\"");
   });
 
   // Red when: a database connection string (it carries the password) or the

@@ -24,17 +24,84 @@
 const SECRET_ENVIRONMENT_KEY =
   /(?:password|secret|token|private[_-]?key|api[_-]?key|oauth|credential|encryption[_-]?key|(?:database|postgres)\w*url)/i;
 
+/**
+ * The credentials main listed by name (`configuredSecretValues` in its
+ * `services/settings/runtime-settings.ts`), plus the key stored connections are
+ * encrypted with. Always redacted, whatever their length: each is a credential
+ * this product issues or reads, and a short one is a bad credential, not a
+ * public one.
+ */
+const KNOWN_SECRET_VARIABLES: ReadonlySet<string> = new Set([
+  "JIRA_API_TOKEN",
+  "GITHUB_APP_PRIVATE_KEY",
+  "GITLAB_TOKEN",
+  "CHAT_SDK_SLACK_TOKEN",
+  "SLACK_SIGNING_SECRET",
+  "ANTHROPIC_API_KEY",
+  "CODEX_API_KEY",
+  "CODEX_CHATGPT_OAUTH_TOKEN",
+  "GENAI_ENGINE_API_KEY",
+  "VERCEL_TOKEN",
+  "CRON_SECRET",
+  "JIRA_WEBHOOK_SECRET",
+  "GITHUB_WEBHOOK_SECRET",
+  "GITLAB_WEBHOOK_SECRET",
+  "WEBHOOK_TRIGGER_ENCRYPTION_KEY",
+  "BETTER_AUTH_SECRET",
+  "SSO_CLIENT_SECRET",
+  "RESEND_API_KEY",
+  "RESEND_WEBHOOK_SECRET",
+  "INTEGRATION_SECRETS_KEY",
+]);
+
+/**
+ * The shortest value found only by its variable's name that is redacted.
+ *
+ * The name pattern also finds values a person chose, such as
+ * `DASHBOARD_AUTH_PASSWORD`. Every exact occurrence of a redacted value is cut
+ * out of every PR body, Jira comment and Slack message, so a short one
+ * ("admin", a word) would mangle them; a value this short is also no
+ * credential worth the name. It is skipped, and said once per variable.
+ */
+const PATTERN_ONLY_FLOOR = 12;
+
+const warnedShortVariables = new Set<string>();
+
 export function environmentSecretValues(
   environment: Readonly<Record<string, string | undefined>> = process.env,
+  warn: (variable: string) => void = warnShortVariable,
 ): string[] {
-  return Object.entries(environment)
-    .filter(
-      ([key, value]) =>
-        value !== undefined &&
-        value.length > 0 &&
-        SECRET_ENVIRONMENT_KEY.test(key),
-    )
-    .map(([, value]) => value!);
+  const values: string[] = [];
+  for (const [key, value] of Object.entries(environment)) {
+    if (value === undefined || value.length === 0) continue;
+    if (KNOWN_SECRET_VARIABLES.has(key)) {
+      values.push(value);
+      continue;
+    }
+    if (!SECRET_ENVIRONMENT_KEY.test(key)) continue;
+    if (value.length >= PATTERN_ONLY_FLOOR) {
+      values.push(value);
+      continue;
+    }
+    if (!warnedShortVariables.has(key)) {
+      warnedShortVariables.add(key);
+      warn(key);
+    }
+  }
+  return values;
+}
+
+/** Names the variable, never its value. `console`, not the worker's logger:
+ *  workflow scope reads this too and has no Node logger. */
+function warnShortVariable(variable: string): void {
+  console.warn(
+    JSON.stringify({
+      level: "warn",
+      msg: "environment_secret_too_short_to_redact",
+      variable,
+      minimumLength: PATTERN_ONLY_FLOOR,
+    }),
+  );
 }
 
 /**
