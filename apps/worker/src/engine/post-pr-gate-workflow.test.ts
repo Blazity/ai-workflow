@@ -18,16 +18,14 @@ const state = vi.hoisted(() => ({
 
 vi.mock("./support/adapters.js", async () => {
   const { adaptersFor } = await import("../test-support/issue-tracker.js");
-  return {
-    createAdapters: async () =>
-      adaptersFor(state.tracker, {
-        vcs: {
-          createGateStatus: state.createGateStatus,
-          updateGateStatus: state.updateGateStatus,
-        },
-      }),
-  };
+  return { createAdapters: async () => adaptersFor(state.tracker) };
 });
+vi.mock("./support/vcs-runtime.js", () => ({
+  resolveRepositoryVCS: async () => ({
+    createGateStatus: state.createGateStatus,
+    updateGateStatus: state.updateGateStatus,
+  }),
+}));
 vi.mock("../post-pr-gate/config.js", () => ({
   loadPostPrGateConfig: () => ({
     postPrGate: {

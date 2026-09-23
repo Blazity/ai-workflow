@@ -58,7 +58,14 @@ export interface RepositoryVcsRuntime {
   provider: VcsProviderKind;
   repoPath: string;
   baseBranch: string;
+  /** The port, reached before the connection resolves: see `DeferredVcsAdapter`. */
   vcs: DeferredVcsAdapter;
+  /**
+   * The same adapter once its connection has resolved (one resolution, shared
+   * with `vcs`): the one to ask what the provider implements beyond the port,
+   * and to call it with.
+   */
+  adapter: () => Promise<VcsIntegrationAdapter>;
   credentials: () => Promise<VcsSandboxCredentials>;
 }
 
@@ -76,8 +83,46 @@ export type DeferredMembers<T> = {
   [K in keyof T as T[K] extends (...args: never[]) => Promise<unknown> ? K : never]: T[K];
 };
 
-/** A VCS adapter reached before its connection resolves. */
+/**
+ * A VCS adapter reached before its connection resolves: the port's members,
+ * each forwarded once the connection has resolved, and nothing else.
+ *
+ * It cannot say what the provider behind it implements beyond the port, so it
+ * does not pretend to: every other member reads as absent, and a capability
+ * guard (`hasPRFilesCapability` and the rest) asked of it answers no. Ask the
+ * resolved adapter instead (`RepositoryVcsRuntime.adapter`,
+ * `resolveRepositoryVCS`). It once answered every name with a function, so
+ * every guard said yes for every provider and the call then failed inside.
+ */
 export type DeferredVcsAdapter = DeferredMembers<VCSAdapter>;
+
+/**
+ * The port's members, which the deferred adapter forwards. Keyed by the port
+ * itself, so a member added to `VCSAdapter` does not compile until it is
+ * listed here too.
+ */
+const PORT_MEMBERS: Readonly<Record<keyof VCSAdapter, true>> = {
+  createBranchIfMissing: true,
+  resetOwnedBranch: true,
+  createPR: true,
+  push: true,
+  getPRComments: true,
+  postPRComment: true,
+  getCheckRunResults: true,
+  getPRConflictStatus: true,
+  getPRHeadSha: true,
+  findPR: true,
+  getBranchSha: true,
+  getBranchShaIfExists: true,
+  getPRHead: true,
+  listReviewThreads: true,
+  settleReviewThread: true,
+  postRunFailureNote: true,
+};
+
+function isPortMember(property: PropertyKey): property is keyof VCSAdapter {
+  return typeof property === "string" && Object.hasOwn(PORT_MEMBERS, property);
+}
 
 /**
  * How `provider`'s handles compare, from its integration's runtime.
@@ -105,7 +150,9 @@ export async function vcsHandleIdentity(provider: string): Promise<VcsHandleIden
  * it makes is already bounded on its own, and a timer started here would
  * expire the context under whoever still holds it.
  */
-async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<VCSAdapter> {
+async function resolveIntegrationAdapter(
+  target: RepositoryVcsTarget,
+): Promise<VcsIntegrationAdapter> {
   const manifest = integrationManifest(target.provider);
   if (!manifest?.capabilities.includes("vcs")) {
     throw new Error(
@@ -167,41 +214,41 @@ async function resolveIntegrationAdapter(target: RepositoryVcsTarget): Promise<V
   const adapter = (factory as unknown as (
     context: IntegrationContext<IntegrationManifest>,
     repository: { repoPath: string; baseBranch: string },
-  ) => VCSAdapter)(ctx, target);
+  ) => VcsIntegrationAdapter)(ctx, target);
   // Every title, body, comment, review and status summary core publishes
   // through it is redacted with the whole set of known secrets first: one of
   // the publishing boundaries `publication-redaction.ts` lists.
   return redactingPublications(adapter, VCS_PUBLICATIONS);
 }
 
-function lazyAdapter(resolve: () => Promise<VCSAdapter>): DeferredVcsAdapter {
-  let resolved: Promise<VCSAdapter> | undefined;
-  const adapter = () => (resolved ??= resolve());
+function lazyAdapter(resolve: () => Promise<VcsIntegrationAdapter>): DeferredVcsAdapter {
   return new Proxy({} as DeferredVcsAdapter, {
     get(_target, property) {
-      if (property === "then") return;
+      if (!isPortMember(property)) return undefined;
       return async (...args: unknown[]) => {
-        const concrete = await adapter();
-        const member = (concrete as unknown as Record<PropertyKey, unknown>)[property];
+        const concrete = await resolve();
+        const member: unknown = concrete[property];
         if (typeof member !== "function") {
-          throw new TypeError(`Version control provider does not support ${String(property)}.`);
+          throw new TypeError(`Version control provider does not support ${property}.`);
         }
-        return member.apply(concrete, args);
+        return (member as (...values: unknown[]) => unknown).apply(concrete, args);
       };
     },
+    has: (_target, property) => isPortMember(property),
   });
 }
 
 export function createRepositoryVcsRuntime(target: RepositoryVcsTarget): RepositoryVcsRuntime {
-  let concrete: Promise<VCSAdapter> | undefined;
+  let concrete: Promise<VcsIntegrationAdapter> | undefined;
   const resolve = () => (concrete ??= resolveIntegrationAdapter(target));
   return {
     provider: target.provider,
     repoPath: target.repoPath,
     baseBranch: target.baseBranch,
     vcs: lazyAdapter(resolve),
+    adapter: resolve,
     credentials: async () => {
-      const adapter = await resolve() as VcsIntegrationAdapter;
+      const adapter = await resolve();
       if (!adapter.sandboxCredentials) {
         throw new Error(
           `Version control provider ${target.provider} cannot hand a sandbox credentials to push with.`,
@@ -221,8 +268,17 @@ export function createRepositoryVCS(target: RepositoryVcsTarget): DeferredVcsAda
   return createRepositoryVcsRuntime(target).vcs;
 }
 
+/**
+ * The repository's adapter with its connection resolved: what a caller asks
+ * when it needs more than the port, a gate status or a pull request's files,
+ * and has to know whether this provider offers it.
+ */
+export function resolveRepositoryVCS(target: RepositoryVcsTarget): Promise<VcsIntegrationAdapter> {
+  return createRepositoryVcsRuntime(target).adapter();
+}
+
 export async function loadRepositoryVcsProfile(target: RepositoryVcsTarget) {
-  const adapter = await resolveIntegrationAdapter(target) as VcsIntegrationAdapter;
+  const adapter = await resolveIntegrationAdapter(target);
   if (!adapter.loadRepositoryProfile) {
     throw new Error(
       `Version control provider ${target.provider} does not support repository profiles.`,
@@ -238,7 +294,7 @@ export function createManualDispatchPrReader(target: {
   return {
     async getManualDispatchPullRequest(prId) {
       // The capability is asked of the resolved adapter: the deferred one
-      // answers every member with a function.
+      // forwards the port and nothing else.
       const adapter = await resolveIntegrationAdapter({ ...target, baseBranch: "" });
       if (!hasManualDispatchPrCapability(adapter)) {
         throw new ManualDispatchUnsupportedError(target.provider);
@@ -259,7 +315,7 @@ export async function resolveConfiguredPullRequestUrl(
 
   for (const provider of providerIds) {
     const adapter = await resolveIntegrationAdapter({ provider, repoPath: "", baseBranch: "" });
-    const parse = (adapter as VcsIntegrationAdapter).parsePullRequestUrl;
+    const parse = adapter.parsePullRequestUrl;
     if (!parse) continue;
     const parsed = parse.call(adapter, url);
     if (parsed) return { provider, ...parsed };
@@ -475,11 +531,11 @@ export async function resolveRepositorySkillSource(
   for (const entry of resolved.usable) {
     let adapter: VcsIntegrationAdapter;
     try {
-      adapter = (await resolveIntegrationAdapter({
+      adapter = await resolveIntegrationAdapter({
         provider: entry.manifest.id,
         repoPath: "",
         baseBranch: "",
-      })) as VcsIntegrationAdapter;
+      });
     } catch (error) {
       // One broken provider must not decide for the others.
       unreachable.push(

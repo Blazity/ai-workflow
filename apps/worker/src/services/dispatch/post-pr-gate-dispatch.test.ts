@@ -23,7 +23,7 @@ const mockReleaseLock = vi.fn();
 const mockStart = vi.fn();
 const mockGetRun = vi.fn();
 const mockCancelRun = vi.fn();
-const mockCreateAdapters = vi.fn();
+const mockResolveRepositoryVCS = vi.fn();
 const mockUpdateGateStatus = vi.fn();
 
 vi.mock("workflow/api", () => ({
@@ -58,8 +58,8 @@ vi.mock("../../post-pr-gate/gate-store.js", () => ({
   })),
 }));
 
-vi.mock("../../engine/support/adapters.js", () => ({
-  createAdapters: (...args: any[]) => mockCreateAdapters(...args),
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
+  resolveRepositoryVCS: async (...args: any[]) => mockResolveRepositoryVCS(...args),
 }));
 
 vi.mock("../../engine/index.js", () => ({
@@ -104,11 +104,9 @@ describe("dispatchPostPrGateWebhook eligibility", () => {
     mockCancelRun.mockResolvedValue(undefined);
     mockGetRun.mockReturnValue({ cancel: mockCancelRun });
     mockUpdateGateStatus.mockResolvedValue(undefined);
-    mockCreateAdapters.mockReturnValue({
-      vcs: {
-        createGateStatus: vi.fn(),
-        updateGateStatus: mockUpdateGateStatus,
-      },
+    mockResolveRepositoryVCS.mockResolvedValue({
+      createGateStatus: vi.fn(),
+      updateGateStatus: mockUpdateGateStatus,
     });
   });
 
@@ -168,11 +166,9 @@ describe("dispatchPostPrGateWebhook orchestration", () => {
     mockCancelRun.mockResolvedValue(undefined);
     mockGetRun.mockReturnValue({ cancel: mockCancelRun });
     mockUpdateGateStatus.mockResolvedValue(undefined);
-    mockCreateAdapters.mockReturnValue({
-      vcs: {
-        createGateStatus: vi.fn(),
-        updateGateStatus: mockUpdateGateStatus,
-      },
+    mockResolveRepositoryVCS.mockResolvedValue({
+      createGateStatus: vi.fn(),
+      updateGateStatus: mockUpdateGateStatus,
     });
   });
 
