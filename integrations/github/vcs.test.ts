@@ -62,7 +62,6 @@ const mockOctokit = {
 // reach for has to be here: a name missing from the factory throws on import,
 // not at the call.
 vi.mock("./auth", () => ({
-  buildOctokit: vi.fn(() => mockOctokit),
   mintInstallationToken: vi.fn(async () => "ghs-installation-token"),
   getBotIdentity: vi.fn(async () => ({
     name: "ai-workflow[bot]",
@@ -74,7 +73,8 @@ function ghAdapter(
   overrides: Partial<ConstructorParameters<typeof GitHubAdapter>[0]> = {},
 ) {
   return new GitHubAdapter({
-    credential: { appId: 1, privateKey: "a2V5", installationId: 2 },
+    octokit: mockOctokit as never,
+    appId: 1,
     owner: "test-org",
     repo: "test-repo",
     baseBranch: "main",

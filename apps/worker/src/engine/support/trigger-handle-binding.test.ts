@@ -1,7 +1,8 @@
-import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { TriggerEvent } from "@shared/contracts";
 import { describe, expect, it, vi } from "vitest";
+
+import { gitLabRestAnswers } from "../../test-support/gitlab-rest.js";
 
 /**
  * The two halves of a check identity, put together the way a run puts them.
@@ -29,8 +30,6 @@ const mockOctokit = vi.hoisted(() => ({
   paginate: vi.fn(),
 }));
 
-vi.mock("@octokit/rest", () => ({ Octokit: vi.fn(() => mockOctokit) }));
-vi.mock("@octokit/auth-app", () => ({ createAppAuth: vi.fn(() => vi.fn()) }));
 // `bindCurrentPullRequest` is pure; its module also exports the reader that
 // resolves an adapter through the capability, which would drag this deployment's
 // environment in. This test builds the adapter itself, on purpose, so the
@@ -52,16 +51,10 @@ const delivery = JSON.parse(
   ),
 );
 
-/** A real key, because the credential reader refuses anything that is not one. */
-const { privateKey } = generateKeyPairSync("rsa", {
-  modulusLength: 2048,
-  privateKeyEncoding: { type: "pkcs1", format: "pem" },
-  publicKeyEncoding: { type: "spki", format: "pem" },
-});
-
 function adapter() {
   return new GitHubAdapter({
-    credential: { appId: 1, privateKey: privateKey as unknown as string, installationId: 2 },
+    octokit: mockOctokit as never,
+    appId: 1,
     owner: "Codertocat",
     repo: "Hello-World",
     baseBranch: "master",
@@ -224,6 +217,26 @@ const gitLabPipeline = JSON.parse(
 );
 
 /**
+ * The GitLab adapter on GitLab's REST answers for merge request 1 of
+ * `gitlab-org/gitlab-test`: the merge request and the jobs of a pipeline,
+ * through the context's fetch, which is how the adapter reaches GitLab.
+ */
+function gitLabAnswering(answers: { mergeRequest: unknown; jobs: unknown[] }) {
+  return new GitLabAdapter({
+    http: gitLabRestAnswers((path) =>
+      path.endsWith("/merge_requests/1")
+        ? answers.mergeRequest
+        : /\/pipelines\/\d+\/jobs$/u.test(path)
+          ? answers.jobs
+          : undefined,
+    ),
+    token: "t",
+    projectId: "gitlab-org/gitlab-test",
+    baseBranch: "master",
+  });
+}
+
+/**
  * GitLab's half of the same question, on a merged-results pipeline: the one
  * kind of pipeline whose own sha is NOT the merge request's head. GitLab runs
  * it on a temporary commit that merges the source into the target, so a
@@ -241,34 +254,21 @@ describe("a failed GitLab pipeline binds to the merge request it ran for", () =>
     return body;
   }
 
-  function gitLabClient(headPipeline: { id: number; status: string }) {
-    return {
-      MergeRequests: {
-        show: vi.fn().mockResolvedValue({
-          diff_refs: { head_sha: sourceHead },
-          source_branch: "test",
-          target_branch: "master",
-          state: "opened",
-          head_pipeline: headPipeline,
-        }),
+  function gitLabAdapter(headPipeline: { id: number; status: string }) {
+    return gitLabAnswering({
+      mergeRequest: {
+        diff_refs: { head_sha: sourceHead },
+        source_branch: "test",
+        target_branch: "master",
+        state: "opened",
+        head_pipeline: headPipeline,
       },
-      Jobs: {
-        all: vi.fn().mockResolvedValue(
-          gitLabPipeline.builds.map((build: { id: number; name: string }) => ({
-            id: build.id,
-            name: build.name,
-            status: build.name === "test-build" ? "failed" : "success",
-          })),
-        ),
-      },
-    };
-  }
-
-  function gitLabAdapter(client: ReturnType<typeof gitLabClient>) {
-    return new GitLabAdapter(
-      { token: "t", projectId: "gitlab-org/gitlab-test", baseBranch: "master" },
-      client as never,
-    );
+      jobs: gitLabPipeline.builds.map((build: { id: number; name: string }) => ({
+        id: build.id,
+        name: build.name,
+        status: build.name === "test-build" ? "failed" : "success",
+      })),
+    });
   }
 
   it("adopts the merge request's head once the failed job is still failed on it", async () => {
@@ -277,7 +277,7 @@ describe("a failed GitLab pipeline binds to the merge request it ran for", () =>
     });
     expect(event?.triggerType).toBe("trigger_pr_checks_failed");
 
-    const vcs = gitLabAdapter(gitLabClient({ id: 31, status: "failed" }));
+    const vcs = gitLabAdapter({ id: 31, status: "failed" });
     const current = await vcs.getPRHead(1);
     const bound = bindCurrentPullRequest(event!, current, gitlabHandleIdentity,
     );
@@ -294,7 +294,7 @@ describe("a failed GitLab pipeline binds to the merge request it ran for", () =>
       deliveryId: "gl-2",
     });
 
-    const vcs = gitLabAdapter(gitLabClient({ id: 32, status: "failed" }));
+    const vcs = gitLabAdapter({ id: 32, status: "failed" });
     const current = await vcs.getPRHead(1);
 
     expect(
@@ -406,27 +406,19 @@ describe("an envelope recorded before checks carried a handle still binds", () =
   }
 
   function gitLabHead(headPipelineId: number) {
-    const client = {
-      MergeRequests: {
-        show: vi.fn().mockResolvedValue({
-          diff_refs: { head_sha: "5f2d4c1e9a7b3d6f8e0c2a4b6d8f0e1c3a5b7d9f" },
-          source_branch: "test",
-          target_branch: "master",
-          state: "opened",
-          head_pipeline: { id: headPipelineId, status: "failed" },
-        }),
+    return gitLabAnswering({
+      mergeRequest: {
+        diff_refs: { head_sha: "5f2d4c1e9a7b3d6f8e0c2a4b6d8f0e1c3a5b7d9f" },
+        source_branch: "test",
+        target_branch: "master",
+        state: "opened",
+        head_pipeline: { id: headPipelineId, status: "failed" },
       },
-      Jobs: {
-        all: vi.fn().mockResolvedValue([
-          { id: 378, name: "test-build", status: "failed" },
-          { id: 377, name: "test-image", status: "success" },
-        ]),
-      },
-    };
-    return new GitLabAdapter(
-      { token: "t", projectId: "gitlab-org/gitlab-test", baseBranch: "master" },
-      client as never,
-    );
+      jobs: [
+        { id: 378, name: "test-build", status: "failed" },
+        { id: 377, name: "test-image", status: "success" },
+      ],
+    });
   }
 
   it("binds a GitLab job recorded by name under its pipeline", async () => {

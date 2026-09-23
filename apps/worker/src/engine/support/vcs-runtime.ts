@@ -368,56 +368,6 @@ export async function buildSandboxProviderConfigs(
   return configs;
 }
 
-// A few bounded retries with jittered exponential backoff, for the one call
-// where a provider hiccup costs a whole run: the pre-sandbox step that selects
-// repositories owns this listing under a 60 second budget, so a longer ladder
-// would spend that budget hanging instead of failing with a reason. Worst case
-// is three attempts plus at most 1.5 seconds of backoff. The ladder lived in
-// `adapters/vcs/repository-directory.ts` until S11 and moved here with the
-// listing, rather than being dropped with the code around it.
-const LISTING_MAX_ATTEMPTS = 3;
-const LISTING_RETRY_BASE_DELAY_MS = 500;
-const LISTING_RETRY_MAX_DELAY_MS = 4_000;
-
-function listingRetryDelayMs(failedAttempt: number): number {
-  const ceiling = Math.min(
-    LISTING_RETRY_MAX_DELAY_MS,
-    LISTING_RETRY_BASE_DELAY_MS * 2 ** (failedAttempt - 1),
-  );
-  // Full jitter, so retries a shared upstream blip fired at once do not
-  // re-converge on the same instant.
-  return Math.floor(Math.random() * ceiling);
-}
-
-/** Retry only what the provider can recover from without us changing anything:
- *  a timeout or a 5xx. A 401 or 403 is a credential the retry would replay
- *  unchanged, and every other 4xx is a request this code will keep sending. */
-function isTransientListingError(error: unknown): boolean {
-  if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) {
-    return true;
-  }
-  if (typeof error !== "object" || error === null) return false;
-  if ((error as { timedOut?: unknown }).timedOut === true) return true;
-  const status = (error as { status?: unknown }).status;
-  return typeof status === "number" && status >= 500 && status < 600;
-}
-
-export async function listWithRetry<T>(list: () => Promise<T[]>): Promise<T[]> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= LISTING_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await list();
-    } catch (error) {
-      lastError = error;
-      if (attempt >= LISTING_MAX_ATTEMPTS || !isTransientListingError(error)) break;
-      await new Promise((resolve) => {
-        setTimeout(resolve, listingRetryDelayMs(attempt));
-      });
-    }
-  }
-  throw lastError;
-}
-
 /**
  * Every repository this deployment can see, from every connected version
  * control provider. Until S11 a second listing sat beside this one, fetched by
@@ -475,7 +425,12 @@ export async function listVcsRepositories(options: {
       if (!adapter.listRepositories) {
         throw new Error(`${entry.manifest.name} does not support repository listing.`);
       }
-      repositories.push(...await listWithRetry(adapter.listRepositories.bind(adapter)));
+      // No retry here: each page goes through the context's HTTP, which
+      // retries what GitLab or GitHub can recover from (a 5xx, a 429, a
+      // request that got no answer) and never a refusal. A second ladder on
+      // top would multiply the attempts (three of its own, each three of the
+      // context's) past the repository selection step's 60 second budget.
+      repositories.push(...(await adapter.listRepositories()));
     } catch (error) {
       failures.push({
         provider: entry.manifest.id,

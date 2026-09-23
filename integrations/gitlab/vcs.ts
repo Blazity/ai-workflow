@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Gitlab } from "@gitbeaker/rest";
+import type { Gitlab } from "@gitbeaker/rest";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   FatalError,
@@ -11,6 +11,7 @@ import {
   legacyReviewCommentMarker,
   markReviewLedgerReplyResolved,
   markReviewLedgerReplyStale,
+  providerAnswer,
   PullRequestUnreadableError,
   readAnyReviewLedgerMarker,
   readProviderFailure,
@@ -27,6 +28,7 @@ import {
   type GateStatusCapableVCS,
   type GateStatusRef,
   type GateStatusUpdate,
+  type IntegrationHttp,
   type IntegrationLogger,
   type ManualDispatchPrCapableVCS,
   type ManualDispatchPullRequestSnapshot,
@@ -56,6 +58,7 @@ import {
   jobCheck,
   pipelineCheck,
 } from "./pipeline-checks";
+import { gitLabClient, GitLabRequestError, type GitLabClient, type GitLabRequestInit } from "./client";
 import { createGitLabProfileSource } from "./profile-source";
 
 function clampBothEnds(value: string, maxLength: number): string {
@@ -166,6 +169,9 @@ const COMMIT_STATUS_409_RETRY_DELAYS_MS = [500, 1_000, 2_000];
 const PROJECTS_LIST_TIMEOUT_MS = 18_000;
 
 export interface GitLabConfig {
+  /** The context's HTTP: every request this adapter makes goes through it
+   *  (see `client.ts`). */
+  http: IntegrationHttp;
   token: string;
   projectId: string;
   baseBranch: string;
@@ -215,56 +221,50 @@ export class GitLabAdapter implements
   PRReviewCapableVCS,
   ManualDispatchPrCapableVCS
 {
+  private client: GitLabClient;
   private gl: InstanceType<typeof Gitlab>;
   private projectId: string;
   private baseBranch: string;
   /** `undefined` until looked up; `null` when GitLab returned no username. */
   private cachedUsername: string | null | undefined;
 
-  constructor(
-    private config: GitLabConfig,
-    client?: InstanceType<typeof Gitlab>,
-  ) {
-    this.gl =
-      client ??
-      new Gitlab({
-        token: config.token,
-        ...(config.host ? { host: config.host } : {}),
-      });
+  constructor(private config: GitLabConfig) {
+    this.client = gitLabClient({
+      http: config.http,
+      host: config.host ?? "https://gitlab.com",
+      token: config.token,
+    });
+    this.gl = this.client.api;
     this.projectId = config.projectId;
     this.baseBranch = config.baseBranch;
   }
 
-
   /**
-   * Every project the token is a member of. A failure carries `status` or
-   * `timedOut`, because core's listing retry reads exactly those to tell a
-   * GitLab outage it can wait out from a credential it would replay unchanged.
+   * Every project the token is a member of, one page at a time inside the
+   * catalog import's budget. The context retries a page GitLab failed on its
+   * own side or never answered; a failure that reaches the caller carries
+   * GitLab's status, or says the page ran out of time.
    */
   async listRepositories(): Promise<VcsRepositoryMetadata[]> {
     const projects: any[] = [];
-    const baseUrl = (this.config.host ?? "https://gitlab.com").replace(/\/$/u, "");
     let page = "1";
     while (page) {
-      const response = await fetch(
-        `${baseUrl}/api/v4/projects?membership=true&per_page=100&page=${page}`,
-        {
-          headers: { "PRIVATE-TOKEN": this.config.token },
-          signal: AbortSignal.timeout(PROJECTS_LIST_TIMEOUT_MS),
-        },
-      ).catch((error: unknown) => {
-        if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-          throw Object.assign(
-            new Error(`GitLab projects list timed out after ${PROJECTS_LIST_TIMEOUT_MS}ms`),
-            { timedOut: true },
-          );
-        }
-        throw error;
-      });
+      const response = await this.client
+        .send(`/projects?membership=true&per_page=100&page=${page}`, {
+          timeoutMs: PROJECTS_LIST_TIMEOUT_MS,
+        })
+        .catch((error: unknown) => {
+          if (error instanceof Error && error.name === "TimeoutError") {
+            throw new Error(`GitLab projects list timed out after ${PROJECTS_LIST_TIMEOUT_MS}ms`, {
+              cause: error,
+            });
+          }
+          throw error;
+        });
       if (!response.ok) {
-        throw Object.assign(
-          new Error(`GitLab projects list failed: ${response.status} ${response.statusText}`),
-          { status: response.status },
+        throw new GitLabRequestError(
+          `GitLab projects list failed: ${response.status} ${response.statusText}`,
+          response,
         );
       }
       projects.push(...((await response.json()) as any[]));
@@ -274,10 +274,7 @@ export class GitLabAdapter implements
   }
 
   loadRepositoryProfile(repoPath: string) {
-    return createGitLabProfileSource(
-      { token: this.config.token, host: this.config.host ?? "https://gitlab.com" },
-      repoPath,
-    ).loadProfile();
+    return createGitLabProfileSource(this.client, repoPath).loadProfile();
   }
 
   async sandboxCredentials() {
@@ -288,10 +285,6 @@ export class GitLabAdapter implements
       commitAuthor: "ai-workflow-blazity",
       commitEmail: "ai-workflow@blazity.com",
     };
-  }
-
-  private get apiBaseUrl(): string {
-    return `${(this.config.host ?? "https://gitlab.com").replace(/\/+$/, "")}/api/v4`;
   }
 
   private get encodedProjectId(): string {
@@ -351,18 +344,9 @@ export class GitLabAdapter implements
     }
   }
 
-  private getStatusCode(err: any): number | undefined {
-    // gitbeaker error shapes vary across versions and transports:
-    // - fetch-based: err.cause.response.status
-    // - got-based:   err.response.statusCode / err.response.status
-    // - normalized:  err.status / err.statusCode
-    return (
-      err?.cause?.response?.status ??
-      err?.response?.status ??
-      err?.response?.statusCode ??
-      err?.status ??
-      err?.statusCode
-    );
+  /** GitLab's status in a failure, read where the SDK reads it. */
+  private getStatusCode(err: unknown): number | undefined {
+    return providerAnswer(err)?.status;
   }
 
   /** A refusal of the values sent is final for this call; anything else,
@@ -394,23 +378,20 @@ export class GitLabAdapter implements
       retryOn409?: boolean;
     },
   ): Promise<{ data: T; headers: Headers }> {
-    const headers: Record<string, string> = {
-      "PRIVATE-TOKEN": this.config.token,
-    };
-    const init: RequestInit = {
+    const init: GitLabRequestInit = {
       method: options.method,
-      headers,
+      ...(options.body !== undefined
+        ? {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(options.body),
+          }
+        : {}),
     };
-
-    if (options.body !== undefined) {
-      headers["Content-Type"] = "application/json";
-      init.body = JSON.stringify(options.body);
-    }
 
     const retryDelays = options.retryOn409 ? COMMIT_STATUS_409_RETRY_DELAYS_MS : [];
     const maxAttempts = retryDelays.length + 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const response = await fetch(`${this.apiBaseUrl}${path}`, init);
+      const response = await this.client.send(path, init);
       if (response.ok) {
         return {
           data:
@@ -431,11 +412,10 @@ export class GitLabAdapter implements
         // Best-effort diagnostic body.
       }
       const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-      const error = new Error(
+      throw new GitLabRequestError(
         `GitLab REST ${options.method} ${path} failed with ${status}${details ? `: ${details}` : ""}`,
+        response,
       );
-      Object.assign(error, { status: response.status });
-      throw error;
     }
 
     throw new Error(`GitLab REST ${options.method} ${path} failed`);

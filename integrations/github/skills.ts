@@ -20,7 +20,7 @@ import type {
   RepositorySkillTreeEntry,
 } from "@integrations/sdk";
 import { extract } from "tar-stream";
-import { buildOctokit, type GitHubAppCredential } from "./auth";
+import type { Octokit } from "@octokit/rest";
 
 /**
  * A provider failure that already knows which HTTP status it deserves.
@@ -97,15 +97,11 @@ const MAX_REPOSITORY_ARCHIVE_BYTES = 50 * 1024 * 1024;
 const MAX_SNAPSHOT_FILE_BYTES = 1024 * 1024;
 
 /**
- * The port, backed by the App installation this deployment is connected as.
- *
- * Octokit mints and refreshes the installation token per request, so the client
- * is built once per import rather than per call.
+ * The port, backed by the App installation this deployment is connected as,
+ * through the adapter's own client (`buildOctokit`), which mints and
+ * refreshes the installation token as it goes.
  */
-export function createGitHubSkillSource(
-  credential: GitHubAppCredential,
-): RepositorySkillSource {
-  const octokit = buildOctokit(credential);
+export function createGitHubSkillSource(octokit: Octokit): RepositorySkillSource {
   return {
     async getDefaultBranch(input) {
       const response = await gitHubCall(() =>

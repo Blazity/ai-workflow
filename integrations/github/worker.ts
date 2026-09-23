@@ -36,7 +36,8 @@ function adapter(ctx: GitHubContext, repository?: { repoPath: string; baseBranch
   const target = repository ?? { repoPath: "", baseBranch: "" };
   const [owner = "", repo = ""] = target.repoPath.split("/");
   return new GitHubAdapter({
-    credential: credentialOf(ctx),
+    octokit: octokitOf(ctx),
+    appId: ctx.connection.appId,
     owner,
     repo,
     baseBranch: target.baseBranch,
@@ -44,9 +45,9 @@ function adapter(ctx: GitHubContext, repository?: { repoPath: string; baseBranch
   });
 }
 
-/** The connection's own Octokit, on the context's HTTP (see `buildOctokit`). */
+/** The connection's one client, on the context's HTTP (see `buildOctokit`). */
 function octokitOf(ctx: GitHubContext) {
-  return buildOctokit(credentialOf(ctx), { fetch: ctx.http.fetch });
+  return buildOctokit(credentialOf(ctx), ctx.http.fetch);
 }
 
 /** The App itself, on the App JWT. Fails when the key or the App id is wrong. */

@@ -13,7 +13,7 @@ import type { IssueTrackerAdapter, IssueTrackerQueryRule } from "./issue-tracker
 import type { IntegrationBlockManifest, IntegrationManifest } from "./manifest";
 import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter } from "./messaging";
-import type { VCSAdapter, VcsHandleIdentity } from "./vcs";
+import type { VcsHandleIdentity, VcsIntegrationAdapter } from "./vcs";
 import type { IntegrationWebhook, IntegrationWebhookReception } from "./webhook";
 
 /**
@@ -181,7 +181,9 @@ export type ErasedIntegrationCall<R> = (...args: never[]) => Promise<R>;
 /** Core creates adapters through these, with a fresh context whenever the connection changes. */
 export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
   issue_tracker: (ctx: IntegrationContext<M>) => IssueTrackerAdapter;
-  vcs: (ctx: IntegrationContext<M>, repository: VcsRepositoryTarget) => VCSAdapter;
+  /** The port, plus whichever of the optional surfaces in `vcs-extensions.ts`
+   *  this provider has, so what it returns is checked against both. */
+  vcs: (ctx: IntegrationContext<M>, repository: VcsRepositoryTarget) => VcsIntegrationAdapter;
   messaging: (ctx: IntegrationContext<M>) => MessagingAdapter;
   memory: (ctx: IntegrationContext<M>) => MemoryAdapter;
   agent_tracing: (ctx: IntegrationContext<M>) => AgentTracingAdapter;

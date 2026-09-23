@@ -59,17 +59,15 @@ import {
   isTrustedByDefaultCheckProducer,
   type GitHubHandle,
 } from "./handles";
-import {
-  buildOctokit,
-  getBotIdentity,
-  mintInstallationToken,
-  type GitHubAppCredential,
-} from "./auth";
+import { getBotIdentity, mintInstallationToken } from "./auth";
 import { createGitHubProfileSource } from "./profile-source";
 import { createGitHubSkillSource } from "./skills";
 
 export interface GitHubConfig {
-  credential: GitHubAppCredential;
+  /** The integration's one client, built from the context (`buildOctokit`). */
+  octokit: Octokit;
+  /** The App's id: a check run is ours when this App created it. */
+  appId: number;
   owner: string;
   repo: string;
   baseBranch: string;
@@ -431,7 +429,7 @@ export class GitHubAdapter
   private cachedViewerLogin: string | null | undefined;
 
   constructor(private config: GitHubConfig) {
-    this.octokit = buildOctokit(config.credential);
+    this.octokit = config.octokit;
   }
 
   private get ownerRepo() {
@@ -465,24 +463,24 @@ export class GitHubAdapter
   }
 
   loadRepositoryProfile(repoPath: string) {
-    return createGitHubProfileSource(this.config.credential, repoPath).loadProfile();
+    return createGitHubProfileSource(this.octokit, repoPath).loadProfile();
   }
 
   /** A short-lived installation token, plus the identity that makes a commit
    * render as the App rather than as the human who registered it. */
   async sandboxCredentials(): Promise<VcsSandboxCredentials> {
-    const identity = await getBotIdentity(this.config.credential);
+    const identity = await getBotIdentity(this.octokit);
     return {
       host: "https://github.com",
       authUser: "x-access-token",
-      token: await mintInstallationToken(this.config.credential),
+      token: await mintInstallationToken(this.octokit),
       commitAuthor: identity.name,
       commitEmail: identity.email,
     };
   }
 
   skillSource(): RepositorySkillSource {
-    return createGitHubSkillSource(this.config.credential);
+    return createGitHubSkillSource(this.octokit);
   }
 
   async createBranchIfMissing(
@@ -1389,7 +1387,7 @@ export class GitHubAdapter
     const pending = existing.find(
       (check) =>
         check.name === name &&
-        check.app?.id === this.config.credential.appId &&
+        check.app?.id === this.config.appId &&
         (ownershipKey === undefined || check.external_id === ownershipKey) &&
         (check.status === "queued" || check.status === "in_progress"),
     );

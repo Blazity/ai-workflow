@@ -1,4 +1,3 @@
-import { generateKeyPairSync } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitHubAdapter } from "../../../../../integrations/github/vcs.js";
 import { GitLabAdapter } from "../../../../../integrations/gitlab/vcs.js";
@@ -31,13 +30,6 @@ vi.mock("../../infra/logger.js", () => ({
  * resolve line-anchored threads. Asserting equality there would pin a bug into
  * place rather than catch one.
  */
-
-/** The App credential reader refuses anything that is not a key, so this is one. */
-const TEST_PRIVATE_KEY = generateKeyPairSync("rsa", {
-  modulusLength: 2048,
-  privateKeyEncoding: { type: "pkcs1", format: "pem" },
-  publicKeyEncoding: { type: "spki", format: "pem" },
-}).privateKey as unknown as string;
 
 const BOT = "aiw-bot";
 const PR = 7;
@@ -138,18 +130,8 @@ const mockOctokit = {
   pulls: { listReviews: vi.fn(), listCommentsForReview: vi.fn() },
 };
 
-// The GitHub adapter lives in its own package now, so the module to replace is
-// that package's own auth, not core's.
-vi.mock("../../../../../integrations/github/auth.js", () => ({
-  buildOctokit: vi.fn(() => mockOctokit),
-}));
-
-const mockDiscussions = { all: vi.fn() };
-
-vi.mock("@gitbeaker/rest", () => ({
-  Gitlab: vi.fn(() => ({ MergeRequestDiscussions: mockDiscussions })),
-}));
-
+/** GitLab's REST API as the adapter's client reaches it: through the
+ *  context's fetch, Gitbeaker's discussion listing included. */
 const mockFetch = vi.fn();
 
 interface Provider {
@@ -173,7 +155,8 @@ const providers: Provider[] = [
       // nothing, so the scenario observes the line-anchored threads alone.
       mockOctokit.paginate.mockResolvedValue([]);
       return new GitHubAdapter({
-        credential: { appId: 1, privateKey: TEST_PRIVATE_KEY, installationId: 2 },
+        octokit: mockOctokit as never,
+        appId: 1,
         owner: "test-org",
         repo: "test-repo",
         baseBranch: "main",
@@ -184,7 +167,6 @@ const providers: Provider[] = [
     name: "gitlab",
     threadId: gitlabThreadId,
     load(threads) {
-      mockDiscussions.all.mockResolvedValue(renderGitLab(threads));
       mockFetch.mockImplementation(async (input: string | URL | Request) => {
         const url =
           typeof input === "string"
@@ -195,26 +177,17 @@ const providers: Provider[] = [
         const body = url.includes("/discussions")
           ? renderGitLab(threads)
           : { username: BOT };
-        return {
-          ok: true,
+        return new Response(JSON.stringify(body), {
           status: 200,
-          statusText: "OK",
-          headers: new Headers(),
-          json: vi.fn().mockResolvedValue(body),
-          text: vi.fn().mockResolvedValue(JSON.stringify(body)),
-          blob: vi.fn().mockResolvedValue(
-            new Blob([JSON.stringify(body)], { type: "application/json" }),
-          ),
-        };
+          headers: { "content-type": "application/json" },
+        });
       });
-      vi.stubGlobal("fetch", mockFetch);
       return new GitLabAdapter({
+        http: { fetch: mockFetch },
         token: "glpat-xxxxxxxxxxxx",
         projectId: "blazity/demo-app",
         baseBranch: "main",
-      }, {
-        MergeRequestDiscussions: mockDiscussions,
-      } as any) as unknown as VCSAdapter;
+      }) as unknown as VCSAdapter;
     },
   },
 ];
@@ -268,7 +241,6 @@ describe("review thread feed, one contract across providers", () => {
     vi.clearAllMocks();
     mockOctokit.graphql.mockReset();
     mockOctokit.paginate.mockReset();
-    mockDiscussions.all.mockReset();
     mockFetch.mockReset();
   });
 

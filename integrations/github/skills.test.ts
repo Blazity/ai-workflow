@@ -16,11 +16,8 @@ const octokit = {
   git: { getTree: vi.fn() },
 };
 
-vi.mock("./auth", () => ({
-  buildOctokit: () => octokit,
-}));
-
-const CREDENTIAL = { appId: 1, privateKey: "pem", installationId: 2 };
+/** The adapter's own client, which the source is handed. */
+const CLIENT = octokit as never;
 const COMMIT = "a".repeat(40);
 const TREE = "b".repeat(40);
 
@@ -85,7 +82,7 @@ describe("GitHub skill source", () => {
     ]);
     octokit.repos.downloadTarballArchive.mockResolvedValue({ data: archive });
 
-    const files = await createGitHubSkillSource(CREDENTIAL).getFiles({
+    const files = await createGitHubSkillSource(CLIENT).getFiles({
       owner: "acme",
       repository: "skills",
       commitSha: COMMIT,
@@ -110,7 +107,7 @@ describe("GitHub skill source", () => {
       data: Buffer.alloc(50 * 1024 * 1024 + 1),
     });
 
-    const error = await createGitHubSkillSource(CREDENTIAL)
+    const error = await createGitHubSkillSource(CLIENT)
       .getFiles({
         owner: "acme",
         repository: "skills",
@@ -135,7 +132,7 @@ describe("GitHub skill source", () => {
     octokit.repos.get.mockResolvedValue({ data: { default_branch: null } });
 
     await expect(
-      createGitHubSkillSource(CREDENTIAL).getDefaultBranch({
+      createGitHubSkillSource(CLIENT).getDefaultBranch({
         owner: "acme",
         repository: "skills",
       }),
@@ -162,7 +159,7 @@ describe("GitHub skill source", () => {
     });
 
     await expect(
-      createGitHubSkillSource(CREDENTIAL).getTree({
+      createGitHubSkillSource(CLIENT).getTree({
         owner: "acme",
         repository: "skills",
         treeSha: TREE,
@@ -184,7 +181,7 @@ describe("GitHub skill source", () => {
       data: { truncated: false, tree: [{ path: "skills", type: "blob" }] },
     });
     await expect(
-      createGitHubSkillSource(CREDENTIAL).getTree({
+      createGitHubSkillSource(CLIENT).getTree({
         owner: "acme",
         repository: "skills",
         treeSha: TREE,
@@ -206,7 +203,7 @@ describe("GitHub refusing a skill import", () => {
   it("says the repository is missing or outside the installation on a 404", async () => {
     octokit.repos.get.mockRejectedValueOnce(requestError(404, "Not Found"));
 
-    const failure = await createGitHubSkillSource(CREDENTIAL)
+    const failure = await createGitHubSkillSource(CLIENT)
       .getDefaultBranch({ owner: "acme", repository: "skills" })
       .catch((error: unknown) => error);
 
@@ -222,7 +219,7 @@ describe("GitHub refusing a skill import", () => {
       requestError(403, "Resource not accessible by integration"),
     );
 
-    const failure = await createGitHubSkillSource(CREDENTIAL)
+    const failure = await createGitHubSkillSource(CLIENT)
       .resolveCommit({ owner: "acme", repository: "skills", ref: "main" })
       .catch((error: unknown) => error);
 
@@ -235,7 +232,7 @@ describe("GitHub refusing a skill import", () => {
   it("leaves a GitHub outage without a status of its own", async () => {
     octokit.git.getTree.mockRejectedValueOnce(requestError(502, "Bad Gateway"));
 
-    const failure = await createGitHubSkillSource(CREDENTIAL)
+    const failure = await createGitHubSkillSource(CLIENT)
       .getTree({ owner: "acme", repository: "skills", treeSha: TREE })
       .catch((error: unknown) => error);
 

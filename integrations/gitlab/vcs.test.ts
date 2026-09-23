@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./vcs.js";
 import { AI_WORKFLOW_COMMENT_MARKER, providerAnswer } from "@integrations/sdk";
+import { GitLabRequestError } from "./client.js";
 
 /**
  * Core's thread identity for a finding (`reviewFindingDigest` in the worker),
@@ -93,8 +94,14 @@ vi.mock("@gitbeaker/rest", () => ({
   })),
 }));
 
+/** The context's HTTP, as the integration's runtime hands it to the adapter:
+ *  every request the adapter makes outside Gitbeaker's (mocked) resources is
+ *  answered here, and the global `fetch` refuses. */
+const http = { fetch: (input: unknown, init?: unknown) => mockFetch(input, init) } as never;
+
 function glAdapter(overrides: Partial<ConstructorParameters<typeof GitLabAdapter>[0]> = {}) {
   return new GitLabAdapter({
+    http,
     token: "glpat-xxxxxxxxxxxx",
     projectId: "blazity/demo-app",
     baseBranch: "main",
@@ -107,7 +114,9 @@ describe("GitLabAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetch.mockReset();
-    vi.stubGlobal("fetch", mockFetch);
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("A request went around ctx.http.");
+    });
   });
 
   describe("repository listing", () => {
@@ -229,9 +238,12 @@ describe("GitLabAdapter", () => {
       expect(mockBranches.remove).not.toHaveBeenCalled();
     });
 
-    it("handles alternate gitbeaker error shapes (response.statusCode)", async () => {
-      const error = new Error("404 Branch Not Found") as any;
-      error.response = { statusCode: 404 };
+    it("seeds an empty project when GitLab answers the branch create with 404", async () => {
+      // What this integration's client throws for a non-2xx answer (`client.ts`).
+      const error = new GitLabRequestError(
+        "404 Branch Not Found",
+        new Response(null, { status: 404 }),
+      );
       mockBranches.create.mockRejectedValueOnce(error);
       mockRepositoryFiles.create.mockResolvedValueOnce({ branch: "main" });
       mockBranches.create.mockResolvedValueOnce({});
@@ -395,7 +407,7 @@ describe("GitLabAdapter", () => {
 
     it("returns null only for an authoritatively missing branch", async () => {
       mockBranches.show.mockRejectedValueOnce(
-        Object.assign(new Error("Not Found"), { response: { status: 404 } }),
+        new GitLabRequestError("404 Branch Not Found", new Response(null, { status: 404 })),
       );
 
       await expect(
@@ -756,6 +768,7 @@ describe("GitLabAdapter", () => {
       mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 555 }, { status: 201 }));
 
       const adapter = new GitLabAdapter({
+        http,
         token: "glpat-xxxxxxxxxxxx",
         projectId: "12345",
         baseBranch: "main",
@@ -1680,6 +1693,7 @@ describe("GitLabAdapter", () => {
   describe("nested namespace project id", () => {
     function nestedAdapter() {
       return new GitLabAdapter({
+        http,
         token: "glpat-xxxxxxxxxxxx",
         projectId: "group/subgroup/repo",
         baseBranch: "main",
