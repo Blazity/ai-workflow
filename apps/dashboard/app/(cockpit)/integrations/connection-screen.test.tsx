@@ -751,6 +751,37 @@ test("disconnecting names affected repositories and what is erased", async (t) =
   assert.equal(sent[1]!.method, "DELETE");
 });
 
+test("disconnecting onto the environment's values says no run stops, and that its token may differ", async (t) => {
+  // A run pins the non-secret values only. The dialog said the deployment
+  // "falls back to the same connection" whenever the environment's URL
+  // matched, whatever token the environment held.
+  const sent = stubReplies(t, (call) => {
+    const body = call.body as { preview?: string } | null;
+    if (body?.preview === "disconnect") {
+      return { status: 200, body: impactOf({ stops: "none" }) };
+    }
+    return { status: 200, body: { integration: integration() } };
+  }, false);
+  const root = render(t, {
+    integration: integration({
+      state: state({
+        environment: {
+          setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"],
+          missingVariables: [],
+          complete: true,
+        },
+      }),
+    }),
+  });
+  await press(button(root, "Disconnect"));
+
+  assert.equal(sent.length, 1, "only the impact preview runs before confirmation");
+  const rendered = text(root);
+  assert.match(rendered, /disconnecting stops no run in flight/);
+  assert.match(rendered, /Runs go on with the environment's secrets, which may not be the ones stored here/);
+  assert.doesNotMatch(rendered, /same connection/);
+});
+
 test("saving a fingerprint change names the enabled definition and the runs that would stop", async (t) => {
   const sent = stubReplies(t, (call) => {
     const body = call.body as { preview?: string } | null;

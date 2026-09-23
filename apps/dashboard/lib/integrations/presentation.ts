@@ -703,9 +703,14 @@ function impactReasonLine(
   }
   switch (impact.stops) {
     case "none":
-      return integration.state.usable
-        ? `This deployment falls back to the same connection for ${name}, so disconnecting the stored values stops no run already in flight.`
-        : `${name} is not working right now, so no run in flight is using it and this stops none.`;
+      // A run's pin covers the non-secret values only, so matching values
+      // say nothing about the token behind them.
+      if (!integration.state.usable) {
+        return `${name} is not working right now, so no run in flight is using it and this stops none.`;
+      }
+      return integration.fields.some((field) => field.secret)
+        ? `This deployment's environment configures ${name} with the same non-secret values, so disconnecting stops no run in flight. Runs go on with the environment's secrets, which may not be the ones stored here.`
+        : `This deployment's environment configures ${name} with the same values, so disconnecting stops no run in flight.`;
     case "unusable":
       return action === "disable"
         ? `Turning ${name} off is read at every use, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`
