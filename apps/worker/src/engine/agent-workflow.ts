@@ -5047,9 +5047,15 @@ async function agentWorkflowBody(
             taskId: ctx.ticket.identifier,
             workspaceManifest: ctx.workspaceManifest,
             runId: ctx.runId,
+            ...(ctx.workspaceNotebookRecalled === undefined
+              ? {}
+              : { notebookRecalled: ctx.workspaceNotebookRecalled }),
           });
           if (captured.unavailable !== undefined) {
             reportMemoryRefusal("memory_capture_unavailable", captured.unavailable);
+          }
+          if (captured.withheld !== undefined) {
+            reportMemoryRefusal("memory_capture_withheld", captured.withheld);
           }
         }
       } catch {

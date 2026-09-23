@@ -53,6 +53,10 @@ interface MemoryDocumentSummary {
 
 export interface ListMemoryDocumentsOptions {
   ticketKey?: string;
+  /** Only this subject's documents, compared exactly. Applied in the query,
+   *  before the cap, so a subject whose documents are older than the newest
+   *  page is still listed whole. */
+  subjectKey?: string;
   limit?: number;
 }
 
@@ -142,9 +146,14 @@ export async function listMemoryDocuments(
     })
     .from(agentMemoryDocuments)
     .where(
-      options.ticketKey === undefined
-        ? undefined
-        : eq(agentMemoryDocuments.ticketKey, options.ticketKey),
+      and(
+        options.ticketKey === undefined
+          ? undefined
+          : eq(agentMemoryDocuments.ticketKey, options.ticketKey),
+        options.subjectKey === undefined
+          ? undefined
+          : eq(agentMemoryDocuments.subjectKey, options.subjectKey),
+      ),
     )
     // Primary key as the tie-break, so documents written inside one timestamp
     // still come back in a stable order.

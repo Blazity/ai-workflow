@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   db: null as unknown,
   logWarn: vi.fn(),
   logInfo: vi.fn(),
+  /** Makes this deployment's secret set unreadable, which a recall answers
+   *  as `unavailable`: the ordinary way hydration fails to see the notebook. */
+  secretsUnreadable: false,
 }));
 
 vi.mock("@vercel/sandbox", () => ({
@@ -29,7 +32,18 @@ vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
 vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/integrations/runtime.js")>();
   const { environmentSecretValues } = await import("../../run-observability/configured-secrets.js");
-  return { ...actual, knownSecretValues: async () => environmentSecretValues() };
+  return {
+    ...actual,
+    knownSecretValues: async () => {
+      if (mocks.secretsUnreadable) {
+        const { IntegrationSecretsUnreadableError } = await import(
+          "../../services/integrations/secret-values.js"
+        );
+        throw new IntegrationSecretsUnreadableError(new Error("db blinked"));
+      }
+      return environmentSecretValues();
+    },
+  };
 });
 
 import type { Db } from "../../db/client.js";
@@ -40,6 +54,8 @@ import {
   getMemoryDocument,
   upsertMemoryDocument,
 } from "../../memory/store.js";
+import { MEMORY_NOTEBOOK_MAX_BYTES } from "@integrations/sdk";
+import { MEMORY_CUT_MARKER } from "../../memory/content.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import {
   hydrateWorkspaceMemoryStep,
@@ -145,12 +161,82 @@ function lsFilesCalls(sandbox: { runCommand: ReturnType<typeof vi.fn> }): unknow
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  mocks.secretsUnreadable = false;
   db = await createTestDb();
   mocks.db = db;
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe("a notebook write that may have landed", () => {
+  it("is never repeated by the step runner", () => {
+    // A retried step would send the same observe again after an answer that
+    // may have been stored: core never repeats a memory write.
+    expect(hydrateWorkspaceMemoryStep.maxRetries).toBe(0);
+    expect(persistWorkspaceMemoryStep.maxRetries).toBe(0);
+  });
+});
+
+describe("a notebook the run never saw", () => {
+  it("is kept at teardown rather than replaced by a file that started without it", async () => {
+    // Hydration could not read memory, so the agent started with an empty
+    // notebook and wrote this run's notes into it. Storing that file would
+    // replace every earlier run's history with one run's notes.
+    await storeDocument("# history\n- three runs of notes");
+    fakeSandbox({ lsFiles: "" });
+    mocks.secretsUnreadable = true;
+    const hydrated = await hydrateWorkspaceMemoryStep(target);
+    expect(hydrated).toMatchObject({ written: false, recalled: false });
+
+    // Memory is back by teardown; the agent's file is there.
+    mocks.secretsUnreadable = false;
+    fakeSandbox({ files: { [ROOT_PATH]: "# this run\n- one new note" } });
+    const captured = await persistWorkspaceMemoryStep({
+      ...target,
+      notebookRecalled: hydrated.recalled,
+    });
+
+    expect(captured).toEqual({
+      persisted: false,
+      withheld: expect.stringContaining("the stored notebook was kept"),
+    });
+    expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe(
+      "# history\n- three runs of notes",
+    );
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: expect.stringContaining("started without the notebook") }),
+      "memory_document_persist_withheld",
+    );
+  });
+
+  it("is not written over when memory still cannot say whether one is stored", async () => {
+    await storeDocument("# history");
+    fakeSandbox({ files: { [ROOT_PATH]: "# this run" } });
+    mocks.secretsUnreadable = true;
+
+    const captured = await persistWorkspaceMemoryStep({ ...target, notebookRecalled: false });
+
+    expect(captured).toEqual({
+      persisted: false,
+      withheld: expect.stringContaining("still could not say"),
+    });
+    expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe("# history");
+  });
+
+  it("is stored when nothing was there to replace", async () => {
+    // The positive control: a first run whose hydration failed still keeps
+    // what the agent wrote, because there was no history to lose.
+    fakeSandbox({ files: { [ROOT_PATH]: "# this run\n- first notes" } });
+
+    const captured = await persistWorkspaceMemoryStep({ ...target, notebookRecalled: false });
+
+    expect(captured).toEqual({ persisted: true });
+    expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe(
+      "# this run\n- first notes",
+    );
+  });
 });
 
 describe("hydrateWorkspaceMemoryStep", () => {
@@ -162,6 +248,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
       source: "db",
       trackedInRepo: false,
       written: true,
+      recalled: true,
     });
     expect(sandbox.runCommand).toHaveBeenCalledWith("mkdir", [
       "-p",
@@ -170,6 +257,32 @@ describe("hydrateWorkspaceMemoryStep", () => {
     expect(sandbox.writeFiles).toHaveBeenCalledWith([
       { path: ROOT_PATH, content: Buffer.from("# stored notes\nzażółć") },
     ]);
+  });
+
+  it("writes a recalled notebook longer than the notebook limit cut, and says where", async () => {
+    // M2 for the notebook: whatever a provider returns, the agent's file is at
+    // most the SDK's notebook limit, and a cut one ends with a line the agent
+    // reads. Written straight into the table, the way a row from an older cap
+    // or an engine that holds more looks, because the store refuses to write
+    // one this size itself.
+    const paragraph = `${"notes about the plan ".repeat(40)}\n`;
+    const content = paragraph.repeat(Math.ceil((300 * 1024) / paragraph.length));
+    await db.insert(agentMemoryDocuments).values({
+      subjectKey: SUBJECT_KEY,
+      docPath: DOC_PATH,
+      ticketKey: TASK_ID,
+      content,
+      bytes: Buffer.byteLength(content, "utf8"),
+      sourceRunId: "run_0",
+    });
+    const sandbox = fakeSandbox();
+
+    expect(await hydrateWorkspaceMemoryStep(target)).toMatchObject({ written: true });
+    const files = (sandbox.writeFiles.mock.calls[0]?.[0] ?? []) as Array<{ content: Buffer }>;
+    const written = files[0]?.content;
+    expect(written?.byteLength).toBeLessThanOrEqual(MEMORY_NOTEBOOK_MAX_BYTES);
+    expect(written?.toString("utf8").endsWith(`\n${MEMORY_CUT_MARKER}`)).toBe(true);
+    expect(written?.toString("utf8").startsWith(paragraph)).toBe(true);
   });
 
   it("hydrates a document stored under the legacy key when the new key is absent", async () => {
@@ -181,6 +294,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
       source: "db",
       trackedInRepo: false,
       written: true,
+      recalled: true,
     });
     // Migrated on read: written to the NEW path the current prompt points at.
     expect(sandbox.runCommand).toHaveBeenCalledWith("mkdir", [
@@ -200,7 +314,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
 
     expect(
       await hydrateWorkspaceMemoryStep({ ...target, taskId: prTaskId, ticketKey: null }),
-    ).toEqual({ source: "db", trackedInRepo: false, written: true });
+    ).toEqual({ source: "db", trackedInRepo: false, written: true, recalled: true });
     expect(sandbox.runCommand).toHaveBeenCalledWith("mkdir", [
       "-p",
       "/vercel/sandbox/ai-workflow/memory/pr:github:acme",
@@ -218,6 +332,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
       source: "db",
       trackedInRepo: true,
       written: false,
+      recalled: true,
     });
     expect(sandbox.runCommand).toHaveBeenCalledWith("git", [
       "-C",
@@ -244,6 +359,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
       source: "none",
       trackedInRepo: false,
       written: false,
+      recalled: false,
     });
     expect(sandbox.writeFiles).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith(
@@ -261,7 +377,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
         ...target,
         workspaceManifest: promotedManifest,
       }),
-    ).toEqual({ source: "db", trackedInRepo: false, written: true });
+    ).toEqual({ source: "db", trackedInRepo: false, written: true, recalled: true });
     expect(lsFilesCalls(sandbox)).toHaveLength(0);
     expect(sandbox.writeFiles).toHaveBeenCalledWith([
       { path: ROOT_PATH, content: Buffer.from("# stored notes") },
@@ -275,6 +391,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
       source: "repo",
       trackedInRepo: false,
       written: false,
+      recalled: true,
     });
     const stored = await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH);
     expect(stored?.content).toBe("# legacy notes");
@@ -290,6 +407,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
       source: "repo",
       trackedInRepo: false,
       written: false,
+      recalled: true,
     });
     // Re-keyed to the new path so persist and future runs read it there.
     expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe(
@@ -309,7 +427,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
         ...target,
         workspaceManifest: promotedManifest,
       }),
-    ).toEqual({ source: "repo", trackedInRepo: false, written: false });
+    ).toEqual({ source: "repo", trackedInRepo: false, written: false, recalled: true });
     expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe(
       "# committed notes",
     );
@@ -323,6 +441,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
       source: "none",
       trackedInRepo: false,
       written: false,
+      recalled: true,
     });
     expect(sandbox.writeFiles).not.toHaveBeenCalled();
     expect(await countRows()).toBe(0);
@@ -335,6 +454,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
       source: "none",
       trackedInRepo: false,
       written: false,
+      recalled: false,
     });
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.anything(),

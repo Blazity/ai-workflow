@@ -302,6 +302,7 @@ export type {
   MemorySubject,
   MemoryWrite,
 } from "./memory";
+export { MEMORY_NOTEBOOK_MAX_BYTES, MEMORY_PROMPT_BUDGET_BYTES } from "./memory";
 
 export type {
   MessageRetrievalFailure,

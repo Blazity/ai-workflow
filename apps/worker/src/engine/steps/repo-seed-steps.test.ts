@@ -281,6 +281,13 @@ beforeEach(async () => {
   mocks.db = db;
 });
 
+describe("a seed write that may have landed", () => {
+  it("is never repeated by the step runner", () => {
+    // Core never repeats a memory write: a retry could store the seed twice.
+    expect(seedRepoMemoryStep.maxRetries).toBe(0);
+  });
+});
+
 describe("seedRepoMemoryStep", () => {
   it("does nothing without a repository", async () => {
     expect(await seedRepoMemoryStep({ ...input, repositories: [] })).toEqual({
@@ -501,9 +508,11 @@ describe("seedRepoMemoryStep", () => {
     });
     expect(stepUpserts()).toEqual([]);
     expect(await repoRows()).toHaveLength(0);
+    // Refused at the read that decides whether a seed is needed: core cleans
+    // what memory hands back too, so without the set nothing is read either.
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.objectContaining({ repo: "github:acme/api", code: "unavailable" }),
-      "repo_memory_seed_refused",
+      "memory_provider_unavailable",
     );
   });
 
@@ -985,9 +994,9 @@ describe("seedRepoMemoryStep pruning", () => {
 
   it("does not store a pruned document that no longer fits the cap", async () => {
     // Past the 12 KiB document cap the distill step renders against, so the
-    // survivors come back truncated. The cut lands wherever redaction leaves it,
-    // most often inside a bullet or its provenance comment, and a mangled
-    // document is worse than a stale one.
+    // survivors would come back truncated. The cut lands wherever it lands, most
+    // often inside a bullet or its provenance comment, and a mangled document
+    // is worse than a stale one.
     const bulky = Array.from({ length: 80 }, (_, index) => `${"f".repeat(180)} ${index}`);
     await storeFacts(["Run lint with: pnpm lint", ...bulky], "run_0");
     fakeSandbox(packageJson({ scripts: { test: "vitest run" } }));
@@ -997,7 +1006,7 @@ describe("seedRepoMemoryStep pruning", () => {
       pruned: 0,
       // S13: the store refuses a document it cannot render inside its own cap
       // and says so, rather than the step deciding that for it.
-      unavailable: expect.stringContaining("grew the document"),
+      unavailable: expect.stringContaining("larger than the 12 KiB this store holds"),
     });
     expect(stepUpserts()).toEqual([]);
     expect((await readFacts()) ?? []).toHaveLength(bulky.length + 1);
@@ -1091,8 +1100,8 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(stepUpserts()).toEqual([]);
     expect(await factTexts()).toEqual(["Run lint with: pnpm lint"]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api" }),
-      "repo_memory_prune_refused",
+      expect.objectContaining({ repo: "github:acme/api", code: "unavailable" }),
+      "memory_provider_unavailable",
     );
   });
 });

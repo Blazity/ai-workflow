@@ -69,11 +69,14 @@ export type IntegrationPageComponent = ComponentType<IntegrationPageProps>;
  *
  * The keys are the manifest's literal page ids, so a page declared without a
  * component and a component for a page nobody declared are both refused where
- * the mistake is rather than at the tab that renders nothing.
+ * the mistake is rather than at the tab that renders nothing. A manifest that
+ * declares no page takes no component either: mapped over no ids the type
+ * would be `{}`, which accepts any object, so that case is spelled out.
  */
-export type IntegrationDashboardPages<M extends IntegrationManifest> = {
-  readonly [PageId in M["pages"][number]["id"]]: IntegrationPageComponent;
-};
+export type IntegrationDashboardPages<M extends IntegrationManifest> =
+  [M["pages"][number]["id"]] extends [never]
+    ? { readonly [pageId: string]: never }
+    : { readonly [PageId in M["pages"][number]["id"]]: IntegrationPageComponent };
 
 export interface IntegrationDashboard<M extends IntegrationManifest = IntegrationManifest> {
   readonly pages: IntegrationDashboardPages<M>;

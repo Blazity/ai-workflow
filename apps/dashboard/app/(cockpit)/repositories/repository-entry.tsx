@@ -97,11 +97,32 @@ const FIELD_LABELS: Record<RepositoryProfileField, string> = {
   batchTimeoutMinutes: "checks ceiling",
 };
 
+/** One document the memory listing holds for this repository, by the pair it
+ *  was listed under. */
 export interface RepositoryMemorySlot {
   subjectKey: string;
   docPath: string;
+  /** Null when it was erased since it was listed, or could not be read. */
   document: MemoryDocumentDto | null;
+  /** The provider's sentence when this one read failed; null otherwise. */
+  unreadable: string | null;
 }
+
+/** What the Memory tab can say: the repository's documents as the provider
+ *  listed them, or why the provider could not be asked. */
+export type RepositoryMemory =
+  | {
+      readonly state: "listed";
+      /** False when the provider cannot promise the listing is everything. */
+      readonly complete: boolean;
+      readonly documents: readonly RepositoryMemorySlot[];
+    }
+  | {
+      readonly state: "unavailable";
+      /** True when asking again may work (503), false when it will not (501). */
+      readonly retryable: boolean;
+      readonly reason: string;
+    };
 
 /**
  * The scripts entry the editor works on.
@@ -166,7 +187,7 @@ export function RepositoryEntryScreen({
    *  rather than showing an id. */
   catalog: readonly RepositoryCatalogEntry[];
   allowedEnv: string[] | undefined;
-  memory: readonly RepositoryMemorySlot[];
+  memory: RepositoryMemory;
   /** canManageRepositoryCatalog(role): owners and admins. */
   canManage: boolean;
 }) {
@@ -856,7 +877,7 @@ function MemoryTab({
   memory,
   canDelete,
 }: {
-  memory: readonly RepositoryMemorySlot[];
+  memory: RepositoryMemory;
   canDelete: boolean;
 }) {
   const [erased, setErased] = useState<ReadonlySet<string>>(() => new Set());
@@ -873,99 +894,125 @@ function MemoryTab({
     <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
       <h3 className="m-0 font-display text-[15px] font-medium text-coal">Agent memory</h3>
       <p className="m-0 mt-1 font-body text-[12px] text-neutral-600">
-        Two documents per repository, written by runs rather than by hand:
-        `facts` is what the agent learned about this repository, `lessons` is
-        what it learned from getting it wrong. Erasing one cannot be undone.
+        What runs wrote down about this repository, as this deployment&apos;s
+        memory lists it. Written by runs rather than by hand. Erasing a
+        document cannot be undone.
       </p>
-      {error && (
-        <div className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700">
-          {error}
-        </div>
-      )}
-      {memory.map((slot) => {
-        const gone = erased.has(slot.docPath);
-        return (
-          <div
-            key={slot.docPath}
-            className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-[6px]"
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <span className="font-mono text-[12px] text-neutral-900">{slot.docPath}</span>
-              {slot.document !== null && !gone && (
-                <span className="font-body text-[11px] text-neutral-500">
-                  {slot.document.bytes} bytes · updated{" "}
-                  {formatDateTime(slot.document.updatedAt)} · from run{" "}
-                  {slot.document.sourceRunId}
-                </span>
-              )}
+      {memory.state === "unavailable" ? (
+        <MemoryUnavailable retryable={memory.retryable} reason={memory.reason} />
+      ) : (
+        <>
+          {!memory.complete && (
+            // Neutral on whose limit it was: the cap may be this deployment's
+            // own as easily as the provider's.
+            <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">
+              This list may not be everything stored for this repository, so a
+              document missing here may still exist.
+            </p>
+          )}
+          {error && (
+            <div className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700">
+              {error}
             </div>
-            {gone || slot.document === null ? (
-              <p className="m-0 mt-1 font-body text-[12px] text-neutral-500">
-                {gone ? "Erased." : "Nothing recorded yet."}
-              </p>
-            ) : (
-              <>
-                <pre className="m-0 mt-1 max-h-[280px] overflow-auto whitespace-pre-wrap font-mono text-[11px] text-neutral-700">
-                  {slot.document.content}
-                </pre>
-                {canDelete && armed !== slot.docPath && (
-                  <Button
-                    variant="text"
-                    onClick={() => {
-                      setError(null);
-                      setArmed(slot.docPath);
-                    }}
-                    className="mt-1 appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 hover:text-red-600 cursor-pointer"
-                  >
-                    Erase {slot.docPath}
-                  </Button>
-                )}
-                {canDelete && armed === slot.docPath && (
-                  <div className="mt-1 flex flex-wrap items-center gap-2">
-                    <span className="font-body text-[12px] text-neutral-700">
-                      Erase {slot.docPath} from the store? This removes the
-                      stored text now. A later run can learn it again.
+          )}
+          {/* Only beside a list that is everything: "nothing recorded" next to
+              "this may not be everything" is two answers to one question. */}
+          {memory.documents.length === 0 && memory.complete && (
+            <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">
+              Nothing recorded yet. Documents appear here once a run writes to
+              this repository&apos;s memory.
+            </p>
+          )}
+          {memory.documents.map((slot) => {
+            const gone = erased.has(slot.docPath);
+            return (
+              <div
+                key={slot.docPath}
+                className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-[6px]"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="font-mono text-[12px] text-neutral-900">{slot.docPath}</span>
+                  {slot.document !== null && !gone && (
+                    <span className="font-body text-[11px] text-neutral-500">
+                      {slot.document.bytes} bytes · updated{" "}
+                      {formatDateTime(slot.document.updatedAt)} · from run{" "}
+                      {slot.document.sourceRunId}
                     </span>
-                    <Button
-                      variant="danger"
-                      disabled={erasing === slot.docPath}
-                      onClick={async () => {
-                        setError(null);
-                        setErasing(slot.docPath);
-                        try {
-                          const result = await apiClient.memory.delete(
-                            slot.subjectKey,
-                            slot.docPath,
-                          );
-                          if (!result.ok) {
-                            setError(result.errorMessage);
-                            return;
-                          }
-                          setErased((prev) => new Set(prev).add(slot.docPath));
-                          setArmed(null);
-                        } finally {
-                          setErasing(null);
-                        }
-                      }}
-                      loading={erasing === slot.docPath}
-                    >
-                      {erasing === slot.docPath ? "Erasing…" : "Confirm erase"}
-                    </Button>
-                    <Button
-                      variant="text"
-                      disabled={erasing === slot.docPath}
-                      onClick={() => setArmed(null)}
-                      className="appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 cursor-pointer disabled:opacity-40 disabled:cursor-default"
-                    >
-                      Cancel
-                    </Button>
-                  </div>
+                  )}
+                </div>
+                {gone || slot.document === null ? (
+                  <p className="m-0 mt-1 font-body text-[12px] text-neutral-500">
+                    {gone
+                      ? "Erased."
+                      : slot.unreadable !== null
+                        ? `Could not be read right now. ${asSentence(slot.unreadable)}`
+                        : "No longer stored: it was erased after the list was read."}
+                  </p>
+                ) : (
+                  <>
+                    <pre className="m-0 mt-1 max-h-[280px] overflow-auto whitespace-pre-wrap font-mono text-[11px] text-neutral-700">
+                      {slot.document.content}
+                    </pre>
+                    {canDelete && armed !== slot.docPath && (
+                      <Button
+                        variant="text"
+                        onClick={() => {
+                          setError(null);
+                          setArmed(slot.docPath);
+                        }}
+                        className="mt-1 appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 hover:text-red-600 cursor-pointer"
+                      >
+                        Erase {slot.docPath}
+                      </Button>
+                    )}
+                    {canDelete && armed === slot.docPath && (
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <span className="font-body text-[12px] text-neutral-700">
+                          Erase {slot.docPath} from the store? This removes the
+                          stored text now. A later run can learn it again.
+                        </span>
+                        <Button
+                          variant="danger"
+                          disabled={erasing === slot.docPath}
+                          onClick={async () => {
+                            setError(null);
+                            setErasing(slot.docPath);
+                            try {
+                              const result = await apiClient.memory.delete(
+                                slot.subjectKey,
+                                slot.docPath,
+                              );
+                              if (!result.ok) {
+                                setError(result.errorMessage);
+                                return;
+                              }
+                              setErased((prev) => new Set(prev).add(slot.docPath));
+                              setArmed(null);
+                            } finally {
+                              setErasing(null);
+                            }
+                          }}
+                          loading={erasing === slot.docPath}
+                        >
+                          {erasing === slot.docPath ? "Erasing…" : "Confirm erase"}
+                        </Button>
+                        <Button
+                          variant="text"
+                          disabled={erasing === slot.docPath}
+                          onClick={() => setArmed(null)}
+                          className="appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+                  </>
                 )}
-              </>
-            )}
-          </div>
-        );
-      })}
+              </div>
+            );
+          })}
+        </>
+      )}
       <p className="m-0 mt-2 font-body text-[11px] text-neutral-500">
         Every subject&apos;s documents, including these, are on the{" "}
         <a href="/memory" className="text-mariner">
@@ -975,6 +1022,35 @@ function MemoryTab({
       </p>
     </section>
   );
+}
+
+/**
+ * The provider could not be asked. Said as a state, never as "nothing
+ * recorded": a person who reads that about a store nobody could read
+ * concludes the agent forgot this repository. What to do is the worker's
+ * sentence, because only the worker knows whether the fix is waiting, an
+ * admin on the Integrations page, or the provider's own console.
+ */
+function MemoryUnavailable({ retryable, reason }: { retryable: boolean; reason: string }) {
+  return (
+    <div
+      role="status"
+      className="mt-2 rounded-[3px] border border-neutral-200 bg-off-white px-3 py-2"
+    >
+      <p className="m-0 font-body text-[13px] font-medium text-neutral-900">
+        {retryable ? "Memory is not available right now" : "Memory cannot be browsed here"}
+      </p>
+      <p className="m-0 mt-1 font-body text-[12px] text-neutral-700">{asSentence(reason)}</p>
+      <p className="m-0 mt-1 font-body text-[12px] text-neutral-500">Nothing was erased.</p>
+    </div>
+  );
+}
+
+/** The worker's refusals end without a full stop, so a screen quoting one can
+ *  place it; standing alone here, it gets one. */
+function asSentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 function HistoryTab({

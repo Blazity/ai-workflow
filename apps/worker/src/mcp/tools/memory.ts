@@ -96,14 +96,17 @@ function requireKeyPart(value: string, field: string): string {
 
 export function registerMemoryTools(server: McpServer, deps: McpToolDependencies): void {
   registerCatalogTool(server, "memory.list", async (input) => {
+    const subjectKey =
+      input.subjectKey === undefined ? undefined : requireKeyPart(input.subjectKey, "subjectKey");
     const envelope = await executeMcpRead({
       deps,
       toolName: "memory.list",
-      targetRefs: input.ticketKey === undefined ? [] : [input.ticketKey],
+      targetRefs: [input.ticketKey, subjectKey].filter((ref): ref is string => ref !== undefined),
       operation: async (): Promise<MemoryListData> => {
-        const listing = await listMemoryDocumentSummaries(
-          input.ticketKey === undefined ? {} : { ticketKey: input.ticketKey },
-        );
+        const listing = await listMemoryDocumentSummaries({
+          ...(input.ticketKey === undefined ? {} : { ticketKey: input.ticketKey }),
+          ...(subjectKey === undefined ? {} : { subjectKey }),
+        });
         if (!listing.ok) throw providerRefused(listing.reason, listing.listable);
         return {
           documents: listing.documents.map((row) => ({

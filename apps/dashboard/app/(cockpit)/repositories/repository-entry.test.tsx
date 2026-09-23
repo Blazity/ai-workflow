@@ -217,7 +217,7 @@ function render(
               versionsHasMore={options.versionsHasMore ?? false}
               catalog={options.catalog ?? [REPOSITORY]}
               allowedEnv={undefined}
-              memory={options.memory ?? []}
+              memory={options.memory ?? { state: "listed", complete: true, documents: [] }}
               canManage
             />
           </SearchParamsContext.Provider>
@@ -463,32 +463,38 @@ test("restoring an old version saves it forward with a reason that says what it 
   assert.equal(body.expectedProfileVersion, 3);
 });
 
-const MEMORY = [
-  {
-    subjectKey: "repo:github:acme/web",
-    docPath: "facts",
-    document: {
+const MEMORY: React.ComponentProps<typeof RepositoryEntryScreen>["memory"] = {
+  state: "listed",
+  complete: true,
+  documents: [
+    {
       subjectKey: "repo:github:acme/web",
       docPath: "facts",
-      content: "The storefront runs on Next.js.",
-      bytes: 30,
-      updatedAt: "2026-09-02T00:00:00.000Z",
-      sourceRunId: "run-1",
+      unreadable: null,
+      document: {
+        subjectKey: "repo:github:acme/web",
+        docPath: "facts",
+        content: "The storefront runs on Next.js.",
+        bytes: 30,
+        updatedAt: "2026-09-02T00:00:00.000Z",
+        sourceRunId: "run-1",
+      },
     },
-  },
-  {
-    subjectKey: "repo:github:acme/web",
-    docPath: "lessons",
-    document: {
+    {
       subjectKey: "repo:github:acme/web",
       docPath: "lessons",
-      content: "Do not run the codegen twice.",
-      bytes: 29,
-      updatedAt: "2026-09-02T00:00:00.000Z",
-      sourceRunId: "run-2",
+      unreadable: null,
+      document: {
+        subjectKey: "repo:github:acme/web",
+        docPath: "lessons",
+        content: "Do not run the codegen twice.",
+        bytes: 29,
+        updatedAt: "2026-09-02T00:00:00.000Z",
+        sourceRunId: "run-2",
+      },
     },
-  },
-] as unknown as React.ComponentProps<typeof RepositoryEntryScreen>["memory"];
+  ],
+};
 
 test("erasing a memory document takes two clicks, and the first one sends nothing", async (t) => {
   const harness = render(t, { memory: MEMORY });

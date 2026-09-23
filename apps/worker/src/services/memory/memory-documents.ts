@@ -15,6 +15,7 @@
 import { MEMORY_KEY_MAX_LENGTH } from "@shared/contracts";
 import type { MemoryStoredDocument, MemoryStoredSummary } from "@integrations/sdk";
 import { activeMemory } from "../../engine/support/memory-runtime.js";
+import { BUILTIN_MEMORY_PROVIDER_ID } from "../../memory/builtin/adapter.js";
 
 export type { MemoryStoredDocument, MemoryStoredSummary };
 
@@ -55,9 +56,11 @@ export type MemoryErasure =
   | { readonly ok: true; readonly erased: boolean }
   | { readonly ok: false; readonly reason: string; readonly listable: boolean };
 
-/** The listing, without content, optionally narrowed to one ticket. */
+/** The listing, without content, optionally narrowed to one ticket or to one
+ *  subject (compared exactly, by the provider where it lists). */
 export async function listMemoryDocumentSummaries(options: {
   ticketKey?: string;
+  subjectKey?: string;
 }): Promise<MemoryListing> {
   const memory = await activeMemory();
   if (memory.refusal) {
@@ -65,12 +68,13 @@ export async function listMemoryDocumentSummaries(options: {
   }
   if (!memory.store) return { ok: false, reason: cannotList(memory.name), listable: false };
   try {
-    const listing = await memory.store.list(
-      options.ticketKey === undefined ? {} : { ticketKey: options.ticketKey },
-    );
+    const listing = await memory.store.list({
+      ...(options.ticketKey === undefined ? {} : { ticketKey: options.ticketKey }),
+      ...(options.subjectKey === undefined ? {} : { subjectKey: options.subjectKey }),
+    });
     return { ok: true, documents: listing.documents, complete: listing.complete };
   } catch (error) {
-    return { ok: false, reason: providerFailed(memory.name, error), listable: true };
+    return { ok: false, reason: providerFailed(memory, error), listable: true };
   }
 }
 
@@ -87,7 +91,7 @@ export async function readMemoryDocument(
   try {
     return { ok: true, document: await memory.store.read({ subjectKey, docPath }) };
   } catch (error) {
-    return { ok: false, reason: providerFailed(memory.name, error), listable: true };
+    return { ok: false, reason: providerFailed(memory, error), listable: true };
   }
 }
 
@@ -113,7 +117,7 @@ export async function eraseMemoryDocument(
   try {
     return { ok: true, erased: await memory.store.forget({ subjectKey, docPath }) };
   } catch (error) {
-    return { ok: false, reason: providerFailed(memory.name, error), listable: true };
+    return { ok: false, reason: providerFailed(memory, error), listable: true };
   }
 }
 
@@ -125,6 +129,16 @@ function cannotErase(name: string): string {
   return `${name} keeps this deployment's memory and cannot erase one document on request, so it cannot be erased here. Erase it where that provider keeps it.`;
 }
 
-function providerFailed(name: string, error: unknown): string {
-  return `${name} could not answer: ${error instanceof Error ? error.message : String(error)}`;
+/**
+ * A provider that threw, with the next step, because a screen quoting this
+ * has no other way to know it: waiting is the fix for a blip, and for an
+ * integration that keeps failing the Integrations page is where its
+ * connection is fixed. The built-in store is not on that page, so it gets
+ * only the first half.
+ */
+function providerFailed(memory: { id: string | null; name: string }, error: unknown): string {
+  const said = `${memory.name} could not answer: ${error instanceof Error ? error.message : String(error)}.`;
+  return memory.id === BUILTIN_MEMORY_PROVIDER_ID
+    ? `${said} Try again in a moment`
+    : `${said} Try again in a moment, and if it keeps failing, check ${memory.name}'s connection on the Integrations page`;
 }

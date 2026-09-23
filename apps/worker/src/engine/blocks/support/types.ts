@@ -284,6 +284,15 @@ export interface EngineCtx {
    * Never replace this with a manifest read after agent code has run. */
   workspaceManifest: WorkspaceManifest | null;
   /**
+   * Whether the latest workspace's hydration got an answer from memory for
+   * its notebook (`HydrateWorkspaceMemoryResult.recalled`). False means the
+   * agent started without knowing what was stored, so teardown asks before it
+   * stores the agent's file over it. Absent before prepare_workspace and on a
+   * run replayed from a hydration recorded before the field existed, which
+   * keeps the behaviour that run started under.
+   */
+  workspaceNotebookRecalled?: boolean | undefined;
+  /**
    * Paths tracked on each repository's DEFAULT branch, keyed by
    * `<provider>:<repoPath>`, listed in prepare_workspace from the clone before
    * any agent block ran. Read only by the repo-memory distill, which uses it to

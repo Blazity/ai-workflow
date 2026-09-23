@@ -114,7 +114,7 @@ test("the rules editor blocks save and names an unknown variable inline", async 
               versions={[]}
               catalog={[REPOSITORY]}
               allowedEnv={[]}
-              memory={[]}
+              memory={{ state: "listed", complete: true, documents: [] }}
               canManage
             />
           </SearchParamsContext.Provider>

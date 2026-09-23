@@ -18,8 +18,13 @@
  *
  * `recall` and `observe` NEVER THROW. Both answer, because the port promises
  * that and because memory must not be able to change a run's outcome. A
- * database error, an oversized document and a refused redaction are all
- * answers there.
+ * database error and an oversized document are both answers there.
+ *
+ * What it is sent is already clean: core takes this deployment's secrets out
+ * of every observation before any provider sees it (`withoutKnownSecrets` in
+ * `engine/support/memory-runtime.ts`). What it already HOLDS is its own to
+ * clean, and it does, at the next write into a document
+ * (`heldItems`, with the same rule from `memory/known-secrets.ts`).
  *
  * `store` is the other half and it DOES throw, which the port also says: its
  * three methods have no failure shape to answer with, so the alternative is to
@@ -43,6 +48,12 @@ import type {
   MemoryWrite,
 } from "@integrations/sdk";
 import { prepareMemoryContent, utf8Bytes } from "../content.js";
+import {
+  knownSecretsReader,
+  takeOutKnownSecrets,
+  unscrubbedWrite,
+  type KnownSecretsReader,
+} from "../known-secrets.js";
 import {
   mergeRepoMemoryItems,
   parseRepoMemoryDocument,
@@ -91,10 +102,17 @@ const NOTEBOOK_DIR = "ai-workflow/memory";
 const LEGACY_NOTEBOOK_DIR = "blazebot/memory";
 
 /** The built-in provider, as core resolves it. */
-export function builtinMemoryAdapter(): MemoryAdapter {
+/**
+ * `knownSecrets` is the step's one reader of the secret set, shared with the
+ * port wrapper around this store (`activeMemory`), so cleaning what this store
+ * holds costs the step no second read.
+ */
+export function builtinMemoryAdapter(
+  knownSecrets: KnownSecretsReader = knownSecretsReader(),
+): MemoryAdapter {
   return {
     recall: builtinRecall,
-    observe: builtinObserve,
+    observe: (request) => builtinObserve(request, knownSecrets),
     store: builtinMemoryStore,
   };
 }
@@ -188,18 +206,10 @@ async function builtinRecall(request: MemoryRecallRequest): Promise<MemoryRecall
   }
 }
 
-/**
- * Every secret the deployment knows, for the redaction every write runs first.
- * A set that cannot be read throws, and `builtinObserve` answers that as
- * `unavailable`: the write is refused and worth retrying, never stored with a
- * token an admin kept in the dashboard left in the clear.
- */
-async function memorySecretValues(): Promise<string[]> {
-  const { knownSecretValues } = await import("../../services/integrations/runtime.js");
-  return knownSecretValues();
-}
-
-async function builtinObserve(request: MemoryObserveRequest): Promise<MemoryWrite> {
+async function builtinObserve(
+  request: MemoryObserveRequest,
+  knownSecrets: KnownSecretsReader,
+): Promise<MemoryWrite> {
   try {
     if (request.observation.kind === "document") {
       return await storeDocument(
@@ -218,7 +228,7 @@ async function builtinObserve(request: MemoryObserveRequest): Promise<MemoryWrit
         detail: "the built-in store keeps a notebook as one document, so it takes no item observations",
       };
     }
-    return await storeItems(request, request.scope.kind, request.observation);
+    return await storeItems(request, request.scope.kind, request.observation, knownSecrets);
   } catch (error) {
     return { ok: false, code: writeFailureCode(error), detail: failureDetail(error) };
   }
@@ -261,21 +271,7 @@ async function storeDocument(
   // carry the marker. Without it a prefix that happens to fit the cap is
   // indistinguishable from a whole document, and the stored text would end mid
   // sentence with nothing saying why.
-  const prepared = prepareMemoryContent(
-    text,
-    MAX_MEMORY_DOCUMENT_BYTES,
-    sourceTruncated,
-    await memorySecretValues(),
-  );
-  // Fail closed: text that could not be scrubbed of this deployment's
-  // configured secrets never reaches the database.
-  if (!prepared) {
-    return {
-      ok: false,
-      code: "rejected",
-      detail: "the text could not be scrubbed of configured secrets, so it was not stored",
-    };
-  }
+  const prepared = prepareMemoryContent(text, MAX_MEMORY_DOCUMENT_BYTES, sourceTruncated);
   if (prepared.truncated) {
     // Stored truncated rather than dropped, which is what this store has
     // always done. The warning is the record that it happened.
@@ -314,18 +310,21 @@ async function storeItems(
   request: MemoryObserveRequest,
   kind: RepoMemoryDocKind,
   observation: Extract<MemoryObserveRequest["observation"], { kind: "items" }>,
+  knownSecrets: KnownSecretsReader,
 ): Promise<MemoryWrite> {
   const { getConnectedMemoryDocument, upsertConnectedMemoryDocument } = await import(
     "../../db/repositories/memory.js"
   );
-  const secrets = await memorySecretValues();
-  const stored = await getConnectedMemoryDocument(request.subject.key, kind);
 
   if (observation.onlyIfEmpty) {
     // Create only. A document that appears between the read and the insert
     // belongs to whoever wrote it: what a run distilled is strictly better than
-    // what a deterministic seed derives, so it is never merged into.
-    if (stored) return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
+    // what a deterministic seed derives, so it is never merged into. Nothing
+    // held is merged into, so nothing held needs cleaning and the secret set
+    // is not needed to say "already there".
+    if (await getConnectedMemoryDocument(request.subject.key, kind)) {
+      return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
+    }
     const items: RepoMemoryItem[] = observation.learned.map((text) => ({
       text,
       runId: request.runId,
@@ -334,7 +333,7 @@ async function storeItems(
     if (items.length === 0) {
       return { ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 };
     }
-    const prepared = prepared12k(request.subject.label, kind, items, secrets);
+    const prepared = prepared12k(request.subject.label, kind, items);
     if (!prepared.ok) return prepared.write;
     const created = await upsertConnectedMemoryDocument({
       subjectKey: request.subject.key,
@@ -353,11 +352,10 @@ async function storeItems(
     };
   }
 
-  let existing = stored ? parseRepoMemoryDocument(stored.content) : [];
-  // `stored?.version ?? 0` is the required idiom: the key may never be present
-  // with an undefined value, and 0 is what means "create it".
-  let expectedVersion = stored?.version ?? 0;
+  let held = await heldItems(request.subject.key, kind, knownSecrets);
+  if (!held.ok) return held.refusal;
   for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
+    const existing = held.items;
     /**
      * FORGETTING ON REQUEST NEVER COSTS MORE THAN WHAT WAS ASKED FOR.
      *
@@ -387,7 +385,9 @@ async function storeItems(
       subject: request.subject.label,
       kind,
     });
-    if (sameItems(merged.items, existing)) {
+    // Against what is stored, not what was cleaned: a document that held a
+    // secret it now knows is written even when nothing else changed.
+    if (sameItems(merged.items, held.stored)) {
       return {
         ok: true,
         stored: false,
@@ -396,7 +396,7 @@ async function storeItems(
         remaining: merged.items.length,
       };
     }
-    const prepared = prepared12k(request.subject.label, kind, merged.items, secrets);
+    const prepared = prepared12k(request.subject.label, kind, merged.items);
     if (!prepared.ok) return prepared.write;
     const result = await upsertConnectedMemoryDocument({
       subjectKey: request.subject.key,
@@ -404,7 +404,7 @@ async function storeItems(
       ticketKey: request.ticketKey,
       content: prepared.content,
       sourceRunId: request.runId,
-      expectedVersion,
+      expectedVersion: held.version,
     });
     if (result.applied) {
       // Counts only once the swap applied: a contended or refused write deleted
@@ -428,13 +428,56 @@ async function storeItems(
         detail: `another writer won this document ${MAX_WRITE_ATTEMPTS} times, so this run's observation was not stored`,
       };
     }
-    const fresh = await getConnectedMemoryDocument(request.subject.key, kind);
-    existing = fresh ? parseRepoMemoryDocument(fresh.content) : [];
-    expectedVersion = fresh?.version ?? 0;
+    held = await heldItems(request.subject.key, kind, knownSecrets);
+    if (!held.ok) return held.refusal;
   }
   // Unreachable: the loop returns on every path. Present so the function has
   // one type rather than an implicit undefined.
   return { ok: false, code: "contended", detail: "the document could not be written" };
+}
+
+type HeldItems =
+  | {
+      readonly ok: true;
+      /** The items as stored, to tell whether a write changes anything. */
+      readonly stored: readonly RepoMemoryItem[];
+      /** The same items with the secrets this deployment knows now taken out:
+       *  what is merged into, sized and written back. */
+      readonly items: RepoMemoryItem[];
+      /** `0` means "create it". */
+      readonly version: number;
+    }
+  | { readonly ok: false; readonly refusal: MemoryWrite };
+
+/**
+ * One facts or lessons document as it is held, cleaned.
+ *
+ * A value stored before it became a known secret is taken out here, at the
+ * next write, as this store did when every write re-rendered and scrubbed the
+ * whole document. Merging into the cleaned items also keeps a retraction
+ * working: core cleans `refuted`, so a run that disproved such an item names it
+ * cleaned, and a raw stored copy would never match it.
+ *
+ * Nothing stored means nothing to clean, so the secret set is not read.
+ */
+async function heldItems(
+  subjectKey: string,
+  kind: RepoMemoryDocKind,
+  knownSecrets: KnownSecretsReader,
+): Promise<HeldItems> {
+  const { getConnectedMemoryDocument } = await import("../../db/repositories/memory.js");
+  const document = await getConnectedMemoryDocument(subjectKey, kind);
+  const stored = document ? parseRepoMemoryDocument(document.content) : [];
+  // `document?.version ?? 0` is the required idiom: the key may never be
+  // present with an undefined value, and 0 is what means "create it".
+  const version = document?.version ?? 0;
+  if (stored.length === 0) return { ok: true, stored, items: [], version };
+  const cleaned = await takeOutKnownSecrets(
+    (clean) => stored.map((item) => ({ ...item, text: clean(item.text) })),
+    knownSecrets(),
+  );
+  if (!cleaned.ok) return { ok: false, refusal: unscrubbedWrite(cleaned.why) };
+  return { ok: true, stored, items: cleaned.value, version };
 }
 
 /** What the items already stored render to, so a retraction is bounded by what
@@ -452,44 +495,32 @@ type PreparedDocument =
   | { readonly ok: false; readonly write: MemoryWrite };
 
 /**
- * Render, scrub and size one facts or lessons document.
+ * Render and size one facts or lessons document.
  *
- * Both refusals fail closed, and both are `rejected` rather than a silent skip:
- * text that could not be scrubbed must never reach the database, and a
- * truncation here means redaction GREW the text past a cap the merge already
- * sized it under, so the cut would land inside a bullet or its provenance
- * comment. Storing a mangled document is worse than storing none, and the next
- * run re-derives this one.
+ * The merge already sized the items under the cap, so a cut here is reached
+ * only by a pure retraction on a document stored under an older, larger cap
+ * (see "forgetting on request" in `storeItems`). It is `rejected` rather than
+ * a silent trim: the cut would land inside a bullet or its provenance comment,
+ * storing a mangled document is worse than storing none, and the next run
+ * that adds something trims it properly.
  */
 function prepared12k(
   subject: string,
   kind: RepoMemoryDocKind,
   items: readonly RepoMemoryItem[],
-  secrets: readonly string[],
 ): PreparedDocument {
   const prepared = prepareMemoryContent(
     renderRepoMemoryDocument({ subject, kind, items }),
     MAX_DOC_BYTES,
     false,
-    secrets,
   );
-  if (!prepared) {
-    return {
-      ok: false,
-      write: {
-        ok: false,
-        code: "rejected",
-        detail: "the text could not be scrubbed of configured secrets, so it was not stored",
-      },
-    };
-  }
   if (prepared.truncated) {
     return {
       ok: false,
       write: {
         ok: false,
         code: "rejected",
-        detail: "scrubbing grew the document past what this store holds, so it was not stored",
+        detail: `the document would be larger than the ${MAX_DOC_BYTES / 1024} KiB this store holds, so it was not stored`,
       },
     };
   }
@@ -540,15 +571,13 @@ const builtinMemoryStore: MemoryStoreAdapter = {
     // The cap belongs to the repository, so the answer does too: this store
     // passes the caller's limit through and reports back what the query found,
     // rather than keeping a second copy of the cap that could drift from it.
-    return await listConnectedMemoryDocuments(
-      options.ticketKey === undefined
-        ? options.limit === undefined
-          ? {}
-          : { limit: options.limit }
-        : options.limit === undefined
-          ? { ticketKey: options.ticketKey }
-          : { ticketKey: options.ticketKey, limit: options.limit },
-    );
+    return await listConnectedMemoryDocuments({
+      ...(options.ticketKey === undefined ? {} : { ticketKey: options.ticketKey }),
+      // In the query, before the cap: a repository whose documents are older
+      // than the newest page is still listed whole.
+      ...(options.subjectKey === undefined ? {} : { subjectKey: options.subjectKey }),
+      ...(options.limit === undefined ? {} : { limit: options.limit }),
+    });
   },
   async read(ref: MemoryStoredDocumentRef) {
     const { getConnectedMemoryDocument } = await import("../../db/repositories/memory.js");

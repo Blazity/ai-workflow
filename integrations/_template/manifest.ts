@@ -24,6 +24,8 @@ export const lookupBlock = defineIntegrationBlock({
   defaults: { limit: 10 },
   // One port, named `out`. A workflow branches on `status` instead.
   contract: { ports: ["out"], allowsFailurePort: true },
+  // How the block looks in the editor's palette. The scaffold sets the glyph
+  // to your name's initial; choose colours of your own too.
   ui: {
     label: "Example lookup",
     description: "Searches Example and reports what it found.",

@@ -413,6 +413,29 @@ describe("prepare_workspace execute", () => {
     expect(result.kind).toBe("next");
     expect(ctx.sandboxId).toBe("sbx-9");
     expect(ctx.selectedRepositories).toEqual([repo]);
+    // Nothing says what was stored, so teardown must ask before it writes.
+    expect(ctx.workspaceNotebookRecalled).toBe(false);
+  });
+
+  it("tells teardown whether the agent started from the stored notebook", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.hydrateWorkspaceMemoryStep.mockResolvedValue({
+      source: "none",
+      trackedInRepo: false,
+      written: false,
+      unavailable: "Built-in memory could not answer",
+      recalled: false,
+    });
+    const ctx = makeCtx({ sandboxId: null });
+
+    await ensureWorkspace(ctx, undefined, {});
+
+    expect(ctx.workspaceNotebookRecalled).toBe(false);
   });
 
   // Same contract for the seed as for the hydration above: an error crossing the

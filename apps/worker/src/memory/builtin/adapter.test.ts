@@ -10,28 +10,30 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ db: null as unknown }));
+const mocks = vi.hoisted(() => ({
+  db: null as unknown,
+  // What this deployment knows as secret. Stated here rather than read from the
+  // connection tables: these cases break the database on purpose.
+  secrets: (async () => []) as () => Promise<string[]>,
+}));
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
-// A deployment with nothing connected: what it knows is its environment's
-// secrets. These cases break the store on purpose, and the known set is read
-// from the same database, so it is stated here rather than read from a fake
-// that only answers the calls the store makes.
-vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../services/integrations/runtime.js")>();
-  const { environmentSecretValues } = await import("../../run-observability/configured-secrets.js");
-  return { ...actual, knownSecretValues: async () => environmentSecretValues() };
-});
+vi.mock("../../services/integrations/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/integrations/runtime.js")>()),
+  knownSecretValues: () => mocks.secrets(),
+}));
 vi.mock("../../infra/logger.js", () => ({
   logger: { child: () => ({ warn: vi.fn(), info: vi.fn() }), warn: vi.fn(), info: vi.fn() },
 }));
 
 import { createTestDb } from "../../db/test-db.js";
-import { upsertMemoryDocument } from "../../db/repositories/memory.js";
+import { getMemoryDocument, upsertMemoryDocument } from "../../db/repositories/memory.js";
 import { renderRepoMemoryDocument } from "../repo-memory.js";
 import { builtinMemoryAdapter } from "./adapter.js";
 
 const SUBJECT = { key: "repo:github:acme/api", label: "acme/api" };
-const memory = builtinMemoryAdapter();
+/** One adapter per test, as a step gets one per resolution: it keeps the
+ *  secret set it read, so a case that changes the set needs a fresh one. */
+let memory: ReturnType<typeof builtinMemoryAdapter>;
 
 async function store(items: string[], runId = "run_0"): Promise<void> {
   await upsertMemoryDocument(mocks.db as never, {
@@ -56,6 +58,8 @@ function selectOf(db: unknown): unknown {
 
 beforeEach(async () => {
   mocks.db = await createTestDb();
+  mocks.secrets = async () => [];
+  memory = builtinMemoryAdapter();
 });
 
 describe("recall", () => {
@@ -218,6 +222,123 @@ describe("observe", () => {
     });
 
     expect(write).toMatchObject({ ok: false, code: "unavailable" });
+  });
+});
+
+describe("a secret it learned after storing it", () => {
+  // A value can reach memory before it is a known secret: an environment
+  // variable added later, a token pasted into the dashboard later. Core cleans
+  // everything it sends; only this store can clean what it already holds.
+  const TOKEN = "stored-dashboard-token-5e1f0c";
+  const CLEANED = "[REDACTED:configured_secret]";
+
+  async function storedText(): Promise<string | undefined> {
+    return (await getMemoryDocument(mocks.db as never, SUBJECT.key, "facts"))?.content;
+  }
+
+  it("takes it out of what it holds at the next write", async () => {
+    await store([`Deploy with ${TOKEN} in the header`]);
+    mocks.secrets = async () => [TOKEN];
+
+    const write = await memory.observe({
+      subject: SUBJECT,
+      scope: { kind: "facts" },
+      runId: "run_1",
+      ticketKey: null,
+      observation: { kind: "items", learned: ["Run tests with pnpm test"], refuted: [] },
+    });
+
+    expect(write).toMatchObject({ ok: true, stored: true });
+    expect(await storedText()).not.toContain(TOKEN);
+    expect(await storedText()).toContain(`Deploy with ${CLEANED} in the header`);
+  });
+
+  it("takes it out even when the run only confirmed what was there", async () => {
+    // Confirming an item is otherwise a write only when provenance moves; a
+    // held secret is a change worth writing on its own.
+    await store([`Deploy with ${TOKEN} in the header`], "run_1");
+    mocks.secrets = async () => [TOKEN];
+
+    await memory.observe({
+      subject: SUBJECT,
+      scope: { kind: "facts" },
+      runId: "run_1",
+      ticketKey: null,
+      observation: { kind: "items", learned: [], refuted: [] },
+    });
+
+    expect(await storedText()).not.toContain(TOKEN);
+  });
+
+  it("still forgets such an item when a run disproves it", async () => {
+    // Core cleans `refuted` as well, so the run names the item cleaned. Matched
+    // against the raw stored copy, the retraction would silently miss.
+    await store([`The token ${TOKEN} is read from .env`, "Package manager is pnpm"]);
+    mocks.secrets = async () => [TOKEN];
+
+    const write = await memory.observe({
+      subject: SUBJECT,
+      scope: { kind: "facts" },
+      runId: "run_1",
+      ticketKey: null,
+      observation: { kind: "items", learned: [], refuted: [`The token ${CLEANED} is read from .env`] },
+    });
+
+    expect(write).toMatchObject({ ok: true, stored: true, removed: 1 });
+    const after = await memory.recall({ subject: SUBJECT, scope: { kind: "facts" } });
+    expect(after.ok && after.entries.map((entry) => entry.text)).toEqual(["Package manager is pnpm"]);
+  });
+
+  it("writes nothing when the secrets to take out cannot be read", async () => {
+    await store([`Deploy with ${TOKEN} in the header`]);
+    const before = await storedText();
+    const { IntegrationSecretsUnreadableError } = await import(
+      "../../services/integrations/secret-values.js"
+    );
+    mocks.secrets = async () => {
+      throw new IntegrationSecretsUnreadableError(new Error("db down"));
+    };
+
+    const write = await memory.observe({
+      subject: SUBJECT,
+      scope: { kind: "facts" },
+      runId: "run_1",
+      ticketKey: null,
+      observation: { kind: "items", learned: ["Run tests with pnpm test"], refuted: [] },
+    });
+
+    expect(write).toMatchObject({ ok: false, code: "unavailable" });
+    expect(await storedText()).toBe(before);
+  });
+});
+
+describe("a create-only write", () => {
+  it("answers already there without needing the secret set", async () => {
+    // Nothing held is merged into, so nothing held needs cleaning: a seed that
+    // finds a document says so even when the set cannot be read.
+    await store(["a fact a run distilled"]);
+    const { IntegrationSecretsUnreadableError } = await import(
+      "../../services/integrations/secret-values.js"
+    );
+    mocks.secrets = async () => {
+      throw new IntegrationSecretsUnreadableError(new Error("db down"));
+    };
+
+    const write = await memory.observe({
+      subject: SUBJECT,
+      scope: { kind: "facts" },
+      runId: "run_1",
+      ticketKey: null,
+      observation: {
+        kind: "items",
+        learned: ["Package manager is pnpm"],
+        refuted: [],
+        derived: true,
+        onlyIfEmpty: true,
+      },
+    });
+
+    expect(write).toEqual({ ok: true, stored: false, removed: 0, dropped: 0, remaining: 0 });
   });
 });
 

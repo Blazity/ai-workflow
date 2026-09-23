@@ -10,30 +10,20 @@ to, and the boundaries gate refuses it from here.
 
 ## Declaring pages
 
-```tsx
-// integrations/<id>/dashboard.tsx
-import { defineIntegrationDashboard, Page, Card, KeyValue } from "@integrations/host-ui";
-import type { manifest } from "./manifest";
+`integrations/_template/dashboard.tsx` is the example to copy: one component
+per page, built from these primitives, declared with
 
-function Overview() {
-  return (
-    <Page title="Overview" description="What this integration is doing here.">
-      <Card title="Account">
-        <KeyValue items={[{ label: "Workspace", value: "acme" }]} />
-      </Card>
-    </Page>
-  );
-}
+`defineIntegrationDashboard<typeof manifest>({ pages: { overview: OverviewPage } })`.
 
-export const dashboard = defineIntegrationDashboard<typeof manifest>({
-  pages: { overview: Overview },
-});
-```
+It is the one copy of that example, and CI compiles it (the scaffold test
+compiles every package `pnpm run new:integration` writes), so it cannot drift
+from this package the way a sample in this file could.
 
 The type argument is the manifest's type, imported with `import type` so the
 manifest's zod schemas never reach the browser. It is what makes a page declared
-without a component, and a component for a page nobody declared, a compile
-error rather than a tab that renders nothing.
+without a component, a component for a page nobody declared, and any component
+at all for a manifest that declares no page, a compile error rather than a tab
+that renders nothing (`contract.test.ts` holds it to that).
 
 A manifest that declares no pages needs no `dashboard.tsx`. Its area in the
 cockpit is the Connection screen alone.

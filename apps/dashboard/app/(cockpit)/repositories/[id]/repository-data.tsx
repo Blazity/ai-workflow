@@ -1,8 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 
-import { canManageRepositoryCatalog } from "@shared/contracts";
+import { canManageRepositoryCatalog, repoSubjectKey } from "@shared/contracts";
 import type {
   MemoryDocumentResponse,
+  MemoryDocumentsResponse,
   PrePrChecksResponse,
   RepositoryCatalogEntryResponse,
   RepositoryCatalogListResponse,
@@ -14,7 +15,11 @@ import { isWorkerStatus } from "@/lib/api/worker-errors";
 import { UnauthorizedError } from "@/lib/auth/errors";
 import { requireSession } from "@/lib/auth/session";
 
-import { RepositoryEntryScreen } from "../repository-entry";
+import {
+  RepositoryEntryScreen,
+  type RepositoryMemory,
+  type RepositoryMemorySlot,
+} from "../repository-entry";
 
 /** A missing row, told apart from a broken worker by the status getJSON
  *  carries on what it throws. */
@@ -22,9 +27,73 @@ function isNotFound(error: unknown): boolean {
   return isWorkerStatus(error, 404);
 }
 
-/** Repository-scoped agent memory is two documents under one subject key, which
- *  the worker spells `repo:<provider>:<path>` (apps/worker/src/memory). */
-const MEMORY_DOC_PATHS = ["facts", "lessons"] as const;
+/**
+ * The two statuses the worker answers when this deployment's memory provider
+ * could not be asked: 503 for one that is away (asking again may work), 501
+ * for one that serves runs and cannot list what it holds (asking again will
+ * not). Either is a state the tab shows, never an empty tab and never an error
+ * that takes the profile editor down with it.
+ */
+function memoryRefusal(error: unknown): { retryable: boolean; reason: string } | null {
+  if (!isWorkerStatus(error, 503, 501)) return null;
+  return {
+    retryable: error.status === 503,
+    reason: error.reason ?? "This deployment's memory could not be read.",
+  };
+}
+
+/**
+ * This repository's documents, as this deployment's memory provider lists them.
+ *
+ * The listing is the only source of what exists: a document is read, and later
+ * erased, by exactly the pair the listing returned, and the page never names a
+ * document itself. A provider keeps whatever documents it keeps, under names
+ * it chooses; only the subject key is core's address, so it is built by core's
+ * one helper and matched exactly.
+ *
+ * Listed for this subject, not paged for it: the unfiltered listing is the
+ * newest page of every subject, and a repository nobody ran on lately is not
+ * on it. The exact match below stays as a second guard, so a worker that did
+ * not apply the filter can never put another subject's document on this tab.
+ */
+async function repositoryMemory(subjectKey: string): Promise<RepositoryMemory> {
+  let listing: MemoryDocumentsResponse;
+  try {
+    listing = await getJSON<MemoryDocumentsResponse>(withQuery("/api/v1/memory", { subjectKey }));
+  } catch (error) {
+    const refusal = memoryRefusal(error);
+    if (refusal === null) throw error;
+    return { state: "unavailable", ...refusal };
+  }
+  const pairs = listing.documents
+    .filter((listed) => listed.subjectKey === subjectKey)
+    .sort((left, right) => left.docPath.localeCompare(right.docPath));
+  const documents = await Promise.all(
+    pairs.map(async ({ subjectKey: key, docPath }): Promise<RepositoryMemorySlot> => {
+      try {
+        const read = await getJSON<MemoryDocumentResponse>(
+          withQuery("/api/v1/memory", { subjectKey: key, docPath }),
+        );
+        return { subjectKey: key, docPath, document: read.document, unreadable: null };
+      } catch (error) {
+        // The listing answered and this one read did not. Carried as the
+        // provider's sentence, never as a missing document: telling somebody a
+        // document is gone when nobody erased it is the answer a 503 exists to
+        // prevent.
+        const refusal = memoryRefusal(error);
+        if (refusal !== null) {
+          return { subjectKey: key, docPath, document: null, unreadable: refusal.reason };
+        }
+        // Erased between the listing and the read: the slot says so.
+        if (isNotFound(error)) return { subjectKey: key, docPath, document: null, unreadable: null };
+        throw error;
+      }
+    }),
+  );
+  // Absent reads as complete: a worker built before the field cannot answer
+  // either way, and complete is how its screen already read it.
+  return { state: "listed", complete: listing.complete ?? true, documents };
+}
 
 export async function RepositoryData({ id }: { id: number }) {
   try {
@@ -37,9 +106,9 @@ export async function RepositoryData({ id }: { id: number }) {
     });
     if (entry === null) notFound();
 
-    const subjectKey = `repo:${entry.repository.provider}:${entry.repository.path}`;
+    const subjectKey = repoSubjectKey(entry.repository.provider, entry.repository.path);
 
-    const [versions, catalog, checks, ...memory] = await Promise.all([
+    const [versions, catalog, checks, memory] = await Promise.all([
       // The History tab's FIRST PAGE. Loaded with the page rather than on the
       // tab click: it is one small query and a tab that has to fetch before it
       // can say anything is a tab that shows a spinner every time it is opened.
@@ -62,16 +131,7 @@ export async function RepositoryData({ id }: { id: number }) {
       getJSON<PrePrChecksResponse>("/api/v1/pre-pr-checks").catch(
         (): PrePrChecksResponse | null => null,
       ),
-      ...MEMORY_DOC_PATHS.map((docPath) =>
-        getJSON<MemoryDocumentResponse>(
-          withQuery("/api/v1/memory", { subjectKey, docPath }),
-        ).catch((error) => {
-          // A repository with no memory yet is the ordinary case, not a
-          // failure; anything else still surfaces.
-          if (isNotFound(error)) return null;
-          throw error;
-        }),
-      ),
+      repositoryMemory(subjectKey),
     ]);
 
     return (
@@ -82,11 +142,7 @@ export async function RepositoryData({ id }: { id: number }) {
         versionsHasMore={versions.hasMore}
         catalog={catalog?.repositories ?? []}
         allowedEnv={checks?.allowedEnv}
-        memory={MEMORY_DOC_PATHS.map((docPath, index) => ({
-          docPath,
-          subjectKey,
-          document: memory[index]?.document ?? null,
-        }))}
+        memory={memory}
         canManage={canManageRepositoryCatalog(session.role)}
       />
     );

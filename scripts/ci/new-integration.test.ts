@@ -71,6 +71,9 @@ test("a new integration is the template with the template's names replaced", asy
   assert.match(manifest, /name: "Quokka Cloud"/u);
   assert.match(manifest, /type: "quokka_lookup"/u);
   assert.match(manifest, /env: "QUOKKA_API_TOKEN"/u);
+  // The block's palette tile carries the integration's initial, not the
+  // template's "E", which every scaffolded package used to ship.
+  assert.match(manifest, /glyph: "Q"/u);
   assert.match(readFileSync(join(target, "worker.ts"), "utf8"), /quokka_lookup: async/u);
   assert.match(readFileSync(join(target, "README.md"), "utf8"), /^# Quokka Cloud$/mu);
 });

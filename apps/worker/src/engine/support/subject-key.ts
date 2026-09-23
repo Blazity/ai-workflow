@@ -47,9 +47,9 @@ export function scheduleSubjectKey(
   return occurrenceAt === undefined ? base : `${base}:${occurrenceAt.getTime()}`;
 }
 
-export function repoSubjectKey(provider: VcsProviderKind, repoPath: string): string {
-  return `repo:${provider}:${repoPath}`;
-}
+/** Spelled in `@shared/contracts`, because the dashboard finds a repository's
+ *  memory by it too. */
+export { repoSubjectKey } from "@shared/contracts";
 
 export function orgSubjectKey(provider: VcsProviderKind, owner: string): string {
   return `org:${provider}:${owner}`;
