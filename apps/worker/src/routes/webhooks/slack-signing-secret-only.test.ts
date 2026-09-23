@@ -67,7 +67,7 @@ function command(text: string, secret: string | null = SIGNING_SECRET): Request 
     response_url: "https://hooks.slack.com/commands/T0001/1/abc",
   }).toString();
   const timestamp = String(Math.floor(Date.now() / 1000));
-  const signature =
+  const signature: Record<string, string> =
     secret === null
       ? {}
       : {
