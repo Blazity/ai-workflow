@@ -1,6 +1,6 @@
 "use client";
 
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition } from "@integrations/registry";
 import type { SettingsEntryView } from "@shared/contracts";
 
 import { Input, Select, Textarea } from "@/components/ui";
@@ -31,7 +31,7 @@ export function SettingControl({
   invalid: boolean;
   onChange: (next: string | boolean) => void;
 }) {
-  const definition = findSettingDefinition(entry.key);
+  const definition = settingDefinition(entry.key);
   const label = `Value of ${entry.key}`;
 
   if (definition?.type === "boolean") {

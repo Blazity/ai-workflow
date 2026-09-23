@@ -7,12 +7,11 @@ import {
   CkKPI,
   CkChip,
   CkStatusPill,
-  CkDot,
   TicketLink,
   PRLinks,
   CkPagination,
 } from "@/components/ui";
-import { Spark, Donut } from "@/components/charts";
+import { Spark } from "@/components/charts";
 import { runModelLabel } from "@/lib/run-model";
 import { formatWaited } from "@/lib/waited";
 import { spanColor } from "@/lib/theme";
@@ -28,7 +27,6 @@ import {
 import type { Run } from "@/lib/types";
 import type {
   KpisResponse,
-  EvalHealthResponse,
   LiveRunsResponse,
   DispatchCapacityResponse,
   RunsResponse,
@@ -41,90 +39,10 @@ const MISSING_VALUE = "N/A";
 /** Bundle of the server-fetched responses passed into the presentational Overview. */
 export interface OverviewScreenData {
   kpis: KpisResponse;
-  evalHealth: EvalHealthResponse;
   liveRuns: LiveRunsResponse;
   capacity: DispatchCapacityResponse;
   recentRuns: RunsResponse;
   workflows: WorkflowsResponse;
-}
-
-/* Eval health KPI, fits the hero KPI strip but shows a mini-donut and breakdown. */
-function EvalHealthKPI({ data }: { data: EvalHealthResponse | undefined }) {
-  if (data?.available === true) {
-    const total = data.pass + data.warn + data.fail || 1;
-    return (
-      <div className="bg-panel border border-neutral-200 rounded-sm px-[18px] py-4 flex flex-col gap-1.5 min-h-[124px]">
-        <div className="flex items-center justify-between">
-          <div className="font-mono text-[10px] font-medium tracking-[0.06em] uppercase text-neutral-700">
-            Eval health
-          </div>
-          <Button
-            type="button"
-            variant="text"
-            className="border-0 bg-transparent p-0 font-mono text-[10px] text-mariner tracking-[0.04em] uppercase cursor-pointer"
-          >
-            Detail →
-          </Button>
-        </div>
-        <div className="flex items-center gap-3 mt-0.5">
-          <Donut
-            shares={[data.pass / total, data.warn / total, data.fail / total]}
-            colors={["#5BB04A", "#FFC800", "#D14343"]}
-            size={64}
-            thickness={10}
-            centerLabel={data.score.toFixed(1)}
-          />
-          <div className="flex-1 flex flex-col gap-[3px]">
-            <div className="flex items-center gap-1.5 font-body text-xs">
-              <CkDot color="#5BB04A" />
-              <span className="flex-1 text-neutral-800">Pass</span>
-              <b className="font-mono text-neutral-900">{data.pass}</b>
-            </div>
-            <div className="flex items-center gap-1.5 font-body text-xs">
-              <CkDot color="#FFC800" />
-              <span className="flex-1 text-neutral-800">Warn</span>
-              <b className="font-mono text-neutral-900">{data.warn}</b>
-            </div>
-            <div className="flex items-center gap-1.5 font-body text-xs">
-              <CkDot color="#D14343" />
-              <span className="flex-1 text-neutral-800">Fail</span>
-              <b className="font-mono text-neutral-900">{data.fail}</b>
-            </div>
-          </div>
-        </div>
-        <div className="mt-auto font-mono text-[10px] text-neutral-500 tracking-[0.04em]">
-          {data.spansGraded.toLocaleString("en-US")} spans graded · {data.windowHours}h
-        </div>
-      </div>
-    );
-  }
-
-  const reason = data?.available === false ? data.reason : "Loading…";
-
-  return (
-    <div className="bg-panel border border-neutral-200 rounded-sm px-[18px] py-4 flex flex-col gap-1.5 min-h-[124px]">
-      <div className="flex items-center justify-between">
-        <div className="font-mono text-[10px] font-medium tracking-[0.06em] uppercase text-neutral-700">
-          Eval health
-        </div>
-      </div>
-      <div className="flex items-center gap-3 mt-0.5">
-        <Donut
-          shares={[1, 0, 0]}
-          colors={["#E6E8EB", "#E6E8EB", "#E6E8EB"]}
-          size={64}
-          thickness={10}
-          centerLabel={MISSING_VALUE}
-        />
-        <div className="flex-1 font-body text-xs text-neutral-500 leading-snug">
-          {reason}
-        </div>
-      </div>
-      <div className="mt-auto font-mono text-[10px] text-neutral-500 tracking-[0.04em]">
-        {MISSING_VALUE}
-      </div>
-    </div>
-  );
 }
 
 /* Live "Now running" panel. Shows executing runs, plus the occupied-slot count
@@ -417,9 +335,6 @@ export function OverviewScreen({
   const heroCost = data.kpis.cost24h;
   const heroP95 = data.kpis.p95;
   const heroErrors = data.kpis.errors24h;
-  const evalData = data.evalHealth;
-  const heroEval: Extract<EvalHealthResponse, { available: true }> | null =
-    evalData.available === true ? evalData : null;
 
   return (
     <div className="px-6 pt-5 pb-8 flex flex-col gap-5">
@@ -466,7 +381,7 @@ export function OverviewScreen({
               { l: `Runs · ${wShort}`, v: heroRuns ? heroRuns.value.toLocaleString("en-US") : "N/A" },
               { l: `Cost · ${wShort}`, v: heroCost ? "$" + heroCost.value.toFixed(0) : "N/A" },
               { l: "p95 latency", v: heroP95 ? heroP95.valueSec + "s" : "N/A" },
-              { l: "Eval score", v: heroEval ? heroEval.score.toFixed(1) : "N/A" },
+              { l: `Errors · ${wShort}`, v: heroErrors ? heroErrors.value.toString() : "N/A" },
             ].map((k) => (
               <div key={k.l}>
                 <div className="font-mono text-[10px] text-white/50 tracking-[0.06em] uppercase">
@@ -482,7 +397,7 @@ export function OverviewScreen({
       )}
 
       {/* Hero KPIs */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <CkKPI
           label={`Runs · ${wShort}`}
           value={heroRuns ? heroRuns.value.toLocaleString("en-US") : ""}
@@ -496,7 +411,6 @@ export function OverviewScreen({
           sparkColor="#3C43E7"
           disabled={!heroRuns}
         />
-        <EvalHealthKPI data={data.evalHealth} />
         <CkKPI
           label="p95 latency"
           value={heroP95 ? heroP95.valueSec + "s" : ""}

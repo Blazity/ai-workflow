@@ -24,11 +24,11 @@ vi.mock("../../../db/repositories/approvals.js", () => ({
 }));
 vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
-    issueTracker: {
+    issueTrackerResolution: { ok: true, adapter: {
       postComment: mocks.postComment,
       moveTicket: mocks.moveTicket,
       updateLabels: mocks.updateLabels,
-    },
+    } },
     messaging: { notifyForTicket: mocks.notifyForTicket },
   }),
 }));

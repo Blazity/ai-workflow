@@ -23,6 +23,7 @@ import {
   resolvePendingReviewFeedback,
   selectReviewLedgerWorkItems as selectWorkItems,
 } from "../adapters/vcs/vcs-bot-identity.js";
+import { exampleRepositoryPath } from "../repository-map/repository-path-example.js";
 import {
   buildRepositoryMap,
   type RepositoryMap,
@@ -233,7 +234,17 @@ ${ticket.title}
   );
 }
 
-const REPOSITORY_ACCESS_PROTOCOL = `
+/**
+ * The example provider comes from the repositories this run is actually
+ * holding, never from whichever integration the build happens to ship first: a
+ * deployment with GitLab and no GitHub was being taught to name a repository
+ * that cannot exist there. That is why this is a function of the run rather
+ * than a constant, and why it stays one.
+ */
+function repositoryAccessProtocol(
+  selectedRepositories: SelectedRepository[] | undefined,
+): string {
+  return `
 
 ## Repository Access Protocol
 
@@ -253,13 +264,17 @@ This protocol extends and overrides any older Output Format instructions above.
   attached repositories the implementation must modify, and include concise
   \`repositoryEvidence\`. Every evidence item must name the exact
   \`provider:repoPath\`, the file, symbol, commit, PR, or ticket fact checked,
-  and the relevant finding (for example: \`github:acme/api src/auth.ts:42 \u2014
+  and the relevant finding (for example: \`${exampleRepositoryPath(
+    "acme/api",
+    (selectedRepositories ?? []).map((repository) => repository.provider),
+  )} src/auth.ts:42,
   token refresh is delegated to SessionStore\`). A code-changing plan must
   declare at least one write repository.
 - Set fields that do not apply to \`null\`, as required by the structured schema.
 - Research is read-only: do not modify files, create commits, or change branches.
 - A read-only research checkout is checked out again with write access when implementation starts, so needing to write to an attached repository is never a reason to request it again.
 `;
+}
 
 const RESOLUTION_CHECK = `
 ## Resolution Check
@@ -324,7 +339,7 @@ ${branchName}
       additionsParts,
       prompt.length > 0 &&
         part("block-prompt", "Block prompt", { kind: "block_prompt" }, `\n---\n\n${prompt}\n`),
-      part("repository-access-protocol", "Repository Access Protocol", PLATFORM, REPOSITORY_ACCESS_PROTOCOL),
+      part("repository-access-protocol", "Repository Access Protocol", PLATFORM, repositoryAccessProtocol(selectedRepositories)),
       hasPrFeedback
         ? {
             id: "resolution-check",

@@ -3,8 +3,10 @@ import { settingsSnapshotFromEnvironment } from "../services/settings/snapshot.j
 import type { Db } from "../db/types.js";
 import type { McpActorContext, McpToolDependencies } from "../mcp/contracts.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
-import type { Adapters } from "../engine/support/adapters.js";
+import { adaptersFor } from "./issue-tracker.js";
 import { unactivatedRepositoryCatalog } from "./repository-catalog.js";
+import { testDeploymentIntegrations } from "./integrations.js";
+import { knownSecretValues } from "../services/integrations/index.js";
 
 export function actorFor(overrides: Partial<McpActorContext> = {}): McpActorContext {
   return {
@@ -37,13 +39,25 @@ export function depsFor(
     overrides.settings ?? settingsSnapshotFromEnvironment();
   return {
     services: createMcpToolServices(db, settings),
-    adapters: {} as Adapters,
+    // No issue tracker connected, for the same reason as the integrations
+    // below: a test that is about a tracker says which one it has.
+    adapters: adaptersFor("not_connected"),
     actor: actorFor(),
     settings,
     // The bridge, which is what a deployment that has not activated the catalog
     // loads: a test that is about the catalog overrides this with its own. A
     // thunk, like the transport's, so a tool that never dispatches never asks.
     loadRepositoryCatalog: async () => unactivatedRepositoryCatalog(),
+    // A deployment with no integration usable, which is what a test that is not
+    // about integrations means. A test that IS about them overrides this with
+    // `testDeploymentIntegrations([...])`, one line, no module mocked.
+    loadDeploymentIntegrations: async () => testDeploymentIntegrations(),
+    // Nothing to report, which is what a test that is not about capabilities
+    // means; one that is overrides it with the rows it is about.
+    loadCapabilityOverview: async () => ({ capabilities: [] }),
+    // The same read the transport makes, on the test's own database. A test
+    // about one particular secret passes its own list.
+    loadKnownSecrets: () => knownSecretValues({ db }),
     requestId: "request-execute",
     traceId: "trace-execute",
     now,

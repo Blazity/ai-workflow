@@ -98,7 +98,7 @@ export type WorkspaceGateRequirement =
     };
 
 interface InspectedWorkspaceRepository {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   preAgentSha?: string;
   headSha: string;

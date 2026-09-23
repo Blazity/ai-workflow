@@ -1,4 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// A deployment with nothing connected: the secrets it knows are its
+// environment's. This suite is about something else, and the real source reads
+// the integration settings from a database it does not have
+// (services/integrations/secret-values.test.ts proves that read).
+vi.mock("../../services/integrations/secret-values.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/integrations/secret-values.js")>();
+  const { environmentSecretValues } = await import("../../run-observability/configured-secrets.js");
+  return { ...actual, knownSecretValues: async () => environmentSecretValues() };
+});
 import { ActiveRunOwnerError } from "../../engine/support/run-control-errors.js";
 
 const mocks = vi.hoisted(() => ({
@@ -27,12 +37,12 @@ vi.mock("../../db/repositories/active-runs.js", () => ({
 }));
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
-    issueTracker: {
+    issueTrackerResolution: { ok: true, adapter: {
       fetchTicket: mocks.fetchTicket,
       findCommentByMarker: mocks.findCommentByMarker,
       postComment: mocks.postComment,
       updateLabels: mocks.updateLabels,
-    },
+    } },
     messaging: { notifyForTicket: mocks.notifyForTicket },
   }),
 }));

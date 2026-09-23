@@ -1,66 +1,54 @@
-import { prepareMemoryContent, sliceUtf8Head, utf8Bytes } from "../../memory/content.js";
+import { MEMORY_PROMPT_BUDGET_BYTES } from "@integrations/sdk";
+import { fitMemoryText, MEMORY_CUT_MARKER, utf8Bytes } from "../../memory/content.js";
 import {
   REPO_MEMORY_DOC_PATHS,
-  mergeRepoMemoryItems,
-  parseRepoMemoryDocument,
-  renderRepoMemoryDocument,
   repoMemoryComparisonKey,
-  stripRepoMemoryProvenance,
   type RepoMemoryDocKind,
   type RepoMemoryItem,
 } from "../../memory/repo-memory.js";
 import { orgSubjectKey, repoOwner, repoSubjectKey } from "../support/subject-key.js";
 import { WORKSPACE_ROOT_DIR } from "../../sandbox/repo-workspace.js";
-import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
 import { redactConfiguredSecretsInText } from "../../run-observability/sanitizer.js";
 import type { EffectivePromptMemorySource } from "../helpers/effective-prompt.js";
-import { memoryDocPath, legacyMemoryDocPath } from "./memory-steps.js";
-import { planDeferredBriefing, recordSendBriefing, type DeferredBriefing } from "../agent-visibility/plan.js";
+import {
+  planDeferredBriefing,
+  recordSendBriefing,
+  type DeferredBriefing,
+} from "../agent-visibility/plan.js";
 
 /** Run material handed to the model. The ticket memory document is the long
  * part, so the cap effectively bounds that. */
 const MAX_MATERIAL_BYTES = 24 * 1024;
 /**
- * Per stored document. Far below the store's own limit: these documents are
- * injected into every prompt for the repository. Sized so that FACTS_MAX_ITEMS,
- * not this cap, is what bounds a mature document: a real run id is 31
- * characters, so provenance costs 45 bytes an item, and 40 facts of
- * MAX_ITEM_CHARS ASCII characters render to about 9.8 KiB. The margin left over
- * is a couple of kilobytes and no more, so whoever raises MAX_ITEM_CHARS or adds
- * a second per-item marker will hit this byte cap before the item count and has
- * to move this number with them.
- *
- * That estimate is ASCII only. MAX_ITEM_CHARS counts characters, not bytes, so
- * 40 items of CJK text render to roughly 25 KB. Not a bug: the merge evicts
- * whole items rather than truncating one, so such a document degrades to fewer
- * facts instead of to a corrupt one.
- *
- * The 32 KiB injection budget below is what actually bounds prompt cost.
+ * HOW MUCH A PROVIDER KEEPS IS THE PROVIDER'S ANSWER SINCE S13. The caps that
+ * used to live here (12 KiB a document, 40 facts, 30 lessons, three
+ * compare-and-swap rounds) are in the built-in provider,
+ * `memory/builtin/adapter.ts`, with their reasoning. This step reports what
+ * the provider says it forgot and bounds only what it puts in a prompt, below.
  */
-const MAX_DOC_BYTES = 12 * 1024;
-/** Across every document injected into one invocation. This feature exists to
- * save tokens, and 32 KiB is already around 8k tokens on every invocation, so
- * the ceiling stays put. Eight mature repositories can still lose the tail of
- * the injection; that residual is known and acceptable because every dropped
- * document is logged. Per-repository budgets are future work. */
-const MAX_INJECTED_MEMORY_BYTES = 32 * 1024;
 /**
- * The ceiling above, split per document kind, each with its own latch. One
- * shared latch measured at eight mature repositories injected four facts
- * documents and dropped every single lessons document, and at three
- * repositories only one lessons document survived, so the paid LLM call was
- * buying output no prompt ever saw: the build and test commands in the facts
- * documents come from the free deterministic seed, and lessons are the one
- * thing the model produces that nothing else does.
+ * Across every document injected into one invocation, split per document kind
+ * with a latch each. The numbers are the SDK's (`MEMORY_PROMPT_BUDGET_BYTES`),
+ * because a provider's author has to read them there; the reasons are here.
  *
- * An even split, for two reasons. It is the largest lessons budget the ceiling
- * allows without letting facts starve them, and at one repository, which is the
- * overwhelmingly common manifest, 16 KiB is enough for a whole mature pair
- * including documents written under an older, larger write cap. Facts pay for
- * the org document too, since an org document holds facts only.
+ * 32 KiB in all: this feature exists to save tokens, and 32 KiB is already
+ * around 8k tokens on every invocation. Eight mature repositories can still
+ * lose the tail of the injection; that residual is known and acceptable
+ * because every cut and every left-out document is logged. Per-repository
+ * budgets are future work.
+ *
+ * Split, because one shared latch measured at eight mature repositories
+ * injected four facts documents and dropped every single lessons document, and
+ * at three repositories only one lessons document survived, so the paid LLM
+ * call was buying output no prompt ever saw: the build and test commands in
+ * the facts documents come from the free deterministic seed, and lessons are
+ * the one thing the model produces that nothing else does. Evenly, because it
+ * is the largest lessons budget the ceiling allows without letting facts starve
+ * them, and at one repository, the overwhelmingly common manifest, 16 KiB holds
+ * a whole mature pair. Facts pay for the org document too, since an org
+ * document holds facts only.
  */
-const MAX_INJECTED_FACTS_BYTES = MAX_INJECTED_MEMORY_BYTES / 2;
-const MAX_INJECTED_LESSONS_BYTES = MAX_INJECTED_MEMORY_BYTES - MAX_INJECTED_FACTS_BYTES;
+const MAX_INJECTED_MEMORY_BYTES = MEMORY_PROMPT_BUDGET_BYTES.facts + MEMORY_PROMPT_BUDGET_BYTES.lessons;
 /**
  * Whole-step budget for the reads in loadRepoMemorySourcesStep, not a per-query
  * one, so what an operator can state is "this step costs at most this long"
@@ -83,8 +71,6 @@ const LOAD_DEADLINE_MS = 5_000;
  * 34k input tokens for the half of the prompt nobody was bounding.
  */
 const MAX_KNOWN_BYTES = 24 * 1024;
-const FACTS_MAX_ITEMS = 40;
-const LESSONS_MAX_ITEMS = 30;
 /** Per run. A single run cannot flood the document even if the model insists. */
 const MAX_NEW_FACTS = 8;
 const MAX_NEW_LESSONS = 5;
@@ -92,10 +78,6 @@ const MAX_NEW_LESSONS = 5;
  * tighter than assertion: a model that decides the whole document is wrong can
  * retract at most this many entries in one run. */
 const MAX_CONTRADICTED = 5;
-/** Compare-and-swap rounds per document. neon-http has no transactions, so this
- * loop is what makes the read-merge-write safe; a document under contention from
- * more writers than this keeps its winner and loses only this run's update. */
-const MAX_WRITE_ATTEMPTS = 3;
 /**
  * Repositories under one owner that have to carry a fact before it is promoted
  * to that owner's document. A fact only one repository knows is that
@@ -649,7 +631,7 @@ export interface DistillRepoMemoryInput {
   subjectKey: string;
   taskId: string;
   repositories: Array<{
-    provider: "github" | "gitlab";
+    provider: string;
     repoPath: string;
     /**
      * Paths tracked on this repository's default branch, captured from the clone
@@ -699,7 +681,22 @@ export interface DistillRepoMemoryResult {
     | "no_candidates"
     | "write_skipped"
     | "store_failed"
+    /** This deployment's memory provider could not be reached at all, which is
+     *  not the same event as the store having refused one document. Added in
+     *  S13; a result stored before it existed never carries it. */
+    | "memory_unavailable"
     | null;
+  /**
+   * Why memory could not answer, in the provider's own words, or absent when
+   * it did.
+   *
+   * ADDED IN S13 and optional, so a result written before it existed still
+   * parses on replay. Absent means memory answered, never that nothing was
+   * checked. It is set whenever ANY call refused, including on a run that went
+   * on to store other documents, because "seven of eight repositories were
+   * written" is the incident, not the success.
+   */
+  unavailable?: string;
 }
 
 const DISTILL_OUTPUT_SCHEMA = JSON.stringify({
@@ -777,15 +774,16 @@ interface RepoMemoryState {
   repoPath: string;
   /** Kept apart from `key` so org promotion can group on the provider without
    * having to parse it back out of a composed identifier. */
-  provider: "github" | "gitlab";
+  provider: string;
   /** Database subject key the two documents are stored under. */
   subjectKey: string;
+  /**
+   * What the provider says is already known, for the "Already known" section of
+   * the prompt. No version travels with it any more: reconciling this run's
+   * observations against a concurrent writer's is the provider's job, so the
+   * step no longer holds a value whose only purpose was a compare-and-swap.
+   */
   known: Record<RepoMemoryDocKind, RepoMemoryItem[]>;
-  /** Store version each `known` list was parsed from, 0 for "no row was there".
-   * Handed straight to the upsert as `expectedVersion`, so a run that merged on
-   * top of state a concurrent run has since replaced loses its swap instead of
-   * overwriting it. */
-  versions: Record<RepoMemoryDocKind, number>;
 }
 
 /** One repository's model output. The two contradicted lists are kept apart from
@@ -819,6 +817,10 @@ export async function distillRepoMemoryStep(
    * truncated by redaction, or unscrubbable. Kept apart from "the model produced
    * nothing" so the two do not report as one skip reason. */
   let writeSkipped = false;
+  /** The first refusal any memory call answered, carried onto the result so a
+   *  person reading the run can tell "nothing was learned" from "memory could
+   *  not be reached". */
+  let unavailable: string | undefined;
   try {
     // Imported before the first return rather than after it: the emptiest path
     // out of this step is exactly the one an operator has to be able to tell
@@ -838,25 +840,50 @@ export async function distillRepoMemoryStep(
      * filters on the `outcome` field rather than on which line happens to exist.
      */
     const finish = (skipped: DistillRepoMemoryResult["skipped"]): DistillRepoMemoryResult => {
-      const result: DistillRepoMemoryResult = { written, usage, providerCalled, skipped };
+      const result: DistillRepoMemoryResult = {
+        written,
+        usage,
+        providerCalled,
+        skipped,
+        ...(unavailable === undefined ? {} : { unavailable }),
+      };
       log.info(distillOutcomeFields(result), "repo_memory_distilled");
       return result;
     };
     if (input.repositories.length === 0) return finish("no_repositories");
-    const {
-      getConnectedMemoryDocument,
-      upsertConnectedMemoryDocument,
-    } = await import("../../db/repositories/memory.js");
+    const { activeMemory } = await import("../support/memory-runtime.js");
+    // Resolved once for the whole step: this makes up to 1 + 3N calls, and a
+    // connection read in front of each one would put a database round trip on
+    // the teardown path per document.
+    const memory = await activeMemory();
+    if (memory.refusal) {
+      // Before the model, deliberately. A distill that cannot read what is
+      // already known would re-assert it, and one that cannot write has
+      // nowhere to put what it paid for.
+      unavailable = memory.refusal.detail;
+      log.warn(
+        { code: memory.refusal.code, detail: memory.refusal.detail },
+        "memory_provider_unavailable",
+      );
+      return finish("memory_unavailable");
+    }
 
-    // Dual-read, symmetric with hydrate: the new key first, then the legacy key a
-    // run started under the pre-migration prompt wrote its increment under.
-    const ticketDocument =
-      (await getConnectedMemoryDocument(input.subjectKey, memoryDocPath(input.taskId))) ??
-      (await getConnectedMemoryDocument(
-        input.subjectKey,
-        legacyMemoryDocPath(input.taskId),
-      ));
-    const notes = ticketDocument?.content ?? "";
+    // What the run itself wrote down, as this deployment's provider renders it.
+    // Which addresses that reads, the current one and the one an older run
+    // wrote under, is the provider's business.
+    const ticketDocument = await memory.recall({
+      subject: { key: input.subjectKey, label: input.taskId },
+      scope: { kind: "notebook", name: input.taskId },
+    });
+    if (!ticketDocument.ok) {
+      unavailable = ticketDocument.detail;
+      log.warn(
+        { code: ticketDocument.code, detail: ticketDocument.detail },
+        "memory_provider_unavailable",
+      );
+      return finish("memory_unavailable");
+    }
+    const notes = ticketDocument.rendering;
     const reviewNotes = input.reviewNotes?.trim() ?? "";
     // Review feedback is material in its own right, and on a pr_trigger run it
     // is the richest of the three: leaving it out of this guard would skip the
@@ -867,18 +894,20 @@ export async function distillRepoMemoryStep(
     }
     // Every part shares one budget and the shortest, densest one comes first, so
     // an oversized ticket memory document loses its tail rather than the summary
-    // or the review feedback. Only the section's presence depends on the notes,
-    // never anything the step decides.
-    const material = sliceUtf8Head(
-      [
-        "## change summary",
-        input.changeSummary.trim() === "" ? "(none)" : input.changeSummary,
-        ...(reviewNotes === "" ? [] : ["## review feedback", reviewNotes]),
-        "## run material",
-        notes.trim() === "" ? "(none)" : notes,
-      ].join("\n\n"),
-      MAX_MATERIAL_BYTES,
-    );
+    // or the review feedback, and the model is told it did (`fitMemoryText`).
+    // Only the section's presence depends on the notes, never anything the step
+    // decides.
+    const material =
+      fitMemoryText(
+        [
+          "## change summary",
+          input.changeSummary.trim() === "" ? "(none)" : input.changeSummary,
+          ...(reviewNotes === "" ? [] : ["## review feedback", reviewNotes]),
+          "## run material",
+          notes.trim() === "" ? "(none)" : notes,
+        ].join("\n\n"),
+        MAX_MATERIAL_BYTES,
+      )?.text ?? "";
 
     // The provider-qualified key is what the prompt shows and what the model's
     // answer is matched on, so the same path on two providers stays two
@@ -900,15 +929,27 @@ export async function distillRepoMemoryStep(
         );
       }
       const known: Record<RepoMemoryDocKind, RepoMemoryItem[]> = { facts: [], lessons: [] };
-      const versions: Record<RepoMemoryDocKind, number> = { facts: 0, lessons: 0 };
       for (const kind of REPO_MEMORY_DOC_PATHS) {
-        const stored = await getConnectedMemoryDocument(subjectKey, kind);
-        if (stored) {
-          known[kind] = parseRepoMemoryDocument(stored.content);
-          // `stored?.version ?? 0` is the required idiom: the key may never be
-          // present with an undefined value, and 0 is what means "create it".
-          versions[kind] = stored.version;
+        const recalled = await memory.recall({
+          subject: { key: subjectKey, label: repository.repoPath },
+          scope: { kind },
+        });
+        if (!recalled.ok) {
+          // One repository's read failing is not a reason to distil nothing:
+          // the model is told less about this repository and more about the
+          // others, which is strictly better than paying for a call that
+          // re-asserts what is already stored everywhere.
+          unavailable = recalled.detail;
+          log.warn(
+            { repo: subjectKey, docPath: kind, code: recalled.code, detail: recalled.detail },
+            "memory_provider_unavailable",
+          );
+          continue;
         }
+        // Items with no provenance: what the model is told is what is known,
+        // never who asserted it. The merge stamps this run's id on whatever it
+        // keeps, so nothing here has to carry one forward.
+        known[kind] = recalled.entries.map((entry) => ({ text: entry.text, runId: null }));
       }
       states.push({
         key: `${repository.provider}:${repository.repoPath}`,
@@ -916,7 +957,6 @@ export async function distillRepoMemoryStep(
         provider: repository.provider,
         subjectKey,
         known,
-        versions,
       });
     }
 
@@ -943,7 +983,7 @@ export async function distillRepoMemoryStep(
       usage = result.usage;
       providerCalled = true;
     } catch (err) {
-      log.warn({ err: redactProviderError(err) }, "repo_memory_distill_llm_failed");
+      log.warn({ err: await redactProviderError(err) }, "repo_memory_distill_llm_failed");
       return finish("llm_failed");
     }
 
@@ -979,95 +1019,47 @@ export async function distillRepoMemoryStep(
       const candidates = candidatesByKey.get(state.key);
       if (!candidates) continue;
       for (const kind of REPO_MEMORY_DOC_PATHS) {
-        // Read, merge and render are all redone per attempt: a lost swap means
-        // another run replaced the document, and re-issuing the same bytes would
-        // discard exactly the items this loop exists to preserve.
-        //
-        // Retractions are replayed on every attempt, deliberately: if the run
-        // that won the race had just reasserted an entry this run disproved, the
-        // retry deletes it again. This run's material is what proved it false,
-        // and dropping retractions on retry would let a stale reassertion win by
-        // arriving second.
-        let existing = state.known[kind];
-        let expectedVersion = state.versions[kind];
-        for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
-          const merged = mergeRepoMemoryItems({
-            existing,
-            candidates: candidates[kind],
+        const write = await memory.observe({
+          subject: { key: state.subjectKey, label: state.repoPath },
+          scope: { kind },
+          runId: input.runId,
+          // Repo scoped, so no ticket owns these documents.
+          ticketKey: null,
+          observation: {
+            kind: "items",
+            learned: candidates[kind],
             // Kind picked from the trusted doc-path list, never from the model:
             // a retraction reported for one kind can only reach that kind.
-            contradicted:
+            refuted:
               kind === "facts" ? candidates.contradictedFacts : candidates.contradictedLessons,
-            runId: input.runId,
-            maxItems: kind === "facts" ? FACTS_MAX_ITEMS : LESSONS_MAX_ITEMS,
-            maxBytes: MAX_DOC_BYTES,
-            subject: state.repoPath,
-            kind,
-          });
-          if (sameItems(merged.items, existing)) break;
-          const prepared = prepareMemoryContent(
-            renderRepoMemoryDocument({ subject: state.repoPath, kind, items: merged.items }),
-            MAX_DOC_BYTES,
-            false,
+          },
+        });
+        if (!write.ok) {
+          writeSkipped = true;
+          unavailable = write.detail;
+          log.warn(
+            { repo: state.key, docPath: kind, code: write.code, detail: write.detail },
+            "repo_memory_write_refused",
           );
-          // Fail closed: text that could not be scrubbed never reaches the store.
-          if (!prepared) {
-            writeSkipped = true;
-            log.warn({ repo: state.key, docPath: kind }, "repo_memory_redaction_failed");
-            break;
-          }
-          // The merge already sized the pre-redaction render to the cap, so a
-          // truncation here means redaction grew the text, and the cut lands
-          // wherever that leaves it: most often inside a trailing provenance
-          // comment, which parses back as item text and does not strip. Storing
-          // a mangled document is worse than skipping one update, and the next
-          // run re-derives this one.
-          if (prepared.truncated) {
-            writeSkipped = true;
-            log.warn({ repo: state.key, docPath: kind }, "repo_memory_truncated_skipped");
-            break;
-          }
-          const result = await upsertConnectedMemoryDocument({
-            subjectKey: state.subjectKey,
-            docPath: kind,
-            // Repo scoped, so no ticket owns these documents.
-            ticketKey: null,
-            content: prepared.content,
-            sourceRunId: input.runId,
-            expectedVersion,
-          });
-          if (result.applied) {
-            written += 1;
-            // Only once the swap applied: a contended or refused write deleted
-            // nothing, so reporting its counts would name a loss the store never
-            // took. Both counts and what survived, because "removed 3, 37 left"
-            // and "removed 3, nothing left" are different incidents, and the
-            // merge returned both to a caller that read neither.
-            if (merged.removed > 0 || merged.dropped > 0) {
-              log.warn(
-                {
-                  repo: state.key,
-                  docPath: kind,
-                  removed: merged.removed,
-                  dropped: merged.dropped,
-                  remaining: merged.items.length,
-                },
-                "repo_memory_items_discarded",
-              );
-            }
-            break;
-          }
-          if (attempt === MAX_WRITE_ATTEMPTS) {
-            writeSkipped = true;
-            log.warn(
-              { repo: state.key, docPath: kind, attempts: MAX_WRITE_ATTEMPTS },
-              "repo_memory_write_contended",
-            );
-            break;
-          }
-          const fresh = await getConnectedMemoryDocument(state.subjectKey, kind);
-          existing = fresh ? parseRepoMemoryDocument(fresh.content) : [];
-          expectedVersion = fresh?.version ?? 0;
+          continue;
+        }
+        if (!write.stored) continue;
+        written += 1;
+        // Both counts and what survived, because "removed 3, 37 left" and
+        // "removed 3, nothing left" are different incidents. The provider
+        // reports them only for a write it actually took, so these never name
+        // a loss the store did not make.
+        if (write.removed > 0 || write.dropped > 0) {
+          log.warn(
+            {
+              repo: state.key,
+              docPath: kind,
+              removed: write.removed,
+              dropped: write.dropped,
+              remaining: write.remaining,
+            },
+            "repo_memory_items_discarded",
+          );
         }
       }
     }
@@ -1090,12 +1082,25 @@ export async function distillRepoMemoryStep(
       // concurrent writer's included.
       const corroborated = new Map<string, { text: string; repositories: number }>();
       for (const member of group.members) {
-        const stored = await getConnectedMemoryDocument(member.subjectKey, "facts");
-        if (!stored) continue;
+        const stored = await memory.recall({
+          subject: { key: member.subjectKey, label: member.repoPath },
+          scope: { kind: "facts" },
+        });
+        if (!stored.ok) {
+          // A member this run could not read corroborates nothing, which is
+          // the same conservative direction as a member with no document: a
+          // fact is promoted only on testimony we actually have.
+          unavailable = stored.detail;
+          log.warn(
+            { repo: member.key, docPath: "facts", code: stored.code, detail: stored.detail },
+            "memory_provider_unavailable",
+          );
+          continue;
+        }
         // Counted once per repository, not once per item: two spellings of one
         // fact inside a single document are still one repository knowing it.
         const seen = new Set<string>();
-        for (const item of parseRepoMemoryDocument(stored.content)) {
+        for (const item of stored.entries) {
           // Promotion re-reads STORED text, which never passed through
           // normalizeItems: an entry written before that filter existed, or one
           // seeded from a manifest, can still carry either shape, and promotion
@@ -1124,83 +1129,51 @@ export async function distillRepoMemoryStep(
         .map((entry) => entry.text);
       if (promoted.length === 0) continue;
 
-      // The same compare-and-swap loop the per-repository path runs, for the
-      // same reason: neon-http has no transactions, and an owner document is
-      // contended by every repository under it rather than by one.
+      // The same single call the per-repository path makes. An owner document
+      // is contended by every repository under it rather than by one, which is
+      // the provider's problem to solve and not this step's.
       const subjectKey = orgSubjectKey(group.provider, group.owner);
-      const storedOrg = await getConnectedMemoryDocument(subjectKey, "facts");
-      let existing = storedOrg ? parseRepoMemoryDocument(storedOrg.content) : [];
-      let expectedVersion = storedOrg?.version ?? 0;
-      for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
-        const merged = mergeRepoMemoryItems({
-          existing,
-          candidates: promoted,
+      const write = await memory.observe({
+        subject: { key: subjectKey, label: group.owner },
+        scope: { kind: "facts" },
+        runId: input.runId,
+        // Owner scoped, so no ticket owns this document either.
+        ticketKey: null,
+        observation: {
+          kind: "items",
+          learned: promoted,
           // Never promoted: a retraction is scoped to the repository whose
           // material disproved it, and one repository's disproof says nothing
           // about the sibling that still holds the fact.
-          contradicted: [],
-          runId: input.runId,
-          maxItems: FACTS_MAX_ITEMS,
-          maxBytes: MAX_DOC_BYTES,
-          subject: group.owner,
-          kind: "facts",
-        });
-        if (sameItems(merged.items, existing)) break;
-        const prepared = prepareMemoryContent(
-          renderRepoMemoryDocument({ subject: group.owner, kind: "facts", items: merged.items }),
-          MAX_DOC_BYTES,
-          false,
+          refuted: [],
+        },
+      });
+      if (!write.ok) {
+        writeSkipped = true;
+        unavailable = write.detail;
+        log.warn(
+          { org: group.key, docPath: "facts", code: write.code, detail: write.detail },
+          "repo_memory_write_refused",
         );
-        if (!prepared) {
-          writeSkipped = true;
-          log.warn({ org: group.key, docPath: "facts" }, "repo_memory_redaction_failed");
-          break;
-        }
-        if (prepared.truncated) {
-          writeSkipped = true;
-          log.warn({ org: group.key, docPath: "facts" }, "repo_memory_truncated_skipped");
-          break;
-        }
-        const result = await upsertConnectedMemoryDocument({
-          subjectKey,
-          docPath: "facts",
-          // Owner scoped, so no ticket owns this document either.
-          ticketKey: null,
-          content: prepared.content,
-          sourceRunId: input.runId,
-          expectedVersion,
-        });
-        if (result.applied) {
-          written += 1;
-          // Same rule as the per-repository write above, and `removed` is
-          // structurally zero here because a retraction is never promoted. It is
-          // still reported: the shape stays one shape, and a non-zero value
-          // would mean promotion started deleting, which is worth seeing.
-          if (merged.removed > 0 || merged.dropped > 0) {
-            log.warn(
-              {
-                org: group.key,
-                docPath: "facts",
-                removed: merged.removed,
-                dropped: merged.dropped,
-                remaining: merged.items.length,
-              },
-              "repo_memory_items_discarded",
-            );
-          }
-          break;
-        }
-        if (attempt === MAX_WRITE_ATTEMPTS) {
-          writeSkipped = true;
-          log.warn(
-            { org: group.key, docPath: "facts", attempts: MAX_WRITE_ATTEMPTS },
-            "repo_memory_write_contended",
-          );
-          break;
-        }
-        const fresh = await getConnectedMemoryDocument(subjectKey, "facts");
-        existing = fresh ? parseRepoMemoryDocument(fresh.content) : [];
-        expectedVersion = fresh?.version ?? 0;
+        continue;
+      }
+      if (!write.stored) continue;
+      written += 1;
+      // Same rule as the per-repository write above, and `removed` is
+      // structurally zero here because a retraction is never promoted. It is
+      // still reported: the shape stays one shape, and a non-zero value would
+      // mean promotion started deleting, which is worth seeing.
+      if (write.removed > 0 || write.dropped > 0) {
+        log.warn(
+          {
+            org: group.key,
+            docPath: "facts",
+            removed: write.removed,
+            dropped: write.dropped,
+            remaining: write.remaining,
+          },
+          "repo_memory_items_discarded",
+        );
       }
     }
 
@@ -1216,6 +1189,7 @@ export async function distillRepoMemoryStep(
       usage,
       providerCalled,
       skipped: "store_failed",
+      ...(unavailable === undefined ? {} : { unavailable }),
     };
     // The reporting path is itself wrapped: a failed logger import here would
     // otherwise escape a step whose whole contract is that it cannot throw.
@@ -1230,7 +1204,7 @@ export async function distillRepoMemoryStep(
         {
           ...bindings,
           // A driver error can echo the statement, and with it the document.
-          err: redactProviderError(err),
+          err: await redactProviderError(err),
         },
         "repo_memory_distill_failed",
       );
@@ -1249,6 +1223,7 @@ distillRepoMemoryStep.maxRetries = 0;
 export interface CaptureDefaultBranchFilesInput {
   sandboxId: string;
   runId: string;
+  integrationPins?: readonly import("@shared/contracts").IntegrationConnectionPin[];
   /**
    * The trusted in-memory manifest's view of every checkout, exactly the shape
    * and exactly the reason seedRepoMemoryStep takes it: the ref this lists is
@@ -1258,7 +1233,7 @@ export interface CaptureDefaultBranchFilesInput {
    * branch counts as the repository.
    */
   repositories: Array<{
-    provider: "github" | "gitlab";
+    provider: string;
     repoPath: string;
     localPath: string;
     branchName: string;
@@ -1486,7 +1461,10 @@ export async function captureDefaultBranchFilesStep(
             // API call stalls workspace preparation exactly as a hung command
             // would.
             const resolved = await withinDeadline(() =>
-              buildSandboxProviderConfigs(input.repositories.map((entry) => entry.provider)),
+              buildSandboxProviderConfigs(
+                input.repositories.map((entry) => entry.provider),
+                input.integrationPins,
+              ),
             );
             if (resolved === CAPTURE_DEADLINE) {
               reportDeadline(key, ref);
@@ -1501,8 +1479,8 @@ export async function captureDefaultBranchFilesStep(
             const { buildVcsUrls, gitAuthArgs } = await import("../../infra/vcs-urls.js");
             const { buildProviderRepoSlug } = await import("../../sandbox/repo-workspace.js");
             const urls = buildVcsUrls({
-              kind: provider.kind,
               host: provider.host,
+              authUser: provider.authUser,
               repoPath: repository.repoPath,
             });
             // Minting an installation token is a third API call, and it has no
@@ -1625,7 +1603,7 @@ export async function captureDefaultBranchFilesStep(
       } catch (err) {
         unavailable += 1;
         log.warn(
-          { repo: key, err: redactProviderError(err) },
+          { repo: key, err: await redactProviderError(err) },
           "repo_memory_default_branch_files_failed",
         );
       } finally {
@@ -1665,7 +1643,7 @@ export async function captureDefaultBranchFilesStep(
           sandboxId: input.sandboxId,
           runId: input.runId,
           step: "captureDefaultBranchFiles",
-          err: redactProviderError(err),
+          err: await redactProviderError(err),
         },
         "repo_memory_default_branch_files_failed",
       );
@@ -1709,7 +1687,23 @@ function defaultBranchRef(repository: {
 }
 
 export interface LoadRepoMemorySourcesInput {
-  repositories: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
+  repositories: Array<{ provider: string; repoPath: string }>;
+}
+
+/**
+ * What this step found, and whether memory could answer at all.
+ *
+ * A LIST WOULD HAVE BEEN ENOUGH until S13, and it is not any more: an empty
+ * list meant "nothing is stored for these repositories", and it now also means
+ * "this deployment's memory could not be reached". Those are the same prompt
+ * and two entirely different incidents, so the caller is told which.
+ *
+ * `unavailable` is absent on every result recorded before this shape existed,
+ * and absent means memory answered.
+ */
+export interface LoadRepoMemorySourcesResult {
+  sources: EffectivePromptMemorySource[];
+  unavailable?: string;
 }
 
 /**
@@ -1721,14 +1715,38 @@ export interface LoadRepoMemorySourcesInput {
  */
 export async function loadRepoMemorySourcesStep(
   input: LoadRepoMemorySourcesInput,
-): Promise<EffectivePromptMemorySource[]> {
+): Promise<LoadRepoMemorySourcesResult> {
   "use step";
   try {
-    if (input.repositories.length === 0) return [];
-    const { getConnectedMemoryDocument } = await import(
-      "../../db/repositories/memory.js"
-    );
+    // Nothing to read, so nothing is resolved either: a prompt with no
+    // repositories pays no settings read to learn that.
+    if (input.repositories.length === 0) return { sources: [] };
+    const { activeMemory } = await import("../support/memory-runtime.js");
+    // Resolved once for the whole step, not per document: this issues up to
+    // 1 + 2N reads on the critical path before an agent starts.
+    const memory = await activeMemory();
+    if (memory.refusal) {
+      // Wrapped like every other report here. A prompt with no memory because
+      // the provider could not be reached used to be indistinguishable from a
+      // prompt with no memory because nothing was stored.
+      try {
+        const { logger } = await import("../../infra/logger.js");
+        logger.warn(
+          {
+            step: "loadRepoMemorySources",
+            code: memory.refusal.code,
+            detail: memory.refusal.detail,
+          },
+          "memory_provider_unavailable",
+        );
+      } catch {
+        // Nothing left to report with.
+      }
+      return { sources: [], unavailable: memory.refusal.detail };
+    }
 
+    /** The first refusal any read answered, carried onto the result. */
+    let unavailable: string | undefined;
     const sources: EffectivePromptMemorySource[] = [];
     /**
      * One budget per document kind, each with its own latch, so facts cannot
@@ -1738,11 +1756,45 @@ export async function loadRepoMemorySourcesStep(
      * point of the split.
      */
     const budgets: Record<RepoMemoryDocKind, { max: number; bytes: number; exhausted: boolean }> = {
-      facts: { max: MAX_INJECTED_FACTS_BYTES, bytes: 0, exhausted: false },
-      lessons: { max: MAX_INJECTED_LESSONS_BYTES, bytes: 0, exhausted: false },
+      facts: { max: MEMORY_PROMPT_BUDGET_BYTES.facts, bytes: 0, exhausted: false },
+      lessons: { max: MEMORY_PROMPT_BUDGET_BYTES.lessons, bytes: 0, exhausted: false },
     };
     let dropped = 0;
     const droppedRepositories: string[] = [];
+    const truncatedRepositories: string[] = [];
+    /**
+     * One rendering against its kind's budget, WHATEVER THE PROVIDER RETURNED:
+     * whole when it fits what is left; cut to what is left, at a line end when
+     * one keeps at least half the room and inside a line otherwise, with a
+     * marker the model reads, when it does not (`fitMemoryText`); left out when
+     * the kind is spent or too little is left to be worth a section. A cut
+     * spends the kind, so nothing after it is injected.
+     *
+     * Cut rather than dropped whole since M2: a provider that holds more than
+     * one prompt may carry used to cost the agent all of that kind's memory,
+     * and half a list is only misleading without the marker, which is why
+     * "whole documents only" was the rule before.
+     *
+     * `label` is provider-qualified here and nowhere else: the bare-path
+     * contract governs the prompt label, and this diagnostic is the one place
+     * that has to tell the same path on two providers apart.
+     */
+    const charge = (kind: RepoMemoryDocKind, rendering: string, label: string): string | null => {
+      const budget = budgets[kind];
+      const fitted = budget.exhausted ? null : fitMemoryText(rendering, budget.max - budget.bytes);
+      if (fitted === null) {
+        budget.exhausted = true;
+        dropped += 1;
+        if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
+        return null;
+      }
+      if (fitted.cut) {
+        budget.exhausted = true;
+        if (!truncatedRepositories.includes(label)) truncatedRepositories.push(label);
+      }
+      budget.bytes += utf8Bytes(fitted.text);
+      return fitted.text;
+    };
     /**
      * Absolute, so the deadline bounds the whole step rather than each query:
      * every read races the time left until this instant, and a read that loses
@@ -1752,10 +1804,14 @@ export async function loadRepoMemorySourcesStep(
      */
     const deadlineAt = Date.now() + LOAD_DEADLINE_MS;
     let timedOut = false;
+    /** Recalls that the provider refused, as opposed to had nothing for. */
+    let refused = 0;
     const readWithinDeadline = async (
       subjectKey: string,
+      label: string,
       docPath: RepoMemoryDocKind,
-    ): Promise<Awaited<ReturnType<typeof getConnectedMemoryDocument>>> => {
+      exclude?: readonly string[],
+    ): Promise<{ entries: readonly { text: string }[]; rendering: string } | null> => {
       const remaining = deadlineAt - Date.now();
       if (remaining <= 0) {
         timedOut = true;
@@ -1764,7 +1820,11 @@ export async function loadRepoMemorySourcesStep(
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const outcome = await Promise.race([
-          getConnectedMemoryDocument(subjectKey, docPath),
+          memory.recall({
+            subject: { key: subjectKey, label },
+            scope: { kind: docPath },
+            ...(exclude === undefined ? {} : { exclude }),
+          }),
           new Promise<typeof READ_DEADLINE>((resolve) => {
             timer = setTimeout(() => resolve(READ_DEADLINE), remaining);
           }),
@@ -1773,7 +1833,15 @@ export async function loadRepoMemorySourcesStep(
           timedOut = true;
           return null;
         }
-        return outcome;
+        if (!outcome.ok) {
+          // Counted, not silent, and not a reason to abandon the rest: one
+          // document this provider could not answer for costs this prompt that
+          // document and nothing else.
+          refused += 1;
+          unavailable ??= outcome.detail;
+          return null;
+        }
+        return { entries: outcome.entries, rendering: outcome.rendering };
       } finally {
         // The loser of the race is always cleared, so a healthy step leaves no
         // pending timer behind it.
@@ -1781,22 +1849,26 @@ export async function loadRepoMemorySourcesStep(
       }
     };
     /**
-     * Comparison keys of the org items actually injected, scoped to the owner
-     * they came from. A repository facts document that repeats one of its OWN
-     * owner's items drops its copy below, so a promoted fact reaches one prompt
-     * once. The scope is what keeps that from becoming a cross-owner delete: two
-     * owners routinely store the same generic line, and an unscoped set would
+     * The org entries actually injected, keyed by the owner they came from. A
+     * repository facts document that repeats one of its OWN owner's entries
+     * leaves its copy out below, so a promoted fact reaches one prompt once.
+     * The key is what keeps that from becoming a cross-owner silencing: two
+     * owners routinely store the same generic line, and an unkeyed set would
      * let one owner's document silence a different owner's repository. Provider
      * qualified for the same reason the write path is, and joined with NUL,
      * which neither a provider nor an owner segment can contain.
      *
-     * Only keys from documents that survived the budget go in. That guard is
+     * Only entries from documents that survived the budget go in. That guard is
      * unreachable today because the org loop shares the facts latch with the
      * repository facts loop below, so a dropped org document is always followed
      * by a dropped repository facts document; it goes live the moment someone
      * gives the org scope a budget of its own.
+     *
+     * The texts themselves rather than comparison keys, because the provider
+     * is the one asked to leave them out and it decides what "the same entry"
+     * means.
      */
-    const orgKeys = new Set<string>();
+    const orgTextsByOwner = new Map<string, string[]>();
     // Org facts before any repository document, and out of the facts budget: an
     // org document holds facts only. They are what two or more repositories
     // under one owner agreed on, so when that budget runs out the
@@ -1804,29 +1876,31 @@ export async function loadRepoMemorySourcesStep(
     for (const entry of distinctOwners(input.repositories)) {
       const stored = await readWithinDeadline(
         orgSubjectKey(entry.provider, entry.owner),
+        // The owner alone as the label, which is the header this document was
+        // written with.
+        entry.owner,
         "facts",
       );
       if (timedOut) break;
-      const content = stored?.content ?? "";
-      const items = parseRepoMemoryDocument(content);
+      const items = stored?.entries ?? [];
       if (items.length === 0) continue;
-      const injected = stripRepoMemoryProvenance(content);
-      const injectedBytes = utf8Bytes(injected);
-      const budget = budgets.facts;
-      if (budget.exhausted || budget.bytes + injectedBytes > budget.max) {
-        budget.exhausted = true;
-        dropped += 1;
-        // Scope-qualified as well as provider-qualified: an owner label and a
-        // repository label under it would otherwise read as the same loss.
-        const label = `org:${entry.provider}:${entry.owner}`;
-        if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
-        continue;
-      }
-      budget.bytes += injectedBytes;
+      const rendering = stored?.rendering ?? "";
+      // Scope-qualified as well as provider-qualified: an owner label and a
+      // repository label under it would otherwise read as the same loss.
+      const injected = charge("facts", rendering, `org:${entry.provider}:${entry.owner}`);
+      if (injected === null) continue;
+      const ownerScope = shadowKey(entry.provider, entry.owner, "");
+      const texts = orgTextsByOwner.get(ownerScope) ?? [];
       for (const item of items) {
-        const key = repoMemoryComparisonKey(item.text);
-        if (key.length > 0) orgKeys.add(shadowKey(entry.provider, entry.owner, key));
+        if (repoMemoryComparisonKey(item.text).length === 0) continue;
+        // An entry cut off the end never reached the prompt, so it must not
+        // count as already there: a repository holding its own copy would look
+        // fully shadowed and vanish from the budget warning, when what really
+        // happened is that the cut spent the budget it needed.
+        if (injected !== rendering && !injected.includes(item.text)) continue;
+        texts.push(item.text);
       }
+      orgTextsByOwner.set(ownerScope, texts);
       // The owner alone as the label, and the scope is what keeps it from
       // colliding with a repository label in the compiled provenance.
       sources.push({
@@ -1845,75 +1919,51 @@ export async function loadRepoMemorySourcesStep(
       if (timedOut) break;
       for (const repository of input.repositories) {
         const subjectKey = repoSubjectKey(repository.provider, repository.repoPath);
-        const stored = await readWithinDeadline(subjectKey, kind);
-        if (timedOut) break;
-        const content = stored?.content ?? "";
-        // Item count, not blankness: a document rendered with zero items is a
-        // header plus a marker, which is not blank and would compile into a
-        // memory section with no content. The read path does not assume the
-        // write path stays correct about that.
-        const items = parseRepoMemoryDocument(content);
-        if (items.length === 0) continue;
         // Facts already injected from THIS repository's owner are not injected a
         // second time under the repository. Scoped to that owner: a sibling
-        // owner's document must not delete this one's items. Facts only: an org
+        // owner's document must not silence this one's items. Facts only: an org
         // document holds no lessons, so a lessons document is never filtered.
-        const scope = shadowKey(repository.provider, repoOwner(repository.repoPath) ?? "", "");
-        const surviving =
-          kind === "facts" && orgKeys.size > 0
-            ? items.filter((item) => !orgKeys.has(`${scope}${repoMemoryComparisonKey(item.text)}`))
-            : items;
+        //
+        // The provider is asked to leave them out rather than core filtering
+        // them afterwards, because deciding that two entries say the same thing
+        // is the same judgement the provider dedups with, and core doing it
+        // separately is how the two drift apart.
+        const ownerScope = shadowKey(
+          repository.provider,
+          repoOwner(repository.repoPath) ?? "",
+          "",
+        );
+        const exclude =
+          kind === "facts" ? (orgTextsByOwner.get(ownerScope) ?? []) : [];
+        const stored = await readWithinDeadline(
+          subjectKey,
+          // Bare path, the label the document header was written with.
+          repository.repoPath,
+          kind,
+          exclude.length > 0 ? exclude : undefined,
+        );
+        if (timedOut) break;
+        // Entry count, not blankness: a document rendered with zero entries is
+        // a header plus a marker, which is not blank and would compile into a
+        // memory section with no content.
+        const surviving = stored?.entries ?? [];
         // Everything this repository knew is already in the prompt from the org
         // document, so the section would carry a header and nothing else.
         if (surviving.length === 0) continue;
-        // Provenance is bookkeeping the agent must never see, so it goes before
-        // the document is measured as well as before it is injected: the budget
-        // has to count the bytes the prompt actually pays for. A document that
-        // lost nothing takes the strip path and is byte for byte what the store
-        // holds; only a shadowed one is re-rendered.
-        //
-        // Both branches end in stripRepoMemoryProvenance, and the re-render
-        // needs it as much as the other one does: parse peels only the LAST
-        // anchored marker, so an item whose text itself ends in a
-        // provenance-shaped comment carries that comment inside `text` and would
-        // render straight into the prompt. `runId: null` suppresses only the
-        // marker this format writes, never one embedded in the text.
-        //
-        // `runId` is required on the item, so the choice here is which value to
-        // pass, never whether to pass one. `null` makes the render correct on
-        // its own; `item.runId` would be safe only because something downstream
-        // cleans up after it. The strip runs over the render's output
-        // unconditionally, so passing `item.runId` produces identical bytes and
-        // no observation can separate the two: read `runId: null` as the render
-        // staying correct in isolation, not as the thing holding the invariant
-        // up. The two also fail independently, the strip if
-        // PROVENANCE_SUFFIX_RUN is edited and this if the render call is, and
-        // removing the strip is the edit that reopens the leak.
-        const injected = stripRepoMemoryProvenance(
-          surviving.length === items.length
-            ? content
-            : renderRepoMemoryDocument({
-                subject: repository.repoPath,
-                kind,
-                items: surviving.map((item) => ({ text: item.text, runId: null })),
-              }),
+        // The provider's own rendering, already free of its bookkeeping. The
+        // budget is measured on it rather than on anything this step composes,
+        // so what is counted is the bytes the prompt actually pays for. That
+        // the rendering carries no provenance is the port's promise and the
+        // built-in provider's test, not something re-checked here: a second
+        // strip in core would be a second definition of what an agent may see.
+        // The scan continues past a left-out document so the warning can name
+        // every one of them.
+        const injected = charge(
+          kind,
+          stored?.rendering ?? "",
+          `${repository.provider}:${repository.repoPath}`,
         );
-        const injectedBytes = utf8Bytes(injected);
-        // Whole documents only: half a facts list still reads to the model as a
-        // complete one. Dropped documents are counted rather than cut, and the
-        // scan continues so the warning can name every one of them.
-        const budget = budgets[kind];
-        if (budget.exhausted || budget.bytes + injectedBytes > budget.max) {
-          budget.exhausted = true;
-          dropped += 1;
-          // Provider-qualified here and nowhere else: the bare-path contract
-          // governs the prompt label, and this diagnostic is the one place that
-          // has to tell the same path on two providers apart.
-          const label = `${repository.provider}:${repository.repoPath}`;
-          if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
-          continue;
-        }
-        budget.bytes += injectedBytes;
+        if (injected === null) continue;
         // The bare path, the same label repository instruction sections use, so
         // one repository never appears in a compiled prompt under two names. The
         // provider qualifies the subject key above and stops there. No hash: the
@@ -1941,10 +1991,25 @@ export async function loadRepoMemorySourcesStep(
         // Nothing left to report with.
       }
     }
-    if (dropped > 0) {
+    if (refused > 0) {
+      // Wrapped on its own, like the rest of the reporting here. A prompt that
+      // is thin because the provider refused some reads is a different event
+      // from one that is thin because nothing is stored, and only this line
+      // separates them.
+      try {
+        const { logger } = await import("../../infra/logger.js");
+        logger.warn(
+          { step: "loadRepoMemorySources", refused, provider: memory.id },
+          "memory_provider_unavailable",
+        );
+      } catch {
+        // Nothing left to report with.
+      }
+    }
+    if (dropped > 0 || truncatedRepositories.length > 0) {
       // Wrapped on its own: a failed logger import must not discard a fully
       // populated result through the outer catch just because the warning about
-      // what was dropped could not be emitted.
+      // what was cut or left out could not be emitted.
       try {
         const { logger } = await import("../../infra/logger.js");
         logger.warn(
@@ -1952,6 +2017,7 @@ export async function loadRepoMemorySourcesStep(
             step: "loadRepoMemorySources",
             dropped,
             repositories: droppedRepositories,
+            truncated: truncatedRepositories,
             maxBytes: MAX_INJECTED_MEMORY_BYTES,
           },
           "repo_memory_injection_budget_exceeded",
@@ -1972,6 +2038,7 @@ export async function loadRepoMemorySourcesStep(
             bytes: budgets.facts.bytes + budgets.lessons.bytes,
             maxBytes: MAX_INJECTED_MEMORY_BYTES,
             dropped,
+            truncated: truncatedRepositories.length,
             orgDocuments,
           },
           "repo_memory_injected",
@@ -1980,20 +2047,21 @@ export async function loadRepoMemorySourcesStep(
         // Nothing left to report with.
       }
     }
-    return sources;
+    return { sources, ...(unavailable === undefined ? {} : { unavailable }) };
   } catch (err) {
     // Same wrapped reporting as the write path: a failed logger import here
     // would otherwise escape a step whose whole contract is that it cannot throw.
+    const reason = await redactProviderError(err);
     try {
       const { logger } = await import("../../infra/logger.js");
       logger.warn(
-        { step: "loadRepoMemorySources", err: redactProviderError(err) },
+        { step: "loadRepoMemorySources", err: reason },
         "repo_memory_load_failed",
       );
     } catch {
       // Nothing left to report with.
     }
-    return [];
+    return { sources: [], unavailable: reason };
   }
 }
 loadRepoMemorySourcesStep.maxRetries = 0;
@@ -2004,7 +2072,7 @@ loadRepoMemorySourcesStep.maxRetries = 0;
  * NUL separates the parts because neither a provider, an owner nor a comparison
  * key can contain one, so no two distinct triples can compose the same string.
  */
-function shadowKey(provider: "github" | "gitlab", owner: string, key: string): string {
+function shadowKey(provider: string, owner: string, key: string): string {
   return `${provider}\0${owner}\0${key}`;
 }
 
@@ -2016,8 +2084,8 @@ function shadowKey(provider: "github" | "gitlab", owner: string, key: string): s
  */
 function distinctOwners(
   repositories: LoadRepoMemorySourcesInput["repositories"],
-): Array<{ provider: "github" | "gitlab"; owner: string }> {
-  const owners: Array<{ provider: "github" | "gitlab"; owner: string }> = [];
+): Array<{ provider: string; owner: string }> {
+  const owners: Array<{ provider: string; owner: string }> = [];
   const seen = new Set<string>();
   for (const repository of repositories) {
     const owner = repoOwner(repository.repoPath);
@@ -2033,7 +2101,7 @@ function distinctOwners(
 interface RepoMemoryOwnerGroup {
   /** Provider-qualified owner, the label the promotion diagnostics carry. */
   key: string;
-  provider: "github" | "gitlab";
+  provider: string;
   owner: string;
   members: RepoMemoryState[];
 }
@@ -2092,7 +2160,9 @@ function buildDistillPrompt(
  * Whole entries only, and from the head of the list. A retraction addresses a
  * stored entry by quoting it exactly, so an entry cut in half is an entry that
  * can never be retracted; dropping it entirely only costs the chance to retract
- * it this run.
+ * it this run. A list that lost its tail ends with `MEMORY_CUT_MARKER` on a line
+ * of its own, charged to the same share, so the model does not read part of a
+ * list as all of it.
  *
  * The head is what the merge leaves least recently confirmed, which is the
  * stalest knowledge and so the likeliest to be contradicted by this run, while
@@ -2103,23 +2173,25 @@ function buildDistillPrompt(
  */
 function knownList(items: readonly RepoMemoryItem[], maxBytes: number): string {
   if (items.length === 0) return "(none)";
+  // Text only: provenance is bookkeeping and never reaches the model. The
+  // newline that joins a line to the one before is counted too, so the section
+  // cannot overrun its share by the number of entries in it.
+  const all = items.map((item) => `- ${item.text}`);
+  const cost = (line: string) => utf8Bytes(line) + 1;
+  if (all.reduce((total, line) => total + cost(line), 0) <= maxBytes) return all.join("\n");
+  const room = maxBytes - cost(MEMORY_CUT_MARKER);
   const lines: string[] = [];
   let bytes = 0;
-  for (const item of items) {
-    // Text only: provenance is bookkeeping and never reaches the model.
-    const line = `- ${item.text}`;
-    // The newline that joins it to the line before is counted too, so the
-    // section cannot overrun its share by the number of entries in it.
-    const cost = utf8Bytes(line) + 1;
-    if (bytes + cost > maxBytes) break;
-    bytes += cost;
+  for (const line of all) {
+    if (bytes + cost(line) > room) break;
+    bytes += cost(line);
     lines.push(line);
   }
   // A share too small for even one entry reads as a repository with nothing
   // stored, which costs a retraction rather than corrupting one. MAX_ITEM_CHARS
   // bounds an entry, so reaching this needs a manifest of dozens of repositories.
   if (lines.length === 0) return "(none)";
-  return lines.join("\n");
+  return [...lines, MEMORY_CUT_MARKER].join("\n");
 }
 
 /**
@@ -2252,7 +2324,8 @@ function normalizeItems(
     // a later run nothing. This is the same rule the document and the manifest
     // reader already hold, that a truncated fact is worse than a missing one,
     // finally applied to a single entry as well. The bound stays: the caller
-    // sizes the item count against MAX_DOC_BYTES on the assumption that no
+    // sizes the item count against the provider's document cap on the
+    // assumption that no
     // entry exceeds this, and the system prompt states the limit, so an
     // overrun is the model ignoring it rather than a legitimate long fact.
     //
@@ -2327,31 +2400,29 @@ function distillOutcomeFields(result: DistillRepoMemoryResult): Record<string, u
   };
 }
 
-/** Provenance counts as a difference, not just text: a run that only confirms
- * stored items produces an identical text list but a fresher run id, and
- * skipping that write would leave the eviction order frozen at whatever last
- * changed the text. The price is one extra upsert per confirming run. */
-function sameItems(left: readonly RepoMemoryItem[], right: readonly RepoMemoryItem[]): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (item, index) =>
-        item.text === right[index]?.text && item.runId === right[index]?.runId,
-    )
-  );
-}
-
 /** An error from the model provider or the database driver can echo request
- * content back, so redact configured secrets, mask long opaque runs and bound
- * it before it reaches a log sink. */
-function redactProviderError(err: unknown): string {
+ * content back, so redact every secret the deployment knows, mask long opaque
+ * runs and bound it before it reaches a log sink.
+ *
+ * The set is read here, on the failure path only, so a healthy step pays
+ * nothing for it. When it cannot be read the text is withheld rather than
+ * redacted with part of the set, and the log line still says which step
+ * failed: these steps must not throw, so withholding is their fail-closed. */
+async function redactProviderError(err: unknown): Promise<string> {
+  let secrets: readonly string[];
+  try {
+    const { knownSecretValues } = await import("../../services/integrations/runtime.js");
+    secrets = await knownSecretValues();
+  } catch {
+    return "[error text withheld: the secrets to redact it with could not be read]";
+  }
   const message = err instanceof Error ? err.message : String(err);
   // The git credential header goes first, before the length cap and before the
   // two general passes, because it is the one secret in here that neither of
   // them can see. See GIT_AUTH_HEADER_PATTERN.
   return redactConfiguredSecretsInText(
     message.replace(GIT_AUTH_HEADER_PATTERN, "[git-auth redacted]"),
-    configuredReplaySecrets(),
+    secrets,
   )
     .replace(OPAQUE_TOKEN_PATTERN, (token) => `${token.slice(0, 8)}****`)
     .slice(0, 500);

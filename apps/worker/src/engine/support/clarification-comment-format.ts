@@ -1,6 +1,7 @@
 import type { WorkScopeAskReason } from "@shared/contracts";
 import type { UnrecordedAnswerCommentPath } from "../work-scope/context.js";
 import { scrubForPublication } from "./publication-scrub.js";
+import { exampleRepositoryPath } from "../../repository-map/repository-path-example.js";
 
 /**
  * Pure text builders for the Jira comments that carry clarification questions
@@ -504,7 +505,7 @@ export function formatAnswerNotRecordedComment(
         ? tooManyNamedForAComment
         : onlyTheRecordIsProven(one)
       : onlyTheCatalogCanOpenThese(one)
-    : "Write the full path of the repository this work should use in a comment here, for example github:acme/app, and the next run reads this ticket and picks it up.";
+    : `Write the full path of the repository this work should use in a comment here, for example ${exampleRepositoryPath("acme/app")}, and the next run reads this ticket and picks it up.`;
   // The route that does not exist, said plainly instead of implied. Only worth
   // saying where the question offered repositories to decline.
   const decliningHasNoShortcut =
@@ -813,6 +814,11 @@ export function formatAnswerAlsoNamedComment(input: {
   overLimit?: readonly string[];
 }): string {
   const sentences: string[] = [];
+  // The keys this answer already carried, so the example shows a provider this
+  // work is actually on rather than whichever one the build ships first. The
+  // ones that matched come before the ones that did not, because a key that
+  // matched names a provider the catalog certainly holds.
+  const named = [...input.added, ...input.notEnabled, ...(input.overLimit ?? []), ...input.unmatched];
   if (input.added.length > 0) {
     const plural = input.added.length > 1;
     sentences.push(
@@ -837,8 +843,8 @@ export function formatAnswerAlsoNamedComment(input: {
     sentences.push(
       `Your answer also named ${input.unmatched.join(", ")}, which could not be matched to a repository this deployment holds, so nothing about ${one ? "it" : "them"} was recorded.`,
       one
-        ? "A repository is matched by its full path, such as github:acme/app: check how it was written, and if it is right, it has to be added to this deployment's catalog on the repositories screen before this work can use it."
-        : "A repository is matched by its full path, such as github:acme/app: check how they were written, and if a name is right, that repository has to be added to this deployment's catalog on the repositories screen before this work can use it.",
+        ? `A repository is matched by its full path, such as ${exampleRepositoryPath("acme/app", named)}: check how it was written, and if it is right, it has to be added to this deployment's catalog on the repositories screen before this work can use it.`
+        : `A repository is matched by its full path, such as ${exampleRepositoryPath("acme/app", named)}: check how they were written, and if a name is right, that repository has to be added to this deployment's catalog on the repositories screen before this work can use it.`,
     );
   }
   // Held here and only past what one answer records, so the list does take it.

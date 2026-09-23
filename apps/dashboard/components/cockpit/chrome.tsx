@@ -1,57 +1,137 @@
 "use client";
 
 import React from "react";
-import { BlazityLogo } from "@/components/ui";
+import { BlazityLogo, NavItem } from "@/components/ui";
+import {
+  CORE_NAV_GROUPS,
+  INTEGRATIONS_GROUP_LABEL,
+  browserHandlesClick,
+  integrationNavEntries,
+  type CockpitIntegration,
+  type NavEntry,
+} from "@/lib/cockpit/navigation";
 
-const NAV = [
-  { id: "overview", label: "Overview", glyph: "◇", group: "obs" },
-  { id: "runs", label: "Workflow runs", glyph: "≡", group: "obs" },
-  { id: "approvals", label: "Approvals", glyph: "⚖", group: "obs" },
-  { id: "prompts", label: "Prompts", glyph: "❡", group: "obs" },
-  { id: "memory", label: "Memory", glyph: "❖", group: "obs" },
-  { id: "evals", label: "Arthur evals", glyph: "✓", group: "obs" },
-  { id: "cost", label: "Cost & usage", glyph: "$", group: "obs" },
-  { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
-  { id: "profiles", label: "Harness profiles", glyph: "⌘", group: "flow" },
-  { id: "repositories", label: "Repositories", glyph: "☑", group: "flow" },
-  { id: "health", label: "System health", glyph: "＋", group: "team" },
-  { id: "users", label: "Users", glyph: "U", group: "team" },
-  // Last, and never role gated: reading what the deployment is configured to do
-  // is open to every role, and only the forms on it are owner and admin only.
-  { id: "settings", label: "Settings", glyph: "⚙", group: "team" },
-];
+/**
+ * The cockpit's own navigation.
+ *
+ * Three core groups, a separator, then Integrations: the line says which side
+ * of the product you are reading. Above it is what we build; below it is what
+ * this deployment was connected to, and an integration nobody connected is not
+ * there at all. The Integrations page itself always is, because "nothing is
+ * connected" is an answer somebody has to be able to go and read.
+ *
+ * Groups collapse, and the whole column scrolls if it ever has to. Both exist
+ * for the same reason: the number of entries below the separator is not ours
+ * to decide, and a sidebar that pushed Settings off the bottom of a laptop
+ * screen the day somebody connected a fifth provider would be our fault, not
+ * theirs.
+ */
 
-const NAV_GROUPS = [
-  { id: "obs", label: "Observability" },
-  { id: "flow", label: "Workflow" },
-  { id: "team", label: "Administration" },
-];
-
-const MOBILE_MORE_NAV_IDS = [
-  "approvals",
-  "prompts",
-  "memory",
-  "evals",
-  "cost",
-  "profiles",
-  "repositories",
-  "health",
-  "users",
-  "settings",
-] as const;
-
-export function isMobileMoreNavItem(id: string): boolean {
-  return (MOBILE_MORE_NAV_IDS as readonly string[]).includes(id);
+function SidebarEntry({
+  entry,
+  active,
+  collapsed,
+  onNav,
+}: {
+  entry: NavEntry;
+  active: boolean;
+  collapsed: boolean;
+  onNav: (id: string) => void;
+}) {
+  // A real link, so the address bar, cmd-click and the browser's own back
+  // button all behave; the handler is what keeps an in-cockpit move inside the
+  // unsaved-work guard the shell owns.
+  return (
+    <NavItem
+      href={entry.href}
+      label={entry.label}
+      active={active}
+      collapsed={collapsed}
+      title={collapsed ? entry.label : undefined}
+      icon={
+        <span
+          className={
+            entry.glyph.length > 1
+              ? "flex h-[18px] w-[18px] items-center justify-center rounded-[3px] border border-current font-mono text-[9px] font-semibold leading-none"
+              : "font-mono text-lg leading-none"
+          }
+        >
+          {entry.glyph}
+        </span>
+      }
+      onClick={(event) => {
+        if (browserHandlesClick(event)) return;
+        event.preventDefault();
+        onNav(entry.id);
+      }}
+    />
+  );
 }
 
-export function cockpitNavItems({
-  canManageUsers,
+function GroupHeader({
+  label,
+  open,
+  onToggle,
 }: {
-  canManageUsers: boolean;
+  label: string;
+  open: boolean;
+  onToggle: () => void;
 }) {
-  return NAV.filter(
-    (item) =>
-      (item.id !== "users" && item.id !== "health") || canManageUsers,
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      className="mx-2 flex items-center gap-1 rounded-[3px] border-none bg-transparent px-3 py-1 text-left appearance-none cursor-pointer text-neutral-500 hover:bg-app-bg hover:text-neutral-700 transition-colors duration-[var(--motion-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1"
+    >
+      <span className="font-mono text-[9px] font-medium uppercase tracking-[0.06em]">{label}</span>
+      <span aria-hidden="true" className="ml-auto font-mono text-[10px] leading-none">
+        {open ? "⌄" : "›"}
+      </span>
+    </button>
+  );
+}
+
+function NavSection({
+  id,
+  label,
+  entries,
+  active,
+  collapsed,
+  open,
+  onToggle,
+  onNav,
+}: {
+  id: string;
+  label: string;
+  entries: readonly NavEntry[];
+  active: string;
+  collapsed: boolean;
+  open: boolean;
+  onToggle: (id: string) => void;
+  onNav: (id: string) => void;
+}) {
+  // In the rail there is no room for a heading and nothing to read it by, so
+  // every group is open there: collapsing a nameless stack of glyphs would
+  // hide entries with no way to tell what was hidden.
+  const expanded = collapsed || open;
+  return (
+    <>
+      {!collapsed && <GroupHeader label={label} open={open} onToggle={() => onToggle(id)} />}
+      {expanded && (
+        <nav aria-label={label} className="flex flex-col gap-px px-2 pb-1">
+          {entries.map((entry) => (
+            <SidebarEntry
+              key={entry.id}
+              entry={entry}
+              active={active === entry.id}
+              collapsed={collapsed}
+              onNav={onNav}
+            />
+          ))}
+        </nav>
+      )}
+    </>
   );
 }
 
@@ -60,19 +140,34 @@ export function CkSidebar({
   onNav,
   collapsed = false,
   onToggleCollapse,
-  canManageUsers,
+  integrations = [],
+  collapsedGroups = [],
+  onToggleGroup,
 }: {
   active: string;
   onNav: (id: string) => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
-  canManageUsers: boolean;
+  /** Every integration this build ships; only the usable ones get an entry. */
+  integrations?: readonly CockpitIntegration[];
+  collapsedGroups?: readonly string[];
+  onToggleGroup?: (id: string) => void;
 }) {
-  const nav = cockpitNavItems({ canManageUsers });
+  const isOpen = (id: string) => !collapsedGroups.includes(id);
+  const toggleGroup = (id: string) => onToggleGroup?.(id);
+  const integrationEntries = integrationNavEntries(integrations);
+  // An integration's own area is below the separator; when it is one nobody
+  // connected there is no entry for it, and the section it belongs to is the
+  // honest thing to light instead of nothing.
+  const activeEntry = active.startsWith("integration:")
+    ? integrationEntries.some((entry) => entry.id === active)
+      ? active
+      : "integrations"
+    : active;
 
   return (
     <aside
-      className={`relative bg-panel border-r border-neutral-200 flex flex-col py-5 transition-[width,flex-basis] duration-[var(--motion-base)] ease-[cubic-bezier(.2,0,0,1)] ${
+      className={`relative bg-panel border-r border-neutral-200 flex flex-col py-5 transition-[width,flex-basis] duration-[var(--motion-base)] ease-standard ${
         collapsed ? "w-[60px] flex-[0_0_60px]" : "w-[220px] flex-[0_0_220px]"
       }`}
     >
@@ -98,37 +193,43 @@ export function CkSidebar({
         )}
       </div>
 
-      {NAV_GROUPS.filter((grp) =>
-        nav.some((item) => item.group === grp.id),
-      ).map((grp, gi) => (
-        <React.Fragment key={grp.id}>
-          <nav className={`flex flex-col gap-px px-2 ${gi === 0 ? "mt-2" : "mt-3"}`}>
-            {nav.filter((n) => n.group === grp.id).map((n) => {
-              const on = active === n.id;
-              return (
-                <button
-                  key={n.id}
-                  type="button"
-                  onClick={() => onNav(n.id)}
-                  title={collapsed ? n.label : undefined}
-                  aria-label={n.label}
-                  className={`appearance-none text-left border-none cursor-pointer flex items-center gap-[10px] py-[9px] rounded-[3px] font-body text-[13px] transition-[color,background-color,transform] duration-[var(--motion-fast)] ease-[cubic-bezier(.2,0,0,1)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
-                    collapsed ? "px-0 justify-center" : "px-3"
-                  } ${
-                    on
-                      ? "bg-[#ECECFD] text-mariner font-semibold"
-                      : "bg-transparent text-neutral-800 font-medium hover:bg-app-bg"
-                  }`}
-                >
-                  <span className={`font-mono text-lg leading-none ${on ? "text-mariner" : "text-neutral-700"}`}>{n.glyph}</span>
-                  {!collapsed && n.label}
-                  {!collapsed && on && <span className="ml-auto w-1 h-4 bg-mariner rounded-full" />}
-                </button>
-              );
-            })}
-          </nav>
-        </React.Fragment>
-      ))}
+      {/* The one part of the column that scrolls, and it says when it does:
+          five integrations plus every group open does not fit an 800 tall
+          laptop, and an overlay scrollbar nobody has touched shows nothing. */}
+      <div
+        data-cockpit-nav-scroll=""
+        className="ck-scroll-cue flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+      >
+        {CORE_NAV_GROUPS.map((group) => (
+          <NavSection
+            key={group.id}
+            id={group.id}
+            label={group.label}
+            entries={group.entries}
+            active={activeEntry}
+            collapsed={collapsed}
+            open={isOpen(group.id)}
+            onToggle={toggleGroup}
+            onNav={onNav}
+          />
+        ))}
+
+        <div
+          role="separator"
+          className={`my-2 border-t border-neutral-200 ${collapsed ? "mx-3" : "mx-5"}`}
+        />
+
+        <NavSection
+          id="integrations"
+          label={INTEGRATIONS_GROUP_LABEL}
+          entries={integrationEntries}
+          active={activeEntry}
+          collapsed={collapsed}
+          open={isOpen("integrations")}
+          onToggle={toggleGroup}
+          onNav={onNav}
+        />
+      </div>
     </aside>
   );
 }

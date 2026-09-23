@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   /** Makes the secret source unavailable, which is the one way redaction fails
    * and `prepareMemoryContent` answers null. */
   redactionThrows: false,
+  /** How many times the step read the secret set. */
+  secretReads: 0,
   /**
    * Answers reads instead of the store, for the deadline case. A read that never
    * settles is what a database at the far end of a degraded link looks like from
@@ -68,18 +70,38 @@ vi.mock("../../infra/logger.js", () => ({
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 vi.mock("../llm.js", () => ({ generateStructured: mocks.generateStructured }));
-// Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
-// this one included, so failing it here is what drives the null-result branch.
-vi.mock("../../run-observability/configured-secrets.js", async (importOriginal) => {
+// Passthrough by default. Failing it is what "the secrets could not be read"
+// looks like to a memory write: the write resolves the whole set first and
+// stores nothing without it.
+vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../run-observability/configured-secrets.js")>();
+    await importOriginal<typeof import("../../services/integrations/runtime.js")>();
   return {
     ...actual,
-    configuredReplaySecrets: (
-      ...args: Parameters<typeof actual.configuredReplaySecrets>
-    ) => {
-      if (mocks.redactionThrows) throw new Error("secret source unavailable");
-      return actual.configuredReplaySecrets(...args);
+    // Nothing connected: with a memory integration in the registry, resolving
+    // who serves memory reads the integration rows, and several cases swap
+    // the database for a fake that answers only the store's own calls.
+    resolveUsableIntegrations: async () => ({
+      readable: true as const,
+      usable: [],
+      states: new Map(),
+      connectionFailures: new Map(),
+    }),
+    knownSecretValues: async () => {
+      mocks.secretReads += 1;
+      if (mocks.redactionThrows) {
+        const { IntegrationSettingsUnreadableError } = await import(
+          "../../services/integrations/secret-values.js"
+        );
+        throw new IntegrationSettingsUnreadableError("so the secrets they hold could not be redacted", new Error("secret source unavailable"));
+      }
+      // A deployment with nothing connected: its environment's secrets. Read
+      // from the environment rather than the database, because several cases
+      // swap the database for a fake that only answers the store's own calls.
+      const { environmentSecretValues } = await import(
+        "../../run-observability/configured-secrets.js"
+      );
+      return environmentSecretValues();
     },
   };
 });
@@ -142,6 +164,8 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { agentMemoryDocuments } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
+import { MEMORY_PROMPT_BUDGET_BYTES } from "@integrations/sdk";
+import { MEMORY_CUT_MARKER } from "../../memory/content.js";
 import { orgSubjectKey, repoOwner, repoSubjectKey } from "../../engine/support/subject-key.js";
 import {
   parseRepoMemoryDocument,
@@ -150,7 +174,6 @@ import {
   type RepoMemoryDocKind,
   type RepoMemoryItem,
 } from "../../memory/repo-memory.js";
-import { prepareMemoryContent } from "../../memory/content.js";
 import {
   getMemoryDocument,
   upsertMemoryDocument,
@@ -587,6 +610,7 @@ beforeEach(async () => {
   mocks.beforeUpsert = null;
   mocks.readOverride = null;
   mocks.redactionThrows = false;
+  mocks.secretReads = 0;
   mocks.gitCommands = [];
   mocks.lsTree = new Map();
   mocks.fetchExit = 128;
@@ -616,6 +640,13 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
+});
+
+describe("a distilled write that may have landed", () => {
+  it("is never repeated by the step runner", () => {
+    // Core never repeats a memory write: a retry could store the lessons twice.
+    expect(distillRepoMemoryStep.maxRetries).toBe(0);
+  });
 });
 
 describe("distillRepoMemoryStep", () => {
@@ -1315,6 +1346,9 @@ describe("distillRepoMemoryStep", () => {
     // ticket document is cut and the summary ahead of it is not.
     expect(prompt).not.toContain("TAIL_SENTINEL");
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(24 * 1024 + 1_024);
+    // And the model is told the notebook was cut (M2), rather than reading
+    // its first 24 KiB as the whole of what the run wrote down.
+    expect(prompt.trimEnd().endsWith(MEMORY_CUT_MARKER)).toBe(true);
   });
 
   it("ignores a repository the model invented", async () => {
@@ -1377,12 +1411,16 @@ describe("distillRepoMemoryStep", () => {
       written: 0,
       usage: null,
       providerCalled: false,
-      skipped: "store_failed",
+      // S13: the provider answers instead of throwing, so the step stops
+      // before paying for a model call whose output it could not store, and
+      // names memory rather than reporting an unexplained store failure.
+      skipped: "memory_unavailable",
+      unavailable: expect.stringContaining("db down"),
     });
     expect(mocks.generateStructured).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.anything(),
-      "repo_memory_distill_failed",
+      expect.objectContaining({ code: "unavailable" }),
+      "memory_provider_unavailable",
     );
   });
 
@@ -1399,7 +1437,11 @@ describe("distillRepoMemoryStep", () => {
       written: 0,
       usage: USAGE,
       providerCalled: true,
-      skipped: "store_failed",
+      // S13: a write the provider could not make is `write_skipped` carrying
+      // its reason, not an unexplained `store_failed`. The tokens the run paid
+      // for are still reported, which is what this test is for.
+      skipped: "write_skipped",
+      unavailable: expect.stringContaining("write down"),
     });
   });
 
@@ -1458,11 +1500,15 @@ describe("distillRepoMemoryStep", () => {
       { text: "CI runs on Actions", runId: "run_9" },
       { text: "Run `pnpm -C apps/worker typecheck` before pushing", runId: "run_1" },
     ]);
-    // Version 1 was what this run read; version 2 is what the racing run left.
-    expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([1, 2]);
+    // S13: one swap, not two. The provider reads the document at the moment it
+    // writes, so a write that landed DURING the model call is already the base
+    // it merges onto, and the step no longer carries a version read before the
+    // model ran. What the document ends up holding, asserted above, is
+    // unchanged.
+    expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([2]);
     expect(mocks.logWarn).not.toHaveBeenCalledWith(
       expect.anything(),
-      "repo_memory_write_contended",
+      "repo_memory_write_refused",
     );
   });
 
@@ -1484,17 +1530,21 @@ describe("distillRepoMemoryStep", () => {
       usage: USAGE,
       providerCalled: true,
       skipped: "write_skipped",
+      // S13: the provider's own reason for refusing, so a person can tell a
+      // contended write from an unscrubbable one without reading the log.
+      unavailable: expect.any(String),
     });
     // Three attempts and no more: an unbounded loop would spin against a hot
     // repository for as long as the runs keep coming.
+    // Three attempts, starting from the version the provider read for itself.
     expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([1, 2, 3]);
     // The last writer owns the document; this run's update is simply lost.
     expect(await readRepoItems("facts")).toEqual([
       { text: "winner 3", runId: "run_9" },
     ]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ docPath: "facts", attempts: 3 }),
-      "repo_memory_write_contended",
+      expect.objectContaining({ docPath: "facts", code: "contended" }),
+      "repo_memory_write_refused",
     );
   });
 
@@ -1525,38 +1575,45 @@ describe("distillRepoMemoryStep", () => {
     ]);
   });
 
-  it("does not store a document redaction could not scrub", async () => {
+  it("reads, stores and pays for nothing when this deployment's secrets cannot be read", async () => {
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
     mocks.redactionThrows = true;
     respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
 
-    // Fail closed: unscrubbed text never reaches the store, and the step still
-    // returns rather than falling through into the truncation check on a null.
-    // The model did produce candidates, so this reports as a refused write and
-    // not as a run that learned nothing.
+    // Fail closed, and at the first step that needs the set: core cleans what
+    // memory hands back as well as what it is sent, so without the set nothing
+    // is read. The model is never called, so nothing is paid for a write that
+    // could not have been stored. The write-side refusal has its own guards
+    // (`memory-runtime.test.ts`, `memory/builtin/adapter.test.ts`).
     expect(await distillRepoMemoryStep(input)).toEqual({
       written: 0,
-      usage: USAGE,
-      providerCalled: true,
-      skipped: "write_skipped",
+      usage: null,
+      providerCalled: false,
+      skipped: "memory_unavailable",
+      unavailable: expect.stringContaining("could not be read"),
     });
     expect(stepUpserts()).toEqual([]);
     expect(await readRepoItems("facts")).toEqual([
       { text: "Package manager is pnpm", runId: null },
     ]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: REPO_KEY, docPath: "facts" }),
-      "repo_memory_redaction_failed",
+      expect.objectContaining({ code: "unavailable" }),
+      "memory_provider_unavailable",
     );
   });
 
-  it("does not store a document that redaction truncated", async () => {
+  it("sizes a document after its secrets are taken out, so no cut lands inside it", async () => {
     // Redaction replaces a short secret with a 28 character marker, so a
-    // document that fitted the cap before scrubbing can exceed it after. The cut
-    // then lands wherever it lands, most often inside a trailing provenance
-    // comment, which parses back as item text and does not strip.
+    // document that fits the cap before scrubbing can exceed it after. Core
+    // takes the secret out before any provider sees the text, so the store
+    // merges and sizes what it will actually hold: the document is brought
+    // under the cap the way any other is, never cut mid-bullet or inside a
+    // provenance comment, and the secret is nowhere in it. Scrubbing inside the
+    // store, after its merge, is what used to make this a refused write.
+    // A credential named on the known list is redacted however short; a
+    // short value found only by its variable name is not (configured-secrets.ts).
     const SECRET = "zz9";
-    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    vi.stubEnv("CRON_SECRET", SECRET);
     const secretFact = `deploy uses ${SECRET} from the pipeline`;
     const measure = (fillerChars: number) =>
       Buffer.byteLength(
@@ -1579,27 +1636,71 @@ describe("distillRepoMemoryStep", () => {
         { text: secretFact, runId: input.runId },
       ],
     });
-    // The bracket the case rests on: the merge keeps both items because the
-    // render fits exactly, and redaction is what pushes it over.
+    // The bracket the case rests on: the render with the secret in it fits
+    // exactly, and the same render with the secret taken out does not.
     expect(Buffer.byteLength(rendered, "utf8")).toBe(DOC_CAP);
-    expect(prepareMemoryContent(rendered, DOC_CAP, false)?.truncated).toBe(true);
+    expect(
+      Buffer.byteLength(rendered.replace(SECRET, "[REDACTED:configured_secret]"), "utf8"),
+    ).toBeGreaterThan(DOC_CAP);
 
     await storeRepoDocument("facts", [filler]);
     respond({ repositories: [{ repository: REPO_KEY, facts: [secretFact], lessons: [] }] });
 
-    expect(await distillRepoMemoryStep(input)).toEqual({
-      written: 0,
-      usage: USAGE,
-      providerCalled: true,
-      skipped: "write_skipped",
+    expect(await distillRepoMemoryStep(input)).toMatchObject({ written: 1 });
+    const content = (await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts"))?.content ?? "";
+    expect(content).not.toContain(SECRET);
+    expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(DOC_CAP);
+    // Whole items only: what was learned, cleaned, and nothing cut in half.
+    const redactedFact = "deploy uses [REDACTED:configured_secret] from the pipeline";
+    const items = (await readRepoItems("facts")) ?? [];
+    expect(items.map((item) => item.text)).toContain(redactedFact);
+    expect(items.every((item) => item.text === filler || item.text === redactedFact)).toBe(true);
+    expect(mocks.logWarn).not.toHaveBeenCalledWith(expect.anything(), "repo_memory_write_refused");
+  });
+
+  it("takes a secret known since out of what is stored, and still retracts a fact the run quotes", async () => {
+    // A value can be stored before it is a known secret. Once it is known, the
+    // next write takes it out of what the store already holds, and a run that
+    // disproved such a fact still retracts it by quoting it as it was shown.
+    const SECRET = "tok-7f3a9c2e1b";
+    const heldFact = `Deploys read ${SECRET} from the vault`;
+    const disproved = `The staging key is ${SECRET}`;
+    await storeRepoDocument("facts", [heldFact, disproved]);
+    vi.stubEnv("CRON_SECRET", SECRET);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: ["Package manager is pnpm"],
+          lessons: [],
+          contradictedFacts: [disproved],
+          contradictedLessons: [],
+        },
+      ],
     });
-    // Nothing truncated reaches the store, so the write never happens at all.
-    expect(stepUpserts()).toEqual([]);
-    expect(await readRepoItems("facts")).toEqual([{ text: filler, runId: null }]);
-    expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: REPO_KEY, docPath: "facts" }),
-      "repo_memory_truncated_skipped",
-    );
+
+    expect(await distillRepoMemoryStep(input)).toMatchObject({ written: 1 });
+    const content = (await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts"))?.content ?? "";
+    expect(content).not.toContain(SECRET);
+    const items = ((await readRepoItems("facts")) ?? []).map((item) => item.text);
+    expect(items).toContain("Deploys read [REDACTED:configured_secret] from the vault");
+    expect(items).toContain("Package manager is pnpm");
+    expect(items.some((text) => text.startsWith("The staging key is"))).toBe(false);
+  });
+
+  it("never shows the distilling model a secret the store still holds", async () => {
+    // Held before it was a known secret and not rewritten since: the known
+    // list is the provider's recall, and it reaches a paid model.
+    const SECRET = "tok-2b8e5a1c9d";
+    await storeRepoDocument("facts", [`Deploys read ${SECRET} from the vault`]);
+    vi.stubEnv("CRON_SECRET", SECRET);
+    respond({ repositories: [{ repository: REPO_KEY, facts: [], lessons: [] }] });
+
+    await distillRepoMemoryStep(input);
+
+    expect(mocks.generateStructured).toHaveBeenCalled();
+    expect(promptOf()).not.toContain(SECRET);
+    expect(promptOf()).toContain("Deploys read [REDACTED:configured_secret] from the vault");
   });
 
   it("removes a stored fact the run proved false", async () => {
@@ -1832,6 +1933,9 @@ describe("distillRepoMemoryStep", () => {
     expect(prompt).toContain(`- ${quoted}`);
     expect(prompt).toContain(`- ${matureText("facts", 6)}`);
     expect(prompt).not.toContain(`- ${matureText("facts", 7)}`);
+    // A list that lost its tail says so on a line of its own, which no entry
+    // can be confused with and no retraction can quote (M2).
+    expect(prompt).toContain(`- ${matureText("facts", 6)}\n${MEMORY_CUT_MARKER}\n`);
     // Every repository keeps a window, rather than the budget being spent in
     // manifest order and leaving the tail of the manifest unable to retract.
     expect(prompt).toContain(`### repository github:${manifest[7]?.repoPath}`);
@@ -1971,7 +2075,15 @@ describe("distillRepoMemoryStep outcome reporting", () => {
 
   it("names write_skipped when the step had something to store and refused", async () => {
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
-    mocks.redactionThrows = true;
+    // A refusal the store answers for this write alone: every read still works.
+    mocks.db = {
+      select: db.select.bind(db),
+      insert: () => {
+        throw Object.assign(new Error("exceeds the memory document size limit"), {
+          code: "memory_document_too_large",
+        });
+      },
+    };
     respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
 
     await distillRepoMemoryStep(input);
@@ -1986,15 +2098,15 @@ describe("distillRepoMemoryStep outcome reporting", () => {
     };
 
     await distillRepoMemoryStep(input);
-    // The throwing path reports too. Its child logger died with the try block, so
-    // this line is emitted from the catch with the bindings spelled out.
+    // S13: an unreachable store is an ANSWER from the provider, so this path no
+    // longer leaves through the catch. The outcome line is emitted from the
+    // child logger on the ordinary exit and names memory rather than an
+    // unexplained store failure. The run id, subject and step are the child
+    // logger's bindings in production; this suite's `child` mock drops them,
+    // which is why they are not asserted here and are asserted on the throwing
+    // path below, where the catch still spells them out.
     expect(outcomeLines()).toEqual([
-      expect.objectContaining({
-        ...line("store_failed", 0, false),
-        runId: input.runId,
-        subjectKey: SUBJECT_KEY,
-        step: "distillRepoMemory",
-      }),
+      expect.objectContaining(line("memory_unavailable", 0, false)),
     ]);
   });
 
@@ -2011,7 +2123,8 @@ describe("distillRepoMemoryStep outcome reporting", () => {
     // Billed and stored nothing: the tokens have to reach the line even when the
     // run left through the catch, or the cost of a failing store reads as free.
     expect(outcomeLines()).toEqual([
-      expect.objectContaining(line("store_failed", 0, true, USAGE)),
+      // S13: a refused write is `write_skipped` with the provider's reason.
+      expect.objectContaining(line("write_skipped", 0, true, USAGE)),
     ]);
   });
 
@@ -2261,6 +2374,25 @@ describe("distillRepoMemoryStep org promotion", () => {
     ]);
   });
 
+  it("reads this deployment's secret set once, however many documents it reads and writes", async () => {
+    // One step, one read: the port wrapper and the built-in store share the
+    // step's reader, so cleaning what the store holds before each merge costs
+    // no read of its own.
+    await storeFacts("github", REPO_PATH, ["Package manager is pnpm", "API uses fastify"]);
+    await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm", "Built with vite"]);
+    respond({
+      repositories: [
+        { repository: REPO_KEY, facts: ["Uses turborepo"], lessons: ["reran the flaky suite"] },
+        { repository: `github:${SIBLING_REPO_PATH}`, facts: ["Deploys on Fridays"], lessons: [] },
+      ],
+    });
+
+    const result = await distillRepoMemoryStep({ ...input, repositories: SIBLINGS });
+
+    expect(result.written).toBeGreaterThanOrEqual(3);
+    expect(mocks.secretReads).toBe(1);
+  });
+
   it("leaves the repository documents untouched when it promotes", async () => {
     await storeFacts("github", REPO_PATH, ["Package manager is pnpm"], "wrun_old");
     await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm"], "wrun_old");
@@ -2493,6 +2625,8 @@ describe("distillRepoMemoryStep org promotion", () => {
       usage: USAGE,
       providerCalled: true,
       skipped: "write_skipped",
+      // S13: the provider's own reason for refusing.
+      unavailable: expect.any(String),
     });
     // Three attempts and no more: an owner document is contended by every
     // repository under it, so an unbounded loop would spin hardest exactly where
@@ -2502,12 +2636,12 @@ describe("distillRepoMemoryStep org promotion", () => {
       { text: "winner 3", runId: "run_9" },
     ]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ org: `github:${OWNER}`, docPath: "facts", attempts: 3 }),
-      "repo_memory_write_contended",
+      expect.objectContaining({ org: `github:${OWNER}`, docPath: "facts", code: "contended" }),
+      "repo_memory_write_refused",
     );
   });
 
-  it("does not store an owner document redaction could not scrub", async () => {
+  it("reads and stores no owner document when this deployment's secrets cannot be read", async () => {
     await storeFacts("github", REPO_PATH, ["Package manager is pnpm"]);
     await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm"]);
     mocks.redactionThrows = true;
@@ -2520,24 +2654,27 @@ describe("distillRepoMemoryStep org promotion", () => {
       }),
     ).toEqual({
       written: 0,
-      usage: USAGE,
-      providerCalled: true,
-      skipped: "write_skipped",
+      usage: null,
+      providerCalled: false,
+      skipped: "memory_unavailable",
+      unavailable: expect.stringContaining("could not be read"),
     });
     expect(orgUpserts()).toEqual([]);
     expect(await orgRows()).toHaveLength(0);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ org: `github:${OWNER}`, docPath: "facts" }),
-      "repo_memory_redaction_failed",
+      expect.objectContaining({ code: "unavailable" }),
+      "memory_provider_unavailable",
     );
   });
 
-  it("does not store an owner document that redaction truncated", async () => {
-    // Redaction replaces a short secret with a 28 character marker, so a
-    // document that fitted the cap before scrubbing can exceed it after, and the
-    // cut then lands wherever it lands.
+  it("sizes an owner document after its secrets are taken out", async () => {
+    // The org-scope counterpart of the case above: the secret is taken out
+    // before the store merges, so the promoted document is whole, inside its
+    // cap and free of the secret.
+    // A credential named on the known list is redacted however short; a
+    // short value found only by its variable name is not (configured-secrets.ts).
     const SECRET = "zz9";
-    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    vi.stubEnv("CRON_SECRET", SECRET);
     const secretFact = `deploy uses ${SECRET} from the pipeline`;
     const measure = (fillerChars: number) =>
       Buffer.byteLength(
@@ -2558,32 +2695,30 @@ describe("distillRepoMemoryStep org promotion", () => {
       kind: "facts",
       items: promoted.map((text) => ({ text, runId: input.runId })),
     });
-    // The bracket the case rests on: the merge keeps both items because the
-    // render fits exactly, and redaction is what pushes it over.
+    // The bracket the case rests on: the render with the secret in it fits
+    // exactly, and the same render with the secret taken out does not.
     expect(Buffer.byteLength(rendered, "utf8")).toBe(DOC_CAP);
-    expect(prepareMemoryContent(rendered, DOC_CAP, false)?.truncated).toBe(true);
+    expect(
+      Buffer.byteLength(rendered.replace(SECRET, "[REDACTED:configured_secret]"), "utf8"),
+    ).toBeGreaterThan(DOC_CAP);
 
     await storeFacts("github", REPO_PATH, promoted);
     await storeFacts("github", SIBLING_REPO_PATH, promoted);
     respond({ repositories: [] });
 
-    expect(
-      await distillRepoMemoryStep({
-        ...input,
-        repositories: SIBLINGS,
-      }),
-    ).toEqual({
-      written: 0,
-      usage: USAGE,
-      providerCalled: true,
-      skipped: "write_skipped",
-    });
-    // Nothing truncated reaches the store, so the write never happens at all.
-    expect(orgUpserts()).toEqual([]);
-    expect(await orgRows()).toHaveLength(0);
-    expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ org: `github:${OWNER}`, docPath: "facts" }),
-      "repo_memory_truncated_skipped",
+    await distillRepoMemoryStep({ ...input, repositories: SIBLINGS });
+
+    const content =
+      (await getMemoryDocument(db, orgSubjectKey("github", OWNER), "facts"))?.content ?? "";
+    expect(content).not.toContain(SECRET);
+    expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(DOC_CAP);
+    const redactedFact = "deploy uses [REDACTED:configured_secret] from the pipeline";
+    const items = (await readOrgItems("github", OWNER)) ?? [];
+    expect(items.length).toBeGreaterThan(0);
+    expect(items.every((item) => item.text === filler || item.text === redactedFact)).toBe(true);
+    expect(mocks.logWarn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ org: `github:${OWNER}` }),
+      "repo_memory_write_refused",
     );
   });
 
@@ -2614,7 +2749,7 @@ describe("distillRepoMemoryStep org promotion", () => {
       { text: "Package manager is pnpm", runId: "run_1" },
     ]);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories: SIBLINGS });
+    const sources = await loadSources({ repositories: SIBLINGS });
     // Once, from the owner. Both repository documents are fully shadowed.
     expect(sources.map((source) => `${source.scope ?? "repo"}:${source.repository}`)).toEqual([
       `org:${OWNER}`,
@@ -2653,7 +2788,7 @@ describe("distillRepoMemoryStep org promotion", () => {
       { text: "- Package manager is pnpm", runId: "run_1" },
     ]);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories: SIBLINGS });
+    const sources = await loadSources({ repositories: SIBLINGS });
     expect(sources.map((source) => `${source.scope ?? "repo"}:${source.repository}`)).toEqual([
       `org:${OWNER}`,
     ]);
@@ -2835,14 +2970,41 @@ describe("distillRepoMemoryStep org promotion", () => {
   });
 });
 
+/**
+ * What the step found. Since S13 it also answers whether memory could be
+ * reached at all, which `loadRepoMemorySourcesStep.unavailable` carries and the
+ * cases below are not about; the two cases that ARE about it read the whole
+ * result. Nothing else in this suite changed meaning.
+ */
+async function loadSources(
+  input: Parameters<typeof loadRepoMemorySourcesStep>[0],
+): Promise<Awaited<ReturnType<typeof loadRepoMemorySourcesStep>>["sources"]> {
+  return (await loadRepoMemorySourcesStep(input)).sources;
+}
+
 describe("loadRepoMemorySourcesStep", () => {
   const repositories = [{ provider: "github" as const, repoPath: REPO_PATH }];
   const OTHER_REPO_PATH = "acme/web";
   /** A third repository under the same owner, for the cases that need a small
    * document behind a dropped one to prove the latch. */
   const THIRD_REPO_PATH = "acme/tools";
-  /** Mirrors MAX_INJECTED_MEMORY_BYTES, which the step keeps to itself. */
-  const BUDGET = 32 * 1024;
+  /** The two per-kind budgets the SDK states, together. */
+  const BUDGET = MEMORY_PROMPT_BUDGET_BYTES.facts + MEMORY_PROMPT_BUDGET_BYTES.lessons;
+  /** Every line of an injected document is a heading, the format's marker
+   *  comment, a whole entry, or the marker core ends a cut one with: never half
+   *  an entry. */
+  function linesAreWhole(content: string, entries: readonly string[]): boolean {
+    return content
+      .split("\n")
+      .every(
+        (line) =>
+          line === "" ||
+          line.startsWith("#") ||
+          line.startsWith("<!--") ||
+          line === MEMORY_CUT_MARKER ||
+          entries.some((entry) => line === `- ${entry}`),
+      );
+  }
   /** Mirrors the whole-step read deadline, which the step keeps to itself. */
   const DEADLINE_MS = 5_000;
 
@@ -2853,7 +3015,7 @@ describe("loadRepoMemorySourcesStep", () => {
   ): Promise<{ facts: number; lessons: number }> {
     const manifest = matureManifest(repositoryCount);
     for (const repository of manifest) await storeMatureRepository(repository.repoPath);
-    const sources = await loadRepoMemorySourcesStep({ repositories: manifest });
+    const sources = await loadSources({ repositories: manifest });
     return {
       facts: sources.filter((source) => source.docPath === "facts").length,
       lessons: sources.filter((source) => source.docPath === "lessons").length,
@@ -2867,9 +3029,14 @@ describe("loadRepoMemorySourcesStep", () => {
     // was buying the one output no prompt ever saw: the build and test commands
     // in a facts document are re-derivable from the free deterministic seed,
     // and lessons are not derivable from anything.
+    //
+    // Since M2 the document that overflows is cut at a line and marked rather
+    // than dropped, so the third lessons document reaches the prompt in part.
+    // The third facts document does not: two mature ones leave about a hundred
+    // bytes, which is a heading and a marker and no knowledge.
     expect(await matureInjection(1)).toEqual({ facts: 1, lessons: 1 });
-    expect(await matureInjection(3)).toEqual({ facts: 2, lessons: 2 });
-    expect(await matureInjection(8)).toEqual({ facts: 2, lessons: 2 });
+    expect(await matureInjection(3)).toEqual({ facts: 2, lessons: 3 });
+    expect(await matureInjection(8)).toEqual({ facts: 2, lessons: 3 });
   });
 
   it("does not let a starved facts budget drop a lessons document", async () => {
@@ -2880,9 +3047,36 @@ describe("loadRepoMemorySourcesStep", () => {
     await storeDocument(REPO_SUBJECT_KEY, "facts", big);
     await storeRepoDocument("lessons", ["flaky suite -> reran -> pinned the seed"]);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
-    expect(sources.map((source) => source.docPath)).toEqual(["lessons"]);
-    expect(sources[0]?.content).toContain("- flaky suite -> reran -> pinned the seed");
+    const sources = await loadSources({ repositories });
+    expect(sources.map((source) => source.docPath)).toEqual(["facts", "lessons"]);
+    expect(sources[1]?.content).toContain("- flaky suite -> reran -> pinned the seed");
+  });
+
+  it("cuts a rendering longer than its kind's budget at a line, and says so in the prompt", async () => {
+    // M2: whatever a provider returns, one prompt carries at most the budget
+    // the SDK states per scope. A provider with no cap of its own (an engine
+    // that accumulates, and renders everything it holds) must not cost the
+    // agent its whole memory by being dropped, nor fill the prompt: it is cut
+    // at the last line that fits, and the cut is visible to the model, because
+    // half a list without a marker reads as the whole list.
+    const entries = Array.from({ length: 200 }, (_, index) => `entry ${index} `.padEnd(150, "w"));
+    await storeRepoDocument("facts", entries);
+    await storeRepoDocument("lessons", ["flaky suite -> reran -> pinned the seed"]);
+
+    const sources = await loadSources({ repositories });
+
+    const facts = sources.find((source) => source.docPath === "facts")?.content ?? "";
+    expect(Buffer.byteLength(facts, "utf8")).toBeLessThanOrEqual(MEMORY_PROMPT_BUDGET_BYTES.facts);
+    expect(facts.endsWith(`\n${MEMORY_CUT_MARKER}`)).toBe(true);
+    expect(linesAreWhole(facts, entries)).toBe(true);
+    // The head survives, because a provider puts first what must survive.
+    expect(facts).toContain(`- ${entries[0]}`);
+    expect(facts).not.toContain(`- ${entries[199]}`);
+    expect(sources.map((source) => source.docPath)).toEqual(["facts", "lessons"]);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ dropped: 0, truncated: [`github:${REPO_PATH}`] }),
+      "repo_memory_injection_budget_exceeded",
+    );
   });
 
   it("returns bounded partial results when the database stops answering", async () => {
@@ -2911,7 +3105,7 @@ describe("loadRepoMemorySourcesStep", () => {
     };
     vi.useFakeTimers();
 
-    const pending = loadRepoMemorySourcesStep({
+    const pending = loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "github", repoPath: OTHER_REPO_PATH },
@@ -2940,7 +3134,7 @@ describe("loadRepoMemorySourcesStep", () => {
   it("reports no deadline on a database that answers", async () => {
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
 
-    expect(await loadRepoMemorySourcesStep({ repositories })).toHaveLength(1);
+    expect(await loadSources({ repositories })).toHaveLength(1);
     expect(mocks.logWarn).not.toHaveBeenCalledWith(
       expect.anything(),
       "repo_memory_load_deadline_exceeded",
@@ -2954,7 +3148,7 @@ describe("loadRepoMemorySourcesStep", () => {
     await storeOrgFacts("gitlab", "group", ["Customer A rotates keys weekly"]);
 
     expect(
-      await loadRepoMemorySourcesStep({
+      await loadSources({
         repositories: [{ provider: "gitlab", repoPath: "group/customer-b/api" }],
       }),
     ).toEqual([]);
@@ -2966,7 +3160,7 @@ describe("loadRepoMemorySourcesStep", () => {
     // injected whatever the flag says.
     await storeOrgFacts("github", OWNER, ["Release tags are signed"]);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories: SIBLINGS });
+    const sources = await loadSources({ repositories: SIBLINGS });
     // The gate is on the write. Flipping it must not silently hide knowledge
     // that is already stored and already correct.
     expect(sources.map((source) => source.scope)).toEqual(["org"]);
@@ -2974,11 +3168,26 @@ describe("loadRepoMemorySourcesStep", () => {
   });
 
   it("returns nothing without a repository", async () => {
-    expect(await loadRepoMemorySourcesStep({ repositories: [] })).toEqual([]);
+    expect(await loadSources({ repositories: [] })).toEqual([]);
   });
 
   it("returns nothing when the repository has no stored documents", async () => {
-    expect(await loadRepoMemorySourcesStep({ repositories })).toEqual([]);
+    expect(await loadSources({ repositories })).toEqual([]);
+  });
+
+  it("takes a secret known since it was stored out of what reaches the prompt", async () => {
+    // Stored before the value was a known secret, and not rewritten since:
+    // the prompt is where it would leave this deployment, so core cleans the
+    // rendering on its way there, whichever provider holds it.
+    const SECRET = "tok-4c1d8e2f9a";
+    await storeRepoDocument("facts", [`Deploys read ${SECRET} from the vault`]);
+    vi.stubEnv("CRON_SECRET", SECRET);
+
+    const sources = await loadSources({ repositories });
+
+    expect(sources.map((source) => source.docPath)).toEqual(["facts"]);
+    expect(sources[0]?.content).not.toContain(SECRET);
+    expect(sources[0]?.content).toContain("- Deploys read [REDACTED:configured_secret] from the vault");
   });
 
   it("strips provenance before a document reaches the prompt", async () => {
@@ -2988,7 +3197,7 @@ describe("loadRepoMemorySourcesStep", () => {
       "wrun_abc",
     );
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     expect(sources).toHaveLength(1);
     expect(sources[0]?.content).not.toContain("run:");
     expect(sources[0]?.content).toContain("- Package manager is pnpm\n");
@@ -3017,7 +3226,7 @@ describe("loadRepoMemorySourcesStep", () => {
       );
     }
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "github", repoPath: OTHER_REPO_PATH },
@@ -3053,7 +3262,7 @@ describe("loadRepoMemorySourcesStep", () => {
       }),
     );
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: OTHER_REPO_PATH },
         { provider: "github", repoPath: REPO_PATH },
@@ -3076,7 +3285,7 @@ describe("loadRepoMemorySourcesStep", () => {
     );
     await storeRepoDocument("lessons", ["flaky suite -> reran -> pinned the seed"]);
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "github", repoPath: OTHER_REPO_PATH },
@@ -3109,7 +3318,7 @@ describe("loadRepoMemorySourcesStep", () => {
     expect(bytes(storedFacts) + injectedLessons).toBeGreaterThan(BUDGET);
     expect(injectedFacts + bytes(storedLessons)).toBeGreaterThan(BUDGET);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     expect(sources.map((source) => source.docPath)).toEqual(["facts", "lessons"]);
     expect(bytes(sources[0]?.content ?? "")).toBe(injectedFacts);
     expect(mocks.logWarn).not.toHaveBeenCalledWith(
@@ -3118,7 +3327,7 @@ describe("loadRepoMemorySourcesStep", () => {
     );
   });
 
-  it("drops whole documents once a kind's injection budget is spent and logs what was lost", async () => {
+  it("cuts the document that overflows a kind's budget, leaves out the ones after it, and logs both", async () => {
     // Oversized against today's 12 KiB write cap on purpose: the read path also
     // has to bound rows written under an older, larger cap. 10 + 10 > 16.
     const big = `# facts\n- ${"z".repeat(10 * 1024)}\n`;
@@ -3132,24 +3341,32 @@ describe("loadRepoMemorySourcesStep", () => {
       "# facts\n- Built with vite\n",
     );
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "github", repoPath: OTHER_REPO_PATH },
         { provider: "github", repoPath: THIRD_REPO_PATH },
       ],
     });
-    // Whole documents only, so the 10 KiB that did fit is emitted untouched.
-    expect(sources).toHaveLength(1);
-    expect(sources[0]?.docPath).toBe("facts");
-    expect(sources[0]?.repository).toBe(REPO_PATH);
+    // The 10 KiB that fitted is emitted untouched; the second is cut to the
+    // 6 KiB left, inside its one long line because a line end would keep only
+    // the heading, and marked; the third is left out, because once a kind is
+    // cut nothing further of it is injected (a small document jumping the
+    // queue would reorder what the manifest ordered).
+    expect(sources.map((source) => source.repository)).toEqual([REPO_PATH, OTHER_REPO_PATH]);
     expect(sources[0]?.content).toBe(big);
-    // A dropped document is never silent, and the diagnostic keeps the provider
-    // so the same path on two providers cannot collapse into one name.
+    const cut = sources[1]?.content ?? "";
+    expect(cut.endsWith(`\n${MEMORY_CUT_MARKER}`)).toBe(true);
+    expect(Buffer.byteLength(big, "utf8") + Buffer.byteLength(cut, "utf8")).toBeLessThanOrEqual(
+      MEMORY_PROMPT_BUDGET_BYTES.facts,
+    );
+    // Nothing is lost silently, and the diagnostic keeps the provider so the
+    // same path on two providers cannot collapse into one name.
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.objectContaining({
-        dropped: 2,
-        repositories: [`github:${OTHER_REPO_PATH}`, `github:${THIRD_REPO_PATH}`],
+        dropped: 1,
+        repositories: [`github:${THIRD_REPO_PATH}`],
+        truncated: [`github:${OTHER_REPO_PATH}`],
       }),
       "repo_memory_injection_budget_exceeded",
     );
@@ -3169,12 +3386,12 @@ describe("loadRepoMemorySourcesStep", () => {
         { provider: "gitlab", repoPath: REPO_PATH },
       ],
     });
-    // Both dropped documents share the bare path, so deduping on it would have
+    // Both cut documents share the bare path, so deduping on it would have
     // reported one repository and hidden half the loss.
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.objectContaining({
-        dropped: 2,
-        repositories: [`gitlab:${REPO_PATH}`, `github:${REPO_PATH}`],
+        dropped: 0,
+        truncated: [`gitlab:${REPO_PATH}`, `github:${REPO_PATH}`],
       }),
       "repo_memory_injection_budget_exceeded",
     );
@@ -3192,7 +3409,7 @@ describe("loadRepoMemorySourcesStep", () => {
       }),
     );
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "gitlab", repoPath: REPO_PATH },
@@ -3212,10 +3429,15 @@ describe("loadRepoMemorySourcesStep", () => {
       },
     };
 
-    expect(await loadRepoMemorySourcesStep({ repositories })).toEqual([]);
+    expect(await loadSources({ repositories })).toEqual([]);
+    // S13: the provider turns the failure into an answer, so the step reports
+    // which reads it refused rather than reporting that a read threw. A prompt
+    // that is thin because memory could not be reached is still separable from
+    // one that is thin because nothing is stored, which is the whole point.
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.anything(),
-      "repo_memory_load_failed",
+      // One org document plus facts and lessons for the one repository.
+      expect.objectContaining({ refused: 3, provider: "builtin" }),
+      "memory_provider_unavailable",
     );
   });
 
@@ -3224,7 +3446,7 @@ describe("loadRepoMemorySourcesStep", () => {
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
     await storeRepoDocument("lessons", ["flaky suite -> reran -> pinned the seed"]);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     // Shared knowledge first: if the budget runs out, the sibling-derived facts
     // are the ones worth keeping.
     expect(
@@ -3240,7 +3462,7 @@ describe("loadRepoMemorySourcesStep", () => {
     await storeOrgFacts("github", OWNER, ["Release tags are signed"]);
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "github", repoPath: OTHER_REPO_PATH },
@@ -3254,7 +3476,7 @@ describe("loadRepoMemorySourcesStep", () => {
     await storeOrgFacts("github", OWNER, ["Release tags are signed"]);
     await storeOrgFacts("github", "globex", ["Deploys from main"]);
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: "globex/api" },
         { provider: "github", repoPath: REPO_PATH },
@@ -3275,7 +3497,7 @@ describe("loadRepoMemorySourcesStep", () => {
       }),
     );
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [{ provider: "github", repoPath: "standalone" }],
     });
     expect(sources.map((source) => source.scope ?? "repo")).toEqual(["repo"]);
@@ -3284,7 +3506,7 @@ describe("loadRepoMemorySourcesStep", () => {
   it("keeps a repository owner apart from the same owner on another provider", async () => {
     await storeOrgFacts("gitlab", OWNER, ["Checks run on GitLab CI"]);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     // The github manifest must not pick up the gitlab owner's document.
     expect(sources).toEqual([]);
   });
@@ -3297,7 +3519,7 @@ describe("loadRepoMemorySourcesStep", () => {
       "wrun_abc",
     );
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     expect(sources).toHaveLength(2);
     // Matched on the comparison key, so a trailing period is still the same
     // fact. Injecting it under both scopes would spend the budget twice on one
@@ -3327,7 +3549,7 @@ describe("loadRepoMemorySourcesStep", () => {
       }),
     );
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     // The org document shadows the first item, so the second is emitted through
     // the re-render branch. `runId: null` suppresses only the marker the format
     // writes, never one already embedded in the text, so the render has to be
@@ -3354,7 +3576,7 @@ describe("loadRepoMemorySourcesStep", () => {
       }),
     );
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "github", repoPath: "globex/api" },
@@ -3380,7 +3602,7 @@ describe("loadRepoMemorySourcesStep", () => {
       }),
     );
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "gitlab", repoPath: REPO_PATH },
@@ -3408,7 +3630,7 @@ describe("loadRepoMemorySourcesStep", () => {
       }),
     );
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "github", repoPath: "acmeweb/site" },
@@ -3426,7 +3648,7 @@ describe("loadRepoMemorySourcesStep", () => {
     await storeOrgFacts("github", "globex", ["Deploys from main"]);
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
 
-    const sources = await loadRepoMemorySourcesStep({
+    const sources = await loadSources({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "github", repoPath: "globex/api" },
@@ -3441,7 +3663,7 @@ describe("loadRepoMemorySourcesStep", () => {
     await storeOrgFacts("github", OWNER, ["Package manager is pnpm"]);
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     // A header with no bullets under it would compile into a memory section
     // with no content.
     expect(
@@ -3455,7 +3677,7 @@ describe("loadRepoMemorySourcesStep", () => {
     await storeOrgFacts("github", OWNER, ["Package manager is pnpm"]);
     await storeRepoDocument("lessons", ["Package manager is pnpm"]);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     expect(sources.map((source) => source.docPath)).toEqual(["facts", "lessons"]);
     expect(sources[1]?.content).toContain("- Package manager is pnpm");
   });
@@ -3467,7 +3689,7 @@ describe("loadRepoMemorySourcesStep", () => {
     const raw = "# facts for acme/api\nSome prose the writer left in.\n\n- Package manager is pnpm\n";
     await storeDocument(REPO_SUBJECT_KEY, "facts", raw);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     expect(sources[1]?.content).toBe(raw);
   });
 
@@ -3481,19 +3703,83 @@ describe("loadRepoMemorySourcesStep", () => {
     );
     await storeDocument(REPO_SUBJECT_KEY, "facts", `# facts\n- repo ${"z".repeat(10 * 1024)}\n`);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     // An org document holds facts, so it is charged to the facts budget: it goes
     // first, spends 10 KiB of the 16 KiB there, and the repository document no
-    // longer fits and is dropped whole.
-    expect(sources).toHaveLength(1);
-    expect(sources[0]?.scope).toBe("org");
+    // longer fits and is cut to what is left.
+    expect(sources.map((source) => source.scope ?? "repository")).toEqual(["org", "repository"]);
+    expect(sources[1]?.content.endsWith(`\n${MEMORY_CUT_MARKER}`)).toBe(true);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ dropped: 1, repositories: [`github:${REPO_PATH}`] }),
+      expect.objectContaining({ dropped: 0, truncated: [`github:${REPO_PATH}`] }),
       "repo_memory_injection_budget_exceeded",
     );
   });
 
-  it("names a dropped org document by its scope in the warning", async () => {
+  it("leaves out a small document behind a cut, even when the cut left room for it", async () => {
+    // A cut spends the kind. Lines of 1.5 KiB make the line-end cut keep about
+    // 1.2 KiB of the facts budget unused, far more than the small document
+    // behind it needs; injecting that one anyway would let a later document
+    // jump the queue the manifest ordered.
+    const long = `# facts\n${Array.from(
+      { length: 20 },
+      (_, index) => `- ${String.fromCodePoint(97 + index).repeat(1500)}\n`,
+    ).join("")}`;
+    await storeDocument(REPO_SUBJECT_KEY, "facts", long);
+    await storeDocument(
+      repoSubjectKey("github", OTHER_REPO_PATH),
+      "facts",
+      "# facts\n- Built with vite\n",
+    );
+
+    const sources = await loadSources({
+      repositories: [
+        { provider: "github", repoPath: REPO_PATH },
+        { provider: "github", repoPath: OTHER_REPO_PATH },
+      ],
+    });
+
+    expect(sources.map((source) => source.repository)).toEqual([REPO_PATH]);
+    const cut = sources[0]?.content ?? "";
+    expect(cut.endsWith(`\n${MEMORY_CUT_MARKER}`)).toBe(true);
+    // The premise: the cut really did leave room the small document fits in.
+    expect(MEMORY_PROMPT_BUDGET_BYTES.facts - Buffer.byteLength(cut, "utf8")).toBeGreaterThan(1024);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dropped: 1,
+        repositories: [`github:${OTHER_REPO_PATH}`],
+        truncated: [`github:${REPO_PATH}`],
+      }),
+      "repo_memory_injection_budget_exceeded",
+    );
+  });
+
+  it("names a repository whose own copy of an entry was cut off the org document", async () => {
+    // An entry cut off the org document never reached the prompt, so it must
+    // not count as already there for the repository that holds its own copy.
+    // Counted as there, the repository document would look fully shadowed and
+    // vanish from the warning; the budget the cut spent leaves it out either
+    // way, and the warning is where a person learns that.
+    const entries = Array.from({ length: 200 }, (_, index) =>
+      `org entry ${index} `.padEnd(150, "w"),
+    );
+    await storeOrgFacts("github", OWNER, entries);
+    await storeRepoDocument("facts", [entries[199]!]);
+
+    const sources = await loadSources({ repositories });
+
+    expect(sources.map((source) => source.scope ?? "repository")).toEqual(["org"]);
+    expect(sources[0]?.content).not.toContain(entries[199]);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dropped: 1,
+        repositories: [`github:${REPO_PATH}`],
+        truncated: [`org:github:${OWNER}`],
+      }),
+      "repo_memory_injection_budget_exceeded",
+    );
+  });
+
+  it("names a cut org document by its scope in the warning", async () => {
     const big = `# facts\n- ${"z".repeat(10 * 1024)}\n`;
     await storeDocument(orgSubjectKey("github", OWNER), "facts", big);
     await storeDocument(orgSubjectKey("github", "globex"), "facts", big);
@@ -3507,7 +3793,7 @@ describe("loadRepoMemorySourcesStep", () => {
     // Scope-qualified as well as provider-qualified: an owner and a repository
     // under it would otherwise read as the same loss.
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ dropped: 1, repositories: [`org:github:globex`] }),
+      expect.objectContaining({ dropped: 0, truncated: [`org:github:globex`] }),
       "repo_memory_injection_budget_exceeded",
     );
   });
@@ -3520,7 +3806,7 @@ describe("loadRepoMemorySourcesStep", () => {
     // would report the same number.
     await storeRepoDocument("lessons", ["flaky suite -> reran -> pinned the seed"]);
 
-    const sources = await loadRepoMemorySourcesStep({ repositories });
+    const sources = await loadSources({ repositories });
     expect(mocks.logInfo).toHaveBeenCalledWith(
       {
         step: "loadRepoMemorySources",
@@ -3531,6 +3817,7 @@ describe("loadRepoMemorySourcesStep", () => {
         ),
         maxBytes: BUDGET,
         dropped: 0,
+        truncated: 0,
         orgDocuments: 1,
       },
       "repo_memory_injected",
@@ -3538,17 +3825,20 @@ describe("loadRepoMemorySourcesStep", () => {
   });
 
   it("logs nothing when there was nothing to inject", async () => {
-    expect(await loadRepoMemorySourcesStep({ repositories })).toEqual([]);
+    expect(await loadSources({ repositories })).toEqual([]);
     expect(mocks.logInfo).not.toHaveBeenCalled();
   });
 
-  it("logs the injection even when every document was dropped", async () => {
+  it("logs the injection when the only document had to be cut", async () => {
+    // Before M2 a document this size was dropped whole and the prompt carried
+    // no memory at all. The first document of a kind always has the whole
+    // budget in front of it, so it is cut rather than lost.
     const big = `# facts\n- ${"z".repeat(40 * 1024)}\n`;
     await storeDocument(REPO_SUBJECT_KEY, "facts", big);
 
-    expect(await loadRepoMemorySourcesStep({ repositories })).toEqual([]);
+    expect(await loadSources({ repositories })).toHaveLength(1);
     expect(mocks.logInfo).toHaveBeenCalledWith(
-      expect.objectContaining({ documents: 0, dropped: 1, orgDocuments: 0 }),
+      expect.objectContaining({ documents: 1, dropped: 0, truncated: 1, orgDocuments: 0 }),
       "repo_memory_injected",
     );
   });

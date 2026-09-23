@@ -278,7 +278,7 @@ export function blockTypesMissingExecutor(): WorkflowBlockType[] {
 export function buildImplementationAgentSuccessOutput(input: {
   workspaceId: string;
   workspaceManifest: WorkspaceManifest;
-  commits: Array<{ provider: "github" | "gitlab"; repoPath: string; sha: string }>;
+  commits: Array<{ provider: string; repoPath: string; sha: string }>;
   summary?: string | null;
   verification?: BlockOutput["verification"];
 }): BlockOutput {
@@ -523,7 +523,7 @@ export function soleActiveBlockId(
   return onlyActive ?? null;
 }
 
-export function resolveSlackMessageInput(
+export function resolveMessageInput(
   params: Record<string, unknown>,
   resolvedInputs: Record<string, unknown>,
 ): string {
@@ -611,10 +611,23 @@ export function resolveOpenPrBody(
   vars: PromptVariableValues,
 ): string {
   const bound = typeof resolvedInputs.body === "string" ? resolvedInputs.body : "";
-  if (bound.trim() !== "") return bound;
+  if (bound.trim() !== "") return withoutEmptyLinks(bound);
   const authored = typeof params.body === "string" ? params.body : "";
-  if (authored.trim() !== "") return authored;
-  return substitutePromptVariables(DEFAULT_OPEN_PR_BODY, vars);
+  if (authored.trim() !== "") return withoutEmptyLinks(authored);
+  return withoutEmptyLinks(substitutePromptVariables(DEFAULT_OPEN_PR_BODY, vars));
+}
+
+/**
+ * A Markdown link whose target came out empty, `[AIW-12]()`, as its text alone.
+ *
+ * The default body links the ticket as `[{{ticket_key}}]({{ticket_url}})`, and
+ * the link is empty whenever the run has none: a tracker that gives no links,
+ * or a run resumed across the deploy that moved the link onto the ticket
+ * snapshot, whose replayed snapshot carries none. A provider renders `[KEY]()`
+ * as a link to the pull request itself, so the key is shown plainly instead.
+ */
+function withoutEmptyLinks(markdown: string): string {
+  return markdown.replace(/\[([^\]\n]+)\]\(\s*\)/g, "$1");
 }
 
 function publicationPrForTelemetry(

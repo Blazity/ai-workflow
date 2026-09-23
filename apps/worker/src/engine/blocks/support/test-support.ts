@@ -26,17 +26,17 @@ import {
 } from "../../../sandbox/harness-runtime.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import type { BlockInvocationContext, EngineCtx } from "./types.js";
+import { MESSAGING_CONNECTED } from "../../definition/messaging-deployment.fixture.js";
 import { createBriefingSequence } from "../../agent-visibility/plan.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
   llmProviders: { claude: true, codex: true },
   defaultAgent: { provider: "claude", model: "claude-model" },
-  vcsProviders: ["github", "gitlab"],
-  vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
-  arthurConfigured: true,
+  vcsProviders: [],
+  vcsBotIdentities: [],
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 /** Keep an executor assertion coupled to the editor-visible registry contract. */
@@ -202,7 +202,7 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     defaults: { claude: "claude-model", codex: "codex-model" },
     prompts: { research: "r", implement: "i", review: "v" },
     moveTargets: { backlog: "Backlog", aiReview: "AI Review" },
-    arthur: { taskId: null },
+    integrationRunStates: null,
     checksCeilingMs: null,
     prePrChecksFailureMessage: vi.fn().mockImplementation((error: unknown) =>
       Promise.resolve(error instanceof Error ? error.message : String(error)),

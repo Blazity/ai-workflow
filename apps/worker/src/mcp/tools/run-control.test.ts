@@ -42,6 +42,15 @@ vi.mock("workflow/api", () => ({
 
 vi.mock("../../db/client.js", () => ({ getDb: () => hooks.db }));
 
+// This deployment has an issue tracker connected. Which one, and what it is
+// wired to, is an integration connection since S12 and is resolved from the
+// database; this suite is about what happens to a RUN, so it says the one
+// thing it means and leaves the resolution to its own tests.
+vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
+  const support = await import("../../test-support/issue-tracker.js");
+  return support.connectedIssueTracker({});
+});
+
 import { MAX_ANSWER_LENGTH } from "../../services/clarifications/answer-core.js";
 import {
   getHookClarification,
@@ -56,15 +65,16 @@ import {
   organization,
   workflowRuns,
 } from "../../db/schema.js";
-import type { Adapters } from "../../engine/support/adapters.js";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,
 } from "../../adapters/run-registry/types.js";
+import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import { MCP_TOOL_CATALOG } from "../tool-catalog.js";
 import { policyFor } from "../policy.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerRunControlTools } from "./run-control.js";
 
 const ORG_ID = "org-execute";
@@ -163,6 +173,38 @@ async function seedParkedRun() {
   return publishHookClarification(db, row.id);
 }
 
+const PR_RUN_ID = "wrun_pr_parked";
+const PR_SUBJECT = "pr:github:acme/web#7";
+
+/** The same park for a pull request run, which has no ticket. */
+async function seedTicketlessParkedRun() {
+  const row = await prepareHookClarification(db, {
+    ticketKey: null,
+    subjectKey: PR_SUBJECT,
+    runId: PR_RUN_ID,
+    blockId: "human_question",
+    definitionId: 1,
+    definitionVersion: 4,
+    questions: ["Should this pull request ship today?"],
+    suggestedAnswers: [],
+  });
+  await db.insert(activeRuns).values({
+    subjectKey: PR_SUBJECT,
+    ticketKey: null,
+    ownerToken: "owner-pr",
+    runId: PR_RUN_ID,
+    state: "bound",
+    runKind: "pr_trigger",
+  });
+  await db.insert(workflowRuns).values({
+    runId: PR_RUN_ID,
+    subjectKey: PR_SUBJECT,
+    ticketKey: null,
+    status: "awaiting",
+  });
+  return publishHookClarification(db, row.id);
+}
+
 /**
  * A registry stub rather than the real adapter, which is built from env and talks to
  * the deployed store. What the cancel core needs from it is exactly these four calls
@@ -186,16 +228,18 @@ function registryStub(): RunRegistryAdapter {
 
 async function connectedClient(
   actor: Partial<McpActorContext> = { scopes: DISPATCH_ONLY },
+  tracker: Parameters<typeof adaptersFor>[0] = {
+    fetchTicket,
+    moveTicket,
+    postComment,
+  } as unknown as IssueTrackerAdapter,
 ) {
   const server = new McpServer({ name: "run-control-test", version: "0.1.0" });
   registerRunControlTools(
     server,
     depsFor(db, () => now, {
       actor: actorFor(actor),
-      adapters: {
-        issueTracker: { fetchTicket, moveTicket, postComment },
-        runRegistry,
-      } as unknown as Adapters,
+      adapters: adaptersFor(tracker, { runRegistry }),
     }),
   );
   const client = new Client({ name: "run-control-test-client", version: "1.0.0" });
@@ -316,6 +360,43 @@ describe("runs.answer_clarification", () => {
     // The park marker is cleared by the core, so the run stops reading as awaiting
     // the moment the answer lands.
     expect(await runStatus()).toBe("running");
+  });
+
+  // A deployment may have no usable tracker since S12. The tool read the
+  // throwing getter for every answer, so each one was an INTERNAL_ERROR that
+  // spent its key, a question with no ticket included.
+  it.each([
+    ["nothing is connected", "not_connected", "VALIDATION_FAILED", false],
+    ["its settings cannot be read", "unreadable", "DEPENDENCY_UNAVAILABLE", true],
+  ] as const)(
+    "refuses a ticket question when %s, records nothing, and gives the key back",
+    async (_shape, tracker, code, retryable) => {
+      const refusing = await connectedClient({ scopes: DISPATCH_ONLY }, tracker);
+
+      const refused = await answer(refusing);
+
+      expect(errorPayload(refused)).toMatchObject({ code, retryable });
+      expect(hooks.resumeHook).not.toHaveBeenCalled();
+      expect((await getHookClarification(db, clarificationId))?.status).toBe("pending");
+
+      // The same key, once a tracker is there, answers.
+      const connected = await connectedClient();
+      expect(dataOf(await answer(connected))).toMatchObject({ status: "answered" });
+    },
+  );
+
+  it("answers a question with no ticket on a deployment with no tracker", async () => {
+    const parked = await seedTicketlessParkedRun();
+    hooks.resumeHook.mockResolvedValueOnce({ runId: PR_RUN_ID });
+    const client = await connectedClient({ scopes: DISPATCH_ONLY }, "not_connected");
+
+    const result = await answer(client, { runId: PR_RUN_ID, answer: "Ship it" });
+
+    expect(dataOf(result)).toMatchObject({ runId: PR_RUN_ID, status: "answered", ticketKey: null });
+    expect(hooks.resumeHook).toHaveBeenCalledWith(
+      parked.hookToken,
+      expect.objectContaining({ answer: "Ship it" }),
+    );
   });
 
   it("accepts an absent hook after a failed resume as a committed delivery", async () => {
@@ -537,6 +618,24 @@ describe("runs.cancel", () => {
     // MCP client stopped it rather than an unexplained stop.
     expect(await runStatus()).toBe("blocked");
   });
+
+  // A deployment with no usable tracker can still stop a run. The tool read the
+  // throwing getter, so every cancel there was an INTERNAL_ERROR that also spent
+  // its key. The tracker is optional to the cancel itself: without one the run
+  // is stopped and its ticket is simply not moved.
+  it.each(["not_connected", "unreadable"] as const)(
+    "stops a live run when the tracker is %s",
+    async (tracker) => {
+      const client = await connectedClient({ scopes: DISPATCH_ONLY }, tracker);
+
+      const result = await cancel(client);
+
+      expect(dataOf(result)).toMatchObject({ runId: RUN_ID, outcome: "cancelled" });
+      expect(hooks.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(moveTicket).not.toHaveBeenCalled();
+      expect(await runStatus()).toBe("blocked");
+    },
+  );
 
   it("retires the question a cancelled run was parked on", async () => {
     const client = await connectedClient();

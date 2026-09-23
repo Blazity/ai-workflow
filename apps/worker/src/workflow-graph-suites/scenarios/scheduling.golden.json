@@ -324,7 +324,7 @@
       "28/29 review-approved#2@root/loop:retry:1 branch dispatched scheduler completed true[builtin-post-pr-autofix-10-review-approved-true-post-review-approved]",
       "30/31 retry#2@root/loop:retry:1 loop skipped scheduler - -",
       "32/33 post-review-exhausted#1@root post_pr_review skipped scheduler - -",
-      "34/35 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "34/35 exhausted-message#1@root send_message skipped scheduler - -",
       "36/37 complete-failure#1@root complete_pr_check skipped scheduler - -",
       "39/40 post-review-approved#1@root post_pr_review dispatched executor completed out[builtin-post-pr-autofix-17-post-review-approved-out-complete-success]",
       "41/42 complete-success#1@root complete_pr_check dispatched executor completed out[]"
@@ -358,7 +358,7 @@
       "45/46 post-review-approved#1@root post_pr_review skipped scheduler - -",
       "47/48 complete-success#1@root complete_pr_check skipped scheduler - -",
       "49/50 post-review-exhausted#1@root post_pr_review dispatched executor completed out[builtin-post-pr-autofix-18-post-review-exhausted-out-exhausted-message]",
-      "51/52 exhausted-message#1@root send_slack_message dispatched executor completed out[builtin-post-pr-autofix-19-exhausted-message-out-complete-failure]",
+      "51/52 exhausted-message#1@root send_message dispatched executor completed out[builtin-post-pr-autofix-19-exhausted-message-out-complete-failure]",
       "53/54 complete-failure#1@root complete_pr_check dispatched executor completed out[]"
     ]
   },
@@ -555,7 +555,7 @@
       "28/29 review-approved#2@root/loop:retry:1 branch dispatched scheduler completed true[builtin-post-pr-autofix-10-review-approved-true-post-review-approved]",
       "30/31 retry#2@root/loop:retry:1 loop skipped scheduler - -",
       "32/33 post-review-exhausted#1@root post_pr_review skipped scheduler - -",
-      "34/35 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "34/35 exhausted-message#1@root send_message skipped scheduler - -",
       "36/37 complete-failure#1@root complete_pr_check skipped scheduler - -",
       "39/40 post-review-approved#1@root post_pr_review dispatched executor completed out[builtin-post-pr-autofix-17-post-review-approved-out-complete-success]",
       "41/42 complete-success#1@root complete_pr_check dispatched executor completed out[]"
@@ -589,7 +589,7 @@
       "45/46 post-review-approved#1@root post_pr_review skipped scheduler - -",
       "47/48 complete-success#1@root complete_pr_check skipped scheduler - -",
       "49/50 post-review-exhausted#1@root post_pr_review dispatched executor completed out[builtin-post-pr-autofix-18-post-review-exhausted-out-exhausted-message]",
-      "51/52 exhausted-message#1@root send_slack_message dispatched executor completed out[builtin-post-pr-autofix-19-exhausted-message-out-complete-failure]",
+      "51/52 exhausted-message#1@root send_message dispatched executor completed out[builtin-post-pr-autofix-19-exhausted-message-out-complete-failure]",
       "53/54 complete-failure#1@root complete_pr_check dispatched executor completed out[]"
     ]
   },
@@ -865,7 +865,7 @@
       "17/18 reviews-approved#1@root branch skipped scheduler - -",
       "19/20 retry#1@root loop skipped scheduler - -",
       "21/22 checks#1@root run_pre_pr_checks skipped scheduler - -",
-      "23/24 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "23/24 exhausted-message#1@root send_message skipped scheduler - -",
       "25/26 finalize#1@root finalize_workspace skipped scheduler - -",
       "27/28 exhausted-failure#1@root terminate skipped scheduler - -",
       "29/30 open-pr#1@root open_pr skipped scheduler - -",
@@ -891,7 +891,7 @@
       "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "28/29 reviews-approved#2@root/loop:retry:1 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "30/31 retry#2@root/loop:retry:1 loop skipped scheduler - -",
-      "32/33 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "32/33 exhausted-message#1@root send_message skipped scheduler - -",
       "34/35 exhausted-failure#1@root terminate skipped scheduler - -",
       "37/38 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "39/40 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -924,7 +924,7 @@
       "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "40/41 reviews-approved#3@root/loop:retry:2 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "42/43 retry#3@root/loop:retry:2 loop skipped scheduler - -",
-      "44/45 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "44/45 exhausted-message#1@root send_message skipped scheduler - -",
       "46/47 exhausted-failure#1@root terminate skipped scheduler - -",
       "49/50 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "51/52 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -967,7 +967,7 @@
       "59/60 finalize#1@root finalize_workspace skipped scheduler - -",
       "61/62 open-pr#1@root open_pr skipped scheduler - -",
       "63/64 status#1@root update_ticket_status skipped scheduler - -",
-      "65/66 exhausted-message#1@root send_slack_message dispatched executor completed out[builtin-reviewed-ticket-workflow-20-exhausted-message-out-exhausted-failure]",
+      "65/66 exhausted-message#1@root send_message dispatched executor completed out[builtin-reviewed-ticket-workflow-20-exhausted-message-out-exhausted-failure]",
       "67/68 exhausted-failure#1@root terminate dispatched executor failed -"
     ]
   },
@@ -1006,7 +1006,7 @@
       "59/60 finalize#1@root finalize_workspace skipped scheduler - -",
       "61/62 open-pr#1@root open_pr skipped scheduler - -",
       "63/64 status#1@root update_ticket_status skipped scheduler - -",
-      "65/66 exhausted-message#1@root send_slack_message dispatched executor completed out[builtin-reviewed-ticket-workflow-20-exhausted-message-out-exhausted-failure]",
+      "65/66 exhausted-message#1@root send_message dispatched executor completed out[builtin-reviewed-ticket-workflow-20-exhausted-message-out-exhausted-failure]",
       "67/68 exhausted-failure#1@root terminate dispatched executor failed -"
     ]
   },
@@ -1041,7 +1041,7 @@
       "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "54/55 retry#4@root/loop:retry:3 loop skipped scheduler - -",
-      "56/57 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "56/57 exhausted-message#1@root send_message skipped scheduler - -",
       "58/59 exhausted-failure#1@root terminate skipped scheduler - -",
       "61/62 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "63/64 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1080,7 +1080,7 @@
       "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "54/55 retry#4@root/loop:retry:3 loop skipped scheduler - -",
-      "56/57 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "56/57 exhausted-message#1@root send_message skipped scheduler - -",
       "58/59 exhausted-failure#1@root terminate skipped scheduler - -",
       "61/62 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "63/64 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1119,7 +1119,7 @@
       "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "54/55 retry#4@root/loop:retry:3 loop skipped scheduler - -",
-      "56/57 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "56/57 exhausted-message#1@root send_message skipped scheduler - -",
       "58/59 exhausted-failure#1@root terminate skipped scheduler - -",
       "61/62 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "63/64 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1158,7 +1158,7 @@
       "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "54/55 retry#4@root/loop:retry:3 loop skipped scheduler - -",
-      "56/57 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "56/57 exhausted-message#1@root send_message skipped scheduler - -",
       "58/59 exhausted-failure#1@root terminate skipped scheduler - -",
       "61/62 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "63/64 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1179,7 +1179,7 @@
       "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "19/20 retry#1@root loop skipped scheduler - -",
-      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_message skipped scheduler - -",
       "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
       "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1200,7 +1200,7 @@
       "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "19/20 retry#1@root loop skipped scheduler - -",
-      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_message skipped scheduler - -",
       "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
       "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1221,7 +1221,7 @@
       "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "19/20 retry#1@root loop skipped scheduler - -",
-      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_message skipped scheduler - -",
       "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
       "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1242,7 +1242,7 @@
       "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "19/20 retry#1@root loop skipped scheduler - -",
-      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_message skipped scheduler - -",
       "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
       "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1263,7 +1263,7 @@
       "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "19/20 retry#1@root loop skipped scheduler - -",
-      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_message skipped scheduler - -",
       "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
       "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1284,7 +1284,7 @@
       "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "19/20 retry#1@root loop skipped scheduler - -",
-      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_message skipped scheduler - -",
       "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
       "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1305,7 +1305,7 @@
       "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
       "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
       "19/20 retry#1@root loop skipped scheduler - -",
-      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_message skipped scheduler - -",
       "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
       "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
       "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
@@ -1356,9 +1356,9 @@
       "23/24 checks#1@root run_pre_pr_checks skipped scheduler - -",
       "25/26 finalize#1@root finalize_workspace skipped scheduler - -",
       "27/28 open-pr#1@root open_pr skipped scheduler - -",
-      "29/30 notify-code#1@root send_slack_message skipped scheduler - -",
+      "29/30 notify-code#1@root send_message skipped scheduler - -",
       "31/32 non-code-summary#1@root transform dispatched executor completed out[builtin-support-investigation-16-non-code-summary-out-notify-non-code]",
-      "33/34 notify-non-code#1@root send_slack_message dispatched executor completed out[]"
+      "33/34 notify-non-code#1@root send_message dispatched executor completed out[]"
     ]
   },
   {
@@ -1378,9 +1378,9 @@
       "23/24 checks#1@root run_pre_pr_checks skipped scheduler - -",
       "25/26 finalize#1@root finalize_workspace skipped scheduler - -",
       "27/28 open-pr#1@root open_pr skipped scheduler - -",
-      "29/30 notify-code#1@root send_slack_message skipped scheduler - -",
+      "29/30 notify-code#1@root send_message skipped scheduler - -",
       "31/32 non-code-summary#1@root transform dispatched executor completed out[builtin-support-investigation-16-non-code-summary-out-notify-non-code]",
-      "33/34 notify-non-code#1@root send_slack_message dispatched executor completed out[]"
+      "33/34 notify-non-code#1@root send_message dispatched executor completed out[]"
     ]
   },
   {
@@ -1392,7 +1392,7 @@
       "7/8 classify#1@root generic_agent dispatched executor completed out[builtin-support-investigation-04-classify-out-code-route]",
       "9/10 code-route#1@root branch dispatched scheduler completed true[builtin-support-investigation-05-code-route-true-approval-plan]",
       "11/12 non-code-summary#1@root transform skipped scheduler - -",
-      "13/14 notify-non-code#1@root send_slack_message skipped scheduler - -",
+      "13/14 notify-non-code#1@root send_message skipped scheduler - -",
       "15/16 approval-plan#1@root transform dispatched executor completed out[builtin-support-investigation-06-approval-plan-out-approval]",
       "17/18 approval#1@root human_question dispatched executor completed out[builtin-support-investigation-07-approval-out-approval-route]",
       "19/20 approval-route#1@root branch dispatched scheduler completed true[builtin-support-investigation-08-approval-route-true-prepare]",
@@ -1402,7 +1402,7 @@
       "27/28 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-support-investigation-11-checks-out-finalize]",
       "29/30 finalize#1@root finalize_workspace dispatched executor completed out[builtin-support-investigation-12-finalize-out-open-pr]",
       "31/32 open-pr#1@root open_pr dispatched executor completed out[builtin-support-investigation-13-open-pr-out-notify-code]",
-      "33/34 notify-code#1@root send_slack_message dispatched executor completed out[]"
+      "33/34 notify-code#1@root send_message dispatched executor completed out[]"
     ]
   },
   {
@@ -1422,9 +1422,9 @@
       "23/24 checks#1@root run_pre_pr_checks skipped scheduler - -",
       "25/26 finalize#1@root finalize_workspace skipped scheduler - -",
       "27/28 open-pr#1@root open_pr skipped scheduler - -",
-      "29/30 notify-code#1@root send_slack_message skipped scheduler - -",
+      "29/30 notify-code#1@root send_message skipped scheduler - -",
       "31/32 non-code-summary#1@root transform dispatched executor completed out[builtin-support-investigation-16-non-code-summary-out-notify-non-code]",
-      "33/34 notify-non-code#1@root send_slack_message dispatched executor completed out[]"
+      "33/34 notify-non-code#1@root send_message dispatched executor completed out[]"
     ]
   },
   {
@@ -1436,7 +1436,7 @@
       "7/8 classify#1@root generic_agent dispatched executor completed out[builtin-support-investigation-04-classify-out-code-route]",
       "9/10 code-route#1@root branch dispatched scheduler completed true[builtin-support-investigation-05-code-route-true-approval-plan]",
       "11/12 non-code-summary#1@root transform skipped scheduler - -",
-      "13/14 notify-non-code#1@root send_slack_message skipped scheduler - -",
+      "13/14 notify-non-code#1@root send_message skipped scheduler - -",
       "15/16 approval-plan#1@root transform dispatched executor completed out[builtin-support-investigation-06-approval-plan-out-approval]",
       "17/18 approval#1@root human_question dispatched executor completed out[builtin-support-investigation-07-approval-out-approval-route]",
       "19/20 approval-route#1@root branch dispatched scheduler completed false[builtin-support-investigation-14-approval-route-false-reject]",
@@ -1445,7 +1445,7 @@
       "25/26 checks#1@root run_pre_pr_checks skipped scheduler - -",
       "27/28 finalize#1@root finalize_workspace skipped scheduler - -",
       "29/30 open-pr#1@root open_pr skipped scheduler - -",
-      "31/32 notify-code#1@root send_slack_message skipped scheduler - -",
+      "31/32 notify-code#1@root send_message skipped scheduler - -",
       "33/34 reject#1@root terminate dispatched executor completed -"
     ]
   },
@@ -1459,7 +1459,7 @@
       "9/10 checks#1@root run_pre_pr_checks skipped scheduler - -",
       "11/12 finalize#1@root finalize_workspace skipped scheduler - -",
       "13/14 open-pr#1@root open_pr skipped scheduler - -",
-      "15/16 slack#1@root send_slack_message skipped scheduler - -",
+      "15/16 notify#1@root send_message skipped scheduler - -",
       "17/18 status#1@root update_ticket_status skipped scheduler - -"
     ]
   },
@@ -1472,8 +1472,8 @@
       "7/8 implementation#1@root implementation_agent dispatched executor completed out[builtin-ticket-workflow-04-implementation-out-checks]",
       "9/10 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-ticket-workflow-05-checks-out-finalize]",
       "11/12 finalize#1@root finalize_workspace dispatched executor completed out[builtin-ticket-workflow-06-finalize-out-open-pr]",
-      "13/14 open-pr#1@root open_pr dispatched executor completed out[builtin-ticket-workflow-07-open-pr-out-slack]",
-      "15/16 slack#1@root send_slack_message dispatched executor completed out[builtin-ticket-workflow-08-slack-out-status]",
+      "13/14 open-pr#1@root open_pr dispatched executor completed out[builtin-ticket-workflow-07-open-pr-out-notify]",
+      "15/16 notify#1@root send_message dispatched executor completed out[builtin-ticket-workflow-08-notify-out-status]",
       "17/18 status#1@root update_ticket_status dispatched executor completed out[]"
     ]
   },
@@ -1486,8 +1486,8 @@
       "7/8 implementation#1@root implementation_agent dispatched executor completed out[builtin-ticket-workflow-04-implementation-out-checks]",
       "9/10 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-ticket-workflow-05-checks-out-finalize]",
       "11/12 finalize#1@root finalize_workspace dispatched executor completed out[builtin-ticket-workflow-06-finalize-out-open-pr]",
-      "13/14 open-pr#1@root open_pr dispatched executor completed out[builtin-ticket-workflow-07-open-pr-out-slack]",
-      "15/16 slack#1@root send_slack_message dispatched executor completed out[builtin-ticket-workflow-08-slack-out-status]",
+      "13/14 open-pr#1@root open_pr dispatched executor completed out[builtin-ticket-workflow-07-open-pr-out-notify]",
+      "15/16 notify#1@root send_message dispatched executor completed out[builtin-ticket-workflow-08-notify-out-status]",
       "17/18 status#1@root update_ticket_status dispatched executor completed out[]"
     ]
   },
@@ -1518,8 +1518,8 @@
       "11/12 implement#1@root generic_agent skipped scheduler - -",
       "13/14 finalize#1@root finalize_workspace skipped scheduler - -",
       "15/16 open-pr#1@root open_pr skipped scheduler - -",
-      "17/18 notify#1@root send_slack_message skipped scheduler - -",
-      "19/20 notify-no-code#1@root send_slack_message dispatched executor completed out[]"
+      "17/18 notify#1@root send_message skipped scheduler - -",
+      "19/20 notify-no-code#1@root send_message dispatched executor completed out[]"
     ]
   },
   {
@@ -1529,12 +1529,12 @@
       "3/4 triage#1@root generic_agent dispatched executor completed out[builtin-webhook-ticket-triage-02-triage-out-assess]",
       "5/6 assess#1@root generic_agent dispatched executor completed out[builtin-webhook-ticket-triage-03-assess-out-code-issue]",
       "7/8 code-issue#1@root branch dispatched scheduler completed true[builtin-webhook-ticket-triage-04-code-issue-true-prepare]",
-      "9/10 notify-no-code#1@root send_slack_message skipped scheduler - -",
+      "9/10 notify-no-code#1@root send_message skipped scheduler - -",
       "11/12 prepare#1@root prepare_workspace dispatched executor completed out[builtin-webhook-ticket-triage-05-prepare-out-implement]",
       "13/14 implement#1@root generic_agent dispatched executor completed out[builtin-webhook-ticket-triage-06-implement-out-finalize]",
       "15/16 finalize#1@root finalize_workspace dispatched executor completed out[builtin-webhook-ticket-triage-07-finalize-out-open-pr]",
       "17/18 open-pr#1@root open_pr dispatched executor completed out[builtin-webhook-ticket-triage-08-open-pr-out-notify]",
-      "19/20 notify#1@root send_slack_message dispatched executor completed out[]"
+      "19/20 notify#1@root send_message dispatched executor completed out[]"
     ]
   }
 ]

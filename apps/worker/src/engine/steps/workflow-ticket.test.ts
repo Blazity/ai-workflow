@@ -5,12 +5,16 @@ const fetchTicket = vi.fn();
 // user" concept is the shape every other case here runs under, and the one the
 // step has to survive.
 let getCurrentUserAccountId: (() => Promise<string>) | undefined;
+// How the tracker links its own tickets. Deliberately nothing like Jira's
+// pages, so a link core spelled itself cannot pass for the tracker's.
+let ticketUrl: ((key: string) => string | null) | undefined;
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
-    issueTracker: {
+    issueTrackerResolution: { ok: true, adapter: {
       fetchTicket,
       ...(getCurrentUserAccountId ? { getCurrentUserAccountId } : {}),
-    },
+      ...(ticketUrl ? { ticketUrl } : {}),
+    } },
   }),
 }));
 
@@ -31,6 +35,7 @@ describe("resolveWorkflowTicketStep", () => {
   beforeEach(() => {
     fetchTicket.mockReset();
     getCurrentUserAccountId = undefined;
+    ticketUrl = undefined;
   });
 
   it("builds PR-only context for a synthetic subject without touching Jira", async () => {
@@ -55,6 +60,59 @@ describe("resolveWorkflowTicketStep", () => {
       title: "Review this",
       attachments: [],
     });
+  });
+
+  it("marks a pull request snapshot as text core composed, not text a person wrote", async () => {
+    // Everything in that snapshot is ours: the URL and the head ref. The pull
+    // request's body and its review comments, which are the untrusted text on
+    // this trigger, are not in it. A screen reading it by default would find
+    // nothing every time and report a verdict its author would believe.
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+    const ticket = await resolveWorkflowTicketStep(
+      {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        subjectKey: "pr:github:acme/api#42",
+        ownerToken: "owner-a",
+        definitionId: 7,
+        definitionVersion: 11,
+        scope: "any",
+        pr,
+      },
+      "AI",
+    );
+
+    expect(ticket!.subjectTextIsPlaceholder).toBe(true);
+  });
+
+  it("leaves a fetched ticket unmarked, because a person wrote it", async () => {
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+    fetchTicket.mockResolvedValue({
+      id: "AWT-42",
+      identifier: "AWT-42",
+      title: "Checkout breaks",
+      description: "It charges twice.",
+      acceptanceCriteria: "",
+      comments: [],
+      labels: [],
+      trackerStatus: "AI",
+      attachments: [],
+    });
+
+    const ticket = await resolveWorkflowTicketStep(
+      {
+        kind: "ticket",
+        ticketKey: "AWT-42",
+        subjectKey: "ticket:jira:AWT-42",
+        ownerToken: "owner-a",
+        definitionId: 7,
+        definitionVersion: 11,
+        scope: "any",
+      } as never,
+      "AI",
+    );
+
+    expect(ticket!.subjectTextIsPlaceholder).toBeUndefined();
   });
 
   it("synthesizes a git-ref-safe identifier for webhook deliveries", async () => {
@@ -89,6 +147,9 @@ describe("resolveWorkflowTicketStep", () => {
       description: "It started smoking after the firmware update.",
       attachments: [],
     });
+    // Authored: both lines are the payload the sender sent, which is exactly
+    // the text a screen exists to look at.
+    expect(ticket!.subjectTextIsPlaceholder).toBeUndefined();
     // Endpoint ids are "wh_" + 24 hex, so the last 6 characters are hex too.
     expect(ticket!.identifier).toMatch(/^webhook-d0e1f2-[0-9a-f]{8}$/);
 
@@ -148,6 +209,9 @@ describe("resolveWorkflowTicketStep", () => {
 
     expect(fetchTicket).not.toHaveBeenCalled();
     expect(ticket).toMatchObject({ title: "Sweep the backlog", attachments: [] });
+    // Composed here, around the schedule's own instruction: an occurrence
+    // receives nothing from outside the workflow for a screen to look at.
+    expect(ticket!.subjectTextIsPlaceholder).toBe(true);
     expect(ticket!.identifier).toBe(
       "schedule-sch_a1b2c3d4e5f6a7b8c9d0e1f2-20260805T1400",
     );
@@ -308,5 +372,48 @@ describe("resolveWorkflowTicketStep", () => {
     };
     expect(await resolveWorkflowTicketStep(entry, "AI")).toMatchObject({ identifier: "AIW-1" });
     expect(fetchTicket).toHaveBeenCalledWith("AIW-1");
+  });
+
+  it("records the page the tracker links for the ticket it read", async () => {
+    // The run keeps this link for good: its views, messages and MCP answers
+    // show it rather than whatever the tracker in force would say later.
+    fetchTicket.mockResolvedValue({ identifier: "AIW-1", trackerStatus: "Review" });
+    ticketUrl = (key) => `https://tracker.example/t/${key}`;
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+
+    const ticket = await resolveWorkflowTicketStep(correlatedEntry, "AI");
+
+    expect(ticket).toMatchObject({ identifier: "AIW-1", url: "https://tracker.example/t/AIW-1" });
+  });
+
+  it("records no page for a ticket its tracker does not link", async () => {
+    fetchTicket.mockResolvedValue({ identifier: "AIW-1", trackerStatus: "Review" });
+    ticketUrl = () => null;
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+
+    const ticket = await resolveWorkflowTicketStep(correlatedEntry, "AI");
+
+    expect(ticket).not.toHaveProperty("url");
+  });
+
+  it("records no ticket page for a pull request with no ticket", async () => {
+    ticketUrl = (key) => `https://tracker.example/t/${key}`;
+    const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+
+    const ticket = await resolveWorkflowTicketStep(
+      {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        subjectKey: "pr:github:acme/api#42",
+        ownerToken: "owner-a",
+        definitionId: 7,
+        definitionVersion: 11,
+        scope: "any",
+        pr,
+      },
+      "AI",
+    );
+
+    expect(ticket).not.toHaveProperty("url");
   });
 });

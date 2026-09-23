@@ -37,36 +37,10 @@ export interface KpisResponse {
   cost24h: { value: number; deltaPct: number } | null;
 }
 
-export type EvalHealthResponse =
-  | {
-      available: true;
-      score: number;
-      pass: number;
-      warn: number;
-      fail: number;
-      spansGraded: number;
-      windowHours: number;
-    }
-  | { available: false; reason: string };
-
-export type EvalsResponse =
-  | {
-      available: true;
-      generatedAt: string;
-      windowHours: number;
-      /** continuous_eval_success_rate × 100, fleet-wide. */
-      score: number;
-      /** Σ eval_count across tasks — "spans graded" in the window. */
-      spansGraded: number;
-      /** Σ trace_count across tasks. */
-      traceCount: number;
-    }
-  | { available: false; generatedAt: string; reason: string };
-
 export interface CostByWorkflowEntry {
-  /** Arthur task_id (per ticket-run, e.g. "AWT-42" / "AWT-42.1"). */
+  /** The workflow definition the runs belong to. */
   taskId: string;
-  /** Arthur task name (= the ticket-run identifier). */
+  /** That definition's name, or its id when the name is gone. */
   name: string;
   /** trace_count for the task. */
   runs: number;
@@ -81,8 +55,8 @@ export interface CostByWorkflowEntry {
 export interface CostResponse {
   generatedAt: string;
   /**
-   * false when Arthur is unconfigured/unreachable or returns nothing. The
-   * screen renders its empty/N-A state.
+   * false when the window holds no runs, or when the figures could not be
+   * read. The screen renders its empty/N-A state.
    */
   available: boolean;
   /** Window the figures cover (month-to-date). ISO. */
@@ -295,7 +269,15 @@ export type ManualDispatchBlockerCode =
   | "deployment_changed"
   | "invalid_input"
   | "not_eligible"
-  | "provider_unavailable";
+  | "provider_unavailable"
+  /**
+   * An integration this workflow uses is disconnected, disabled, failing, or no
+   * longer part of this build. Distinct from `provider_unavailable`, which is a
+   * provider that could not be reached for THIS request and may work on the
+   * next: this one never succeeds until an admin changes a connection, and the
+   * message names which integration and what to do about it.
+   */
+  | "integration_unavailable";
 
 export interface ManualDispatchPreflightStep {
   title: string;
@@ -803,6 +785,14 @@ export interface WorkflowDefinitionCatalogResponse {
 export interface WorkflowDefinitionValidationResponse {
   valid: boolean;
   issues: WorkflowDefinitionValidationIssue[];
+  /**
+   * What the graph does that would be refused if it were written now, but
+   * that the deployed version already does. Shown to the person editing and
+   * never counted against `valid`: refusing it would block every other edit,
+   * and a rollback or re-enable, over something that already runs. Absent when
+   * there is nothing to say.
+   */
+  notices?: WorkflowDefinitionValidationNotice[];
   /** Parameter-resolved contracts for the exact candidate graph. */
   nodeContracts: Record<string, WorkflowBlockContract>;
   /** Worker-owned v2 data-flow catalog, keyed by consuming block id. */
@@ -814,6 +804,15 @@ export interface WorkflowDefinitionValidationIssue {
   severity: "error";
   nodeId: string | null;
   /** JSON Pointer identifying the offending value when one is available. */
+  path?: string;
+  message: string;
+}
+
+/** One entry of `WorkflowDefinitionValidationResponse.notices`: said, never blocking. */
+export interface WorkflowDefinitionValidationNotice {
+  code: string;
+  nodeId: string | null;
+  /** JSON Pointer identifying the value it is about. */
   path?: string;
   message: string;
 }
@@ -968,6 +967,17 @@ export interface PromptLibraryUsageResponse {
   prompts: PromptLibraryPromptUsageRow[];
 }
 
+/**
+ * The longest a memory address part may be.
+ *
+ * Subject keys and doc paths the agent writes are short identifiers, so a
+ * longer value is a malformed or hostile request and is refused before it
+ * reaches any provider. One derivation, because the HTTP routes and the MCP
+ * tools both bound the same two strings and a second number here would let one
+ * of them accept what the other rejects.
+ */
+export const MEMORY_KEY_MAX_LENGTH = 512;
+
 /** One stored agent memory document, without its body. */
 export interface MemoryDocumentSummaryDto {
   /** Canonical identity of the run subject the document belongs to. */
@@ -983,6 +993,19 @@ export interface MemoryDocumentSummaryDto {
 export interface MemoryDocumentsResponse {
   /** Newest first, capped by the store's list limit. */
   documents: MemoryDocumentSummaryDto[];
+  /**
+   * False when the provider that keeps this deployment's memory cannot promise
+   * the list is everything it holds, so a screen says so rather than letting a
+   * person read absence as proof.
+   *
+   * Optional, and absent reads as `true`: a response from a build before this
+   * field existed cannot answer either way, and `true` is how that build's
+   * screen already read it, so an older worker keeps its behaviour instead of
+   * gaining a notice nothing behind it can decide. A provider that cannot list
+   * AT ALL does not answer this shape; the request is refused with the reason
+   * instead.
+   */
+  complete?: boolean;
 }
 
 /** A single document with its body; `subjectKey` / `docPath` echo the request. */
@@ -1007,6 +1030,11 @@ export interface MemoryDocumentResponse {
  * entries; `mock` means the system deliberately runs a no-op adapter (Slack
  * without a token). Every probed check resolves to a probe result: there is no
  * "unverified" state, a check that cannot be verified is not listed.
+ *
+ * `disabled` is an integration an admin turned off. It is neither an outage nor
+ * a gap in the configuration: nothing was probed because nobody asked for it to
+ * run, and a screen that showed it as either would send somebody to fix a
+ * decision that was deliberate.
  */
 export type SystemHealthMode =
   | "live"
@@ -1015,9 +1043,12 @@ export type SystemHealthMode =
   | "configured"
   | "not-configured"
   | "misconfigured"
-  | "mock";
+  | "mock"
+  | "disabled";
 
-export type SystemHealthGroup = "core" | "auth-email" | "platform";
+/** `integrations` is every integration the build ships, each a section of its
+ *  own; the other three are core's own services. */
+export type SystemHealthGroup = "core" | "auth-email" | "platform" | "integrations";
 
 export interface SystemHealthPing {
   ok: boolean;
@@ -1053,6 +1084,9 @@ export interface SystemHealthIntegration {
   id: string;
   label: string;
   group: SystemHealthGroup;
+  /** One line about what this is, for a section core cannot describe itself:
+   *  an integration brings its manifest's description with it. */
+  description?: string;
   /** Variable NAMES only — values never leave the worker. */
   envVars: string[];
   /** A failure blocks the workflow itself (issue tracker, VCS, agent, DB). */
@@ -1083,4 +1117,346 @@ export interface SystemHealthResponse {
 /** The most recent scan the worker stored; `null` until the first Scan. */
 export interface SystemHealthLastScanResponse {
   scan: SystemHealthResponse | null;
+}
+
+// --------------------------------------------------------------------------
+// Integrations
+//
+// One vocabulary for what an integration is right now, spoken by the worker's
+// resolver, the health page (S5), the engine (S4), MCP (S3) and the dashboard
+// (S6). The shapes live here rather than in the worker so all five read one
+// description instead of five derivations of it; ADR-010 records why each
+// distinction exists.
+// --------------------------------------------------------------------------
+
+/** Where an integration's connection values come from. Never both at once. */
+export type IntegrationSource = "environment" | "stored";
+
+/** What the connection is, before the enable flag is applied. */
+export type IntegrationConnectionStatus = "connected" | "not_connected" | "failing";
+
+/**
+ * What a card, the health page and the palette show. `disabled` wins over
+ * everything else, because it is the one an admin chose deliberately and the
+ * one that explains why nothing is running.
+ */
+export type IntegrationStatus = IntegrationConnectionStatus | "disabled";
+
+/**
+ * Why an integration is not usable, in the admin's own terms. Split as finely as
+ * the ACTION differs: rotating a credential at the provider, setting a variable,
+ * restoring a key and re-entering a value are four different afternoons.
+ */
+export type IntegrationFailureReason =
+  /** Some of the declared variables are set and some are not. */
+  | "environment_incomplete"
+  /** Stored values leave a required field empty. */
+  | "stored_incomplete"
+  /** The provider answered, and refused the credential. */
+  | "credential_rejected"
+  /**
+   * A value cannot be what its field is: a URL that does not parse, a number
+   * that is not one, a one-line value with a line break in it, a key that does
+   * not read as a key. No provider was needed to say so, and no request could
+   * have carried it. The message names the field and never repeats the value.
+   */
+  | "value_malformed"
+  /** The provider could not be reached at all. */
+  | "provider_unreachable"
+  /** `INTEGRATION_SECRETS_KEY` is not set on this deployment. */
+  | "secrets_key_missing"
+  /** The stored ciphertext was written under another key. */
+  | "secrets_key_mismatch"
+  /** Right key, right slot, and the bytes no longer verify. */
+  | "secret_corrupted"
+  /** The ciphertext in this slot belongs to another integration or field. */
+  | "secret_foreign";
+
+export interface IntegrationFailure {
+  readonly reason: IntegrationFailureReason;
+  /** One sentence an admin can act on. Never carries a credential. */
+  readonly message: string;
+  /** Variable names, for `environment_incomplete`. */
+  readonly missingVariables?: readonly string[];
+  /** Connection field keys, for `stored_incomplete`. */
+  readonly missingFields?: readonly string[];
+}
+
+/**
+ * What the last connection test proved, and whether it still applies.
+ *
+ * `never_tested` has no time on purpose: an environment-configured deployment
+ * that nobody ever tested is Connected because its values are complete, and
+ * saying so without inventing a verification it never had is the whole reason
+ * this is a state rather than a nullable timestamp.
+ */
+export type IntegrationVerification =
+  | { readonly state: "never_tested" }
+  /** Tested, then the values changed; the verdict says nothing about what is in use now. */
+  | { readonly state: "stale"; readonly at: string }
+  | { readonly state: "passed"; readonly at: string; readonly message?: string }
+  | { readonly state: "failed"; readonly at: string; readonly failure: IntegrationFailure };
+
+export interface IntegrationEnvironmentPresence {
+  /** Declared variables this deployment has set to a non-empty value. */
+  readonly setVariables: readonly string[];
+  /** Required variables with neither a value nor a default. */
+  readonly missingVariables: readonly string[];
+  readonly complete: boolean;
+}
+
+export interface IntegrationStoredPresence {
+  /** The highest version ever minted; 0 when nothing was ever saved. Also the
+   *  token a save carries as `expectedVersion`. */
+  readonly latestVersion: number;
+  /** The version whose values are used when `stored` is the source. */
+  readonly activeVersion: number | null;
+  /** Field keys the active version leaves empty. */
+  readonly missingFields: readonly string[];
+  readonly complete: boolean;
+  /** A save that did not become active, and why. */
+  readonly prepared: IntegrationPreparedValues | null;
+}
+
+/** Values an admin saved that failed their test, kept so the card can say why. */
+export interface IntegrationPreparedValues {
+  readonly version: number;
+  readonly at: string;
+  readonly failure: IntegrationFailure;
+}
+
+/**
+ * What a run pins when it starts, and compares at every later use.
+ *
+ * The fingerprint covers the connection's non-secret values only, so a rotated
+ * token is followed mid-run and a different site is not. It covers neither the
+ * source nor the enable flag: switching source without changing a value changes
+ * nothing a run would observe, and disabling is read live rather than pinned.
+ */
+export interface IntegrationConnectionPin {
+  readonly integrationId: string;
+  readonly configFingerprint: string;
+}
+
+/** Why a run may not use the integration it pinned. */
+export type IntegrationUnavailableReason = "disconnected" | "disabled" | "reconfigured";
+
+/** Everything the resolver decides. Carries no secret and no ciphertext: there
+ *  is nowhere in this shape to put one. */
+export interface IntegrationState {
+  readonly integrationId: string;
+  readonly enabled: boolean;
+  readonly source: IntegrationSource;
+  readonly status: IntegrationStatus;
+  /** What `status` would be if the integration were enabled. */
+  readonly connection: IntegrationConnectionStatus;
+  readonly verification: IntegrationVerification;
+  readonly failure: IntegrationFailure | null;
+  /** Enabled and connected: the one question the engine asks. */
+  readonly usable: boolean;
+  readonly environment: IntegrationEnvironmentPresence;
+  readonly stored: IntegrationStoredPresence;
+  readonly pin: IntegrationConnectionPin;
+  /** Connection field keys that carry a value in the active source. Values are
+   * never exposed; deployment capability checks only need their presence. */
+  readonly configuredFields?: readonly string[];
+  /** False when `INTEGRATION_SECRETS_KEY` is absent, which is what disables the
+   *  secret fields on the card rather than letting a save fail later. */
+  readonly secretsKeyAvailable: boolean;
+}
+
+/**
+ * One connection field as a screen needs it. A secret's value is never here,
+ * under any source: `storedSecretSet` says whether one exists, and that is all
+ * the screen needs to draw "leave blank to keep".
+ */
+export interface IntegrationConnectionFieldDto {
+  readonly key: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly env: string;
+  readonly secret: boolean;
+  /** Whether values stored here may leave it empty (`connectionFieldRequired`
+   *  for stored values): a webhook secret the environment may omit is still
+   *  required in the form. */
+  readonly optional: boolean;
+  readonly format: "text" | "multiline" | "url" | "integer";
+  /** Whether this deployment's environment sets the variable. */
+  readonly envSet: boolean;
+  /** The stored value of a non-secret field, so one field can be corrected
+   *  without retyping the rest. Absent for a secret, always. */
+  readonly storedValue?: string;
+  readonly storedSecretSet: boolean;
+}
+
+export interface IntegrationBlockSummary {
+  readonly type: string;
+  readonly label: string;
+}
+
+export interface IntegrationPageSummary {
+  readonly id: string;
+  readonly label: string;
+}
+
+export interface IntegrationDto {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly docsUrl?: string;
+  readonly capabilities: readonly string[];
+  readonly blocks: readonly IntegrationBlockSummary[];
+  readonly pages: readonly IntegrationPageSummary[];
+  readonly fields: readonly IntegrationConnectionFieldDto[];
+  readonly state: IntegrationState;
+  /**
+   * The webhook of an integration whose manifest says which connection fields
+   * it reads (`webhook.requires`), and whether this deployment answers it now.
+   * Decided by the same read the webhook route makes, so it is answered while
+   * the rest of the integration is not usable (Slack's slash command on its
+   * signing secret alone) and refused while the rest is Connected. Absent for
+   * an integration without such a webhook.
+   */
+  readonly webhook?: IntegrationWebhookDto;
+}
+
+export interface IntegrationWebhookDto {
+  /** What it answers, as a person calls it: `/ai-workflow slash command`. */
+  readonly label: string;
+  /** The connection field keys it reads. */
+  readonly requires: readonly string[];
+  /** Switched on, and every one of those fields read from the active source. */
+  readonly served: boolean;
+}
+
+/**
+ * Whether this deployment may change integrations at all. A preview that reads
+ * production's database may not, and the reason names both sides so a developer
+ * who meets it knows which of the two to change.
+ */
+export type IntegrationWriteAccess =
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly reason: string };
+
+export interface IntegrationsListResponse {
+  readonly integrations: readonly IntegrationDto[];
+  readonly writes: IntegrationWriteAccess;
+}
+
+/**
+ * Who serves one capability on this deployment right now, as a run would find
+ * out. Decided by the worker from the same resolvers the engine uses; a screen
+ * only puts it into words.
+ */
+export type IntegrationCapabilityServing =
+  /** The integrations serving it, in manifest order: exactly one for a `one`
+   *  capability, every usable provider for a `many` capability. */
+  | { readonly kind: "integrations"; readonly ids: readonly string[] }
+  /** Core's own provider. It needs no connection and has no card of its own;
+   *  connecting an integration that provides the capability replaces it. */
+  | { readonly kind: "builtin"; readonly name: string }
+  /** Nothing on this deployment serves it. */
+  | { readonly kind: "none" }
+  /** Several integrations are switched on for a `one` capability and none is
+   *  chosen, so none of them is used. For memory a failing one counts, as the
+   *  resolver counts it: picking the one that works today moves the day the
+   *  other recovers. */
+  | { readonly kind: "ambiguous"; readonly ids: readonly string[] }
+  /** The resolver chose these integrations and refused to use them (switched
+   *  on and failing, or shipping no code for the capability); its own sentence
+   *  says why. Nothing serves the capability until that is fixed. */
+  | { readonly kind: "refused"; readonly ids: readonly string[]; readonly reason: string }
+  /** The deployment could not say; the resolver's own sentence says why. */
+  | { readonly kind: "unknown"; readonly reason: string };
+
+/** One capability core asks a provider for, and who answers it here. */
+export interface IntegrationCapabilityDto {
+  readonly id: string;
+  /** What a person reads for it, from the SDK's one table of capabilities. */
+  readonly label: string;
+  /** `one`: a single active provider. `many`: every usable provider at once. */
+  readonly cardinality: "one" | "many";
+  /** Every integration this build ships that declares it, usable or not. */
+  readonly declaredBy: readonly string[];
+  readonly serving: IntegrationCapabilityServing;
+}
+
+export interface IntegrationCapabilitiesResponse {
+  /** Every capability a provider can serve today, in the SDK's order. */
+  readonly capabilities: readonly IntegrationCapabilityDto[];
+}
+
+/**
+ * How long the worker gives a provider while a person waits on the answer: a
+ * connection test (Save and test, Test what is in use) and the read behind a
+ * page an integration contributes.
+ *
+ * One number, because three things have to agree on it: the worker bounds the
+ * call with it, the dashboard waits longer than it so the answer a person
+ * reads is the worker's and never the dashboard's own timeout, and the
+ * connection screen tells the admin how long the wait can be. Two copies of it
+ * is how a provider answering in fifteen seconds came to be reported as our
+ * outage.
+ */
+export const INTEGRATION_PROVIDER_WAIT_MS = 20_000;
+
+export type IntegrationTestOutcome =
+  | { readonly ok: true; readonly message?: string }
+  | { readonly ok: false; readonly failure: IntegrationFailure };
+
+export interface IntegrationMutationResponse {
+  readonly integration: IntegrationDto;
+  /** The connection test this request ran, when it ran one. */
+  readonly test?: IntegrationTestOutcome;
+}
+
+/** One enabled definition whose deployed graph reaches an integration. */
+export interface IntegrationImpactDefinition {
+  readonly id: number;
+  readonly name: string;
+}
+
+/**
+ * What an integration change would interrupt if it succeeds.
+ *
+ * A null collection or count means the worker could not answer that read. It
+ * is deliberately not an empty collection or zero: the confirmation must not
+ * turn a database failure into "nothing will stop".
+ */
+export interface IntegrationImpactPreviewResponse {
+  /** Whether this action changes the pin a run compares at its next use. */
+  readonly changesFingerprint: boolean;
+  /**
+   * Whether runs in flight may stop once this change is made, and by which
+   * mechanism: the check a run makes at its next use, applied to the state
+   * the change leaves. `none`: no run stops. `reconfigured`: the integration
+   * stays usable with values a run's pin no longer matches, so a run stops
+   * only where its next use compares that pin. `unusable`: it can no longer
+   * be used (turned off, or disconnected with nothing to fall back to), so
+   * every run that reaches it stops or goes on without it at its next use.
+   * The one answer to "does this stop runs"; the dashboard asks for
+   * confirmation on it and says why from it.
+   */
+  readonly stops: "none" | "reconfigured" | "unusable";
+  /**
+   * Capabilities this integration serves that the worker cannot see a
+   * workflow use at all. Non-empty means `enabledDefinitions` is null, and
+   * `inFlightRuns` too when runs stop, because the worker could not measure
+   * them, not because a read failed.
+   */
+  readonly unmeasuredCapabilities: readonly string[];
+  /** Enabled definitions only, from each definition's deployed graph. */
+  readonly enabledDefinitions: readonly IntegrationImpactDefinition[] | null;
+  /** In-flight runs on those definitions that may stop, counted by the
+   *  mechanism `stops` names. */
+  readonly inFlightRuns: number | null;
+  /** Catalog repositories whose provider is this integration. */
+  readonly repositories: readonly { provider: string; path: string }[] | null;
+}
+
+/** A save whose `expectedVersion` no longer matches. Carries the current version
+ *  so a second tab can reload rather than guess. */
+export interface IntegrationVersionConflict {
+  readonly error: "integration_version_conflict";
+  readonly currentVersion: number;
 }

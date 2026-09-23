@@ -12,8 +12,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
     GITLAB_TOKEN: "gitlab-token",
     CHAT_SDK_SLACK_TOKEN: "slack-token",
     CHAT_SDK_CHANNEL_ID: "channel",
-    GENAI_ENGINE_API_KEY: "arthur-key",
-    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
   },
 }));
 
@@ -56,6 +54,16 @@ beforeEach(async () => {
   db = await createTestDb();
 });
 
+// GitHub configured the way a deployment configures it. Version control is an
+// integration since S11, so without a connection every block that needs the
+// capability is correctly unavailable, and these cases are not about that.
+Object.assign(process.env, {
+  GITHUB_APP_ID: "1",
+  GITHUB_APP_PRIVATE_KEY: "private-key",
+  GITHUB_INSTALLATION_ID: "2",
+  GITHUB_WEBHOOK_SECRET: "webhook-secret",
+});
+
 describe("v2 workflow definition storage", () => {
   it("saves and reads a v2 draft without rewriting its schema version", async () => {
     const created = await createWorkflowDefinition(db, {
@@ -80,9 +88,8 @@ describe("v2 workflow definition storage", () => {
     const repositoryScope = {
       repositories: [
         { provider: "github" as const, repoPath: "Acme/Web" },
-        { provider: "gitlab" as const, repoPath: "acme/group/api" },
       ],
-      providers: ["github" as const, "gitlab" as const],
+      providers: ["github" as const],
     };
     const created = await createWorkflowDefinition(db, {
       name: "V2 pinned",

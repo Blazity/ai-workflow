@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { integrationsProviding } from "@integrations/registry";
 import {
   addPinnedRepositories,
   contradictingPinnedRepositories,
@@ -8,6 +9,8 @@ import {
   isRepositoryScopeEmpty,
   MAX_PINNED_REPOSITORIES,
   normalizeRepositoryScope,
+  PINNABLE_PROVIDERS,
+  providerLabel,
   removePinnedRepository,
   repositoryScopeFromDefinition,
 } from "./repository-scope.ts";
@@ -165,4 +168,25 @@ test("the toolbar summary names the repository count and the effective providers
     describeRepositoryScope({ providers: ["github", "gitlab"] }),
     "GitHub + GitLab",
   );
+});
+
+test("the pinnable providers are the version control integrations this build ships, each once", () => {
+  const shipped = integrationsProviding("vcs").map((manifest) => manifest.id);
+  assert.deepEqual([...PINNABLE_PROVIDERS], shipped);
+  // Naming one of them in core as well used to list it twice, and the editor
+  // draws this list: two checkboxes for one provider, sharing a React key.
+  assert.equal(new Set(PINNABLE_PROVIDERS).size, PINNABLE_PROVIDERS.length);
+});
+
+test("a provider is called what its own integration calls itself", () => {
+  for (const manifest of integrationsProviding("vcs")) {
+    assert.equal(providerLabel(manifest.id), manifest.name);
+  }
+});
+
+test("a provider this build does not ship is shown by the id the pin stored", () => {
+  // Not "Forgejo": a build without that integration has no name for it, and a
+  // title cased word invented from the id is a name nobody wrote.
+  assert.equal(providerLabel("forgejo"), "forgejo");
+  assert.equal(providerLabel("acme-scm"), "acme-scm");
 });

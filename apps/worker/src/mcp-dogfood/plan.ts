@@ -11,6 +11,8 @@
 // a drifting list reports full coverage of a surface it never touched.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { integrationsProviding } from "@integrations/registry";
+import { INTEGRATION_ID } from "@shared/contracts";
 
 type JsonSchema = {
   type?: string;
@@ -96,6 +98,12 @@ function sampleString(schema: JsonSchema): string {
     // surfaced instead of guessed, because a guess would read as a tool defect.
     const sha256 = /^\^sha256:\[0-9a-f\]\{64\}\$$/.exec(schema.pattern);
     if (sha256) return `sha256:${"0".repeat(64)}`;
+    // An integration id, which every repository argument is scoped by. Taken
+    // from this build rather than written out, so the probe names a provider
+    // the deployment can actually answer about.
+    if (schema.pattern === INTEGRATION_ID.source) {
+      return integrationsProviding("vcs")[0]?.id ?? "provider";
+    }
     throw new Error(`no sample for pattern ${schema.pattern}`);
   }
   if (schema.format === "uuid") return "00000000-0000-4000-8000-000000000000";

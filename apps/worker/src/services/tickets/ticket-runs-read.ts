@@ -12,7 +12,8 @@ import {
   type DashboardRunRow,
 } from "../../db/repositories/runs/dashboard-query-rows.js";
 import { logger } from "../../infra/logger.js";
-import { issueTrackerBaseUrl } from "../settings/index.js";
+import { issueTrackerTicketLinks } from "../settings/index.js";
+import { ticketLinkFor, type TicketLinks } from "../../engine/support/ticket-url.js";
 import { resolveRunModels } from "../overview/index.js";
 
 /** The ticket payload as the wire carries it, minus the timestamp the route stamps. */
@@ -40,7 +41,7 @@ const RUN_STATUSES = new Set<RunStatus>([
   "awaiting",
 ]);
 
-function mapTicketRun(row: DashboardRunRow, now: Date, jiraOrigin: string): Run {
+function mapTicketRun(row: DashboardRunRow, now: Date, ticketLinks: TicketLinks): Run {
   const effective = row.startedAt ?? row.firstSeenAt;
   const tokens = row.tokensInput !== null || row.tokensOutput !== null
     ? (row.tokensInput ?? 0) + (row.tokensOutput ?? 0)
@@ -66,7 +67,7 @@ function mapTicketRun(row: DashboardRunRow, now: Date, jiraOrigin: string): Run 
     guardrailHits: null,
     ticketTitle: row.ticketTitle ?? row.ticketKey ?? "",
     prNumber: row.prNumber,
-    ticketUrl: row.ticketUrl ?? (row.ticketKey ? `${jiraOrigin}/browse/${row.ticketKey}` : ""),
+    ticketUrl: ticketLinkFor(row.ticketUrl, row.ticketKey, ticketLinks) ?? "",
     prUrl: row.prUrl,
     prs: row.prs,
   };
@@ -81,14 +82,14 @@ export async function listTicketRuns(ticketKey: string): Promise<TicketRunsPaylo
   if (!ticketKey) return EMPTY;
   try {
     const now = new Date();
-    const jiraOrigin = issueTrackerBaseUrl().replace(/\/+$/, "");
+    const ticketLinks = await issueTrackerTicketLinks();
     const data = await connectedDashboardRunQueries.listTicketRuns(ticketKey);
-    const runs = data.map((row) => mapTicketRun(row, now, jiraOrigin));
+    const runs = data.map((row) => mapTicketRun(row, now, ticketLinks));
     const newest = data[0];
     const ticket = newest ? {
       key: newest.ticketKey ?? ticketKey,
       title: newest.ticketTitle ?? newest.ticketKey ?? ticketKey,
-      url: newest.ticketUrl ?? `${jiraOrigin}/browse/${newest.ticketKey ?? ticketKey}`,
+      url: ticketLinkFor(newest.ticketUrl, newest.ticketKey ?? ticketKey, ticketLinks) ?? "",
     } : null;
     const counts = { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 };
     let cost = 0;

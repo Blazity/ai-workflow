@@ -187,7 +187,7 @@
         "severity": "error",
         "nodeId": "prepare",
         "path": "/nodes/1/configuration",
-        "message": "Block \"prepare\" (prepare_workspace) is unavailable: No version-control provider is configured."
+        "message": "Block \"prepare\" (prepare_workspace) is unavailable: Nothing on this deployment provides the version control capability, which this block needs. Connect an integration that provides it on the Integrations page."
       },
       {
         "code": "deployment",
@@ -215,28 +215,28 @@
         "severity": "error",
         "nodeId": "checks",
         "path": "/nodes/5/configuration",
-        "message": "Block \"checks\" (run_pre_pr_checks) is unavailable: No version-control provider is configured."
+        "message": "Block \"checks\" (run_pre_pr_checks) is unavailable: Nothing on this deployment provides the version control capability, which this block needs. Connect an integration that provides it on the Integrations page."
       },
       {
         "code": "deployment",
         "severity": "error",
         "nodeId": "finalize",
         "path": "/nodes/6/configuration",
-        "message": "Block \"finalize\" (finalize_workspace) is unavailable: No version-control provider is configured."
+        "message": "Block \"finalize\" (finalize_workspace) is unavailable: Nothing on this deployment provides the version control capability, which this block needs. Connect an integration that provides it on the Integrations page."
       },
       {
         "code": "deployment",
         "severity": "error",
         "nodeId": "open-pr",
         "path": "/nodes/7/configuration",
-        "message": "Block \"open-pr\" (open_pr) is unavailable: No version-control provider is configured."
+        "message": "Block \"open-pr\" (open_pr) is unavailable: Nothing on this deployment provides the version control capability, which this block needs. Connect an integration that provides it on the Integrations page."
       },
       {
         "code": "deployment",
         "severity": "error",
-        "nodeId": "slack",
+        "nodeId": "notify",
         "path": "/nodes/8/configuration",
-        "message": "Block \"slack\" (send_slack_message) is unavailable: Slack messaging is not configured."
+        "message": "Block \"notify\" (send_message) is unavailable: Nothing on this deployment provides the messaging capability, which this block needs. Connect an integration that provides it on the Integrations page."
       }
     ]
   },
@@ -713,14 +713,14 @@
         "severity": "error",
         "nodeId": "slack",
         "path": "/nodes/3/configuration/channel",
-        "message": "Block \"slack\" (send_slack_message) has invalid configuration: property \"channel\" is not supported."
+        "message": "Block \"slack\" (send_message) has invalid configuration: property \"channel\" is not supported."
       },
       {
         "code": "deployment",
         "severity": "error",
         "nodeId": "prepare",
         "path": "/nodes/1/configuration",
-        "message": "Block \"prepare\" (prepare_workspace) is unavailable: No version-control provider is configured."
+        "message": "Block \"prepare\" (prepare_workspace) is unavailable: Nothing on this deployment provides the version control capability, which this block needs. Connect an integration that provides it on the Integrations page."
       },
       {
         "code": "deployment",
@@ -734,7 +734,7 @@
         "severity": "error",
         "nodeId": "slack",
         "path": "/nodes/3/configuration",
-        "message": "Block \"slack\" (send_slack_message) is unavailable: Slack messaging is not configured."
+        "message": "Block \"slack\" (send_message) is unavailable: Nothing on this deployment provides the messaging capability, which this block needs. Connect an integration that provides it on the Integrations page."
       }
     ]
   },

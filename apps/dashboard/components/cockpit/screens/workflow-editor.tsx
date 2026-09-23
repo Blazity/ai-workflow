@@ -34,6 +34,7 @@ import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-l
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { RepositoryCatalogProvider } from "@/components/cockpit/flow-editor/repository-catalog-context";
 import { DeployPinWarning } from "@/components/cockpit/flow-editor/deploy-pin-warning";
+import { IntegrationChangeRefresh } from "@/components/cockpit/integration-change-refresh";
 import { Button, Input, Select } from "@/components/ui";
 import { ManualDispatchModal } from "@/components/cockpit/manual-dispatch-modal";
 import {
@@ -62,6 +63,7 @@ import {
 } from "@/lib/workflow-editor/layout-save";
 import {
   type WorkflowValidationState,
+  validationStateOf,
 } from "@/lib/workflow-editor/validation-controller";
 import { useWorkflowValidationController } from "@/lib/workflow-editor/use-validation-controller";
 import { useWorkflowDataCatalog } from "@/lib/workflow-editor/use-workflow-data-catalog";
@@ -727,12 +729,7 @@ export function WorkflowEditorScreen({
       setValidation({
         key: savedValidationKey,
         state: res.validation
-          ? {
-              status: res.validation.valid ? "valid" : "invalid",
-              issues: res.validation.issues,
-              nodeContracts: res.validation.nodeContracts,
-              availableValuesByNode: res.validation.availableValuesByNode,
-            }
+          ? validationStateOf(res.validation)
           : {
               status: "error",
               issues: [
@@ -1317,6 +1314,10 @@ export function WorkflowEditorScreen({
           selectionRequest={selectionRequest}
           onSelectionChange={handleSelectionChange}
         />
+        {/* The palette and the canvas warning are drawn from the registry the
+            server rendered with. This is what makes them follow an integration
+            that was connected, disabled or disconnected somewhere else. */}
+        <IntegrationChangeRefresh />
         {manualDispatchTrigger && deployed && (
           <ManualDispatchModal
             definitionId={selectedId}

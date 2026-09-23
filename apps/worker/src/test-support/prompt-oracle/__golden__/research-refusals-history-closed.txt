@@ -139,7 +139,7 @@ Session refresh drops the user after a deploy
 
 ## Attachments
 
-The following files from the Jira ticket are available in `/tmp/attachments/`.
+The following files from the ticket are available in `/tmp/attachments/`.
 Read them when relevant to the task.
 
 - `/tmp/attachments/har.json` — application/json, 47.1 KB
@@ -262,7 +262,7 @@ This protocol extends and overrides any older Output Format instructions above.
   attached repositories the implementation must modify, and include concise
   `repositoryEvidence`. Every evidence item must name the exact
   `provider:repoPath`, the file, symbol, commit, PR, or ticket fact checked,
-  and the relevant finding (for example: `github:acme/api src/auth.ts:42 —
+  and the relevant finding (for example: `github:acme/api src/auth.ts:42,
   token refresh is delegated to SessionStore`). A code-changing plan must
   declare at least one write repository.
 - Set fields that do not apply to `null`, as required by the structured schema.

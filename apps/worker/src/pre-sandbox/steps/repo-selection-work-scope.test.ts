@@ -15,13 +15,12 @@ const mocks = vi.hoisted(() => {
   const listRepositories = vi.fn();
   return {
     listRepositories,
-    listRepositoriesAcrossProviders: vi.fn(
+    listVcsRepositories: vi.fn(
       async (): Promise<{
         repositories: RepositoryMetadata[];
         failures: RepositoryListingFailure[];
       }> => ({ repositories: await listRepositories(), failures: [] }),
     ),
-    getConfiguredVcsProviders: vi.fn(),
     listWorkflowOwnedBranchesForTicket: vi.fn(),
     listRepositoryRules: vi.fn(),
     applyRunWorkScopePlan: vi.fn(),
@@ -33,14 +32,22 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../adapters/vcs/repository-directory.js")>()),
-  listRepositoriesAcrossProviders: mocks.listRepositoriesAcrossProviders,
+// What the connected providers offered. Only the listing is replaced; the pure
+// scope helpers beside it stay real.
+vi.mock("../../engine/support/vcs-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../engine/support/vcs-runtime.js")>()),
+  listVcsRepositories: mocks.listVcsRepositories,
 }));
 
-vi.mock("../../infra/vcs-config.js", () => ({
-  env: {},
-  getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
+
+vi.mock("../../services/integrations/runtime.js", () => ({
+  resolveUsableIntegrations: vi.fn(async () => ({
+    readable: true,
+    usable: [],
+    states: new Map(),
+  })),
+  checkIntegrationPin: vi.fn(() => ({ ok: true })),
 }));
 
 vi.mock("../../db/repositories/runs.js", () => ({
@@ -238,14 +245,6 @@ beforeEach(() => {
   mocks.readSelectionAnswered.mockResolvedValue(false);
   mocks.readAnsweredKeys.mockResolvedValue([]);
   mocks.getMemoryDocument.mockResolvedValue(null);
-  mocks.getConfiguredVcsProviders.mockReturnValue([
-    {
-      kind: "github",
-      auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-      host: "https://github.com",
-      legacyBaseBranch: "main",
-    },
-  ]);
 });
 
 describe("the workspace starts from the record", () => {

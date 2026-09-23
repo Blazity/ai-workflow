@@ -94,6 +94,16 @@ export default defineEventHandler(async (event) => {
     case "rejected":
       return { status: "rejected", reason: outcome.reason };
     case "at_capacity":
+      // 503 HERE, AND 2xx ON AN INTEGRATION'S WEBHOOK, DELIBERATELY. The caller
+      // of a custom endpoint is whatever somebody pointed at this URL: a
+      // script, a scheduler, a third party's automation. It has no delivery
+      // log of ours to read and no rule about what repeated failures mean, so
+      // the status code is the only thing that can tell it the request was not
+      // acted on, and a caller that retries is the behaviour we want. A
+      // provider's own webhook is the opposite case: GitLab switches a hook
+      // off after a few consecutive failures, which would trade one missed
+      // event for every later one, so `routes/webhooks/[id].post.ts` answers
+      // 2xx there and says `at_capacity` in the body its delivery log records.
       throw createError({ statusCode: 503, statusMessage: "webhook_at_capacity" });
     case "dispatch_failed":
       throw createError({

@@ -73,6 +73,13 @@ import {
   NO_ENABLED_REPOSITORIES_MESSAGE,
   repositoryNotEnabledMessage,
 } from "../../support/repository-access.js";
+
+/** Repository selection stopped because the integration settings could not be read. */
+const REPOSITORY_SETTINGS_UNREADABLE_MESSAGE =
+  "Repository selection could not start: this run could not read the deployment's integration settings, so nothing is known about any repository. Retry the run.";
+// Static for the same reason: the example path is read off the manifests, which
+// are plain data, so this import drags in no adapter and no client.
+import { exampleRepositoryPath } from "../../../repository-map/repository-path-example.js";
 // Type only, so importing this file never pulls the routing module in with it.
 //
 // This file is NOT in the workflow isolate: the bundles were built and checked, and
@@ -486,11 +493,10 @@ const selectRepositoriesForRun = async (
       messageStandsAlone: true,
     };
   }
-  const { listRepositoriesAcrossProviders } = await import("../../../adapters/vcs/repository-directory.js");
+  const { listVcsRepositories } = await import("../../support/vcs-runtime.js");
   const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
     "../../../db/repositories/runs.js"
   );
-  const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
   const ticketIdentifier = context.ticket.identifier;
   const workflowOwnedBranches = ticketIdentifier
     ? (await listConnectedWorkflowOwnedBranchesForTicket(ticketIdentifier)).map((record) => ({
@@ -503,13 +509,29 @@ const selectRepositoriesForRun = async (
       }))
     : [];
   const repositoryScope = context.repositoryScope;
-  const listing = await listRepositoriesAcrossProviders(
-    listedVcsProviders(
-      getConfiguredVcsProviders(),
-      repositoryScope,
-      workflowOwnedBranches,
-    ),
-  );
+  let listing: Awaited<ReturnType<typeof listVcsRepositories>>;
+  try {
+    listing = await listVcsRepositories({
+      neededProviders: neededVcsProviders(repositoryScope, workflowOwnedBranches),
+      integrationPins: context.integrationPins,
+    });
+  } catch (error) {
+    const { isIntegrationSettingsUnreadableError } = await import(
+      "../../helpers/integration-settings-unreadable.js"
+    );
+    if (!isIntegrationSettingsUnreadableError(error)) throw error;
+    // Not "the catalog was incomplete" and not "nothing matched": nothing is
+    // known about any provider. The database's words are in the log.
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn({ err: error.message, cause: String(error.cause) }, "repo_selection_settings_unreadable");
+    return {
+      status: "halt",
+      outcome: "failed",
+      message: REPOSITORY_SETTINGS_UNREADABLE_MESSAGE,
+      cause: REPOSITORY_SETTINGS_UNREADABLE_MESSAGE,
+      messageStandsAlone: true,
+    };
+  }
   const repositories = filterRunRepositories(
     context.repositoryAccess,
     listing.repositories,
@@ -1017,6 +1039,9 @@ async function rememberRoutingAnswer(input: {
       "../../../db/repositories/memory.js"
     );
     const { prepareMemoryContent } = await import("../../../memory/content.js");
+    const { redactConfiguredSecretsInText } = await import(
+      "../../../run-observability/sanitizer.js"
+    );
     const {
       REPO_ROUTING_DOC_PATH,
       mergeRepoRoutingEntries,
@@ -1053,6 +1078,10 @@ async function rememberRoutingAnswer(input: {
     // Neither the label nor the repository path may address a document: the
     // subject key comes from orgSubjectKey and the doc path is a constant.
     const subjectKey = orgSubjectKey(chosen.provider, owner);
+    // Every secret the deployment knows, for the redaction below. A set that
+    // cannot be read lands in the catch at the bottom and nothing is written.
+    const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
+    const secrets = await knownSecretValues();
     const stored = await getConnectedMemoryDocument(subjectKey, REPO_ROUTING_DOC_PATH);
     let existing = stored ? parseRepoRoutingDocument(stored.content) : [];
     // `stored?.version ?? 0` is the required idiom: the key may never be present
@@ -1068,11 +1097,21 @@ async function rememberRoutingAnswer(input: {
       });
       // Already stored, so a repeated run does not bump the version for nothing.
       if (sameRoutingEntries(merged.entries, existing)) return;
-      const prepared = prepareMemoryContent(
-        renderRepoRoutingDocument({ owner, entries: merged.entries }),
-        MAX_ROUTING_DOC_BYTES,
-        false,
-      );
+      // Redacted here rather than by the memory port, because this writer is not
+      // on the port (it writes the built-in store directly, the one exception
+      // the memory rule names). Every write through the port is cleaned in
+      // `withoutKnownSecrets` instead; the set of secrets is the same one.
+      let scrubbed: string | null;
+      try {
+        scrubbed = redactConfiguredSecretsInText(
+          renderRepoRoutingDocument({ owner, entries: merged.entries }),
+          secrets,
+        );
+      } catch {
+        scrubbed = null;
+      }
+      const prepared =
+        scrubbed === null ? null : prepareMemoryContent(scrubbed, MAX_ROUTING_DOC_BYTES, false);
       // Fail closed. Text that could not be scrubbed never reaches the store, and
       // a truncated routing document is worse than a missing one: the cut can land
       // mid-line and leave an entry naming a repository nobody chose.
@@ -1175,8 +1214,8 @@ function errorText(err: unknown): string {
  * choice anyway. The definition pin already excludes everything it could have
  * offered, so the surviving listing is exactly what selection would have seen had
  * the provider answered, and the run proceeds on its normal path. A provider
- * carrying a workflow-owned branch for this ticket never qualifies: listedVcsProviders
- * queries it precisely so an in-flight pull request is not stranded, and treating
+ * carrying a workflow-owned branch for this ticket never qualifies: `neededVcsProviders`
+ * keeps it in the listing precisely so an in-flight pull request is not stranded, and treating
  * its silence as harmless would strand that pull request without saying so.
  */
 function failedProviderCannotAffectSelection(
@@ -1234,17 +1273,14 @@ function incompleteCatalogMessage(
  * would strand that branch's open pull request the moment an operator edits the
  * pin.
  */
-function listedVcsProviders<T extends { kind: RepositoryMetadata["provider"] }>(
-  providers: T[],
+function neededVcsProviders(
   repositoryScope: WorkflowRepositoryScope | undefined,
   workflowOwnedBranches: WorkflowOwnedBranchSelectionInput[],
-): T[] {
+): ReadonlySet<string> | undefined {
   const pinned = repositoryScope?.providers ?? [];
-  if (pinned.length === 0) return providers;
+  if (pinned.length === 0) return undefined;
   const owned = new Set(workflowOwnedBranches.map((branch) => branch.provider));
-  return providers.filter(
-    (provider) => pinned.includes(provider.kind) || owned.has(provider.kind),
-  );
+  return new Set([...pinned, ...owned]);
 }
 
 function scopeNarrowing(
@@ -1744,8 +1780,8 @@ export function selectRepositoriesFromMetadata(input: {
 
   // AND THE PROVIDER THE PIN NEVER QUERIED, WHICH IS IN NONE OF THOSE SETS.
   //
-  // `listedVcsProviders` narrows the providers BEFORE any listing happens, so a
-  // workflow pinned to `providers: ["github"]` never calls GitLab and a GitLab
+  // `neededVcsProviders` narrows the providers BEFORE any listing happens, so a
+  // workflow pinned to one provider never calls another and an excluded
   // repository is in no listing at all: not withheld, not unusable, not outside
   // the pin, because all three are built from a listing. A person writes "the
   // fix is in gitlab:acme/ops", the run works in the GitHub repositories it
@@ -1753,7 +1789,7 @@ export function selectRepositoriesFromMetadata(input: {
   // nothing said. That is the complaint this whole delivery exists to end,
   // arriving through the pin that was supposed to be reported.
   //
-  // ANSWERED FROM THE KEY, NOT FROM A LISTING. `gitlab:acme/ops` says which
+  // ANSWERED FROM THE KEY, NOT FROM A LISTING. `provider:acme/ops` says which
   // provider it is on; querying a provider the pin excludes would be a network
   // call to prove what the person already wrote. Only a path that NAMES its
   // provider counts: a bare "acme/ops" could be on either, and a line claiming
@@ -2152,7 +2188,12 @@ export function selectRepositoriesFromMetadata(input: {
         status: "clarification_needed",
         questions: [
           `These repositories named in the previous answer are not available to this workflow: ${unresolved.join(", ")}. ` +
-            `Name a repository from the accessible catalog as "owner/repo", or as "github:owner/repo" to pin the provider.`,
+            // Scoped to a provider whose repositories this run can actually
+            // reach, which is what the listing in hand holds.
+            `Name a repository from the accessible catalog as "owner/repo", or as "${exampleRepositoryPath(
+              "owner/repo",
+              input.repositories.map((repository) => repository.provider),
+            )}" to pin the provider.`,
         ],
       });
     }

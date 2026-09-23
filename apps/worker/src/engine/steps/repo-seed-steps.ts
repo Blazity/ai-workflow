@@ -1,25 +1,9 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
-import { prepareMemoryContent } from "../../memory/content.js";
-import {
-  parseRepoMemoryDocument,
-  renderRepoMemoryDocument,
-  repoMemoryComparisonKey,
-  type RepoMemoryItem,
-} from "../../memory/repo-memory.js";
+import { repoMemoryComparisonKey } from "../../memory/repo-memory.js";
 import { repoSubjectKey } from "../support/subject-key.js";
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.get>>;
 
-/**
- * Mirrors the document cap the distill step keeps to itself. The two write the
- * same document, so a seed rendered against a larger cap would store bytes the
- * distill step then refuses to rewrite.
- */
-const MAX_DOC_BYTES = 12 * 1024;
-/** Compare-and-swap rounds per document, the same bound the distill step uses:
- * neon-http has no transactions, so this loop is what makes the read-prune-write
- * safe, and a document under heavier contention keeps its winner. */
-const MAX_WRITE_ATTEMPTS = 3;
 /**
  * A cloned repository is untrusted input, so the manifest read is bounded rather
  * than streamed whole. Sized well above a realistic package.json (this repo's
@@ -91,7 +75,7 @@ export interface SeedRepoMemoryInput {
    * decision does not have to trust the workspace at all.
    */
   repositories: Array<{
-    provider: "github" | "gitlab";
+    provider: string;
     repoPath: string;
     localPath: string;
     /** The ref the manifest says this workspace checked out. */
@@ -122,6 +106,12 @@ export interface SeedRepoMemoryResult {
   seeded: number;
   /** Facts documents rewritten with fewer items. */
   pruned: number;
+  /**
+   * Why this deployment's memory provider could not answer, or absent when it
+   * did. Added in S13 and optional, so a result stored before it existed still
+   * replays; absent means memory answered, never that nothing was tried.
+   */
+  unavailable?: string;
 }
 
 /** What the derivation needs out of a package.json, and nothing else: no value
@@ -149,8 +139,15 @@ export async function seedRepoMemoryStep(
   // reports what the earlier repositories already got.
   let seeded = 0;
   let pruned = 0;
+  /** The first refusal any memory call answered, reported on the result. */
+  let unavailable: string | undefined;
+  const finish = (): SeedRepoMemoryResult => ({
+    seeded,
+    pruned,
+    ...(unavailable === undefined ? {} : { unavailable }),
+  });
   try {
-    if (input.repositories.length === 0) return { seeded, pruned };
+    if (input.repositories.length === 0) return finish();
     const { logger } = await import("../../infra/logger.js");
     const log = logger.child({
       sandboxId: input.sandboxId,
@@ -159,9 +156,19 @@ export async function seedRepoMemoryStep(
     });
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-    const { getConnectedMemoryDocument, upsertConnectedMemoryDocument } = await import(
-      "../../db/repositories/memory.js"
-    );
+    const { activeMemory } = await import("../support/memory-runtime.js");
+    const memory = await activeMemory();
+    if (memory.refusal) {
+      // Before the sandbox is touched. Deriving facts runs commands in a
+      // checkout, and doing that for a provider that cannot take them spends a
+      // run's time on nothing.
+      unavailable = memory.refusal.detail;
+      log.warn(
+        { code: memory.refusal.code, detail: memory.refusal.detail },
+        "memory_provider_unavailable",
+      );
+      return finish();
+    }
     const sandbox = await Sandbox.get({
       sandboxId: input.sandboxId,
       ...getSandboxCredentials(),
@@ -199,53 +206,50 @@ export async function seedRepoMemoryStep(
           continue;
         }
 
-        const stored = await getConnectedMemoryDocument(subjectKey, "facts");
-        if (!stored) {
-          // Create only. A document that appears between this read and the insert
-          // belongs to whoever wrote it: an LLM-distilled document is strictly
-          // better than this derivation, so it is never merged into or retried.
+        const subject = { key: subjectKey, label: repository.repoPath };
+        const stored = await memory.recall({ subject, scope: { kind: "facts" } });
+        if (!stored.ok) {
+          unavailable = stored.detail;
+          log.warn(
+            { repo: label, code: stored.code, detail: stored.detail },
+            "memory_provider_unavailable",
+          );
+          continue;
+        }
+        if (!stored.held) {
           const texts = await deriveFacts(sandbox, repository.localPath, manifest);
           if (texts.length === 0) continue;
-          // Marked so cap pressure evicts model-authored prose ahead of a derived
-          // fact. Nothing else can restate one: this create path fires only when
-          // the whole document is absent, and the distill prompt forbids
-          // restating what the document already knows.
-          const items: RepoMemoryItem[] = texts.map((text) => ({
-            text,
+          // `onlyIfEmpty` is create-only, and that is the whole rule: a
+          // document that appears between the read and the write belongs to
+          // whoever wrote it, because an LLM-distilled document is strictly
+          // better than this derivation. `derived` marks these so a provider
+          // under cap pressure gives up model prose first: nothing else can
+          // restate a derived fact, since this path fires only when the whole
+          // document is absent and the distill prompt forbids restating what is
+          // already known.
+          const created = await memory.observe({
+            subject,
+            scope: { kind: "facts" },
             runId: input.runId,
-            pinned: true as const,
-          }));
-          const prepared = prepareMemoryContent(
-            renderRepoMemoryDocument({
-              subject: repository.repoPath,
-              kind: "facts",
-              items,
-            }),
-            MAX_DOC_BYTES,
-            false,
-          );
-          // Fail closed: text that could not be scrubbed never reaches the store.
-          if (!prepared) {
-            log.warn({ repo: label }, "repo_memory_seed_redaction_failed");
-            continue;
-          }
-          // A derived document is a few hundred bytes, so a truncation here means
-          // redaction rewrote it into something this step no longer understands.
-          // Storing a mangled document is worse than storing none.
-          if (prepared.truncated) {
-            log.warn({ repo: label }, "repo_memory_seed_truncated_skipped");
-            continue;
-          }
-          const created = await upsertConnectedMemoryDocument({
-            subjectKey,
-            docPath: "facts",
             // Repo scoped, so no ticket owns this document.
             ticketKey: null,
-            content: prepared.content,
-            sourceRunId: input.runId,
-            expectedVersion: 0,
+            observation: {
+              kind: "items",
+              learned: texts,
+              refuted: [],
+              derived: true,
+              onlyIfEmpty: true,
+            },
           });
-          if (created.applied) seeded += 1;
+          if (!created.ok) {
+            unavailable = created.detail;
+            log.warn(
+              { repo: label, code: created.code, detail: created.detail },
+              "repo_memory_seed_refused",
+            );
+            continue;
+          }
+          if (created.stored) seeded += 1;
           continue;
         }
 
@@ -272,63 +276,31 @@ export async function seedRepoMemoryStep(
           continue;
         }
 
-        // Read, prune and render are all redone per attempt: a lost swap means
-        // another writer replaced the document, and re-issuing the bytes rendered
-        // against the old one would delete whatever it had added.
-        let existing = parseRepoMemoryDocument(stored.content);
-        let expectedVersion = stored.version;
-        for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
-          const survivors = survivingItems(existing, manifest.scripts);
-          if (survivors.length === existing.length) break;
-          const prepared = prepareMemoryContent(
-            renderRepoMemoryDocument({
-              subject: repository.repoPath,
-              kind: "facts",
-              items: survivors,
-            }),
-            MAX_DOC_BYTES,
-            false,
+        // Retraction as an observation: every entry this step could have
+        // written that names a script the manifest no longer declares is
+        // reported as refuted, and the provider forgets what matches. That is
+        // the same rule `survivingItems` applied, from the other side: only an
+        // entry this step could have written may be retracted by it, so a fact
+        // the distill worded for itself, and an entry no parser here can read,
+        // are both kept.
+        const refuted = staleScriptFacts(stored.entries, manifest.scripts);
+        if (refuted.length === 0) continue;
+        const write = await memory.observe({
+          subject,
+          scope: { kind: "facts" },
+          runId: input.runId,
+          ticketKey: null,
+          observation: { kind: "items", learned: [], refuted, derived: true },
+        });
+        if (!write.ok) {
+          unavailable = write.detail;
+          log.warn(
+            { repo: label, code: write.code, detail: write.detail },
+            "repo_memory_prune_refused",
           );
-          // Fail closed, exactly as on the seed path.
-          if (!prepared) {
-            log.warn({ repo: label }, "repo_memory_prune_redaction_failed");
-            break;
-          }
-          // The survivors are a subset of a document that already fit the cap, so a
-          // truncation here means redaction grew the text, and the cut would land
-          // inside a bullet or its provenance comment.
-          if (prepared.truncated) {
-            log.warn({ repo: label }, "repo_memory_prune_truncated_skipped");
-            break;
-          }
-          const result = await upsertConnectedMemoryDocument({
-            subjectKey,
-            docPath: "facts",
-            ticketKey: null,
-            content: prepared.content,
-            sourceRunId: input.runId,
-            expectedVersion,
-          });
-          if (result.applied) {
-            pruned += 1;
-            break;
-          }
-          if (attempt === MAX_WRITE_ATTEMPTS) {
-            // Bounded on purpose: an unbounded loop would spin against a hot
-            // repository for as long as the runs keep coming, and a stale fact
-            // costs far less than that.
-            log.warn(
-              { repo: label, attempts: MAX_WRITE_ATTEMPTS },
-              "repo_memory_prune_contended",
-            );
-            break;
-          }
-          const fresh = await getConnectedMemoryDocument(subjectKey, "facts");
-          existing = fresh ? parseRepoMemoryDocument(fresh.content) : [];
-          // `fresh?.version ?? 0` is the required idiom: the row may have been
-          // deleted, and 0 is what means "create it".
-          expectedVersion = fresh?.version ?? 0;
+          continue;
         }
+        if (write.stored) pruned += 1;
       } catch (err) {
         log.warn(
           { repo: label, err: errorMessage(err) },
@@ -338,7 +310,7 @@ export async function seedRepoMemoryStep(
     }
 
     if (seeded > 0 || pruned > 0) log.info({ seeded, pruned }, "repo_memory_seeded");
-    return { seeded, pruned };
+    return finish();
   } catch (err) {
     // The reporting path is itself wrapped: a failed logger import here would
     // otherwise escape a step whose whole contract is that it cannot throw.
@@ -356,7 +328,7 @@ export async function seedRepoMemoryStep(
     } catch {
       // Nothing left to report with.
     }
-    return { seeded, pruned };
+    return finish();
   }
 }
 seedRepoMemoryStep.maxRetries = 0;
@@ -451,20 +423,25 @@ function declaredPackageManager(raw: unknown): PackageManagerName | null {
 /**
  * The whole retraction rule, and it fails towards keeping: deleting a true fact
  * costs durable knowledge for every future run, keeping a stale one costs a line
- * of prompt. An item is dropped only when it is one of this step's own script
+ * of prompt. An entry is retracted only when it is one of this step's own script
  * facts and the manifest no longer declares that script.
+ *
+ * It returns the entries to retract rather than the ones to keep, because the
+ * provider is what forgets now and a retraction is what a run observes. The
+ * rule is unchanged: anything this step did not write is not this step's to
+ * judge, so a fact the distill step worded itself, and an entry no parser here
+ * can read at all, are both left alone.
  */
-function survivingItems(
-  items: readonly RepoMemoryItem[],
+function staleScriptFacts(
+  entries: readonly { text: string }[],
   scripts: ReadonlySet<ScriptKey>,
-): RepoMemoryItem[] {
-  return items.filter((item) => {
-    const named = SEED_SCRIPT_FACT_KEYS.get(repoMemoryComparisonKey(item.text));
-    // Anything this step did not write is not this step's to judge, so a fact
-    // the distill step worded itself, and an item no parser here can read at
-    // all, are kept for the same reason.
-    return named === undefined || scripts.has(named);
-  });
+): string[] {
+  const stale: string[] = [];
+  for (const entry of entries) {
+    const named = SEED_SCRIPT_FACT_KEYS.get(repoMemoryComparisonKey(entry.text));
+    if (named !== undefined && !scripts.has(named)) stale.push(entry.text);
+  }
+  return stale;
 }
 
 /**

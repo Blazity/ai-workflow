@@ -14,6 +14,7 @@ import {
 } from "../../db/repositories/clarification-hooks.js";
 import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import { createAdapters } from "../../engine/support/adapters.js";
+import { issueTrackerIfConnected } from "../../engine/support/connected-issue-tracker.js";
 import {
   answerConnectedClarificationAndResume,
   type AnswerClarificationOutcome,
@@ -23,6 +24,10 @@ import { loadSettingsSnapshot } from "../settings/index.js";
 export type AnswerClarificationRequestOutcome =
   | Exclude<AnswerClarificationOutcome, { kind: "answered" }>
   | { kind: "unknown_clarification" }
+  /** The question was asked on a ticket and no tracker is usable to answer it
+   *  on. Nothing was recorded; the question is still pending. `retryable`
+   *  when the settings could not be read, rather than nothing being there. */
+  | { kind: "issue_tracker_unavailable"; message: string; retryable: boolean }
   | {
       kind: "answered";
       clarification: ClarificationAnswerResponse["clarification"];
@@ -64,6 +69,23 @@ export async function answerClarificationRequest(input: {
   const row = await getConnectedHookClarification(input.id);
   if (!row) return { kind: "unknown_clarification" };
 
+  // A question asked on a ticket is answered on it, so without a usable
+  // tracker it is refused before anything is recorded. Reading the throwing
+  // getter here answered every dashboard answer on a deployment with no
+  // tracker with a server error, a question with no ticket included.
+  const adapters = await createAdapters();
+  const tracker = adapters.issueTrackerResolution;
+  if (row.ticketKey && !tracker.ok) {
+    return {
+      kind: "issue_tracker_unavailable",
+      message: tracker.refusal === "unreadable"
+        ? "This deployment's integration settings could not be read, so the ticket this question was asked on could not be reached and nothing was recorded. Try again shortly."
+        : tracker.reason,
+      retryable: tracker.refusal === "unreadable",
+    };
+  }
+  const issueTracker = issueTrackerIfConnected(adapters);
+
   const label = await getConnectedDashboardUserLabel(input.actor.userId);
   const settings = await loadSettingsSnapshot();
   const outcome = await answerConnectedClarificationAndResume({
@@ -71,7 +93,7 @@ export async function answerClarificationRequest(input: {
     rawAnswer: input.rawAnswer,
     actor: { id: input.actor.userId, label },
     surface: { kind: "dashboard" },
-    issueTracker: createAdapters().issueTracker,
+    ...(issueTracker ? { issueTracker } : {}),
     aiColumn: settings.COLUMN_AI,
     cancelSettings: settings,
   });

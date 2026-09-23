@@ -57,14 +57,45 @@ export interface RunPullRequest {
   url: string;
   /** Head observed when the workflow published the PR, when available. */
   headSha?: string;
+  /**
+   * How a person references it on its provider (`#12`, `!12`), stamped by
+   * core from the provider's manifest (`changeRequestNaming` in
+   * `@integrations/registry`) on every pull request it hands a messaging
+   * integration. Not stored with a run: the dashboard asks the registry
+   * itself, and an integration cannot, because it may not import one.
+   */
+  reference?: string;
+  /**
+   * What a person calls it on its provider (`PR`, `MR`), stamped with
+   * `reference` from the same answer, so a sentence and the link inside it
+   * never name one change request two ways.
+   */
+  noun?: string;
 }
 
-/** Provider-native reference: GitHub numbers PRs `#12`, GitLab MRs `!12`. */
-export function pullRequestRef(pr: Pick<RunPullRequest, "provider" | "id">): string {
-  return `${pr.provider === "gitlab" ? "!" : "#"}${pr.id}`;
+/**
+ * What to call a set of pull requests in a sentence: their stamped noun when
+ * they share one (`MR`), each distinct noun joined with a slash when a run
+ * opened them on two providers (`PR/MR`), and `PR` where nothing stamped one,
+ * as `pullRequestRef` falls back to `#id`.
+ */
+export function pullRequestNoun(prs: ReadonlyArray<Pick<RunPullRequest, "noun">>): string {
+  const nouns = [...new Set(prs.map((pr) => pr.noun ?? "PR"))];
+  return nouns.length === 0 ? "PR" : nouns.join("/");
 }
 
-/** Last path segment of `owner/repo` (or a nested GitLab group path). */
+/**
+ * The reference to render for a pull request: the one core stamped, or `#id`
+ * where nothing stamped one. Every pull request core hands a messaging
+ * integration carries a stamp, so `#id` is only ever read for one that came
+ * from somewhere else (a test, or a caller outside core); it is GitHub's form
+ * and on GitLab it names an issue, which is why core stamps.
+ */
+export function pullRequestRef(pr: Pick<RunPullRequest, "id" | "reference">): string {
+  return pr.reference ?? `#${pr.id}`;
+}
+
+/** Last path segment of a potentially nested repository path. */
 function repoLeaf(repoPath: string): string {
   const segments = repoPath.split("/").filter(Boolean);
   return segments.pop() ?? repoPath;
@@ -289,7 +320,8 @@ export interface HourPoint {
 
 // --- Pre-PR checks (dashboard-managed gate config) ---
 
-export type VcsProviderKind = "github" | "gitlab";
+/** Persisted integration id of the provider that owns a repository. */
+export type VcsProviderKind = string;
 
 /** One named group of repository scripts, as it is stored. */
 export interface PrePrCheckGroupConfig {
@@ -478,8 +510,25 @@ export interface WorkflowBlockContract {
     /** Fields guaranteed when execution continues through a normal output port. */
     bindingSchema: WorkflowValueSchema;
     statusVariants: string[];
+    /**
+     * Output fields a published graph must read somewhere, because the block
+     * reports something the run has to act on (a screen's verdict) and a graph
+     * that never looks at it would carry on regardless. Absent means none.
+     */
+    mustRead?: string[];
   };
   availability: WorkflowBlockAvailability;
+  /**
+   * Present, and true, only when this build ships nothing that could run the
+   * block: neither core's catalog nor an integration compiled into it.
+   *
+   * A fact about the build rather than about the deployment, so it is a field
+   * of its own rather than something a reader infers from a payload. No
+   * connection an admin could make brings the block back, which is why a
+   * definition carrying one is refused where it is written and not only where
+   * it is published.
+   */
+  unprovided?: true;
 }
 
 export interface WorkflowDefinitionNode {
@@ -763,7 +812,7 @@ export type ApprovalStatus = "pending" | "approved" | "rejected" | "superseded";
 
 export interface ApprovedRepositoryScope {
   repositories: Array<{
-    provider: "github" | "gitlab";
+    provider: string;
     repoPath: string;
     defaultBranch: string;
     /** Exact branch inspected during research (default or a workflow-owned PR branch). */
@@ -934,5 +983,12 @@ export const FIRST_SLICE_TOOLS = [
   // dashboard or debugging a run would mean leaving the terminal.
   "runs.briefing",
   "workflows.node_briefing",
+  // Appended after those, for the same reason again and in the same place: what
+  // the agent remembered was readable and erasable from the dashboard and from
+  // nowhere else, which left an agent that had learned something false with no
+  // way to say so. These three are the memory screen's own three actions.
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];

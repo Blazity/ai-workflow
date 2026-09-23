@@ -1,0 +1,231 @@
+{
+  "coreRoots": [
+    "apps/worker",
+    "apps/dashboard",
+    "packages"
+  ],
+  "coreRootsReason": "Core is the code that must stop knowing a provider: each app whole, so a config file or a directory added at its root is read the day it lands, and packages. integrations/ is where the names belong. scripts/ is release and gate tooling, and the Arthur tenant repository it names is not the Arthur provider. changelog/ and docs/ are prose about what shipped. The app directories the exclude list names are not core either: apps/worker/drizzle holds applied migrations, which are history and cannot be rewritten, apps/worker/scripts and apps/dashboard/scripts are operations tooling beside the app in the way scripts/ is beside the repository, apps/worker/e2e, workflow-sdk-tests and workflow-test-fixtures are test suites, and apps/dashboard/public is static files.",
+  "exclude": [
+    "\\.(?:test|spec)\\.[cm]?[jt]sx?$",
+    "\\.generated\\.[cm]?[jt]sx?$",
+    "(?:^|/)test-support\\.[cm]?[jt]sx?$",
+    "(?:^|/)test-support/",
+    "^apps/worker/src/workflow-graph-suites/",
+    "^apps/worker/src/mcp-dogfood/",
+    "(?:^|/)(?:fixtures/|[^/]+\\.fixture\\.)",
+    "^apps/worker/(?:drizzle|e2e|scripts|workflow-sdk-tests|workflow-test-fixtures)/",
+    "^apps/dashboard/(?:public|scripts)/"
+  ],
+  "excludeReason": "A test cannot create production coupling: it exercises core code that still names a provider, and it changes with its subject when S8 to S12 move that provider out. Listing each of the several hundred of them would churn on every test edit and get this gate switched off. Generated files are the output of core files that are themselves scanned, so a name reported twice would be fixed once. The test-support modules and any test-support directory, workflow-graph-suites, mcp-dogfood, fixture files and fixtures trees are test material by another name: nothing outside a test imports them, and a fixture naming a provider is the subject of the test rather than a coupling in the product.",
+  "plannedIntegrations": {},
+  "plannedIntegrationsReason": "A name core still writes, with the stage that takes it away. Empty since S12: every provider this build knows now arrives from the registry, so a new name here would be a provider core started writing before an integration owned it. The gate watches these as well as the registry ids, so it passes on what is here today and fails on anything new.",
+  "incidentalReason": "A row may carry \"incidental\": true when its files spell a provider id by accident, such as a URL on the provider's host or a CSS keyword written outside a className or style attribute, rather than depending on the provider; the gate then keeps the row listed but never reports it as stale, because such a hit comes and goes with ordinary edits and a failure on one could not be acted on. Text inside a className or style attribute is never a mention, so it needs no row.",
+  "allowlist": [
+    {
+      "ids": [
+        "arthur"
+      ],
+      "stage": "kept",
+      "reason": "the analysis comment marker (`Arthur report: <run>:<stage>`) and the two headings of the comments it marks (`Arthur research complete`, `Arthur pull requests ready`), all written into tickets and all naming the Arthur tenant rather than the Arthur provider. The marker is a stored identifier in comments already posted, so rewriting it would make the product post a second copy of every report; the headings are what that tenant's people read at the top of those comments, and changing them is a product decision rather than a refactor",
+      "paths": [
+        "apps/worker/src/engine/support/run-analysis-report.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "never",
+      "reason": "the SHAPES of GitHub credentials (`ghp_`, `gho_`, `github_pat_`), named so a token is redacted or reported wherever it turns up: in an unpushed diff, in a sandbox transcript, in an MCP result, in a repository URL somebody pasted. A deployment that ships no GitHub integration at all still has to redact a GitHub token a person hands it, so this is not a dependency on the provider and no stage removes it.",
+      "paths": [
+        "apps/worker/src/engine/blocks/leak-review/execute.ts",
+        "apps/worker/src/mcp/sanitize-result.ts",
+        "apps/worker/src/run-observability/visibility-detector.ts",
+        "apps/worker/src/sandbox/agents/redact.ts",
+        "apps/worker/src/services/repository-catalog/suggest.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "kept",
+      "reason": "the harness skill importer, whose source kind `github` is a value written into `harness_skill_artifacts.source_kind` on every skill imported from a repository, pinned by a CHECK constraint and by the four columns that variant carries, and whose locator is the stored `https://github.com/owner/repo` URL an artifact keeps. Every provider CALL this feature makes now goes through the `RepositorySkillSource` port an integration implements, so the name that is left is the stored identifier and the sentences a person reads about it. Rewriting either would orphan the artifacts already imported, which is a data migration and a product decision, not a refactor.",
+      "paths": [
+        "apps/dashboard/components/cockpit/harness-profiles/profile-editor.tsx",
+        "apps/dashboard/components/cockpit/harness-profiles/skill-import.tsx",
+        "apps/worker/src/db/repositories/harness-profiles.ts",
+        "apps/worker/src/db/schema/harness.ts",
+        "apps/worker/src/harness-profiles/local-skills.ts",
+        "apps/worker/src/harness-profiles/repository-skills.ts",
+        "apps/worker/src/harness-profiles/resolved-version.ts",
+        "packages/contracts/harness-profiles.ts",
+        "packages/contracts/requests-harness.ts",
+        "packages/skills/index.ts",
+        "packages/skills/source.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github",
+        "gitlab"
+      ],
+      "stage": "never",
+      "reason": "`GITHUB_BASE_BRANCH` and `GITLAB_BASE_BRANCH` in the frozen list of environment names the worker permanently refuses at boot, so an operator who still sets one learns that the base branch is now a repository profile value rather than having it silently ignored. The list is deliberately a literal rather than anything derived, so that a later registry edit cannot make a retired name legal again; a retired name has to stay spelled out somewhere, and this is that somewhere.",
+      "paths": [
+        "packages/contracts/settings-registry.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "kept",
+      "reason": "the producer name `github-actions` on delivery envelopes recorded before `trustedByDefault` was part of the trigger contract. It is read off rows already in the database and never written: a stored envelope carries no bit, and re-deciding trust from nothing would either start runs that could not start before or stop runs that could. New envelopes carry the bit their integration set, so this set answers only for the old rows and can never grow.",
+      "paths": [
+        "apps/worker/src/services/dispatch/trigger-events.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "kept",
+      "reason": "the cockpit activity drawer, whose rows are hardcoded sample events (invented pull request numbers, invented tickets) with an invented source label beside each. Nothing here asks which providers are connected, because nothing here reads anything real. The drawer showing fabricated activity to a person is worth fixing on its own, and the provider name is the smallest thing wrong with it.",
+      "paths": [
+        "apps/dashboard/components/cockpit/activity-drawer.tsx"
+      ]
+    },
+    {
+      "ids": [
+        "slack"
+      ],
+      "stage": "R1",
+      "reason": "the send_slack_message compatibility alias keeps stored definitions and suspended runs working until the explicit rewrite has run and been verified. R1 removes the alias after that verification.",
+      "paths": [
+        "packages/contracts/workflow-graph.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github",
+        "gitlab"
+      ],
+      "stage": "R1",
+      "reason": "the two producer filters `trigger_pr_checks_failed` carried until S10 (`githubAppSlugs`, `gitlabPipelineSources`) and the value each one meant when absent, read off check triggers published before S10 and folded into `trustedProducers` wherever a stored graph enters the build. ADR-010 keeps those rows unrewritten, so dispatch, validation and a replaying run can only honour the list an operator saved if this one reader still knows the old keys. R1 removes it once no stored graph carries them.",
+      "paths": [
+        "packages/contracts/workflow-graph.ts"
+      ]
+    },
+    {
+      "ids": [
+        "slack"
+      ],
+      "stage": "never",
+      "reason": "the leak review scans an unpushed diff for the SHAPES of credentials, and it names each shape so the finding a person reads says which kind of token leaked. The pattern would be worth keeping if this product never talked to the provider at all, so it is not a dependency and no stage removes it.",
+      "paths": [
+        "apps/worker/src/engine/blocks/leak-review/execute.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira"
+      ],
+      "stage": "kept",
+      "reason": "the key `jira` inside the run analysis report, which is a JSON document already written to `run_analysis_reports` for every run that has produced one. It names the two deliveries that report makes about a ticket, research and pull request. Renaming the key is a migration over that history, not a rename: a build that read the new name would report every existing row as malformed and the run view would go blank on it. Core reaches the tracker itself only through the `issue_tracker` capability; this is the stored word and nothing else.",
+      "paths": [
+        "apps/dashboard/components/cockpit/screens/run-analysis-report.tsx",
+        "apps/worker/src/db/repositories/runs/analysis-report.ts",
+        "apps/worker/src/engine/support/run-analysis-report.ts",
+        "apps/worker/src/run-analysis/persistence.ts",
+        "packages/contracts/run-analysis.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira"
+      ],
+      "stage": "kept",
+      "reason": "identifiers earlier builds WROTE and these lines only read back. `ticket:jira:<KEY>` is reconstructed for a clarification row from before `subjectKey` was a column, and for the string form of the workflow entry point, which only a run suspended before that entry point changed can still arrive through; `jira:` prefixes the actor recorded on a composed clarification answer. New keys are derived from the active issue tracker's id in `engine/support/issue-tracker-runtime.ts`, which is `jira` today and is the same string, so nothing already written changes meaning. Rewriting any of these would orphan the rows they belong to.",
+      "paths": [
+        "apps/worker/src/db/repositories/clarifications.ts",
+        "apps/worker/src/engine/agent-workflow.ts",
+        "apps/worker/src/services/clarifications/answer-authorship.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira",
+        "slack"
+      ],
+      "stage": "R1",
+      "reason": "the compatibility half of the S12 parameter rename on the `investigate` block: the map from `jiraJqlTemplate` to `issueTrackerQueryTemplate` and from the stored value `jira` to `issue_tracker`, the block reading the old key beside the new one, and the editor drawing a node saved with the old vocabulary as what it really is. A stored definition the one-off rewrite has not reached, and a run replaying a plan recorded before the rename, both still hand us the old words, and reading them as nothing selected would tell a person their node investigates nothing and then make that true on the next save. These go with the one-off rewrite in R1, the same way the `send_slack_message` alias does.",
+      "paths": [
+        "apps/dashboard/components/cockpit/flow-editor/block-palette.ts",
+        "apps/dashboard/components/cockpit/flow-editor/blocks/shared.tsx",
+        "apps/worker/src/engine/blocks/investigate/execute.ts",
+        "apps/worker/src/engine/blocks/investigate/manifest.ts",
+        "packages/contracts/workflow-graph.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira"
+      ],
+      "stage": "migration",
+      "reason": "the delivery surface of a clarification answer, persisted as the literal `jira` in `agent_briefing`'s sibling tables and checked by a CHECK constraint, then carried through the services that write it and the dashboard that labels it. It means \"the answer arrived as a ticket comment\", which is the issue tracker capability and not one provider: on a deployment running another tracker this word is already wrong, and the run still records it. Renaming it to `issue_tracker` is a migration over rows shipped on 2026-09-19 plus a constraint change, so it is a delivery of its own rather than part of moving the providers out. Until then core names a provider here and this row says so.",
+      "paths": [
+        "apps/dashboard/lib/agent-visibility/wording.ts",
+        "apps/worker/src/db/repositories/agent-visibility.ts",
+        "apps/worker/src/db/schema/agent-visibility.ts",
+        "apps/worker/src/services/agent-visibility/deliveries.ts",
+        "apps/worker/src/services/clarifications/answer-core.ts",
+        "apps/worker/src/services/clarifications/resume-from-comments.ts",
+        "packages/agent-visibility/vocabulary.ts"
+      ]
+    },
+    {
+      "ids": [
+        "jira"
+      ],
+      "stage": "kept",
+      "reason": "the same key-shape example in the MCP tool descriptions, plus two tracker behaviours explained in prose: a summary field's 255 characters, and a board that resolves a move only through two transitions. Those two are the tracker's limits described in core, and they belong with the tracker capability rather than in a tool description; they are here because rewriting a published tool description is a contract change with its own review, not part of moving the providers out.",
+      "paths": [
+        "apps/worker/src/mcp/tool-catalog.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "never",
+      "incidental": true,
+      "reason": "URLs on github.com hosts that are not the GitHub provider: the default Codex price list, which a third party publishes on raw.githubusercontent.com, and the public repository the sandbox installs the frontend-design skill from. The worker downloads both over plain HTTPS whatever version control integration a deployment connects, so neither is a dependency on the provider.",
+      "paths": [
+        "apps/worker/src/infra/runtime-env.ts",
+        "apps/worker/src/sandbox/agents/shared.ts"
+      ]
+    },
+    {
+      "ids": [
+        "github"
+      ],
+      "stage": "open",
+      "reason": "the manual dispatch field shows a GitHub pull request URL as its placeholder whichever version control integration is connected, so a GitLab deployment is shown an example it cannot paste. The example belongs to the connected integration, not to core; the fix is the dashboard's, and until it lands this row says the placeholder names a provider. The comment-stripping bug in this gate hid it until 2026-09-22.",
+      "paths": [
+        "apps/dashboard/components/cockpit/manual-dispatch-modal.tsx"
+      ]
+    },
+    {
+      "ids": [
+        "github",
+        "gitlab"
+      ],
+      "stage": "migration",
+      "reason": "the default implementation prompt tells the agent not to call the GitHub/GitLab API and not to ask for their credentials. The sentence belongs in provider-neutral words (\"the version control provider\"), but a prompt is pinned by the workflows that use it, so changing its bytes needs the resync migration this repository uses for pinned prompts; until that delivery the words stay and this row says so. They used to be split into fragments so this gate could not see them, which hid the coupling instead of recording it.",
+      "paths": [
+        "packages/prompts/default-prompts.ts"
+      ]
+    }
+  ]
+}

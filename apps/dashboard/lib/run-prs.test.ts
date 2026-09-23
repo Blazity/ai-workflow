@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { primaryPullRequestLabel, runPullRequests } from "./run-prs";
+import { changeRequestNaming } from "@integrations/registry";
+import { runPullRequests, soleVcsProvider } from "./run-prs";
 
 test("a multi-repo run returns every PR/MR in stored order", () => {
   assert.deepEqual(
@@ -39,7 +40,10 @@ test("a multi-repo run returns every PR/MR in stored order", () => {
   );
 });
 
-test("a legacy run without the list keeps its GitHub PR link", () => {
+// A legacy row stored no provider, and this build ships more than one, so the
+// entry carries none. It used to carry whichever provider core was written
+// around, which put a provider's name on a run that may never have touched it.
+test("a legacy run without the list keeps its PR link and claims no provider", () => {
   assert.deepEqual(
     runPullRequests({
       prs: null,
@@ -48,7 +52,7 @@ test("a legacy run without the list keeps its GitHub PR link", () => {
     }),
     [
       {
-        provider: "github",
+        provider: "",
         repoPath: "",
         id: 91,
         url: "https://github.com/acme/storefront/pull/91",
@@ -57,7 +61,7 @@ test("a legacy run without the list keeps its GitHub PR link", () => {
   );
 });
 
-test("a legacy GitLab URL is recognised as a merge request", () => {
+test("a legacy merge request URL keeps its link and is still read as an MR", () => {
   assert.deepEqual(
     runPullRequests({
       prs: null,
@@ -66,13 +70,30 @@ test("a legacy GitLab URL is recognised as a merge request", () => {
     }),
     [
       {
-        provider: "gitlab",
+        provider: "",
         repoPath: "",
         id: 18,
         url: "https://gitlab.com/acme/api/-/merge_requests/18",
       },
     ],
   );
+  // The noun a person reads comes from the link the row did store, matched
+  // against the shape each provider declares, so losing the guessed provider
+  // did not turn this link into a pull request.
+  const [legacy] = runPullRequests({
+    prs: null,
+    prUrl: "https://gitlab.com/acme/api/-/merge_requests/18",
+    prNumber: 18,
+  });
+  assert.deepEqual(changeRequestNaming(legacy!), { noun: "MR", reference: "!18" });
+});
+
+test("a deployment with one version control provider attributes a legacy row to it", () => {
+  // The only deployment where the answer is knowable: one provider connected
+  // means every row that predates the field came from it.
+  assert.equal(soleVcsProvider(["forgejo"]), "forgejo");
+  assert.equal(soleVcsProvider(["github", "gitlab"]), "");
+  assert.equal(soleVcsProvider([]), "");
 });
 
 test("a run that opened nothing renders no links", () => {
@@ -84,21 +105,5 @@ test("a run with only half a legacy ref is not rendered as a broken link", () =>
   assert.deepEqual(
     runPullRequests({ prs: null, prUrl: "https://github.com/a/b/pull/4", prNumber: null }),
     [],
-  );
-});
-
-test("the primary reference uses the provider's noun and punctuation", () => {
-  assert.equal(
-    primaryPullRequestLabel({
-      prs: [{
-        provider: "gitlab",
-        repoPath: "acme/app",
-        id: 51,
-        url: "https://gitlab.example/acme/app/-/merge_requests/51",
-      }],
-      prUrl: "https://gitlab.example/acme/app/-/merge_requests/51",
-      prNumber: 51,
-    }),
-    "MR !51",
   );
 });

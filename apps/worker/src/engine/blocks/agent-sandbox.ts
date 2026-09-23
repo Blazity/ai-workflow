@@ -6,11 +6,9 @@ import {
 } from "../../sandbox/agents/runtime-error.js";
 import { isRunControlError } from "../helpers/run-control-error.js";
 import type { EngineCtx } from "./support/types.js";
-import {
-  ensureArthurTask,
-  ensureChecksCeiling,
-  sandboxLifetimeMs,
-} from "./prepare-workspace/execute.js";
+import { ensureChecksCeiling, sandboxLifetimeMs } from "./prepare-workspace/execute.js";
+import { agentTracingRun } from "../support/integration-run-state.js";
+import type { AgentTracingRun } from "../support/integration-tracing.js";
 import type {
   ResolvedHarnessRuntime,
   ResolvedRuntimeCredentials,
@@ -21,7 +19,8 @@ async function blockProvisionAgentSandboxStep(
   ownerToken: string,
   agentKind: AgentKind,
   model: string,
-  arthurTaskId: string | null,
+  /** The run as its tracing providers see it, with their states. */
+  tracingRun: AgentTracingRun,
   /** The run's job timeout, from the settings snapshot it started with, so a
    *  sandbox created late in a run is sized by the same value as the first. */
   jobTimeoutMs: number,
@@ -71,14 +70,8 @@ async function blockProvisionAgentSandboxStep(
     };
   }
 
-  const arthur =
-    env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
-      ? {
-          apiKey: env.GENAI_ENGINE_API_KEY,
-          taskId: arthurTaskId,
-          endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-        }
-      : undefined;
+  const { agentTracingPlans } = await import("../support/integration-tracing.js");
+  const tracing = await agentTracingPlans({ harness: agentKind, run: tracingRun });
   const sandbox = await Sandbox.create({
     ...getSandboxCredentials(),
     runtime: "node24",
@@ -93,7 +86,7 @@ async function blockProvisionAgentSandboxStep(
 
   try {
     const { createAdapters } = await import("../support/adapters.js");
-    await createAdapters().runRegistry.registerSandbox(
+    await (await createAdapters()).runRegistry.registerSandbox(
       subjectKey,
       ownerToken,
       sandbox.sandboxId,
@@ -112,7 +105,7 @@ async function blockProvisionAgentSandboxStep(
     await adapter.configure(sandbox, {
       ...runtimeCredentials,
       model,
-      arthur,
+      tracing,
     });
     return { ok: true, sandboxId: sandbox.sandboxId };
   } catch (error) {
@@ -150,7 +143,8 @@ export async function prepareHarnessAgentInvocationStep(
   sandboxId: string,
   agentKind: AgentKind,
   model: string,
-  arthurTaskId: string | null,
+  /** The run as its tracing providers see it, this invocation included. */
+  tracingRun: AgentTracingRun,
   /**
    * What this invocation is run against, named rather than counted off in
    * order, which is also where new inputs go: a trailing bag leaves the
@@ -230,20 +224,11 @@ export async function prepareHarnessAgentInvocationStep(
       codexApiKey: env.CODEX_API_KEY,
       codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
     });
-    const arthur =
-      env.GENAI_ENGINE_API_KEY &&
-      env.GENAI_ENGINE_TRACE_ENDPOINT &&
-      arthurTaskId
-        ? {
-            apiKey: env.GENAI_ENGINE_API_KEY,
-            taskId: arthurTaskId,
-            endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-          }
-        : undefined;
+    const { agentTracingPlans } = await import("../support/integration-tracing.js");
     await adapter.configure(sandbox, {
       ...credentials,
       model,
-      arthur,
+      tracing: await agentTracingPlans({ harness: agentKind, run: tracingRun }),
       runtime: runtime.paths,
       ...(runtime.modelSettings
         ? { modelSettings: runtime.modelSettings }
@@ -287,14 +272,15 @@ export async function ensureAgentSandbox(
     if (existing) return existing;
   }
 
-  const arthurTaskId = await ensureArthurTask(ctx);
+  // No invocation: a scratch sandbox is reused across the nodes that need it.
+  const tracingRun = await agentTracingRun(ctx);
   const checksCeilingMs = await ensureChecksCeiling(ctx);
   const provisioned = await blockProvisionAgentSandboxStep(
     ctx.entry.subjectKey,
     ctx.entry.ownerToken,
     agentKind,
     model,
-    arthurTaskId,
+    tracingRun,
     ctx.settings.JOB_TIMEOUT_MS,
     checksCeilingMs,
     runtime,

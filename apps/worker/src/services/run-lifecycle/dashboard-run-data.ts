@@ -7,6 +7,7 @@ import type {
   WorkflowRow,
 } from "@shared/contracts";
 import type { Db } from "../../db/types.js";
+import { ticketLinkFor, type TicketLinks } from "../../engine/support/ticket-url.js";
 import {
   connectedDashboardRunQueries,
   countDashboardRunRowsByStatus,
@@ -62,7 +63,7 @@ function bounds(window: TimeWindow, now: Date) {
   };
 }
 
-function mapRun(row: DashboardRunRow, now: Date, tenantOrigin: string): Run {
+function mapRun(row: DashboardRunRow, now: Date, links: TicketLinks): Run {
   const effective = row.startedAt ?? row.firstSeenAt;
   const tokens = row.tokensInput !== null || row.tokensOutput !== null
     ? (row.tokensInput ?? 0) + (row.tokensOutput ?? 0)
@@ -85,7 +86,7 @@ function mapRun(row: DashboardRunRow, now: Date, tenantOrigin: string): Run {
     guardrailHits: null,
     ticketTitle: row.ticketTitle ?? row.ticketKey ?? "",
     prNumber: row.prNumber,
-    ticketUrl: row.ticketUrl ?? (row.ticketKey ? `${tenantOrigin}/browse/${row.ticketKey}` : ""),
+    ticketUrl: ticketLinkFor(row.ticketUrl, row.ticketKey, links) ?? "",
     prUrl: row.prUrl,
     prs: row.prs,
   };
@@ -108,7 +109,8 @@ export interface ListRunsOptions {
   window: TimeWindow;
   q: string | null;
   now: Date;
-  jiraBaseUrl: string;
+  /** How the active tracker links a ticket (`issueTrackerTicketLinks`). */
+  ticketLinks: TicketLinks;
   limit?: number;
 }
 
@@ -133,8 +135,11 @@ async function listRunsWithQueries(queries: Queries, options: ListRunsOptions) {
     counts[coerceStatus(row.status)] += count;
     total += count;
   }
-  const origin = options.jiraBaseUrl.replace(/\/+$/, "");
-  return { rows: data.map((row) => mapRun(row, options.now, origin)), total, counts };
+  return {
+    rows: data.map((row) => mapRun(row, options.now, options.ticketLinks)),
+    total,
+    counts,
+  };
 }
 
 function sum(values: number[]): number {
@@ -224,7 +229,7 @@ async function runKpisWithQueries(
 export interface WorkflowAggOptions {
   window: TimeWindow;
   now: Date;
-  jiraBaseUrl: string;
+  ticketLinks: TicketLinks;
   registry: WorkflowMeta[];
 }
 
@@ -243,7 +248,6 @@ async function workflowAggWithQueries(queries: Queries, options: WorkflowAggOpti
     queries.listLatestWorkflowRows(),
   ]);
   const latestById = new Map(latestRows.map((row) => [row.workflowId, row]));
-  const origin = options.jiraBaseUrl.replace(/\/+$/, "");
   const rows: WorkflowRow[] = options.registry.map((workflow) => {
     const selected = windowRows.filter((row) => row.workflowId === workflow.id);
     const durations = selected.map((row) => row.durationSec).filter((value): value is number => value !== null);
@@ -259,7 +263,7 @@ async function workflowAggWithQueries(queries: Queries, options: WorkflowAggOpti
       costToday: selected.length > 0 ? sum(selected.map((row) => row.costUsd ?? 0)) : null,
       latestRun: latest ? {
         ticket: latest.ticketKey ?? "",
-        ticketUrl: latest.ticketUrl ?? (latest.ticketKey ? `${origin}/browse/${latest.ticketKey}` : ""),
+        ticketUrl: ticketLinkFor(latest.ticketUrl, latest.ticketKey, options.ticketLinks) ?? "",
         ticketTitle: latest.ticketTitle ?? latest.ticketKey ?? "",
         prNumber: latest.prNumber,
         prUrl: latest.prUrl,
@@ -341,22 +345,21 @@ async function costAggWithQueries(
 }
 
 export async function listRunsForTicket(
-  options: { db: Db; ticketKey: string; now: Date; jiraBaseUrl: string },
+  options: { db: Db; ticketKey: string; now: Date; ticketLinks: TicketLinks },
 ) {
   return listRunsForTicketWithQueries(explicitQueries(options.db), options);
 }
 
-export function connectedListRunsForTicket(options: { ticketKey: string; now: Date; jiraBaseUrl: string }) {
+export function connectedListRunsForTicket(options: { ticketKey: string; now: Date; ticketLinks: TicketLinks }) {
   return listRunsForTicketWithQueries(connectedDashboardRunQueries, options);
 }
 
 async function listRunsForTicketWithQueries(
   queries: Queries,
-  options: { ticketKey: string; now: Date; jiraBaseUrl: string },
+  options: { ticketKey: string; now: Date; ticketLinks: TicketLinks },
 ) {
   const data = await queries.listTicketRuns(options.ticketKey);
-  const origin = options.jiraBaseUrl.replace(/\/+$/, "");
-  const runs = data.map((row) => mapRun(row, options.now, origin));
+  const runs = data.map((row) => mapRun(row, options.now, options.ticketLinks));
   const counts = { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 };
   let cost = 0;
   let tokens = 0;
@@ -369,7 +372,9 @@ async function listRunsForTicketWithQueries(
   const ticket = newest ? {
     key: newest.ticketKey ?? options.ticketKey,
     title: newest.ticketTitle ?? newest.ticketKey ?? options.ticketKey,
-    url: newest.ticketUrl ?? `${origin}/browse/${newest.ticketKey ?? options.ticketKey}`,
+    url:
+      ticketLinkFor(newest.ticketUrl, newest.ticketKey ?? options.ticketKey, options.ticketLinks) ??
+      "",
   } : null;
   return { ticket, runs, totals: { cost, tokens, runCount: runs.length, counts } };
 }

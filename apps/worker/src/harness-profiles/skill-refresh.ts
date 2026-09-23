@@ -1,9 +1,9 @@
 import type { HarnessSkillArtifact } from "@shared/contracts";
+import type { RepositorySkillSource } from "@integrations/sdk";
 import {
   HarnessSkillImportError,
-  refreshGitHubSkillArtifactFromRepository,
-  type GitHubSkillRepository,
-} from "./github-skills.js";
+  refreshRepositorySkillArtifactFromRepository,
+} from "./repository-skills.js";
 import { refreshLocalSkillArtifactFromRepository } from "./local-skills.js";
 import {
   createConnectedHarnessProfileRepository,
@@ -17,7 +17,8 @@ export function refreshConnectedHarnessSkillArtifact(
     organizationId: string;
     actorId: string;
     artifactHash: string;
-    githubRepository: () => GitHubSkillRepository;
+    /** The connected provider that can read this artifact's source, by its id. */
+    repositorySkillSource: (provider: string) => Promise<RepositorySkillSource>;
   },
 ): Promise<HarnessSkillArtifact> {
   return refreshHarnessSkillArtifactFromRepository(
@@ -32,7 +33,8 @@ async function refreshHarnessSkillArtifactFromRepository(
     organizationId: string;
     actorId: string;
     artifactHash: string;
-    githubRepository: () => GitHubSkillRepository;
+    /** The connected provider that can read this artifact's source, by its id. */
+    repositorySkillSource: (provider: string) => Promise<RepositorySkillSource>;
   },
 ): Promise<HarnessSkillArtifact> {
   const existing = await repository.getArtifactByHash({
@@ -49,8 +51,8 @@ async function refreshHarnessSkillArtifactFromRepository(
       artifactHash: input.artifactHash,
     });
   }
-  return refreshGitHubSkillArtifactFromRepository(repository, {
-    repository: input.githubRepository(),
+  return refreshRepositorySkillArtifactFromRepository(repository, {
+    repository: await input.repositorySkillSource(existing.sourceKind),
     organizationId: input.organizationId,
     actorId: input.actorId,
     artifactHash: input.artifactHash,

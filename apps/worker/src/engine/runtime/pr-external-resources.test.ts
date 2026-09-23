@@ -27,15 +27,29 @@ import {
 } from "../helpers/review-finding-merge.js";
 import { reviewFindingDigest } from "../../adapters/vcs/types.js";
 
-const { mockUpdateGateStatus, mockCreateRepositoryVCS, mockAssertActiveRunOwner } =
-  vi.hoisted(() => ({
-    mockUpdateGateStatus: vi.fn(),
-    mockCreateRepositoryVCS: vi.fn(),
-    mockAssertActiveRunOwner: vi.fn(),
-  }));
+const {
+  mockUpdateGateStatus,
+  mockCreateRepositoryVCS,
+  mockAssertActiveRunOwner,
+  mockLogger,
+} = vi.hoisted(() => ({
+  mockUpdateGateStatus: vi.fn(),
+  mockCreateRepositoryVCS: vi.fn(),
+  mockAssertActiveRunOwner: vi.fn(),
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+// One adapter per resolution, as the runtime hands it out: the deferred port
+// and the resolved adapter are the same object here, which is what they are
+// once the connection has resolved.
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mockCreateRepositoryVCS,
+  resolveRepositoryVCS: async (target: unknown) => mockCreateRepositoryVCS(target),
+  createRepositoryVcsRuntime: (target: unknown) => {
+    const vcs = mockCreateRepositoryVCS(target);
+    return { vcs, adapter: async () => vcs };
+  },
 }));
+vi.mock("../../infra/logger.js", () => ({ logger: mockLogger }));
 vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: mockAssertActiveRunOwner,
 }));
@@ -739,7 +753,7 @@ describe("PR check reconciliation", () => {
       prNumber: 9,
       headSha: "head",
       name: "AI Workflow / Review",
-      providerReference: { provider: "github" as const, id: 9 },
+      providerReference: { provider: "github" as const, id: 9 } as never,
       state: "pending",
       ...overrides,
     };
@@ -873,7 +887,7 @@ describe("PR check reconciliation", () => {
         prNumber: 7,
         headSha: "head",
         name: "AI Workflow / success",
-        providerReference: { provider: "github", id: 1 },
+        providerReference: { provider: "github", id: 1 } as never,
         state: "closing",
         closureIntent: "success",
       },
@@ -889,7 +903,7 @@ describe("PR check reconciliation", () => {
         prNumber: 7,
         headSha: "head",
         name: "AI Workflow / failure",
-        providerReference: { provider: "github", id: 2 },
+        providerReference: { provider: "github", id: 2 } as never,
         state: "closing",
         closureIntent: "failure",
       },
@@ -922,6 +936,38 @@ describe("PR check reconciliation", () => {
 });
 
 describe("terminal PR check settlement", () => {
+  /** A run that died before its PR check ever reached the provider, which is
+   *  the one reconcile path that asks the provider for anything. */
+  async function uncreatedCheckDb(
+    runId: string,
+    integrationPins: { integrationId: string; configFingerprint: string }[] | undefined,
+  ) {
+    mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      createGateStatus: vi.fn().mockResolvedValue({ provider: "gitlab", id: 31 }),
+      updateGateStatus: mockUpdateGateStatus,
+    });
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId, ...(integrationPins ? { integrationPins } : {}) });
+    await db.insert(workflowRunExternalChecks).values({
+      id: `${runId}-check`,
+      runId,
+      nodeId: "create-check",
+      attempt: 1,
+      activationScope: "root",
+      subjectKey: "pr:gitlab:acme/app#7",
+      provider: "gitlab",
+      repository: "acme/app",
+      prNumber: 7,
+      headSha: "head",
+      name: "AI Workflow / Review",
+      providerReference: null,
+      state: "creating",
+      closureIntent: null,
+    });
+    return db;
+  }
+
   async function pendingCheckDb(runId: string) {
     const db = await createTestDb();
     await db.insert(workflowRuns).values({ runId });
@@ -937,7 +983,7 @@ describe("terminal PR check settlement", () => {
       prNumber: 7,
       headSha: "head",
       name: "AI Workflow / Review",
-      providerReference: { provider: "github", id: 11 },
+      providerReference: { provider: "github", id: 11 } as never,
       state: "pending",
     });
     return db;
@@ -1037,15 +1083,22 @@ describe("terminal PR check settlement", () => {
       updateGateStatus: mockUpdateGateStatus,
     });
     const db = await createTestDb();
-    await db.insert(workflowRuns).values({ runId: "run-reconciled" });
+    const integrationPins = [{
+      integrationId: "gitlab",
+      configFingerprint: "gitlab.example.com",
+    }];
+    await db.insert(workflowRuns).values({
+      runId: "run-reconciled",
+      integrationPins,
+    });
     await db.insert(workflowRunExternalChecks).values({
       id: "run-reconciled-check",
       runId: "run-reconciled",
       nodeId: "create-check",
       attempt: 1,
       activationScope: "root",
-      subjectKey: "pr:github:acme/app#7",
-      provider: "github",
+      subjectKey: "pr:gitlab:acme/app#7",
+      provider: "gitlab",
       repository: "acme/app",
       prNumber: 7,
       headSha: "head",
@@ -1059,6 +1112,10 @@ describe("terminal PR check settlement", () => {
     // records it; the next cron pass publishes it.
     await reconcilePendingPrChecks(db);
 
+    expect(mockCreateRepositoryVCS).toHaveBeenCalledWith(expect.objectContaining({
+      integrationPins,
+    }));
+
     const [row] = await db
       .select()
       .from(workflowRunExternalChecks)
@@ -1066,6 +1123,41 @@ describe("terminal PR check settlement", () => {
     expect(row!.state).toBe("closing");
     expect(row!.closureIntent).not.toBe("failure");
     expect(row!.closureIntent).toBe("cancelled");
+  });
+
+  it("says so when it reconciles a run whose row carries no pins", async () => {
+    // A run row written before `0072_integrations_contract` has NULL there, and
+    // its pins cannot be recovered, so this verdict goes to whichever provider
+    // is connected now rather than to the one the run started with. The S10
+    // drain is what makes that safe. If the drain did not hold, this line is
+    // the only way anyone finds out: everything else about the pass succeeds.
+    mockLogger.warn.mockReset();
+    const db = await uncreatedCheckDb("run-unpinned", undefined);
+
+    await reconcilePendingPrChecks(db);
+
+    expect(mockCreateRepositoryVCS).toHaveBeenCalledWith(expect.objectContaining({
+      integrationPins: undefined,
+    }));
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runIds: ["run-unpinned"] }),
+      "pr_check_reconcile_without_integration_pins",
+    );
+  });
+
+  it("stays quiet about a run that recorded its pins", async () => {
+    mockLogger.warn.mockReset();
+    const db = await uncreatedCheckDb("run-pinned", [
+      { integrationId: "gitlab", configFingerprint: "gitlab.example.com" },
+    ]);
+
+    await reconcilePendingPrChecks(db);
+
+    expect(mockCreateRepositoryVCS).toHaveBeenCalled();
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "pr_check_reconcile_without_integration_pins",
+    );
   });
 
   it("lets a moved head outrank a verdict that never reached the provider", async () => {
@@ -1146,7 +1238,7 @@ describe("PR check verdicts", () => {
         prNumber: 7,
         headSha: "head",
         name: "AI Workflow / Review",
-        providerReference: { provider: "github", id: 12 },
+        providerReference: { provider: "github", id: 12 } as never,
         state: "pending",
       });
 
@@ -1204,7 +1296,7 @@ describe("PR check verdicts", () => {
       prNumber: 7,
       headSha: "trigger-head",
       name: "AI Workflow / Review",
-      providerReference: { provider: "github", id: 12 },
+      providerReference: { provider: "github", id: 12 } as never,
       state: "pending",
     });
 

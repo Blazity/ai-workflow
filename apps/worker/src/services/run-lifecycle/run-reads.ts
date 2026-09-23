@@ -30,8 +30,10 @@ import {
   registryRows,
   resolveRunModels,
 } from "../overview/index.js";
-import { issueTrackerBaseUrl } from "../settings/index.js";
+import { issueTrackerTicketLinks } from "../settings/index.js";
 import { createAdapters } from "../../engine/support/adapters.js";
+import { issueTrackerIfConnected } from "../../engine/support/connected-issue-tracker.js";
+import { ticketLinksOf } from "../../engine/support/ticket-url.js";
 
 /** The runs list as the wire carries it, minus the timestamp the route stamps. */
 export type DashboardRunsPage = Omit<RunsResponse, "generatedAt">;
@@ -58,7 +60,7 @@ export async function listDashboardRuns(query: {
       window: parseWindow(query.window),
       q: parseSearch(query.q),
       now: new Date(),
-      jiraBaseUrl: issueTrackerBaseUrl(),
+      ticketLinks: await issueTrackerTicketLinks(),
     });
     const models = await resolveRunModels(rows.map((row) => row.id));
     return {
@@ -86,7 +88,7 @@ export async function listWorkflowAggregates(
     const { rows, total } = await connectedWorkflowAgg({
       window: parseWindow(query.window),
       now: new Date(),
-      jiraBaseUrl: issueTrackerBaseUrl(),
+      ticketLinks: await issueTrackerTicketLinks(),
       registry: getWorkflowRegistry(settings),
     });
     return { rows, total };
@@ -106,17 +108,19 @@ export async function listWorkflowAggregates(
  * registry entry must not mask a parked run.
  */
 export async function listLiveRuns(): Promise<LiveRunsResponse> {
-  const adapters = createAdapters();
+  const adapters = await createAdapters();
   const now = new Date();
-  const jiraBaseUrl = issueTrackerBaseUrl();
+  // Only a title lookup and a link, so no tracker titles a row by its subject
+  // key and links nothing, rather than taking the whole live board down with
+  // it. The tracker the adapters resolved is the one both panels link with.
+  const issueTracker = issueTrackerIfConnected(adapters);
   const [running, awaiting] = await Promise.all([
     collectLiveRuns({
       registry: adapters.runRegistry,
-      issueTracker: adapters.issueTracker,
-      jiraBaseUrl,
+      issueTracker,
       resolveModels: resolveRunModels,
     }),
-    collectAwaitingRuns({ jiraBaseUrl, now }),
+    collectAwaitingRuns({ ticketLinks: ticketLinksOf(issueTracker), now }),
   ]);
 
   const awaitingIds = new Set(awaiting.map((r) => r.id));
@@ -128,13 +132,13 @@ export async function listLiveRuns(): Promise<LiveRunsResponse> {
  * Per-block statuses, optionally narrowed to one definition. A definitionId
  * that is not a positive integer names no definition, so it narrows nothing.
  */
-export function readRunBlockStatuses(query: {
+export async function readRunBlockStatuses(query: {
   definitionId?: unknown;
 }): Promise<RunBlockStatusesResponse["run"]> {
   const parsed = Number(query.definitionId);
   const definitionId = Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
   return collectBlockStatuses({
-    registry: createAdapters().runRegistry,
+    registry: (await createAdapters()).runRegistry,
     definitionId,
   });
 }

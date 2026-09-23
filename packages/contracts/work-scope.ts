@@ -16,11 +16,11 @@
 import { z } from "zod";
 import type { WorkflowBlockType } from "./block-catalog.generated";
 import type { WorkflowRepositoryScope } from "./domain";
+import { INTEGRATION_ID } from "./integration-id";
 import {
   REPOSITORY_CATALOG_LABEL_MAX_LENGTH,
   REPOSITORY_CATALOG_PATH_PATTERN,
   repositoryCatalogKey,
-  repositoryCatalogProviderSchema,
 } from "./repository-catalog";
 import type { PrTriggerType } from "./trigger-events";
 
@@ -86,7 +86,10 @@ export const workScopeSubjectKeySchema = z
   .refine(
     (key) => WORK_SCOPE_SUBJECT_KINDS.some((kind) => key.startsWith(kind)),
     {
-      message: `subjectKey must name a subject kind (${WORK_SCOPE_SUBJECT_KINDS.join(" ")}), for example ticket:jira:AWP-1 or pr:github:acme/app#7`,
+      // No example key, for the reason the repository key gives none: this
+      // package may not read the registry, so any provider it wrote would be a
+      // guess, and a reader copies an example back verbatim.
+      message: `subjectKey must start with a subject kind (${WORK_SCOPE_SUBJECT_KINDS.join(" ")}), then the provider id and the subject, exactly as a run and its work scope record print it`,
     },
   );
 const WORK_SCOPE_WRITE_PLAN_KEYS_MAX = 16;
@@ -262,7 +265,10 @@ function isRepositoryKey(key: string): boolean {
   if (separator < 0) return false;
   const path = key.slice(separator + 1);
   return (
-    repositoryCatalogProviderSchema.safeParse(key.slice(0, separator)).success &&
+    // The id rule itself, not the provider schema: that one trims, and a key
+    // is compared as the string it is, so "github :acme/api" would pass as a
+    // key no catalog entry ever equals.
+    INTEGRATION_ID.test(key.slice(0, separator)) &&
     path.length <= REPOSITORY_CATALOG_LABEL_MAX_LENGTH &&
     REPOSITORY_CATALOG_PATH_PATTERN.test(path)
   );
@@ -273,15 +279,20 @@ function hasUniqueValues(values: readonly string[]): boolean {
 }
 
 /** The normalised catalog key a run's frozen enabled list already carries:
- *  lower case "provider:path", e.g. "github:blazity/ai-workflow-demo". The
- *  path follows the catalog's own rule, so a GitLab project in nested groups
- *  is a key and a bare "owner/name" is not. */
+ *  lower case "provider:path", where the provider is a registry id. The path
+ *  follows the catalog's own rule, so a project in nested groups is a key on a
+ *  provider whose paths nest, and a bare "owner/name" is never one. */
 export const repositoryKeySchema = z
   .string()
   .trim()
   .toLowerCase()
   .refine(isRepositoryKey, {
-    message: 'repository key must look like "github:owner/name"',
+    // NO EXAMPLE KEY HERE. This package may not read the registry, so any
+    // example it wrote would name a provider by guess, and a reader copying
+    // `provider:owner/name` sends a key naming a provider called `provider`.
+    // The rule is stated instead, with the place real keys are printed.
+    message:
+      "repository key must be lower case: the repository's provider id, a colon, then its path, exactly as the repositories list and every run report print it",
   });
 export type RepositoryKey = z.infer<typeof repositoryKeySchema>;
 

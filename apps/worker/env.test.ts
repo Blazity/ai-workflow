@@ -11,16 +11,11 @@ async function importEnvModule() {
     import("./src/infra/vcs-config.js"),
     import("./src/services/vcs/vcs-bot-login.js"),
   ]);
-  return { ...config, getVcsBotLogin: botIdentity.getVcsBotLogin };
+  return { ...config, readVcsBotLogin: botIdentity.readVcsBotLogin };
 }
 
 describe("env", () => {
   const VALID_ENV = {
-    ISSUE_TRACKER_KIND: "jira",
-    JIRA_BASE_URL: "https://test.atlassian.net",
-    JIRA_API_TOKEN: "token",
-    JIRA_PROJECT_KEY: "PROJ",
-    VCS_KIND: "github",
     GITHUB_APP_ID: "123456",
     // base64 of: -----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n
     GITHUB_APP_PRIVATE_KEY: "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCkZBS0UKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=",
@@ -29,7 +24,6 @@ describe("env", () => {
     GITHUB_REPO: "test-repo",
     CHAT_SDK_SLACK_TOKEN: "xoxb-test",
     CHAT_SDK_CHANNEL_ID: "C123",
-    CHAT_SDK_BOT_NAME: "blazebot",
     SLACK_SIGNING_SECRET: "fake-signing-secret",
     ANTHROPIC_API_KEY: "sk-ant-test",
     DATABASE_URL: "postgresql://user:pass@ep-fake.neon.tech/neondb",
@@ -55,20 +49,55 @@ describe("env", () => {
   it("parses valid env", async () => {
     Object.assign(process.env, VALID_ENV);
     const { env } = await importEnvModule();
-    expect(env.JIRA_BASE_URL).toBe("https://test.atlassian.net");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
   });
 
-  it("accepts optional Jira transition ids", async () => {
+  it("carries no issue tracker configuration at all", async () => {
+    // Core used to refuse to boot without a Jira, and every value below was
+    // parsed here. They are the Jira integration's connection fields now, read
+    // by the integration through its connection and never by core, so a
+    // deployment can set all of them and core still knows nothing about a
+    // ticket system.
     Object.assign(process.env, {
       ...VALID_ENV,
+      ISSUE_TRACKER_KIND: "jira",
+      JIRA_BASE_URL: "https://test.atlassian.net",
+      JIRA_API_TOKEN: "token",
+      JIRA_PROJECT_KEY: "PROJ",
+      JIRA_WEBHOOK_SECRET: "jira-webhook-secret",
       JIRA_BACKLOG_TRANSITION_ID: "11",
+      JIRA_AI_TRANSITION_ID: "21",
       JIRA_AI_REVIEW_TRANSITION_ID: "31",
     });
 
     const { env } = await importEnvModule();
-    expect(env.JIRA_BACKLOG_TRANSITION_ID).toBe("11");
-    expect(env.JIRA_AI_REVIEW_TRANSITION_ID).toBe("31");
+    const values = env as Record<string, unknown>;
+
+    for (const name of [
+      "ISSUE_TRACKER_KIND",
+      "JIRA_BASE_URL",
+      "JIRA_API_TOKEN",
+      "JIRA_PROJECT_KEY",
+      "JIRA_WEBHOOK_SECRET",
+      "JIRA_BACKLOG_TRANSITION_ID",
+      "JIRA_AI_TRANSITION_ID",
+      "JIRA_AI_REVIEW_TRANSITION_ID",
+    ]) {
+      expect(values[name]).toBeUndefined();
+    }
+  });
+
+  it("boots with no issue tracker configured at all", async () => {
+    // The state S12 made legitimate: a deployment that watches no board. It
+    // used to be a boot failure. Nothing about a missing tracker is silent,
+    // though: the Integrations page and the health probes are what say a
+    // tracker is absent or pointed at a project that matches nothing.
+    Object.assign(process.env, VALID_ENV);
+    for (const name of Object.keys(process.env)) {
+      if (name.startsWith("JIRA_")) delete process.env[name];
+    }
+
+    await expect(importEnvModule()).resolves.toBeDefined();
   });
 
   it("uses defaults for optional fields", async () => {
@@ -187,62 +216,45 @@ describe("env", () => {
 
   it("throws on missing required field", async () => {
     const partial = { ...VALID_ENV };
-    delete (partial as any).JIRA_API_TOKEN;
+    delete (partial as any).DATABASE_URL;
+    delete process.env.DATABASE_URL;
     Object.assign(process.env, partial);
     await expect(async () => {
       await importEnvModule();
     }).rejects.toThrow();
   });
 
-  it("parses valid GitLab env without GitHub webhook secret", async () => {
-    const gitlabEnv = { ...VALID_ENV, VCS_KIND: "gitlab" };
-    delete (gitlabEnv as any).GITHUB_APP_ID;
-    delete (gitlabEnv as any).GITHUB_APP_PRIVATE_KEY;
-    delete (gitlabEnv as any).GITHUB_INSTALLATION_ID;
-    delete (gitlabEnv as any).GITHUB_OWNER;
-    delete (gitlabEnv as any).GITHUB_REPO;
-    delete (gitlabEnv as any).GITHUB_WEBHOOK_SECRET;
-    (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
-    (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
-    (gitlabEnv as any).GITLAB_WEBHOOK_SECRET = "gitlab-webhook-secret";
-    Object.assign(process.env, gitlabEnv);
-
-    const { env, getVcsProviderConfig } = await importEnvModule();
-    expect(env.GITLAB_WEBHOOK_SECRET).toBe("gitlab-webhook-secret");
-    const vcs = getVcsProviderConfig("gitlab");
-    expect(vcs.kind).toBe("gitlab");
-    if (vcs.kind !== "gitlab") throw new Error("expected gitlab");
-    expect(vcs.token).toBe("glpat-test");
-    expect(vcs.legacyRepoPath).toBe("group/repo");
-    expect(vcs.host).toBe("https://gitlab.com");
-  });
-
-  it("configures GitHub and GitLab providers in the same deployment without legacy repo env vars", async () => {
-    const mixedEnv = {
+  it("carries no version control provider configuration at all", async () => {
+    // Every one of these used to be parsed into a provider config core built an
+    // adapter from. They are an integration's connection fields now, read by
+    // the integration and never by core, so a deployment can set all of them
+    // and core still knows nothing about a provider.
+    Object.assign(process.env, {
       ...VALID_ENV,
       GITLAB_TOKEN: "glpat-test",
       GITLAB_HOST: "https://gitlab.example.com",
       GITLAB_WEBHOOK_SECRET: "gitlab-webhook-secret",
-    };
-    delete (mixedEnv as any).VCS_KIND;
-    delete (mixedEnv as any).GITHUB_OWNER;
-    delete (mixedEnv as any).GITHUB_REPO;
-    delete (mixedEnv as any).GITLAB_PROJECT_ID;
-    Object.assign(process.env, mixedEnv);
-    delete process.env.VCS_KIND;
-    delete process.env.GITHUB_OWNER;
-    delete process.env.GITHUB_REPO;
-    delete process.env.GITLAB_PROJECT_ID;
+    });
 
-    const { getConfiguredVcsProviders, getVcsProviderConfig } = await importEnvModule();
+    const config = await importEnvModule();
+    const values = config.env as Record<string, unknown>;
 
-    expect(getConfiguredVcsProviders().map((provider) => provider.kind)).toEqual(["github", "gitlab"]);
-    expect(getVcsProviderConfig("github").host).toBe("https://github.com");
-    expect(getVcsProviderConfig("gitlab").host).toBe("https://gitlab.example.com");
-    // Neither carries a repository: a deployment with two providers names the
-    // repository per call, which is what the catalog made true everywhere.
-    expect(getVcsProviderConfig("github").legacyRepoPath).toBeUndefined();
-    expect(getVcsProviderConfig("gitlab").legacyRepoPath).toBeUndefined();
+    for (const name of [
+      "GITHUB_APP_ID",
+      "GITHUB_APP_PRIVATE_KEY",
+      "GITHUB_INSTALLATION_ID",
+      "GITHUB_WEBHOOK_SECRET",
+      "GITHUB_BOT_LOGIN",
+      "GITHUB_OWNER",
+      "GITHUB_REPO",
+      "GITLAB_TOKEN",
+      "GITLAB_HOST",
+      "GITLAB_WEBHOOK_SECRET",
+    ]) {
+      expect(values[name]).toBeUndefined();
+    }
+    expect(Object.keys(config)).not.toContain("getConfiguredVcsProviders");
+    expect(Object.keys(config)).not.toContain("getVcsProviderConfig");
   });
 
   it("leaves bot identity unset when no review bot login is configured", async () => {
@@ -251,155 +263,35 @@ describe("env", () => {
     delete process.env.GITHUB_BOT_LOGIN;
     delete process.env.GITLAB_BOT_LOGIN;
 
-    const { getVcsBotLogin } = await importEnvModule();
+    const { readVcsBotLogin } = await importEnvModule();
 
-    expect(getVcsBotLogin("github")).toBeUndefined();
-    expect(getVcsBotLogin("gitlab")).toBeUndefined();
+    for (const provider of ["github", "gitlab"]) {
+      const reading = await readVcsBotLogin(provider);
+      expect(reading.readable ? reading.login : undefined).toBeUndefined();
+    }
   });
 
-  it.each(["VCS_BOT_LOGIN", "GITHUB_BOT_LOGIN", "GITLAB_BOT_LOGIN"])(
-    "rejects a whitespace-only %s",
-    async (name) => {
-      Object.assign(process.env, VALID_ENV, { [name]: "   " });
+  it("rejects a whitespace-only VCS_BOT_LOGIN", async () => {
+    // The one bot login core still reads. A per-provider one is a connection
+    // field, validated where the connection is saved.
+    Object.assign(process.env, VALID_ENV, { VCS_BOT_LOGIN: "   " });
 
-      await expect(importEnvModule()).rejects.toThrow();
-    },
-  );
-
-  it("trims and case-normalizes the resolved provider bot login", async () => {
-    Object.assign(process.env, {
-      ...VALID_ENV,
-      GITHUB_BOT_LOGIN: "  GitHub-App[Bot]  ",
-    });
-
-    const { env, getVcsBotLogin } = await importEnvModule();
-
-    expect(env.GITHUB_BOT_LOGIN).toBe("GitHub-App[Bot]");
-    expect(getVcsBotLogin("github")).toBe("github-app");
+    await expect(importEnvModule()).rejects.toThrow();
   });
 
-  it("uses the legacy bot login only for an unambiguous single provider", async () => {
-    Object.assign(process.env, { ...VALID_ENV, VCS_BOT_LOGIN: "legacy-bot" });
-    delete process.env.GITHUB_BOT_LOGIN;
-    delete process.env.GITLAB_BOT_LOGIN;
-
-    const { getVcsBotLogin } = await importEnvModule();
-
-    expect(getVcsBotLogin("github")).toBe("legacy-bot");
-    expect(getVcsBotLogin("gitlab")).toBeUndefined();
-  });
-
-  it("requires provider-specific bot identities in a mixed-provider deployment", async () => {
-    Object.assign(process.env, {
-      ...VALID_ENV,
-      GITLAB_TOKEN: "glpat-test",
-      GITLAB_WEBHOOK_SECRET: "gitlab-webhook-secret",
-      VCS_BOT_LOGIN: "ambiguous-legacy-bot",
-      GITHUB_BOT_LOGIN: "github-app[bot]",
-    });
-    delete process.env.GITLAB_BOT_LOGIN;
-
-    const { getVcsBotLogin } = await importEnvModule();
-
-    expect(getVcsBotLogin("github")).toBe("github-app");
-    expect(getVcsBotLogin("gitlab")).toBeUndefined();
-  });
-
-  it("honors GITLAB_HOST for self-hosted instances", async () => {
-    const gitlabEnv = { ...VALID_ENV, VCS_KIND: "gitlab" };
-    delete (gitlabEnv as any).GITHUB_APP_ID;
-    delete (gitlabEnv as any).GITHUB_APP_PRIVATE_KEY;
-    delete (gitlabEnv as any).GITHUB_INSTALLATION_ID;
-    delete (gitlabEnv as any).GITHUB_OWNER;
-    delete (gitlabEnv as any).GITHUB_REPO;
-    (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
-    (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
-    (gitlabEnv as any).GITLAB_HOST = "https://gitlab.example.com";
-    (gitlabEnv as any).GITLAB_WEBHOOK_SECRET = "gitlab-webhook-secret";
-    Object.assign(process.env, gitlabEnv);
-
-    const { getVcsProviderConfig } = await importEnvModule();
-    expect(getVcsProviderConfig("gitlab").host).toBe("https://gitlab.example.com");
-  });
-
-  it("throws at startup when no VCS provider credentials are configured", async () => {
-    const noProviderEnv = { ...VALID_ENV };
-    delete (noProviderEnv as any).VCS_KIND;
-    delete (noProviderEnv as any).GITHUB_APP_ID;
-    delete (noProviderEnv as any).GITHUB_APP_PRIVATE_KEY;
-    delete (noProviderEnv as any).GITHUB_INSTALLATION_ID;
-    delete (noProviderEnv as any).GITHUB_OWNER;
-    delete (noProviderEnv as any).GITHUB_REPO;
-    delete (noProviderEnv as any).GITHUB_WEBHOOK_SECRET;
-    Object.assign(process.env, noProviderEnv);
-    delete process.env.VCS_KIND;
+  it("starts with no provider credentials, and with half a set, because a connection is checked where it is made", async () => {
+    // Both of these refused to boot before S11: a deployment with three of the
+    // four GitHub App values, and one with the App configured and no webhook
+    // secret. A worker that will not start says nothing to the person who can
+    // fix it, so the check moved to the Integrations page, where the same two
+    // states are rows naming the variable to set.
+    const partial = { ...VALID_ENV } as Record<string, string>;
+    delete partial.GITHUB_APP_ID;
+    delete partial.GITHUB_WEBHOOK_SECRET;
+    Object.assign(process.env, partial);
     delete process.env.GITHUB_APP_ID;
-    delete process.env.GITHUB_APP_PRIVATE_KEY;
-    delete process.env.GITHUB_INSTALLATION_ID;
-    delete process.env.GITHUB_OWNER;
-    delete process.env.GITHUB_REPO;
     delete process.env.GITHUB_WEBHOOK_SECRET;
 
-    await expect(async () => {
-      await importEnvModule();
-    }).rejects.toThrow("At least one VCS provider must be configured");
-  });
-
-  it("throws at startup when GitHub App credentials are partial", async () => {
-    const partial = { ...VALID_ENV };
-    delete (partial as any).GITHUB_APP_ID;
-    Object.assign(process.env, partial);
-
-    await expect(async () => {
-      await importEnvModule();
-    }).rejects.toThrow("GitHub provider requires GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_INSTALLATION_ID");
-  });
-
-  it("requires GITHUB_WEBHOOK_SECRET when GitHub provider credentials are configured", async () => {
-    const partial = { ...VALID_ENV };
-    delete (partial as any).GITHUB_WEBHOOK_SECRET;
-    Object.assign(process.env, partial);
-    delete process.env.GITHUB_WEBHOOK_SECRET;
-    delete process.env.GITLAB_WEBHOOK_SECRET;
-
-    await expect(async () => {
-      await importEnvModule();
-    }).rejects.toThrow("GitHub provider requires GITHUB_WEBHOOK_SECRET");
-  });
-
-  it("requires GITLAB_WEBHOOK_SECRET when GitLab provider credentials are configured", async () => {
-    const gitlabEnv = { ...VALID_ENV };
-    delete (gitlabEnv as any).VCS_KIND;
-    delete (gitlabEnv as any).GITHUB_APP_ID;
-    delete (gitlabEnv as any).GITHUB_APP_PRIVATE_KEY;
-    delete (gitlabEnv as any).GITHUB_INSTALLATION_ID;
-    delete (gitlabEnv as any).GITHUB_OWNER;
-    delete (gitlabEnv as any).GITHUB_REPO;
-    delete (gitlabEnv as any).GITHUB_WEBHOOK_SECRET;
-    (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
-    (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
-    Object.assign(process.env, gitlabEnv);
-    delete process.env.VCS_KIND;
-    delete process.env.GITHUB_WEBHOOK_SECRET;
-    delete process.env.GITLAB_WEBHOOK_SECRET;
-
-    await expect(async () => {
-      await importEnvModule();
-    }).rejects.toThrow("GitLab provider requires GITLAB_WEBHOOK_SECRET");
-  });
-
-  it("getVcsProviderConfig returns GitHub App config", async () => {
-    Object.assign(process.env, VALID_ENV);
-    const { getVcsProviderConfig } = await importEnvModule();
-    const vcs = getVcsProviderConfig("github");
-    expect(vcs.kind).toBe("github");
-    if (vcs.kind !== "github") throw new Error("expected github");
-    expect(vcs.auth.appId).toBe(123456);
-    expect(vcs.auth.installationId).toBe(789012);
-    expect(vcs.auth.privateKeyBase64).toBe(
-      "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCkZBS0UKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=",
-    );
-    expect(vcs.legacyRepoPath).toBe("test-org/test-repo");
-    expect(vcs.host).toBe("https://github.com");
+    await expect(importEnvModule()).resolves.toBeDefined();
   });
 });

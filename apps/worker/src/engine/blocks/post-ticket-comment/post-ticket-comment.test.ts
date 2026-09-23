@@ -12,7 +12,7 @@ vi.mock("../../../db/repositories/active-runs.js", () => ({
     mocks.assertActiveRunOwner(...args),
 }));
 vi.mock("../../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
+  createAdapters: () => ({ issueTrackerResolution: { ok: true, adapter: { postComment: mocks.postComment }  }}),
 }));
 
 import { execute } from "./execute.js";

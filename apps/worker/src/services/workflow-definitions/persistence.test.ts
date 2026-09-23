@@ -17,8 +17,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
     GITLAB_TOKEN: "gitlab-token",
     CHAT_SDK_SLACK_TOKEN: "slack-token",
     CHAT_SDK_CHANNEL_ID: "channel",
-    GENAI_ENGINE_API_KEY: "arthur-key",
-    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
   },
 }));
 const { loggerMock } = vi.hoisted(() => ({
@@ -182,6 +180,16 @@ let db: Db;
 beforeEach(async () => {
   db = await createTestDb();
   loggerMock.warn.mockClear();
+});
+
+// GitHub configured the way a deployment configures it. Version control is an
+// integration since S11, so without a connection every block that needs the
+// capability is correctly unavailable, and these cases are not about that.
+Object.assign(process.env, {
+  GITHUB_APP_ID: "1",
+  GITHUB_APP_PRIVATE_KEY: "private-key",
+  GITHUB_INSTALLATION_ID: "2",
+  GITHUB_WEBHOOK_SECRET: "webhook-secret",
 });
 
 describe("migration seed", () => {

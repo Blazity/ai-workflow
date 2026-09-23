@@ -7,7 +7,7 @@ export type RunAnalysisStage =
   | "no_change";
 
 export interface RunAnalysisRepository {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   defaultBranch: string;
   researchBranch: string;
@@ -37,7 +37,7 @@ export interface RunAnalysisLeftOutRepository {
 }
 
 export interface RunAnalysisRepositoryRequest {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   rationale: string;
 }

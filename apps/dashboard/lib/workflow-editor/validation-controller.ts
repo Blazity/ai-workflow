@@ -2,6 +2,7 @@ import type {
   WorkflowBlockContract,
   WorkflowAvailableValuesByNode,
   WorkflowDefinitionValidationIssue,
+  WorkflowDefinitionValidationNotice,
   WorkflowDefinitionValidationResponse,
 } from "@shared/contracts";
 
@@ -15,8 +16,23 @@ export type WorkflowValidationState =
 interface ValidationStatePayload<Status extends string> {
   status: Status;
   issues: WorkflowDefinitionValidationIssue[];
+  /** What the validator said without refusing: shown, never counted against Deploy. */
+  notices?: WorkflowDefinitionValidationNotice[];
   nodeContracts: Record<string, WorkflowBlockContract>;
   availableValuesByNode: WorkflowAvailableValuesByNode;
+}
+
+/** The editor's state for a validation the worker answered. */
+export function validationStateOf(
+  result: WorkflowDefinitionValidationResponse,
+): WorkflowValidationState {
+  return {
+    status: result.valid ? "valid" : "invalid",
+    issues: result.issues,
+    ...(result.notices && result.notices.length > 0 ? { notices: result.notices } : {}),
+    nodeContracts: result.nodeContracts,
+    availableValuesByNode: result.availableValuesByNode,
+  };
 }
 
 export type ValidationTimer = (callback: () => void, delayMs: number) => () => void;
@@ -84,6 +100,7 @@ export function createWorkflowValidationController<T>(
     options.onState({
       status: "checking",
       issues: lastCompleted?.issues ?? [],
+      ...(lastCompleted?.notices ? { notices: lastCompleted.notices } : {}),
       nodeContracts: lastCompleted?.nodeContracts ?? {},
       availableValuesByNode: lastCompleted?.availableValuesByNode ?? {},
     });
@@ -94,12 +111,7 @@ export function createWorkflowValidationController<T>(
     result: WorkflowDefinitionValidationResponse,
   ) {
     if (disposed || generation !== scheduledGeneration) return;
-    const state: WorkflowValidationState = {
-      status: result.valid ? "valid" : "invalid",
-      issues: result.issues,
-      nodeContracts: result.nodeContracts,
-      availableValuesByNode: result.availableValuesByNode,
-    };
+    const state = validationStateOf(result);
     lastCompleted = state;
     options.onState(state);
   }

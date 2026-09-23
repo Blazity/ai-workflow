@@ -3,7 +3,7 @@ import test from "node:test";
 import React, { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition } from "@integrations/registry";
 import type { SettingsEntryView } from "@shared/contracts";
 import { installTestDom } from "@/components/ui/test-dom";
 import { SettingControl } from "./setting-control";
@@ -14,7 +14,7 @@ test("settings switch toggles with Space and persists through the row change han
   const dom = installTestDom();
   const container = document.createElement("div");
   document.body.append(container);
-  const definition = findSettingDefinition("ENABLE_REPO_MEMORY");
+  const definition = settingDefinition("ENABLE_REPO_MEMORY");
   assert.ok(definition);
   const entry: SettingsEntryView = {
     key: "ENABLE_REPO_MEMORY",

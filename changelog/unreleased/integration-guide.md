@@ -1,0 +1,1 @@
+- Developers can add an integration of their own: `pnpm run new:integration` creates a package that passes every check before it is edited, and the guide in `docs/architecture/integrations.md` takes it from there to a connected card on the Integrations page.

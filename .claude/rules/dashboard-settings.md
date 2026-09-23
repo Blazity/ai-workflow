@@ -9,6 +9,7 @@ paths:
   - "apps/dashboard/components/cockpit/screens/memory.tsx"
   - "apps/dashboard/components/cockpit/logout-button.tsx"
   - "packages/contracts/settings-registry.ts"
+  - "integrations/registry/index.ts"
 ---
 
 # Dashboard settings
@@ -18,7 +19,9 @@ paths:
   cadence with `appliesToNote` in
   `apps/dashboard/lib/settings/format.ts`. Guard:
   `apps/dashboard/lib/settings/format.test.ts`.
-- Keep the Settings screen registry-driven. Group entries in registry order,
+- Keep the Settings screen registry-driven: look a key up with `settingDefinition`
+  from `@integrations/registry` (core's keys and integrations' declared ones),
+  never core's registry alone. Group entries in that list's order,
   build PATCH bodies from changed keys only, and keep validation refusals keyed
   to their fields in `apps/dashboard/lib/settings/groups.ts` and
   `apps/dashboard/lib/settings/patch.ts`. Guard:
@@ -43,10 +46,13 @@ paths:
   `apps/dashboard/lib/api/client.ts`, while the worker remains the authority for
   role checks and registry validation. Guard:
   `apps/dashboard/app/api/settings/handler.test.ts`.
-- Use one dirty-form registry for every settings form and repository profile
-  draft. The cockpit shell and logout action consult
-  `apps/dashboard/lib/settings/unsaved.ts`, each form owns its `beforeunload`
-  listener, and no per-form popstate sentinel is added. Guard:
+- Use one dirty-form registry for every settings form, repository profile
+  draft and integration connection form. The cockpit shell and logout action
+  consult `apps/dashboard/lib/settings/unsaved.ts`; each form registers and
+  owns its `beforeunload` listener through `useUnsavedWork`
+  (`apps/dashboard/lib/settings/use-unsaved-work.ts`). Back and Forward are
+  asked about once, by the shell (`lib/settings/back-guard.ts`); no per-form
+  popstate sentinel is added. Guard:
   `apps/dashboard/app/(cockpit)/cockpit-shell.test.tsx`.
 - Gate editing with `canEditSettings`; every role may read settings, members see
   read-only forms, and the worker enforces writes. Place:

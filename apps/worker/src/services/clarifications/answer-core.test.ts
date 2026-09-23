@@ -2,6 +2,16 @@ import { eq, sql } from "drizzle-orm";
 import { fakeAnswerReadingModel, replyFromPrompt } from "../work-scope/read-answer.fake.js";
 import type { AnswerReadingModel } from "../work-scope/index.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// A deployment with nothing connected: the secrets it knows are its
+// environment's. This suite is about something else, and the real source reads
+// the integration settings from a database it does not have
+// (services/integrations/secret-values.test.ts proves that read).
+vi.mock("../integrations/secret-values.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../integrations/secret-values.js")>();
+  const { environmentSecretValues } = await import("../../run-observability/configured-secrets.js");
+  return { ...actual, knownSecretValues: async () => environmentSecretValues() };
+});
 import { defaultSettingsSnapshot, type WorkScopeAskedRepository } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import {
@@ -47,6 +57,15 @@ vi.mock("workflow/api", () => ({
 vi.mock("../run-lifecycle/cancel-run.js", () => ({
   cancelRunForOperator: (...args: unknown[]) => mocks.cancelRunForOperator(...args),
 }));
+
+// This deployment has an issue tracker connected. Which one, and what it is
+// wired to, is an integration connection since S12 and is resolved from the
+// database; this suite is about what happens to a RUN, so it says the one
+// thing it means and leaves the resolution to its own tests.
+vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
+  const support = await import("../../test-support/issue-tracker.js");
+  return support.connectedIssueTracker({});
+});
 
 const TICKET = "AWT-9";
 const SUBJECT = "ticket:jira:AWT-9";
@@ -215,6 +234,31 @@ beforeEach(async () => {
     scheduleOccurrenceSettled: null,
   });
   db = await createTestDb();
+});
+
+// The tracker is optional to the core since a deployment may have none, and
+// only a question with no ticket may arrive without one. A ticket question
+// that did would be answered with nothing moved and nothing said on the ticket,
+// so the core refuses it before recording anything.
+describe("answerClarificationAndResume without a tracker", () => {
+  it("refuses a ticket question that arrived without its tracker, recording nothing", async () => {
+    const row = await seedPending();
+    const current = await getHookClarification(db, row.id);
+
+    await expect(
+      answerClarificationAndResume({
+        db,
+        row: current!,
+        rawAnswer: "Use Next.js",
+        actor: ACTOR,
+        surface: { kind: "dashboard" },
+        answerReadingDeps: { generate: fakeAnswerReadingModel() },
+        cancelSettings: defaultSettingsSnapshot(),
+      }),
+    ).rejects.toThrow(/without the issue tracker/);
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+    expect((await getHookClarification(db, row.id))?.status).toBe("pending");
+  });
 });
 
 describe("answerClarificationAndResume resume attempts", () => {

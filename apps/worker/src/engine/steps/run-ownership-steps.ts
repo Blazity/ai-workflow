@@ -7,7 +7,7 @@ export async function bindWorkflowCandidateStep(
 ): Promise<boolean> {
   "use step";
   const { createAdapters } = await import("../support/adapters.js");
-  return createAdapters().runRegistry.markRunEntryStarted({
+  return (await createAdapters()).runRegistry.markRunEntryStarted({
     subjectKey,
     ticketKey,
     kind,
@@ -78,8 +78,41 @@ export async function acknowledgePrTriggerDispatchStep(
     triggerType: entry.triggerType,
     pr: entry.pr,
   };
-  const current = await readProviderCurrentPullRequest(triggerEvent);
-  if (!bindCurrentPullRequest(triggerEvent, current)) {
+  const { isPullRequestUnreadableError } = await import("@integrations/sdk");
+  let read: Awaited<ReturnType<typeof readProviderCurrentPullRequest>>;
+  try {
+    read = await readProviderCurrentPullRequest(triggerEvent);
+  } catch (error) {
+    // The same answer dispatch gives it: a pull request this connection can
+    // never read closes the delivery, and this run stands down, instead of
+    // failing.
+    if (isPullRequestUnreadableError(error)) {
+      await completeConnectedTriggerDelivery(
+        entry.delivery.provider,
+        entry.delivery.deliveryId,
+        { result: "ignored_pull_request_unreadable" },
+      );
+      return false;
+    }
+    // Any other failure (a refused credential, a provider that did not
+    // answer) belongs to this moment or to the connection, not to the
+    // delivery. This step is not retried, so throwing would leave a failed run
+    // for a delivery that will still be served: the run stands down instead,
+    // and the delivery stays pending for the drain to bind again once this
+    // run has released the pull request.
+    const { logger } = await import("../../infra/logger.js");
+    logger.warn(
+      {
+        subjectKey: entry.subjectKey,
+        deliveryId: entry.delivery.deliveryId,
+        runId: workflowRunId,
+        err: error instanceof Error ? error.message : String(error),
+      },
+      "pr_trigger_head_read_failed_run_stood_down",
+    );
+    return false;
+  }
+  if (!bindCurrentPullRequest(triggerEvent, read.current, read.handles)) {
     await completeConnectedTriggerDelivery(
       entry.delivery.provider,
       entry.delivery.deliveryId,
@@ -175,12 +208,14 @@ export async function repairClarificationLabelStep(
 ): Promise<void> {
   "use step";
   const { createAdapters } = await import("../../engine/support/adapters.js");
+  const { issueTrackerIfConnected } = await import("../../engine/support/connected-issue-tracker.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../../engine/support/ticket-labels.js");
   const { updateConnectedTicketLabelsForRun } = await import(
     "../../engine/support/ticket-label-mutation.js"
   );
-  const { issueTracker } = createAdapters();
-  if (typeof issueTracker.updateLabels !== "function") return;
+  // A repair of a label nobody can see without a tracker has nothing to do.
+  const issueTracker = issueTrackerIfConnected(await createAdapters());
+  if (typeof issueTracker?.updateLabels !== "function") return;
   await updateConnectedTicketLabelsForRun({
     issueTracker,
     ticketKey,

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasUnquotedAiWorkflowCommentMarker,
-  isOurOwnPrComment,
+  isOurOwnVcsComment,
   reviewLedgerMarker,
 } from "./vcs-bot-identity.js";
 
@@ -15,7 +15,13 @@ import {
  * the identity rule did not know about, and on every pull request it had
  * touched, our own findings were read as a person's words.
  */
-const MARKER_WRITERS = ["./github.ts", "./gitlab.ts", "./vcs-bot-identity.ts"];
+const MARKER_WRITERS = [
+  "../../../../../integrations/sdk/review-markers.ts",
+  "../../../../../integrations/github/vcs.ts",
+  "../../../../../integrations/gitlab/vcs.ts",
+  "./types.ts",
+  "./vcs-bot-identity.ts",
+];
 
 /** Every `<!-- ai-workflow... -->` literal in a file, with template holes and
  *  capture groups filled in so the result is a marker a provider could return. */
@@ -34,7 +40,7 @@ function markersWrittenIn(relativePath: string): string[] {
   ];
 }
 
-describe("isOurOwnPrComment knows every marker this workflow writes", () => {
+describe("isOurOwnVcsComment knows every marker this workflow writes", () => {
   const markers = MARKER_WRITERS.flatMap(markersWrittenIn);
 
   it("found the marker families to check, in the adapters' own source", () => {
@@ -48,26 +54,26 @@ describe("isOurOwnPrComment knows every marker this workflow writes", () => {
   });
 
   it.each(markers)("claims %s as ours when its author wrote it", (marker) => {
-    expect(isOurOwnPrComment(`Some body text.\n\n${marker}`)).toBe(true);
+    expect(isOurOwnVcsComment(`Some body text.\n\n${marker}`)).toBe(true);
   });
 
   it.each(markers)("hands %s back to the person who only quoted it", (marker) => {
     const quoted = `> Some body text.\n>\n> ${marker}\n\nThis did not fix it.`;
-    expect(isOurOwnPrComment(quoted)).toBe(false);
+    expect(isOurOwnVcsComment(quoted)).toBe(false);
   });
 });
 
-describe("isOurOwnPrComment", () => {
+describe("isOurOwnVcsComment", () => {
   it("reads a comment with no marker at all as a person's", () => {
-    expect(isOurOwnPrComment("please add the missing null check")).toBe(false);
-    expect(isOurOwnPrComment("")).toBe(false);
-    expect(isOurOwnPrComment(null)).toBe(false);
-    expect(isOurOwnPrComment(undefined)).toBe(false);
+    expect(isOurOwnVcsComment("please add the missing null check")).toBe(false);
+    expect(isOurOwnVcsComment("")).toBe(false);
+    expect(isOurOwnVcsComment(null)).toBe(false);
+    expect(isOurOwnVcsComment(undefined)).toBe(false);
   });
 
   it("reads a marker behind a nested or indented quote as quoted", () => {
     for (const prefix of ["> > ", "   > ", ">"]) {
-      expect(isOurOwnPrComment(`${prefix}${AI_WORKFLOW_COMMENT_MARKER}\n\nstill broken`)).toBe(
+      expect(isOurOwnVcsComment(`${prefix}${AI_WORKFLOW_COMMENT_MARKER}\n\nstill broken`)).toBe(
         false,
       );
     }
@@ -75,9 +81,9 @@ describe("isOurOwnPrComment", () => {
 
   it("keeps a note of ours that quotes somebody else", () => {
     expect(
-      isOurOwnPrComment(`> still broken\n\nFixed in a1b2c3d.\n\n${AI_WORKFLOW_COMMENT_MARKER}`),
+      isOurOwnVcsComment(`> still broken\n\nFixed in a1b2c3d.\n\n${AI_WORKFLOW_COMMENT_MARKER}`),
     ).toBe(true);
-    expect(isOurOwnPrComment(`Answered.\n\n${reviewLedgerMarker("PRRT_1")}`)).toBe(true);
+    expect(isOurOwnVcsComment(`Answered.\n\n${reviewLedgerMarker("PRRT_1")}`)).toBe(true);
   });
 });
 
@@ -92,7 +98,7 @@ describe("hasUnquotedAiWorkflowCommentMarker", () => {
   });
 
   it("does not accept a review marker in place of the bot marker", () => {
-    // Narrower than isOurOwnPrComment on purpose: the bot marker is the one
+    // Narrower than isOurOwnVcsComment on purpose: the bot marker is the one
     // trigger-events falls back to when a bot login is misconfigured, so a
     // review finding's own marker must not stand in for it.
     expect(hasUnquotedAiWorkflowCommentMarker("body\n\n<!-- ai-workflow-review-finding:abc -->")).toBe(

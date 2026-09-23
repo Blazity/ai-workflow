@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SETTINGS_REGISTRY } from "@shared/contracts";
+import { settingDefinitions } from "@integrations/registry";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { writeManySettings } from "../../db/repositories/settings.js";
@@ -11,6 +11,21 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
+// A board has a tracker half since S12, and that half is an integration's
+// connection rather than a settings row. This suite is about the settings
+// half, so it says only that a tracker is connected, and which project it
+// names so the join can be seen.
+vi.mock("../../engine/support/issue-tracker-runtime.js", () => ({
+  trackerIdentityOf: (id: string, baseUrl: string) =>
+    `${id}\u0000${baseUrl.trim().toLowerCase()}`,
+  resolveActiveIssueTracker: async () => ({
+    ok: true,
+    id: "jira",
+    name: "Jira",
+    adapter: {},
+    wiring: { projectKey: "AIW", connection: "tracker-connection" },
+  }),
+}));
 const {
   loadSettingsResolution,
   loadSettingsSnapshot,
@@ -82,7 +97,9 @@ describe("settings snapshot", () => {
     const snapshot = await loadSettingsSnapshot();
     const synchronous = settingsSnapshotFromEnvironment();
 
-    for (const definition of SETTINGS_REGISTRY) {
+    // This build's settings: core's registry and every setting an integration
+    // declares, which a request resolves beside core's.
+    for (const definition of settingDefinitions) {
       const key = definition.key as keyof typeof snapshot;
       expect(snapshot).toHaveProperty(definition.key);
       const value: unknown = snapshot[key];
@@ -93,7 +110,7 @@ describe("settings snapshot", () => {
       expect(synchronous[key]).toEqual(value);
     }
     expect(Object.keys(snapshot).sort()).toEqual(
-      SETTINGS_REGISTRY.map((definition) => definition.key).sort(),
+      settingDefinitions.map((definition) => definition.key).sort(),
     );
   });
 
@@ -148,7 +165,18 @@ describe("settings accessors", () => {
       serverVersion: "0.1.0",
       maxResultBytes: 524_288,
     });
-    expect(ticketBoardSettings(snapshot)).toMatchObject({
+  });
+
+  it("reads the board's columns from the snapshot and its project from the connection", async () => {
+    // The one accessor that is not synchronous, and deliberately so: since S12
+    // its project and transition ids come from the tracker's connection, which
+    // is a database read. Its columns still come from the snapshot passed in,
+    // which is what keeps the poller and the dashboard agreeing on a renamed
+    // column.
+    const snapshot = await loadSettingsSnapshot();
+
+    expect(await ticketBoardSettings(snapshot)).toMatchObject({
+      trackerName: "Jira",
       projectKey: "AIW",
       aiColumn: "AI",
       aiReviewColumn: "AI Review",
@@ -161,15 +189,16 @@ describe("settings accessors", () => {
     // A literal list, not a loop over the registry: the registry says which
     // keys exist, and iterating it over the snapshot would stay green if an
     // accessor itself became async. Add every new accessor that reads a
-    // migrated key here.
+    // migrated key here. `ticketBoardSettings` is not on it: it alone reaches
+    // past the snapshot, to the tracker's connection, and the test above says
+    // so out loud rather than letting it slip off this list unnoticed.
     const results: unknown[] = [
       maxConcurrentAgents(snapshot),
       dashboardOrganizationSettings(snapshot),
       mcpSettings(snapshot),
-      ticketBoardSettings(snapshot),
     ];
 
-    expect(results).toHaveLength(4);
+    expect(results).toHaveLength(3);
     for (const result of results) {
       expect(result).not.toBeInstanceOf(Promise);
       expect(typeof (result as { then?: unknown })?.then === "function").toBe(false);
@@ -185,6 +214,6 @@ describe("settings accessors", () => {
     const snapshot = await loadSettingsSnapshot();
 
     expect(maxConcurrentAgents(snapshot)).toBe(2);
-    expect(ticketBoardSettings(snapshot).aiColumn).toBe("Agent");
+    expect((await ticketBoardSettings(snapshot)).aiColumn).toBe("Agent");
   });
 });

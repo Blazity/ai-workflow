@@ -505,6 +505,13 @@
       "when": 1789864099585,
       "tag": "0071_work_scope_related_repository_origin",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1790094437670,
+      "tag": "0072_integrations_contract",
+      "breakpoints": true
     }
   ]
 }

@@ -21,6 +21,7 @@ export {
   cancelSubjectRun,
 } from "./cancel-run.js";
 export type {
+  CancelRunDetailedInput,
   CancelRunForOperatorResult,
   CancelRunTarget,
 } from "./cancel-run.js";

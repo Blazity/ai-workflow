@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   db: undefined as unknown,
   sessionUserId: "user_admin",
   env: { DASHBOARD_ORG_SLUG: "ai-workflow", MAX_CONCURRENT_AGENTS: 3 },
+  tracker: "connected" as "connected" | "not_connected" | "unreadable",
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -36,12 +37,18 @@ vi.mock("../../../services/auth/auth-instance.js", () => ({
     },
   },
 }));
-vi.mock("../../../engine/support/adapters.js", () => ({
-  createAdapters: () => ({
-    issueTracker: { fetchTicket: mocks.fetchTicket, postComment: mocks.postComment },
-    runRegistry: {},
-  }),
-}));
+vi.mock("../../../engine/support/adapters.js", async () => {
+  const { adaptersFor } = await import("../../../test-support/issue-tracker.js");
+  return {
+    createAdapters: () =>
+      adaptersFor(
+        state.tracker === "connected"
+          ? ({ fetchTicket: mocks.fetchTicket, postComment: mocks.postComment } as never)
+          : state.tracker,
+        { runRegistry: {} },
+      ),
+  };
+});
 vi.mock("../../../services/approvals/dispatch.js", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dispatchPlanApproved: (...args: any[]) => mocks.dispatchPlanApproved(...args),
@@ -103,6 +110,7 @@ const runStatus = (runId: string) =>
 beforeEach(async () => {
   vi.clearAllMocks();
   state.sessionUserId = "user_admin";
+  state.tracker = "connected";
   mocks.fetchTicket.mockResolvedValue({ identifier: "AWT-1", trackerStatus: "AI" });
   mocks.postComment.mockResolvedValue(null);
   db = await createTestDb();
@@ -338,6 +346,40 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     expect(stored?.decidedById).toBe("user_admin");
     expect(stored?.dispatchedRunId).toBeNull();
     expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
+  });
+});
+
+describe("deciding a plan on a deployment with no usable issue tracker", () => {
+  it("refuses an approval with 409 and decides nothing, since the run needs its ticket", async () => {
+    const row = await seedPending("AWT-1");
+    state.tracker = "not_connected";
+
+    const res = await approve(row.id);
+
+    expect(res.status).toBe(409);
+    expect((await getApproval(db, row.id))?.status).toBe("pending");
+    expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
+  });
+
+  it("answers 503 when the settings could not be read, so the same button works again", async () => {
+    const row = await seedPending("AWT-1");
+    state.tracker = "unreadable";
+
+    const res = await approve(row.id);
+
+    expect(res.status).toBe(503);
+    expect((await getApproval(db, row.id))?.status).toBe("pending");
+  });
+
+  it("still rejects a plan, leaving the ticket without its comment", async () => {
+    const row = await seedPending("AWT-1");
+    state.tracker = "not_connected";
+
+    const res = await reject(row.id);
+
+    expect(res.status).toBe(200);
+    expect((await getApproval(db, row.id))?.status).toBe("rejected");
+    expect(mocks.postComment).not.toHaveBeenCalled();
   });
 });
 

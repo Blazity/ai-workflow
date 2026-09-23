@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../support/adapters.js", () => ({
-  createAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
+  createAdapters: () => ({ issueTrackerResolution: { ok: true, adapter: { postComment: mocks.postComment }  }}),
 }));
 
 vi.mock("../../db/repositories/active-runs.js", () => ({

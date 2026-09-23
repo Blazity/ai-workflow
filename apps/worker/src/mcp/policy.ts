@@ -413,6 +413,34 @@ const WORK_SCOPE_EDIT_POLICY = {
   },
 } as const satisfies McpToolPolicy;
 
+/**
+ * Erasing one memory document.
+ *
+ * The same two roles the dashboard route allows (`canDeleteAgentMemory`), and
+ * deliberately not `member`: this path exists to answer erasure requests and to
+ * take back something the agent remembered wrongly, and both are decisions an
+ * admin owns. `service` is left out for the same reason the dashboard leaves
+ * out a member: an unattended client must not be able to quietly empty a
+ * deployment's memory.
+ */
+const MEMORY_FORGET_POLICY = {
+  scope: "runs:dispatch",
+  roles: ["admin", "owner"],
+  mutation: "direct",
+  annotations: {
+    readOnlyHint: false,
+    // A hard delete. The text is gone and no later run brings that document
+    // back; it only learns something again. A client must never probe with it.
+    destructiveHint: true,
+    // A repeat under the same key replays the first answer, and a fresh key on
+    // an already-erased document answers NOT_FOUND as data.
+    idempotentHint: true,
+    // Reaches whatever provider keeps this deployment's memory, which may not
+    // be this deployment's own database.
+    openWorldHint: true,
+  },
+} as const satisfies McpToolPolicy;
+
 const TOOL_POLICY = {
   "system.capabilities": READ_POLICY,
   "tickets.get": READ_POLICY,
@@ -506,6 +534,12 @@ const TOOL_POLICY = {
   // them, and dropping a membership stops that person's.
   "runs.briefing": READ_POLICY,
   "workflows.node_briefing": READ_POLICY,
+  // Reads of what the agent remembered. Same gate as every other read: the
+  // text was distilled from tickets and repositories this surface already
+  // exposes, and a client that can read a run can read what that run learned.
+  "memory.list": READ_POLICY,
+  "memory.get": READ_POLICY,
+  "memory.forget": MEMORY_FORGET_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

@@ -84,8 +84,6 @@ JIRA_PROJECT_KEY=<value>
 JIRA_WEBHOOK_SECRET=<generated>
 ```
 
-`ISSUE_TRACKER_KIND` is omitted — `env.ts` defaults it to `jira`.
-
 Tell the user to paste, save, and reply when done.
 
 ### 1e. Done

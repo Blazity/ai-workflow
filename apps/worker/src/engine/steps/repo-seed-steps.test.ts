@@ -32,18 +32,28 @@ vi.mock("../../infra/logger.js", () => ({
 }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
-// Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
-// this one included, so failing it here is what drives the null-result branch.
-vi.mock("../../run-observability/configured-secrets.js", async (importOriginal) => {
+// Passthrough by default. Failing it is what "the secrets could not be read"
+// looks like to a memory write: the write resolves the whole set first and
+// stores nothing without it.
+vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../run-observability/configured-secrets.js")>();
+    await importOriginal<typeof import("../../services/integrations/runtime.js")>();
   return {
     ...actual,
-    configuredReplaySecrets: (
-      ...args: Parameters<typeof actual.configuredReplaySecrets>
-    ) => {
-      if (mocks.redactionThrows) throw new Error("secret source unavailable");
-      return actual.configuredReplaySecrets(...args);
+    knownSecretValues: async () => {
+      if (mocks.redactionThrows) {
+        const { IntegrationSettingsUnreadableError } = await import(
+          "../../services/integrations/secret-values.js"
+        );
+        throw new IntegrationSettingsUnreadableError("so the secrets they hold could not be redacted", new Error("secret source unavailable"));
+      }
+      // A deployment with nothing connected: its environment's secrets. Read
+      // from the environment rather than the database, because several cases
+      // swap the database for a fake that only answers the store's own calls.
+      const { environmentSecretValues } = await import(
+        "../../run-observability/configured-secrets.js"
+      );
+      return environmentSecretValues();
     },
   };
 });
@@ -271,6 +281,13 @@ beforeEach(async () => {
   mocks.db = db;
 });
 
+describe("a seed write that may have landed", () => {
+  it("is never repeated by the step runner", () => {
+    // Core never repeats a memory write: a retry could store the seed twice.
+    expect(seedRepoMemoryStep.maxRetries).toBe(0);
+  });
+});
+
 describe("seedRepoMemoryStep", () => {
   it("does nothing without a repository", async () => {
     expect(await seedRepoMemoryStep({ ...input, repositories: [] })).toEqual({
@@ -475,19 +492,27 @@ describe("seedRepoMemoryStep", () => {
     ]);
   });
 
-  it("does not store a seed redaction could not scrub", async () => {
+  it("does not store a seed when the secrets to redact it with cannot be read", async () => {
     mocks.redactionThrows = true;
     fakeSandbox({
       ...packageJson({ scripts: { test: "vitest run" } }),
       [`${LOCAL_PATH}/pnpm-lock.yaml`]: "lockfileVersion: '9.0'",
     });
 
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(await seedRepoMemoryStep(input)).toEqual({
+      seeded: 0,
+      pruned: 0,
+      // S13: the provider refused this text and the step reports why, instead
+      // of reading the same as a repository with nothing to derive.
+      unavailable: expect.stringContaining("could not be read"),
+    });
     expect(stepUpserts()).toEqual([]);
     expect(await repoRows()).toHaveLength(0);
+    // Refused at the read that decides whether a seed is needed: core cleans
+    // what memory hands back too, so without the set nothing is read either.
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api" }),
-      "repo_memory_seed_redaction_failed",
+      expect.objectContaining({ repo: "github:acme/api", code: "unavailable" }),
+      "memory_provider_unavailable",
     );
   });
 
@@ -969,19 +994,25 @@ describe("seedRepoMemoryStep pruning", () => {
 
   it("does not store a pruned document that no longer fits the cap", async () => {
     // Past the 12 KiB document cap the distill step renders against, so the
-    // survivors come back truncated. The cut lands wherever redaction leaves it,
-    // most often inside a bullet or its provenance comment, and a mangled
-    // document is worse than a stale one.
+    // survivors would come back truncated. The cut lands wherever it lands, most
+    // often inside a bullet or its provenance comment, and a mangled document
+    // is worse than a stale one.
     const bulky = Array.from({ length: 80 }, (_, index) => `${"f".repeat(180)} ${index}`);
     await storeFacts(["Run lint with: pnpm lint", ...bulky], "run_0");
     fakeSandbox(packageJson({ scripts: { test: "vitest run" } }));
 
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(await seedRepoMemoryStep(input)).toEqual({
+      seeded: 0,
+      pruned: 0,
+      // S13: the store refuses a document it cannot render inside its own cap
+      // and says so, rather than the step deciding that for it.
+      unavailable: expect.stringContaining("larger than the 12 KiB this store holds"),
+    });
     expect(stepUpserts()).toEqual([]);
     expect((await readFacts()) ?? []).toHaveLength(bulky.length + 1);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api" }),
-      "repo_memory_prune_truncated_skipped",
+      expect.objectContaining({ repo: "github:acme/api", code: "rejected" }),
+      "repo_memory_prune_refused",
     );
   });
 
@@ -1007,7 +1038,7 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([1, 2]);
     expect(mocks.logWarn).not.toHaveBeenCalledWith(
       expect.anything(),
-      "repo_memory_prune_contended",
+      "repo_memory_prune_refused",
     );
   });
 
@@ -1022,14 +1053,20 @@ describe("seedRepoMemoryStep pruning", () => {
       await competingWrite(["Run lint with: pnpm lint", `winner ${round}`], "run_9");
     };
 
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(await seedRepoMemoryStep(input)).toEqual({
+      seeded: 0,
+      pruned: 0,
+      // S13: a retraction lost to a racing writer is reported rather than
+      // being indistinguishable from a repository with nothing stale.
+      unavailable: expect.stringContaining("another writer won"),
+    });
     // Three attempts and no more: an unbounded loop would spin against a hot
     // repository for as long as the runs keep coming.
     expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([1, 2, 3]);
     expect(await factTexts()).toEqual(["Run lint with: pnpm lint", "winner 3"]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api", attempts: 3 }),
-      "repo_memory_prune_contended",
+      expect.objectContaining({ repo: "github:acme/api", code: "contended" }),
+      "repo_memory_prune_refused",
     );
   });
 
@@ -1048,19 +1085,23 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(await repoRows()).toHaveLength(0);
   });
 
-  it("does not store a pruned document redaction could not scrub", async () => {
+  it("does not store a pruned document when the secrets to redact it with cannot be read", async () => {
     await storeFacts(["Run lint with: pnpm lint"], "run_0");
     fakeSandbox(packageJson({ scripts: { test: "vitest run" } }));
     mocks.redactionThrows = true;
 
     // Fail closed: unscrubbed text never reaches the store, and the stored
     // document keeps the stale item rather than being rewritten from a null.
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(await seedRepoMemoryStep(input)).toEqual({
+      seeded: 0,
+      pruned: 0,
+      unavailable: expect.stringContaining("could not be read"),
+    });
     expect(stepUpserts()).toEqual([]);
     expect(await factTexts()).toEqual(["Run lint with: pnpm lint"]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api" }),
-      "repo_memory_prune_redaction_failed",
+      expect.objectContaining({ repo: "github:acme/api", code: "unavailable" }),
+      "memory_provider_unavailable",
     );
   });
 });

@@ -3,9 +3,14 @@ import { sql } from "drizzle-orm";
 import { GateStore } from "./gate-store.js";
 import { createTestDb } from "../db/test-db.js";
 import type { Db } from "../db/client.js";
+import type { VcsOpaqueHandle } from "@integrations/sdk";
 
 let db: Db;
 let store: GateStore;
+
+function opaqueHandle(value: object): VcsOpaqueHandle {
+  return value as unknown as VcsOpaqueHandle;
+}
 
 beforeEach(async () => {
   db = await createTestDb();
@@ -98,7 +103,7 @@ describe("current pointer", () => {
   const current = {
     runId: "run_a",
     headSha: "sha1",
-    gateStatusRefs: [] as Array<{ provider: "github"; id: number }>,
+    gateStatusRefs: [] as VcsOpaqueHandle[],
   };
 
   async function getRawCurrent(repo: string, pr: number) {
@@ -123,16 +128,16 @@ describe("current pointer", () => {
     expect("checkRunIds" in stored!).toBe(false);
   });
 
-  it("setCurrent with gateStatusRefs keeps legacy check_run_ids in sync", async () => {
+  it("stores opaque gate status refs without inspecting them for legacy check IDs", async () => {
     await store.setCurrent("o/r", 1, {
       runId: "run_a",
       headSha: "sha1",
-      gateStatusRefs: [{ provider: "github", id: 7 }],
+      gateStatusRefs: [opaqueHandle({ provider: "github", id: 7 })],
     });
 
     expect(await getRawCurrent("o/r", 1)).toEqual({
-      gateStatusRefs: [{ provider: "github", id: 7 }],
-      checkRunIds: [7],
+      gateStatusRefs: [opaqueHandle({ provider: "github", id: 7 })],
+      checkRunIds: [],
     });
   });
 
@@ -150,7 +155,7 @@ describe("current pointer", () => {
     await store.setCurrent("o/r", 1, {
       runId: "run_b",
       headSha: "sha2",
-      gateStatusRefs: [{ provider: "github", id: 7 }],
+      gateStatusRefs: [opaqueHandle({ provider: "github", id: 7 })],
     });
     expect(await store.getCurrent("o/r", 1)).toEqual({
       runId: "run_b",
@@ -163,12 +168,12 @@ describe("current pointer", () => {
     await store.setCurrent("o/r", 1, current);
     expect(
       await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
-        { provider: "github", id: 30000000001 },
+        opaqueHandle({ provider: "github", id: 30000000001 }),
       ]),
     ).toBe(true);
     expect(
       await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
-        { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
+        opaqueHandle({ provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" }),
       ]),
     ).toBe(true);
     expect((await store.getCurrent("o/r", 1))!.gateStatusRefs).toEqual([
@@ -180,17 +185,17 @@ describe("current pointer", () => {
         { provider: "github", id: 30000000001 },
         { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
       ],
-      checkRunIds: [30000000001],
+      checkRunIds: [],
     });
   });
 
   it("appendGateStatusRefsForSha appends refs containing SQL-sensitive characters", async () => {
     await store.setCurrent("o/r", 1, current);
-    const ref = {
+    const ref = opaqueHandle({
       provider: "gitlab" as const,
       name: "blazebot / Bob's \"quoted\" check",
       headSha: "sha'1",
-    };
+    });
 
     expect(await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [ref])).toBe(true);
     expect((await store.getCurrent("o/r", 1))!.gateStatusRefs).toEqual([ref]);
@@ -199,13 +204,13 @@ describe("current pointer", () => {
   it("appendGateStatusRefsForSha returns false on SHA mismatch or missing pointer", async () => {
     expect(
       await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
-        { provider: "github", id: 1 },
+        opaqueHandle({ provider: "github", id: 1 }),
       ]),
     ).toBe(false);
     await store.setCurrent("o/r", 1, current);
     expect(
       await store.appendGateStatusRefsForSha("o/r", 1, "superseded", [
-        { provider: "github", id: 1 },
+        opaqueHandle({ provider: "github", id: 1 }),
       ]),
     ).toBe(false);
     expect((await store.getCurrent("o/r", 1))!.gateStatusRefs).toEqual([]);
@@ -222,7 +227,7 @@ describe("current pointer", () => {
     );
     expect(
       await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
-        { provider: "github", id: 1 },
+        opaqueHandle({ provider: "github", id: 1 }),
       ]),
     ).toBe(false);
   });
@@ -238,7 +243,7 @@ describe("current pointer", () => {
   it("updateRunIdIfHeadSha updates only on SHA match, preserving gateStatusRefs", async () => {
     await store.setCurrent("o/r", 1, current);
     await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
-      { provider: "github", id: 42 },
+      opaqueHandle({ provider: "github", id: 42 }),
     ]);
     expect(await store.updateRunIdIfHeadSha("o/r", 1, "sha1", "run_real")).toBe(true);
     expect(await store.getCurrent("o/r", 1)).toEqual({

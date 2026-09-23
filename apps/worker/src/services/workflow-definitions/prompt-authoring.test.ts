@@ -13,6 +13,7 @@ import {
   resolveNodePromptAuthoring,
   validateWorkflowPromptAuthoringIssuesWithLoader,
 } from "./prompt-authoring.js";
+import { MESSAGING_CONNECTED } from "../../engine/definition/messaging-deployment.fixture.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -20,9 +21,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "codex", model: "gpt-5-codex" },
   vcsProviders: ["github"],
   vcsBotIdentities: ["github"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const resolveContract = testBlockContractResolver(registryContext);
@@ -396,7 +396,7 @@ describe("v2 prompt authoring validation", () => {
       },
       {
         id: "slack",
-        type: "send_slack_message",
+        type: "send_message",
         x: 600,
         y: 0,
         configuration: { message: "{{pr_url}}" },
@@ -490,7 +490,7 @@ describe("v2 prompt authoring validation", () => {
         },
         {
           id: "message",
-          type: "send_slack_message",
+          type: "send_message",
           x: 200,
           y: 0,
           configuration: {

@@ -378,7 +378,16 @@ export async function resumeClarificationFromComments(input: {
   }
   // Cap the label: many distinct commenters would otherwise store an unbounded
   // string in answered_by_label and inject it into prompts/memory.
-  const answeredByLabel = `${uniqueAuthors.join(", ")} (via Jira)`.slice(0, 200);
+  const { resolveActiveIssueTracker } = await import(
+    "../../engine/support/issue-tracker-runtime.js"
+  );
+  const resolvedTracker = await resolveActiveIssueTracker();
+  // Where the answers came from, in the words of whichever tracker they came
+  // from. A deployment whose tracker could not be read says "the issue
+  // tracker" rather than nothing: the label is what a person reads next to the
+  // answer, and a blank there reads as nobody having answered.
+  const trackerLabel = resolvedTracker.ok ? resolvedTracker.name : "the issue tracker";
+  const answeredByLabel = `${uniqueAuthors.join(", ")} (via ${trackerLabel})`.slice(0, 200);
 
   const outcome = await persistence.answer({
     row,

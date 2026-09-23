@@ -9,7 +9,7 @@ import { requireDashboardActor } from "../../../../services/auth/request-context
 import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
 import { DashboardAuthError } from "@shared/contracts";
 import {
-  importGitHubSkillSelection,
+  importRepositorySkillSelection,
 } from "../../../../services/harness/skill-sources.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 import { toHarnessSkillHttpError } from "./discover.post.js";
@@ -30,7 +30,7 @@ export default defineEventHandler(
         throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
       return {
-        artifacts: await importGitHubSkillSelection({
+        artifacts: await importRepositorySkillSelection({
           organizationId: actor.organizationId,
           actorId: actor.userId,
           // The exact shape is the import's own business: it validates the

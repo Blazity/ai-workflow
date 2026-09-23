@@ -96,7 +96,7 @@ export type RepositoryWorkflowObservation =
       /** A provider's repository listing failed after the bounded retry, so the
        *  catalog selection saw was incomplete. */
       event: "catalog_degraded";
-      providers: Array<"github" | "gitlab">;
+      providers: string[];
       /** continued_degraded means a deterministic signal resolved the selection
        *  without the missing catalog; failed_closed means the run stopped rather
        *  than choose from a partial one. */
@@ -111,6 +111,29 @@ export type RepositoryWorkflowObservation =
        *  nothing else on the run says why. */
       event: "work_scope_drop";
       repositoryKeys: string[];
+    }
+  | {
+      /**
+       * This run could not reach the memory its deployment keeps, so it ran
+       * without what earlier runs learned, or could not record what it learned
+       * itself.
+       *
+       * ON THE RUN rather than only in the log, for the reason the work scope
+       * drop above gives: the person who has to see it is the one reading a
+       * run that behaved as if it had never seen this repository before, and
+       * nothing else on the run distinguishes that from a subject with nothing
+       * stored. ADR-010 decision 12 makes memory the one capability a run
+       * continues without, on the condition that it SAYS SO. This is where it
+       * says so.
+       *
+       * `where` names the moment, because the three cost different things: a
+       * workspace that started without its notebook, a repository that got no
+       * derived facts, and a prompt compiled without what the repository knows.
+       */
+      event: "memory_unavailable";
+      where: "hydrate" | "seed" | "prompt";
+      /** The provider's own sentence, already free of secrets. */
+      reason: string;
     }
   | {
       event: "publication";

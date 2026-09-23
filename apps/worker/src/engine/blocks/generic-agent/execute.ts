@@ -1,3 +1,4 @@
+import { agentTracingRun } from "../../support/integration-run-state.js";
 import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
 import { concatPromptParts, type EffectivePromptPart } from "@shared/prompts";
@@ -490,8 +491,11 @@ export const execute: BlockExecuteFn = async (
       sandboxId,
       kind,
       model,
-      ctx.arthur.taskId,
-      { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
+      await agentTracingRun(ctx, { nodeId: block.id, attempt: execution?.attempt ?? 1 }),
+      {
+        organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG,
+        runtime,
+      },
     );
     if (!preparedRuntime.ok) {
       return agentProtocolExecutionError(preparedRuntime);

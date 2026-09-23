@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-14
+Last-verified: 2026-09-19
 
 # ai-workflow — Setup & Deployment Guide
 
@@ -53,6 +53,8 @@ Accounts you must own:
 Do these in any order — you'll paste the resulting values into Vercel in step 5.
 
 ### 2.1 Jira
+
+Jira is an integration: its credentials live on its connection, seeded from the `JIRA_*` variables below or entered in the dashboard under **Integrations → Jira → Connection**. The worker boots without it, and its two health checks (Account access and Project access) say on the Health screen whether the token is accepted and whether the project key names a project this account can actually see.
 
 ai-workflow authenticates to Jira as an **Atlassian service account** — a machine identity managed in the organization admin, with no human login. Tokens are Bearer-style and routed through `api.atlassian.com/ex/jira/{cloudId}`. Don't use a personal API token from a real user account: rotation, audit, and least-privilege all break down when the bot shares identity with a human.
 
@@ -127,7 +129,7 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 8. Import the repository on the Repositories page. The catalog records the
    provider's default branch; an explicit profile value overrides it.
 
-> The legacy `GITHUB_TOKEN` PAT path was removed: `VCS_KIND=github` now requires the App vars above. `apps/worker/src/infra/runtime-env.ts` enforces this at boot, including `GITHUB_WEBHOOK_SECRET`.
+> The legacy `GITHUB_TOKEN` PAT path was removed: GitHub needs the App vars above. They are the GitHub integration's connection fields (`integrations/github/manifest.ts`), not boot requirements: a deployment with only some of them set still starts, and the GitHub card on the Integrations page reads Failing and names the missing variable.
 
 **GitLab:**
 
@@ -139,7 +141,7 @@ For GitLab.com single-project setup, see [`docs/GITLAB-SETUP.md`](./docs/runbook
 4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`.
 5. Import the repository on the Repositories page. The catalog records the
    provider's default branch; an explicit profile value overrides it.
-6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`apps/worker/src/infra/runtime-env.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
+6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`integrations/gitlab/manifest.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
 
 ### 2.3 Slack
 
@@ -165,10 +167,14 @@ The Slack app powers two things: **notifications** (run start, success, failure 
 5. Pick (or create) the channel where ai-workflow should post — e.g. `#ai-workflow` or your team's engineering channel. Public is simplest; private works as long as you invite the bot.
 6. In Slack, open the channel → **Channel details → Integrations → Add apps** → select the ai-workflow app you just installed. (Or run `/invite @ai-workflow` in the channel.) Without this the bot's posts will fail with `not_in_channel`.
 7. Right-click the channel → **View channel details** → copy the channel ID at the bottom (looks like `C0123456789`) → `CHAT_SDK_CHANNEL_ID`.
-8. Optional: choose a display name → `CHAT_SDK_BOT_NAME` (default `ai-workflow`). This is what users see as the message author.
-9. Optional: restrict who can invoke the slash command by setting `SLACK_ALLOWED_USER_IDS` to a comma-separated list of Slack user IDs (`U0123…`). When unset, anyone in the workspace can run it.
+8. Optional: restrict who can invoke the slash command by setting `SLACK_ALLOWED_USER_IDS` to a comma-separated list of Slack user IDs (`U0123…`). When unset, anyone in the workspace can run it. After deploy the same list is a setting (dashboard Settings page, Integrations panel, or MCP `settings.set`); a value saved there takes precedence over the variable, needs no redeploy, and stays in force if you later switch Slack's connection to stored values.
 
-> If you skip the Slack section entirely (`CHAT_SDK_SLACK_TOKEN` and `CHAT_SDK_CHANNEL_ID` unset), runs proceed silently — Jira and PRs still update, just no chat notifications.
+Slack uses the bot name configured on the app itself as the visible message
+author. Change that name in the Slack app configuration.
+
+> The token and the channel go together: with one of the two set, the Integrations card reads Failing and names the missing value rather than connecting and dropping every message. Skip both and runs proceed silently: Jira and PRs still update, there are no chat notifications, and a workflow that uses Send message says so in the editor and stops before doing any work rather than failing halfway.
+>
+> An admin can instead enter these values in the dashboard (Integrations, Slack, Connection), which switches the source from the environment to the stored connection; until they do, the environment is the source.
 
 The slash command itself is registered in step 8 (after you have a deployment URL). For the deeper walkthrough, see [`.claude/skills/init-slack/`](./.claude/skills/init-slack/).
 
@@ -275,12 +281,11 @@ vercel env add JIRA_API_TOKEN production
 
 | Variable                                                                                           | Purpose                                                |
 | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`                                              | Jira credentials (scoped service-account Bearer token) |
-| `JIRA_BACKLOG_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID`                                       | Optional stable transition IDs for Jira moves; recommended when Jira localizes transition names |
-| `VCS_KIND`                                                                                         | Optional. Provider credentials are additive: configure GitHub, GitLab, or both in one deployment (a run can then mix repositories from both providers). Set `VCS_KIND` only to pin the legacy single-repo helpers to one provider; leave it unset in dual-provider deployments. |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If GitHub is configured (GitHub App auth)              |
+| `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`                                              | If Jira is configured: the site, a scoped service-account Bearer token, and the project this deployment watches. Jira is an integration, so these seed its connection; an admin can instead enter them in the dashboard (Integrations → Jira → Connection). The worker starts without them, and a deployment with no issue tracker runs the workflows that do not involve a ticket. |
+| `JIRA_BACKLOG_TRANSITION_ID`, `JIRA_AI_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID`              | Optional stable transition IDs for Jira moves; recommended when Jira localizes transition names |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If GitHub is configured (GitHub App auth). Provider credentials are additive: configure GitHub, GitLab, or both in one deployment, and a run can then mix repositories from both providers. |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If GitHub is configured: signs the GitHub webhook deliveries that drive the PR workflow triggers. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
-| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                        | If GitLab is configured: GitLab.com token with `api` + `write_repository`, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
+| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                        | If GitLab is configured: GitLab.com token with `api` + `write_repository`, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. GitLab is an integration, so these seed its connection; an admin can instead enter them in the dashboard (Integrations → GitLab → Connection). |
 | `ANTHROPIC_API_KEY`                                                                                | Claude execution and Harness Profile capability discovery; accepts a standard API key or Claude Code OAuth token |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | Codex execution or Harness Profile capability discovery |
 | `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
@@ -297,10 +302,9 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | Variable                                      | Default                                                                                                                                                     | Purpose                                                                                                                          |
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `GITLAB_HOST`                                 | `https://gitlab.com`                                                                                                                                        | GitLab instance URL. Set it for a self-hosted instance; the sandbox clone URL is `<host>/<project path>.git`.                     |
-| `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID` | unset                                                                                                                                                       | Slack bot. When unset, runs proceed silently (no notifications).                                                                 |
-| `CHAT_SDK_BOT_NAME`                           | `ai-workflow`                                                                                                                                               | Slack display name                                                                                                               |
-| `SLACK_SIGNING_SECRET`                        | unset                                                                                                                                                       | Required only if you register the `/ai-workflow` slash command. When unset, `/webhooks/slack` rejects all requests.              |
-| `SLACK_ALLOWED_USER_IDS`                      | empty (anyone)                                                                                                                                              | Comma-separated user IDs allowed to run slash commands                                                                           |
+| `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID` | unset                                                                                                                                                       | Slack bot. Required together: one without the other reads as Failing. When both are unset, runs proceed silently and the messaging blocks are unavailable. |
+| `SLACK_SIGNING_SECRET`                        | unset                                                                                                                                                       | Required only if you register the `/ai-workflow` slash command, and the only variable the command needs. When unset, `/webhooks/slack` rejects all requests. |
+| `SLACK_ALLOWED_USER_IDS`                      | empty (anyone)                                                                                                                                              | Comma-separated user IDs allowed to run slash commands. Read while no value is saved for it on the Settings page, which then takes precedence. |
 | `CRON_SECRET`                                 | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, `/cron/poll` accepts unauthenticated callers — strongly recommended in production. |
 | `JIRA_WEBHOOK_SECRET`                         | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, dispatch is cron-bound (1-min latency).                                            |
 | `COMMIT_AUTHOR`, `COMMIT_EMAIL`               | _unset_ on GitHub → auto-derived from the App (commits author as `<app-slug>[bot]`); GitLab falls back to `ai-workflow-blazity` / `ai-workflow@blazity.com` | Optional override; set both or neither                                                                                           |
@@ -312,7 +316,7 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`        | unset (commented-review triggers for that provider are unavailable)                                                                                         | Provider-specific login of the bot's own VCS account. Required for every selected, configured provider when `trigger_pr_review.on` includes `commented`, so the bot cannot recursively trigger a run from its own review. For a GitHub App this is usually `<app-slug>[bot]`. |
 | `VCS_BOT_LOGIN`                               | unset                                                                                                                                                        | Legacy fallback for a commented-review bot identity, accepted only when exactly one VCS provider is configured. Mixed GitHub/GitLab deployments require provider-specific logins. |
 
-`apps/worker/src/infra/runtime-env.ts` cross-validates at startup: missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
+`apps/worker/src/infra/runtime-env.ts` cross-validates at startup: missing required vars or wrong combinations (e.g. `RESEND_API_KEY` without `RESEND_FROM_EMAIL`, or only some of the four `SSO_*` variables) crash the process with a precise error.
 
 #### Repository access and the retired `AGENT_ALLOWED_REPOS`
 
@@ -378,7 +382,7 @@ Without this, ai-workflow only learns about ticket changes via the 1-minute cron
 1. Go to **Jira → System Settings → WebHooks** (admin only) or use the Atlassian REST API.
 2. Create a webhook:
    - **URL:** `https://<your-vercel-domain>/webhooks/jira`
-   - **Secret:** the `JIRA_WEBHOOK_SECRET` value from step 5. Jira signs each delivery with HMAC-SHA256 in the `X-Hub-Signature` header; the handler at `apps/worker/src/routes/webhooks/jira.post.ts` verifies it with `timingSafeEqual`.
+   - **Secret:** the `JIRA_WEBHOOK_SECRET` value from step 5. Jira signs each delivery with HMAC-SHA256 in the `X-Hub-Signature` header, and the Jira integration verifies it over the exact bytes received (`integrations/jira/webhook.ts`). The URL is served by the shared integration webhook route, `apps/worker/src/routes/webhooks/[id].post.ts`, which records each delivery for the Webhook delivery health check.
    - **Events:** `jira:issue_updated` (required). Add `jira:issue_created` and `comment_created` if you want creates and comments to dispatch instantly. Answering clarification questions does not require `comment_created`: the answers are picked up when the ticket is moved back to the AI column (comment first, then move), and the cron poller is the backstop if that webhook is missed.
    - **JQL filter** (optional): `project = AWT` to limit deliveries to the relevant project.
 3. Save.
@@ -405,6 +409,8 @@ For GitLab.com, configure the project webhook instead: see [`docs/GITLAB-SETUP.m
 
 For GitHub, verify from the App's **Advanced → Recent Deliveries** tab: opening a pull request on the target repo produces a `pull_request` delivery that answers 2xx. With a deployed definition carrying a PR trigger, the run appears in the dashboard and its checks appear on the PR head SHA under the `AI Workflow /` prefix. With no PR-triggered definition deployed, a 2xx answer and an `ignored` reason in the runtime log is the correct outcome.
 
+**At capacity.** When this deployment is at its run limit, a GitHub or GitLab delivery is answered 2xx with the reason `at_capacity` in the body, not 5xx: GitHub never redelivers a failed delivery by itself, and GitLab switches a webhook off after a few consecutive failures, which would lose every later event. The delivery therefore reads as successful in the provider's log, nobody redelivers it, and nothing dispatches it again later; the reason in the stored response body is the only record that a run did not start. A custom webhook endpoint answers 503 instead, because its caller keeps no delivery log and retrying is what it should do.
+
 For GitLab.com, verify by opening or updating an `ai-workflow/*` merge request and checking that the webhook delivery succeeds; when a deployed definition claims the merge request, its checks appear on the MR head commit as `AI Workflow / ...` commit statuses. See the smoke checklist in [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
 
 ---
@@ -426,7 +432,7 @@ Test in Slack:
 /ai-workflow list
 ```
 
-If you set `SLACK_ALLOWED_USER_IDS`, only those Slack user IDs can invoke the command — useful for limiting to your engineering team.
+If you set `SLACK_ALLOWED_USER_IDS` (or save the list on the Settings page), only those Slack user IDs can invoke the command, which is useful for limiting it to your engineering team.
 
 > See `.claude/skills/init-slack/references/slash-commands.md` for the full walkthrough.
 
@@ -846,20 +852,24 @@ A copyable example lives in [`docs/example-skill/SKILL.md`](./docs/example-skill
 
 **Build behaviour.** `pnpm build` in `apps/worker` validates the directory before anything else runs and fails the build when any entry cannot ship, listing each path and reason. A deployment with no `skills/` directory is fine and says so in one line.
 
-### Arthur AI Engine (tracing + prompt-injection check)
+### Arthur AI Engine (tracing, evals and the prompt-injection check)
 
-Set both:
+Arthur is an integration, configured once and read everywhere it appears: the tracer in every agent sandbox, the Evals page in its own sidebar section, its check on System health, and the `arthur_injection_check` block in the editor. Set both variables and the Integrations page shows it Connected, sourced from the environment:
 
 ```bash
 GENAI_ENGINE_API_KEY=...
 GENAI_ENGINE_TRACE_ENDPOINT=https://your-arthur-host/api/v1/traces
 ```
 
-This enables per-run tracing and the optional `arthur_injection_check` block. The tracer is built into every sandbox via `pnpm build:arthur-tracer` during deploy.
+`GENAI_ENGINE_TRACE_ENDPOINT` is the full traces URL and ends in `/api/v1/traces`: the in-sandbox tracer posts to it, and the task API is read from the same host. An admin can instead enter both values in the dashboard (Integrations → Arthur Engine → Connection), which switches the source from the environment to the stored connection; until they do, the environment is the source.
+
+Leaving both unset leaves Arthur disconnected, and that is now a visible state rather than a quiet one: its block is not offered in the palette, a workflow that uses it cannot be published, and a run that would reach it stops at the start naming Arthur. The prompt-injection check reports a verdict or stops the run; it never reports that it did not look.
+
+The tracer travels with the integration as `integrations/arthur/tracer.generated.ts` and is installed into each sandbox at run time, so no deploy-time build step is involved. Regenerate it from a newer upstream tracer with `pnpm --filter @integrations/arthur run build:tracer`.
 
 ### GitLab alongside (or instead of) GitHub
 
-Provider credentials are additive. To run GitLab only, provide `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, and `GITLAB_WEBHOOK_SECRET` (optionally `VCS_KIND=gitlab` to pin the legacy single-repo helpers); `GITHUB_*` vars may be removed. To run BOTH providers in one deployment, keep the GitHub App vars and add the GitLab vars side by side, leave `VCS_KIND` unset, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. For GitLab.com setup, see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
+GitLab is an integration. An admin connects it in the dashboard (Integrations → GitLab → Connection), or leaves the environment as the source by setting `GITLAB_TOKEN`, `GITLAB_WEBHOOK_SECRET` and optionally `GITLAB_PROJECT_ID`. There is no deployment-wide choice of provider to make: a repository carries its own provider, so provider credentials are additive and `GITHUB_*` vars may be removed if you want GitLab alone. To run BOTH providers in one deployment, keep the GitHub App vars and connect GitLab beside them, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`, which is accepted only when one provider is configured. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. One connection per integration means one GitLab host per deployment: a repository's identity does not record its host, so pointing an existing deployment at a second GitLab instance would retarget the repositories it already has. For GitLab.com setup, see [`docs/GITLAB-SETUP.md`](./docs/runbooks/GITLAB-SETUP.md).
 
 ### Webhook trigger
 
@@ -884,6 +894,51 @@ The key is **required for the feature but optional at boot**: the worker starts 
 **Rekeying (`WEBHOOK_TRIGGER_ENCRYPTION_KEY` changed).** The key encrypts endpoint secrets at rest, so changing it makes every existing secret undecryptable. Those deliveries then fail with `decrypt_failed` (recorded in the endpoint's rejection counters, and distinct from a bad signature, which is `invalid_signature`). To recover, rotate or revive each endpoint so its secret is re-minted under the new key, then update every sender with the freshly minted secret.
 
 > **Security warning.** The shipped `webhook-ticket-triage` template feeds external input (a support ticket body) straight through to an automatically opened pull request with **no human gate**. HMAC authenticates the **channel**, not the **content**: anyone who can file a ticket into a connected Zendesk or Sentry controls the agent's prompt, and therefore the PR it opens. Before pointing a real sender at this template, add a human-approval gate before the `open_pr` block, or treat the workflow as triage-and-notify only.
+
+### Integration secrets
+
+Nothing here is required to run the bot. Every provider in this deployment can be
+configured entirely through the environment variables in the sections above, and
+a deployment that does so keeps working exactly as it did: the Integrations
+screen reports the environment as the source, and nobody has to touch anything.
+
+This key exists for the other way of connecting one: storing values from the
+dashboard, so a token can be rotated without a redeploy.
+
+| Variable                   | Value                                                               |
+| -------------------------- | ------------------------------------------------------------------- |
+| `INTEGRATION_SECRETS_KEY`  | 64 hex characters (32 bytes). Generate with `openssl rand -hex 32`. |
+
+**This is not the webhook key.** `WEBHOOK_TRIGGER_ENCRYPTION_KEY` protects the
+secrets this deployment mints for inbound webhooks; `INTEGRATION_SECRETS_KEY`
+protects the credentials an admin pastes for a third party. They are separate so
+that rotating one never silently invalidates the other's rows. Setting both to
+the same value works and is a bad idea for the same reason.
+
+**Without it**, the worker starts and everything configured through environment
+variables is unaffected. What is unavailable is storing a secret from the
+dashboard: those fields are disabled on the card, naming this variable, and an
+integration that already has stored secrets reads as Failing rather than
+crashing.
+
+**One key per database.** Every deployment that reads the same database has to
+carry the same value, because the ciphertext is what is shared, not the key. A
+deployment holding a different key reads the stored values as
+"stored under another key, enter it again" and never as a wrong credential,
+which is the difference between re-pasting a value and rotating a token at the
+provider for no reason.
+
+**Rekeying.** Changing the value makes every stored secret unreadable, and each
+affected integration says so on its card. Recover by entering the values again
+from the dashboard; there is no re-encryption path, because a key rotation with
+one is a different feature than this one.
+
+**Where writes are accepted.** Changing an integration is refused on any
+deployment that does not own the database it is connected to, and the refusal
+names both sides. The demo deployment is a preview pointed at production's Neon
+branch (`DATABASE_SHARED_WITH=production`), so a toggle there would change
+production; the same refusal catches a local worker whose `DATABASE_URL` points
+at production. Reading what is connected works everywhere.
 
 ### Remote MCP — connect your agent
 
@@ -927,7 +982,7 @@ The last two scopes were added after the first clients registered, and a client 
 
 ```
 trigger_ticket_ai -> planning_agent -> branch(gate)
-  gate --true--> send_slack_message -> terminate       (needs a human, stop and say so)
+  gate --true--> send_message -> terminate             (needs a human, stop and say so)
   gate --false--> implementation_agent -> run_pre_pr_checks -> branch(verdict)
     verdict --true--> finalize_workspace -> open_pr     (checks passed, ship it)
     verdict --false--> loop(retry) --continue--> review_agent(fix) -> back to run_pre_pr_checks
@@ -948,8 +1003,9 @@ trigger_ticket_ai -> planning_agent -> branch(gate)
 | Run registry: `DATABASE_URL undefined`                | Neon integration not connected to this project, or env var scoped to the wrong environments                                             | Reinstall the Neon integration / check it's connected to this project.                                                                                                  |
 | Agent runs but PR isn't created                       | GitHub App missing **Pull requests: Read & write** or **Contents: Read & write**, App not installed on target repo, or wrong owner/repo | In the App settings, re-check **Repository permissions** and the **Installations** list. Verify `GITHUB_OWNER`/`GITHUB_REPO` point at the _target_ repo, not this repo. |
 | A PR trigger never fires on an opened PR              | App webhook inactive, `Pull request` event not subscribed, missing `Checks: Read & write`, permission/event change not re-accepted on the installed repo, or no deployed definition carries that trigger | App settings → **Webhook: Active** + URL set to `/webhooks/github`. Subscribe to **Pull request**. Bump **Checks** to read & write. Then have a repo admin re-accept the install at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>`. Check **Advanced → Recent Deliveries** for 2xx responses, and the workflow editor for a deployed, enabled definition whose trigger and repository pin match. |
+| A delivery answers `ignored` with `vcs_credential_refused` | The provider refused this deployment's credential while reading the pull request: a token that expired or was revoked, a GitLab token without `read_api`, a GitHub App without **Pull requests: Read** or with a permission change not re-accepted on the installed repo. The Webhook delivery row on the Integrations page is red with the same reason | Repair the connection on the Integrations page (rotate the token, or accept the App's new permissions). The webhook stays on, queued reviews and failed checks start by themselves once the credential works, and deliveries answered in the meantime are not replayed. The diagnostic id in the answer finds the log line (`trigger_vcs_credential_refused`) |
 | GitHub webhook returns 401 in Recent Deliveries       | `GITHUB_WEBHOOK_SECRET` missing on the deployment or different from the value pasted into the App | Set the var on **every** environment (production + preview + development): preview deployments receive the webhook too. Redeploy after changing. Test by re-sending a delivery from the App's Recent Deliveries tab. |
-| Slack messages don't arrive                           | Bot not in channel, or wrong `CHAT_SDK_CHANNEL_ID`                                                                                      | Invite bot to the channel. Re-copy the channel ID.                                                                                                                      |
+| Slack messages don't arrive                           | Bot not in channel, wrong `CHAT_SDK_CHANNEL_ID`, or Slack disabled on the Integrations page                                                                                      | Invite bot to the channel. Re-copy the channel ID. Check the Slack card on Integrations: a disabled integration sends nothing, and its two health checks say what Slack refused. |
 | Slash command returns `dispatch_failed`               | Signing secret wrong, or app not reinstalled                                                                                            | Verify `SLACK_SIGNING_SECRET`. Reinstall the Slack app after adding the slash command.                                                                                  |
 | Two pollers race on the same ticket                   | Stale claim sentinel                                                                                                                    | The reconciler clears claims older than 5 minutes on every poll; wait one cycle after correcting the underlying issue. |
 | Sandbox times out                                     | Job exceeds the timeout configured on Settings                                                                                          | Increase the job timeout to 60 to 90 minutes on Settings, or split the work.                                                                                            |
@@ -1011,6 +1067,12 @@ Three settings remain deployment-owned and may stay in the environment:
 `DASHBOARD_ORG_SLUG`, `MCP_ALLOW_PUBLIC_DCR`, and
 `PRE_PR_CHECKS_ALLOWED_ENV`. They are marked `requiresRedeploy`; a stored row
 does not override them, and changing one takes effect only after redeploying.
+
+Three names are read by nothing and are not refused at boot, so remove them at
+leisure: `VCS_KIND` (each repository names its version control provider),
+`ISSUE_TRACKER_KIND` (the issue tracker is the connected issue tracker
+integration) and `CHAT_SDK_BOT_NAME` (Slack posts under the Slack app's own
+name; rename the app to change it).
 
 `AGENT_ALLOWED_REPOS` is not part of the boot refusal because some existing
 production environments still carry it. It has been unused since H2 and may be

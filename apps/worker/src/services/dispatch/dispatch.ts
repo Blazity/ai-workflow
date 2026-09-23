@@ -5,7 +5,6 @@ import {
   type SettingsSnapshot,
   type WorkflowDefinition,
 } from "@shared/contracts";
-import { env } from "../../infra/vcs-config.js";
 import {
   RESERVATION_BIND_GRACE_MS,
   type RunKind,
@@ -28,7 +27,12 @@ import { BUILTIN_FALLBACK_DEFINITION_VERSION } from "../../engine/agent-input.js
 import { agentWorkflow } from "../../engine/index.js";
 import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import type { Adapters } from "../../engine/support/adapters.js";
+import { issueTrackerOrThrow } from "../../engine/support/connected-issue-tracker.js";
 import { logger } from "../../infra/logger.js";
+import {
+  resolveActiveIssueTracker,
+  ticketSubject,
+} from "../../engine/support/issue-tracker-runtime.js";
 import { ticketSubjectKey } from "../../engine/support/subject-key.js";
 
 export const STALE_CLAIM_MS = RESERVATION_BIND_GRACE_MS;
@@ -52,7 +56,9 @@ export interface DispatchResult {
     | "wrong_project_key"
     | "no_definition"
     | "approval_pending"
-    | "rate_limited";
+    | "rate_limited"
+    /** A pull request trigger's fix-attempt cap, refused in its guard. */
+    | "autofix_cap_reached";
 }
 
 export interface ClaimSubject {
@@ -77,9 +83,17 @@ export async function dispatchTicket(
   maxConcurrentAgents: number,
   settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<DispatchResult> {
-  const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
+  // One resolution for the project this deployment watches and the key the
+  // run is claimed under, so the two cannot come from two different reads
+  // (and two decryptions of the same connection).
+  const tracker = await resolveActiveIssueTracker();
+  if (!tracker.ok) throw new Error(tracker.reason);
+  const expectedProjectKey = tracker.wiring.projectKey.trim().toUpperCase();
   const expectedAiStatus = settings.COLUMN_AI.trim().toLowerCase();
-  const { issueTracker, runRegistry } = adapters;
+  // Dispatching a ticket reads it, so no tracker is this dispatch's failure;
+  // the wiring read above already refuses the same way.
+  const issueTracker = issueTrackerOrThrow(adapters);
+  const { runRegistry } = adapters;
 
   try {
     if (await runRegistry.isTicketFailed(ticketKey)) {
@@ -93,7 +107,7 @@ export async function dispatchTicket(
   let ticket: TicketContent | null = null;
   let definitionId: number | null = null;
   let definitionVersion: WorkflowDefinitionVersionPin | null = null;
-  const subjectKey = ticketSubjectKey("jira", ticketKey);
+  const subjectKey = ticketSubjectKey(tracker.id, ticketKey);
   const result = await claimSubjectRun(
     { subjectKey, ticketKey, kind: "ticket" },
     runRegistry,
@@ -384,7 +398,7 @@ export async function claimTicketRun(
 ): Promise<DispatchResult> {
   return claimSubjectRun(
     {
-      subjectKey: ticketSubjectKey("jira", ticketKey),
+      subjectKey: await ticketSubject(ticketKey),
       ticketKey,
       kind: options.kind ?? "ticket",
     },

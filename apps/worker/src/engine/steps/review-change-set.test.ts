@@ -13,7 +13,7 @@ const { mockCreateRepositoryVCS } = vi.hoisted(() => ({
   mockCreateRepositoryVCS: vi.fn(),
 }));
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
-  createRepositoryVCS: mockCreateRepositoryVCS,
+  resolveRepositoryVCS: async (target: unknown) => mockCreateRepositoryVCS(target),
 }));
 
 const target: PullRequestChangeSetTarget = {

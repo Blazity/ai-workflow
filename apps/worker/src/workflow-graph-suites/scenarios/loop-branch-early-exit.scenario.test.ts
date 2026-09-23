@@ -15,6 +15,7 @@ import {
   portsOf,
 } from "./assertions.js";
 import { createScenario } from "./harness.js";
+import { MESSAGING_CONNECTED } from "../../engine/definition/messaging-deployment.fixture.js";
 
 const SNAPSHOT = { path: "loop-branch-early-exit-v1.json" };
 
@@ -24,9 +25,8 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-scenario" },
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);

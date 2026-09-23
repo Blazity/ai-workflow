@@ -1,15 +1,26 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
-import {
-  prepareMemoryContent,
-  utf8Bytes,
-  utf8BoundaryEnd,
-} from "../../memory/content.js";
+import { MEMORY_NOTEBOOK_MAX_BYTES } from "@integrations/sdk";
+import { fitMemoryText, utf8Bytes, utf8BoundaryEnd } from "../../memory/content.js";
+import type { ActiveMemory } from "../support/memory-runtime.js";
 import {
   WORKSPACE_ROOT_DIR,
   type WorkspaceManifest,
 } from "../../sandbox/repo-workspace.js";
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.get>>;
+
+/**
+ * The size of one workspace memory document, in both directions: how much of
+ * the agent's file this step reads out of a sandbox, and how much of a
+ * recalled notebook it writes into one. The SDK states it
+ * (`MEMORY_NOTEBOOK_MAX_BYTES`) because a provider's author has to know it.
+ *
+ * The read happens before any provider is involved: a stream has to be capped
+ * as it is consumed, and there is nothing to ask yet. The provider applies its
+ * own limit to what it is given, so a provider that holds less simply stores
+ * less. The write is capped whatever the provider returned.
+ */
+const MAX_WORKSPACE_MEMORY_BYTES = MEMORY_NOTEBOOK_MAX_BYTES;
 
 /** Exactly the path the agent still reads and commits, relative to its cwd, so
  * the store and the working copy stay the same document. */
@@ -45,10 +56,56 @@ export interface HydrateWorkspaceMemoryResult {
   trackedInRepo: boolean;
   /** True only when the stored document was written into the workspace. */
   written: boolean;
+  /**
+   * Why this deployment's memory provider could not answer, or absent when it
+   * did.
+   *
+   * ADDED IN S13, and absent on every result stored before it existed, which
+   * is what a run replaying across the deploy reads. Absent means "nothing was
+   * wrong with memory", which is what every such run in fact saw.
+   *
+   * It is here because `source: "none"` used to mean two different things that
+   * a person reading a run cannot tell apart: this subject has nothing stored,
+   * and this deployment's memory could not be reached at all. Now it answers
+   * only the first.
+   */
+  unavailable?: string;
+  /**
+   * True when the provider answered the recall for this notebook, held or
+   * not, so the workspace file started from what was stored (or, for a file
+   * the repository tracks, from the committed copy the agent reads instead).
+   * False when it did not: the provider refused, the tracked-file probe
+   * failed before the recall, or the step failed. Teardown reads it
+   * (`PersistWorkspaceMemoryInput.notebookRecalled`) so a file that started
+   * empty never replaces a notebook the run never saw.
+   *
+   * ADDED AFTER S13, and absent on every result recorded before it, which a
+   * run replaying across the deploy reads: absent keeps the behaviour those
+   * runs started under.
+   */
+  recalled?: boolean;
+}
+
+export interface PersistWorkspaceMemoryInput extends WorkspaceMemoryTarget {
+  /**
+   * The hydration's `recalled`, carried by the caller. False makes this step
+   * ask the provider before it writes, and keep a stored notebook rather than
+   * replace it with a file the agent started without it.
+   *
+   * ADDED AFTER S13, optional for the same reason as `recalled`: an input
+   * recorded before it has no such field, and absent writes as this step
+   * always did.
+   */
+  notebookRecalled?: boolean;
 }
 
 export interface PersistWorkspaceMemoryResult {
   persisted: boolean;
+  /** As above: absent means memory answered, not that nothing went wrong. */
+  unavailable?: string;
+  /** Why the agent's file was not stored over the provider's notebook, when
+   *  it was not. Absent when the write went ahead or nothing was there. */
+  withheld?: string;
 }
 
 /**
@@ -78,8 +135,10 @@ export async function hydrateWorkspaceMemoryStep(
     });
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-    const { MAX_MEMORY_DOCUMENT_BYTES, getConnectedMemoryDocument, upsertConnectedMemoryDocument } =
-      await import("../../db/repositories/memory.js");
+    const { activeMemory } = await import("../support/memory-runtime.js");
+    const memory = await activeMemory();
+    const subject = { key: input.subjectKey, label: input.taskId };
+    const scope = { kind: "notebook", name: input.taskId } as const;
     const sandbox = await Sandbox.get({
       sandboxId: input.sandboxId,
       ...getSandboxCredentials(),
@@ -107,7 +166,7 @@ export async function hydrateWorkspaceMemoryStep(
           { repo: rootRepository.repoPath, exitCode: tracked.exitCode },
           "memory_document_tracked_probe_failed",
         );
-        return { source: "none", trackedInRepo: false, written: false };
+        return { source: "none", trackedInRepo: false, written: false, recalled: false };
       }
       if ((await tracked.stdout()).trim().length > 0) {
         trackedInRepo = true;
@@ -115,16 +174,34 @@ export async function hydrateWorkspaceMemoryStep(
       }
     }
 
-    // Dual-read: the new key first, then the legacy key an older run wrote
-    // under. Whatever is found is hydrated into the workspace at the NEW
-    // absolutePath, so the agent reads it where the current prompt points and
-    // the persist step at the end of the run stores it under the new key.
-    const stored =
-      (await getConnectedMemoryDocument(input.subjectKey, docPath)) ??
-      (await getConnectedMemoryDocument(
-        input.subjectKey,
-        legacyMemoryDocPath(input.taskId),
-      ));
+    // What the provider knows about this piece of work, rendered. Which
+    // addresses it reads (the current one, and the one an older run wrote
+    // under) is the provider's own business now.
+    const recalled = await memory.recall({ subject, scope });
+    if (!recalled.ok) {
+      // Named, not swallowed. This is the difference between "this ticket has
+      // nothing stored", which is the ordinary first run, and "this deployment
+      // could not reach memory", which somebody has to be able to see.
+      log.warn(
+        { code: recalled.code, provider: memory.id, detail: recalled.detail },
+        "memory_provider_unavailable",
+      );
+      return {
+        source: "none",
+        trackedInRepo,
+        written: false,
+        unavailable: recalled.detail,
+        recalled: false,
+      };
+    }
+    // Whatever the provider returned, the agent's file is at most the notebook
+    // limit, and a cut one says so on its last line (`fitMemoryText`, the one
+    // rule for cutting memory). The limit is far above the rule's floor, so
+    // the empty fallback is never reached; it exists so that nothing past the
+    // limit can be written even then.
+    const stored = recalled.held
+      ? { content: fitMemoryText(recalled.rendering, MAX_WORKSPACE_MEMORY_BYTES)?.text ?? "" }
+      : null;
     if (stored) {
       if (trackedInRepo) {
         // Overwriting a tracked file is a tracked modification, which the
@@ -135,47 +212,64 @@ export async function hydrateWorkspaceMemoryStep(
           { repo: rootRepository?.repoPath },
           "memory_hydration_skipped_tracked",
         );
-        return { source: "db", trackedInRepo, written: false };
+        return { source: "db", trackedInRepo, written: false, recalled: true };
       }
       // writeFiles does not guarantee mkdir -p semantics.
       await sandbox.runCommand("mkdir", ["-p", parentDirectory(absolutePath)]);
       await sandbox.writeFiles([
         { path: absolutePath, content: Buffer.from(stored.content) },
       ]);
-      log.info({ bytes: stored.bytes }, "memory_document_hydrated_from_store");
-      return { source: "db", trackedInRepo, written: true };
+      log.info(
+        { bytes: utf8Bytes(stored.content) },
+        "memory_document_hydrated_from_store",
+      );
+      return { source: "db", trackedInRepo, written: true, recalled: true };
     }
 
     // One-time migration of the legacy committed file. This only reads the tree
-    // and writes the store, so the workspace is left untouched either way.
+    // and hands the text to the provider, so the workspace is left untouched
+    // either way.
     const legacy = await readLegacyMemoryFile(
       sandbox,
       input.workspaceManifest,
       docPath,
       legacyMemoryDocPath(input.taskId),
-      MAX_MEMORY_DOCUMENT_BYTES,
+      MAX_WORKSPACE_MEMORY_BYTES,
     );
     if (!legacy || legacy.text.trim().length === 0) {
-      return { source: "none", trackedInRepo, written: false };
+      return { source: "none", trackedInRepo, written: false, recalled: true };
     }
-    const prepared = prepareMemoryContent(
-      legacy.text,
-      MAX_MEMORY_DOCUMENT_BYTES,
-      legacy.truncated,
-    );
-    if (!prepared) {
-      log.warn({}, "memory_document_redaction_failed");
-      return { source: "none", trackedInRepo, written: false };
-    }
-    await upsertConnectedMemoryDocument({
-      subjectKey: input.subjectKey,
-      docPath,
+    const seeded = await memory.observe({
+      subject,
+      scope,
+      runId: input.runId,
       ticketKey: input.ticketKey,
-      content: prepared.content,
-      sourceRunId: input.runId,
+      observation: {
+        kind: "document",
+        text: legacy.text,
+        ...(legacy.truncated ? { sourceTruncated: true as const } : {}),
+      },
     });
-    log.info({ truncated: prepared.truncated }, "memory_document_seeded_from_repo");
-    return { source: "repo", trackedInRepo, written: false };
+    if (!seeded.ok) {
+      // Every refusal is reported. `rejected` is the text being declined
+      // (core could not scrub it of this deployment's secrets, or the
+      // provider will not take it), which used to be
+      // `memory_document_redaction_failed` here and now carries its own
+      // sentence.
+      log.warn(
+        { code: seeded.code, provider: memory.id, detail: seeded.detail },
+        "memory_document_seed_refused",
+      );
+      return {
+        source: "none",
+        trackedInRepo,
+        written: false,
+        unavailable: seeded.detail,
+        recalled: true,
+      };
+    }
+    log.info({ truncated: legacy.truncated }, "memory_document_seeded_from_repo");
+    return { source: "repo", trackedInRepo, written: false, recalled: true };
   } catch (err) {
     const { logger } = await import("../../infra/logger.js");
     logger.warn(
@@ -188,7 +282,7 @@ export async function hydrateWorkspaceMemoryStep(
       },
       "memory_document_hydrate_failed",
     );
-    return { source: "none", trackedInRepo: false, written: false };
+    return { source: "none", trackedInRepo: false, written: false, recalled: false };
   }
 }
 hydrateWorkspaceMemoryStep.maxRetries = 0;
@@ -199,7 +293,7 @@ hydrateWorkspaceMemoryStep.maxRetries = 0;
  * teardown path, which must never fail because of memory.
  */
 export async function persistWorkspaceMemoryStep(
-  input: WorkspaceMemoryTarget,
+  input: PersistWorkspaceMemoryInput,
 ): Promise<PersistWorkspaceMemoryResult> {
   "use step";
   try {
@@ -216,9 +310,7 @@ export async function persistWorkspaceMemoryStep(
     });
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-    const { MAX_MEMORY_DOCUMENT_BYTES, upsertConnectedMemoryDocument } = await import(
-      "../../db/repositories/memory.js"
-    );
+    const { activeMemory } = await import("../support/memory-runtime.js");
     const sandbox = await Sandbox.get({
       sandboxId: input.sandboxId,
       ...getSandboxCredentials(),
@@ -226,38 +318,59 @@ export async function persistWorkspaceMemoryStep(
 
     // New path first; if it is absent or empty, fall back to the legacy path a
     // run started under the pre-migration prompt wrote its increment to, so that
-    // increment is not lost at teardown. Whatever is found is stored under the
-    // NEW key below (migrate-forward), never written back into the workspace.
-    let file = await readMemoryFile(sandbox, absolutePath, MAX_MEMORY_DOCUMENT_BYTES);
+    // increment is not lost at teardown. Whatever is found is handed to the
+    // provider, never written back into the workspace.
+    let file = await readMemoryFile(sandbox, absolutePath, MAX_WORKSPACE_MEMORY_BYTES);
     if (!file || file.text.trim().length === 0) {
       file = await readMemoryFile(
         sandbox,
         `${WORKSPACE_ROOT_DIR}/${legacyMemoryDocPath(input.taskId)}`,
-        MAX_MEMORY_DOCUMENT_BYTES,
+        MAX_WORKSPACE_MEMORY_BYTES,
       );
     }
     if (!file || file.text.trim().length === 0) return { persisted: false };
-    const prepared = prepareMemoryContent(
-      file.text,
-      MAX_MEMORY_DOCUMENT_BYTES,
-      file.truncated,
-    );
-    // Fail closed: text that could not be scrubbed never reaches the database.
-    if (!prepared) {
-      log.warn({}, "memory_document_redaction_failed");
-      return { persisted: false };
+    // Resolved after the read, so a deployment whose memory cannot be reached
+    // does not pay a settings read for a workspace that had nothing to capture.
+    const memory = await activeMemory();
+    const subject = { key: input.subjectKey, label: input.taskId };
+    const scope = { kind: "notebook", name: input.taskId } as const;
+    if (input.notebookRecalled === false) {
+      // The agent started without knowing what was stored, so its file holds
+      // this run's notes and none of the history. Writing it would replace
+      // that history with them. Ask first, and write only over nothing.
+      const withheld = await unseenNotebookHeld(memory, subject, scope);
+      if (withheld !== null) {
+        log.warn({ provider: memory.id, detail: withheld }, "memory_document_persist_withheld");
+        return { persisted: false, withheld };
+      }
     }
-    if (prepared.truncated) {
-      log.warn({ maxBytes: MAX_MEMORY_DOCUMENT_BYTES }, "memory_document_truncated");
-    }
-    await upsertConnectedMemoryDocument({
-      subjectKey: input.subjectKey,
-      docPath,
+    const written = await memory.observe({
+      subject,
+      scope,
+      runId: input.runId,
       ticketKey: input.ticketKey,
-      content: prepared.content,
-      sourceRunId: input.runId,
+      observation: {
+        kind: "document",
+        text: file.text,
+        // The read was capped, so the provider is told this is a prefix rather
+        // than left to infer it from a length that fits.
+        ...(file.truncated ? { sourceTruncated: true as const } : {}),
+      },
     });
-    log.info({ bytes: utf8Bytes(prepared.content) }, "memory_document_persisted");
+    if (!written.ok) {
+      // The one place a lost capture used to look exactly like a run with an
+      // empty notebook. It reports the provider's own sentence, and the caller
+      // logs that sentence against the run id (`memory_capture_unavailable`).
+      // It does NOT reach the run row: the observation channel the hydrate and
+      // seed refusals use is scoped to a block attempt and every attempt is
+      // closed by the time this runs.
+      log.warn(
+        { code: written.code, provider: memory.id, detail: written.detail },
+        "memory_provider_unavailable",
+      );
+      return { persisted: false, unavailable: written.detail };
+    }
+    log.info({ bytes: utf8Bytes(file.text) }, "memory_document_persisted");
     return { persisted: true };
   } catch (err) {
     const { logger } = await import("../../infra/logger.js");
@@ -277,14 +390,44 @@ export async function persistWorkspaceMemoryStep(
 }
 persistWorkspaceMemoryStep.maxRetries = 0;
 
-export function memoryDocPath(taskId: string): string {
+/**
+ * Why the agent's file must not be stored over this notebook, or null when
+ * nothing is stored and the write may go ahead. A recall that fails again is
+ * a reason too: not knowing whether history is there is not permission to
+ * replace it.
+ */
+async function unseenNotebookHeld(
+  memory: ActiveMemory,
+  subject: { key: string; label: string },
+  scope: { kind: "notebook"; name: string },
+): Promise<string | null> {
+  const recalled = await memory.recall({ subject, scope });
+  if (!recalled.ok) {
+    return `this run started without the notebook stored for this work, and memory still could not say whether one is stored (${recalled.detail}), so nothing was written over it`;
+  }
+  return recalled.held
+    ? "this run started without the notebook stored for this work, because memory could not be read then, so the stored notebook was kept and this run's file was not stored"
+    : null;
+}
+
+/**
+ * Where the document sits IN THE WORKSPACE, which is what this step writes and
+ * what the agent's prompt points at.
+ *
+ * It is spelled here and in the built-in provider, and that is not a second
+ * derivation of one thing: this one names a file in a checkout, the other names
+ * an address in a store, and they only look alike because the store was built
+ * to mirror the checkout. A provider that keeps memory somewhere else changes
+ * its address and must not change this path.
+ */
+function memoryDocPath(taskId: string): string {
   // A task id may never walk out of the memory directory.
   if (taskId.split("/").includes("..")) throw new Error("invalid memory task id");
   return `${MEMORY_DIR}/${taskId}.md`;
 }
 
-/** The document key an older run wrote under. Read only, for backward-compat. */
-export function legacyMemoryDocPath(taskId: string): string {
+/** The workspace path an older run wrote to. Read only, for backward-compat. */
+function legacyMemoryDocPath(taskId: string): string {
   // A task id may never walk out of the memory directory.
   if (taskId.split("/").includes("..")) throw new Error("invalid memory task id");
   return `${LEGACY_MEMORY_DIR}/${taskId}.md`;

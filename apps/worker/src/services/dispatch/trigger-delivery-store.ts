@@ -38,6 +38,11 @@ export type StoredTriggerResult =
   | {
       result:
         | "coalesced"
+        // A terminal drop, told apart from a queued `coalesced` so the
+        // provider's log can say no run will follow. Rows written before
+        // this split read `coalesced` for both.
+        | "rate_limited"
+        | "autofix_cap_reached"
         | "at_capacity"
         | "ignored_provider"
         // Distinct from ignored_provider on purpose: an operator reading the
@@ -47,6 +52,7 @@ export type StoredTriggerResult =
         // constraint, so widening the union needs no migration.
         | "ignored_repository_not_enabled"
         | "ignored_stale_head"
+        | "ignored_pull_request_unreadable"
         | "ignored_not_workflow_owned";
     };
 
@@ -102,7 +108,7 @@ export async function acceptTriggerDelivery(
 
 export async function completeTriggerDelivery(
   db: Db,
-  provider: "github" | "gitlab",
+  provider: string,
   deliveryId: string,
   result: StoredTriggerResult,
 ): Promise<void> {
@@ -111,7 +117,7 @@ export async function completeTriggerDelivery(
 
 export async function getTriggerDelivery(
   db: Db,
-  provider: "github" | "gitlab",
+  provider: string,
   deliveryId: string,
 ): Promise<StoredTriggerDelivery | null> {
   const row = await findTriggerDeliveryRow(db, { provider, deliveryId });
@@ -122,7 +128,7 @@ export async function getTriggerDelivery(
  * semantic-key conflict). */
 async function getTriggerDeliveryBySemanticKey(
   db: Db,
-  provider: "github" | "gitlab",
+  provider: string,
   semanticKey: string,
 ): Promise<StoredTriggerDelivery | null> {
   const row = await findTriggerDeliveryRowBySemanticKey(db, { provider, semanticKey });
@@ -227,7 +233,7 @@ export async function acknowledgeStartedTriggerDelivery(
 }
 
 export async function getConnectedTriggerDelivery(
-  provider: "github" | "gitlab",
+  provider: string,
   deliveryId: string,
 ): Promise<StoredTriggerDelivery | null> {
   const row = await findConnectedTriggerDeliveryRow({ provider, deliveryId });

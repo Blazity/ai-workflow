@@ -1,3 +1,4 @@
+import type { AgentTracingRun } from "../support/integration-tracing.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 
@@ -156,8 +157,10 @@ trap 'rm -f -- "$credential_pattern_file"' EXIT HUP INT TERM
 find /tmp -maxdepth 1 -type f -name '.aiw-clarification-credential-patterns-*' ! -path "$credential_pattern_file" -delete
 find /tmp -maxdepth 1 -type f -name 'agent-env*.sh' -delete
 rm -rf "$snapshot_home/.codex" "$snapshot_home/.claude" "$snapshot_home/.config/claude" "$snapshot_home/.config/claude-code"
-rm -f "$snapshot_home/.claude.json" /tmp/config.toml /tmp/arthur_config.json /tmp/arthur-tracer.py
-find /tmp -maxdepth 1 -type f \\( -iname '*arthur*credential*' -o -iname '*tracer*credential*' \\) -delete
+rm -f "$snapshot_home/.claude.json" /tmp/config.toml
+rm -rf "$snapshot_home/.aiw-tracing"
+find /tmp -maxdepth 1 -type f -name 'aiw-tracing-*' -delete
+find /tmp -maxdepth 1 -type f \\( -iname '*tracer*credential*' -o -iname '*engine*credential*' \\) -delete
 ${profileRuntimeCredentialScrubScript(input.profileRuntimeRoot)}
 chmod 600 "$credential_pattern_file"
 node --input-type=module - "$credential_pattern_file" ${scanRootArguments} "$snapshot_home" <<'AIW_CREDENTIAL_SCAN'
@@ -339,11 +342,42 @@ export async function snapshotClarificationSandboxStep(
     );
     const { randomUUID } = await import("node:crypto");
     const { env } = await import("../../infra/vcs-config.js");
+    const { integrationSecretValues } = await import(
+      "../../services/integrations/runtime.js"
+    );
+    // What was handed to THIS sandbox, and nothing more, because the patterns
+    // below are written into it: the agent credentials the harness exports, and
+    // the secrets of the tracing integrations, which ADR-010 (decision 7) puts
+    // in a sandbox by design. Never the whole known set: every other
+    // integration's token, a GitHub App private key and the database URL were
+    // never in here, and writing them into a pattern file would hand them to
+    // whatever the agent left running. A tracing key stored in the dashboard is
+    // covered the same as one from the environment.
+    //
+    // Settings that cannot be read FAIL THE RUN, deliberately: a snapshot lives
+    // seven days and is restored into later sandboxes, so it is never taken
+    // with the tracing key unscanned. This step keeps the runtime's default
+    // retries, which ride out a blink; once they are spent the park rethrows
+    // (the snapshot call in agent-workflow.ts has no catch of its own) and the
+    // run fails. It does not park without a snapshot. The message is this
+    // failure's own, so an operator can tell a settings outage from a sandbox
+    // that refused the pattern file, and the cause rides with it.
+    let tracingSecrets: string[];
+    try {
+      tracingSecrets = await integrationSecretValues({
+        include: (manifest) => manifest.capabilities.includes("agent_tracing"),
+      });
+    } catch (error) {
+      throw new Error(
+        "clarification credential scan could not be prepared: the integration settings could not be read",
+        { cause: error },
+      );
+    }
     const credentialValues = [
       env.ANTHROPIC_API_KEY,
       env.CODEX_API_KEY,
       env.CODEX_CHATGPT_OAUTH_TOKEN,
-      env.GENAI_ENGINE_API_KEY,
+      ...tracingSecrets,
     ].filter(
       (value): value is string =>
         typeof value === "string" && value.length > 0,
@@ -470,7 +504,7 @@ export async function snapshotClarificationSandboxStep(
   }
 
   const { createAdapters } = await import("../support/adapters.js");
-  const { runRegistry } = createAdapters();
+  const { runRegistry } = await createAdapters();
   if (typeof runRegistry.unregisterSandbox === "function") {
     try {
       await runRegistry.unregisterSandbox(
@@ -497,7 +531,8 @@ export interface RestoreClarificationSandboxInput {
     model: string;
     runtime?: ResolvedHarnessRuntime;
   }>;
-  arthurTaskId: string | null;
+  /** The run as its tracing providers see it, with their states. */
+  tracingRun: AgentTracingRun;
 }
 
 /** Restore from a serializable id, register exact ownership, then inject current credentials. */
@@ -522,17 +557,10 @@ export async function restoreClarificationSandboxStep(
     throw unavailableSnapshotError(input.snapshotId, error);
   }
 
-  const { runRegistry } = createAdapters();
+  const { runRegistry } = await createAdapters();
   try {
     await runRegistry.registerSandbox(input.subjectKey, input.ownerToken, sandbox.sandboxId);
-    const arthur =
-      env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && input.arthurTaskId
-        ? {
-            apiKey: env.GENAI_ENGINE_API_KEY,
-            taskId: input.arthurTaskId,
-            endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-          }
-        : undefined;
+    const { agentTracingPlans } = await import("../support/integration-tracing.js");
     for (const selected of input.agents) {
       const adapter = createAgentAdapter(
         selected.kind,
@@ -549,7 +577,7 @@ export async function restoreClarificationSandboxStep(
           anthropicApiKey: env.ANTHROPIC_API_KEY,
           codexApiKey: env.CODEX_API_KEY,
           codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-          arthur,
+          tracing: await agentTracingPlans({ harness: selected.kind, run: input.tracingRun }),
         });
       }
     }

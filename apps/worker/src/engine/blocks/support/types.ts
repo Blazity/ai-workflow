@@ -1,3 +1,4 @@
+import type { IntegrationConnectionPin } from "@shared/contracts";
 import type {
   RunRepositoryAccess,
   SettingsSnapshot,
@@ -21,10 +22,7 @@ import type {
 import { executionError, failureEvidenceFromDiagnostic } from "@shared/workflow-graph";
 import type { AgentKind } from "../../../sandbox/agents/index.js";
 import type { AgentProtocolResult, PhaseUsage } from "../../../sandbox/agents/types.js";
-import type {
-  IssueTrackerMoveTarget,
-  TicketContent,
-} from "../../../adapters/issue-tracker/types.js";
+import type { IssueTrackerMoveTarget } from "../../../adapters/issue-tracker/types.js";
 import type {
   PreSandboxPromptAddition,
   SelectedRepositoryPromptContext,
@@ -38,6 +36,8 @@ import type { RunStartWorkScope } from "../../steps/run-start-settings.js";
 import type { RunTriggerRepositoryPolicySource } from "../../work-scope/policy.js";
 import type { TicketTextReading } from "../../work-scope/context.js";
 import type { LoadedPrompts } from "../../steps/prompts-step.js";
+import type { IntegrationRunStateOutcome } from "../../steps/integration-run-state-step.js";
+import type { WorkflowTicket } from "../../steps/workflow-ticket.js";
 import type { AgentWorkflowInput } from "../../agent-input.js";
 import type {
   RunBudgetAttribution,
@@ -68,7 +68,7 @@ import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
  * Mutation contract (executors write back through the shared object):
  * - prepare_workspace sets `sandboxId` (and appends to `sandboxIds`),
  *   `workspaceManifest`, `selectedRepositories`, `repositoryContexts`,
- *   `preSandboxAdditions`, `repositoryScopeNarrowing`, and `arthur.taskId`.
+ *   `preSandboxAdditions` and `repositoryScopeNarrowing`.
  * - fetch_pr_context refreshes `repositoryContexts`.
  * - prepare_workspace sets `setupFailures` when a setup command fails.
  * - finalize_workspace sets `publication`.
@@ -77,6 +77,26 @@ import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
 export interface EngineCtx {
   /** Durable workflow run id (getWorkflowMetadata().workflowRunId). */
   runId: string;
+  /**
+   * The connection each integration this graph uses had when the run started,
+   * frozen by the same step that loaded the definition.
+   *
+   * Compared at every use, so a rotated token is followed and a different site
+   * stops the run. Absent for a run that started before integrations existed
+   * and replayed its recorded plan: it then runs with no pin to compare, which
+   * is exactly the behaviour it had before this shipped.
+   */
+  integrationPins?: readonly IntegrationConnectionPin[];
+  /**
+   * The run's preferred provider and model for an integration block's
+   * `ctx.llm`, and its model for each provider; the block step picks with
+   * `integrationLlmTarget` (engine/definition/integration-llm.ts).
+   */
+  integrationLlmDefaults?: {
+    provider: "claude" | "codex";
+    model: string;
+    models?: { claude: string; codex: string };
+  };
   /**
    * The deployment settings this run started under, loaded once by
    * `loadRunStartSettingsStep` before any other step.
@@ -227,10 +247,15 @@ export interface EngineCtx {
   definitionNodes: WorkflowDefinitionNode[];
   /** What started this run. */
   entry: AgentWorkflowInput;
-  ticket: TicketContent;
-  /** Ticket URL in the issue tracker (JIRA_BASE_URL/browse/<key>); empty when the
-   *  run has no ticket. Backs the {{ticket_url}} prompt variable so open_pr and
-   *  comment templates can link back to the ticket. */
+  /** The run's subject: a fetched ticket, or the ticket-shaped snapshot core
+   *  gave a run that has none. `subjectTextIsPlaceholder` tells them apart. */
+  ticket: WorkflowTicket;
+  /** The page the tracker links for the run's ticket, recorded when the run
+   *  read it (`WorkflowTicket.url`); empty when the run has no ticket, when the
+   *  tracker gives no link, and for a run resumed across the deploy that moved
+   *  the link onto the ticket snapshot. Backs the {{ticket_url}} prompt
+   *  variable; open_pr's body shows the key without a link when it is empty
+   *  (`withoutEmptyLinks`). */
   ticketUrl: string;
   /** Summary of what the agent changed, carried from the implementation phase.
    *  Backs {{change_summary}} for the open_pr description; empty until the
@@ -261,6 +286,15 @@ export interface EngineCtx {
   /** Manager-authored repository identity, routing, and baseline metadata.
    * Never replace this with a manifest read after agent code has run. */
   workspaceManifest: WorkspaceManifest | null;
+  /**
+   * Whether the latest workspace's hydration got an answer from memory for
+   * its notebook (`HydrateWorkspaceMemoryResult.recalled`). False means the
+   * agent started without knowing what was stored, so teardown asks before it
+   * stores the agent's file over it. Absent before prepare_workspace and on a
+   * run replayed from a hydration recorded before the field existed, which
+   * keeps the behaviour that run started under.
+   */
+  workspaceNotebookRecalled?: boolean | undefined;
   /**
    * Paths tracked on each repository's DEFAULT branch, keyed by
    * `<provider>:<repoPath>`, listed in prepare_workspace from the clone before
@@ -370,10 +404,18 @@ export interface EngineCtx {
   prompts: LoadedPrompts;
   moveTargets: { backlog: IssueTrackerMoveTarget; aiReview: IssueTrackerMoveTarget };
   /**
-   * Arthur observability wiring. prepare_workspace ensures the run's Arthur
-   * task (named after the ticket) and writes back the resolved `taskId`.
+   * Per-run integration state, by integration id: created at the run's first
+   * use of each integration that declares it and shared by every later use (a
+   * provider's per-run bucket, session or task).
+   *
+   * The IN-FLIGHT answer, not the settled one: two uses starting in the same
+   * tick would both miss a cache written after the await, and ask the provider
+   * twice. An answer about this moment rather than about the run (settings
+   * that could not be read, an integration an admin turned off) is dropped
+   * once it settles, so the next use asks again. Null until something asks;
+   * `engine/support/integration-run-state.ts` is the only writer.
    */
-  arthur: { taskId: string | null };
+  integrationRunStates: Readonly<Record<string, Promise<IntegrationRunStateOutcome>>> | null;
   /**
    * The run's checks ceiling in milliseconds, resolved once and cached.
    *

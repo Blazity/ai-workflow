@@ -12,15 +12,47 @@ import type {
   RepositoryProviderStatus,
   VcsProviderKind,
 } from "@shared/contracts";
-import { listRepositoriesAcrossProviders } from "../../adapters/vcs/repository-directory.js";
-import { configuredVcsProviders } from "../settings/index.js";
-
-const SUPPORTED_PROVIDERS: VcsProviderKind[] = ["github", "gitlab"];
+import { integrationsProviding } from "@integrations/registry";
+import { isIntegrationSettingsUnreadableError } from "../../engine/helpers/integration-settings-unreadable.js";
 
 /** Every listable repository, plus one status per supported provider. */
 export async function listRepositoryDirectory(): Promise<RepositoriesResponse> {
-  const configured = configuredVcsProviders();
-  const listing = await listRepositoriesAcrossProviders(configured);
+  return (await readRepositoryDirectory()).response;
+}
+
+/**
+ * The directory, and whether it is an answer worth reusing.
+ *
+ * When this deployment's own integration settings could not be read, nothing
+ * is known about any provider: each one says so, rather than "not connected",
+ * which is what an empty listing used to read as, and the answer is not
+ * cached, so the next open asks again instead of repeating it for a minute.
+ */
+async function readRepositoryDirectory(): Promise<{
+  response: RepositoriesResponse;
+  reusable: boolean;
+}> {
+  const supportedProviders: VcsProviderKind[] = integrationsProviding("vcs").map(
+    (manifest) => manifest.id,
+  );
+  const runtime = await import("../../engine/support/vcs-runtime.js");
+  let listing: Awaited<ReturnType<typeof runtime.listVcsRepositories>>;
+  try {
+    listing = await runtime.listVcsRepositories();
+  } catch (error) {
+    if (!isIntegrationSettingsUnreadableError(error)) throw error;
+    return {
+      response: {
+        repositories: [],
+        providers: supportedProviders.map((provider): RepositoryProviderStatus => ({
+          provider,
+          status: "error",
+          error: "This deployment's integration settings could not be read, so nothing is known about this provider right now. Try again shortly.",
+        })),
+      },
+      reusable: false,
+    };
+  }
   const repositories = listing.repositories.map(
     (repo): RepositoryOption => ({
       provider: repo.provider,
@@ -35,8 +67,8 @@ export async function listRepositoryDirectory(): Promise<RepositoriesResponse> {
   const failures = new Map(
     listing.failures.map((failure) => [failure.provider, failure.message]),
   );
-  const configuredKinds = new Set(configured.map((provider) => provider.kind));
-  const providers = SUPPORTED_PROVIDERS.map(
+  const configuredKinds = new Set(listing.providers);
+  const providers = supportedProviders.map(
     (provider): RepositoryProviderStatus => {
       if (!configuredKinds.has(provider)) {
         return { provider, status: "not_connected" };
@@ -47,7 +79,7 @@ export async function listRepositoryDirectory(): Promise<RepositoriesResponse> {
         : { provider, status: "ready" };
     },
   );
-  return { repositories, providers };
+  return { response: { repositories, providers }, reusable: true };
 }
 
 /**
@@ -77,8 +109,8 @@ export async function listCachedRepositoryDirectory(): Promise<RepositoriesRespo
   if (cache && Date.now() - cache.at < DIRECTORY_CACHE_TTL_MS) {
     return cache.response;
   }
-  const response = await listRepositoryDirectory();
-  cache = { at: Date.now(), response };
+  const { response, reusable } = await readRepositoryDirectory();
+  if (reusable) cache = { at: Date.now(), response };
   return response;
 }
 

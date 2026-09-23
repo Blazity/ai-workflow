@@ -25,11 +25,15 @@ export async function describePrePrChecksFailureStep(
 ): Promise<string> {
   "use step";
   const { logger } = await import("../../infra/logger.js");
-  const { redactDiagnosticText: redact } = await import("../../sandbox/agents/redact.js");
-  // Redacted a second time, deliberately. The caller redacts before the step
-  // boundary so the journal never holds a secret; this keeps the step correct
-  // on its own terms for any input it is given, and redaction is idempotent.
-  const report = prePrChecksFailureReport(error, redact);
+  const { redactDiagnosticText } = await import("../../sandbox/agents/redact.js");
+  const { knownSecretValues } = await import("../../services/integrations/runtime.js");
+  // Redacted a second time, deliberately, and with more. The caller redacts
+  // before the step boundary with the environment's secrets, which is all
+  // workflow scope can see; this pass adds every connected integration's,
+  // including one stored in the dashboard. A set that cannot be read throws
+  // here, and the caller reports the failure without its cause.
+  const secrets = await knownSecretValues();
+  const report = prePrChecksFailureReport(error, (value) => redactDiagnosticText(value, secrets));
   logger.error(
     {
       version: configurationVersion,

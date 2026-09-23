@@ -10,15 +10,13 @@ import type {
 import { McpPublicError } from "./contracts.js";
 import { logger } from "../services/system/logger.js";
 import type { McpRateLimitVerdict } from "../services/mcp/rate-limit-store.js";
-import {
-  configuredSecretValues,
-  mcpSettings,
-} from "../services/settings/runtime-settings.js";
+import { mcpSettings } from "../services/settings/runtime-settings.js";
 import { authorizeTool, policyFor } from "./policy.js";
 import {
   MCP_CONTRACT_HASH,
   hashCanonicalJson,
   sanitizeMcpData,
+  sanitizeMcpText,
 } from "./sanitize-result.js";
 
 // What a running mutation holds is a lease, not the lifetime of its answer: the
@@ -83,6 +81,15 @@ type ExecutionContext = {
   startedAt: Date;
   inputHash: string;
   idempotencyKeyHash: string | null;
+  /**
+   * What must never leave in a result: every secret the deployment knows
+   * (`knownSecretValues`), core's own and every connected integration's,
+   * resolved once per call after the call is authorized. A provider's key can
+   * reach a result the long way round: it lives inside an agent sandbox, an
+   * agent can echo its own environment, and what it wrote is what a tool
+   * hands back. Empty until `prepare` fills it; nothing sanitizes before then.
+   */
+  secrets: string[];
 };
 
 // Node reports a transport failure as `TypeError: fetch failed` and puts the
@@ -245,6 +252,27 @@ async function prepare(context: ExecutionContext): Promise<void> {
   } catch (error) {
     await auditFailure(context, error);
   }
+  // Resolved once per call, after the guards so a throttled or refused call
+  // does not pay for it, and before anything runs so a result can never be
+  // sanitized with part of the set. A set that cannot be read is a backend
+  // that is down: the call is refused as retryable, and for a mutation that
+  // happens before its idempotency key is taken, so no key is spent on it.
+  try {
+    context.secrets.push(...(await context.deps.loadKnownSecrets()));
+  } catch (error) {
+    logger.warn(
+      {
+        requestId: context.deps.requestId,
+        toolName: context.toolName,
+        err: error instanceof Error ? error.message : String(error),
+      },
+      "mcp_known_secrets_unreadable",
+    );
+    await auditFailure(
+      context,
+      new McpPublicError("DEPENDENCY_UNAVAILABLE", "Dependency unavailable", true),
+    );
+  }
 }
 
 function sanitize<T>(context: ExecutionContext, data: T): McpEnvelope<T> {
@@ -253,12 +281,33 @@ function sanitize<T>(context: ExecutionContext, data: T): McpEnvelope<T> {
     traceId: context.deps.traceId,
     trust: "external_untrusted",
     maxBytes: mcpSettings(context.deps.settings).maxResultBytes,
-    secrets: configuredSecretValues(),
+    secrets: context.secrets,
   });
 }
 
+/**
+ * Every refusal leaves through here, so this is where its words pass the floor
+ * the data passes (`sanitizeMcpText`). A tool that composed its own sentence
+ * loses nothing; one that forwarded a provider's reason no longer forwards the
+ * secrets or the variable names in it.
+ */
+function withSafeWords(error: McpPublicErrorType, secrets: readonly string[]): McpPublicErrorType {
+  const message = sanitizeMcpText(error.message, secrets);
+  const failureReason =
+    error.failureReason === undefined ? undefined : sanitizeMcpText(error.failureReason, secrets);
+  if (message === error.message && failureReason === error.failureReason) return error;
+  return new McpPublicError(
+    error.code,
+    message,
+    error.retryable,
+    error.retryAfterMs,
+    error.effectNotApplied,
+    failureReason,
+  );
+}
+
 async function auditFailure(context: ExecutionContext, error: unknown): Promise<never> {
-  const safeError = publicError(error);
+  const safeError = withSafeWords(publicError(error), context.secrets);
   await auditResult(context, auditOutcome(safeError.code), null, safeError.code);
   throw safeError;
 }
@@ -267,7 +316,9 @@ export async function executeMcpRead<T>(input: {
   deps: McpToolDependencies;
   toolName: McpToolName;
   targetRefs: string[];
-  operation: (signal: AbortSignal) => Promise<T>;
+  /** `secrets` is the set this call resolved, for an operation that runs a
+   *  sanitizer of its own before the result is sanitized again on the way out. */
+  operation: (signal: AbortSignal, secrets: readonly string[]) => Promise<T>;
 }): Promise<McpEnvelope<T>> {
   const startedAt = input.deps.now();
   const context: ExecutionContext = {
@@ -280,6 +331,7 @@ export async function executeMcpRead<T>(input: {
       toolName: input.toolName,
     }),
     idempotencyKeyHash: null,
+    secrets: [],
   };
   await prepare(context);
 
@@ -287,7 +339,10 @@ export async function executeMcpRead<T>(input: {
   try {
     envelope = sanitize(
       context,
-      await input.operation(AbortSignal.timeout(readTimeoutMs(input.deps.settings))),
+      await input.operation(
+        AbortSignal.timeout(readTimeoutMs(input.deps.settings)),
+        context.secrets,
+      ),
     );
   } catch (error) {
     return auditFailure(context, error);
@@ -330,6 +385,7 @@ export async function executeMcpMutation<T>(input: {
     startedAt,
     inputHash: input.payloadHash,
     idempotencyKeyHash: hashCanonicalJson(input.idempotencyKey),
+    secrets: [],
   };
   // Guarded rather than trusted, because "must be pure and must not throw" is a
   // docstring and not a mechanism. This runs in argument position on the audit

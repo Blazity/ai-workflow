@@ -66,7 +66,7 @@ export type AgentWorkflowInput =
       /** Authenticated provider delivery that launched this candidate. Optional
        * only for workflow inputs serialized before durable delivery tracking. */
       delivery?: {
-        provider: "github" | "gitlab";
+        provider: string;
         producer: string;
         deliveryId: string;
       };

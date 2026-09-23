@@ -65,6 +65,7 @@ export async function executePreSandboxPhase(
             run: input.run,
             repositoryAccess: input.repositoryAccess,
             settings: input.settings,
+            ...(input.integrationPins ? { integrationPins: input.integrationPins } : {}),
             ...(input.repositoryScope ? { repositoryScope: input.repositoryScope } : {}),
             ...(input.clarification ? { clarification: input.clarification } : {}),
             // Forwarded one by one rather than spread, so a field the caller

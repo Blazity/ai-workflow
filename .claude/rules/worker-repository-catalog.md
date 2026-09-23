@@ -8,6 +8,7 @@ paths:
   - "apps/worker/src/db/repositories/repository-catalog-history.ts"
   - "apps/worker/src/routes/api/v1/repository-catalog.get.ts"
   - "apps/worker/src/routes/api/v1/repository-catalog/**"
+  - "apps/worker/src/routes/webhooks/*id*.post.ts"
   - "apps/worker/src/engine/agent-workflow.ts"
   - "apps/worker/src/engine/steps/run-start-settings.ts"
   - "apps/worker/src/engine/support/repository-access.ts"

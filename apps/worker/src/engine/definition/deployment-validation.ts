@@ -22,6 +22,7 @@ import type {
   HarnessProfileManifest,
   VcsProviderKind,
   WorkflowBlockContractResolver,
+  WorkflowBlockInputContract,
   WorkflowDefinition,
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
@@ -29,6 +30,7 @@ import type {
   WorkflowParamValue,
 } from "@shared/contracts";
 import {
+  describeSubjectDefault,
   isHarnessProfileReference,
   isTriggerBlockType,
   triggerRepositoryPolicySchema,
@@ -44,6 +46,8 @@ import {
   validateWorkflowV2WorkspaceAccessIssues,
   workflowDefinitionIssue,
   workflowScheduleGraphIssues,
+  workflowSubjectDefaultIssues,
+  workflowUnreadOutputIssues,
   workflowValueReferenceIssues,
   type WorkflowBlockParamsSchemas,
   type WorkflowDeploymentIssueSource,
@@ -51,6 +55,7 @@ import {
   type WorkflowValueAnalysis,
 } from "@shared/workflow-graph";
 import { JSON_SCHEMA_SUPPORT } from "./json-schema-support.js";
+import { buildProvidesBlockType } from "./integration-block-contract.js";
 import {
   MINIMUM_PERIOD_MS,
   parseSchedule,
@@ -194,9 +199,55 @@ function workerDeploymentIssues(
     ),
     ...analysis.issues,
     ...workflowValueReferenceIssues(def, catalogAnalysis.catalogByNode),
+    // Publish only, both of them. A graph deployed before a block declared a
+    // field it must read, or before an unbound default had to be answerable
+    // for, keeps running; refusing it at run load would stop runs over a rule
+    // its author never saw, and the next publish is where they meet it.
+    ...(checkEnvironmentAvailability === false
+      ? []
+      : workflowUnreadOutputIssues(
+          def,
+          (node) =>
+            resolveContract(
+              node.type,
+              v2ConfigurationParams(node, blockParamsSchemas, resolvedHarnessProfiles),
+            ).output.mustRead ?? [],
+        )),
+    ...(checkEnvironmentAvailability === false
+      ? []
+      : workflowSubjectDefaultIssues(def, (node) =>
+          unboundSubjectDefaults(
+            node,
+            resolveContract(
+              node.type,
+              v2ConfigurationParams(node, blockParamsSchemas, resolvedHarnessProfiles),
+            ),
+          ),
+        )),
     ...validateWorkflowV2WorkspaceAccessIssues(def),
     ...repositoryScopePinIssues(def, configuredVcsProviders, { checkEnvironmentAvailability }),
   ];
+}
+
+/**
+ * The node's inputs that would be filled from the run's subject, because the
+ * contract names a default and the author bound nothing.
+ *
+ * The description comes from `describeSubjectDefault` and nowhere else, so the
+ * refusal, the editor's hint and the block's own run-time message cannot name
+ * the same default three different ways.
+ */
+function unboundSubjectDefaults(
+  node: WorkflowDefinitionV2Node,
+  contract: { inputs: Record<string, WorkflowBlockInputContract> },
+): Array<{ name: string; describes: string }> {
+  const unbound: Array<{ name: string; describes: string }> = [];
+  for (const [name, input] of Object.entries(contract.inputs)) {
+    const fields = input.defaultFromSubject;
+    if (!fields || fields.length === 0 || node.inputs[name]) continue;
+    unbound.push({ name, describes: describeSubjectDefault(fields) });
+  }
+  return unbound;
 }
 
 function v2ConfigurationParams(
@@ -209,7 +260,10 @@ function v2ConfigurationParams(
   const parsedConfiguration =
     node.type === "branch" || node.type === "transform"
       ? null
-      : blockParamsSchemas[node.type].safeParse(node.configuration);
+      : // Undefined for a block whose integration this build no longer ships;
+        // the node's own availability says so, so the raw configuration is kept
+        // and nothing here pretends to understand it.
+        (blockParamsSchemas[node.type]?.safeParse(node.configuration) ?? null);
   const configuration =
     parsedConfiguration?.success === true
       ? (parsedConfiguration.data as Record<string, unknown>)
@@ -418,15 +472,28 @@ function validateWorkflowV2BlockDeploymentIssues(
           message: `Block "${node.id}" (${node.type}) is unavailable: ${issue.message}`,
         })),
       );
-    } else if (
-      options.checkEnvironmentAvailability !== false &&
-      !profileUnavailable
-    ) {
-      const availability = resolveContract(node.type, params).availability;
-      if (!availability.available) {
+    } else {
+      const contract = resolveContract(node.type, params);
+      // A block type nothing in this build provides is refused whatever the
+      // deployment looks like, because no connection an admin could make would
+      // bring it back: it is a fact about the build, not about a provider. It
+      // is therefore reported even where environment availability is skipped.
+      if (!buildProvidesBlockType(contract)) {
         issues.push(
           workflowDefinitionIssue(
-            `Block "${node.id}" (${node.type}) is unavailable: ${availability.unavailableReason}`,
+            `Block "${node.id}" (${node.type}) is unavailable: ${contract.availability.unavailableReason}`,
+            node.id,
+            `/nodes/${nodeIndex}/type`,
+          ),
+        );
+      } else if (
+        options.checkEnvironmentAvailability !== false &&
+        !profileUnavailable &&
+        !contract.availability.available
+      ) {
+        issues.push(
+          workflowDefinitionIssue(
+            `Block "${node.id}" (${node.type}) is unavailable: ${contract.availability.unavailableReason}`,
             node.id,
             `/nodes/${nodeIndex}/configuration`,
           ),

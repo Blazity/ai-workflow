@@ -17,12 +17,14 @@ function harnessManifest(nodeId: string, modelId: string): HarnessRunManifestRec
 }
 
 const JIRA = "https://blazity.atlassian.net";
+/** How the tracker these runs were on links a ticket: its answer, which core carries. */
+const LINKS = (key: string) => `${JIRA}/browse/${key}`;
 let db: Db;
 beforeEach(async () => {
   db = await createTestDb();
 });
 
-const base = { jiraBaseUrl: JIRA };
+const base = { ticketLinks: LINKS, secrets: [] as string[] };
 
 describe("fetchRunDetailFromDb", () => {
   it("returns null for an unknown run id", async () => {
@@ -362,7 +364,7 @@ describe("fetchRunDetailFromDb", () => {
 
 describe("fetchRunRefs", () => {
   it("returns null for an unknown run id", async () => {
-    expect(await fetchRunRefs(db, "nope", JIRA)).toBeNull();
+    expect(await fetchRunRefs(db, "nope", LINKS)).toBeNull();
   });
 
   it("returns the persisted ticket + PR refs", async () => {
@@ -373,7 +375,7 @@ describe("fetchRunRefs", () => {
       prUrl: "https://github.com/acme/demo/pull/42",
       prNumber: 42,
     });
-    expect(await fetchRunRefs(db, "r1", JIRA)).toEqual({
+    expect(await fetchRunRefs(db, "r1", LINKS)).toEqual({
       ticketKey: "AWT-981",
       ticketUrl: "https://blazity.atlassian.net/browse/AWT-981",
       ticketTitle: "Add greeting endpoint",
@@ -405,7 +407,7 @@ describe("fetchRunRefs", () => {
         },
       ],
     });
-    expect((await fetchRunRefs(db, "r1", JIRA))?.prs).toEqual([
+    expect((await fetchRunRefs(db, "r1", LINKS))?.prs).toEqual([
       {
         provider: "github",
         repoPath: "acme/backend",
@@ -427,13 +429,79 @@ describe("fetchRunRefs", () => {
       status: "blocked",
       statusReason: "Cancelled via Slack /ai-workflow cancel",
     });
-    const refs = await fetchRunRefs(db, "r1", JIRA);
+    const refs = await fetchRunRefs(db, "r1", LINKS);
     expect(refs?.statusReason).toBe("Cancelled via Slack /ai-workflow cancel");
   });
 
   it("derives the ticket url from the key when none is stored", async () => {
     await db.insert(workflowRuns).values({ runId: "r1", ticketKey: "AWT-5" });
-    const refs = await fetchRunRefs(db, "r1", JIRA);
+    const refs = await fetchRunRefs(db, "r1", LINKS);
     expect(refs?.ticketUrl).toBe("https://blazity.atlassian.net/browse/AWT-5");
+  });
+});
+
+/**
+ * The new code column changes nothing for a failure that has no code, which is
+ * every failure the product produces today and every run that failed before the
+ * column existed.
+ *
+ * `readRunDetailRow` selects the whole table, so a new column arrives in the row
+ * whether anyone asked for it or not. What must not happen is that arrival
+ * reaching a caller: the API payload is built field by field, and the day it is
+ * not, this is what says so.
+ */
+describe("a failed run that carries no failure code", () => {
+  const failure = {
+    runId: "r-nocode",
+    status: "failed",
+    statusReason: "Implementation phase timed out",
+    startedAt: new Date("2026-09-19T10:00:00Z"),
+  };
+
+  it("reads exactly as it did before the column existed", async () => {
+    await db.insert(workflowRuns).values(failure);
+
+    const result = await fetchRunDetailFromDb({ db, runId: "r-nocode", ...base });
+
+    expect(result?.run.statusReason).toBe("Implementation phase timed out");
+    expect(result?.run.error).toEqual({ message: "Implementation phase timed out" });
+    // Not "is null": absent. A field nobody added cannot be one a client has to
+    // learn to ignore.
+    expect(Object.keys(result?.run ?? {})).not.toContain("statusReasonCode");
+    expect(Object.keys(result?.run ?? {})).not.toContain("failureCode");
+  });
+
+  it("keeps the refs read to the fields it always returned", async () => {
+    await db.insert(workflowRuns).values(failure);
+
+    const refs = await fetchRunRefs(db, "r-nocode", LINKS);
+
+    expect(Object.keys(refs ?? {}).sort()).toEqual([
+      "prNumber",
+      "prUrl",
+      "prs",
+      "statusReason",
+      "ticketKey",
+      "ticketTitle",
+      "ticketUrl",
+    ]);
+  });
+
+  it("does not let a run that HAS a code grow a field on the way out either", async () => {
+    // The code is for a machine reading the durable row, and S3 is the first
+    // thing that will read it. It is not part of this payload until someone
+    // decides it is, deliberately, with a contract change.
+    await db.insert(workflowRuns).values({
+      ...failure,
+      runId: "r-code",
+      statusReason: "Acme Notify is disabled.",
+      statusReasonCode: "integration_unavailable.disabled",
+    });
+
+    const result = await fetchRunDetailFromDb({ db, runId: "r-code", ...base });
+
+    expect(result?.run.statusReason).toBe("Acme Notify is disabled.");
+    expect(result?.run.error).toEqual({ message: "Acme Notify is disabled." });
+    expect(Object.keys(result?.run ?? {})).not.toContain("statusReasonCode");
   });
 });

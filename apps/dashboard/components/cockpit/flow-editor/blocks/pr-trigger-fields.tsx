@@ -3,8 +3,11 @@
 import { useState } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
 import type { WorkflowParamValue } from "@shared/contracts";
-import { toggleRequiredArrayValue } from "@/lib/workflow-editor/params";
-import { describeRepositoryScope } from "@/lib/workflow-editor/repository-scope";
+import {
+  PINNABLE_PROVIDERS,
+  describeRepositoryScope,
+  providerLabel,
+} from "@/lib/workflow-editor/repository-scope";
 import { Button, Select } from "@/components/ui";
 import { RepositoryScopeModal } from "../repository-scope-modal";
 import { useRepositoryScopeContext } from "../repository-scope-context";
@@ -37,6 +40,20 @@ export function PrScopeField({
   );
 }
 
+/**
+ * Which providers' pull requests start this trigger: one checkbox per version
+ * control provider the registry ships, named the way its integration names
+ * itself. None ticked is the stored default and admits every connected
+ * provider, so it is said in words rather than drawn as every box ticked: a
+ * list that ticks every box would store every id on the first click and stop
+ * admitting a provider added later.
+ *
+ * A stored id this build does not ship (a definition from a build with one
+ * more provider, or one written through the API) keeps its own row until the
+ * author removes it. The dispatcher compares ids, so such an id matches no
+ * event; dropping it on the next toggle would change what the trigger admits
+ * without anybody choosing that.
+ */
 export function PrProvidersField({
   node,
   canEdit,
@@ -46,32 +63,59 @@ export function PrProvidersField({
   canEdit: boolean;
   onChange: (path: string, value: WorkflowParamValue | undefined) => void;
 }) {
-  const configured = arr(node.params.providers).filter(
-    (provider) => provider === "github" || provider === "gitlab",
-  );
-  const effective = configured.length > 0 ? configured : ["github", "gitlab"];
-  const toggle = (provider: "github" | "gitlab") => (checked: boolean) => {
-    onChange(
-      "params.providers",
-      toggleRequiredArrayValue(effective, provider, checked),
-    );
-  };
+  const stored = arr(node.params.providers);
+  const unknown = stored.filter((provider) => !PINNABLE_PROVIDERS.includes(provider));
+  const shippedPicked = stored.length - unknown.length > 0;
+  const write = (next: string[]) => onChange("params.providers", next);
 
   return (
     <ConfigField label="Providers">
       <div className="flex flex-col gap-1.5">
-        {(["github", "gitlab"] as const).map((provider) => {
-          const checked = effective.includes(provider);
+        {PINNABLE_PROVIDERS.map((provider) => {
+          const checked = stored.includes(provider);
           return (
             <CheckboxRow
               key={provider}
-              label={provider === "github" ? "GitHub" : "GitLab"}
+              label={providerLabel(provider)}
               checked={checked}
-              disabled={!canEdit || (checked && effective.length === 1)}
-              onChange={toggle(provider)}
+              disabled={!canEdit}
+              onChange={(next) =>
+                write(
+                  next
+                    ? [...stored, provider]
+                    : stored.filter((entry) => entry !== provider),
+                )
+              }
             />
           );
         })}
+        {unknown.map((provider) => (
+          <div key={provider} className="flex items-center gap-2 font-body text-xs text-coal">
+            <span className="font-mono">{provider}</span>
+            <span className="text-neutral-500">Unknown provider</span>
+            <Button
+              type="button"
+              variant="text"
+              size="sm"
+              aria-label={`Remove ${provider}`}
+              disabled={!canEdit}
+              onClick={() => write(stored.filter((entry) => entry !== provider))}
+              className="ml-auto appearance-none border-none bg-transparent cursor-pointer p-0 font-body text-[11px] text-mariner disabled:cursor-default disabled:opacity-40"
+            >
+              Remove
+            </Button>
+          </div>
+        ))}
+        {stored.length === 0 ? (
+          <p className="m-0 font-body text-[11px] text-neutral-500">
+            None ticked: a pull request from any connected provider starts it.
+          </p>
+        ) : !shippedPicked ? (
+          <p className="m-0 font-body text-[11px] text-fail-fg">
+            This build ships no provider named here, so this trigger never fires.
+            Tick a provider above or remove the unknown one.
+          </p>
+        ) : null}
       </div>
     </ConfigField>
   );

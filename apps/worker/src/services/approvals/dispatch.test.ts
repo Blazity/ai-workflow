@@ -31,6 +31,15 @@ vi.mock("../tickets/ticket-label-mutation.js", () => ({
     mockUpdateTicketLabelsWithIntent(...args),
 }));
 
+// This deployment has an issue tracker connected. Which one, and what it is
+// wired to, is an integration connection since S12 and is resolved from the
+// database; this suite is about what happens to a RUN, so it says the one
+// thing it means and leaves the resolution to its own tests.
+vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
+  const support = await import("../../test-support/issue-tracker.js");
+  return support.connectedIssueTracker({});
+});
+
 const { dispatchPlanApproved } = await import("./dispatch.js");
 const db = {} as never;
 
@@ -151,7 +160,7 @@ function makeIssueTracker(overrides: Partial<IssueTrackerAdapter> = {}): IssueTr
     fetchTicket: vi.fn(),
     moveTicket: vi.fn().mockResolvedValue(undefined),
     postComment: vi.fn().mockResolvedValue(null),
-    searchTickets: vi.fn(),
+    ticketsInStatus: vi.fn(),
     updateLabels: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as IssueTrackerAdapter;

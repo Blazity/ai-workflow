@@ -3,10 +3,24 @@ import { z } from "zod";
 // AgentProtocolDiagnostic, its failure-kind union and the provider name are
 // plain serializable data that `@shared/workflow-graph` also names, so they
 // live in contracts.
-import type {
-  AgentProtocolDiagnostic,
-  AgentProtocolProvider,
+import {
+  INTEGRATION_ID,
+  repositoryCatalogProviderSchema,
+  type AgentProtocolDiagnostic,
+  type AgentProtocolProvider,
 } from "@shared/contracts";
+import type { AgentTracingSetup } from "@integrations/sdk";
+
+/**
+ * One tracing provider's answer for one sandbox, resolved before the step that
+ * configures it ran. It holds whatever that provider asked for, a connection
+ * secret included: it reaches a sandbox through a written file, never a
+ * command line (ADR-010, decision 7).
+ */
+export interface AgentTracingPlan {
+  readonly integrationId: string;
+  readonly setup: AgentTracingSetup;
+}
 
 // Open union: "research" | "impl" | "review" remain the built-in phases, but
 // new block executors label phases freely (e.g. "fix", "agent-<blockId>").
@@ -245,7 +259,7 @@ type ResearchStatus =
   | "clarification_needed"
   | "failed";
 export interface ResearchRepository {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   rationale: string;
 }
@@ -265,7 +279,7 @@ export interface ResearchResult {
 }
 
 const researchRepositorySchema = z.object({
-  provider: z.enum(["github", "gitlab"]),
+  provider: repositoryCatalogProviderSchema,
   repoPath: z.string().min(1),
   rationale: z.string().min(1),
 }).strict();
@@ -290,6 +304,17 @@ export const researchOutputSchema = z.object({
   error: z.string().nullish(),
 }).strict();
 export type ResearchOutput = z.infer<typeof researchOutputSchema>;
+
+/**
+ * The provider a research answer names, as the harness is told it: the same
+ * rule `researchRepositorySchema` validates the answer with, so the model is
+ * constrained to exactly what will be accepted. `pattern` rather than the
+ * `minLength` this replaced, which the rule already implies: both harnesses'
+ * structured outputs document `pattern` on a string (Claude's as a simple
+ * regex, OpenAI's under strict mode), and Claude's lists `minLength` as
+ * unsupported.
+ */
+const RESEARCH_PROVIDER_JSON_SCHEMA = { type: "string", pattern: INTEGRATION_ID.source } as const;
 
 export const RESEARCH_SCHEMA = JSON.stringify({
   type: "object",
@@ -326,7 +351,7 @@ export const RESEARCH_SCHEMA = JSON.stringify({
           items: {
             type: "object",
             properties: {
-              provider: { type: "string", enum: ["github", "gitlab"] },
+              provider: RESEARCH_PROVIDER_JSON_SCHEMA,
               repoPath: { type: "string" },
               rationale: { type: "string" },
             },
@@ -345,7 +370,7 @@ export const RESEARCH_SCHEMA = JSON.stringify({
           items: {
             type: "object",
             properties: {
-              provider: { type: "string", enum: ["github", "gitlab"] },
+              provider: RESEARCH_PROVIDER_JSON_SCHEMA,
               repoPath: { type: "string" },
               rationale: { type: "string" },
             },
@@ -463,18 +488,17 @@ export interface PhaseUsage {
 
 // --- Adapter contract ---
 
-interface ArthurConfig {
-  apiKey: string;
-  taskId: string;
-  endpoint: string;
-}
-
 export interface ConfigureOpts {
   anthropicApiKey?: string;
   codexApiKey?: string;
   codexChatGptOauthToken?: string;
   model: string;
-  arthur?: ArthurConfig;
+  /**
+   * What the connected tracing integrations asked this sandbox for, already
+   * resolved: core applies each plan and maps the moments a provider named to
+   * the hooks this harness has. Empty or absent when nothing is connected.
+   */
+  tracing?: readonly AgentTracingPlan[];
   /**
    * PR5 v2 profiles use an immutable, manifest-hash-addressed runtime. V1
    * omits this and retains its historical shared-home compatibility behavior.

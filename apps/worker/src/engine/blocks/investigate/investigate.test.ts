@@ -1,18 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   generateStructured: vi.fn(),
-  searchTicketSummaries: vi.fn(),
-  searchSlackChannels: vi.fn(),
-  /** The tenant configuration the block reads: the Jira project it may search
-   *  and the Slack bot token. Mutable so a test can take either away. */
-  env: {
-    JIRA_PROJECT_KEY: "AWT" as string | undefined,
-    CHAT_SDK_SLACK_TOKEN: "test-slack-token" as string | undefined,
-  },
+  findTickets: vi.fn(),
+  searchMessages: vi.fn(),
+  resolveActiveIssueTracker: vi.fn(),
   /** Configured secrets the retrieval step redacts with. Fixed here so the test
    *  does not depend on the machine's environment. */
   secrets: [] as string[],
+  /** Set to make the secret source fail the way unreadable settings do. */
+  secretsUnreadable: false,
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
@@ -21,27 +18,31 @@ vi.mock("../../llm.js", () => ({
 }));
 vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
-    issueTracker: { searchTicketSummaries: mocks.searchTicketSummaries },
+    issueTrackerResolution: { ok: true, adapter: { findTickets: mocks.findTickets } },
+    messaging: { searchMessages: mocks.searchMessages },
   }),
 }));
-vi.mock("../../../adapters/messaging/slack-search.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../adapters/messaging/slack-search.js")>();
-  // Only the network call is mocked; the failure classifier is the real one, so
-  // the block's degradation reasons are the ones production would produce.
-  return { ...actual, searchSlackChannels: mocks.searchSlackChannels };
-});
-vi.mock("../../../infra/vcs-config.js", () => ({ env: mocks.env }));
-vi.mock("../../../run-observability/configured-secrets.js", () => ({
-  configuredReplaySecrets: () => mocks.secrets,
+vi.mock("../../../services/integrations/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/integrations/runtime.js")>()),
+  knownSecretValues: async () => {
+    if (mocks.secretsUnreadable) throw new Error("settings unreadable");
+    return mocks.secrets;
+  },
+}));
+// Which tracker is connected, asked only to find the rule a query template is
+// judged by. The search itself goes through createAdapters above.
+vi.mock("../../support/issue-tracker-runtime.js", () => ({
+  resolveActiveIssueTracker: mocks.resolveActiveIssueTracker,
 }));
 
 import {
-  buildInvestigateJql,
-  classifyJiraFailure,
+  classifyTrackerFailure,
   describeRetrievalGaps,
   execute,
 } from "./execute.js";
 import { manifest } from "./manifest.js";
+import { integrationRuntime } from "@integrations/registry/worker";
+import { logger } from "../../../infra/logger.js";
 import {
   expectOutputConformsToRegistry,
   makeCtx,
@@ -58,12 +59,12 @@ const THEORY_RESULT = {
   object: {
     classification: "known_issue",
     theory: "Matches AWT-9.",
-    evidenceRefs: ["jira:AWT-9"],
+    evidenceRefs: ["issue_tracker:AWT-9"],
   },
   text: "",
   usage: null,
 };
-const JIRA_HITS = [
+const TRACKER_HITS = [
   {
     key: "AWT-9",
     summary: "Login button unresponsive",
@@ -75,20 +76,21 @@ const JIRA_HITS = [
     updatedAt: "2026-08-10T09:15:00.000Z",
   },
 ];
-const SLACK_HITS = [
+const CHAT_HITS = [
   {
     channel: "C1",
-    ts: "1754000000.000100",
+    id: "1754000000.000100",
     text: "login is broken again",
-    permalink: "https://slack.example/p/1",
+    url: "https://slack.example/p/1",
     author: "U42",
+    postedAt: "2025-07-31T22:13:20.000Z",
   },
 ];
 
-/** The normalized shapes the two providers above turn into. */
-const JIRA_EVIDENCE = {
-  ref: "jira:AWT-9",
-  source: "jira",
+/** The normalized shapes the two sources above turn into. */
+const TRACKER_EVIDENCE = {
+  ref: "issue_tracker:AWT-9",
+  source: "issue_tracker",
   title: "AWT-9 Login button unresponsive",
   excerpt: "[In Progress] The login button does nothing on Safari.",
   author: "Ada Lovelace",
@@ -96,9 +98,9 @@ const JIRA_EVIDENCE = {
   timestamp: "2026-08-10T09:15:00.000Z",
   link: "https://jira.example.com/browse/AWT-9",
 };
-const SLACK_EVIDENCE = {
-  ref: "slack:C1/1754000000.000100",
-  source: "slack",
+const CHAT_EVIDENCE = {
+  ref: "chat:C1/1754000000.000100",
+  source: "chat",
   title: "login is broken again",
   excerpt: "login is broken again",
   author: "U42",
@@ -107,13 +109,44 @@ const SLACK_EVIDENCE = {
   link: "https://slack.example/p/1",
 };
 
+/**
+ * Jira as a run reaches it: the adapter its own runtime builds, over a fetch
+ * that records every URL, so a test reads the JQL Jira would receive.
+ */
+function connectedJira() {
+  const requests: string[] = [];
+  const fetch = vi.fn(async (input: unknown) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("/_edge/tenant_info")) return Response.json({ cloudId: "cloud-1" });
+    if (url.includes("/rest/api/3/search/jql")) return Response.json({ issues: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  const adapter = integrationRuntime("jira")!.capabilities.issue_tracker!({
+    connection: { baseUrl: "https://acme.atlassian.net", apiToken: "token", projectKey: "OPS" },
+    http: { fetch },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    signal: new AbortController().signal,
+  } as never) as { findTickets(input: unknown): Promise<unknown> };
+  return {
+    adapter,
+    resolved: { ok: true, id: "jira", name: "Jira", adapter, wiring: { projectKey: "OPS", baseUrl: "https://acme.atlassian.net" } },
+    /** The JQL of every search sent, decoded the way Jira reads it. */
+    searchedJql: () =>
+      requests
+        .filter((url) => url.includes("/rest/api/3/search/jql"))
+        .map((url) => new URL(url).searchParams.get("jql")),
+  };
+}
+
 function mockHappyPath() {
   mocks.generateStructured
     .mockResolvedValueOnce(KEYWORDS_RESULT)
     .mockResolvedValueOnce(THEORY_RESULT);
-  mocks.searchTicketSummaries.mockResolvedValue(JIRA_HITS);
-  mocks.searchSlackChannels.mockResolvedValue({
-    matches: SLACK_HITS,
+  mocks.findTickets.mockResolvedValue(TRACKER_HITS);
+  mocks.searchMessages.mockResolvedValue({
+    ok: true,
+    matches: CHAT_HITS,
     skipped: [],
   });
 }
@@ -121,10 +154,10 @@ function mockHappyPath() {
 describe("investigate paramsSchema", () => {
   it("accepts the full param set and rejects unknown keys", () => {
     const parsed = manifest.paramsSchema.safeParse({
-      providers: ["jira"],
-      slackChannels: ["C1"],
-      slackLookbackDays: 14,
-      jiraJqlTemplate: "project = ENG",
+      sources: ["issue_tracker"],
+      chatChannels: ["C1"],
+      chatLookbackDays: 14,
+      issueTrackerQueryTemplate: "project = ENG",
       maxResults: 5,
       model: "claude-haiku-4-5",
     });
@@ -132,13 +165,13 @@ describe("investigate paramsSchema", () => {
     expect(manifest.paramsSchema.safeParse({}).success).toBe(true);
     expect(manifest.paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
     expect(manifest.paramsSchema.safeParse({ maxResults: 0 }).success).toBe(false);
-    expect(manifest.paramsSchema.safeParse({ slackLookbackDays: 0 }).success).toBe(false);
+    expect(manifest.paramsSchema.safeParse({ chatLookbackDays: 0 }).success).toBe(false);
   });
 
-  it("rejects a provider selection that is empty or names an unknown provider", () => {
-    expect(manifest.paramsSchema.safeParse({ providers: [] }).success).toBe(false);
-    expect(manifest.paramsSchema.safeParse({ providers: ["zendesk"] }).success).toBe(false);
-    expect(manifest.paramsSchema.safeParse({ providers: "jira" }).success).toBe(false);
+  it("rejects a source selection that is empty or names an unknown source", () => {
+    expect(manifest.paramsSchema.safeParse({ sources: [] }).success).toBe(false);
+    expect(manifest.paramsSchema.safeParse({ sources: ["zendesk"] }).success).toBe(false);
+    expect(manifest.paramsSchema.safeParse({ sources: "issue_tracker" }).success).toBe(false);
   });
 
   it("caps maxResults so one run cannot fan out arbitrarily", () => {
@@ -146,43 +179,55 @@ describe("investigate paramsSchema", () => {
     expect(manifest.paramsSchema.safeParse({ maxResults: 11 }).success).toBe(false);
   });
 
-  it("rejects a JQL template that could escape its project-scoped clause", () => {
+  it("leaves the query language to the tracker and checks only the template's length", () => {
+    // The template is written in the connected tracker's language, so core
+    // keeps no copy of its syntax: the tracker's own rule is asked when a
+    // definition is saved (services/workflow-definitions/block-contracts.test.ts),
+    // and its adapter drops at run time what it would not run.
     expect(
-      manifest.paramsSchema.safeParse({
-        jiraJqlTemplate: 'labels = support) OR (project = OTHER',
-      }).success,
-    ).toBe(false);
-    expect(
-      manifest.paramsSchema.safeParse({ jiraJqlTemplate: 'summary ~ "literal (value)"' }).success,
+      manifest.paramsSchema.safeParse({ issueTrackerQueryTemplate: "summary ~ 'fix)'" }).success,
     ).toBe(true);
+    expect(
+      manifest.paramsSchema.safeParse({ issueTrackerQueryTemplate: "x".repeat(1001) }).success,
+    ).toBe(false);
   });
 
-  it("defaults only the provider selection, leaving the numbers to the executor", () => {
+  it("defaults only the source selection, leaving the numbers to the executor", () => {
     const parsed = manifest.paramsSchema.safeParse({});
     expect(parsed.success).toBe(true);
     if (parsed.success) {
-      expect(parsed.data.providers).toEqual(["jira", "slack"]);
-      expect(parsed.data.slackLookbackDays).toBeUndefined();
+      expect(parsed.data.sources).toEqual(["issue_tracker", "chat"]);
+      expect(parsed.data.chatLookbackDays).toBeUndefined();
       expect(parsed.data.maxResults).toBeUndefined();
     }
   });
 });
 
-describe("classifyJiraFailure", () => {
+describe("classifyTrackerFailure", () => {
+  // What a tracker client throws for an answer that was not a success: the
+  // provider's sentence, and the status it answered with on the error.
+  const answered = (message: string, status: number) =>
+    Object.assign(new Error(message), { status });
+
   it("separates a refused credential from an outage and a timeout", () => {
+    expect(classifyTrackerFailure(answered("Jira search failed: Forbidden", 403))).toBe("permission");
+    expect(classifyTrackerFailure(answered("Jira search failed: Unauthorized", 401))).toBe("permission");
+    expect(classifyTrackerFailure(answered("Jira search failed: Service Unavailable", 503))).toBe(
+      "unavailable",
+    );
     expect(
-      classifyJiraFailure(new Error("Jira API error: 403 Forbidden on /rest/api/3/search/jql")),
-    ).toBe("permission");
-    expect(
-      classifyJiraFailure(new Error("Jira API error: 401 Unauthorized on /rest/api/3/search/jql")),
-    ).toBe("permission");
-    expect(
-      classifyJiraFailure(new Error("Jira API error: 503 Service Unavailable on /x")),
-    ).toBe("unavailable");
-    expect(
-      classifyJiraFailure(Object.assign(new Error("aborted"), { name: "TimeoutError" })),
+      classifyTrackerFailure(Object.assign(new Error("aborted"), { name: "TimeoutError" })),
     ).toBe("timeout");
-    expect(classifyJiraFailure(new TypeError("fetch failed"))).toBe("unavailable");
+    expect(classifyTrackerFailure(new TypeError("fetch failed"))).toBe("unavailable");
+  });
+
+  it("reads the verdict from the status, not from numbers in the sentence", () => {
+    // A rate limit is no verdict on the credential, whatever the words say.
+    expect(classifyTrackerFailure(answered("Jira search failed: 403 quota", 429))).toBe("unavailable");
+    // A query the tracker refuses is the provider saying no.
+    expect(classifyTrackerFailure(answered("Jira search failed: Bad Request", 400))).toBe("permission");
+    // A sentence with no status says nothing about the values.
+    expect(classifyTrackerFailure(new Error("Jira API error: 401 Unauthorized"))).toBe("unavailable");
   });
 });
 
@@ -191,65 +236,15 @@ describe("describeRetrievalGaps", () => {
     expect(describeRetrievalGaps([])).toBe("");
   });
 
-  it("names each provider and channel with why it was not searched", () => {
+  it("names each source and channel with why it was not searched", () => {
     expect(
       describeRetrievalGaps([
-        { provider: "jira", reason: "unavailable", scope: "" },
-        { provider: "slack", reason: "permission", scope: "C_PRIV" },
-        { provider: "slack", reason: "timeout", scope: "" },
+        { provider: "issue_tracker", reason: "unavailable", scope: "" },
+        { provider: "chat", reason: "permission", scope: "C_PRIV" },
+        { provider: "chat", reason: "timeout", scope: "" },
       ]),
     ).toBe(
-      "Not searched: Jira (unavailable); Slack channel C_PRIV (no access); Slack (timed out).",
-    );
-  });
-});
-
-describe("buildInvestigateJql", () => {
-  it("scopes to the configured project and ORs the keyword clauses", () => {
-    expect(buildInvestigateJql("AWT", ["login failure", "payment"])).toBe(
-      '(project = "AWT") AND (text ~ "login failure" OR text ~ "payment")',
-    );
-  });
-
-  it("keeps the project scope first when a template narrows the search", () => {
-    expect(buildInvestigateJql("AWT", ["login"], "labels = support")).toBe(
-      '(project = "AWT") AND (labels = support) AND (text ~ "login")',
-    );
-  });
-
-  it("scopes the template alone when no keywords were extracted", () => {
-    expect(buildInvestigateJql("AWT", [], "labels = support")).toBe(
-      '(project = "AWT") AND (labels = support)',
-    );
-  });
-
-  it("never produces an unscoped query, even with nothing else to add", () => {
-    expect(buildInvestigateJql("AWT", [])).toBe('(project = "AWT")');
-  });
-
-  it("cannot be widened past the configured project by a template naming another", () => {
-    // Both project clauses are ANDed, so this finds nothing rather than finding
-    // OTHER's tickets: out of scope fails closed.
-    const jql = buildInvestigateJql("AWT", ["login"], "project = OTHER OR project = AWT");
-    expect(jql).toBe(
-      '(project = "AWT") AND (project = OTHER OR project = AWT) AND (text ~ "login")',
-    );
-    expect(jql.startsWith('(project = "AWT") AND')).toBe(true);
-  });
-
-  it("drops an unbalanced template that tries to close the project scope", () => {
-    expect(
-      buildInvestigateJql(
-        "AWT",
-        ["login"],
-        "labels = support) OR (project = OTHER",
-      ),
-    ).toBe('(project = "AWT") AND (text ~ "login")');
-  });
-
-  it("strips quotes and backslashes that would break out of a clause", () => {
-    expect(buildInvestigateJql('AW"T', ['weird "quoted" \\keyword'])).toBe(
-      '(project = "AW T") AND (text ~ "weird quoted keyword")',
+      "Not searched: the issue tracker (unavailable); chat channel C_PRIV (no access); chat (timed out).",
     );
   });
 });
@@ -261,10 +256,10 @@ describe("investigate execute", () => {
     // behind, so a test that stops before the theory call would hand its unused
     // answer to the next test's keyword call.
     mocks.generateStructured.mockReset();
-    mocks.searchTicketSummaries.mockReset();
-    mocks.searchSlackChannels.mockReset();
-    mocks.env.CHAT_SDK_SLACK_TOKEN = "test-slack-token";
-    mocks.env.JIRA_PROJECT_KEY = "AWT";
+    mocks.findTickets.mockReset();
+    mocks.searchMessages.mockReset();
+    mocks.resolveActiveIssueTracker.mockReset();
+    mocks.resolveActiveIssueTracker.mockResolvedValue(connectedJira().resolved);
     mocks.secrets = [];
   });
 
@@ -298,8 +293,8 @@ describe("investigate execute", () => {
       },
     });
     expect(mocks.generateStructured).not.toHaveBeenCalled();
-    expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
+    expect(mocks.findTickets).not.toHaveBeenCalled();
+    expect(mocks.searchMessages).not.toHaveBeenCalled();
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
@@ -307,7 +302,7 @@ describe("investigate execute", () => {
     mockHappyPath();
 
     const result = await execute(
-      makeNode("investigate", { slackChannels: ["C1"] }),
+      makeNode("investigate", { chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
@@ -324,22 +319,20 @@ describe("investigate execute", () => {
     expect(keywordsCall.prompt).toMatch(/English/);
     expect(keywordsCall.prompt).toMatch(/ticket's (own )?language/i);
 
-    expect(mocks.searchTicketSummaries).toHaveBeenCalledWith(
-      '(project = "AWT") AND (text ~ "login failure" OR text ~ "błąd logowania")',
-      10,
-    );
-    expect(mocks.searchSlackChannels).toHaveBeenCalledWith({
-      token: "test-slack-token",
+    expect(mocks.findTickets).toHaveBeenCalledWith({
+      keywords: ["login failure", "błąd logowania"],
+      limit: 10,
+    });
+    expect(mocks.searchMessages).toHaveBeenCalledWith({
       channels: ["C1"],
       keywords: ["login failure", "błąd logowania"],
       lookbackDays: 30,
       maxResults: 10,
-      now: expect.any(Date),
     });
 
     const theoryCall = mocks.generateStructured.mock.calls[1][0];
-    expect(theoryCall.prompt).toContain("jira:AWT-9");
-    expect(theoryCall.prompt).toContain("slack:C1/1754000000.000100");
+    expect(theoryCall.prompt).toContain("issue_tracker:AWT-9");
+    expect(theoryCall.prompt).toContain("chat:C1/1754000000.000100");
 
     expect(result).toEqual({
       kind: "next",
@@ -347,12 +340,117 @@ describe("investigate execute", () => {
         status: "ok",
         classification: "known_issue",
         theory: "Matches AWT-9.",
-        evidence: [JIRA_EVIDENCE, SLACK_EVIDENCE],
+        evidence: [TRACKER_EVIDENCE, CHAT_EVIDENCE],
         partial: [],
         partialReasons: [],
       },
     });
     expectOutputConformsToRegistry("investigate", result.output!);
+  });
+
+  it("passes the author's template through as providerQuery, without composing a query of its own", async () => {
+    mockHappyPath();
+
+    await execute(
+      makeNode("investigate", { issueTrackerQueryTemplate: "labels = support" }),
+      {},
+      makeCtx(),
+    );
+
+    expect(mocks.findTickets).toHaveBeenCalledWith({
+      keywords: ["login failure", "błąd logowania"],
+      limit: 10,
+      providerQuery: "labels = support",
+    });
+  });
+
+  it("asks the tracker nothing when the block has no query template", async () => {
+    mockHappyPath();
+
+    await execute(makeNode("investigate", { chatChannels: ["C1"] }), {}, makeCtx());
+
+    // Resolving the tracker reads the deployment's integrations: a run with no
+    // template to judge must not pay for it.
+    expect(mocks.resolveActiveIssueTracker).not.toHaveBeenCalled();
+  });
+
+  describe("a query template the tracker would not run", () => {
+    // `labels = 'backend` never closes its quote. Jira's adapter drops such a
+    // fragment rather than send a query that fails; the run has to say so, or
+    // the person reading the theory takes a keyword search for the one the
+    // block's author wrote.
+    const REFUSED = "labels = 'backend";
+
+    it("searches by the keywords alone and says why in the theory, and in the log", async () => {
+      const jira = connectedJira();
+      mocks.resolveActiveIssueTracker.mockResolvedValue(jira.resolved);
+      mockHappyPath();
+      mocks.findTickets.mockImplementation((input) => jira.adapter.findTickets(input));
+      const warn = vi.spyOn(logger, "warn").mockReturnValue(undefined);
+      onTestFinished(() => warn.mockRestore());
+
+      const result = await execute(
+        makeNode("investigate", { sources: ["issue_tracker"], issueTrackerQueryTemplate: REFUSED }),
+        {},
+        makeCtx(),
+      );
+
+      expect(jira.searchedJql()).toEqual([
+        '(project = "OPS") AND (text ~ "login failure" OR text ~ "błąd logowania")',
+      ]);
+      expect(result.output?.theory).toBe(
+        "Matches AWT-9.\n\nJira would not run this block's query template, so the issue tracker was searched by the ticket's keywords alone. The value opened with ' at character 10 is never closed.",
+      );
+      expect(warn).toHaveBeenCalledWith(
+        { tracker: "jira", problem: "The value opened with ' at character 10 is never closed.", searched: true },
+        "investigate_query_template_not_run",
+      );
+      expectOutputConformsToRegistry("investigate", result.output!);
+    });
+
+    it("does not search the whole project when the ticket gave no keywords either", async () => {
+      const jira = connectedJira();
+      mocks.resolveActiveIssueTracker.mockResolvedValue(jira.resolved);
+      mocks.generateStructured
+        .mockResolvedValueOnce({ ...KEYWORDS_RESULT, object: { keywords: [] } })
+        .mockResolvedValueOnce({ ...THEORY_RESULT, object: { ...THEORY_RESULT.object, classification: "insufficient_data", evidenceRefs: [] } });
+      mocks.findTickets.mockImplementation((input) => jira.adapter.findTickets(input));
+      const warn = vi.spyOn(logger, "warn").mockReturnValue(undefined);
+      onTestFinished(() => warn.mockRestore());
+
+      const result = await execute(
+        makeNode("investigate", { sources: ["issue_tracker"], issueTrackerQueryTemplate: REFUSED }),
+        {},
+        makeCtx(),
+      );
+
+      expect(jira.searchedJql()).toEqual([]);
+      expect(result.output).toMatchObject({
+        evidence: [],
+        partial: [],
+        theory: expect.stringMatching(
+          /\n\nJira would not run this block's query template and the ticket gave no keywords, so the issue tracker was not searched\. The value opened with ' at character 10 is never closed\.$/u,
+        ),
+      });
+    });
+
+    it("sends a template the tracker runs, and adds nothing to the theory", async () => {
+      const jira = connectedJira();
+      mocks.resolveActiveIssueTracker.mockResolvedValue(jira.resolved);
+      mockHappyPath();
+      mocks.findTickets.mockImplementation((input) => jira.adapter.findTickets(input));
+
+      const result = await execute(
+        makeNode("investigate", { sources: ["issue_tracker"], issueTrackerQueryTemplate: "summary ~ 'fix)'" }),
+        {},
+        makeCtx(),
+      );
+
+      expect(jira.searchedJql()).toEqual([
+        '(project = "OPS") AND (summary ~ \'fix)\') AND (text ~ "login failure" OR text ~ "błąd logowania")',
+      ]);
+      expect(result.output?.theory).toBe("Matches AWT-9.");
+    });
   });
 
   it("omits maxItems from the keyword schema and caps normalized keywords at runtime", async () => {
@@ -365,10 +463,10 @@ describe("investigate execute", () => {
     mocks.generateStructured
       .mockResolvedValueOnce({ object: { keywords }, text: "", usage: null })
       .mockResolvedValueOnce(THEORY_RESULT);
-    mocks.searchSlackChannels.mockResolvedValue({ matches: [], skipped: [] });
+    mocks.searchMessages.mockResolvedValue({ ok: true, matches: [], skipped: [] });
 
     await execute(
-      makeNode("investigate", { providers: ["slack"], slackChannels: ["C1"] }),
+      makeNode("investigate", { sources: ["chat"], chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
@@ -379,23 +477,23 @@ describe("investigate execute", () => {
       items: { type: "string" },
     });
     expect(keywordSchema.properties.keywords).not.toHaveProperty("maxItems");
-    expect(mocks.searchSlackChannels).toHaveBeenCalledWith(
+    expect(mocks.searchMessages).toHaveBeenCalledWith(
       expect.objectContaining({
         keywords: Array.from({ length: 10 }, (_, index) => `keyword-${index + 1}`),
       }),
     );
   });
 
-  it("normalizes both providers onto the same evidence fields", async () => {
+  it("normalizes both sources onto the same evidence fields", async () => {
     mockHappyPath();
 
     const result = await execute(
-      makeNode("investigate", { slackChannels: ["C1"] }),
+      makeNode("investigate", { chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
 
-    // The point of normalization: one binding path works for either provider.
+    // The point of normalization: one binding path works for either source.
     for (const item of result.output!.evidence as Record<string, unknown>[]) {
       expect(Object.keys(item).sort()).toEqual([
         "author",
@@ -416,10 +514,10 @@ describe("investigate execute", () => {
     mocks.generateStructured
       .mockResolvedValueOnce(KEYWORDS_RESULT)
       .mockResolvedValueOnce(THEORY_RESULT);
-    mocks.searchTicketSummaries.mockResolvedValue([
-      { ...JIRA_HITS[0]!, excerpt: "curl -H 'Authorization: s3cr3t-token' failed" },
+    mocks.findTickets.mockResolvedValue([
+      { ...TRACKER_HITS[0]!, excerpt: "curl -H 'Authorization: s3cr3t-token' failed" },
     ]);
-    mocks.searchSlackChannels.mockResolvedValue({ matches: [], skipped: [] });
+    mocks.searchMessages.mockResolvedValue({ ok: true, matches: [], skipped: [] });
 
     const result = await execute(makeNode("investigate"), {}, makeCtx());
 
@@ -436,10 +534,10 @@ describe("investigate execute", () => {
     mocks.generateStructured
       .mockResolvedValueOnce(KEYWORDS_RESULT)
       .mockResolvedValueOnce(THEORY_RESULT);
-    mocks.searchTicketSummaries.mockResolvedValue([
-      { ...JIRA_HITS[0]!, status: "", excerpt: "y".repeat(900) },
+    mocks.findTickets.mockResolvedValue([
+      { ...TRACKER_HITS[0]!, status: "", excerpt: "y".repeat(900) },
     ]);
-    mocks.searchSlackChannels.mockResolvedValue({ matches: [], skipped: [] });
+    mocks.searchMessages.mockResolvedValue({ ok: true, matches: [], skipped: [] });
 
     const result = await execute(makeNode("investigate"), {}, makeCtx());
 
@@ -455,7 +553,7 @@ describe("investigate execute", () => {
 
     await execute(
       makeNode("investigate", {
-        slackChannels: ["C1"],
+        chatChannels: ["C1"],
         model: "claude-sonnet-4-5",
       }),
       {},
@@ -468,37 +566,37 @@ describe("investigate execute", () => {
     }
   });
 
-  it("searches Jira only when the selection omits Slack", async () => {
+  it("searches the issue tracker only when the selection omits chat", async () => {
     mockHappyPath();
 
     const result = await execute(
-      makeNode("investigate", { providers: ["jira"], slackChannels: ["C1"] }),
+      makeNode("investigate", { sources: ["issue_tracker"], chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
 
-    expect(mocks.searchTicketSummaries).toHaveBeenCalledTimes(1);
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
-    // A provider that was never asked is not a gap.
+    expect(mocks.findTickets).toHaveBeenCalledTimes(1);
+    expect(mocks.searchMessages).not.toHaveBeenCalled();
+    // A source that was never asked is not a gap.
     expect(result.output!.partial).toEqual([]);
     expect(result.output!.partialReasons).toEqual([]);
-    expect(result.output!.evidence).toEqual([JIRA_EVIDENCE]);
+    expect(result.output!.evidence).toEqual([TRACKER_EVIDENCE]);
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
-  it("searches Slack only when the selection omits Jira", async () => {
+  it("searches chat only when the selection omits the issue tracker", async () => {
     mockHappyPath();
 
     const result = await execute(
-      makeNode("investigate", { providers: ["slack"], slackChannels: ["C1"] }),
+      makeNode("investigate", { sources: ["chat"], chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
 
-    expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
-    expect(mocks.searchSlackChannels).toHaveBeenCalledTimes(1);
+    expect(mocks.findTickets).not.toHaveBeenCalled();
+    expect(mocks.searchMessages).toHaveBeenCalledTimes(1);
     expect(result.output!.partial).toEqual([]);
-    expect(result.output!.evidence).toEqual([SLACK_EVIDENCE]);
+    expect(result.output!.evidence).toEqual([CHAT_EVIDENCE]);
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
@@ -514,11 +612,11 @@ describe("investigate execute", () => {
         text: "",
         usage: null,
       });
-    mocks.searchTicketSummaries.mockResolvedValue([]);
-    mocks.searchSlackChannels.mockResolvedValue({ matches: [], skipped: [] });
+    mocks.findTickets.mockResolvedValue([]);
+    mocks.searchMessages.mockResolvedValue({ ok: true, matches: [], skipped: [] });
 
     const result = await execute(
-      makeNode("investigate", { slackChannels: ["C1"] }),
+      makeNode("investigate", { chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
@@ -535,216 +633,219 @@ describe("investigate execute", () => {
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
-  it("marks enabled Slack without configured channels as a permission gap", async () => {
+  it("marks enabled chat without configured channels as a permission gap", async () => {
     mockHappyPath();
 
     const result = await execute(makeNode("investigate"), {}, makeCtx());
 
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
-    expect(result.output!.partial).toEqual(["slack"]);
+    expect(mocks.searchMessages).not.toHaveBeenCalled();
+    expect(result.output!.partial).toEqual(["chat"]);
     expect(result.output!.partialReasons).toEqual([
-      { provider: "slack", reason: "permission", scope: "" },
+      { provider: "chat", reason: "permission", scope: "" },
     ]);
     expect(result.output!.theory).toBe(
-      "Matches AWT-9.\n\nNot searched: Slack (no access).",
+      "Matches AWT-9.\n\nNot searched: chat (no access).",
     );
   });
 
-  it("builds the JQL from the template when one is configured", async () => {
+  it("degrades to partial tracker evidence when the tracker search fails, keeping the reason", async () => {
     mockHappyPath();
-
-    await execute(
-      makeNode("investigate", { jiraJqlTemplate: "labels = support" }),
-      {},
-      makeCtx(),
-    );
-
-    expect(mocks.searchTicketSummaries).toHaveBeenCalledWith(
-      '(project = "AWT") AND (labels = support) AND (text ~ "login failure" OR text ~ "błąd logowania")',
-      10,
-    );
-  });
-
-  it("degrades to partial jira evidence when the tracker search fails, keeping the reason", async () => {
-    mockHappyPath();
-    mocks.searchTicketSummaries.mockReset();
-    mocks.searchTicketSummaries.mockRejectedValue(
-      new Error("Jira API error: 403 Forbidden on /rest/api/3/search/jql"),
+    mocks.findTickets.mockReset();
+    mocks.findTickets.mockRejectedValue(
+      Object.assign(new Error("Jira search failed: Forbidden"), { status: 403 }),
     );
 
     const result = await execute(
-      makeNode("investigate", { slackChannels: ["C1"] }),
+      makeNode("investigate", { chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
 
     expect(result.kind).toBe("next");
-    expect(result.output!.partial).toEqual(["jira"]);
+    expect(result.output!.partial).toEqual(["issue_tracker"]);
     expect(result.output!.partialReasons).toEqual([
-      { provider: "jira", reason: "permission", scope: "" },
+      { provider: "issue_tracker", reason: "permission", scope: "" },
     ]);
-    expect(result.output!.evidence).toEqual([SLACK_EVIDENCE]);
+    expect(result.output!.evidence).toEqual([CHAT_EVIDENCE]);
     expect(result.output!.classification).toBe("known_issue");
     expect(result.output!.theory).toBe(
-      "Matches AWT-9.\n\nNot searched: Jira (no access).",
+      "Matches AWT-9.\n\nNot searched: the issue tracker (no access).",
     );
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
-  it("tells a Jira outage apart from a Jira timeout", async () => {
+  // Red when: a set of secrets that cannot be read fails the block (and with
+  // it the run) after both searches already succeeded. Every provider failure
+  // degrades into a gap by design; the settings blink is one more, and the
+  // evidence is withheld rather than stored unredacted.
+  it("withholds the evidence and reports both sources as gaps when the secrets cannot be read", async () => {
     mockHappyPath();
-    mocks.searchTicketSummaries.mockReset();
-    mocks.searchTicketSummaries.mockRejectedValue(
+    mocks.secretsUnreadable = true;
+    try {
+      const result = await execute(
+        makeNode("investigate", { chatChannels: ["C1"] }),
+        {},
+        makeCtx(),
+      );
+
+      expect(result.kind).toBe("next");
+      expect(result.output!.evidence).toEqual([]);
+      expect(result.output!.partialReasons).toEqual([
+        { provider: "issue_tracker", reason: "unavailable", scope: "" },
+        { provider: "chat", reason: "unavailable", scope: "" },
+      ]);
+      // Nothing was searched with a set that could not redact what came back.
+      expect(mocks.findTickets).not.toHaveBeenCalled();
+      expect(mocks.searchMessages).not.toHaveBeenCalled();
+      expectOutputConformsToRegistry("investigate", result.output!);
+    } finally {
+      mocks.secretsUnreadable = false;
+    }
+  });
+
+  it("tells a tracker outage apart from a tracker timeout", async () => {
+    mockHappyPath();
+    mocks.findTickets.mockReset();
+    mocks.findTickets.mockRejectedValue(
       Object.assign(new Error("aborted"), { name: "TimeoutError" }),
     );
 
     const result = await execute(
-      makeNode("investigate", { providers: ["jira"] }),
+      makeNode("investigate", { sources: ["issue_tracker"] }),
       {},
       makeCtx(),
     );
 
     expect(result.output!.partialReasons).toEqual([
-      { provider: "jira", reason: "timeout", scope: "" },
+      { provider: "issue_tracker", reason: "timeout", scope: "" },
     ]);
   });
 
-  it("degrades to partial slack evidence when the Slack search throws", async () => {
+  it("degrades to partial chat evidence when the chat search throws", async () => {
     mockHappyPath();
-    mocks.searchSlackChannels.mockReset();
-    mocks.searchSlackChannels.mockRejectedValue(new Error("slack down"));
+    mocks.searchMessages.mockReset();
+    mocks.searchMessages.mockRejectedValue(new Error("chat down"));
 
     const result = await execute(
-      makeNode("investigate", { slackChannels: ["C1"] }),
+      makeNode("investigate", { chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
 
     expect(result.kind).toBe("next");
-    expect(result.output!.partial).toEqual(["slack"]);
+    expect(result.output!.partial).toEqual(["chat"]);
     expect(result.output!.partialReasons).toEqual([
-      { provider: "slack", reason: "unavailable", scope: "" },
+      { provider: "chat", reason: "unavailable", scope: "" },
     ]);
-    expect(result.output!.evidence).toEqual([JIRA_EVIDENCE]);
+    expect(result.output!.evidence).toEqual([TRACKER_EVIDENCE]);
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
-  it("does not search Jira at all when the deployment has no configured project", async () => {
+  it("falls back to the pre-rename provider selection and param names for a recorded plan replaying the old words", async () => {
     mockHappyPath();
-    mocks.env.JIRA_PROJECT_KEY = undefined;
 
     const result = await execute(
-      makeNode("investigate", { slackChannels: ["C1"] }),
+      makeNode("investigate", {
+        providers: ["jira"],
+        slackChannels: ["C1"],
+      }),
       {},
       makeCtx(),
     );
 
-    // Fail closed: no scope means no search, never a search across every project
-    // the credential can reach.
-    expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
-    expect(result.output!.partial).toEqual(["jira"]);
-    expect(result.output!.partialReasons).toEqual([
-      { provider: "jira", reason: "permission", scope: "" },
-    ]);
-    expect(result.output!.evidence).toEqual([SLACK_EVIDENCE]);
-    expectOutputConformsToRegistry("investigate", result.output!);
+    expect(mocks.findTickets).toHaveBeenCalledTimes(1);
+    expect(mocks.searchMessages).not.toHaveBeenCalled();
+    expect(result.output!.evidence).toEqual([TRACKER_EVIDENCE]);
   });
 
-  it("treats a blank configured project the same as none", async () => {
+  it("enables both sources for a recorded plan carrying the old provider words with no selection narrowed", async () => {
     mockHappyPath();
-    mocks.env.JIRA_PROJECT_KEY = "   ";
 
     const result = await execute(
-      makeNode("investigate", { providers: ["jira"] }),
+      makeNode("investigate", { providers: ["jira", "slack"], slackChannels: ["C1"] }),
       {},
       makeCtx(),
     );
 
-    expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
-    expect(result.output!.partialReasons).toEqual([
-      { provider: "jira", reason: "permission", scope: "" },
-    ]);
+    expect(mocks.findTickets).toHaveBeenCalledTimes(1);
+    expect(mocks.searchMessages).toHaveBeenCalledTimes(1);
+    expect(result.output!.evidence).toEqual([TRACKER_EVIDENCE, CHAT_EVIDENCE]);
   });
 
-  it("keeps a template inside the configured project instead of letting it widen", async () => {
+  it("says no provider is connected rather than blaming the channel's permissions", async () => {
+    // A deployment with no messaging provider is not a deployment whose bot was
+    // refused a channel. Reporting "no access" here sent an admin to check
+    // Slack scopes for a workspace nobody had connected.
     mockHappyPath();
-
-    await execute(
-      makeNode("investigate", { jiraJqlTemplate: "project = OTHER" }),
-      {},
-      makeCtx(),
-    );
-
-    const [jql] = mocks.searchTicketSummaries.mock.calls[0];
-    expect(jql).toBe(
-      '(project = "AWT") AND (project = OTHER) AND (text ~ "login failure" OR text ~ "błąd logowania")',
-    );
-  });
-
-  it("marks Slack a permission gap when no bot token is configured", async () => {
-    mockHappyPath();
-    mocks.env.CHAT_SDK_SLACK_TOKEN = undefined;
+    mocks.searchMessages.mockReset();
+    mocks.searchMessages.mockResolvedValue({ ok: false, reason: "not_connected" });
 
     const result = await execute(
-      makeNode("investigate", { slackChannels: ["C1"] }),
+      makeNode("investigate", { chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
 
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
-    expect(result.output!.partial).toEqual(["slack"]);
+    expect(mocks.searchMessages).toHaveBeenCalled();
+    expect(result.output!.partial).toEqual(["chat"]);
     expect(result.output!.partialReasons).toEqual([
-      { provider: "slack", reason: "permission", scope: "" },
+      { provider: "chat", reason: "not_connected", scope: "" },
     ]);
+    // What the person approving the theory actually reads.
+    expect(result.output!.theory).toContain(
+      "Not searched: chat (no messaging provider is connected).",
+    );
   });
 
   it("reports a channel the bot cannot read as a per-channel gap, in the theory too", async () => {
     mockHappyPath();
-    mocks.searchSlackChannels.mockReset();
-    mocks.searchSlackChannels.mockResolvedValue({
-      matches: SLACK_HITS,
+    mocks.searchMessages.mockReset();
+    mocks.searchMessages.mockResolvedValue({
+      ok: true,
+      matches: CHAT_HITS,
       skipped: [{ channel: "C_PRIV", reason: "permission" }],
     });
 
     const result = await execute(
-      makeNode("investigate", { slackChannels: ["C1", "C_PRIV"] }),
+      makeNode("investigate", { chatChannels: ["C1", "C_PRIV"] }),
       {},
       makeCtx(),
     );
 
     expect(result.output!.theory).toBe(
-      "Matches AWT-9.\n\nNot searched: Slack channel C_PRIV (no access).",
+      "Matches AWT-9.\n\nNot searched: chat channel C_PRIV (no access).",
     );
-    // The channel that did answer still contributed, but Slack is incomplete.
-    expect(result.output!.evidence).toEqual([JIRA_EVIDENCE, SLACK_EVIDENCE]);
-    expect(result.output!.partial).toEqual(["slack"]);
+    // The channel that did answer still contributed, but chat is incomplete.
+    expect(result.output!.evidence).toEqual([TRACKER_EVIDENCE, CHAT_EVIDENCE]);
+    expect(result.output!.partial).toEqual(["chat"]);
     expect(result.output!.partialReasons).toEqual([
-      { provider: "slack", reason: "permission", scope: "C_PRIV" },
+      { provider: "chat", reason: "permission", scope: "C_PRIV" },
     ]);
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
-  it("propagates a Slack permalink failure as a partial channel gap", async () => {
+  it("propagates a chat permalink failure as a partial channel gap", async () => {
     mockHappyPath();
-    mocks.searchSlackChannels.mockReset();
-    mocks.searchSlackChannels.mockResolvedValue({
+    mocks.searchMessages.mockReset();
+    mocks.searchMessages.mockResolvedValue({
+      ok: true,
       matches: [],
       skipped: [{ channel: "C1", reason: "unavailable" }],
     });
 
     const result = await execute(
-      makeNode("investigate", { slackChannels: ["C1"] }),
+      makeNode("investigate", { chatChannels: ["C1"] }),
       {},
       makeCtx(),
     );
 
-    expect(result.output!.evidence).toEqual([JIRA_EVIDENCE]);
-    expect(result.output!.partial).toEqual(["slack"]);
+    expect(result.output!.evidence).toEqual([TRACKER_EVIDENCE]);
+    expect(result.output!.partial).toEqual(["chat"]);
     expect(result.output!.partialReasons).toEqual([
-      { provider: "slack", reason: "unavailable", scope: "C1" },
+      { provider: "chat", reason: "unavailable", scope: "C1" },
     ]);
     expect(result.output!.theory).toBe(
-      "Matches AWT-9.\n\nNot searched: Slack channel C1 (unavailable).",
+      "Matches AWT-9.\n\nNot searched: chat channel C1 (unavailable).",
     );
     expectOutputConformsToRegistry("investigate", result.output!);
   });
@@ -758,15 +859,15 @@ describe("investigate execute", () => {
     if (result.kind === "execution_error") {
       expect(result.error.detail).toBe("llm down");
     }
-    expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
-    expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
+    expect(mocks.findTickets).not.toHaveBeenCalled();
+    expect(mocks.searchMessages).not.toHaveBeenCalled();
   });
 
   it("fails the block when the theory call fails", async () => {
     mocks.generateStructured
       .mockResolvedValueOnce(KEYWORDS_RESULT)
       .mockRejectedValueOnce(new Error("llm down"));
-    mocks.searchTicketSummaries.mockResolvedValue(JIRA_HITS);
+    mocks.findTickets.mockResolvedValue(TRACKER_HITS);
 
     const result = await execute(makeNode("investigate"), {}, makeCtx());
 
@@ -780,7 +881,7 @@ describe("investigate execute", () => {
     mocks.generateStructured
       .mockResolvedValueOnce(KEYWORDS_RESULT)
       .mockResolvedValueOnce({ object: { nope: true }, text: "", usage: null });
-    mocks.searchTicketSummaries.mockResolvedValue(JIRA_HITS);
+    mocks.findTickets.mockResolvedValue(TRACKER_HITS);
 
     const result = await execute(makeNode("investigate"), {}, makeCtx());
 

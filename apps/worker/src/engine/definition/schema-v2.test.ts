@@ -23,6 +23,8 @@ import {
 } from "./deployment-validation.js";
 import { parseStoredWorkflowDefinition } from "./stored-definition.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
+import { NO_INTEGRATIONS } from "./integration-availability.js";
+import { MESSAGING_CONNECTED } from "./messaging-deployment.fixture.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -30,9 +32,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github", "gitlab"],
   vcsBotIdentities: ["github", "gitlab"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const blockData = testBlockData(registryContext);
@@ -199,7 +200,7 @@ function loopNode(
 function loopBodyNode(id: string): WorkflowDefinitionV2["nodes"][number] {
   return {
     id,
-    type: "send_slack_message",
+    type: "send_message",
     x: 200,
     y: 0,
     configuration: { message: "Retrying" },
@@ -253,7 +254,7 @@ describe("Workflow Definition v2 schema", () => {
     const definition = v2Definition();
     definition.nodes.push({
       id: "notify",
-      type: "send_slack_message",
+      type: "send_message",
       x: 100,
       y: 20,
       configuration: { message: "Done" },
@@ -433,7 +434,7 @@ describe("Workflow Definition v2 schema", () => {
     const unavailable = v2Definition();
     unavailable.nodes.push({
       id: "notify",
-      type: "send_slack_message",
+      type: "send_message",
       x: 100,
       y: 20,
       configuration: { message: "Ready" },
@@ -445,9 +446,11 @@ describe("Workflow Definition v2 schema", () => {
       from: "ticket",
       to: "notify",
     });
-    const noSlack = testBlockData({ ...registryContext, slackConfigured: false });
+    // No integration serves messaging here, which is what makes the block
+    // unavailable: core has no messaging credential of its own since S9.
+    const noMessaging = testBlockData({ ...registryContext, integrations: NO_INTEGRATIONS });
     expect(
-      testDeploymentIssues(unavailable, ...noSlack),
+      testDeploymentIssues(unavailable, ...noMessaging),
     ).toEqual([
       expect.objectContaining({
         code: "deployment",
@@ -456,7 +459,7 @@ describe("Workflow Definition v2 schema", () => {
       }),
     ]);
     expect(
-      testDeploymentIssues(unavailable, ...noSlack, {
+      testDeploymentIssues(unavailable, ...noMessaging, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);
@@ -476,13 +479,7 @@ describe("Workflow Definition v2 schema", () => {
           vcsBotIdentities: ["gitlab"],
         }),
       ),
-    ).toEqual([
-      expect.objectContaining({
-        code: "deployment",
-        nodeId: "ticket",
-        path: "/nodes/0/configuration",
-      }),
-    ]);
+    ).toEqual([]);
   });
 
   it("validates a custom Claude profile with Claude credentials", () => {
@@ -1555,6 +1552,7 @@ describe("webhook trigger configuration", () => {
         ...deploymentBlockData({
           ...registryContext,
           webhookTriggerConfigured: false,
+          integrations: NO_INTEGRATIONS,
         }),
       ),
     ).toContain(

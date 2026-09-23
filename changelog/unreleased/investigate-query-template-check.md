@@ -1,0 +1,2 @@
+- Saving or deploying a workflow checks the Investigate block's query template the way the connected issue tracker reads it: Jira accepts values in single or double quotes, and a new template Jira would skip, such as one with an unclosed quote or a stray parenthesis, is refused with the reason.
+- A template that already runs keeps working and shows as a notice in the workflow editor, which does not block deploying, and an Investigate run that searched without its template says so in the block's theory.

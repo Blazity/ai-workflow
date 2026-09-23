@@ -1,8 +1,12 @@
-import { createApp, toWebHandler } from "h3";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { connectedIssueTracker } from "../test-support/issue-tracker.js";
 import type { WorkflowDefinition } from "@shared/contracts";
 
-// One file, four source areas. vi.mock is hoisted and file-scoped, so we mock
+// One file, the definition loader's edge cases. The GitHub webhook route that
+// used to be the fifth area left with the GitHub integration in S11, and its
+// cases live in `integrations/github/webhook.test.ts` and in the generic route
+// suite `routes/webhooks/integration-webhook.test.ts`.
+// vi.mock is hoisted and file-scoped, so we mock vi.mock is hoisted and file-scoped, so we mock
 // the union of every dependency once. The runtime environment module is
 // shared by all areas; the bot-login helper has its own mock because it resolves
 // provider configuration through the config module.
@@ -10,18 +14,22 @@ const H = vi.hoisted(() => ({
   env: {
     JIRA_PROJECT_KEY: "PROJ",
     COLUMN_AI: "AI",
-    GITHUB_WEBHOOK_SECRET: "secret" as string | undefined,
-    GITHUB_OWNER: undefined as string | undefined,
-    GITHUB_REPO: undefined as string | undefined,
     MAX_CONCURRENT_AGENTS: 3,
     VCS_BOT_LOGIN: undefined as string | undefined,
   },
 }));
+// This deployment's integrations, stated. The plan load reads them inside the
+// step so a run carries the connection it started with; this file is about
+// which definition the step picks, so it says "none" in one line rather than
+// standing up a database to find out.
+vi.mock("../services/integrations/runtime.js", () => ({
+  readIntegrationStates: async () => new Map(),
+}));
+// A deployment with a tracker connected, which is what a ticket trigger
+// needs to exist at all. The choice of tracker is proved elsewhere.
+vi.mock("./support/issue-tracker-runtime.js", () => connectedIssueTracker());
 vi.mock("../infra/vcs-config.js", () => ({
   env: H.env,
-}));
-vi.mock("../services/vcs/index.js", () => ({
-  getVcsBotLogin: () => H.env.VCS_BOT_LOGIN,
 }));
 
 const mockGetCurrentVersion = vi.fn();
@@ -81,29 +89,6 @@ vi.mock("../db/repositories/repository-catalog.js", () => ({
     activatedById: null,
     activatedByLabel: null,
   }),
-}));
-
-// github.post.ts consumes the mocked dispatch-trigger; the dispatchTriggerEvent
-// area re-loads the real module via vi.importActual (partial-mock pattern).
-const mockDispatchTriggerEvent = vi.fn();
-vi.mock("../services/dispatch/dispatch-trigger.js", () => ({
-  dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
-  resolveEnabledReviewStates: vi.fn().mockResolvedValue(undefined),
-}));
-
-const mockVerifySig = vi.fn();
-vi.mock("../infra/github-webhook-sig.js", () => ({
-  verifyGitHubWebhookSignature: (...args: any[]) => mockVerifySig(...args),
-}));
-
-const mockLoadPostPrGateConfig = vi.fn();
-vi.mock("../post-pr-gate/config.js", () => ({
-  loadPostPrGateConfig: (...args: any[]) => mockLoadPostPrGateConfig(...args),
-}));
-
-const mockDispatchPostPrGateWebhook = vi.fn();
-vi.mock("../services/dispatch/post-pr-gate-dispatch.js", () => ({
-  dispatchPostPrGateWebhook: (...args: any[]) => mockDispatchPostPrGateWebhook(...args),
 }));
 
 import { loadWorkflowDefinitionFor } from "./steps/definition-step.js";
@@ -220,157 +205,3 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
 // focused suites: services/dispatch/dispatch-trigger.test.ts and
 // services/run-lifecycle/reconcile.test.ts.
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Area 5: POST /webhooks/github route
-// ---------------------------------------------------------------------------
-async function send(request: Request): Promise<Response> {
-  const handler = (await import("../routes/webhooks/github.post.js")).default;
-  const app = createApp();
-  app.use("/", handler);
-  return toWebHandler(app)(request);
-}
-
-function makeRequest(body: unknown, ghEvent = "pull_request"): Request {
-  return rawRequest(JSON.stringify(body), ghEvent);
-}
-
-function rawRequest(rawBody: string, ghEvent = "pull_request"): Request {
-  return new Request("http://localhost/", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-hub-signature-256": "sha256=whatever",
-      "x-github-event": ghEvent,
-      "x-github-delivery": "delivery-edge-test",
-    },
-    body: rawBody,
-  });
-}
-
-function repo() {
-  return { owner: { login: "acme" }, name: "app", html_url: "https://github.com/acme/app" };
-}
-
-function pullRequestBody(action: string, headRef = "ai-workflow/aiw-1") {
-  return {
-    action,
-    repository: repo(),
-    pull_request: {
-      number: 7,
-      html_url: "https://github.com/acme/app/pull/7",
-      head: { ref: headRef, sha: "abc123" },
-      base: { ref: "main" },
-      title: "Fix",
-      body: "desc",
-      user: { login: "blazebot[bot]" },
-      draft: false,
-    },
-  };
-}
-
-function checkRunBody(name: string, conclusion = "failure") {
-  return {
-    action: "completed",
-    repository: repo(),
-    check_run: {
-      id: 101,
-      app: { slug: "github-actions" },
-      name,
-      conclusion,
-      pull_requests: [
-        { number: 7, head: { ref: "ai-workflow/aiw-1", sha: "abc123" }, base: { ref: "main" } },
-      ],
-    },
-  };
-}
-
-describe("POST /webhooks/github edge cases", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    H.env.GITHUB_OWNER = undefined;
-    H.env.GITHUB_REPO = undefined;
-    mockLoadPostPrGateConfig.mockReturnValue({ postPrGate: { steps: [] } });
-    mockDispatchPostPrGateWebhook.mockResolvedValue({ status: "dispatched", runId: "gate_run" });
-    mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
-  });
-
-  it("returns 401 when the webhook signature is invalid", async () => {
-    mockVerifySig.mockImplementationOnce(() => {
-      throw new Error("bad signature");
-    });
-
-    const response = await send(makeRequest(pullRequestBody("opened")));
-
-    expect(response.status).toBe(401);
-  });
-
-  it("ignores a payload with no repository as malformed", async () => {
-    const response = await send(makeRequest({ action: "opened" }));
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      status: "ignored",
-      reason: "malformed_payload",
-    });
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
-  });
-
-  it("ignores a non-JSON body as malformed", async () => {
-    const response = await send(rawRequest("not-json{"));
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      status: "ignored",
-      reason: "malformed_payload",
-    });
-  });
-
-  it("ignores a pull_request event with no pull_request object as malformed", async () => {
-    const response = await send(
-      makeRequest({ action: "opened", repository: repo() }),
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      status: "ignored",
-      reason: "malformed_payload",
-    });
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    "AI Workflow / lint",
-    "blazebot / lint",
-  ])("does not self-trigger on the bot's own %s check_run", async (name) => {
-    mockLoadPostPrGateConfig.mockReturnValueOnce({ postPrGate: { steps: [{ name: "lint" }] } });
-
-    const response = await send(makeRequest(checkRunBody(name), "check_run"));
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      status: "ignored",
-      reason: "event_check_run",
-    });
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
-  });
-
-  it("dispatches trigger_pr_ready for a reopened non-draft PR", async () => {
-    const response = await send(makeRequest(pullRequestBody("reopened")));
-
-    expect(response.status).toBe(200);
-    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ triggerType: "trigger_pr_ready" }),
-      expect.anything(),
-    );
-  });
-
-  it("dispatches a check_run that a definition handles and skips the gate", async () => {
-    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_x" });
-
-    const response = await send(makeRequest(checkRunBody("ci / build"), "check_run"));
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run_x" });
-    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
-  });
-});

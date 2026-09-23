@@ -7,20 +7,12 @@ import type {
   SystemHealthResponse,
 } from "@shared/contracts";
 
+/** The check a webhook's deliveries are recorded and reported under: core's
+ *  own Resend webhook's and every integration's. */
+export const WEBHOOK_DELIVERY_CHECK_ID = "webhook-delivery";
+
 export type SystemHealthConfig = {
   databaseUrl?: string;
-  jiraBaseUrl?: string;
-  jiraApiToken?: string;
-  jiraProjectKey?: string;
-  jiraWebhookSecret?: string;
-  githubAppId?: number;
-  githubAppPrivateKey?: string;
-  githubInstallationId?: number;
-  githubWebhookSecret?: string;
-  gitlabToken?: string;
-  gitlabHost?: string;
-  gitlabWebhookSecret?: string;
-  gitlabProjectId?: string;
   agentKind: "claude" | "codex";
   anthropicApiKey?: string;
   anthropicModel?: string;
@@ -37,12 +29,6 @@ export type SystemHealthConfig = {
   resendApiKey?: string;
   resendFromEmail?: string;
   resendWebhookSecret?: string;
-  slackToken?: string;
-  slackChannelId?: string;
-  slackSigningSecret?: string;
-  slackAllowedUserIds?: string;
-  arthurApiKey?: string;
-  arthurTraceEndpoint?: string;
   mcpEnabled: boolean;
   webhookTriggerEncryptionKey?: string;
 };
@@ -68,29 +54,47 @@ export type SystemHealthProbes = Partial<Record<string, SystemHealthProbe>>;
 
 const PROBE_TIMEOUT_MS = 4_000;
 
-type CheckBase = Omit<
+export type CheckBase = Omit<
   SystemHealthCheck,
   "checkedAt" | "observedAt" | "latencyMs" | "coverage"
 >;
 
-type IntegrationDefinition = {
+/**
+ * One section of the report before any probe has run: what is listed, and which
+ * of its checks a probe may still settle. Core writes the sections below;
+ * integrations contribute theirs through `collectSystemHealth`, so the pipeline
+ * (one timeout, one latency, one summary) is the same for both.
+ */
+export type SystemHealthDefinition = {
   id: string;
   label: string;
   group: SystemHealthGroup;
   critical: boolean;
   checks: CheckBase[];
+  /** One line about the integration, when the section brings its own. */
+  description?: string;
+  /**
+   * Prefix for this section's probe keys. Core's own sections have none and
+   * keep the keys they have always had; a contributed section carries one, so
+   * a section whose id happens to equal a core one can never take over a core
+   * probe.
+   */
+  probeNamespace?: string;
 };
 
 export async function collectSystemHealth(input: {
   config: SystemHealthConfig;
   probes: SystemHealthProbes;
+  /** Sections this build's integrations contribute, after core's own and
+   *  probed by the same pipeline. Core writes none of them. */
+  contributed?: readonly SystemHealthDefinition[];
   now?: () => Date;
   monotonicNow?: () => number;
 }): Promise<SystemHealthResponse> {
   const now = input.now ?? (() => new Date());
   const monotonicNow = input.monotonicNow ?? (() => performance.now());
   const generatedAt = now().toISOString();
-  const definitions = healthDefinitions(input.config);
+  const definitions = [...healthDefinitions(input.config), ...(input.contributed ?? [])];
 
   const integrations = await Promise.all(
     definitions.map(async (definition): Promise<SystemHealthIntegration> => {
@@ -98,7 +102,9 @@ export async function collectSystemHealth(input: {
         definition.checks.map((check) =>
           probedCheck(
             check,
-            input.probes[`${definition.id}.${check.id}`],
+            input.probes[
+              `${definition.probeNamespace ?? ""}${definition.id}.${check.id}`
+            ],
             monotonicNow,
             generatedAt,
           ),
@@ -110,7 +116,7 @@ export async function collectSystemHealth(input: {
           check.latencyMs !== undefined &&
           (check.mode === "live" || check.mode === "down"),
       );
-      return {
+      const section: SystemHealthIntegration = {
         id: definition.id,
         label: definition.label,
         group: definition.group,
@@ -133,6 +139,10 @@ export async function collectSystemHealth(input: {
           : null,
         checks,
       };
+      // Only a section that brought a description carries one, so a core
+      // section is the same object it has always been.
+      if (definition.description) section.description = definition.description;
+      return section;
     }),
   );
 
@@ -160,26 +170,7 @@ export async function collectSystemHealth(input: {
   };
 }
 
-function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] {
-  const githubCredentialsMode = groupedMode([
-    config.githubAppId,
-    config.githubAppPrivateKey,
-    config.githubInstallationId,
-  ]);
-  const githubAppMode =
-    githubCredentialsMode === "not-configured" && config.githubWebhookSecret
-      ? "misconfigured"
-      : githubCredentialsMode;
-  const gitlabApiMode: SystemHealthMode = config.gitlabToken
-    ? "configured"
-    : config.gitlabProjectId || config.gitlabWebhookSecret
-      ? "misconfigured"
-      : "not-configured";
-  const jiraApiMode = requiredMode([
-    config.jiraBaseUrl,
-    config.jiraApiToken,
-    config.jiraProjectKey,
-  ]);
+function healthDefinitions(config: SystemHealthConfig): SystemHealthDefinition[] {
   const authMode = requiredMode([
     config.betterAuthSecret,
     config.betterAuthUrl,
@@ -211,21 +202,6 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
     config.resendWebhookSecret && emailCredentialsMode === "not-configured"
       ? "misconfigured"
       : emailCredentialsMode;
-  const slackHasAnyConfig = Boolean(
-    config.slackToken || config.slackChannelId || config.slackSigningSecret,
-  );
-  const slackBotMode: SystemHealthMode = config.slackToken
-    ? "configured"
-    : slackHasAnyConfig
-      ? "misconfigured"
-      : "mock";
-  const slackChannelMode: SystemHealthMode =
-    config.slackToken && config.slackChannelId
-      ? "configured"
-      : slackHasAnyConfig
-        ? "misconfigured"
-        : "mock";
-  const arthurMode = groupedMode([config.arthurApiKey, config.arthurTraceEndpoint]);
   const agentMode: SystemHealthMode =
     config.agentKind === "claude"
       ? requiredMode([config.anthropicApiKey, config.anthropicModel])
@@ -238,20 +214,6 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
     integration("database", "Database", "core", true, [
       configured("configuration", "Configuration", ["DATABASE_URL"], config.databaseUrl),
       checked("connectivity", "Connection and query", ["DATABASE_URL"], config.databaseUrl ? "configured" : "misconfigured", true),
-    ]),
-    integration("jira", "Jira", "core", true, [
-      checked("api", "Account, project and statuses", ["JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY"], jiraApiMode, true),
-      checked("webhook-delivery", "Webhook registration and delivery", ["JIRA_WEBHOOK_SECRET"], optionalValueMode(config.jiraWebhookSecret), false, "provider-config"),
-    ]),
-    integration("github", "GitHub", "core", true, [
-      checked("app-installation", "App installation", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
-      checked("repositories", "Repository access", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
-      checked("webhook-delivery", "App webhook configuration and deliveries", ["GITHUB_WEBHOOK_SECRET"], dependentOptionalMode(githubAppMode, config.githubWebhookSecret), true, "provider-delivery"),
-    ]),
-    integration("gitlab", "GitLab", "core", true, [
-      checked("api", "API identity", ["GITLAB_TOKEN", "GITLAB_HOST"], gitlabApiMode, true),
-      checked("repositories", "Repository access", ["GITLAB_TOKEN", "GITLAB_HOST", "GITLAB_PROJECT_ID"], gitlabApiMode, true),
-      checked("webhook-delivery", "Project webhook test delivery", ["GITLAB_WEBHOOK_SECRET"], dependentOptionalMode(gitlabApiMode, config.gitlabWebhookSecret), true, "provider-delivery"),
     ]),
     integration("agent", config.agentKind === "claude" ? "Claude agent" : "Codex agent", "core", true, [
       checked("model", "Credentials and built-in profile model", config.agentKind === "claude" ? ["ANTHROPIC_API_KEY"] : ["CODEX_API_KEY", "CODEX_CHATGPT_OAUTH_TOKEN"], agentMode, true),
@@ -266,15 +228,7 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
     ]),
     integration("email", "Email delivery", "auth-email", false, [
       checked("sender", "API and sender domain", ["RESEND_API_KEY", "RESEND_FROM_EMAIL"], emailMode, true),
-      checked("webhook-delivery", "Delivery-status webhook", ["RESEND_WEBHOOK_SECRET"], optionalValueMode(config.resendWebhookSecret), false, "provider-delivery"),
-    ]),
-    integration("slack", "Slack", "platform", false, [
-      checked("bot-auth", "Bot authentication", ["CHAT_SDK_SLACK_TOKEN"], slackBotMode, true),
-      checked("channel", "Configured channel delivery", ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"], slackChannelMode, true),
-      checked("webhook-delivery", "Slash command signature", ["SLACK_SIGNING_SECRET", "SLACK_ALLOWED_USER_IDS"], optionalValueMode(config.slackSigningSecret), false, "local-observation"),
-    ]),
-    integration("arthur", "Arthur AI Engine", "platform", false, [
-      checked("api", "Task API", ["GENAI_ENGINE_API_KEY", "GENAI_ENGINE_TRACE_ENDPOINT"], arthurMode, true),
+      checked(WEBHOOK_DELIVERY_CHECK_ID, "Delivery-status webhook", ["RESEND_WEBHOOK_SECRET"], optionalValueMode(config.resendWebhookSecret), false, "provider-delivery"),
     ]),
     integration("mcp", "Remote MCP", "platform", false, [
       checked("contract", "Published tool contract", ["MCP_ENABLED"], config.mcpEnabled ? "configured" : "not-configured", true),
@@ -291,7 +245,7 @@ function integration(
   group: SystemHealthGroup,
   critical: boolean,
   checks: CheckBase[],
-): IntegrationDefinition {
+): SystemHealthDefinition {
   return { id, label, group, critical, checks };
 }
 
@@ -428,6 +382,18 @@ function integrationMode(checks: SystemHealthCheck[]): SystemHealthMode {
   if (checks.some((check) => check.mode === "live")) return "live";
   if (checks.every((check) => check.mode === "not-configured")) return "not-configured";
   if (checks.every((check) => check.mode === "mock")) return "mock";
+  // Nothing was probed because nobody asked for it to be. A decision somebody
+  // made explains more than a value nobody set, so it outranks `not-configured`
+  // here exactly as `disabled` outranks the connection status in the resolver,
+  // and it never outranks a failure: those are decided above.
+  if (
+    checks.some((check) => check.mode === "disabled") &&
+    checks.every(
+      (check) => check.mode === "disabled" || check.mode === "not-configured",
+    )
+  ) {
+    return "disabled";
+  }
   if (checks.some((check) => check.mode === "configured")) return "configured";
   return checks[0]?.mode ?? "not-configured";
 }
@@ -448,15 +414,6 @@ function requiredMode(values: unknown[]): SystemHealthMode {
 
 function optionalValueMode(value: unknown): SystemHealthMode {
   return value ? "configured" : "not-configured";
-}
-
-function dependentOptionalMode(
-  parentMode: SystemHealthMode,
-  value: unknown,
-): SystemHealthMode {
-  if (parentMode === "not-configured") return "not-configured";
-  if (parentMode === "misconfigured") return "misconfigured";
-  return value ? "configured" : "misconfigured";
 }
 
 export class PublicHealthProbeError extends Error {}

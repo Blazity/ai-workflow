@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 
 type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -21,15 +22,9 @@ export async function handleMemoryDelete(req: Request, workerProxy: WorkerProxy)
     const res = await workerProxy(path, { method: "DELETE" });
     return NextResponse.json(await res.json().catch(() => ({})), { status: res.status });
   } catch (error) {
-    if (isWorkerTimeoutError(error)) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json({ error: "Worker request timed out" }, { status: 504 });
     }
     throw error;
   }
-}
-
-function isWorkerTimeoutError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const maybeError = error as { code?: unknown; name?: unknown };
-  return maybeError.name === "TimeoutError" || maybeError.code === 23;
 }

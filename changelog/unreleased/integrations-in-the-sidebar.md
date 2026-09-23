@@ -1,0 +1,2 @@
+- The sidebar separates the product from its integrations: the usual groups, then Integrations with one entry for each connected, switched-on integration, opening its own area with tabs for its screens and for Connection. Groups fold away when you want the room.
+- System health and Users are tabs under Settings, and their old links keep working.

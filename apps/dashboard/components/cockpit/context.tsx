@@ -22,6 +22,13 @@ export type Tweaks = {
   activityDrawerOpen: boolean;
   /** Collapses the cockpit sidebar to an icon-only rail; persists across visits. */
   sidebarCollapsed: boolean;
+  /**
+   * Sidebar groups this person has folded away, by group id. Persisted, because
+   * the number of entries below the Integrations separator is not ours to
+   * decide and folding the core groups is how somebody with ten of them keeps
+   * the column readable.
+   */
+  collapsedNavGroups: string[];
   accentColor: string;
   /** When on, the cockpit polls and refreshes the active screen's data. */
   livePolling: boolean;
@@ -33,6 +40,7 @@ export const TWEAK_DEFAULTS: Tweaks = {
   showStreamingRun: true,
   activityDrawerOpen: false,
   sidebarCollapsed: false,
+  collapsedNavGroups: [],
   accentColor: "#3C43E7",
   livePolling: false,
 };
@@ -50,6 +58,18 @@ export interface CockpitCtxValue {
   env: EnvName;
   /** Open a run in the Trace screen. Provided by CockpitShell; no-op in the default ctx. */
   openRun: (run: Run) => void;
+  /**
+   * Move somewhere else in the cockpit.
+   *
+   * Every in-cockpit move goes through here rather than through `router.push`
+   * or a bare link, because `router.push` never fires `beforeunload` and the
+   * only thing standing between an admin half way through typing a token and
+   * an empty form is this guard. Answers false when the person called the
+   * navigation off. Provided by CockpitShell; no-op in the default ctx.
+   */
+  navigate: (href: string) => boolean;
+  /** Owners and admins. What gates the Settings area's System health and Users tabs. */
+  canManageUsers: boolean;
   /** Live-polling on/off (mirrors the persisted `livePolling` tweak). */
   livePolling: boolean;
   /** Flip live polling on/off. */
@@ -73,6 +93,8 @@ export const CockpitCtx = createContext<CockpitCtxValue>({
   range: "24h",
   env: "prod",
   openRun: () => {},
+  navigate: () => true,
+  canManageUsers: false,
   livePolling: false,
   toggleLive: () => {},
   nextRefreshAt: null,

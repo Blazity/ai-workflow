@@ -10,6 +10,7 @@ import {
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import { unactivatedRepositoryCatalog } from "../../test-support/repository-catalog.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import {
   acknowledgeManualDispatchStarted,
   getManualDispatchRequest,
@@ -47,8 +48,18 @@ vi.mock("./resolve.js", () => ({
   resolveManualDispatch: (...args: unknown[]) => mockResolve(...args),
 }));
 
+// This deployment has an issue tracker connected. Which one, and what it is
+// wired to, is an integration connection since S12 and is resolved from the
+// database; this suite is about what happens to a RUN, so it says the one
+// thing it means and leaves the resolution to its own tests.
+vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
+  const support = await import("../../test-support/issue-tracker.js");
+  return support.connectedIssueTracker({});
+});
+
 const {
   dispatchManualWorkflow,
+  preflightManualDispatch,
   recoverManualDispatches,
 } = await import("./service.js");
 
@@ -158,7 +169,13 @@ beforeEach(async () => {
     releaseReservation: vi.fn().mockResolvedValue(true),
   };
   adapters = {
-    issueTracker: {} as Adapters["issueTracker"],
+    issueTrackerResolution: {
+      ok: true,
+      id: "jira",
+      name: "Jira",
+      adapter: {} as never,
+      wiring: { projectKey: "PROJ", connection: "tracker-connection" },
+    },
     vcs: {} as Adapters["vcs"],
     messaging: {} as Adapters["messaging"],
     runRegistry: runRegistry as unknown as Adapters["runRegistry"],
@@ -383,5 +400,109 @@ describe("manual dispatch durability", () => {
   it("migration creates the durable table with its pinned-version foreign key", async () => {
     const rows = await db.select().from(manualDispatchRequests);
     expect(rows).toEqual([]);
+  });
+});
+
+describe("manual dispatch on a deployment with no issue tracker", () => {
+  const PR_URL = "https://github.com/acme/api/pull/42";
+
+  function pullRequestResolution() {
+    return {
+      definitionId: 9,
+      definitionName: "Standard delivery",
+      definitionVersion: 3,
+      triggerNodeId: "ticket-trigger",
+      triggerType: "trigger_pr_created" as const,
+      input: { kind: "pull_request" as const, url: PR_URL },
+      inputKind: "pull_request" as const,
+      inputPayload: {
+        kind: "pull_request" as const,
+        scope: "any" as const,
+        pr: { provider: "github", repoPath: "acme/api", prNumber: 42, prUrl: PR_URL },
+      },
+      subjectKey: "pr:github:acme/api#42",
+      ticketKey: null,
+      subjectTitle: "Add retries",
+      subjectUrl: PR_URL,
+      aiColumn: "AI",
+      steps: [],
+      blockTypes: [],
+    };
+  }
+
+  function pullRequestDispatch(withoutTracker: Adapters) {
+    return {
+      db,
+      adapters: withoutTracker,
+      definitionId: 9,
+      triggerNodeId: "ticket-trigger",
+      request: {
+        requestId: "6f1c1d52-0f5e-4c1b-9a5e-0d6e2f1f4c11",
+        expectedDeployedVersion: 3,
+        input: { kind: "pull_request" as const, url: PR_URL },
+      },
+      actor: { id: "user-admin", label: "Karol" },
+      maxConcurrentAgents: 4,
+      repositoryCatalog: unactivatedRepositoryCatalog(),
+    };
+  }
+
+  function withoutTracker(): Adapters {
+    return adaptersFor("not_connected", {
+      runRegistry,
+      vcs: {},
+      messaging: {},
+    });
+  }
+
+  beforeEach(() => {
+    mockResolve.mockReset().mockImplementation(async () => pullRequestResolution());
+  });
+
+  it("starts a pull request dispatch, which never needed a ticket", async () => {
+    // A GitHub-only deployment: the dispatch used to reach for the tracker
+    // before resolving the pull request and fail on its absence.
+    await expect(dispatchManualWorkflow(pullRequestDispatch(withoutTracker()))).resolves.toEqual({
+      requestId: "6f1c1d52-0f5e-4c1b-9a5e-0d6e2f1f4c11",
+      status: "started",
+      runId: "run-1",
+    });
+    expect(mockMove).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueTrackerResolution: expect.objectContaining({ ok: false }),
+      }),
+    );
+  });
+
+  it("recovers a queued pull request dispatch instead of counting it as recovering forever", async () => {
+    mockStart.mockRejectedValueOnce(new Error("lost response"));
+    await expect(
+      dispatchManualWorkflow(pullRequestDispatch(withoutTracker())),
+    ).resolves.toMatchObject({ status: "recovering" });
+
+    await expect(
+      recoverManualDispatches({
+        db,
+        adapters: withoutTracker(),
+        maxConcurrentAgents: 4,
+        repositoryCatalog: unactivatedRepositoryCatalog(),
+      }),
+    ).resolves.toMatchObject({ scanned: 1, started: 1, recovering: 0, failed: 0 });
+  });
+
+  it("previews a pull request dispatch rather than failing the modal", async () => {
+    const preview = await preflightManualDispatch({
+      db,
+      adapters: withoutTracker(),
+      definitionId: 9,
+      triggerNodeId: "ticket-trigger",
+      dispatchInput: { kind: "pull_request", url: PR_URL },
+      maxConcurrentAgents: 4,
+      repositoryCatalog: unactivatedRepositoryCatalog(),
+      integrations: { byId: new Map(), providers: new Map() } as never,
+    });
+
+    expect(preview).toMatchObject({ runnable: true, subject: { kind: "pull_request" } });
   });
 });

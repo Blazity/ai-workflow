@@ -1,0 +1,9 @@
+Source URL: https://github.com/zulip/zulip/blob/370f7b66fca175e66f9545330f4534290cc9f9db/zerver/webhooks/jira/fixtures/issue_updated__status.json
+Raw bytes: https://raw.githubusercontent.com/zulip/zulip/370f7b66fca175e66f9545330f4534290cc9f9db/zerver/webhooks/jira/fixtures/issue_updated__status.json
+What it is: a Jira Cloud webhook delivery recorded from a live site and kept by
+  the Zulip project as the fixture its Jira integration is tested against. The
+  bytes are the provider's, unedited: Atlassian's own published example omits
+  issue.fields.status, issue.fields.project and a status changelog item, which
+  are the three fields every branch of this handler reads.
+Retrieved: 2026-09-22
+SHA-256: 8c6c1d67f291aec2df77326101a129bc9496d130e4dc5b127c589011389df666

@@ -32,13 +32,14 @@ import type {
 } from "@shared/contracts";
 import {
   BLOCK_PARAM_KEYS,
-  BLOCK_TYPE_SPECS,
+  blockTypeSpecOf,
   FAILURE_PORT,
   evaluateWorkflowValueCompatibility,
   isHarnessProfileReference,
   isTriggerBlockType,
   isV2AgentBlockType,
   isWorkflowAddressablePathSegment,
+  triggerCarriesAuthoredSubjectText,
 } from "@shared/contracts";
 import {
   transformConfigurationSchema,
@@ -269,8 +270,13 @@ function workflowConfigurationV2Issues(
     // separate avoids accidentally accepting executor params as operations.
     if (node.type === "transform") continue;
 
+    // A block core does not own declares its parameters in its integration's
+    // manifest, so the key list here has nothing to say about it and its own
+    // schema below is what refuses an unsupported one. `null` rather than an
+    // empty list: an empty list would refuse every parameter the block has.
+    const coreParamKeys = BLOCK_PARAM_KEYS[node.type] ?? null;
     const allowedKeys = new Set([
-      ...BLOCK_PARAM_KEYS[node.type],
+      ...(coreParamKeys ?? Object.keys(node.configuration)),
       ...(node.type === "branch" ? ["combinator", "conditions"] : []),
       ...(node.type === "loop" ? ["carry"] : []),
       ...(isV2AgentBlockType(node.type)
@@ -292,7 +298,12 @@ function workflowConfigurationV2Issues(
       );
     }
 
-    const parsed = blockParamsSchemas[node.type].safeParse(node.configuration);
+    // A block type this build has no schema for is one an integration
+    // contributed and this build no longer ships. Its availability already
+    // refuses the node by name; parsing parameters nobody can describe would
+    // bury that under a schema error.
+    const schema = blockParamsSchemas[node.type];
+    const parsed = schema ? schema.safeParse(node.configuration) : { success: true as const, data: node.configuration };
     const profileReference = node.configuration.harnessProfile;
     if (
       parsed.success &&
@@ -542,6 +553,184 @@ export function workflowValueReferenceIssues(
     ...branchConditionIssues(def, catalogByNode),
     ...transformReferenceIssues(def, catalogByNode),
   ];
+}
+
+/**
+ * A block whose output carries something the run has to act on, in a graph
+ * that does not act on it.
+ *
+ * A screen reports a verdict and continues, so "screen, then agent" with no
+ * Branch hands the agent exactly the text the screen flagged. The block's
+ * contract names the fields a published graph must read (`output.mustRead`),
+ * and this checks that the graph is shaped to obey it.
+ *
+ * STRUCTURAL, not textual. A mention somewhere in the graph proves nothing: a
+ * Transform that formats the verdict into a sentence, a prompt holding
+ * `{{data:steps.check.output.status}}`, a Branch placed after the agent has
+ * already read the flagged text, a Branch whose two ports lead to the same
+ * place, and a reader only another trigger can reach all mention the field and
+ * none of them stops a flagged run. So the shape is what is required: on every
+ * outgoing path of the block, the FIRST node is a Branch reading that field of
+ * that block's output, and that Branch's two ports do not reach the same set
+ * of nodes, because a Branch whose answers lead to the same run decides
+ * nothing.
+ *
+ * Every outgoing edge is such a path: a v2 graph has no execution-failure
+ * edges, which the policy refuses where connections are checked. A block with
+ * no outgoing edge at all is left alone: the run ends where it ends, and
+ * nothing downstream reads anything.
+ */
+export function workflowUnreadOutputIssues(
+  def: WorkflowDefinitionV2,
+  mustReadOf: (node: WorkflowDefinitionV2Node) => readonly string[],
+): WorkflowDefinitionValidationIssue[] {
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  const nodesById = new Map(def.nodes.map((node) => [node.id, node]));
+  const forward = new Map<string, string[]>();
+  for (const edge of def.edges) {
+    const targets = forward.get(edge.from);
+    if (targets) targets.push(edge.to);
+    else forward.set(edge.from, [edge.to]);
+  }
+  for (const [nodeIndex, node] of def.nodes.entries()) {
+    const fields = mustReadOf(node);
+    if (fields.length === 0) continue;
+    const path = `/nodes/${nodeIndex}`;
+    const onward = def.edges.filter((edge) => edge.from === node.id);
+    for (const field of fields) {
+      const reference = `steps.${node.id}.output.${field}`;
+      const reported = new Set<string>();
+      for (const edge of onward) {
+        if (reported.has(edge.to)) continue;
+        reported.add(edge.to);
+        const first = nodesById.get(edge.to);
+        // A dangling edge is already refused where edges are checked.
+        if (!first) continue;
+        if (first.type !== "branch" || !branchReads(first, reference, node.id, field)) {
+          issues.push({
+            code: "output.unread",
+            severity: "error",
+            nodeId: node.id,
+            path,
+            message: `Block "${node.id}" reports ${reference}, and the next node on that path is "${first.id}", which does not decide on it: the run would carry on whatever the verdict says. Put a Branch on ${reference} directly after "${node.id}" and send each answer where it belongs.`,
+          });
+          continue;
+        }
+        if (branchPortsAgree(def, first.id, forward)) {
+          issues.push({
+            code: "output.unread",
+            severity: "error",
+            nodeId: first.id,
+            path,
+            message: `Branch "${first.id}" reads ${reference} and both of its answers reach the same set of nodes, so it decides nothing and a flagged run continues exactly like a clean one. Send one of the two answers somewhere else, or end the run there.`,
+          });
+        }
+      }
+    }
+  }
+  return issues;
+}
+
+/**
+ * An input that takes its value from the run's subject when nothing is bound,
+ * in a graph a trigger can start with no subject text anybody wrote.
+ *
+ * The default exists so a graph drawn as "trigger, screen" needs no binding:
+ * the run's own description and comments are what the screen is for. A run
+ * with no ticket has neither. Core gives it a ticket-shaped snapshot whose
+ * description core itself composed (a pull request's URL and head, a
+ * schedule's instruction and instants), and screening that finds nothing every
+ * time. The run-time refusal is the block's (`integration-block.ts`); this is
+ * the same fact said at publish, where the author can still act on it, and it
+ * names the trigger because the trigger is what they would change or bind
+ * around.
+ *
+ * Only a trigger that can reach the block: a graph where the pull request path
+ * never arrives at the screen is not a graph in which the screen ever reads a
+ * composed description.
+ */
+export function workflowSubjectDefaultIssues(
+  def: WorkflowDefinitionV2,
+  subjectDefaultsOf: (
+    node: WorkflowDefinitionV2Node,
+  ) => ReadonlyArray<{ readonly name: string; readonly describes: string }>,
+): WorkflowDefinitionValidationIssue[] {
+  const composed = def.nodes.filter(
+    (node) => isTriggerBlockType(node.type) && !triggerCarriesAuthoredSubjectText(node.type),
+  );
+  if (composed.length === 0) return [];
+  const forward = new Map<string, string[]>();
+  for (const edge of def.edges) {
+    const targets = forward.get(edge.from);
+    if (targets) targets.push(edge.to);
+    else forward.set(edge.from, [edge.to]);
+  }
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  for (const [nodeIndex, node] of def.nodes.entries()) {
+    const defaults = subjectDefaultsOf(node);
+    if (defaults.length === 0) continue;
+    const trigger = composed.find((candidate) =>
+      reachableFrom([candidate.id], forward).has(node.id),
+    );
+    if (!trigger) continue;
+    for (const { name, describes } of defaults) {
+      issues.push({
+        code: "binding.subject_default",
+        severity: "error",
+        nodeId: node.id,
+        path: `/nodes/${nodeIndex}/inputs/${jsonPointerSegment(name)}`,
+        message: `Block "${node.id}" reads "${name}" from ${describes} when nothing is bound, and trigger "${trigger.id}" (${trigger.type}) starts runs that carry no ticket: their description is text core composes, not text a person wrote. Bind "${name}" to the value this workflow wants it to read.`,
+      });
+    }
+  }
+  return issues;
+}
+
+/** Does this Branch's condition test that field of that block's output? */
+function branchReads(
+  branch: WorkflowDefinitionV2Node,
+  reference: string,
+  nodeId: string,
+  field: string,
+): boolean {
+  const parsed = v2BranchConfigurationSchema.safeParse(branch.configuration);
+  if (!parsed.success) return false;
+  const reads = outputFieldPattern(nodeId, field);
+  return parsed.data.conditions.some(
+    (condition) => condition.reference === reference || reads.test(condition.reference),
+  );
+}
+
+/** Both ports wired, and both reaching exactly the same nodes. */
+function branchPortsAgree(
+  def: WorkflowDefinitionV2,
+  branchId: string,
+  forward: Map<string, string[]>,
+): boolean {
+  const targetsOf = (port: string) =>
+    def.edges.filter((edge) => edge.from === branchId && edge.fromPort === port).map((edge) => edge.to);
+  const whenTrue = targetsOf("true");
+  const whenFalse = targetsOf("false");
+  // A port with nothing on it is refused where ports are checked; saying it
+  // twice, in other words, would only make the first sentence harder to find.
+  if (whenTrue.length === 0 || whenFalse.length === 0) return false;
+  const reached = reachableFrom(whenTrue, forward);
+  const otherwise = reachableFrom(whenFalse, forward);
+  return (
+    reached.size === otherwise.size && [...reached].every((id) => otherwise.has(id))
+  );
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** `steps.<id>.output.<field>` and anything under it, or `steps.<id>.output` whole. */
+function outputFieldPattern(nodeId: string, field: string): RegExp {
+  const base = `steps\\.${escapeRegExp(nodeId)}\\.output`;
+  return new RegExp(
+    `(?<![A-Za-z0-9_.-])${base}(?:\\.${escapeRegExp(field)}(?![A-Za-z0-9_-])|(?![A-Za-z0-9_.-]))`,
+  );
 }
 
 function branchConditionIssues(
@@ -896,7 +1085,7 @@ function workflowGraphV2Issues(
     }
     if (!fromNode || !toNode || edge.from === edge.to) continue;
 
-    const ports = BLOCK_TYPE_SPECS[fromNode.type].ports;
+    const ports = blockTypeSpecOf(fromNode.type).ports;
     const resolvedPort = edge.fromPort ?? ports[0];
     if (edge.fromPort === FAILURE_PORT) {
       addIssue(
@@ -1065,12 +1254,9 @@ const ANY_SCOPE_BLOCK_POLICY = {
   update_ticket_status: "deny",
   post_ticket_comment: "deny",
   post_pr_comment: "safe",
-  send_slack_message: "deny",
+  send_message: "deny",
   send_plan_approval: "deny",
   human_question: "deny",
-  // Guardrail classification is explicit: it inspects content and returns a
-  // verdict, but owns no ticket/workspace/branch mutation.
-  arthur_injection_check: "safe",
   // Nothing to guard on an any-scope path: Finalize, Open PR/MR, and the check
   // blocks it protects are all denied there, so the block would only add
   // repository-owned command surface inside the credential-bearing sandbox.

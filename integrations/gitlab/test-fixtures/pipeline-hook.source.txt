@@ -1,0 +1,4 @@
+Source URL: https://docs.gitlab.com/user/project/integrations/webhook_events/#pipeline-events
+GitLab source revision: https://gitlab.com/gitlab-org/gitlab/-/blob/457f8f752b242fad728176d6231fe4910210c956/doc/user/project/integrations/webhook_events.md
+Retrieved: 2026-09-21
+SHA-256: 5c5d889edcc3217581d957b316904db93059312c5fadd536ee31c8ddf6c83308

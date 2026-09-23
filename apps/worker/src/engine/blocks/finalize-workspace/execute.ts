@@ -285,6 +285,7 @@ async function settleReviewLedger(
       provider: pr.provider,
       repoPath: pr.repoPath,
       baseBranch: pr.baseRef,
+      integrationPins: ctx.integrationPins,
     });
     // Stamped on ctx as well as returned: the run's failure path counts open
     // threads off this, and a note claiming a thread is unanswered when the
@@ -371,6 +372,7 @@ export const execute: BlockExecuteFn = async (
       ticketKey: ctx.ticket.identifier,
       workspaceManifest: ctx.workspaceManifest,
       repositoryAccess: ctx.repositories,
+      integrationPins: ctx.integrationPins,
       jobTimeoutMs: ctx.settings.JOB_TIMEOUT_MS,
       prePrGate: ctx.prePrGate ?? recoverPrePrGateFromSteps(steps),
       scriptDrift: recoverScriptDriftFromSteps(steps),

@@ -5,7 +5,7 @@ import type { FlowNodeDef } from "@/lib/flows";
 import type { WebhookRejectionSummaryEntry, WorkflowDataCatalogEntry, WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
 import { arrayToLines, linesToArray, textMatchesLines } from "@/lib/workflow-editor/params";
 import { Button, Checkbox, Input, Select, Textarea } from "@/components/ui";
-import { investigateProviders } from "../block-palette";
+import { investigateSources } from "../block-palette";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
 import { WorkflowTextTemplateEditor } from "../workflow-text-template-editor";
 import { JsonSchemaEditor } from "../json-schema-editor";
@@ -545,8 +545,8 @@ export function TriggerRateLimitFields({
   );
 }
 
-/** Config for the investigate block. The providers param is a selection list of
- *  provider names, like the VCS providers on the PR triggers. */
+/** Config for the investigate block. The sources param is a selection list of
+ *  context source names, like the VCS providers on the PR triggers. */
 export function InvestigateFields({
   node,
   canEdit,
@@ -556,77 +556,83 @@ export function InvestigateFields({
   canEdit: boolean;
   onChange: ConfigChange;
 }) {
-  const providers = investigateProviders(node);
-  const toggleProvider = (key: "jira" | "slack") => (checked: boolean) => {
-    const next = { ...providers, [key]: checked };
-    // Keeping the last provider on: an empty selection fails validation, and
+  const sources = investigateSources(node);
+  const toggleSource = (key: "issueTracker" | "chat") => (checked: boolean) => {
+    const next = { ...sources, [key]: checked };
+    // Keeping the last source on: an empty selection fails validation, and
     // silently writing one would make the node undeployable from a checkbox.
-    if (!next.jira && !next.slack) return;
+    if (!next.issueTracker && !next.chat) return;
     onChange(
-      "params.providers",
-      (["jira", "slack"] as const).filter((name) => next[name]),
+      "params.sources",
+      (["issueTracker", "chat"] as const)
+        .filter((name) => next[name])
+        .map((name) => (name === "issueTracker" ? "issue_tracker" : "chat")),
     );
   };
   const writeOptional = (key: string) => (value: string) =>
     onChange(`params.${key}`, value.trim() === "" ? undefined : value);
+  const chatChannels = node.params.chatChannels ?? node.params.slackChannels;
+  const chatLookbackDays = node.params.chatLookbackDays ?? node.params.slackLookbackDays;
+  const issueTrackerQueryTemplate =
+    str(node.params.issueTrackerQueryTemplate) || str(node.params.jiraJqlTemplate);
   return (
     <>
-      <ConfigField label="Context providers">
+      <ConfigField label="Context sources">
         <div className="flex flex-col gap-1.5">
           <CheckboxRow
-            label="Jira (similar tickets)"
-            checked={providers.jira}
+            label="Issue tracker (similar tickets)"
+            checked={sources.issueTracker}
             disabled={!canEdit}
-            onChange={toggleProvider("jira")}
+            onChange={toggleSource("issueTracker")}
           />
           <CheckboxRow
-            label="Slack (channel history)"
-            checked={providers.slack}
+            label="Chat (channel history)"
+            checked={sources.chat}
             disabled={!canEdit}
-            onChange={toggleProvider("slack")}
+            onChange={toggleSource("chat")}
           />
         </div>
       </ConfigField>
-      {providers.slack && (
+      {sources.chat && (
         <>
-          <ConfigField label="Slack channels">
+          <ConfigField label="Chat channels">
             <ArrayTextarea
-              key={`${node.id}:slackChannels`}
-              value={node.params.slackChannels}
+              key={`${node.id}:chatChannels`}
+              value={chatChannels}
               disabled={!canEdit}
               mono
               placeholder="C0123456789"
-              onChange={(v) => onChange("params.slackChannels", v)}
+              onChange={(v) => onChange("params.chatChannels", v)}
             />
           </ConfigField>
-          <ConfigField label="Slack lookback (days)">
+          <ConfigField label="Chat lookback (days)">
             <NumberField
-              value={node.params.slackLookbackDays ?? 30}
+              value={chatLookbackDays ?? 30}
               min={1}
               max={365}
               disabled={!canEdit}
-              onChange={(v) => onChange("params.slackLookbackDays", v)}
+              onChange={(v) => onChange("params.chatLookbackDays", v)}
             />
           </ConfigField>
           <ConfigNote>
             One channel ID per line. The workflow bot must be invited to each
-            channel; a channel without it is skipped. An empty list skips Slack.
+            channel; a channel without it is skipped. An empty list skips chat.
           </ConfigNote>
         </>
       )}
-      {providers.jira && (
+      {sources.issueTracker && (
         <>
-          <ConfigField label="Jira JQL template (optional)">
+          <ConfigField label="Issue tracker query template (optional)">
             <TextInput
-              value={str(node.params.jiraJqlTemplate)}
+              value={issueTrackerQueryTemplate}
               disabled={!canEdit}
               placeholder="labels = support"
-              onChange={writeOptional("jiraJqlTemplate")}
+              onChange={writeOptional("issueTrackerQueryTemplate")}
             />
           </ConfigField>
           <ConfigNote>
-            The search is always restricted to the Jira project this deployment
-            is configured for. A template narrows within that project; it cannot
+            The search is always restricted to the project the connected issue
+            tracker watches. A template narrows within that project; it cannot
             reach another one, so naming a different project simply finds
             nothing.
           </ConfigNote>

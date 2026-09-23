@@ -47,6 +47,29 @@ describe("durable publication PR phases", () => {
     mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   });
 
+  it("passes the run's connection pin into a later provider call", async () => {
+    const integrationPins = [{ integrationId: "gitlab", configFingerprint: "old-host" }];
+    mocks.createRepositoryVCS.mockReturnValue({ findPR: vi.fn().mockResolvedValue(null) });
+
+    await findWorkflowOwnedPullRequestForBranch({
+      branchName: "ai/AIW-100",
+      repository: {
+        provider: "gitlab",
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        selectedRationale: "run start",
+      },
+      integrationPins,
+    });
+
+    expect(mocks.createRepositoryVCS).toHaveBeenCalledWith({
+      provider: "gitlab",
+      repoPath: "acme/api",
+      baseBranch: "main",
+      integrationPins,
+    });
+  });
+
   it("refuses PR creation on a repository the run's catalog does not enable", async () => {
     mocks.createRepositoryVCS.mockReturnValue({
       findPR: vi.fn().mockResolvedValue(null),

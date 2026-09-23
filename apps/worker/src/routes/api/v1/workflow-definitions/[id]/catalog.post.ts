@@ -13,6 +13,7 @@ import {
   requireDashboardActor,
   toHttpError,
 } from "../../../../../services/auth/request-context.js";
+import { connectedDeploymentIntegrations } from "../../../../../services/workflow-definitions/block-contracts.js";
 import {
   analyzeWorkflowDefinitionCatalog,
   parseWorkflowDefinitionCandidate,
@@ -55,6 +56,7 @@ export default defineEventHandler(
       return analyzeWorkflowDefinitionCatalog(
         await getRequestSettingsSnapshot(event),
         candidate.definition,
+        await connectedDeploymentIntegrations(),
       );
     } catch (error) {
       if (error instanceof Error && "statusCode" in error) throw error;

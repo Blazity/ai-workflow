@@ -1,13 +1,18 @@
-import { BLOCK_TYPE_SPECS, DEFAULT_OUT_PORT } from "@shared/contracts";
+// blockTypeSpecOf, never BLOCK_TYPE_SPECS directly: an integration's block type is
+// storable and has no row in that table, so indexing it threw "Cannot read
+// properties of undefined (reading 'ports')" the moment such a block reached the
+// canvas. The helper answers one action port named `out` for a type core does
+// not own, which is exactly what an integration block declares (ADR-010).
+import { blockTypeSpecOf, DEFAULT_OUT_PORT } from "@shared/contracts";
 import type { WorkflowBlockType } from "@shared/contracts";
 import type { FlowEdgeDef } from "@/lib/flows";
 
 export function defaultPort(type: WorkflowBlockType): string {
-  return BLOCK_TYPE_SPECS[type].ports[0] ?? DEFAULT_OUT_PORT;
+  return blockTypeSpecOf(type).ports[0] ?? DEFAULT_OUT_PORT;
 }
 
 export function canOmitFromPort(type: WorkflowBlockType, port: string): boolean {
-  const ports = BLOCK_TYPE_SPECS[type].ports;
+  const ports = blockTypeSpecOf(type).ports;
   return ports.length === 1 && port === ports[0];
 }
 
@@ -66,7 +71,7 @@ export function removeEdge(
 }
 
 export function visibleOutPorts(type: WorkflowBlockType): string[] {
-  return [...BLOCK_TYPE_SPECS[type].ports];
+  return [...blockTypeSpecOf(type).ports];
 }
 
 export type UpsertEdgeOptions =

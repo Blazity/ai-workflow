@@ -43,7 +43,6 @@ export interface BlockManifest extends Omit<BlockCatalogEntry, "additionalInputs
 }
 
 export type WorkflowBlockType =
-  | "arthur_injection_check"
   | "branch"
   | "call_llm"
   | "complete_pr_check"
@@ -67,8 +66,8 @@ export type WorkflowBlockType =
   | "run_checks"
   | "run_pre_pr_checks"
   | "run_scripts"
+  | "send_message"
   | "send_plan_approval"
-  | "send_slack_message"
   | "terminate"
   | "transform"
   | "trigger_plan_approved"
@@ -84,21 +83,6 @@ export type WorkflowBlockType =
   | "update_ticket_status";
 
 export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
-  arthur_injection_check: {
-    contract: {"category":"action","ports":["out"],"allowsFailurePort":true},
-    ui: {"group":"arthur","label":"Prompt injection check","description":"Scans untrusted content with the optional Arthur Engine integration.","glyph":"◬","color":"#8b6f8f","softColor":"#F3F0F4"},
-    defaults: {},
-    inputs: {
-      "content": {
-        "required": false,
-        "schema": {
-          "type": "string"
-        }
-      }
-    },
-    additionalInputs: [],
-    execution: "map",
-  },
   branch: {
     contract: {"category":"control","ports":["true","false"],"allowsFailurePort":false},
     ui: {"group":"control","label":"Branch","description":"Chooses one of two paths using the restricted condition language.","glyph":"⋔","color":"#35823f","softColor":"#E9F3EA"},
@@ -466,13 +450,13 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
   },
   investigate: {
     contract: {"category":"action","ports":["out"],"allowsFailurePort":true},
-    ui: {"group":"ticket","label":"Investigate","description":"Searches Jira and Slack for context on the ticket and builds an evidence-backed classification and theory for a human decision. Jira is always scoped to the configured project and Slack to the configured channels; a JQL template narrows within that project and cannot widen past it. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question, otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.","glyph":"⌕","color":"#2563EB","softColor":"#E9EFFD"},
+    ui: {"group":"ticket","label":"Investigate","description":"Searches this deployment's issue tracker and chat for context on the ticket and builds an evidence-backed classification and theory for a human decision. The issue tracker search is always scoped to the project the connection names, and chat to the configured channels; a query template narrows within that scope and cannot widen past it. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question, otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.","glyph":"⌕","color":"#2563EB","softColor":"#E9EFFD"},
     defaults: {
-      "providers": [
-        "jira",
-        "slack"
+      "sources": [
+        "issue_tracker",
+        "chat"
       ],
-      "slackLookbackDays": 30,
+      "chatLookbackDays": 30,
       "maxResults": 10
     },
     inputs: {},
@@ -897,6 +881,24 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     additionalInputs: [],
     execution: "map",
   },
+  send_message: {
+    contract: {"category":"action","ports":["out"],"allowsFailurePort":true},
+    ui: {"group":"utility","label":"Send message","description":"Tells the connected messaging integration about a milestone of this run: the pull requests it published, or a message you write.","glyph":"✉","color":"#64748B","softColor":"#EEF1F5"},
+    defaults: {
+      "message": "",
+      "sendOn": "pr_ready"
+    },
+    inputs: {
+      "message": {
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    additionalInputs: [],
+    execution: "inline",
+  },
   send_plan_approval: {
     contract: {"category":"action","ports":[],"allowsFailurePort":false},
     ui: {"group":"human","label":"Send plan for approval","description":"Creates a durable approval item and ends this path.","glyph":"☑","color":"#b06a14","softColor":"#F7F0E7"},
@@ -922,24 +924,6 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     },
     additionalInputs: [],
     execution: "map",
-  },
-  send_slack_message: {
-    contract: {"category":"action","ports":["out"],"allowsFailurePort":true},
-    ui: {"group":"utility","label":"Send Slack message","description":"Notifies the configured Slack channel about a workflow milestone.","glyph":"✉","color":"#64748B","softColor":"#EEF1F5"},
-    defaults: {
-      "message": "",
-      "sendOn": "pr_ready"
-    },
-    inputs: {
-      "message": {
-        "required": false,
-        "schema": {
-          "type": "string"
-        }
-      }
-    },
-    additionalInputs: [],
-    execution: "inline",
   },
   terminate: {
     contract: {"category":"control","ports":[],"allowsFailurePort":false},
@@ -978,19 +962,11 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR checks failed","description":"Starts when external CI reports one or more failed checks.","glyph":"✗","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "workflow_owned",
       "checkNames": [],
       "ignoreCheckNames": [],
-      "githubAppSlugs": [
-        "github-actions"
-      ],
-      "gitlabPipelineSources": [
-        "merge_request_event"
-      ],
+      "trustedProducers": [],
       "maxFixAttemptsPerPr": 2
     },
     inputs: {},
@@ -1001,10 +977,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR created","description":"Starts from an allowed pull or merge request creation event.","glyph":"⎇","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "workflow_owned"
     },
     inputs: {},
@@ -1015,10 +988,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR merged","description":"Starts when an allowed pull or merge request is merged.","glyph":"◆","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "workflow_owned"
     },
     inputs: {},
@@ -1029,10 +999,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR ready for review","description":"Starts when a pull or merge request is ready for review.","glyph":"⎇","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "any"
     },
     inputs: {},
@@ -1043,9 +1010,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR review","description":"Starts from an allowed human pull or merge request review.","glyph":"✎","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github"
-      ],
+      "providers": [],
       "on": [
         "changes_requested"
       ],
@@ -1060,10 +1025,7 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
     contract: {"category":"trigger","ports":["out"],"allowsFailurePort":false},
     ui: {"group":"trigger","label":"PR updated","description":"Starts when the pull or merge request head commit changes.","glyph":"⟳","color":"#D14343","softColor":"#FBECEC"},
     defaults: {
-      "providers": [
-        "github",
-        "gitlab"
-      ],
+      "providers": [],
       "scope": "any"
     },
     inputs: {},
@@ -1129,7 +1091,6 @@ export const BLOCK_CATALOG: Record<WorkflowBlockType, BlockCatalogEntry> = {
 };
 
 export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
-  arthur_injection_check: BLOCK_CATALOG.arthur_injection_check.contract,
   branch: BLOCK_CATALOG.branch.contract,
   call_llm: BLOCK_CATALOG.call_llm.contract,
   complete_pr_check: BLOCK_CATALOG.complete_pr_check.contract,
@@ -1153,8 +1114,8 @@ export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
   run_checks: BLOCK_CATALOG.run_checks.contract,
   run_pre_pr_checks: BLOCK_CATALOG.run_pre_pr_checks.contract,
   run_scripts: BLOCK_CATALOG.run_scripts.contract,
+  send_message: BLOCK_CATALOG.send_message.contract,
   send_plan_approval: BLOCK_CATALOG.send_plan_approval.contract,
-  send_slack_message: BLOCK_CATALOG.send_slack_message.contract,
   terminate: BLOCK_CATALOG.terminate.contract,
   transform: BLOCK_CATALOG.transform.contract,
   trigger_plan_approved: BLOCK_CATALOG.trigger_plan_approved.contract,

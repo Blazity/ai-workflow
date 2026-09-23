@@ -8,6 +8,7 @@ import {
 import type { AgentWorkflowInput, PrTriggerPayload } from "../agent-input.js";
 import { assertScheduledRunMayNotPark, SCHEDULED_RUN_CANNOT_PARK_REASON } from "../agent-workflow.js";
 import { selectEntryTriggerNode, triggerOutputFor, triggerOutputWithTicketContext, triggerTypeFor } from "../helpers/trigger-input.js";
+import { MESSAGING_CONNECTED } from "../definition/messaging-deployment.fixture.js";
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -15,9 +16,8 @@ const context: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github"],
   vcsBotIdentities: ["github"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const basePr: PrTriggerPayload = {

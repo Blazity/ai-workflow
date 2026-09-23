@@ -18,7 +18,9 @@ import {
   type RepositoryExpansionState,
 } from "./runner.js";
 import type { RepositoryCatalogEntry } from "./catalog.js";
-import type { WorkScopeRefusalReason } from "@shared/contracts";
+import { repositoryCatalogProviderSchema, type WorkScopeRefusalReason } from "@shared/contracts";
+import Ajv from "ajv";
+import { PROVIDER_ID_PROBES } from "../../test-support/provider-id-probes.js";
 
 describe("repository discovery harness protocol", () => {
   it("uses a strict bounded output schema", () => {
@@ -33,6 +35,17 @@ describe("repository discovery harness protocol", () => {
       "questions",
       "error",
     ]);
+  });
+
+  it("holds the model to exactly the providers the answer is validated with", () => {
+    // The answer's provider is parsed with the catalog's provider rule
+    // (`discoveryResultSchema` in engine/repository-discovery/protocol.ts), so
+    // the schema the model is handed has to admit the same ids and no others.
+    const items = JSON.parse(REPOSITORY_DISCOVERY_SCHEMA).properties.repositories.anyOf[0].items;
+    const admits = new Ajv({ strict: false }).compile(items.properties.provider);
+    for (const probe of PROVIDER_ID_PROBES.filter((value) => value.trim() === value)) {
+      expect(admits(probe), probe).toBe(repositoryCatalogProviderSchema.safeParse(probe).success);
+    }
   });
 
   it("includes only bounded catalog metadata and mandatory identities", () => {
@@ -417,8 +430,10 @@ describe("repository expansion validation", () => {
     expect(decision.kind).toBe("clarification_needed");
     if (decision.kind === "clarification_needed") {
       const [question] = decision.questions;
-      expect(question).toContain("github:owner/repo");
-      expect(question).toContain("gitlab:group/repo");
+      // The examples themselves are pinned against a registry this build does
+      // not contain, in repository-map/repository-path-example.test.ts. Here the question is
+      // only whether the sentence is said at all.
+      expect(question).toContain("reply with exact repository paths as");
       expect(isExpansionLimitClarification(decision.questions)).toBe(true);
     }
   });
@@ -461,7 +476,7 @@ describe("isRepositoryExpansionClarification", () => {
     relationships: [],
     usable: true,
   };
-  const request = (provider: "github" | "gitlab", repoPath: string) => ({
+  const request = (provider: string, repoPath: string) => ({
     provider,
     repoPath,
     rationale: "needed",
@@ -472,14 +487,14 @@ describe("isRepositoryExpansionClarification", () => {
       name: "a repository that is not on the catalog",
       requests: [request("github", "acme/unknown")],
       catalog: [contracts],
-      attached: [] as Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      attached: [] as Array<{ provider: string; repoPath: string }>,
       completedRounds: 0,
     },
     {
       name: "more than three repositories in one round",
       requests: spare.map((entry) => request(entry.provider, entry.repoPath)),
       catalog: spare,
-      attached: [] as Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      attached: [] as Array<{ provider: string; repoPath: string }>,
       completedRounds: 0,
     },
     {
@@ -489,7 +504,7 @@ describe("isRepositoryExpansionClarification", () => {
         request("gitlab", "acme/shared/contracts"),
       ],
       catalog: [contracts],
-      attached: [] as Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      attached: [] as Array<{ provider: string; repoPath: string }>,
       completedRounds: 0,
     },
     {
@@ -506,7 +521,7 @@ describe("isRepositoryExpansionClarification", () => {
       name: "a genuinely missing repository after two rounds",
       requests: [request("gitlab", "acme/shared/contracts")],
       catalog: [contracts],
-      attached: [] as Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      attached: [] as Array<{ provider: string; repoPath: string }>,
       completedRounds: 2,
     },
   ])(
@@ -529,7 +544,7 @@ describe("isRepositoryExpansionClarification", () => {
       }
       // Whatever the reason for asking, the answer format is stated, so the
       // reply has a shape the parser can read.
-      expect(question).toContain("github:owner/repo");
+      expect(question).toContain("reply with exact repository paths as");
       expect(question).toContain('Reply "none"');
     },
   );
@@ -1472,8 +1487,8 @@ describe("decideRepositoryExpansion", () => {
      *  the state the closure stores. */
     function modelPass(
       current: RepositoryExpansionState,
-      attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
-      requests: Array<{ provider: "github" | "gitlab"; repoPath: string; rationale: string }> = [
+      attached: Array<{ provider: string; repoPath: string }>,
+      requests: Array<{ provider: string; repoPath: string; rationale: string }> = [
         privateRequest,
       ],
     ) {
@@ -1510,7 +1525,7 @@ describe("decideRepositoryExpansion", () => {
       current: RepositoryExpansionState,
       answer: string,
       round: number,
-      attached: Array<{ provider: "github" | "gitlab"; repoPath: string }> = [service],
+      attached: Array<{ provider: string; repoPath: string }> = [service],
     ) {
       return decideRepositoryExpansion({
         origin: "human",

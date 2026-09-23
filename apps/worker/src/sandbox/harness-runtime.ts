@@ -22,6 +22,7 @@ import { AGENT_CLI_SPEC_CATALOG } from "./agents/protocol.js";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
 import { verifyHarnessSkillArtifact } from "@shared/skills";
 import { sha256Digest } from "../harness-profiles/skill-artifact-digest.js";
+import { integrationManifests } from "@integrations/registry";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/;
@@ -65,10 +66,10 @@ const HARNESS_MCP_INTEGRATION_CATALOG = new Set<string>(
 const HARNESS_CREDENTIAL_REFERENCE_CATALOG = new Set([
   "anthropic",
   "openai",
-  "github",
-  "gitlab",
-  "jira",
-  "slack",
+  // Every provider with credentials of its own is an integration now, so the
+  // registry is the whole list. The two model vendors above are not: they are
+  // harness credentials rather than a connection an admin makes.
+  ...integrationManifests.map((manifest) => manifest.id),
 ] as const);
 
 const AGENT_BLOCK_TYPES = new Set<WorkflowBlockType>([

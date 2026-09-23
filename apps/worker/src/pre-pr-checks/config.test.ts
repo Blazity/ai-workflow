@@ -78,10 +78,14 @@ describe("prePrCheckConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects unknown keys and bad providers", () => {
+  it("rejects unknown keys and a provider that is not an integration id", () => {
+    // Which providers exist is the registry's answer, not this schema's: a
+    // deployment shipping a provider core has never heard of has to be able to
+    // write it here. What is checked is the SHAPE of an integration id, so a
+    // display name or a URL in this field is refused where it is written.
     expect(
       prePrCheckConfigSchema.safeParse({
-        repositories: [{ provider: "svn", repoPath: "acme/web", commands: ["make"] }],
+        repositories: [{ provider: "GitHub", repoPath: "acme/web", commands: ["make"] }],
       }).success,
     ).toBe(false);
     expect(

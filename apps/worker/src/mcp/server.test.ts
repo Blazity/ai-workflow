@@ -7,6 +7,7 @@ import { policyFor } from "./policy.js";
 import { createMcpServer } from "./server.js";
 import { settingsSnapshotFromEnvironment } from "../services/settings/snapshot.js";
 import { unactivatedRepositoryCatalog } from "../test-support/repository-catalog.js";
+import { testDeploymentIntegrations } from "../test-support/integrations.js";
 
 const state = vi.hoisted(() => ({
   executeMcpRead: vi.fn(),
@@ -78,6 +79,9 @@ const PUBLISHED: McpToolName[] = [
   "runs.briefing",
   "workflows.node_briefing",
   "work_scope.edit",
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ];
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -98,6 +102,9 @@ const deps = {
     scopes: new Set(["mcp:read"]),
     audience: "https://worker.example.com/mcp",
   },
+  loadDeploymentIntegrations: async () => testDeploymentIntegrations(),
+  loadCapabilityOverview: async () => ({ capabilities: [] }),
+  loadKnownSecrets: async () => [],
   requestId: "request_1",
   traceId: "trace_1",
   now: () => new Date("2026-08-11T12:00:00.000Z"),
@@ -125,8 +132,8 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-async function connectedClient(): Promise<Client> {
-  const server = createMcpServer(deps);
+async function connectedClient(overrides: Partial<McpToolDependencies> = {}): Promise<Client> {
+  const server = createMcpServer({ ...deps, ...overrides });
   const client = new Client({ name: "task-5-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   cleanups.push(() => client.close(), () => server.close());
@@ -196,6 +203,7 @@ describe("createMcpServer", () => {
           "repositories",
           "settings",
           "work_scope",
+          "memory",
         ],
         // These deps carry no messaging adapter, which is the same answer a
         // deployment with no chat credentials gives: the authoring announcements
@@ -205,6 +213,37 @@ describe("createMcpServer", () => {
       },
       meta: { trust: "system" },
     });
+  });
+
+  it("reads the deployment's integrations once, and says unknown rather than none when that fails", async () => {
+    // A database that did not answer for a moment used to read as "nobody is
+    // watching your authoring writes" beside `integrations: null`, the same
+    // read reported two ways in one answer, and the read was made twice.
+    const loadDeploymentIntegrations = vi.fn(async () => {
+      throw new Error("connection terminated unexpectedly");
+    });
+    const loadCapabilityOverview = vi.fn(async () => ({ capabilities: [] }));
+    const client = await connectedClient({ loadDeploymentIntegrations, loadCapabilityOverview });
+
+    const called = await client.callTool({ name: "system.capabilities", arguments: {} });
+
+    expect(called.structuredContent).toMatchObject({
+      data: { authoringAnnouncements: null, integrations: null, capabilities: null },
+    });
+    expect(loadDeploymentIntegrations).toHaveBeenCalledOnce();
+    expect(loadCapabilityOverview).not.toHaveBeenCalled();
+  });
+
+  it("builds every integration field from the one read when it succeeds", async () => {
+    const deployment = testDeploymentIntegrations();
+    const loadDeploymentIntegrations = vi.fn(async () => deployment);
+    const loadCapabilityOverview = vi.fn(async () => ({ capabilities: [] }));
+    const client = await connectedClient({ loadDeploymentIntegrations, loadCapabilityOverview });
+
+    await client.callTool({ name: "system.capabilities", arguments: {} });
+
+    expect(loadDeploymentIntegrations).toHaveBeenCalledOnce();
+    expect(loadCapabilityOverview).toHaveBeenCalledWith(deployment);
   });
 
   // The whole point of the wrapper: the SDK's own tool-error path forwards the

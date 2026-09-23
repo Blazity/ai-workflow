@@ -1176,7 +1176,7 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
 
   it("carries an empty coverage list when the configuration could not be read", async () => {
     const run = await runPrePrChecksWithFixes(
-      options({ config: { repositories: [{ provider: "gitea", repoPath: "x", commands: ["y"] }] } }),
+      options({ config: { repositories: [{ provider: "bad provider", repoPath: "x", commands: ["y"] }] } }),
     );
 
     expect(run.outcome).toBe("failed");

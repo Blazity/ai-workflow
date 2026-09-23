@@ -45,7 +45,8 @@ export function pinnedRepositoriesNotEnabled(
     const repository = entry as { provider?: unknown; repoPath?: unknown };
     if (typeof repository.repoPath !== "string") continue;
     if (
-      (repository.provider === "github" || repository.provider === "gitlab") &&
+      typeof repository.provider === "string" &&
+      repository.provider.length > 0 &&
       isRepositoryEnabled(
         catalog,
         repositoryCatalogKey({

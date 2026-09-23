@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 
 type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -21,12 +22,7 @@ export async function handleJsonSchemaInspect(
       },
     });
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      ((error as { name?: unknown }).name === "TimeoutError" ||
-        (error as { code?: unknown }).code === 23)
-    ) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json(
         { error: "Worker request timed out" },
         { status: 504 },

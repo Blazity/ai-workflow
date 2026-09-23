@@ -24,7 +24,7 @@ const state = vi.hoisted(() => ({
     BETTER_AUTH_URL: "https://worker.example.com",
   },
   requireMcpActor: vi.fn(),
-  createAdapters: vi.fn<() => Record<string, unknown>>(() => ({})),
+  createAdapters: vi.fn<() => unknown>(() => ({})),
   writeMcpAudit: vi.fn<WriteMcpAudit>(),
   realWriteMcpAudit: undefined as unknown as WriteMcpAudit,
   db: undefined as unknown as Db,
@@ -35,7 +35,10 @@ vi.mock("./request-context.js", () => ({
   requireMcpActor: state.requireMcpActor,
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../engine/support/adapters.js", () => ({ createAdapters: state.createAdapters }));
+vi.mock("../engine/support/adapters.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../engine/support/adapters.js")>()),
+  createAdapters: state.createAdapters,
+}));
 // Delegates to the real store unless a test makes it fail: the audit assertions
 // elsewhere in this file read actual rows, so a blanket stub would hollow them out.
 vi.mock("../services/mcp/audit-store.js", async (importOriginal) => {
@@ -50,6 +53,8 @@ vi.mock("../services/mcp/audit-store.js", async (importOriginal) => {
 });
 
 import type { Db } from "../db/client.js";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import { adaptersFor } from "../test-support/issue-tracker.js";
 import { createTestDb } from "../db/test-db.js";
 import { mcpAuditEvents, mcpRateLimitWindows, organization, settings } from "../db/schema.js";
 import { writeManySettings } from "../db/repositories/settings.js";
@@ -157,6 +162,9 @@ const PUBLISHED = [
   "runs.briefing",
   "workflows.node_briefing",
   "work_scope.edit",
+  "memory.list",
+  "memory.get",
+  "memory.forget",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {
@@ -780,9 +788,9 @@ describe("gate before the tool handler", () => {
     // off the SDK, which had nothing registered under it. It is served now, and
     // the second charge below is the handler's only. A gate that also charged a
     // servable call would show 3 here and halve every budget.
-    state.createAdapters.mockReturnValue({
-      issueTracker: { fetchTicket: async () => TICKET_CONTENT },
-    });
+    state.createAdapters.mockReturnValue(
+      adaptersFor({ fetchTicket: async () => TICKET_CONTENT } as unknown as IssueTrackerAdapter),
+    );
     const served = await postToolCall(toolCall(33, "tickets.get", { ticketKey: "PROJ-1" }));
 
     await expect(served.json()).resolves.toMatchObject({

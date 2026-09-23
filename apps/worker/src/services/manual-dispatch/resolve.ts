@@ -9,19 +9,17 @@ import {
   isManuallyDispatchableTrigger,
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
-import { env, getConfiguredVcsProviders } from "../../infra/vcs-config.js";
-import {
-  IssueTrackerNotFoundError,
-  type IssueTrackerAdapter,
-} from "../../adapters/issue-tracker/types.js";
+import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
+import { isPullRequestUnreadableError } from "@integrations/sdk";
 import { isRepositoryWithinPinnedScope } from "../../adapters/vcs/repository-directory.js";
-import type { ManualDispatchPullRequestSnapshot } from "../../adapters/vcs/types.js";
+import {
+  ManualDispatchUnsupportedError,
+  type ManualDispatchPullRequestSnapshot,
+} from "../../adapters/vcs/types.js";
 import type { Db } from "../../db/types.js";
 import { findWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import { findConnectedWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import {
-  isGateCheckName,
-  isConfiguredTriggerRepository,
   isRepositoryDispatchable,
   REPOSITORY_NOT_IN_CATALOG_REASON,
   selectEligibleEvent,
@@ -29,9 +27,17 @@ import {
   TriggerEvent,
 } from "../dispatch/index.js";
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
-import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
-import { createManualDispatchPrReader } from "../../engine/support/vcs-runtime.js";
-import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
+import { prSubjectKey } from "../../engine/support/subject-key.js";
+import { isManagedGateCheckName } from "../../engine/support/workflow-naming.js";
+import {
+  issueTrackerWiring,
+  ticketSubject,
+  type ResolvedIssueTracker,
+} from "../../engine/support/issue-tracker-runtime.js";
+import {
+  createManualDispatchPrReader,
+  resolveConfiguredPullRequestUrl,
+} from "../../engine/support/vcs-runtime.js";
 import { loadSettingsSnapshot, loadSettingsSnapshotOn } from "../settings/index.js";
 import {
   getWorkflowDefinitionName,
@@ -44,7 +50,13 @@ import {
 import type { PrTriggerPayload } from "../../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
-import { ManualDispatchError } from "./errors.js";
+import {
+  issueTrackerForDispatch,
+  ManualDispatchError,
+  settingsUnreadableForDispatch,
+} from "./errors.js";
+import { IntegrationSettingsUnreadableError } from "../integrations/index.js";
+import { readVcsBotLogin } from "../vcs/index.js";
 import {
   readConnectedDeployedWorkflowDefinitionVersion,
   readConnectedWorkflowDefinitionVersion,
@@ -81,6 +93,9 @@ export type ResolvedManualDispatch =
       currentStatus: string;
       aiColumn: string;
       steps: ManualDispatchPreflightStep[];
+      /** Every block type the deployed graph carries, so the preflight can ask
+       *  whether an integration it uses is in a state to run. */
+      blockTypes: string[];
     }
   | {
       definitionId: number;
@@ -101,6 +116,9 @@ export type ResolvedManualDispatch =
       subjectUrl: string;
       aiColumn: string;
       steps: ManualDispatchPreflightStep[];
+      /** Every block type the deployed graph carries, so the preflight can ask
+       *  whether an integration it uses is in a state to run. */
+      blockTypes: string[];
     };
 
 type ManualDispatchPersistence = {
@@ -129,9 +147,19 @@ const connectedPersistence: ManualDispatchPersistence = {
   findWorkflowOwnedPullRequest: findConnectedWorkflowOwnedPullRequest,
 };
 
+/** The block types a deployed graph carries. Empty for a version this build
+ *  cannot run, whose own refusal arrives before the preflight reads this. */
+function deployedBlockTypes(
+  row: Parameters<typeof runnableDefinitionOf>[0],
+): string[] {
+  return (runnableDefinitionOf(row)?.nodes ?? []).map((node) => node.type);
+}
+
 export async function resolveManualDispatch(input: {
   db: Db;
-  issueTracker: IssueTrackerAdapter;
+  /** The deployment's tracker, or why there is none: read only by the inputs
+   *  that need a ticket (`issueTrackerForDispatch`). */
+  issueTrackerResolution: ResolvedIssueTracker;
   definitionId: number;
   triggerNodeId: string;
   dispatchInput: ManualDispatchInput;
@@ -171,7 +199,7 @@ async function resolveManualDispatchWithPersistence(
   );
   if (deployed.triggerType === "trigger_ticket_ai") {
     if (input.dispatchInput.kind !== "ticket") {
-      throw new ManualDispatchError(422, "invalid_input", "This trigger requires a Jira ticket key.");
+      throw new ManualDispatchError(422, "invalid_input", "This trigger needs a ticket key.");
     }
     return resolveTicketDispatch(
       { ...input, dispatchInput: input.dispatchInput, persistence },
@@ -230,7 +258,7 @@ async function loadDeployedTrigger(
 async function resolveTicketDispatch(
   input: {
     persistence: ManualDispatchPersistence;
-    issueTracker: IssueTrackerAdapter;
+    issueTrackerResolution: ResolvedIssueTracker;
     definitionId: number;
     triggerNodeId: string;
     dispatchInput: Extract<ManualDispatchInput, { kind: "ticket" }>;
@@ -243,9 +271,12 @@ async function resolveTicketDispatch(
   },
 ): Promise<Extract<ResolvedManualDispatch, { inputKind: "ticket" }>> {
   const ticketKey = normalizeTicketKey(input.dispatchInput.ticketKey);
+  // Outside the try: no tracker is a refusal about the deployment, not the
+  // tracker failing to answer, and the catch below would say the latter.
+  const issueTracker = issueTrackerForDispatch(input.issueTrackerResolution);
   let ticket;
   try {
-    ticket = await input.issueTracker.fetchTicket(ticketKey);
+    ticket = await issueTracker.fetchTicket(ticketKey);
   } catch (error) {
     if (error instanceof IssueTrackerNotFoundError) {
       throw new ManualDispatchError(
@@ -257,15 +288,15 @@ async function resolveTicketDispatch(
     throw new ManualDispatchError(
       502,
       "provider_unavailable",
-      "Jira could not be reached.",
+      "The issue tracker could not be reached.",
     );
   }
-  const expectedProject = env.JIRA_PROJECT_KEY.trim().toUpperCase();
+  const expectedProject = (await issueTrackerWiring()).projectKey.trim().toUpperCase();
   if (projectKey(ticket.identifier) !== expectedProject) {
     throw new ManualDispatchError(
       422,
       "invalid_input",
-      `Ticket must belong to Jira project ${expectedProject}.`,
+      `Ticket must belong to project ${expectedProject}.`,
     );
   }
   if (await input.persistence.hasBlockingApproval(ticketKey)) {
@@ -287,11 +318,12 @@ async function resolveTicketDispatch(
     input: { kind: "ticket", ticketKey },
     inputKind: "ticket",
     inputPayload: { kind: "ticket", ticketKey },
-    subjectKey: ticketSubjectKey("jira", ticketKey),
+    subjectKey: await ticketSubject(ticketKey),
     ticketKey,
     subjectTitle: ticket.title,
     currentStatus: ticket.trackerStatus,
     aiColumn: input.settings.COLUMN_AI,
+    blockTypes: deployedBlockTypes(deployed.definition),
     steps: [
       {
         title: "Reserve ticket",
@@ -315,7 +347,7 @@ async function resolveTicketDispatch(
 async function resolvePullRequestDispatch(
   input: {
     persistence: ManualDispatchPersistence;
-    issueTracker: IssueTrackerAdapter;
+    issueTrackerResolution: ResolvedIssueTracker;
     definitionId: number;
     triggerNodeId: string;
     dispatchInput: Extract<ManualDispatchInput, { kind: "pull_request" }>;
@@ -328,15 +360,12 @@ async function resolvePullRequestDispatch(
     triggerType: Exclude<RunnableTriggerType, "trigger_ticket_ai">;
   },
 ): Promise<Extract<ResolvedManualDispatch, { inputKind: "pull_request" }>> {
-  const parsed = parsePullRequestUrl(input.dispatchInput.url);
-  const providerConfig = getConfiguredVcsProviders().find(
-    (provider) => provider.kind === parsed.provider,
-  );
-  if (!providerConfig) {
+  const parsed = await parsePullRequestUrl(input.dispatchInput.url);
+  if (!parsed) {
     throw new ManualDispatchError(
       422,
       "not_eligible",
-      `${parsed.provider === "github" ? "GitHub" : "GitLab"} is not configured.`,
+      "The pull request provider is not configured.",
     );
   }
   const vcs = createManualDispatchPrReader({
@@ -346,7 +375,25 @@ async function resolvePullRequestDispatch(
   let snapshot: ManualDispatchPullRequestSnapshot;
   try {
     snapshot = await vcs.getManualDispatchPullRequest(parsed.prNumber);
-  } catch {
+  } catch (error) {
+    // A wrong number, or a pull request this connection may not see, is the
+    // person's to fix, not an outage to wait out.
+    if (isPullRequestUnreadableError(error)) {
+      throw new ManualDispatchError(
+        422,
+        "not_eligible",
+        "This pull request does not exist, or this deployment's connection cannot read it.",
+      );
+    }
+    if (error instanceof ManualDispatchUnsupportedError) {
+      throw new ManualDispatchError(422, "not_eligible", error.message);
+    }
+    // Ours, not the provider's: the read that failed was this deployment's own
+    // settings, taken again when the provider's adapter was built. A 502 here
+    // sent the person to GitHub for a database that did not answer.
+    if (error instanceof IntegrationSettingsUnreadableError) {
+      throw settingsUnreadableForDispatch("the pull request could not be read");
+    }
     throw new ManualDispatchError(
       502,
       "provider_unavailable",
@@ -400,26 +447,18 @@ async function resolvePullRequestDispatch(
     );
   }
   const pr = snapshotToPayload(parsed.provider, parsed.repoPath, snapshot);
-  if (!(await isConfiguredTriggerRepository(pr))) {
-    throw new ManualDispatchError(
-      422,
-      "not_eligible",
-      "This repository is not accessible to the configured provider.",
-    );
-  }
-  const gateCheckNames = loadPostPrGateConfig().postPrGate.steps.map(
-    (step) => `blazebot / ${step.name ?? step.uses}`,
-  );
   const eligible = selectManualTriggerEvent(
     deployed.triggerType,
     pr,
     {
       ...snapshot,
+      // Our own gate's checks, in either naming generation, never start a run.
       failedChecks: snapshot.failedChecks.filter(
-        (check) => !isGateCheckName(check.name, gateCheckNames),
+        (check) => !isManagedGateCheckName(check.name),
       ),
     },
     params,
+    deployed.triggerType === "trigger_pr_review" ? await knownBotLogin(pr.provider) : undefined,
   );
   if (!eligible) {
     throw new ManualDispatchError(
@@ -451,12 +490,15 @@ async function resolvePullRequestDispatch(
         "This trigger only accepts pull requests created by AI Workflow.",
       );
     }
-    const ticket = await input.issueTracker.fetchTicket(owned.ticketKey).catch(() => null);
+    // Refused before the lookup: no tracker is not "could not be verified",
+    // and retrying cannot make one appear.
+    const issueTracker = issueTrackerForDispatch(input.issueTrackerResolution);
+    const ticket = await issueTracker.fetchTicket(owned.ticketKey).catch(() => null);
     if (!ticket) {
       throw new ManualDispatchError(
         502,
         "provider_unavailable",
-        "The linked Jira ticket could not be verified.",
+        "The linked ticket could not be verified.",
       );
     }
     ticketKey = ticket.identifier.trim().toUpperCase();
@@ -464,7 +506,7 @@ async function resolvePullRequestDispatch(
       throw new ManualDispatchError(
         409,
         "approval_pending",
-        "The linked Jira ticket has a pending or approved workflow plan.",
+        "The linked ticket has a pending or approved workflow plan.",
       );
     }
   }
@@ -483,6 +525,7 @@ async function resolvePullRequestDispatch(
     subjectTitle: snapshot.title || `${parsed.repoPath}#${parsed.prNumber}`,
     subjectUrl: snapshot.prUrl,
     aiColumn: input.settings.COLUMN_AI,
+    blockTypes: deployedBlockTypes(deployed.definition),
     steps: [
       {
         title: "Reserve pull request",
@@ -492,7 +535,7 @@ async function resolvePullRequestDispatch(
         title: "Verify current provider state",
         description: ticketKey
           ? `Linked ticket ${ticketKey} remains unchanged`
-          : "No Jira status change",
+          : "No status change",
       },
       {
         title: `Start deployed v${deployed.definition.version}`,
@@ -507,6 +550,7 @@ export function selectManualTriggerEvent(
   pr: PrTriggerPayload,
   snapshot: ManualDispatchPullRequestSnapshot,
   params: Record<string, unknown>,
+  botLogin?: string,
 ): TriggerEvent | null {
   if (triggerType === "trigger_pr_created") {
     if (snapshot.state !== "open") return null;
@@ -531,40 +575,37 @@ export function selectManualTriggerEvent(
         ...baseEvent(triggerType, { ...pr, review }, review.author),
         pr: { ...pr, review },
       };
-      const eligible = selectEligibleEvent(event, params);
+      const eligible = selectEligibleEvent(event, params, botLogin);
       if (eligible) return eligible;
     }
     return null;
   }
 
-  if (pr.provider === "github") {
-    const byProducer = new Map<string, NonNullable<PrTriggerPayload["failedChecks"]>>();
-    for (const check of snapshot.failedChecks) {
-      const producer = check.appSlug ?? "";
-      if (!producer) continue;
-      byProducer.set(producer, [...(byProducer.get(producer) ?? []), check]);
-    }
-    for (const [producer, failedChecks] of byProducer) {
-      const eligible = selectEligibleEvent(
-        baseEvent(triggerType, { ...pr, failedChecks }, producer),
-        params,
-      );
-      if (eligible) return eligible;
-    }
-    return null;
+  const byProducer = new Map<string, NonNullable<PrTriggerPayload["failedChecks"]>>();
+  for (const check of snapshot.failedChecks) {
+    if (!check.producer) continue;
+    byProducer.set(check.producer, [...(byProducer.get(check.producer) ?? []), check]);
   }
-  return selectEligibleEvent(
-    {
-      ...baseEvent(triggerType, { ...pr, failedChecks: snapshot.failedChecks }, "gitlab-ci"),
-      delivery: {
-        provider: "gitlab",
-        producer: "gitlab-ci",
-        source: snapshot.pipelineSource ?? "merge_request_event",
-        deliveryId: "manual",
+  for (const [producer, failedChecks] of byProducer) {
+    const event = baseEvent(triggerType, { ...pr, failedChecks }, producer);
+    const first = snapshot.failedChecks.find((check) => check.producer === producer);
+    const eligible = selectEligibleEvent(
+      {
+        ...event,
+        delivery: {
+          ...event.delivery,
+          ...(first?.source ? { source: first.source } : {}),
+          // The integration's own answer, exactly as its webhook gives it.
+          ...(first?.trustedByDefault !== undefined
+            ? { trustedByDefault: first.trustedByDefault }
+            : {}),
+        },
       },
-    },
-    params,
-  );
+      params,
+    );
+    if (eligible) return eligible;
+  }
+  return null;
 }
 
 function baseEvent(
@@ -584,7 +625,7 @@ function baseEvent(
 }
 
 function snapshotToPayload(
-  provider: "github" | "gitlab",
+  provider: string,
   repoPath: string,
   snapshot: ManualDispatchPullRequestSnapshot,
 ): PrTriggerPayload {
@@ -601,70 +642,38 @@ function snapshotToPayload(
     isDraft: snapshot.isDraft,
     ...(snapshot.mergeSha ? { mergeSha: snapshot.mergeSha } : {}),
     ...(snapshot.mergedAt ? { mergedAt: snapshot.mergedAt } : {}),
-    ...(snapshot.pipelineId !== undefined ? { pipelineId: snapshot.pipelineId } : {}),
     ...(snapshot.failedChecks.length > 0
       ? { failedChecks: snapshot.failedChecks }
       : {}),
   };
 }
 
-export function parsePullRequestUrl(urlText: string): {
-  provider: "github" | "gitlab";
+export async function parsePullRequestUrl(urlText: string): Promise<{
+  provider: string;
   repoPath: string;
   prNumber: number;
-} {
+} | null> {
   let url: URL;
   try {
     url = new URL(urlText.trim());
   } catch {
     throw new ManualDispatchError(422, "invalid_input", "Enter a valid pull or merge request URL.");
   }
-  const provider = getConfiguredVcsProviders().find(
-    (candidate) => new URL(candidate.host).host.toLowerCase() === url.host.toLowerCase(),
-  );
-  if (!provider) {
-    throw new ManualDispatchError(
-      422,
-      "invalid_input",
-      "The URL does not match a configured GitHub or GitLab host.",
-    );
-  }
-  const segments = url.pathname.split("/").filter(Boolean);
-  if (provider.kind === "github") {
-    if (segments.length !== 4 || segments[2] !== "pull") {
-      throw new ManualDispatchError(422, "invalid_input", "Enter a GitHub pull request URL.");
+  try {
+    return await resolveConfiguredPullRequestUrl(url);
+  } catch (error) {
+    // Not "the pull request provider is not configured": nobody could look.
+    if (error instanceof IntegrationSettingsUnreadableError) {
+      throw settingsUnreadableForDispatch("the pull request URL could not be matched to a provider");
     }
-    return {
-      provider: "github",
-      repoPath: `${segments[0]}/${segments[1]}`,
-      prNumber: positiveInteger(segments[3]),
-    };
+    throw error;
   }
-  const marker = segments.findIndex(
-    (segment, index) => segment === "-" && segments[index + 1] === "merge_requests",
-  );
-  if (marker < 1 || marker + 2 >= segments.length) {
-    throw new ManualDispatchError(422, "invalid_input", "Enter a GitLab merge request URL.");
-  }
-  return {
-    provider: "gitlab",
-    repoPath: segments.slice(0, marker).join("/"),
-    prNumber: positiveInteger(segments[marker + 2]),
-  };
-}
-
-function positiveInteger(value: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new ManualDispatchError(422, "invalid_input", "Pull request number is invalid.");
-  }
-  return parsed;
 }
 
 function normalizeTicketKey(value: string): string {
   const normalized = value.trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9_]*-\d+$/.test(normalized)) {
-    throw new ManualDispatchError(422, "invalid_input", "Enter a valid Jira ticket key.");
+    throw new ManualDispatchError(422, "invalid_input", "Enter a valid ticket key.");
   }
   return normalized;
 }
@@ -672,4 +681,18 @@ function normalizeTicketKey(value: string): string {
 function projectKey(identifier: string): string | null {
   const dash = identifier.indexOf("-");
   return dash > 0 ? identifier.slice(0, dash).trim().toUpperCase() : null;
+}
+
+/**
+ * The automation account, for a review this person asked to run. Read the way
+ * automatic dispatch reads it: an account this deployment could not read is
+ * refused out loud, never taken for "none", because a commented review allowed
+ * without it is how the workflow answers its own comment.
+ */
+async function knownBotLogin(provider: string): Promise<string | undefined> {
+  const reading = await readVcsBotLogin(provider);
+  if (reading.readable) return reading.login;
+  // The database's own words are not for the person dispatching; the reader
+  // that failed is what they need, and the same 503 every settings read gives.
+  throw settingsUnreadableForDispatch(`the automation account for ${provider} could not be read`);
 }

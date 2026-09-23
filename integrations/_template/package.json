@@ -1,0 +1,44 @@
+{
+  "name": "@integrations/example",
+  "description": "The package pnpm run new:integration copies into integrations/<id>. Never registered, never shipped.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./manifest.ts",
+  "types": "./manifest.ts",
+  "exports": {
+    ".": {
+      "types": "./manifest.ts",
+      "default": "./manifest.ts"
+    },
+    "./manifest": {
+      "types": "./manifest.ts",
+      "default": "./manifest.ts"
+    },
+    "./worker": {
+      "types": "./worker.ts",
+      "default": "./worker.ts"
+    },
+    "./dashboard": {
+      "types": "./dashboard.tsx",
+      "default": "./dashboard.tsx"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"!(node_modules)/**/*.test.{ts,tsx}\" \"*.test.{ts,tsx}\"",
+    "test:zod4": "node --import tsx --import ../../packages/zod4-alias.mjs --test \"!(node_modules)/**/*.test.{ts,tsx}\" \"*.test.{ts,tsx}\""
+  },
+  "dependencies": {
+    "@integrations/host-ui": "workspace:*",
+    "@integrations/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "react": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "zod4": "catalog:"
+  }
+}

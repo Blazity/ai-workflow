@@ -1,22 +1,24 @@
+import {
+  isPullRequestUnreadableError,
+  readProviderFailure,
+  type VcsHandleIdentity,
+} from "@integrations/sdk";
 import { start } from "workflow/api";
 import type {
-  VcsProviderKind,
   WorkflowBlockType,
   WorkflowDefinition,
 } from "@shared/contracts";
-import { getVcsBotLogin } from "../vcs/index.js";
+import { readVcsBotLogin } from "../vcs/index.js";
 import type { Db } from "../../db/types.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
-import type {
-  LatestCheckRun,
-  PullRequestHead,
-} from "../../adapters/vcs/types.js";
+import type { PullRequestHead } from "../../adapters/vcs/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
 import { agentWorkflow } from "../../engine/index.js";
+import { DEFAULT_REVIEW_TRIGGER_STATES } from "../../engine/blocks/trigger-pr-review/manifest.js";
 import {
   bindWorkflowOwnedPullRequestIntent,
   bindConnectedWorkflowOwnedPullRequestIntent,
@@ -32,7 +34,7 @@ import {
   getConnectedEnabledWorkflowDefinitionForTrigger,
   getEnabledWorkflowDefinitionForTrigger,
 } from "../../engine/definition-trigger-routing.js";
-import { createAdapters } from "../../engine/support/adapters.js";
+import { resolveActiveIssueTracker } from "../../engine/support/issue-tracker-runtime.js";
 import { claimSubjectRun, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "../../infra/logger.js";
@@ -45,6 +47,7 @@ import {
 } from "./pr-autofix-cap.js";
 import { announcePrAutofixExhaustion } from "./pr-autofix-exhaustion.js";
 import { isRepositoryDispatchable } from "./repo-allowlist.js";
+import { isLegacyTrustedCheckDelivery } from "./trigger-events.js";
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey } from "../../engine/support/subject-key.js";
 import { cancelSubjectRun } from "../run-lifecycle/index.js";
@@ -78,6 +81,7 @@ import {
   bindCurrentPullRequest,
   readProviderCurrentPullRequest,
 } from "../../engine/support/trigger-current-pull-request.js";
+import { vcsHandleIdentity } from "../../engine/support/vcs-runtime.js";
 import { normalizeVcsLogin, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
 import {
   readConnectedWorkflowDefinitionVersion,
@@ -91,10 +95,38 @@ export type DispatchTriggerResult =
   | { result: "ignored_repository_not_enabled" }
   | { result: "ignored_producer" }
   | { result: "ignored_stale_head" }
+  /** The provider says this connection cannot read the pull request, and
+   *  asking again will not change that: a GitLab group webhook reports every
+   *  project in the group, including ones the token may not see. */
+  | { result: "ignored_pull_request_unreadable" }
   | { result: "ignored_untrusted_event" }
+  /** A commented review the workflow asks for, dropped only because this
+   *  deployment does not know its own automation account. Its own word, since
+   *  naming the bot login is what an operator does about it. */
+  | { result: "ignored_bot_login_unknown" }
   | { result: "ignored_malformed_delivery" }
+  /** A workflow-owned pull request whose ticket cannot be confirmed because
+   *  this deployment has no usable issue tracker (none connected, disabled,
+   *  or two with nobody chosen). An admin's choice, not a fault: answering it
+   *  retryably would have the provider redeliver, and GitLab switch the
+   *  webhook off, until somebody reconnected the tracker. */
+  | { result: "ignored_issue_tracker_unavailable"; diagnosticId: string }
+  /** Accepted and queued: its pending row is kept, and the drain starts it
+   *  once the pull request's current run or the deployment has room. */
   | { result: "coalesced" }
+  /** Accepted and dropped for good by the trigger's start budget, or by the
+   *  pull request's fix-attempt cap. Nothing is queued: no run will follow. */
+  | { result: "rate_limited" }
+  | { result: "autofix_cap_reached" }
   | { result: "at_capacity" }
+  /** The provider refused this deployment's credential while the delivery
+   *  was being read (a token it stopped accepting, one without the scope or
+   *  the permission, an App whose installation token cannot be minted). It
+   *  lasts until somebody repairs the connection, so it is answered and
+   *  recorded as a fault rather than failed, which GitLab would answer by
+   *  switching the webhook off. Only a delivery not yet accepted: an accepted
+   *  one keeps its pending row and waits for the drain as `error`. */
+  | { result: "vcs_credential_refused"; diagnosticId: string }
   | { result: "error"; diagnosticId: string }
   | { result: "started"; runId: string };
 
@@ -109,10 +141,23 @@ export interface DispatchTriggerDeps {
   issueTracker?: IssueTrackerAdapter;
   getCurrentHead?: (pr: PrTriggerPayload) => Promise<string>;
   getCurrentPullRequest?: (pr: PrTriggerPayload) => Promise<PullRequestHead>;
-  getLatestCheckRuns?: (pr: PrTriggerPayload) => Promise<LatestCheckRun[]>;
-  isRepositoryConfigured?: (pr: PrTriggerPayload) => Promise<boolean>;
   /** Failure-injection seam; production uses deletePendingTrigger. */
   deletePending?: typeof deletePendingTrigger;
+  /**
+   * The automation account's login, read once for a whole delivery by the
+   * caller that holds it (the webhook route asks for pushes too). Absent, each
+   * dispatch reads it itself.
+   */
+  readBotLogin?: typeof readVcsBotLogin;
+  /**
+   * The caller's deadline, when it has one: the webhook route's request. The
+   * pull request read below happens before the trigger is saved, so a
+   * provider that hangs past the invocation would leave nothing behind, not
+   * even a diagnostic; bounded by this it answers unreachable instead, which
+   * the route turns into a retryable 503. Absent (the drain), each request is
+   * bounded by its attempt deadline only.
+   */
+  lifetime?: AbortSignal;
 }
 
 async function readEnabledDefinition(db: Db | undefined, triggerType: WorkflowBlockType) {
@@ -130,7 +175,7 @@ function readDefinitionVersion(db: Db | undefined, definitionId: number, version
 
 function readTriggerDelivery(
   db: Db | undefined,
-  provider: "github" | "gitlab",
+  provider: string,
   deliveryId: string,
 ) {
   return db
@@ -197,22 +242,6 @@ export function triggerNodeParams(
 ): Record<string, unknown> {
   if (!definition) return {};
   return definition.nodes.find((node) => node.type === triggerType)?.configuration ?? {};
-}
-
-export async function resolveEnabledReviewStates(
-  db: Db | undefined,
-  provider: VcsProviderKind,
-  botLogin: string | undefined,
-): Promise<string[]> {
-  const enabled = await readEnabledDefinition(db, "trigger_pr_review");
-  if (!enabled?.current) return provider === "github" ? ["changes_requested"] : [];
-  const params = triggerNodeParams(
-    runnableDefinitionOf(enabled.current),
-    "trigger_pr_review",
-  );
-  const providers = Array.isArray(params.providers) ? params.providers : ["github"];
-  if (!providers.includes(provider)) return [];
-  return selectedReviewStates(params, provider, botLogin);
 }
 
 export async function dispatchTriggerEvent(
@@ -312,26 +341,49 @@ export async function dispatchTriggerEvent(
       }
     }
 
-    const eligibleEvent = selectEligibleEvent(event, params);
-    if (!eligibleEvent) return { result: "ignored_untrusted_event" };
-
-    const repositoryScope = await readRepositoryScope(eligibleEvent.pr, deps);
-    if (repositoryScope.status === "unreachable") {
-      return { result: "error", diagnosticId: repositoryScope.diagnosticId };
+    let botLogin: string | undefined;
+    if (event.triggerType === "trigger_pr_review") {
+      // FAILS CLOSED. Not knowing the automation account is not the same as
+      // it having none: every review it wrote would read as a person's, so a
+      // settings read that failed answers retryably instead of guessing.
+      const reading = await (deps.readBotLogin ?? readVcsBotLogin)(event.pr.provider);
+      if (!reading.readable) {
+        return {
+          result: "error",
+          diagnosticId: recordIngestionFailure(
+            "trigger_bot_login_unreadable",
+            new Error(reading.reason),
+            { delivery: event.delivery, provider: event.pr.provider },
+          ),
+        };
+      }
+      botLogin = reading.login;
     }
-    if (!repositoryScope.configured) return { result: "ignored_provider" };
-
-    const currentResult = await readCurrentPullRequest(eligibleEvent, deps);
-    if (currentResult.status === "unreachable") {
-      return { result: "error", diagnosticId: currentResult.diagnosticId };
+    const eligibleEvent = selectEligibleEvent(event, params, botLogin);
+    if (!eligibleEvent) {
+      return {
+        result: isCommentedReviewWithoutAccount(event, params, botLogin)
+          ? "ignored_bot_login_unknown"
+          : "ignored_untrusted_event",
+      };
     }
-    const currentEvent = bindCurrentPullRequest(eligibleEvent, currentResult.current);
-    if (!currentEvent) return { result: "ignored_stale_head" };
+
+    const bound = await bindToCurrentPullRequest(eligibleEvent, deps);
+    if (bound.status === "unreachable") {
+      return bound.refusedCredential
+        ? { result: "vcs_credential_refused", diagnosticId: bound.diagnosticId }
+        : { result: "error", diagnosticId: bound.diagnosticId };
+    }
+    if (bound.status === "ignored") return { result: bound.result };
+    const currentEvent = bound.event;
 
     const identity = await resolveSubjectIdentity(currentEvent, scope, deps);
     if (identity.status === "ignored") return { result: "ignored_not_workflow_owned" };
     if (identity.status === "retryable_error") {
       return { result: "error", diagnosticId: identity.diagnosticId };
+    }
+    if (identity.status === "tracker_unavailable") {
+      return { result: "ignored_issue_tracker_unavailable", diagnosticId: identity.diagnosticId };
     }
     if (identity.status === "pending_correlation") {
       const diagnosticId = recordIngestionFailure(
@@ -412,64 +464,16 @@ async function supersedePreviousPrRun(
   };
 }
 
-async function readRepositoryScope(
-  pr: PrTriggerPayload,
-  deps: DispatchTriggerDeps,
-): Promise<
-  | { status: "ok"; configured: boolean }
-  | { status: "unreachable"; diagnosticId: string }
-> {
-  try {
-    const configured = deps.isRepositoryConfigured
-      ? await deps.isRepositoryConfigured(pr)
-      : await isConfiguredTriggerRepository(pr);
-    return { status: "ok", configured };
-  } catch (error) {
-    const diagnosticId = recordIngestionFailure(
-      "trigger_repository_scope_lookup_failed_closed",
-      error,
-      { provider: pr.provider, repoPath: pr.repoPath },
-    );
-    return { status: "unreachable", diagnosticId };
-  }
-}
-
-export async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<boolean> {
-  if (pr.provider !== "gitlab") return true;
-  const { env, getConfiguredVcsProviders } = await import("../../infra/vcs-config.js");
-  if (env.GITLAB_PROJECT_ID) {
-    return (
-      pr.repoPath === env.GITLAB_PROJECT_ID ||
-      String(pr.providerProjectId ?? "") === env.GITLAB_PROJECT_ID
-    );
-  }
-  const { createRepositoryDirectoryForProviders } = await import(
-    "../../adapters/vcs/repository-directory.js"
-  );
-  const providers = getConfiguredVcsProviders().filter(
-    (provider) => provider.kind === "gitlab",
-  );
-  if (providers.length === 0) return false;
-  const repositories = await createRepositoryDirectoryForProviders(
-    providers,
-  ).listRepositories();
-  return repositories.some(
-    (repository) =>
-      repository.provider === "gitlab" && repository.repoPath === pr.repoPath,
-  );
-}
-
-
 export function selectEligibleEvent(
   event: TriggerEvent,
   params: Record<string, unknown>,
+  botLogin?: string,
 ): TriggerEvent | null {
   if (event.triggerType === "trigger_pr_review") {
     const review = event.pr.review;
     if (!review) return null;
-    const botLogin = getVcsBotLogin(event.pr.provider);
     if (
-      !selectedReviewStates(params, event.pr.provider, botLogin).includes(review.state) ||
+      !reviewStatesThatMayStartARun(params, botLogin).includes(review.state) ||
       vcsLoginsMatch(review.author, botLogin) ||
       vcsLoginsMatch(event.delivery.producer, botLogin)
     ) {
@@ -480,13 +484,15 @@ export function selectEligibleEvent(
 
   if (event.triggerType !== "trigger_pr_checks_failed") return event;
 
-  if (event.pr.provider === "github") {
-    const trustedApps = stringArray(params.githubAppSlugs, ["github-actions"]);
-    if (!trustedApps.includes(event.delivery.producer)) return null;
-  } else {
-    const trustedSources = stringArray(params.gitlabPipelineSources, ["merge_request_event"]);
-    if (!event.delivery.source || !trustedSources.includes(event.delivery.source)) return null;
-  }
+  const trustedProducers = stringArray(params.trustedProducers);
+  if (
+    trustedProducers.length > 0 &&
+    !trustedProducers.includes(event.delivery.producer) &&
+    !(event.delivery.source && trustedProducers.includes(event.delivery.source))
+  ) return null;
+  const legacyTrustedDefault = isLegacyTrustedCheckDelivery(event.delivery);
+  const trustedByDefault = event.delivery.trustedByDefault ?? legacyTrustedDefault;
+  if (trustedProducers.length === 0 && !trustedByDefault) return null;
 
   // An empty allow-list means every check this trusted producer reported as
   // failed. It used to drop the event instead, which is what the registry
@@ -510,17 +516,42 @@ export function selectEligibleEvent(
   };
 }
 
-function selectedReviewStates(
+/**
+ * The review states the node asked for, less "commented" while the automation
+ * account is unknown.
+ *
+ * A comment is what this workflow itself writes on a pull request, and a
+ * comment body is untrusted text handed to a full-permission agent. Without
+ * the account's login ours cannot be told from a person's, so the workflow
+ * would start a run off its own comment and answer itself. A deployment that
+ * never names its bot login therefore gets changes-requested reviews only.
+ */
+function reviewStatesThatMayStartARun(
   params: Record<string, unknown>,
-  provider: VcsProviderKind,
   botLogin: string | undefined,
 ): string[] {
-  const configuredStates =
-    Array.isArray(params.on) && params.on.length > 0 ? params.on : ["changes_requested"];
-  return configuredStates.filter(
+  const knowsItself = normalizeVcsLogin(botLogin) !== undefined;
+  return configuredReviewStates(params).filter(
     (state): state is string =>
-      (state === "changes_requested" && provider === "github") ||
-      (state === "commented" && Boolean(normalizeVcsLogin(botLogin))),
+      state === "changes_requested" || (state === "commented" && knowsItself),
+  );
+}
+
+function configuredReviewStates(params: Record<string, unknown>): readonly unknown[] {
+  return Array.isArray(params.on) && params.on.length > 0 ? params.on : DEFAULT_REVIEW_TRIGGER_STATES;
+}
+
+/** The one refusal above an operator fixes by naming the bot login. */
+function isCommentedReviewWithoutAccount(
+  event: TriggerEvent,
+  params: Record<string, unknown>,
+  botLogin: string | undefined,
+): boolean {
+  return (
+    event.triggerType === "trigger_pr_review" &&
+    event.pr.review?.state === "commented" &&
+    normalizeVcsLogin(botLogin) === undefined &&
+    configuredReviewStates(params).includes("commented")
   );
 }
 
@@ -743,24 +774,20 @@ async function dispatchAcceptedTrigger(
   existingDiagnosticId?: string,
 ): Promise<DispatchTriggerResult> {
   try {
-    const currentResult = await readCurrentPullRequest(
-      acceptedInput,
-      deps,
-      existingDiagnosticId,
-    );
-    if (currentResult.status === "unreachable") {
+    const bound = await bindToCurrentPullRequest(acceptedInput, deps, existingDiagnosticId);
+    if (bound.status === "unreachable") {
       const result = {
         result: "error" as const,
-        diagnosticId: currentResult.diagnosticId,
+        diagnosticId: bound.diagnosticId,
       };
       await persistAcceptedRetryableFailure(deps.db, acceptedInput, result);
       return result;
     }
-    const accepted = bindCurrentPullRequest(acceptedInput, currentResult.current);
-    if (!accepted) {
-      await completeDelivery(deps.db, acceptedInput, { result: "ignored_stale_head" });
-      return { result: "ignored_stale_head" };
+    if (bound.status === "ignored") {
+      await completeDelivery(deps.db, acceptedInput, { result: bound.result });
+      return { result: bound.result };
     }
+    const accepted = bound.event;
 
     // Persist the exact accepted envelope before a Workflow candidate can be
     // started. The candidate removes this row only after it wins owner CAS and
@@ -803,13 +830,11 @@ async function dispatchAcceptedTrigger(
             return { started: false, reason: "rate_limited" as const };
           }
           // Last of all, so a candidate the rate limit refuses does not spend a
-          // fix attempt either. The reason is shared with the rate limit
-          // because both are the same terminal drop for this dispatcher, and
-          // DispatchResult's reason union belongs to dispatch.ts.
+          // fix attempt either.
           const cap = await prAutofixCapReached(deps.db, accepted);
           if (cap) spentCapKey = cap.key;
           if (cap?.reached) {
-            return { started: false, reason: "rate_limited" as const };
+            return { started: false, reason: "autofix_cap_reached" as const };
           }
           return null;
         },
@@ -842,14 +867,15 @@ async function dispatchAcceptedTrigger(
       return storedResultToDispatch(stored?.result ?? null);
     }
 
-    if (dispatched.reason === "rate_limited") {
+    if (dispatched.reason === "rate_limited" || dispatched.reason === "autofix_cap_reached") {
       // Terminal drop, tallied by the guard. The pending snapshot is removed
       // too: retaining it would let the drain retry the delivery into a run
-      // once the window rolls, which is the deferred queue the rate limit
-      // deliberately does not provide.
-      await completeDelivery(deps.db, accepted, { result: "coalesced" });
+      // once the window rolls, which is the deferred queue the rate limit and
+      // the cap deliberately do not provide.
+      const dropped = { result: dispatched.reason } as const;
+      await completeDelivery(deps.db, accepted, dropped);
       await deleteDurablePendingTrigger(deps.db, accepted);
-      return { result: "coalesced" };
+      return dropped;
     }
 
     if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {
@@ -938,25 +964,21 @@ export async function drainOldestPendingTrigger(
       continue;
     }
 
-    const currentResult = await readCurrentPullRequest(
-      pending,
-      deps,
-      existingDiagnosticId,
-    );
-    if (currentResult.status === "unreachable") {
+    const bound = await bindToCurrentPullRequest(pending, deps, existingDiagnosticId);
+    if (bound.status === "unreachable") {
       const result = {
         result: "error",
-        diagnosticId: currentResult.diagnosticId,
+        diagnosticId: bound.diagnosticId,
       } as const;
       await persistAcceptedRetryableFailure(deps.db, pending, result);
       return result;
     }
-    const currentPending = bindCurrentPullRequest(pending, currentResult.current);
-    if (!currentPending) {
+    if (bound.status === "ignored") {
       await deleteDurablePendingTrigger(deps.db, pending);
-      await completeDelivery(deps.db, pending, { result: "ignored_stale_head" });
+      await completeDelivery(deps.db, pending, { result: bound.result });
       continue;
     }
+    const currentPending = bound.event;
     // The catalog is re-asked here, not trusted from acceptance time: this event
     // was queued because the deployment was at capacity or the subject was busy,
     // and a repository disabled in the meantime must not be dispatched by the
@@ -1011,6 +1033,7 @@ async function resolveSubjectIdentity(
     }
   | { status: "ignored" }
   | { status: "retryable_error"; diagnosticId: string }
+  | { status: "tracker_unavailable"; diagnosticId: string }
 > {
   if (scope === "any") {
     return {
@@ -1102,9 +1125,30 @@ async function resolveTicketIdentity(
     }
   | { status: "ignored" }
   | { status: "retryable_error"; diagnosticId: string }
+  | { status: "tracker_unavailable"; diagnosticId: string }
 > {
   try {
-    const issueTracker = deps.issueTracker ?? createAdapters().issueTracker;
+    let issueTracker = deps.issueTracker;
+    if (!issueTracker) {
+      const tracker = await resolveActiveIssueTracker();
+      if (!tracker.ok) {
+        // Settings that could not be read are a fault of this deployment and
+        // may clear on the next delivery. A tracker nobody connected, one an
+        // admin disabled, or two with none chosen is how the deployment is
+        // set up, and stays that way until a person changes it.
+        const diagnosticId = recordIngestionFailure(
+          tracker.refusal === "unreadable"
+            ? "trigger_ticket_identity_lookup_retryable_failure"
+            : "trigger_ticket_identity_tracker_unavailable",
+          new Error(tracker.reason),
+          { ticketKey },
+        );
+        return tracker.refusal === "unreadable"
+          ? { status: "retryable_error", diagnosticId }
+          : { status: "tracker_unavailable", diagnosticId };
+      }
+      issueTracker = tracker.adapter;
+    }
     const ticket = await issueTracker.fetchTicket(ticketKey);
     if (ticket.identifier.trim().toUpperCase() !== ticketKey.trim().toUpperCase()) {
       return { status: "ignored" };
@@ -1129,48 +1173,102 @@ async function resolveTicketIdentity(
   }
 }
 
+/** The pull request could not be read now. `refusedCredential`: the provider
+ *  refused this deployment's credential, which lasts until the connection is
+ *  repaired; otherwise it gave no answer, which may pass on its own. */
+type HeadReadFailure = { status: "unreachable"; diagnosticId: string; refusedCredential: boolean };
+
+/**
+ * The event bound to what the provider says about the pull request now, or why
+ * it cannot be: a head or a check that moved on is stale, a pull request this
+ * connection may never read is ignored for good, and a provider that did not
+ * answer is a fault of this moment that a redelivery can cure.
+ */
+async function bindToCurrentPullRequest<T extends TriggerEvent>(
+  event: T,
+  deps: DispatchTriggerDeps,
+  existingDiagnosticId?: string,
+): Promise<
+  | { status: "bound"; event: T }
+  | { status: "ignored"; result: "ignored_stale_head" | "ignored_pull_request_unreadable" }
+  | HeadReadFailure
+> {
+  const read = await readCurrentPullRequest(event, deps, existingDiagnosticId);
+  if (read.status !== "ok") return read;
+  const bound = bindCurrentPullRequest(event, read.current, read.handles);
+  return bound
+    ? { status: "bound", event: bound }
+    : { status: "ignored", result: "ignored_stale_head" };
+}
+
 async function readCurrentPullRequest(
   event: Pick<TriggerEvent, "triggerType" | "pr">,
   deps: DispatchTriggerDeps,
   existingDiagnosticId?: string,
 ): Promise<
-  | { status: "ok"; current: PullRequestHead }
-  | { status: "unreachable"; diagnosticId: string }
+  | {
+      status: "ok";
+      current: PullRequestHead;
+      handles: VcsHandleIdentity;
+    }
+  | { status: "ignored"; result: "ignored_pull_request_unreadable" }
+  | HeadReadFailure
 > {
   const { pr } = event;
   try {
-    let current: PullRequestHead;
+    // The seams below stand in for the provider's STATE only. How its handles
+    // compare is the provider's own code whichever way the state was read.
     if (deps.getCurrentPullRequest) {
-      current = await deps.getCurrentPullRequest(pr);
-    } else if (deps.getCurrentHead) {
+      const current = await deps.getCurrentPullRequest(pr);
+      return { status: "ok", current, handles: await vcsHandleIdentity(pr.provider) };
+    }
+    if (deps.getCurrentHead) {
       // Legacy test seam: production always uses getPRHead below, which reads
       // target and lifecycle from the provider together with the head SHA.
-      current = {
+      const current: PullRequestHead = {
         headSha: await deps.getCurrentHead(pr),
         baseRef: pr.baseRef,
         state: event.triggerType === "trigger_pr_merged" ? "merged" : "open",
+        checks: { state: "green", failed: [] },
       };
-    } else {
-      current = await readProviderCurrentPullRequest(event);
+      return { status: "ok", current, handles: await vcsHandleIdentity(pr.provider) };
     }
-    if (pr.provider === "github" && (pr.failedChecks?.length ?? 0) > 0) {
-      const latestCheckRuns =
-        current.latestCheckRuns ??
-        (deps.getLatestCheckRuns
-          ? await deps.getLatestCheckRuns(pr)
-          : null);
-      if (!latestCheckRuns) throw new Error("GitHub latest Check Runs are unavailable");
-      current = { ...current, latestCheckRuns };
-    }
-    return { status: "ok", current };
+    return {
+      status: "ok",
+      ...(await readProviderCurrentPullRequest(event, deps.lifetime ? { lifetime: deps.lifetime } : {})),
+    };
   } catch (error) {
+    // The provider says this connection can never read this pull request (see
+    // `PullRequestUnreadableError`): answered as an ignore the provider's
+    // delivery log shows, never as a failure it would redeliver until GitLab
+    // switched the webhook off. A refused credential is not this: it falls
+    // through to the retryable answer below, and a queued trigger is kept.
+    if (isPullRequestUnreadableError(error)) {
+      logger.info(
+        {
+          provider: pr.provider,
+          repoPath: pr.repoPath,
+          prNumber: pr.prNumber,
+          reason: error.message,
+        },
+        "trigger_pull_request_unreadable",
+      );
+      return { status: "ignored", result: "ignored_pull_request_unreadable" };
+    }
+    // Read on core's copy of the error, which keeps its class, the provider's
+    // status and the headers a verdict reads (`redactedError`): a GitHub 403
+    // that is a rate limit only by its headers is an outage here too, not a
+    // refused credential.
+    const refusedCredential = readProviderFailure(error).kind === "refused";
     const diagnosticId = recordIngestionFailure(
-      "trigger_current_head_lookup_failed_closed",
+      refusedCredential
+        ? "trigger_vcs_credential_refused"
+        : "trigger_current_head_lookup_failed_closed",
       error,
       { provider: pr.provider, repoPath: pr.repoPath },
       existingDiagnosticId,
     );
-    return { status: "unreachable", diagnosticId };
+    return { status: "unreachable", diagnosticId, refusedCredential };
   }
 }
 
@@ -1206,6 +1304,9 @@ function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTri
     return { result: "started", runId: result.runId };
   }
   if (result.result === "ignored_stale_head") return { result: "ignored_stale_head" };
+  if (result.result === "ignored_pull_request_unreadable") {
+    return { result: "ignored_pull_request_unreadable" };
+  }
   if (result.result === "ignored_not_workflow_owned") {
     return { result: "ignored_not_workflow_owned" };
   }
@@ -1214,6 +1315,9 @@ function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTri
     return { result: "ignored_repository_not_enabled" };
   }
   if (result.result === "at_capacity") return { result: "at_capacity" };
+  if (result.result === "rate_limited" || result.result === "autofix_cap_reached") {
+    return { result: result.result };
+  }
   if (result.result === "error") {
     return { result: "error", diagnosticId: result.diagnosticId };
   }

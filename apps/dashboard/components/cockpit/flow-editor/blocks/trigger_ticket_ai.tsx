@@ -10,7 +10,7 @@ export function TriggerTicketAiFields(props: BlockRendererProps) {
   const triggerDefinitionId = promptAuthoring?.previewCandidate?.definitionId;
   return (
           <>
-            <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>
+            <ConfigNote>Fires when a ticket enters the AI column.</ConfigNote>
             <TriggerRateLimitFields
               node={node}
               canEdit={canEdit}

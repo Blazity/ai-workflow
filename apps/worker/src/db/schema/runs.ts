@@ -18,11 +18,13 @@ import {
 import type {
   BlockRunState,
   HarnessRunManifestRecord,
+  IntegrationConnectionPin,
   ReplayAttemptOutcome,
   ReplayAttemptState,
   ReplayCaptureStatus,
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
+  RunFailureCode,
   RunPullRequest,
   RunAnalysisReport,
   RunRepositoryAccess,
@@ -33,10 +35,8 @@ import type {
 } from "@shared/contracts";
 import { organization } from "../auth-schema.js";
 import { workflowDefinitionVersions } from "./definitions.js";
-
-export type GateStatusRef =
-  | { provider: "github"; id: number }
-  | { provider: "gitlab"; name: string; headSha: string };
+/** Opaque provider handle, stored verbatim and interpreted only by its provider. */
+export type GateStatusRef = unknown;
 
 type BlockRunStateSummary = Omit<BlockRunState, "output">;
 
@@ -51,6 +51,16 @@ export const workflowRuns = pgTable("workflow_runs", {
    * failed. Written by cancelRun / recordRunUsage; the world has no such field
    * (a cancelled run's error is always undefined). */
   statusReason: text("status_reason"),
+  /**
+   * The machine-readable companion to statusReason, written in the same
+   * statement so a row can never carry a code without the sentence it explains.
+   *
+   * Nothing is backfilled: every run that failed before this column existed
+   * keeps null, and null means "this failure carries no code", never "unknown
+   * failure". Readers that do not know about it are unaffected, which is the
+   * whole reason it is a column beside the prose instead of a new shape for it.
+   */
+  statusReasonCode: text("status_reason_code").$type<RunFailureCode>(),
   subjectKey: text("subject_key"),
   ticketKey: text("ticket_key"),
   ticketTitle: text("ticket_title"),
@@ -112,6 +122,10 @@ export const workflowRuns = pgTable("workflow_runs", {
    * started before this column existed, which is not an empty list.
    */
   repositoryAccess: jsonb("repository_access").$type<RunRepositoryAccess>(),
+  /** The integration configurations this run froze at start. Reconciliation
+   * reads the same pins as in-run provider calls instead of silently moving a
+   * durable check to a reconfigured provider endpoint. */
+  integrationPins: jsonb("integration_pins").$type<IntegrationConnectionPin[]>(),
   /** Durable markers distinguish a captured replay that expired from a
    * historical run for which replay was never captured. */
   replayOrganizationId: text("replay_organization_id").references(
@@ -427,7 +441,6 @@ export const workflowOwnedBranches = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.ticketKey, t.provider, t.repoPath] }),
-    check("workflow_owned_branches_provider_check", sql`${t.provider} in ('github', 'gitlab')`),
   ],
 );
 

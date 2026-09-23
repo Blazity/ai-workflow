@@ -53,9 +53,19 @@ vi.mock("../../db/repositories/approvals.js", () => ({
     mockHasBlockingApproval(...args),
 }));
 
+// This deployment has an issue tracker connected. Which one, and what it is
+// wired to, is an integration connection since S12 and is resolved from the
+// database; this suite is about what happens to a RUN, so it says the one
+// thing it means and leaves the resolution to its own tests.
+vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
+  const support = await import("../../test-support/issue-tracker.js");
+  return support.connectedIssueTracker({ projectKey: "PROJ" });
+});
+
 const { dispatchTicket, STALE_CLAIM_MS, capacityConsumerCount } = await import(
   "./dispatch.js"
 );
+const issueTrackerSupport = await import("../../test-support/issue-tracker.js");
 const { NO_DEFINITION_BLOCKED_REASON } = await import("../run-lifecycle/run-start-lifecycle.js");
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -146,18 +156,22 @@ function ticket(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function adapters(runRegistry = registry(), ticketValue = ticket()): Adapters {
-  return {
-    runRegistry,
-    issueTracker: {
-      fetchTicket: vi.fn().mockResolvedValue(ticketValue),
-      moveTicket: vi.fn(),
-      postComment: vi.fn(),
-      searchTickets: vi.fn(),
-    },
-    messaging: {} as never,
-    vcs: {} as never,
+function adapters(runRegistry = registry(), ticketValue = ticket()) {
+  const issueTracker = {
+    fetchTicket: vi.fn().mockResolvedValue(ticketValue),
+    moveTicket: vi.fn(),
+    postComment: vi.fn(),
+    ticketsInStatus: vi.fn(),
+    getCurrentUserAccountId: vi.fn().mockResolvedValue("bot-not-the-actor"),
   };
+  const { adaptersFor } = issueTrackerSupport;
+  // `issueTracker` rides alongside so a test can reach the mock it configured.
+  const built: Adapters = adaptersFor(issueTracker as never, {
+    runRegistry,
+    messaging: {},
+    vcs: {},
+  });
+  return Object.assign(built, { issueTracker });
 }
 
 describe("dispatchTicket owner reservation", () => {
@@ -217,6 +231,21 @@ describe("dispatchTicket owner reservation", () => {
         definitionVersion: 4,
       }),
     ]);
+  });
+
+  it("reads the tracker connection once for the project it watches and the run's key", async () => {
+    // Each resolution reads every integration's settings and decrypts the
+    // connection, and two of them could answer from two different moments.
+    const runtime = await import("../../engine/support/issue-tracker-runtime.js");
+    vi.mocked(runtime.resolveActiveIssueTracker).mockClear();
+    vi.mocked(runtime.issueTrackerWiring).mockClear();
+    vi.mocked(runtime.ticketSubject).mockClear();
+
+    await dispatchTicket("PROJ-42", adapters(registry()), 3);
+
+    expect(runtime.resolveActiveIssueTracker).toHaveBeenCalledTimes(1);
+    expect(runtime.issueTrackerWiring).not.toHaveBeenCalled();
+    expect(runtime.ticketSubject).not.toHaveBeenCalled();
   });
 
   it("pins the built-in fallback selection while retaining owner identity", async () => {

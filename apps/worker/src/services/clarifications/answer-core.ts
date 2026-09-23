@@ -8,7 +8,6 @@ import {
   type WorkScopeAnswerReading,
 } from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
-import { env } from "../../infra/vcs-config.js";
 import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../../db/types.js";
 import { loadRepositoryCatalogEntries } from "../repository-catalog/index.js";
@@ -47,7 +46,7 @@ import {
   type TicketComment,
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
-import { aiColumnMoveTarget } from "../tickets/index.js";
+import { trackerMoveTarget } from "../../engine/support/issue-tracker-runtime.js";
 import {
   markConnectedRunResumed,
   markRunResumed,
@@ -166,7 +165,7 @@ interface AnswerPersistence extends RepositoryAnswerPersistence {
   transitionTicket(input: {
     issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
     ticketKey: string;
-    target: ReturnType<typeof aiColumnMoveTarget>;
+    target: IssueTrackerMoveTarget;
     owner: { subjectKey: string; ownerToken: string; runId: string };
   }): Promise<void>;
   /** Move the ticket out of the AI column only if a fresh read still finds it
@@ -192,7 +191,8 @@ interface AnswerPersistence extends RepositoryAnswerPersistence {
   finishFailed(input: {
     row: HookClarificationRow;
     reservation: ResumeAttemptReservation;
-    issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment">;
+    /** Absent for a question with no ticket. */
+    issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment"> | undefined;
     error: unknown;
   }): Promise<"retryable" | "exhausted" | "lost">;
   retireGoneTicket(row: HookClarificationRow): Promise<void>;
@@ -274,10 +274,7 @@ async function moveTicketToAiColumn(input: {
   await input.persistence.transitionTicket({
     issueTracker: input.issueTracker,
     ticketKey: input.ticketKey,
-    target: aiColumnMoveTarget({
-      COLUMN_AI: input.aiColumn,
-      JIRA_AI_TRANSITION_ID: env.JIRA_AI_TRANSITION_ID,
-    }),
+    target: await trackerMoveTarget(input.aiColumn, "ai"),
     owner: {
       subjectKey: input.row.subjectKey,
       ownerToken: owner.ownerToken,
@@ -330,9 +327,7 @@ async function withdrawTicketWhileQuestionWaits(input: {
       issueTracker: input.issueTracker,
       ticketKey,
       aiColumn: columns.COLUMN_AI,
-      target: env.JIRA_BACKLOG_TRANSITION_ID
-        ? { name: columns.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
-        : columns.COLUMN_BACKLOG,
+      target: await trackerMoveTarget(columns.COLUMN_BACKLOG, "backlog"),
       owner: { subjectKey: row.subjectKey, ownerToken: owner.ownerToken, runId: row.runId },
       requiredOwnerState: "bound",
     });
@@ -374,16 +369,27 @@ type AnswerClarificationSurface =
  * `answerAuthorCount` is how many people the caller composed these words from,
  * which only the Jira comment path can say and only the record below reads.
  */
+/** What answering does to a question's ticket: read it, move it, comment on it,
+ *  and tell our own comments from a person's. */
+type AnswerTracker = Pick<
+  IssueTrackerAdapter,
+  "fetchTicket" | "moveTicket" | "postComment" | "getCurrentUserAccountId"
+>;
+
 type AnswerClarificationInput = {
   row: HookClarificationRow;
   rawAnswer: string;
   actor: { id: string; label: string };
   /** Where these words arrived from. */
   surface: AnswerClarificationSurface;
-  issueTracker: Pick<
-    IssueTrackerAdapter,
-    "fetchTicket" | "moveTicket" | "postComment" | "getCurrentUserAccountId"
-  >;
+  /**
+   * The tracker the question's ticket lives in. Present whenever `row.ticketKey`
+   * is set, and absent only for a question with no ticket, which touches no
+   * tracker: a deployment with no usable tracker can still answer the question
+   * a pull request or webhook run asked. Each entry point refuses a ticket
+   * question on such a deployment itself, with the answer its caller renders.
+   */
+  issueTracker?: AnswerTracker;
   skipTicketFetch?: boolean;
   skipTicketMove?: boolean;
   skipAnswerComment?: boolean;
@@ -534,12 +540,34 @@ async function answerClarificationAndResumeWithPersistence(
   }
 }
 
+/**
+ * The ticket a question was asked on, with the tracker it lives in, or null for
+ * a question with no ticket. A ticket question that arrives without its tracker
+ * is a caller that skipped its own refusal, and answering it anyway would move
+ * nothing, comment nowhere and leave the ticket out of AI behind a resumed run.
+ */
+function questionTicketOf(
+  row: HookClarificationRow,
+  issueTracker: AnswerTracker | undefined,
+): { key: string; tracker: AnswerTracker } | null {
+  if (!row.ticketKey) return null;
+  if (!issueTracker) {
+    throw new Error(
+      `Clarification ${row.id} was asked on ticket ${row.ticketKey} and reached the answer without the issue tracker that ticket lives in.`,
+    );
+  }
+  return { key: row.ticketKey, tracker: issueTracker };
+}
+
 async function deliverAnswer(
   input: AnswerClarificationInput,
   persistence: AnswerPersistence,
   arrival: AnswerArrival,
 ): Promise<AnswerClarificationOutcome> {
-  const { row, rawAnswer, actor, issueTracker } = input;
+  const { row, rawAnswer, actor } = input;
+  // Every tracker call below goes through this, so a question with no ticket
+  // never needs a tracker and one with a ticket always has one.
+  const questionTicket = questionTicketOf(row, input.issueTracker);
 
   const answer = rawAnswer.trim();
   const isResumeRetry = row.status === "answered" && row.answer === answer;
@@ -600,12 +628,12 @@ async function deliverAnswer(
   // below that has to know it: an answer nobody could read takes a ticket it
   // finds in the AI column back to the backlog.
   let ticketStatus: string | null = null;
-  if (row.ticketKey && !input.skipTicketFetch) {
+  if (questionTicket && !input.skipTicketFetch) {
     try {
       // With the window: this read exists to count the people who wrote the
       // answer, which is a question about the comments since the question was
       // asked and about nothing else.
-      const ticket = await issueTracker.fetchTicket(row.ticketKey, {
+      const ticket = await questionTicket.tracker.fetchTicket(questionTicket.key, {
         commentsSince: row.askedAt.toISOString(),
       });
       ticketComments = ticket.comments;
@@ -725,11 +753,11 @@ async function deliverAnswer(
         ticketStatus.trim().toLowerCase() ===
           input.cancelSettings.COLUMN_AI.trim().toLowerCase());
     const waitsInBacklog =
-      row.ticketKey && firstTelling && ticketInAiColumn
+      questionTicket && firstTelling && ticketInAiColumn
         ? await withdrawTicketWhileQuestionWaits({
             persistence,
-            issueTracker,
-            ticketKey: row.ticketKey,
+            issueTracker: questionTicket.tracker,
+            ticketKey: questionTicket.key,
             row,
             columns: input.cancelSettings,
           })
@@ -752,9 +780,9 @@ async function deliverAnswer(
     // person answering from the dashboard or an MCP client is told in the
     // surface they used and never has to go and find the ticket.
     const posted =
-      row.ticketKey && firstTelling
-        ? await issueTracker
-            .postComment(row.ticketKey, confirm)
+      questionTicket && firstTelling
+        ? await questionTicket.tracker
+            .postComment(questionTicket.key, confirm)
             .then(() => true)
             .catch((error: unknown) => {
               logger.warn(
@@ -791,12 +819,12 @@ async function deliverAnswer(
   // CAS so a failed transition leaves the question answerable again instead of
   // stranding a live run behind a stale column, and surfaced as its own outcome
   // so the caller can retry it rather than swallow it.
-  if (row.ticketKey && !input.skipTicketMove) {
+  if (questionTicket && !input.skipTicketMove) {
     try {
       await moveTicketToAiColumn({
         persistence,
-        issueTracker,
-        ticketKey: row.ticketKey,
+        issueTracker: questionTicket.tracker,
+        ticketKey: questionTicket.key,
         row,
         aiColumn: input.aiColumn ?? "AI",
       });
@@ -831,7 +859,7 @@ async function deliverAnswer(
     answeredAt,
     answerer,
     authorCount: input.answerAuthorCount,
-    issueTracker,
+    issueTracker: questionTicket?.tracker,
     ticketComments,
     ticketCommentsCoverWindow,
   });
@@ -878,9 +906,9 @@ async function deliverAnswer(
       : input.surface.kind === "dashboard"
         ? { kind: "dashboard" }
         : null;
-  if (row.ticketKey && !input.skipAnswerComment && !isResumeRetry && commentSurface) {
-    const ticketKey = row.ticketKey;
-    await issueTracker
+  if (questionTicket && !input.skipAnswerComment && !isResumeRetry && commentSurface) {
+    const ticketKey = questionTicket.key;
+    await questionTicket.tracker
       .postComment(
         ticketKey,
         formatClarificationAnswerComment({
@@ -1022,9 +1050,9 @@ async function deliverAnswer(
     .filter((sentence): sentence is string => sentence !== undefined)
     .join("\n\n");
   let postedToTheTicket = false;
-  if (toTheTicket.length > 0 && row.ticketKey) {
-    const ticketKey = row.ticketKey;
-    postedToTheTicket = await issueTracker
+  if (toTheTicket.length > 0 && questionTicket) {
+    const ticketKey = questionTicket.key;
+    postedToTheTicket = await questionTicket.tracker
       .postComment(ticketKey, toTheTicket)
       .then(() => true)
       .catch((error: unknown) => {
@@ -1062,11 +1090,11 @@ async function deliverAnswer(
       if (HookNotFoundError.is(verificationError)) {
         hookAfterResume = null;
       } else {
-        return failedResumeOutcome(persistence, answered, reservation, issueTracker, verificationError);
+        return failedResumeOutcome(persistence, answered, reservation, questionTicket?.tracker, verificationError);
       }
     }
     if (hookAfterResume !== null) {
-      return failedResumeOutcome(persistence, answered, reservation, issueTracker, error);
+      return failedResumeOutcome(persistence, answered, reservation, questionTicket?.tracker, error);
     }
   }
 
@@ -1107,7 +1135,7 @@ async function failedResumeOutcome(
   persistence: AnswerPersistence,
   row: HookClarificationRow,
   reservation: ResumeAttemptReservation,
-  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment">,
+  issueTracker: AnswerTracker | undefined,
   error: unknown,
 ): Promise<AnswerClarificationOutcome> {
   const attempt = await persistence.finishFailed({ row, reservation, issueTracker, error });

@@ -1,3 +1,5 @@
+import type { WorkflowSubjectField } from "./subject-default";
+
 /** JSON-shaped values used by the generated block catalog contracts. */
 type BlockCatalogJsonValue =
   | string
@@ -38,12 +40,18 @@ export type WorkflowBlockGroup =
   | "ticket"
   | "vcs"
   | "human"
-  | "utility"
-  | "arthur";
+  | "utility";
 
 export interface WorkflowBlockInputContract {
   required: boolean;
   schema: WorkflowValueSchema;
+  /**
+   * Where the input's value comes from when nothing is bound: these fields of
+   * the run's ticket, joined by `subjectDefaultText`. A required input with a
+   * default is satisfied without a binding, and the editor says where the
+   * value comes from. Text inputs only.
+   */
+  defaultFromSubject?: readonly WorkflowSubjectField[];
 }
 
 /** A registry-owned family of additional named inputs. */

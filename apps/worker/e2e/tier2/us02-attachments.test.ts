@@ -61,13 +61,18 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
     await addAttachment(ticketKey, "spec.md", mdContent);
 
     // 3. Use the real JiraAdapter to fetch the ticket (like the workflow does)
+    // The integration owns the Jira client since S12, reached here the same way
+    // this file already reaches the GitHub integration's App authentication.
     const { JiraAdapter } = await import(
-      "../../src/adapters/issue-tracker/jira.js"
+      "../../../../integrations/jira/issue-tracker.js"
     );
     const jira = new JiraAdapter({
       baseUrl: e2eEnv.JIRA_BASE_URL,
       apiToken: e2eEnv.JIRA_API_TOKEN,
       projectKey: e2eEnv.JIRA_PROJECT_KEY,
+      // Plain fetch: this suite talks to a real Jira without an integration
+      // context, and nothing here depends on the context's retry policy.
+      fetch: (target, init) => fetch(target, init),
     });
 
     const ticketData = await jira.fetchTicket(ticketKey);
@@ -107,10 +112,17 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
     const { getSandboxCredentials } = await import(
       "../../src/sandbox/credentials.js"
     );
-    const { mintInstallationToken } = await import("../../src/services/vcs/github-auth.js");
+    // The integration owns GitHub App authentication since S11. The key is read
+    // the same way the product reads it, so a PEM pasted whole and a base64 one
+    // both work here exactly as they do on a connection.
+    const { mintInstallationToken } = await import(
+      "../../../../integrations/github/auth.js"
+    );
     const installationToken = await mintInstallationToken({
       appId: e2eEnv.E2E_GITHUB_APP_ID,
-      privateKeyBase64: e2eEnv.E2E_GITHUB_APP_PRIVATE_KEY,
+      // Whatever shape the environment holds: the reader inside accepts a PEM
+      // block or its base64 encoding, and refuses anything else by name.
+      privateKey: e2eEnv.E2E_GITHUB_APP_PRIVATE_KEY,
       installationId: e2eEnv.E2E_GITHUB_INSTALLATION_ID,
     });
     const sbx = await Sandbox.create({

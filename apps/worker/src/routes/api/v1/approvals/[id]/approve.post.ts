@@ -33,6 +33,13 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
         throw createError({ statusCode: 410, statusMessage: "definition_gone" });
       case "run_in_flight":
         throw createError({ statusCode: 409, statusMessage: "run_in_flight" });
+      case "issue_tracker_unavailable":
+        // Nothing was decided, so the same button works once there is a
+        // tracker to start the run from. The sentence says where to fix it.
+        throw createError({
+          statusCode: outcome.retryable ? 503 : 409,
+          statusMessage: outcome.message,
+        });
       case "decided":
         return { approval: outcome.approval, runId: outcome.runId };
     }

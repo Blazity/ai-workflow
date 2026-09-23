@@ -26,7 +26,7 @@ import {
   type HarnessProfileActor,
   HarnessProfileStoreError,
 } from "../../db/repositories/harness-profiles.js";
-import { configuredGitHubSkillRepository } from "./skill-sources.js";
+import { connectedRepositorySkillSource } from "./skill-sources.js";
 
 /**
  * The revision the remove and unarchive handlers accept without checking it.
@@ -176,9 +176,9 @@ export function removeHarnessProfile(input: {
 
 /**
  * Re-read a pinned skill from its source and repoint the draft at the artifact
- * that came back. Both halves share one connection, and the GitHub client is
- * passed unbuilt so a deployment-local refresh never needs an installation the
- * tenant may not have.
+ * that came back. Both halves share one connection, and the provider's reader
+ * is passed unresolved so a deployment-local refresh never needs a
+ * version-control integration the tenant may not have connected.
  */
 export async function refreshHarnessProfileSkill(input: {
   profileId: string;
@@ -189,7 +189,7 @@ export async function refreshHarnessProfileSkill(input: {
   requireHarnessProfileManager(input.actor);
   validatedRevision(input.expectedRevision);
   const artifact = await refreshConnectedHarnessSkillArtifact({
-    githubRepository: configuredGitHubSkillRepository,
+    repositorySkillSource: connectedRepositorySkillSource,
     organizationId: input.actor.organizationId,
     actorId: input.actor.id,
     artifactHash: input.artifactHash,

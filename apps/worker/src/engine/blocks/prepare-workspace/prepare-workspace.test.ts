@@ -75,21 +75,18 @@ vi.mock("../pre-pr-checks.js", async (importOriginal) => ({
 vi.mock("../../../sandbox/agents/index.js", () => ({
   createAgentAdapter: mocks.createAgentAdapter,
 }));
+// Every provider-backed call this block makes: an adapter for one repository,
+// the sandbox credentials, and the listing the approved scope is checked
+// against. The pin predicate beside them is pure, so its module stays real.
 vi.mock("../../../engine/support/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: mocks.buildSandboxProviderConfigs,
   createRepositoryVCS: () => ({
     getBranchSha: mocks.getBranchSha,
     getBranchShaIfExists: mocks.getBranchShaIfExists,
   }),
-}));
-// The pin predicate is a pure helper in the same module and stays real; only the
-// network-backed directory is stubbed.
-vi.mock("../../../adapters/vcs/repository-directory.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../../adapters/vcs/repository-directory.js")
-  >()),
-  createRepositoryDirectoryForProviders: () => ({
-    listRepositories: mocks.listRepositories,
+  listVcsRepositories: async () => ({
+    repositories: await mocks.listRepositories(),
+    failures: [],
   }),
 }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
@@ -350,6 +347,35 @@ describe("prepare_workspace execute", () => {
    * catalog. The guarantee is only real where it is observable, so this asserts
    * the WORKSPACE INPUT, which is what provisioning actually clones.
    */
+  it("blames the settings it could not read, not the sandbox, and creates none", async () => {
+    // The provider credentials are read before any sandbox exists. When that
+    // read failed, the person was told the workspace environment could not
+    // complete the block, and went looking at Vercel Sandbox.
+    const { IntegrationSettingsUnreadableError } = await import(
+      "../../../services/integrations/usable.js"
+    );
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.buildSandboxProviderConfigs.mockRejectedValue(
+      new IntegrationSettingsUnreadableError(
+        "so no sandbox was given version control credentials",
+        "connection terminated unexpectedly",
+      ),
+    );
+
+    const result = await ensureWorkspace(makeCtx({ sandboxId: null }), undefined, {});
+
+    if (result.kind !== "execution_error") throw new Error("expected a refusal");
+    expect(result.error.category).toBe("engine");
+    expect(result.error.message).toContain("could not read the deployment's integration settings");
+    expect(JSON.stringify(result.error)).not.toContain("connection terminated");
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+  });
+
   it("clones a related repository read only", async () => {
     const web: SelectedRepository = {
       provider: "github",
@@ -416,6 +442,29 @@ describe("prepare_workspace execute", () => {
     expect(result.kind).toBe("next");
     expect(ctx.sandboxId).toBe("sbx-9");
     expect(ctx.selectedRepositories).toEqual([repo]);
+    // Nothing says what was stored, so teardown must ask before it writes.
+    expect(ctx.workspaceNotebookRecalled).toBe(false);
+  });
+
+  it("tells teardown whether the agent started from the stored notebook", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.hydrateWorkspaceMemoryStep.mockResolvedValue({
+      source: "none",
+      trackedInRepo: false,
+      written: false,
+      unavailable: "Built-in memory could not answer",
+      recalled: false,
+    });
+    const ctx = makeCtx({ sandboxId: null });
+
+    await ensureWorkspace(ctx, undefined, {});
+
+    expect(ctx.workspaceNotebookRecalled).toBe(false);
   });
 
   // Same contract for the seed as for the hydration above: an error crossing the
@@ -2411,6 +2460,43 @@ describe("prepare_workspace execute", () => {
       expect(result.error.detail).toContain("unavailable or no longer allowed");
     }
     expect(mocks.getBranchShaIfExists).not.toHaveBeenCalled();
+  });
+
+  it("does not send an approved plan back for replanning when the settings could not be read", async () => {
+    // An empty listing made the approved repository look gone, and the run
+    // asked for a replan of a plan that was still good.
+    const { IntegrationSettingsUnreadableError } = await import(
+      "../../../services/integrations/usable.js"
+    );
+    mocks.listRepositories.mockRejectedValue(
+      new IntegrationSettingsUnreadableError("so no repository could be listed", "connection terminated"),
+    );
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({
+        sandboxId: null,
+        entry: approvedScopeEntry({
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/api",
+              defaultBranch: "main",
+              researchBranch: "main",
+              researchBaseSha: BASE_SHA,
+              access: "write",
+              rationale: "implementation",
+            },
+          ],
+        }),
+      }),
+    );
+
+    if (result.kind !== "execution_error") throw new Error("expected a refusal");
+    expect(result.error.category).toBe("engine");
+    expect(result.error.message).toContain("could not read the deployment's integration settings");
+    expect(JSON.stringify(result.error)).not.toContain("replan");
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
   });
 
   const approvedScopeEntry = (repositoryScope: unknown) =>

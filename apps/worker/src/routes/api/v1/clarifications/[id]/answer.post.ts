@@ -63,6 +63,14 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
         });
       case "ticket_gone":
         throw createError({ statusCode: 410, statusMessage: "ticket_gone" });
+      case "issue_tracker_unavailable":
+        // Nothing was recorded and the question is still pending. The sentence
+        // says what is missing and where to fix it, and the same box takes the
+        // answer again once there is a tracker to answer it on.
+        throw createError({
+          statusCode: outcome.retryable ? 503 : 409,
+          statusMessage: outcome.message,
+        });
       case "ticket_transition_failed":
         // Nothing was committed: the question is still pending, so the same
         // answer can simply be submitted again once Jira recovers.

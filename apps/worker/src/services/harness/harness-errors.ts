@@ -3,7 +3,7 @@
  * reach them.
  *
  * All three are thrown by modules the engine and db tiers own
- * (`harness-profiles/capability-catalog.ts`, `harness-profiles/github-skills.ts`
+ * (`harness-profiles/capability-catalog.ts`, `harness-profiles/repository-skills.ts`
  * and `db/repositories/harness-profiles.ts`), and a route may not import those tiers. So a
  * route that only has to map one of these to a status names this module instead
  * of the cluster's whole interface.
@@ -13,7 +13,7 @@ export {
 } from "../../harness-profiles/capability-catalog.js";
 export {
   HarnessSkillImportError,
-} from "../../harness-profiles/github-skills.js";
+} from "../../harness-profiles/repository-skills.js";
 export {
   HarnessProfileStoreError,
 } from "../../db/repositories/harness-profiles.js";

@@ -32,21 +32,27 @@ and never application infrastructure. ADR-001 owns the tiers.
 - **Each package typechecks itself.** A package with no scripts drops silently
   out of `pnpm -r typecheck`, so each keeps a `typecheck` script and a strict
   `tsconfig.json`.
-- **The test scripts name the packages they run.** `pnpm run test:packages`
-  runs `test` in `agent-visibility`, `contracts`, `costs`, `harness`,
-  `prompts`, `skills` and `workflow-graph`. `pnpm run test:packages:zod4`
-  runs `test:zod4` in `agent-visibility`, `contracts` and `workflow-graph`,
-  the three packages that carry a runtime zod dependency; the other five have
-  no such script and no zod 4 evidence. Both
-  scripts name those packages with `--filter` rather than selecting
-  `./packages/*` with `--if-present`, which reported a package that owns no
-  such script as a package that passed: over the seven packages that existed
-  then, a run proved two. `conditions` has no `test` script at all and no
-  suite in either run;
-  that is a gap, not a decision recorded here. The test in
+- **The test scripts name the packages they run**, and they reach past
+  `packages/` into `integrations/`. `pnpm run test:packages` runs `test` in
+  `agent-visibility`, `contracts`, `costs`, `harness`, `prompts`, `skills`,
+  `workflow-graph`, every integration that owns a suite (`arthur`, `github`,
+  `gitlab`, `jira`, `slack`, `host-ui`), `@integrations/sdk` and
+  `@integrations/registry`. `pnpm run test:packages:zod4` runs `test:zod4` in
+  `agent-visibility`, `contracts`, `workflow-graph`, the five provider
+  integrations, `@integrations/sdk` and `@integrations/registry`: the packages
+  that carry a runtime zod dependency, plus the registry, whose conformance
+  sweep parses every integration's schemas and so has to run under the zod
+  production loads. That sweep is also what covers the packages with no suite
+  of their own, the template and the fixtures. Both scripts name packages with
+  `--filter` rather than selecting `./packages/*` with `--if-present`, which
+  reported a package that owns no such script as a package that passed, so a
+  run over seven packages proved two. `conditions` has no `test` script at all
+  and no suite in either run; that is a gap, not a decision recorded here. The
+  test in
   `scripts/ci/verify-changed.test.ts` holds each named list equal to the
-  packages that own the script, so adding a package to a run is a deliberate
-  edit and leaving one out is a failing test rather than a silent opt out.
+  packages that own the script, across both roots, so adding a package to a run
+  is a deliberate edit and leaving one out is a failing test rather than a
+  silent opt out.
 - **Shared dependency versions live in the root catalog.** Anything two
   projects declare goes on `catalog:`, enforced by
   `scripts/gates/check-deps-consistency.mjs`.

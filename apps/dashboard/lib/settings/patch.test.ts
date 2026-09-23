@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  findSettingDefinition,
-  type SettingsEntryView,
-} from "@shared/contracts";
+import { settingDefinition } from "@integrations/registry";
+import type { SettingsEntryView } from "@shared/contracts";
 import {
   buildSettingsPatch,
   draftValueFor,
@@ -19,7 +17,7 @@ function entry(
   value: boolean | number | string | readonly string[] | null,
   overrides: Partial<SettingsEntryView> = {},
 ): SettingsEntryView {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   assert.ok(definition, `${key} is not a registry key`);
   return {
     key: key as SettingsEntryView["key"],
@@ -303,4 +301,11 @@ test("localSettingIssues reports only the offending fields", () => {
 test("a field missing from the draft is not reported as an issue", () => {
   const entries = [entry("MAX_CONCURRENT_AGENTS", 3)];
   assert.deepEqual(localSettingIssues(entries, {}), {});
+});
+
+test("an integration's list setting is read from the form like any list", () => {
+  // Slack's allowlist is not in core's registry; the Settings page reads its
+  // shape from the joined list, so pasted ids arrive as a list, not a string
+  // the worker would refuse as the wrong type.
+  assert.deepEqual(toSettingValue("SLACK_ALLOWED_USER_IDS", "U01, U02\nU03,,"), ["U01", "U02", "U03"]);
 });

@@ -12,6 +12,7 @@ import type {
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
+import { capabilityLabel, integrationsProviding } from "@integrations/registry";
 
 import { activationDetail, activationValue } from "@/lib/repository-catalog/activation";
 
@@ -52,6 +53,7 @@ const MODE_LABELS: Record<SystemHealthMode, string> = {
   "not-configured": "Not configured",
   misconfigured: "Needs configuration",
   mock: "Mock mode",
+  disabled: "Disabled",
 };
 
 const MODE_TONES: Record<SystemHealthMode, SetupOverviewTone> = {
@@ -62,6 +64,9 @@ const MODE_TONES: Record<SystemHealthMode, SetupOverviewTone> = {
   "not-configured": "off",
   misconfigured: "warn",
   mock: "warn",
+  // Turned off deliberately: the same tone as something nobody set up, because
+  // neither is a problem to chase.
+  disabled: "off",
 };
 
 /** Which of two providers to report on: the one that is actually set up. */
@@ -73,6 +78,9 @@ const MODE_RANK: Record<SystemHealthMode, number> = {
   down: 2,
   mock: 1,
   "not-configured": 0,
+  // Nothing about a provider somebody switched off says this deployment is set
+  // up to use it, so it never wins the row over one that is.
+  disabled: 0,
 };
 
 const MEMORY_KEY = "ENABLE_REPO_MEMORY";
@@ -92,12 +100,13 @@ function isOn(settings: readonly SettingsEntryView[], key: string): boolean {
   return valueOf(settings, key)?.value === true;
 }
 
-function integrationRow(
+/** The row's answer when the scan cannot say anything, or null when it can. */
+function scanlessRow(
   id: string,
   label: string,
   integrations: readonly SystemHealthIntegration[] | null,
   scanReadable: boolean,
-): SetupOverviewRow {
+): SetupOverviewRow | null {
   if (!scanReadable) {
     return {
       id,
@@ -116,7 +125,32 @@ function integrationRow(
       detail: "No system health scan has been run yet. Run one on the Health page.",
     };
   }
-  const best = [...integrations].sort(
+  return null;
+}
+
+function alsoSeen(others: readonly SystemHealthIntegration[]): string {
+  return others.length > 0
+    ? ` Also seen: ${others
+        .map((entry) => `${entry.label} ${MODE_LABELS[entry.mode].toLowerCase()}`)
+        .join(", ")}.`
+    : "";
+}
+
+/**
+ * A capability every connected provider serves at once (version control): the
+ * row reports the one that is actually set up and names the rest.
+ */
+function manyProviderRow(
+  id: string,
+  label: string,
+  integrations: readonly SystemHealthIntegration[] | null,
+  scanReadable: boolean,
+): SetupOverviewRow {
+  const scanless = scanlessRow(id, label, integrations, scanReadable);
+  if (scanless) return scanless;
+  // Past that check the scan was read, so the list is there.
+  const entries = integrations ?? [];
+  const best = [...entries].sort(
     (a, b) => MODE_RANK[b.mode] - MODE_RANK[a.mode],
   )[0];
   if (!best) {
@@ -128,18 +162,74 @@ function integrationRow(
       detail: "The last scan found no integration of this kind.",
     };
   }
-  const others = integrations.filter((entry) => entry !== best);
-  const detail = others.length > 0
-    ? `${best.label}. Also seen: ${others
-        .map((entry) => `${entry.label} ${MODE_LABELS[entry.mode].toLowerCase()}`)
-        .join(", ")}.`
-    : `${best.label}.`;
   return {
     id,
     label,
     value: MODE_LABELS[best.mode],
     tone: MODE_TONES[best.mode],
-    detail,
+    detail: `${best.label}.${alsoSeen(entries.filter((entry) => entry !== best))}`,
+  };
+}
+
+/** A provider an admin switched on and connected, working or not. */
+function countsAsChosen(entry: SystemHealthIntegration): boolean {
+  return entry.mode !== "disabled" && entry.mode !== "not-configured";
+}
+
+/**
+ * A capability with ONE provider (the issue tracker), by the worker's rule
+ * (`oneProviderChoice` in apps/worker/src/engine/definition/
+ * integration-availability.ts): every provider switched on and connected
+ * counts, working or not. Two counted is a choice nobody made and the worker
+ * uses neither, so the row says that rather than showing the healthier one,
+ * which would describe a deployment that does not exist. One counted is that
+ * one in whatever state it is, never a fallback to another.
+ */
+export function oneProviderRow(
+  id: string,
+  label: string,
+  integrations: readonly SystemHealthIntegration[] | null,
+  scanReadable: boolean,
+): SetupOverviewRow {
+  const scanless = scanlessRow(id, label, integrations, scanReadable);
+  if (scanless) return scanless;
+  // Past that check the scan was read, so the list is there.
+  const entries = integrations ?? [];
+  const chosen = entries.filter(countsAsChosen);
+  const others = entries.filter((entry) => !countsAsChosen(entry));
+  const [only] = chosen;
+  if (!only) {
+    return {
+      id,
+      label,
+      value: "Not configured",
+      tone: "off",
+      detail:
+        entries.length === 0
+          ? "The last scan found no integration of this kind."
+          : `The last scan found none switched on and connected.${alsoSeen(others)}`,
+    };
+  }
+  if (chosen.length > 1) {
+    const names = chosen.map((entry) => entry.label);
+    const listed = `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    return {
+      id,
+      label,
+      value: "No provider chosen",
+      tone: "bad",
+      detail:
+        `${listed} are all switched on, and only one can serve ${label.toLowerCase()}, ` +
+        "so runs use none of them. Switch off the one you do not want on the Integrations page." +
+        alsoSeen(others),
+    };
+  }
+  return {
+    id,
+    label,
+    value: MODE_LABELS[only.mode],
+    tone: MODE_TONES[only.mode],
+    detail: `${only.label}.${alsoSeen(others)}`,
   };
 }
 
@@ -306,6 +396,12 @@ export function buildSetupOverview(input: {
   const { settings, scan, scanReadable, catalogState } = input;
   const byId = (...ids: string[]): SystemHealthIntegration[] | null =>
     scan ? scan.integrations.filter((entry) => ids.includes(entry.id)) : null;
+  // Every version control provider this build ships, which since S11 is all of
+  // them: the row is the health of whichever ones the scan reported.
+  const vcsIntegrationIds = integrationsProviding("vcs").map((manifest) => manifest.id);
+  const issueTrackerIntegrationIds = integrationsProviding("issue_tracker").map(
+    (manifest) => manifest.id,
+  );
 
   const groups = groupSettings(settings);
   const storedRows = groups.map((group) => ({
@@ -318,8 +414,18 @@ export function buildSetupOverview(input: {
 
   return {
     rows: [
-      integrationRow("issue-tracker", "Issue tracker", byId("jira"), scanReadable),
-      integrationRow("vcs", "Version control", byId("github", "gitlab"), scanReadable),
+      oneProviderRow(
+        "issue-tracker",
+        capabilityLabel("issue_tracker") ?? "Issue tracker",
+        byId(...issueTrackerIntegrationIds),
+        scanReadable,
+      ),
+      manyProviderRow(
+        "vcs",
+        capabilityLabel("vcs") ?? "Version control",
+        byId(...vcsIntegrationIds),
+        scanReadable,
+      ),
       secretsRow(scan, scanReadable),
       catalogRow(catalogState),
       featureRow(settings),

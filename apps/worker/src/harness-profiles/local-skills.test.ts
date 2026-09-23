@@ -16,7 +16,7 @@ import {
   organization,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { HarnessSkillImportError } from "./github-skills.js";
+import { HarnessSkillImportError } from "./repository-skills.js";
 import { hashHarnessSkillArtifact } from "@shared/skills";
 import {
   checkLocalSkills,

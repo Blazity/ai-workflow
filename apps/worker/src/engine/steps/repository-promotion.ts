@@ -1,5 +1,5 @@
 import type { ActiveRunOwner } from "../internal/ports.js";
-import type { RunRepositoryAccess } from "@shared/contracts";
+import type { IntegrationConnectionPin, RunRepositoryAccess } from "@shared/contracts";
 import { buildVcsUrls, gitAuthArgs } from "../../infra/vcs-urls.js";
 import {
   WORKSPACE_MANIFEST_PATH,
@@ -20,8 +20,9 @@ interface PromotionSandbox {
 }
 
 interface PromotionProvider {
-  kind: "github" | "gitlab";
+  kind: string;
   host: string;
+  authUser?: string;
   getToken(): Promise<string>;
 }
 
@@ -56,7 +57,7 @@ export interface RepositoryPromotionController {
 }
 
 export interface ResearchBranchMovedEvent {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
   expected: string;
   actual: string;
@@ -288,8 +289,8 @@ export async function promoteRepositoryWriteScope(input: {
       const provider = providers.get(repository.provider)!;
       const token = await provider.getToken();
       const urls = buildVcsUrls({
-        kind: provider.kind,
         host: provider.host,
+        authUser: provider.authUser,
         repoPath: repository.repoPath,
       });
       fetchConfig = {
@@ -355,6 +356,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
   owner: ActiveRunOwner;
   /** Which repositories this run may promote, frozen at its start. */
   repositoryAccess: RunRepositoryAccess;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }): Promise<WorkspaceManifestV2> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -376,6 +378,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
       provider: repository.provider,
       repoPath: repository.repoPath,
       baseBranch: repository.defaultBranch,
+      integrationPins: input.integrationPins,
     });
   return promoteRepositoryWriteScope({
     sandbox: await Sandbox.get({
@@ -387,6 +390,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
     branchName: input.branchName,
     providers: await buildSandboxProviderConfigs(
       input.writeRepositories.map((repository) => repository.provider),
+      input.integrationPins,
     ),
     onResearchBranchMoved: (event) =>
       logger.warn(event, "promotion_research_branch_moved"),
@@ -511,7 +515,7 @@ async function commandError(result: CommandResult): Promise<string> {
 }
 
 function repositoryKey(repository: {
-  provider: "github" | "gitlab";
+  provider: string;
   repoPath: string;
 }): string {
   return `${repository.provider}:${repository.repoPath.toLowerCase()}`;

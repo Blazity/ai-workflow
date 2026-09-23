@@ -3,8 +3,9 @@
 // Every string the Settings surface puts on screen that is derived rather than
 // authored: the field label, the source badge, the applies-to note, the value
 // as text, and the keys named by a refusal the worker sent back.
+import { settingDefinition } from "@integrations/registry";
 import {
-  findSettingDefinition,
+  SETTING_LIST_ENTRY_RULE,
   type SettingValue,
   type SettingsInFlightRule,
   type SettingsSource,
@@ -17,13 +18,16 @@ import { formatDateTime } from "../date-time";
  * A registry key is SCREAMING_SNAKE, so a label built from it would otherwise
  * read "Mcp allow public dcr". Only the words a reader would spell differently
  * are listed; everything else is lowercased after the first word.
+ *
+ * Only words that appear in a SETTINGS key. A provider's own variables are
+ * connection fields now, and those are labelled by the manifest that declares
+ * them and never reach this table; a row for one would be spelling kept for a
+ * key this function is never handed.
  */
 const WORD_CASING: Record<string, string> = {
   AI: "AI",
   API: "API",
   DCR: "DCR",
-  GITHUB: "GitHub",
-  GITLAB: "GitLab",
   MB: "MB",
   MCP: "MCP",
   MS: "ms",
@@ -148,10 +152,10 @@ export function displaySettingValue(value: SettingValue): string {
 }
 
 const ISSUE_PATTERN =
-  /([A-Za-z0-9_.]+)\s*\((unknown_key|wrong_type|not_allowed_value|below_minimum|null_not_allowed|above_request_limit)\)/g;
+  /([A-Za-z0-9_.]+)\s*\((unknown_key|wrong_type|not_allowed_value|below_minimum|null_not_allowed|list_entry_invalid|above_request_limit)\)/g;
 
 function issueSentence(key: string, reason: string): string {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   switch (reason) {
     case "unknown_key":
       return "This deployment's worker does not know this setting.";
@@ -169,6 +173,8 @@ function issueSentence(key: string, reason: string): string {
         : `Must be at least ${definition.minimum}.`;
     case "null_not_allowed":
       return "This setting cannot be left empty.";
+    case "list_entry_invalid":
+      return SETTING_LIST_ENTRY_RULE;
     default:
       return "The MCP result limit must stay at or below the request limit.";
   }

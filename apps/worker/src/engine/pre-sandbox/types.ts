@@ -1,4 +1,5 @@
 import type {
+  IntegrationConnectionPin,
   RunRepositoryAccess,
   SettingsSnapshot,
   TriggerRepositoryPolicy,
@@ -268,6 +269,7 @@ export interface PreSandboxStepContext {
    *  reason: a step that reads a setting from the environment instead would
    *  answer differently on a replay. */
   settings: SettingsSnapshot;
+  integrationPins?: readonly IntegrationConnectionPin[];
   /**
    * Which repositories this subject's work touches and why, frozen at run
    * start, together with whether a person has already answered the
@@ -365,6 +367,7 @@ export interface RunPreSandboxPhaseInput {
   repositoryAccess: PreSandboxStepContext["repositoryAccess"];
   /** Forwarded onto every step's context by the runner, same as above. */
   settings: PreSandboxStepContext["settings"];
+  integrationPins?: PreSandboxStepContext["integrationPins"];
   repositoryScope?: PreSandboxStepContext["repositoryScope"];
   clarification?: PreSandboxStepContext["clarification"];
   /** Forwarded onto every step's context by the runner. Optional, and absent

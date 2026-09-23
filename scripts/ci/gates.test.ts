@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { coreFiles, describeCore, MENTION_RULE } from "../gates/core-references.mjs";
+import { readDirectoryIfPresent, readTextIfPresent } from "../gates/shared.mjs";
 import {
+  allowed,
   classify,
   crossClusterDeepImport,
   deepImportRegression,
+  forbiddenImport,
+  forbiddenSpecifier,
   hasFileCycles,
   normalizeFileCycles,
 } from "../gates/boundaries.mjs";
@@ -113,7 +118,9 @@ function filesNamed(root: string, name: string): string[] {
   const found: string[] = [];
   const ignored = new Set([".git", "node_modules", ".next", ".output", ".nitro"]);
   const visit = (directory: string) => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    // Other test files plant and remove fixture trees in the repository while
+    // this walks it; `readDirectoryIfPresent` in `gates/shared.mjs` holds the rule.
+    for (const entry of readDirectoryIfPresent(directory)) {
       if (ignored.has(entry.name)) continue;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) visit(path);
@@ -375,7 +382,9 @@ test("package contracts refuses a packages directory that is not there", () => {
 
 test("package contracts refuses a packages directory holding no manifest", () => {
   const root = makeDepsRoot("package-contracts-empty-root-", {});
-  mkdirSync(join(root, "packages"), { recursive: true });
+  for (const directory of ["packages", "integrations"]) {
+    mkdirSync(join(root, directory), { recursive: true });
+  }
   const result = gate("package-contracts.mjs", ["--root", root]);
   assert.equal(result.status, gateFailure, result.stderr || result.stdout);
   assert.match(
@@ -458,7 +467,7 @@ test("the lint gate lints an app nobody named", () => {
   const root = makeDepsRoot("lint-new-app-", {
     "apps/newapp/dirty.ts": "export const last = (items: string[]) => items[items.length - 1];\n",
   });
-  for (const directory of ["apps/worker", "scripts", "packages"]) {
+  for (const directory of ["apps/worker", "scripts", "packages", "integrations"]) {
     mkdirSync(join(root, directory), { recursive: true });
   }
   const result = gate("lint.mjs", ["--root", root, "--config", join(repoRoot, ".oxlintrc.json")]);
@@ -645,6 +654,75 @@ test("the boundary gate reads a fixture the same way at any path depth", () => {
   assert.equal(runDeep.status, gateFailure, runDeep.stderr || runDeep.stdout);
   assert.match(runNear.stdout, /app->db\s+1/u);
   assert.equal(runNear.stdout, runDeep.stdout);
+});
+
+test("the boundary gate scans a workspace package no application imports", async () => {
+  const plantedPackage = await mkdtemp(join(repoRoot, "packages/boundary-gate-unimported-"));
+  const plantedFile = join(plantedPackage, "forbidden.ts");
+  try {
+    await writeFile(
+      join(plantedPackage, "package.json"),
+      '{"name":"@test/boundary-gate-unimported","private":true}\n',
+    );
+    await writeFile(
+      plantedFile,
+      'import { verifyHarnessSkillArtifact } from "../skills/index.js";\nvoid verifyHarnessSkillArtifact;\n',
+    );
+
+    const result = gate("boundaries.mjs");
+    assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+    assert.match(result.stdout, /packages\/boundary-gate-unimported-[^/]+\/forbidden\.ts/u);
+  } finally {
+    await rm(plantedPackage, { recursive: true, force: true });
+  }
+});
+
+/**
+ * These two run the gate end to end, because the rule they prove lives in path
+ * resolution rather than in `allowed()`: an import the gate cannot resolve is
+ * an import it cannot refuse, and a unit test of the edge rule passes happily
+ * while the edge is invisible.
+ */
+test("a core file importing an integration fails the boundary gate", async () => {
+  const root = await mkdtemp(join(tmpdir(), "boundary-integration-import-"));
+  await mkdir(join(root, "apps/worker/src/services/dispatch"), { recursive: true });
+  await mkdir(join(root, "integrations/acme"), { recursive: true });
+  await writeFile(join(root, "integrations/acme/manifest.ts"), 'export const manifest = { id: "acme" };\n');
+  await writeFile(
+    join(root, "apps/worker/src/services/dispatch/uses.ts"),
+    'import { manifest } from "../../../../../integrations/acme/manifest.js";\n\nexport const used = manifest;\n',
+  );
+
+  const result = gate("boundaries.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /services->integrations\/acme\s+1/u);
+  assert.match(
+    result.stdout,
+    /uses\.ts -> integrations\/acme\/manifest\.ts[\s\S]*core may not import an integration/u,
+  );
+});
+
+test("the dashboard importing the worker registry by its package subpath fails the boundary gate", async () => {
+  const root = await mkdtemp(join(tmpdir(), "boundary-bundle-line-"));
+  await mkdir(join(root, "apps/dashboard/lib"), { recursive: true });
+  await mkdir(join(root, "integrations/registry"), { recursive: true });
+  await writeFile(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "integrations/*"\n');
+  await writeFile(
+    join(root, "integrations/registry/package.json"),
+    '{"name":"@integrations/registry"}\n',
+  );
+  await writeFile(join(root, "integrations/registry/worker.ts"), "export const runtimes = [];\n");
+  await writeFile(
+    join(root, "apps/dashboard/lib/uses.ts"),
+    'import { runtimes } from "@integrations/registry/worker";\n\nexport const used = runtimes;\n',
+  );
+
+  const result = gate("boundaries.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stdout,
+    /uses\.ts must not import integrations\/registry\/worker\.ts: the dashboard runs in a browser/u,
+  );
 });
 
 test("a missing gate tool names the tool instead of failing on its output", () => {
@@ -1042,6 +1120,7 @@ test("a workspace package without a description fails package contracts", async 
   const root = await mkdtemp(join(tmpdir(), "package-contracts-gate-"));
   const directory = join(root, "packages/conditions");
   await mkdir(directory, { recursive: true });
+  await mkdir(join(root, "integrations"), { recursive: true });
   await writeFile(join(directory, "package.json"), '{"name":"@shared/conditions"}\n');
 
   const result = gate("package-contracts.mjs", ["--root", root]);
@@ -1103,6 +1182,17 @@ test("lint and unused-code gates are unconditional", () => {
   assert.match(unused.stdout, /unused-code PASS/u);
 });
 
+test("a path that vanished while a gate walked holds nothing, and any other failure still stops it", () => {
+  // Parallel test files plant fixture trees in the repository and remove them;
+  // a walker that listed one must read it as empty rather than fail on ENOENT,
+  // and must not turn every unreadable path into "nothing here".
+  const gone = join(mkdtempSync(join(tmpdir(), "vanished-")), "gone");
+  assert.deepEqual(readDirectoryIfPresent(gone), []);
+  assert.equal(readTextIfPresent(join(gone, "file.ts")), null);
+  assert.throws(() => readTextIfPresent(repoRoot), /EISDIR/u);
+  assert.throws(() => readDirectoryIfPresent(join(repoRoot, "package.json")), /ENOTDIR/u);
+});
+
 test("retired gate baselines and update commands are absent", async () => {
   assert.deepEqual(
     readdirSync(join(repoRoot, "scripts/gates"))
@@ -1130,6 +1220,430 @@ test("the composite gate ladder includes both database fences", async () => {
   assert.equal(rootPackage.scripts["gate:docs-status"], "node scripts/gates/docs-status.mjs");
   assert.doesNotMatch(rootPackage.scripts["gate:docs-status"], /if \[ -f/u);
   assert.equal(rootPackage.scripts["gates:update-baselines"], undefined);
+  assert.match(rootPackage.scripts.gates, /gate:core-references/u);
+});
+
+/**
+ * The gate that keeps provider names out of core. Each case is a throwaway
+ * workspace holding one core file and one allowlist, so what it proves is the
+ * rule and not this repository's 374 allowlisted mentions.
+ */
+const coreReferenceRoot = (
+  prefix: string,
+  files: Record<string, string>,
+  config: Record<string, unknown>,
+): string => {
+  const root = makeDepsRoot(prefix, {
+    "core-references.json": `${JSON.stringify(
+      {
+        coreRoots: ["apps/worker/src"],
+        exclude: ["\\.(?:test|spec)\\.[cm]?[jt]sx?$"],
+        plannedIntegrations: { jira: { stage: "S12", reason: "Jira becomes integrations/jira" } },
+        allowlist: [],
+        ...config,
+      },
+      null,
+      2,
+    )}\n`,
+    ...files,
+  });
+  // The gate asks the generator which integrations this build ships, and the
+  // generator refuses an integrations directory that is not there.
+  mkdirSync(join(root, "integrations/sdk"), { recursive: true });
+  mkdirSync(join(root, "apps/worker/src/engine/blocks/alpha"), { recursive: true });
+  writeFileSync(
+    join(root, "apps/worker/src/engine/blocks/alpha/manifest.ts"),
+    `import { z } from "zod";
+
+export const manifest = {
+  type: "alpha",
+  paramsSchema: z.object({}),
+  contract: { category: "action", ports: ["out"], allowsFailurePort: false },
+  ui: { group: "utility", label: "A", description: "A", glyph: "A", color: "#000000", softColor: "#FFFFFF" },
+  defaults: {},
+  inputs: {},
+  execution: "map",
+};
+`,
+  );
+  writeFileSync(
+    join(root, "apps/worker/src/engine/blocks/alpha/execute.ts"),
+    'export const execute = async () => ({ kind: "next" });\n',
+  );
+  return root;
+};
+
+test("a new provider name in core fails the core-reference gate and says what to do", () => {
+  const root = coreReferenceRoot("core-references-new-", {
+    "apps/worker/src/services/dispatch/route.ts": 'export const kind = "jira";\n',
+  }, {});
+  const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(result.status, gateFailure);
+  assert.match(result.stdout, /apps\/worker\/src\/services\/dispatch\/route\.ts names "jira"/u);
+  assert.match(result.stdout, /S12/u);
+  assert.match(result.stdout, /core-references\.json/u);
+});
+
+test("an allowlisted provider name passes, and a test file is never scanned", () => {
+  const root = coreReferenceRoot("core-references-allowed-", {
+    "apps/worker/src/services/dispatch/route.ts": 'export const kind = "jira";\n',
+    "apps/worker/src/services/dispatch/route.test.ts": 'export const kind = "jira";\n',
+  }, {
+    allowlist: [
+      {
+        ids: ["jira"],
+        stage: "S12",
+        reason: "the dispatch route still names the tracker",
+        paths: ["apps/worker/src/services/dispatch/route.ts"],
+      },
+    ],
+  });
+  const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(result.status, gateSuccess);
+  assert.match(result.stdout, /core-references PASS/u);
+});
+
+test("a provider name only a comment carries is not coupling", () => {
+  const root = coreReferenceRoot("core-references-comment-", {
+    "apps/worker/src/services/dispatch/route.ts":
+      "// The tracker here is Jira today.\n/* Jira again. */\nexport const kind = 1;\n",
+  }, {});
+  const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(result.status, gateSuccess);
+});
+
+/**
+ * A comment is prose only where the language says it is. A `//` inside a URL,
+ * a `/*` inside a glob and a slash inside a regular expression are code, and a
+ * gate that read them as the start of a comment would stop looking for the
+ * provider name at exactly the line that spells it.
+ */
+test("a provider name after comment-like text inside a string or a regex is still a mention", () => {
+  for (const [label, source] of [
+    ["a URL", 'export const docs = "https://docs.acme.test/jira/setup";\n'],
+    ["a glob", 'export const glob = "src/*";\nexport const kind = "jira";\n'],
+    ["a regex", 'export const slashes = /\\/\\//u; export const kind = "jira";\n'],
+    ["a template", "export const url = `https://${host}/`; export const kind = \"jira\";\n"],
+  ] as const) {
+    const root = coreReferenceRoot("core-references-literal-", {
+      "apps/worker/src/services/dispatch/route.ts": source,
+    }, {});
+    const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+    assert.equal(result.status, gateFailure, `${label}: ${result.stdout}`);
+    assert.match(result.stdout, /route\.ts names "jira"/u, label);
+  }
+});
+
+/**
+ * What a browser's style engine reads is not a provider: `ease-linear`,
+ * `linear-gradient(...)` and an animation's `linear` timing would otherwise
+ * refuse an integration called linear over a CSS keyword. The exemption is the
+ * text of a `className` or `style` attribute and nothing else, so a comparison
+ * written inside one still counts.
+ */
+test("text a className or style attribute carries is presentation, not a mention", () => {
+  const presentation = coreReferenceRoot("core-references-presentation-", {
+    "apps/worker/src/ui/bar.tsx": [
+      "export const Bar = ({ ms }: { ms: number }) => (",
+      '  <div className="ease-jira bg-jira-to-r" style={{ animation: `drain ${ms}ms jira forwards`, background: "jira-gradient(90deg)" }}>',
+      "    <span className={ms > 1 ? \"jira-a\" : `jira-${ms}`} />",
+      "  </div>",
+      ");",
+      "",
+    ].join("\n"),
+  }, {});
+  const passes = gate("core-references.mjs", ["--root", presentation, "--config", join(presentation, "core-references.json")]);
+  assert.equal(passes.status, gateSuccess, passes.stdout);
+
+  const branched = coreReferenceRoot("core-references-branched-", {
+    "apps/worker/src/ui/bar.tsx":
+      'export const Bar = ({ kind }: { kind: string }) => <div className={kind === "jira" ? "a" : "b"} />;\n',
+  }, {});
+  const fails = gate("core-references.mjs", ["--root", branched, "--config", join(branched, "core-references.json")]);
+  assert.equal(fails.status, gateFailure, fails.stdout);
+  assert.match(fails.stdout, /bar\.tsx names "jira"/u);
+
+  const visible = coreReferenceRoot("core-references-visible-", {
+    "apps/worker/src/ui/bar.tsx": 'export const Bar = () => <div className="x">Connect Jira</div>;\n',
+  }, {});
+  assert.equal(
+    gate("core-references.mjs", ["--root", visible, "--config", join(visible, "core-references.json")]).status,
+    gateFailure,
+    "words a person reads on the page are core naming the provider",
+  );
+});
+
+/**
+ * A config file at an app's root is core as much as a screen is: the
+ * dashboard's redirects, its middleware and the worker's bundler config all
+ * ship. Core is each app minus the directories the allowlist names as not
+ * core, so a config file added tomorrow is read without anybody listing it.
+ */
+test("the real allowlist reads the files at each app's root as core", () => {
+  const config = JSON.parse(readFileSync(join(repoRoot, "scripts/gates/core-references.json"), "utf8"));
+  const files = new Set(coreFiles(repoRoot, config));
+  for (const path of [
+    "apps/dashboard/next.config.ts",
+    "apps/dashboard/middleware.ts",
+    "apps/worker/nitro.config.ts",
+    "apps/worker/src/infra/runtime-env.ts",
+    "apps/dashboard/lib/cockpit/navigation.ts",
+  ]) {
+    assert.ok(files.has(path), `${path} is core and the gate does not read it`);
+  }
+  assert.ok(!files.has("apps/dashboard/next.config.test.ts"), "a test file is never core");
+  assert.ok(
+    [...files].every((path) => !/^apps\/worker\/(?:drizzle|e2e|scripts)\//u.test(path)),
+    "applied migrations, end-to-end suites and operations scripts are not core",
+  );
+});
+
+/**
+ * A mention is a word that starts with the id, however the code joins its
+ * words: the letters of `sentry` inside `scriptsEntry` are the tail of one
+ * word meeting the head of the next, and refusing an integration over them is
+ * a rule nobody can act on.
+ */
+test("an id is mentioned where a word starts with it, not as letters that run across two", () => {
+  const planned = { plannedIntegrations: { sentry: { stage: "S99", reason: "a planned provider" } } };
+  const across = coreReferenceRoot("core-references-across-", {
+    "apps/worker/src/ui/list.ts":
+      'export const scriptsEntry = 1;\nexport function SettingsEntryView() { return "presentry"; }\n',
+  }, planned);
+  const passes = gate("core-references.mjs", ["--root", across, "--config", join(across, "core-references.json")]);
+  assert.equal(passes.status, gateSuccess, passes.stdout);
+
+  for (const source of [
+    "export const sentryClient = 1;\n",
+    "export const SENTRY_DSN = 1;\n",
+    'export const label = "Sentry";\n',
+    'export const host = "https://o1.ingest.sentry.io/api";\n',
+  ]) {
+    const named = coreReferenceRoot("core-references-words-", { "apps/worker/src/ui/list.ts": source }, planned);
+    const fails = gate("core-references.mjs", ["--root", named, "--config", join(named, "core-references.json")]);
+    assert.equal(fails.status, gateFailure, source);
+  }
+  const camel = coreReferenceRoot("core-references-camel-", {
+    "apps/worker/src/ui/list.ts": 'export const label = "GitHub and gitHubApp";\n',
+  }, { plannedIntegrations: { github: { stage: "S99", reason: "a planned provider" } } });
+  assert.equal(
+    gate("core-references.mjs", ["--root", camel, "--config", join(camel, "core-references.json")]).status,
+    gateFailure,
+    "an id written as two capitalised words is still the id",
+  );
+});
+
+/**
+ * Words join into an id only when the join ends where a word ends. Letters that
+ * run on into the next word are ordinary prose meeting by accident: until
+ * 2026-09-23 `Team settings` spelled teams, `Plan empty` plane and `as an
+ * alternative` asana, and the scaffold refused those ids by pointing at prose.
+ */
+test("consecutive words spell an id only when they join to exactly the id", () => {
+  const cases: ReadonlyArray<readonly [string, string, "spells" | "does not spell"]> = [
+    ["teams", 'export const label = "Team settings";\n', "does not spell"],
+    ["plane", 'export const hint = "Plan empty";\n', "does not spell"],
+    ["asana", 'export const hint = "as an alternative";\n', "does not spell"],
+    ["github", 'export const label = "git hub App";\n', "spells"],
+    ["mem0", 'export const pkg = "mem0ai";\n', "spells"],
+  ];
+  for (const [id, source, verdict] of cases) {
+    const root = coreReferenceRoot("core-references-join-", {
+      "apps/worker/src/ui/list.ts": source,
+    }, { plannedIntegrations: { [id]: { stage: "S99", reason: "a planned provider" } } });
+    const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+    assert.equal(result.status, verdict === "spells" ? gateFailure : gateSuccess, `${source.trim()} ${verdict} ${id}: ${result.stdout}`);
+  }
+});
+
+/**
+ * A provider's own package and the identifiers built from its name are the
+ * most direct coupling there is. Each form below is split into words first,
+ * and the id counts where a word starts with it, so a package that runs the id
+ * into more letters (`mem0ai`, `@notionhq/client`) is still the provider.
+ */
+test("a provider's package names and joined identifiers are mentions in every form", () => {
+  const cases: ReadonlyArray<readonly [string, string]> = [
+    ["jira", 'import { Version2Client } from "jira-client";\n'],
+    ["jira", "export const jiraClient = 1;\n"],
+    ["jira", "export class JiraAdapter {}\n"],
+    ["slack", 'import { WebClient } from "slack_sdk";\n'],
+    ["mem0", 'import MemoryClient from "mem0ai";\n'],
+    ["notion", 'import { Client } from "@notionhq/client";\n'],
+    ["github", "export const githubApp = { slug: 1 };\n"],
+  ];
+  for (const [id, source] of cases) {
+    const root = coreReferenceRoot("core-references-forms-", {
+      "apps/worker/src/services/dispatch/route.ts": source,
+    }, { plannedIntegrations: { [id]: { stage: "S99", reason: "a planned provider" } } });
+    const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+    assert.equal(result.status, gateFailure, `${source.trim()} names ${id}: ${result.stdout}`);
+  }
+  // The exemption stays what it was: a class list is presentation.
+  const css = coreReferenceRoot("core-references-forms-css-", {
+    "apps/worker/src/ui/bar.tsx": 'export const Bar = () => <div className="jira-gradient" />;\n',
+  }, { plannedIntegrations: { jira: { stage: "S99", reason: "a planned provider" } } });
+  assert.equal(
+    gate("core-references.mjs", ["--root", css, "--config", join(css, "core-references.json")]).status,
+    gateSuccess,
+  );
+});
+
+/**
+ * What a file that does not parse spells is whatever the parser's recovery
+ * kept, so a gate that read it anyway could pass a provider name it dropped.
+ * Every failure also carries the rule it applied, in the words the scaffold
+ * and the guide use.
+ */
+test("a core file that does not parse fails the gate instead of being read by guesswork", () => {
+  const broken = coreReferenceRoot("core-references-unparsed-", {
+    "apps/worker/src/ui/list.ts": 'export const label = "jira";\nexport function (\n',
+  }, { plannedIntegrations: { jira: { stage: "S99", reason: "a planned provider" } } });
+  const result = gate("core-references.mjs", ["--root", broken, "--config", join(broken, "core-references.json")]);
+  assert.notEqual(result.status, gateSuccess);
+  assert.match(`${result.stdout}${result.stderr}`, /apps\/worker\/src\/ui\/list\.ts does not parse/u);
+});
+
+test("a failing gate states the mention rule it applied", () => {
+  const named = coreReferenceRoot("core-references-rule-", {
+    "apps/worker/src/ui/list.ts": 'export const label = "Jira";\n',
+  }, { plannedIntegrations: { jira: { stage: "S99", reason: "a planned provider" } } });
+  const result = gate("core-references.mjs", ["--root", named, "--config", join(named, "core-references.json")]);
+  assert.equal(result.status, gateFailure);
+  assert.ok(result.stdout.includes(MENTION_RULE), result.stdout);
+});
+
+/**
+ * The rule an author reads in the guide is the rule the gate applies: the
+ * guide quotes `MENTION_RULE`, and a guide that paraphrased it drifted the day
+ * the rule changed (it still said "any spelling" after the rule became whole
+ * words, and whole words after it became word starts).
+ */
+test("the integration guide quotes the gate's mention rule and its reading of core word for word", () => {
+  const guide = readFileSync(join(repoRoot, "docs/architecture/integrations.md"), "utf8");
+  const prose = guide.replace(/^\s*>\s?/gmu, "").replace(/\s+/gu, " ");
+  assert.ok(prose.includes(MENTION_RULE), "docs/architecture/integrations.md no longer quotes MENTION_RULE from scripts/gates/core-references.mjs");
+  const config = JSON.parse(readFileSync(join(repoRoot, "scripts/gates/core-references.json"), "utf8"));
+  assert.ok(prose.includes(describeCore(config)), "docs/architecture/integrations.md no longer quotes describeCore from scripts/gates/core-references.mjs");
+});
+
+/**
+ * Core is the source a commit carries, so git decides what is in it. A local
+ * `nitro build` writes `apps/worker/.vercel/output`, bundled code that names
+ * every provider the build ships; read as core it failed the gate, and every
+ * push through it, on any machine that had built the worker once.
+ */
+test("ignored build output in a git checkout is not core", () => {
+  const root = coreReferenceRoot("core-references-ignored-", {
+    ".gitignore": ".vercel/\n",
+    "apps/worker/src/services/dispatch/route.ts": "export const kind = 1;\n",
+    "apps/worker/.vercel/output/functions/flow.func/index.js": 'export const provider = "jira";\n',
+  }, { coreRoots: ["apps/worker"] });
+  const init = spawnSync("git", ["init", "-q"], { cwd: root, encoding: "utf8" });
+  assert.equal(init.status, 0, init.stderr);
+  const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(result.status, gateSuccess, result.stdout);
+
+  // The same file, not ignored, is core like any other, tracked or not.
+  writeFileSync(join(root, ".gitignore"), "");
+  const unignored = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(unignored.status, gateFailure, unignored.stdout);
+  assert.match(unignored.stdout, /\.vercel\/output\/functions\/flow\.func\/index\.js names "jira"/u);
+});
+
+test("no gate source carries a NUL byte, so git and ripgrep read the gates as text", () => {
+  const directory = join(repoRoot, "scripts/gates");
+  const binary = readdirSync(directory, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .filter((path) => readFileSync(path).includes(0));
+  assert.deepEqual(binary, []);
+});
+
+/**
+ * What S8 to S12 lean on: the day a provider ships as an integration, its
+ * planned entry and its allowlist rows are dead weight that would go on
+ * excusing core. The gate says so instead of passing.
+ */
+test("an id that ships as an integration while its planned entry survives fails the gate", () => {
+  const root = coreReferenceRoot("core-references-both-", {
+    "integrations/jira/manifest.ts": `import { defineIntegration } from "@integrations/sdk";
+
+export const manifest = defineIntegration({
+  id: "jira",
+  name: "Jira",
+  description: "d",
+  connection: { fields: [] },
+  capabilities: [],
+  blocks: [],
+  pages: [],
+  health: [{ id: "auth", label: "Auth", description: "d", critical: true }],
+});
+`,
+    "integrations/jira/worker.ts": "export const runtime = 1;\n",
+    "integrations/jira/README.md": "# jira\n",
+    "integrations/jira/package.json": '{"name":"@integrations/jira"}\n',
+  }, {});
+  const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(
+    result.stdout,
+    /jira is both an integration and a planned one[\s\S]*Delete its plannedIntegrations entry and its allowlist rows/u,
+  );
+});
+
+test("an incidental row is never reported as stale, because the hit was never the provider", () => {
+  const row = {
+    ids: ["jira"],
+    stage: "S12",
+    incidental: true,
+    reason: "a class name that happens to spell the id",
+    paths: ["apps/worker/src/services/dispatch/route.ts"],
+  };
+  const root = coreReferenceRoot("core-references-incidental-", {
+    "apps/worker/src/services/dispatch/route.ts": "export const kind = 1;\n",
+  }, { allowlist: [row] });
+  const result = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
+
+  assert.equal(
+    gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json"), "--prune"]).status,
+    gateSuccess,
+  );
+  assert.deepEqual(
+    (JSON.parse(readFileSync(join(root, "core-references.json"), "utf8")) as {
+      allowlist: unknown[];
+    }).allowlist,
+    [row],
+    "pruning an incidental row would hand back the noise it absorbs",
+  );
+});
+
+test("an allowlist row whose file stopped naming its provider is stale, and --prune removes it", () => {
+  const root = coreReferenceRoot("core-references-stale-", {
+    "apps/worker/src/services/dispatch/route.ts": "export const kind = 1;\n",
+  }, {
+    allowlist: [
+      {
+        ids: ["jira"],
+        stage: "S12",
+        reason: "the dispatch route still names the tracker",
+        paths: ["apps/worker/src/services/dispatch/route.ts"],
+      },
+    ],
+  });
+  const stale = gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]);
+  assert.equal(stale.status, gateFailure);
+  assert.match(stale.stdout, /no longer names "jira".*stale/su);
+
+  assert.equal(gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json"), "--prune"]).status, gateSuccess);
+  assert.equal(gate("core-references.mjs", ["--root", root, "--config", join(root, "core-references.json")]).status, gateSuccess);
+  assert.deepEqual(
+    (JSON.parse(readFileSync(join(root, "core-references.json"), "utf8")) as {
+      allowlist: unknown[];
+    }).allowlist,
+    [],
+  );
 });
 
 // Two service clusters, where beta reaches past alpha's interface.
@@ -1155,6 +1669,251 @@ test("a services cluster file classifies as services and its test as testing", (
   assert.equal(classify(root, "apps/worker/src/services/dispatch/dispatch.ts"), "services");
   assert.equal(classify(root, "apps/worker/src/services/dispatch/index.ts"), "services");
   assert.equal(classify(root, "apps/worker/src/services/dispatch/dispatch.test.ts"), "testing");
+});
+
+/**
+ * A tier carries the root it came from, so a package that arrives at
+ * `packages/sdk` one day is never confused with the integration SDK, and a
+ * fixture nested under `_fixtures` is its own integration rather than a file
+ * of a package called `_fixtures`.
+ */
+test("a package tier names the root it came from", () => {
+  const root = repoRoot;
+  assert.equal(classify(root, "integrations/sdk/manifest.ts"), "integrations/sdk");
+  assert.equal(classify(root, "integrations/registry/worker.ts"), "integrations/registry");
+  assert.equal(
+    classify(root, "integrations/_fixtures/demo/manifest.ts"),
+    "integrations/_fixtures/demo",
+  );
+  assert.equal(classify(root, "packages/contracts/api.ts"), "packages/contracts");
+});
+
+test("core reaches an integration through the registry and never directly", () => {
+  for (const core of ["engine", "services", "adapters", "app"]) {
+    assert.equal(allowed(core, "integrations/registry", "integrations/registry/index.ts"), true);
+    assert.equal(allowed(core, "integrations/sdk", "integrations/sdk/index.ts"), true);
+    assert.equal(allowed(core, "integrations/jira", "integrations/jira/manifest.ts"), false);
+    assert.equal(
+      allowed(core, "integrations/_fixtures/demo", "integrations/_fixtures/demo/manifest.ts"),
+      false,
+    );
+  }
+  assert.equal(
+    allowed("integrations/registry", "integrations/jira", "integrations/jira/manifest.ts"),
+    true,
+  );
+});
+
+test("an integration imports the SDK and nothing else in this repository", () => {
+  assert.equal(allowed("integrations/jira", "integrations/sdk", "integrations/sdk/index.ts"), true);
+  // The host UI is the second half of the same contract: the SDK types what an
+  // integration's worker code is handed, the host UI what its dashboard pages
+  // are built from.
+  assert.equal(
+    allowed("integrations/jira", "integrations/host-ui", "integrations/host-ui/index.ts"),
+    true,
+  );
+  assert.equal(
+    allowed("integrations/jira", "packages/contracts", "packages/contracts/api.ts"),
+    false,
+  );
+  assert.equal(
+    allowed("integrations/jira", "integrations/slack", "integrations/slack/manifest.ts"),
+    false,
+  );
+  assert.equal(
+    allowed("integrations/jira", "integrations/registry", "integrations/registry/index.ts"),
+    false,
+  );
+  assert.equal(allowed("integrations/jira", "engine", "apps/worker/src/engine/index.ts"), false);
+  // The SDK itself still reads the shared contracts, which is where the block
+  // catalog's type language lives.
+  assert.equal(allowed("integrations/sdk", "packages/contracts", "packages/contracts/api.ts"), true);
+  assert.equal(
+    allowed("integrations/sdk", "integrations/jira", "integrations/jira/manifest.ts"),
+    false,
+  );
+});
+
+test("the host UI reads the manifest types and nothing of the dashboard's", () => {
+  // It types the pages a manifest declares, so it reads the SDK. It may not
+  // read an integration, another integration's pages are not its business, and
+  // it may not read the app whose look it carries: a package importing an app
+  // would invert the dependency and put a screen's internals into a contract
+  // with third-party code.
+  assert.equal(
+    allowed("integrations/host-ui", "integrations/sdk", "integrations/sdk/index.ts"),
+    true,
+  );
+  assert.equal(
+    allowed("integrations/host-ui", "integrations/jira", "integrations/jira/manifest.ts"),
+    false,
+  );
+  assert.equal(
+    allowed("integrations/host-ui", "app", "apps/dashboard/components/ui/button.tsx"),
+    false,
+  );
+  // And core does not reach for it: the dashboard has its own primitives, and
+  // a worker importing a React package is a Vercel build failure.
+  for (const core of ["engine", "services", "adapters", "app"]) {
+    assert.equal(
+      allowed(core, "integrations/host-ui", "integrations/host-ui/index.ts"),
+      false,
+      core,
+    );
+  }
+});
+
+test("an integration cannot reach the dashboard through its own alias", () => {
+  // The rule that needs a specifier rather than a path. `@/components/ui` is
+  // the dashboard's tsconfig alias, so from a file outside apps/ it resolves to
+  // nothing at all, and every rule keyed on the target skips it: an edge the
+  // gate cannot resolve is an edge it cannot refuse.
+  assert.notEqual(
+    forbiddenSpecifier("integrations/jira/dashboard.tsx", "@/components/ui"),
+    null,
+  );
+  assert.notEqual(
+    forbiddenSpecifier("integrations/_fixtures/demo/dashboard.tsx", "@/lib/api/client"),
+    null,
+  );
+  // The one import it is meant to send them to is untouched, and so is the
+  // registry, which is core's own file and lives under the same root.
+  assert.equal(
+    forbiddenSpecifier("integrations/jira/dashboard.tsx", "@integrations/host-ui"),
+    null,
+  );
+  assert.equal(forbiddenSpecifier("integrations/registry/dashboard.ts", "@/lib/anything"), null);
+  assert.equal(
+    forbiddenSpecifier("apps/dashboard/components/cockpit/chrome.tsx", "@/components/ui"),
+    null,
+  );
+});
+
+test("a dashboard entry cannot reach our runtime through an import", () => {
+  // These are the doors that turn a contributed page from a page into part of
+  // the cockpit: next/headers reaches our cookies, next/navigation moves the
+  // person, node: reaches the filesystem, server-only says the module is ours.
+  // Integration code is trusted code we review; this rule is against coupling,
+  // not against a hostile page, which ADR-010 says in those words.
+  for (const specifier of [
+    "next/headers",
+    "next/navigation",
+    "node:fs",
+    "node:child_process",
+    "server-only",
+  ]) {
+    assert.notEqual(
+      forbiddenSpecifier("integrations/jira/dashboard.tsx", specifier),
+      null,
+      specifier,
+    );
+  }
+  // What a page is meant to import, and what the worker half still may.
+  assert.equal(forbiddenSpecifier("integrations/jira/dashboard.tsx", "react"), null);
+  assert.equal(forbiddenSpecifier("integrations/jira/dashboard.tsx", "@integrations/host-ui"), null);
+  assert.equal(forbiddenSpecifier("integrations/jira/worker.ts", "node:crypto"), null);
+  assert.equal(forbiddenSpecifier("apps/dashboard/app/(cockpit)/layout.tsx", "next/headers"), null);
+});
+
+test("page code under a dashboard/ directory is held to the dashboard entry's rules", () => {
+  // ADR-010 and the cockpit's stylesheet sanction page code in `dashboard.tsx`
+  // or anywhere under `dashboard/` beside it; a rule that named only the entry
+  // file let the page one directory down import what the entry may not.
+  for (const page of [
+    "integrations/jira/dashboard/page.tsx",
+    "integrations/jira/dashboard/rows/table.ts",
+    "integrations/_fixtures/demo/dashboard/overview.tsx",
+  ]) {
+    assert.notEqual(forbiddenSpecifier(page, "node:fs"), null, page);
+    assert.notEqual(forbiddenSpecifier(page, "next/headers"), null, page);
+    assert.notEqual(forbiddenImport(page, "integrations/jira/worker.ts"), null, page);
+  }
+  // Only page code: a file whose name merely ends in "dashboard" is not.
+  assert.equal(forbiddenSpecifier("integrations/jira/webhook-dashboard.ts", "node:crypto"), null);
+});
+
+test("the dashboard registry stays out of every bundle that has no React", () => {
+  // React components in the Nitro bundle or in the Workflow DevKit's flow
+  // bundle is a Vercel build failure and nothing local.
+  assert.notEqual(
+    forbiddenImport(
+      "apps/worker/src/services/integrations/resolve.ts",
+      "integrations/registry/dashboard.ts",
+    ),
+    null,
+  );
+  assert.notEqual(
+    forbiddenImport("integrations/registry/index.ts", "integrations/registry/dashboard.ts"),
+    null,
+  );
+  assert.notEqual(
+    forbiddenImport("integrations/registry/worker.ts", "integrations/registry/dashboard.generated.ts"),
+    null,
+  );
+  assert.equal(
+    forbiddenImport(
+      "apps/dashboard/app/(cockpit)/integrations/contributed-page.tsx",
+      "integrations/registry/dashboard.ts",
+    ),
+    null,
+  );
+  // And an integration's two halves stay in their own bundles.
+  assert.notEqual(
+    forbiddenImport("integrations/jira/dashboard.tsx", "integrations/jira/worker.ts"),
+    null,
+  );
+});
+
+test("the shared packages keep the edges they had before integrations existed", () => {
+  assert.equal(
+    allowed("packages/workflow-graph", "packages/conditions", "packages/conditions/index.ts"),
+    true,
+  );
+  assert.equal(
+    allowed("packages/harness", "packages/skills", "packages/skills/source.ts"),
+    true,
+  );
+  assert.equal(
+    allowed("packages/costs", "packages/contracts", "packages/contracts/api.ts"),
+    true,
+  );
+  assert.equal(
+    allowed("packages/costs", "packages/skills", "packages/skills/source.ts"),
+    false,
+  );
+  assert.equal(allowed("db", "packages/contracts", "packages/contracts/api.ts"), true);
+  assert.equal(allowed("db", "packages/costs", "packages/costs/index.ts"), false);
+});
+
+/**
+ * The failure this rule prevents appears only in a Vercel build: a Node module
+ * inside the flow bundle, or a provider SDK in the browser. Nothing local
+ * catches it, so the gate has to.
+ */
+test("nothing that reaches a browser or the flow bundle imports a worker entry", () => {
+  assert.notEqual(
+    forbiddenImport(
+      "apps/dashboard/components/cockpit/screens/health.tsx",
+      "integrations/registry/worker.ts",
+    ),
+    null,
+  );
+  assert.equal(
+    forbiddenImport(
+      "apps/dashboard/components/cockpit/screens/health.tsx",
+      "integrations/registry/index.ts",
+    ),
+    null,
+  );
+  assert.notEqual(
+    forbiddenImport("integrations/registry/index.ts", "integrations/jira/worker.ts"),
+    null,
+  );
+  assert.equal(
+    forbiddenImport("integrations/registry/worker.ts", "integrations/jira/worker.ts"),
+    null,
+  );
 });
 
 test("the cross-cluster rule names deep imports and accepts the interface", () => {

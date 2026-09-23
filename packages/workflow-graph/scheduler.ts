@@ -1,5 +1,5 @@
 import {
-  BLOCK_TYPE_SPECS,
+  blockTypeSpecOf,
   createWorkflowExecutionErrorState,
   isTriggerBlockType,
   type BlockOutput,
@@ -400,7 +400,7 @@ export function buildV2RuntimeGraph(
         `edge "${edge.id}" references a missing node`,
       );
     }
-    const port = edge.fromPort ?? BLOCK_TYPE_SPECS[source.type].ports[0];
+    const port = edge.fromPort ?? blockTypeSpecOf(source.type).ports[0];
     if (port === undefined) {
       throw new V2SchedulerDefinitionError(
         `edge "${edge.id}" has no resolvable source port`,
@@ -772,7 +772,7 @@ class V2SchedulerRuntime {
       };
       const selectedPort =
         active
-          ? BLOCK_TYPE_SPECS[trigger.type].ports[0]
+          ? blockTypeSpecOf(trigger.type).ports[0]
           : undefined;
       this.propagatePort(root.id, trigger.id, selectedPort);
       const boundaryAt = this.boundaryTime();
@@ -1866,7 +1866,7 @@ class V2SchedulerRuntime {
     }
 
     if (result.kind === "next") {
-      const ports = BLOCK_TYPE_SPECS[node.type].ports;
+      const ports = blockTypeSpecOf(node.type).ports;
       const port = result.port ?? ports[0];
       if (port === undefined && ports.length === 0) {
         this.completeNode(scopeId, nodeId, attempt, result.output);

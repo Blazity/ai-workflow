@@ -104,15 +104,19 @@ function stepLabel(stepName: string): string {
 }
 
 /** Normalize the run's `error` field (string or structured) into a RunError. */
-function normalizeRunError(error: string | RunError | undefined): RunError | null {
-  return sanitizeRunError(error, "Workflow execution failed.");
+function normalizeRunError(
+  error: string | RunError | undefined,
+  secrets: readonly string[],
+): RunError | null {
+  return sanitizeRunError(error, "Workflow execution failed.", secrets);
 }
 
 export function sanitizeRunStepsForDiagnosticError(
   steps: RunStep[] | null,
   error: RunError | null,
+  secrets: readonly string[],
 ): RunStep[] | null {
-  return sanitizeRunSteps(steps, error);
+  return sanitizeRunSteps(steps, error, secrets);
 }
 
 export interface CollectRunDetailOptions {
@@ -121,6 +125,9 @@ export interface CollectRunDetailOptions {
    * attributes one (see attributeRunModel). The world itself has none. */
   model: string | null;
   runId: string;
+  /** Every secret the deployment knows (`knownSecretValues`): step errors in
+   *  the world are raw, and this is where they are redacted. */
+  secrets: readonly string[];
 }
 
 export interface CollectRunDetailResult {
@@ -138,7 +145,7 @@ export interface CollectRunDetailResult {
 export async function collectRunDetail(
   opts: CollectRunDetailOptions,
 ): Promise<CollectRunDetailResult> {
-  const { world, model, runId } = opts;
+  const { world, model, runId, secrets } = opts;
 
   // The steps endpoint caps `limit` at 100 (a higher value is rejected with
   // HTTP 400; the default page size is only 20). 100 comfortably covers the
@@ -150,7 +157,7 @@ export async function collectRunDetail(
 
   const runStart = (run.startedAt ?? run.createdAt).getTime();
   const { id, name } = mapWorkflow(run.workflowName);
-  const runError = normalizeRunError(run.error);
+  const runError = normalizeRunError(run.error, secrets);
 
   const mappedSteps: RunStep[] = stepsPage.data
     .map((s): RunStep => {
@@ -170,11 +177,11 @@ export async function collectRunDetail(
         completedAt: s.completedAt?.toISOString() ?? null,
         startOffsetMs: Math.max(0, start - runStart),
         durationMs,
-        error: sanitizeRunError(s.error, "Workflow step failed."),
+        error: sanitizeRunError(s.error, "Workflow step failed.", secrets),
       };
     })
     .sort((a, b) => a.startOffsetMs - b.startOffsetMs);
-  const steps = sanitizeRunStepsForDiagnosticError(mappedSteps, runError) ?? [];
+  const steps = sanitizeRunStepsForDiagnosticError(mappedSteps, runError, secrets) ?? [];
 
   const startedAt = run.startedAt ?? run.createdAt;
   const durationSec =
@@ -224,9 +231,10 @@ export async function collectRunDetail(
 export async function captureRunStepsBestEffort(
   world: RunDetailSource,
   runId: string,
+  secrets: readonly string[],
 ): Promise<RunStep[] | null> {
   try {
-    const { steps } = await collectRunDetail({ world, model: null, runId });
+    const { steps } = await collectRunDetail({ world, model: null, runId, secrets });
     return steps;
   } catch {
     return null;

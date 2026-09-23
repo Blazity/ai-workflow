@@ -21,15 +21,15 @@
       "x": 300,
       "y": 200,
       "configuration": {
-        "providers": [
-          "jira",
-          "slack"
+        "sources": [
+          "issue_tracker",
+          "chat"
         ],
-        "slackChannels": [
+        "chatChannels": [
           "C_SUPPORT"
         ],
-        "slackLookbackDays": 30,
-        "jiraJqlTemplate": "labels = support",
+        "chatLookbackDays": 30,
+        "issueTrackerQueryTemplate": "labels = support",
         "maxResults": 10
       },
       "inputs": {},

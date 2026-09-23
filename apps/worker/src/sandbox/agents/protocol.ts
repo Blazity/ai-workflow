@@ -14,6 +14,7 @@ import type {
   SerializableAgentCliSpec,
 } from "./types.js";
 import { redactDiagnosticText } from "./redact.js";
+import { environmentSecretValues } from "../../run-observability/configured-secrets.js";
 import { AgentRuntimeError } from "./runtime-error.js";
 
 export {
@@ -457,9 +458,21 @@ async function commandRuntimeError(
   return new AgentRuntimeError(failure);
 }
 
+/**
+ * The environment's secrets only, and that is a known limit rather than an
+ * oversight: this parser is synchronous and runs inside a dozen callers, none
+ * of which holds the deployment's full set. What it produces reaches a person
+ * through the replay and the run's failure record, and the steps that write
+ * those apply every secret the deployment knows (knownSecretValues), so a
+ * secret stored in the dashboard is caught there.
+ */
+function diagnosticRedaction(value: string): string {
+  return redactDiagnosticText(value, environmentSecretValues());
+}
+
 function safeRedactedText(value: string): string {
   try {
-    return redactDiagnosticText(value);
+    return diagnosticRedaction(value);
   } catch {
     return "[REDACTION FAILED]";
   }
@@ -480,7 +493,7 @@ function withoutSpecStderrNoise(stderr: string, spec: AgentCliSpec): string {
 
 function safeDiagnosticTail(value: string): string | undefined {
   try {
-    const redacted = redactDiagnosticText(value);
+    const redacted = diagnosticRedaction(value);
     return Buffer.from(redacted).subarray(-DIAGNOSTIC_TAIL_BYTES).toString();
   } catch {
     return undefined;

@@ -132,9 +132,17 @@ async function listReconcilePrChecks(
 async function listRunStatuses(
   db: Db,
   runIds: string[],
-): Promise<Array<{ runId: string; status: string | null }>> {
+): Promise<Array<{
+  runId: string;
+  status: string | null;
+  integrationPins: typeof workflowRuns.$inferSelect.integrationPins;
+}>> {
   if (runIds.length === 0) return [];
-  return db.select({ runId: workflowRuns.runId, status: workflowRuns.status })
+  return db.select({
+    runId: workflowRuns.runId,
+    status: workflowRuns.status,
+    integrationPins: workflowRuns.integrationPins,
+  })
     .from(workflowRuns).where(inArray(workflowRuns.runId, runIds));
 }
 

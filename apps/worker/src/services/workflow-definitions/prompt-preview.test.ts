@@ -18,6 +18,7 @@ vi.mock("../../engine/definition/harness-profile-runtime.js", () => ({
 
 import type { effectivePromptProfileSource } from "../../engine/helpers/effective-prompt.js";
 import { previewWorkflowPromptCandidate } from "./prompt-preview.js";
+import { MESSAGING_CONNECTED } from "../../engine/definition/messaging-deployment.fixture.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -25,9 +26,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   defaultAgent: { provider: "codex", model: "gpt-5-codex" },
   vcsProviders: ["github"],
   vcsBotIdentities: ["github"],
-  slackConfigured: true,
-  arthurConfigured: true,
   webhookTriggerConfigured: true,
+  integrations: MESSAGING_CONNECTED,
 };
 
 const candidate: WorkflowDefinitionV2 = {

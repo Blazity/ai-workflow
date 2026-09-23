@@ -25,17 +25,22 @@ import {
   AGENT_ENV_SHIM,
   installSkillsToAgentsDir,
 } from "./shared.js";
-import { ARTHUR_TRACER_PY_BASE64 } from "../arthur-tracer.js";
 import { buildCommitGuardCheckScript } from "./commit-guard.js";
 import { WORKSPACE_MANIFEST_PATH } from "../repo-workspace.js";
+import {
+  applyTracingPlans,
+  tracingEnvironmentLines,
+  type HarnessHookEvents,
+} from "./tracing.js";
 
-const ARTHUR_HOOK_EVENTS: ReadonlyArray<readonly [string, string]> = [
-  ["UserPromptSubmit", "user_prompt_submit"],
-  ["PreToolUse", "pre_tool"],
-  ["PostToolUse", "post_tool"],
-  ["PostToolUseFailure", "post_tool_failure"],
-  ["Stop", "stop"],
-];
+/** What this harness calls each moment a tracing provider can ask for. */
+const CLAUDE_HOOK_EVENTS: HarnessHookEvents = {
+  prompt_submitted: "UserPromptSubmit",
+  tool_started: "PreToolUse",
+  tool_finished: "PostToolUse",
+  tool_failed: "PostToolUseFailure",
+  session_ended: "Stop",
+};
 
 export class ClaudeAgentAdapter implements AgentAdapter {
   readonly kind = "claude" as const;
@@ -81,6 +86,10 @@ export class ClaudeAgentAdapter implements AgentAdapter {
       isOauthToken
         ? `export CLAUDE_CODE_OAUTH_TOKEN=${shellQuote(opts.anthropicApiKey)}`
         : `export ANTHROPIC_API_KEY=${shellQuote(opts.anthropicApiKey)}`,
+      // What a tracing provider asked the agent itself to have. A provider's
+      // hook variables, its key among them, are in its own file instead,
+      // which only its hook commands source.
+      ...tracingEnvironmentLines(opts.tracing ?? []),
     ];
     const envPath = opts.runtime?.envPath ?? AGENT_ENV_CLAUDE_PATH;
     await sandbox.writeFiles([
@@ -153,10 +162,16 @@ export class ClaudeAgentAdapter implements AgentAdapter {
       await installSkillsToAgentsDir(sandbox, this.cliSpec);
     }
 
-    // Arthur tracer (no-op without config)
-    if (opts.arthur) {
-      await this.installArthurTracer(sandbox, opts.arthur, opts.runtime);
-    }
+    // Whatever the connected tracing integrations asked for; nothing when none
+    // is connected, and never a failed run when it cannot be applied.
+    await applyTracingPlans({
+      sandbox,
+      plans: opts.tracing ?? [],
+      harness: this.kind,
+      events: CLAUDE_HOOK_EVENTS,
+      registerHooks: (hooks) => this.mergeSettings(sandbox, { hooks }, opts.runtime),
+      runtime: opts.runtime,
+    });
   }
 
   async setCommitGuard(
@@ -507,73 +522,21 @@ touch ${paths.sentinel}
 
   // --- private ---
 
-  private async installArthurTracer(
-    sandbox: RunnableSandbox,
-    arthur: NonNullable<ConfigureOpts["arthur"]>,
-    runtime?: AgentRuntimePaths,
-  ): Promise<void> {
-    const { logger } = await import("../../infra/logger.js");
-    logger.info({ endpoint: arthur.endpoint, taskId: arthur.taskId, agent: this.kind }, "agent_install_arthur_started");
-
-    const pip = await sandbox.runCommand("bash", [
-      "-c",
-      withRuntimeHome(
-        runtime,
-        "python3 -m ensurepip --user && python3 -m pip install --user --quiet 'opentelemetry-sdk>=1.20.0' 'opentelemetry-exporter-otlp-proto-http>=1.20.0'",
-      ),
-    ]);
-    if (pip.exitCode !== 0) {
-      logger.warn({}, "arthur_pip_install_failed");
-      return;
-    }
-
-    const tracerBytes = Buffer.from(ARTHUR_TRACER_PY_BASE64, "base64");
-    await sandbox.writeFiles([{ path: "/tmp/arthur-tracer.py", content: tracerBytes }]);
-    const mvTracer = await sandbox.runCommand("bash", [
-      "-c",
-      withRuntimeHome(
-        runtime,
-        "mkdir -p $HOME/.claude/hooks && mv /tmp/arthur-tracer.py $HOME/.claude/hooks/claude_code_tracer.py && chmod +x $HOME/.claude/hooks/claude_code_tracer.py",
-      ),
-    ]);
-    if (mvTracer.exitCode !== 0) {
-      logger.warn({}, "arthur_tracer_install_failed");
-      return;
-    }
-
-    const configJson = JSON.stringify(
-      { api_key: arthur.apiKey, task_id: arthur.taskId, endpoint: arthur.endpoint },
-      null, 2,
-    );
-    await sandbox.writeFiles([{ path: "/tmp/arthur_config.json", content: Buffer.from(configJson) }]);
-    await sandbox.runCommand("bash", [
-      "-c",
-      withRuntimeHome(
-        runtime,
-        "mkdir -p $HOME/.claude && mv /tmp/arthur_config.json $HOME/.claude/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json",
-      ),
-    ]);
-
-    await this.mergeSettings(sandbox, { arthur: "install" }, runtime);
-    logger.info({ agent: this.kind }, "agent_install_arthur_complete");
-  }
-
   /** Merge-aware writer for ~/.claude/settings.json. */
   private async mergeSettings(
     sandbox: RunnableSandbox,
     opts: {
       commitGuard?: "enable" | "disable";
-      arthur?: "install";
+      /** `[harness event, command]`, already resolved for this sandbox. */
+      hooks?: ReadonlyArray<readonly [string, string]>;
       autoCompact?: "disable";
     },
     runtime?: AgentRuntimePaths,
   ): Promise<void> {
-    const arthurEvents = JSON.stringify(ARTHUR_HOOK_EVENTS);
     const script = `
       import fs from 'node:fs';
       import path from 'node:path';
       const opts = ${JSON.stringify(opts)};
-      const arthurEvents = ${arthurEvents};
       const home = process.env.HOME;
       const settingsPath = path.join(home, '.claude', 'settings.json');
       fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
@@ -597,10 +560,8 @@ touch ${paths.sentinel}
       if (opts.commitGuard === 'enable') upsertHook('Stop', '', 'bash ~/.claude/commit-guard.sh');
       else if (opts.commitGuard === 'disable') removeHook('Stop', c => c.includes('commit-guard.sh'));
 
-      if (opts.arthur === 'install') {
-        for (const [event, arg] of arthurEvents) {
-          upsertHook(event, '', 'python3 "$HOME/.claude/hooks/claude_code_tracer.py" ' + arg);
-        }
+      for (const [event, command] of opts.hooks || []) {
+        upsertHook(event, '', command);
       }
       if (opts.autoCompact === 'disable') {
         upsertHook('PreCompact', 'auto', 'bash "$HOME/.claude/disable-auto-compact.sh"');

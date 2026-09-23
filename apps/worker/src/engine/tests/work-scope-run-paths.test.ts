@@ -91,16 +91,15 @@ vi.mock("../blocks/pre-pr-checks.js", async (importOriginal) => ({
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: mocks.createAgentAdapter,
 }));
+// Both provider-backed calls this run path makes: the adapter for a repository
+// and the listing of everything the connected providers offer. The pin
+// predicate and the scope helpers next door are pure and stay real.
 vi.mock("../support/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: mocks.buildSandboxProviderConfigs,
   createRepositoryVCS: (...args: unknown[]) => mocks.createRepositoryVCS(...args),
-}));
-// The pin predicate in the same module is pure and stays real; only the
-// network-backed directory is stubbed.
-vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../adapters/vcs/repository-directory.js")>()),
-  createRepositoryDirectoryForProviders: () => ({
-    listRepositories: mocks.listRepositories,
+  listVcsRepositories: async () => ({
+    repositories: await mocks.listRepositories(),
+    failures: [],
   }),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));

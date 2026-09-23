@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import type { IntegrationManifest } from "@integrations/sdk";
 import {
+  AUTHORED_SUBJECT_TEXT_TRIGGER_TYPES,
   BLOCK_CATALOG,
   BLOCK_TYPE_SPECS,
+  COMPOSED_SUBJECT_TEXT_TRIGGER_TYPES,
   GENERATED_TRIGGER_BLOCK_TYPES,
   MANUALLY_DISPATCHABLE_TRIGGER_TYPES,
   NON_DISPATCHABLE_TRIGGER_TYPES,
   TRIGGER_BLOCK_TYPES,
+  triggerCarriesAuthoredSubjectText,
+  type IntegrationState,
   type WorkflowBlockType,
 } from "@shared/contracts";
 import {
@@ -20,16 +26,23 @@ import {
   type WorkflowBlockRegistryContext,
 } from "./block-contract-resolver.js";
 import { LEGACY_BLOCK_METADATA } from "./legacy-block-metadata.fixture.js";
+import { deploymentIntegrations, NO_INTEGRATIONS } from "./integration-availability.js";
+import { manifest as gitlabManifest } from "../../../../../integrations/gitlab/manifest.js";
+import { MESSAGING_CONNECTED, MESSAGING_DISABLED } from "./messaging-deployment.fixture.js";
+
+const VCS_AVAILABLE = {
+  ...NO_INTEGRATIONS,
+  providers: new Map([["vcs", ["github"]]]),
+};
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: false },
   llmProviders: { claude: true, codex: false },
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github"],
-  vcsBotIdentities: [],
-  slackConfigured: false,
-  arthurConfigured: false,
+  vcsBotIdentities: ["github"],
   webhookTriggerConfigured: false,
+  integrations: VCS_AVAILABLE,
 };
 
 describe("workflow block registry", () => {
@@ -220,7 +233,7 @@ describe("workflow block registry", () => {
     expect(Object.keys(registry.update_ticket_status.inputs)).toEqual(["target"]);
     expect(Object.keys(registry.post_ticket_comment.inputs)).toEqual(["body"]);
     expect(Object.keys(registry.post_pr_comment.inputs)).toEqual(["body"]);
-    expect(Object.keys(registry.send_slack_message.inputs)).toEqual(["message"]);
+    expect(Object.keys(registry.send_message.inputs)).toEqual(["message"]);
     expect(Object.keys(registry.human_question.inputs)).toEqual([
       "questions",
       "suggestedAnswers",
@@ -542,13 +555,10 @@ describe("workflow block registry", () => {
 
   it("always explains why an environmentally unavailable block is disabled", () => {
     const registry = buildWorkflowBlockRegistry(context);
-    expect(registry.send_slack_message.availability).toEqual({
+    expect(registry.send_message.availability).toEqual({
       available: false,
-      unavailableReason: "Slack messaging is not configured.",
-    });
-    expect(registry.arthur_injection_check.availability).toEqual({
-      available: false,
-      unavailableReason: "Arthur Engine is not configured.",
+      unavailableReason:
+        "Nothing on this deployment provides the messaging capability, which this block needs. Connect an integration that provides it on the Integrations page.",
     });
 
     for (const contract of Object.values(registry)) {
@@ -556,6 +566,35 @@ describe("workflow block registry", () => {
         expect(contract.availability.unavailableReason.trim(), contract.type).not.toBe("");
       }
     }
+  });
+
+  it("names the provider an admin switched off instead of claiming there is none", () => {
+    // The admin is looking at that provider on the Integrations page while the
+    // editor says nothing provides messaging. One of the two has to name it,
+    // and the one holding the disabled block is this one.
+    const registry = buildWorkflowBlockRegistry({
+      ...context,
+      integrations: MESSAGING_DISABLED,
+    });
+    expect(registry.send_message.availability).toEqual({
+      available: false,
+      unavailableReason:
+        "Test Chat would provide the messaging capability this block needs, but is switched off. " +
+        "Enable it on the Integrations page.",
+    });
+  });
+
+  it("offers the messaging blocks as soon as one provider serves the capability", () => {
+    const registry = buildWorkflowBlockRegistry({
+      ...context,
+      integrations: MESSAGING_CONNECTED,
+    });
+    expect(registry.send_message.availability).toEqual({
+      available: true,
+      unavailableReason: null,
+    });
+    // The investigate block reads chat by default, so it rides the same answer.
+    expect(registry.investigate.availability.available).toBe(true);
   });
 
   it("derives Generic Agent's top-level fields and compatibility data alias from outputSchema", () => {
@@ -809,6 +848,64 @@ describe("workflow block registry", () => {
     });
   });
 
+  it("offers an integration block that uses ctx.llm exactly when some provider takes a direct call", () => {
+    // The block spends a key directly. Offered without a question, it published
+    // on a deployment whose only Claude credential is an OAuth token. Asked with
+    // the default profile's provider (Codex, the built-in default), it was
+    // refused on a deployment with only a Claude API key whose agents run on
+    // Claude, where the run works. The rule the step applies answers both.
+    const summarize: IntegrationManifest = {
+      id: "acmesummary",
+      name: "Acme Summary",
+      description: "A provider core has never heard of.",
+      connection: { fields: [] },
+      capabilities: [],
+      blocks: [
+        {
+          type: "acmesummary_digest",
+          paramsSchema: z.object({}).strict(),
+          contract: { ports: ["out"], allowsFailurePort: false },
+          ui: {
+            label: "Digest",
+            description: "Summarises a thread.",
+            glyph: "D",
+            color: "#445566",
+            softColor: "#EEF1F4",
+          },
+          output: { properties: {}, statusVariants: ["done"] },
+          requires: { llm: true },
+        },
+      ],
+      pages: [],
+      health: [{ id: "reachable", label: "Reachable", description: "", critical: true }],
+    };
+    const deployment = deploymentIntegrations({
+      manifests: [summarize],
+      states: new Map([["acmesummary", { usable: true, status: "connected" } as IntegrationState]]),
+    });
+    // What the editor really passes: the built-in default profile, on Codex.
+    const editor: WorkflowBlockRegistryContext = {
+      ...context,
+      agentProviders: { claude: true, codex: false },
+      llmProviders: { claude: false, codex: false },
+      defaultAgent: { provider: "codex", model: "gpt-5-codex" },
+      integrations: deployment,
+    };
+    const digest = (llmProviders: WorkflowBlockRegistryContext["llmProviders"]) =>
+      (buildWorkflowBlockRegistry({ ...editor, llmProviders }) as Record<
+        string,
+        { availability: unknown }
+      >).acmesummary_digest?.availability;
+
+    expect(digest({ claude: false, codex: false })).toEqual({
+      available: false,
+      unavailableReason:
+        "Digest calls a model directly, and neither a Claude nor a Codex API key is configured (a Claude OAuth token serves agents only).",
+    });
+    expect(digest({ claude: true, codex: false })).toEqual({ available: true, unavailableReason: null });
+    expect(digest({ claude: false, codex: true })).toEqual({ available: true, unavailableReason: null });
+  });
+
   it("uses runtime model inference for Call LLM across a different run default", () => {
     const claudeDefault: WorkflowBlockRegistryContext = {
       ...context,
@@ -858,40 +955,24 @@ describe("workflow block registry", () => {
   });
 
   it("authors a usable PR review trigger by default in a GitLab-only deployment", () => {
+    // What GitLab reports is its manifest's declaration, so the deployment
+    // carries the real one: a comment is the only review GitLab delivers.
     const review = buildWorkflowBlockRegistry({
       ...context,
       vcsProviders: ["gitlab"],
       vcsBotIdentities: ["gitlab"],
+      integrations: deploymentIntegrations({
+        manifests: [gitlabManifest],
+        states: new Map([["gitlab", { usable: true } as IntegrationState]]),
+      }),
     }).trigger_pr_review;
 
     expect(review.defaults).toMatchObject({
-      providers: ["gitlab"],
+      providers: [],
       on: ["commented"],
       scope: "workflow_owned",
     });
     expect(review.availability).toEqual({ available: true, unavailableReason: null });
-  });
-
-  it("rejects GitLab review triggers that omit the only reliable Note Hook state", () => {
-    const gitlab = resolveWorkflowBlockContract(
-      "trigger_pr_review",
-      { providers: ["gitlab"], on: ["changes_requested"] },
-      { ...context, vcsProviders: ["gitlab"], vcsBotIdentities: ["gitlab"] },
-    );
-
-    expect(gitlab.availability).toEqual({
-      available: false,
-      unavailableReason:
-        'GitLab review triggers must include "commented"; GitLab does not emit a reliable changes-requested review event.',
-    });
-
-    expect(
-      resolveWorkflowBlockContract(
-        "trigger_pr_review",
-        { providers: ["github"], on: ["changes_requested"] },
-        context,
-      ).availability,
-    ).toEqual({ available: true, unavailableReason: null });
   });
 
   it("requires bot identities for every configured provider selected by a commented trigger", () => {
@@ -908,7 +989,7 @@ describe("workflow block registry", () => {
     expect(mixed.availability).toEqual({
       available: false,
       unavailableReason:
-        "Commented review triggers require a configured GITLAB_BOT_LOGIN to prevent recursive bot reviews.",
+        "Commented review triggers require a bot username for gitlab to prevent recursive bot reviews. Configure it on the Integrations page.",
     });
   });
 
@@ -920,8 +1001,7 @@ describe("workflow block registry", () => {
           providers: ["github"],
           scope: "workflow_owned",
           checkNames: [],
-          githubAppSlugs: ["github-actions"],
-          gitlabPipelineSources: ["merge_request_event"],
+          trustedProducers: ["github-actions"],
         },
         context,
       ).availability,
@@ -934,8 +1014,7 @@ describe("workflow block registry", () => {
           providers: ["github"],
           scope: "workflow_owned",
           checkNames: ["ci / build"],
-          githubAppSlugs: ["github-actions"],
-          gitlabPipelineSources: ["merge_request_event"],
+          trustedProducers: ["github-actions"],
         },
         context,
       ).availability,
@@ -1114,6 +1193,27 @@ describe("manual dispatch allowlist", () => {
       ...NON_DISPATCHABLE_TRIGGER_TYPES,
     ].filter((type) => BLOCK_TYPE_SPECS[type].category !== "trigger");
     expect(notTriggers).toEqual([]);
+  });
+});
+
+describe("which triggers carry subject text a person wrote", () => {
+  // Same force as the allowlist above, for the same reason: an input that
+  // reads the run's description when nothing is bound gets a sentence core
+  // composed on a run with no ticket, and a trigger nobody classified would
+  // default to "a person wrote this" and be screened as if it had.
+  it("partitions every trigger type into authored or composed, with no overlap", () => {
+    const authored = [...AUTHORED_SUBJECT_TEXT_TRIGGER_TYPES] as WorkflowBlockType[];
+    const composed = [...COMPOSED_SUBJECT_TEXT_TRIGGER_TYPES] as WorkflowBlockType[];
+
+    expect([...authored, ...composed].sort()).toEqual([...TRIGGER_BLOCK_TYPES].sort());
+    expect(authored.filter((type) => composed.includes(type))).toEqual([]);
+  });
+
+  it("reads a pull request trigger as composed, because its runs may carry no ticket", () => {
+    expect(triggerCarriesAuthoredSubjectText("trigger_pr_review")).toBe(false);
+    expect(triggerCarriesAuthoredSubjectText("trigger_schedule")).toBe(false);
+    expect(triggerCarriesAuthoredSubjectText("trigger_ticket_ai")).toBe(true);
+    expect(triggerCarriesAuthoredSubjectText("trigger_webhook")).toBe(true);
   });
 });
 

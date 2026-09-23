@@ -32,14 +32,18 @@ vi.mock("../../infra/vcs-config.js", () => ({
   ],
 }));
 
+const botLogin = vi.hoisted(() => ({
+  reading: { readable: true, login: "workflow-bot" } as
+    | { readable: true; login: string | undefined }
+    | { readable: false; reason: string },
+}));
 vi.mock("../vcs/index.js", () => ({
-  getVcsBotLogin: () => "workflow-bot",
+  readVcsBotLogin: async () => botLogin.reading,
 }));
 
 const mocks = vi.hoisted(() => ({
   getDeployedWorkflowDefinitionVersion: vi.fn(),
   getManualDispatchPullRequest: vi.fn(),
-  isConfiguredTriggerRepository: vi.fn(),
   findWorkflowOwnedPullRequest: vi.fn(),
   hasDispatchBlockingApprovalForTicket: vi.fn(),
 }));
@@ -53,12 +57,33 @@ vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createManualDispatchPrReader: () => ({
     getManualDispatchPullRequest: mocks.getManualDispatchPullRequest,
   }),
+  resolveConfiguredPullRequestUrl: async (url: URL) => {
+    if (url.host === "settings-unreadable.example") {
+      const { IntegrationSettingsUnreadableError } = await import("../integrations/usable.js");
+      throw new IntegrationSettingsUnreadableError(
+        "so the pull request URL could not be matched to a provider",
+        "connection terminated unexpectedly",
+      );
+    }
+    if (url.host === "github.com") {
+      const match = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(url.pathname);
+      return match
+        ? { provider: "github", repoPath: `${match[1]}/${match[2]}`, prNumber: Number(match[3]) }
+        : null;
+    }
+    if (url.host === "gitlab.example.com") {
+      const match = /^\/(.+)\/-\/merge_requests\/(\d+)$/.exec(url.pathname);
+      return match
+        ? { provider: "gitlab", repoPath: match[1], prNumber: Number(match[2]) }
+        : null;
+    }
+    return null;
+  },
 }));
 // Only the provider-reachability probe is stubbed; the trigger-eligibility
 // helpers this module shares with automatic dispatch stay real.
 vi.mock("../dispatch/dispatch-trigger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../dispatch/dispatch-trigger.js")>()),
-  isConfiguredTriggerRepository: mocks.isConfiguredTriggerRepository,
 }));
 vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequest: mocks.findWorkflowOwnedPullRequest,
@@ -68,9 +93,6 @@ vi.mock("../../db/repositories/approvals.js", () => ({
   hasDispatchBlockingApprovalForTicket: mocks.hasDispatchBlockingApprovalForTicket,
   hasConnectedDispatchBlockingApprovalForTicket:
     mocks.hasDispatchBlockingApprovalForTicket,
-}));
-vi.mock("../../post-pr-gate/config.js", () => ({
-  loadPostPrGateConfig: () => ({ postPrGate: { steps: [] } }),
 }));
 
 const { parsePullRequestUrl, resolveManualDispatch, selectManualTriggerEvent } =
@@ -120,17 +142,17 @@ function snapshot(
 }
 
 describe("manual pull request input", () => {
-  it("parses only configured GitHub and nested GitLab MR URLs", () => {
-    expect(parsePullRequestUrl("https://github.com/acme/api/pull/42")).toEqual({
+  it("parses only configured GitHub and nested GitLab MR URLs", async () => {
+    await expect(parsePullRequestUrl("https://github.com/acme/api/pull/42")).resolves.toEqual({
       provider: "github",
       repoPath: "acme/api",
       prNumber: 42,
     });
-    expect(
+    await expect(
       parsePullRequestUrl(
         "https://gitlab.example.com/platform/services/api/-/merge_requests/17",
       ),
-    ).toEqual({
+    ).resolves.toEqual({
       provider: "gitlab",
       repoPath: "platform/services/api",
       prNumber: 17,
@@ -141,8 +163,22 @@ describe("manual pull request input", () => {
     "https://example.com/acme/api/pull/42",
     "https://github.com/acme/api/issues/42",
     "https://gitlab.example.com/platform/api/merge_requests/17",
-  ])("rejects unsupported provider input %s", (url) => {
-    expect(() => parsePullRequestUrl(url)).toThrow();
+  ])("rejects unsupported provider input %s", async (url) => {
+    await expect(parsePullRequestUrl(url)).resolves.toBeNull();
+  });
+
+  it("answers settings that could not be read retryably, never as a provider that is not configured", async () => {
+    // "The pull request provider is not configured" sent a person to the
+    // Integrations page to connect a provider that was connected; a queued
+    // dispatch took it as final and gave up.
+    const refusal = parsePullRequestUrl("https://settings-unreadable.example/acme/api/pull/42");
+
+    await expect(refusal).rejects.toMatchObject({
+      name: "ManualDispatchError",
+      statusCode: 503,
+      code: "integration_unavailable",
+    });
+    await expect(refusal).rejects.toThrow(/integration settings could not be read/);
   });
 
   it("requires created and merged triggers to match current lifecycle state", () => {
@@ -178,22 +214,101 @@ describe("manual pull request input", () => {
         {
           name: "ci / build",
           conclusion: "failure",
-          checkRunId: 100,
-          appSlug: "github-actions",
+          handle: { id: 100, owner: "github-actions" } as never,
+          producer: "github-actions",
         },
       ],
     });
     expect(
       selectManualTriggerEvent("trigger_pr_checks_failed", pr, failed, {
         checkNames: ["ci / build"],
-        githubAppSlugs: ["github-actions"],
+        trustedProducers: ["github-actions"],
       })?.pr.failedChecks,
     ).toEqual(failed.failedChecks);
     expect(
       selectManualTriggerEvent("trigger_pr_checks_failed", pr, failed, {
         checkNames: ["ci / lint"],
-        githubAppSlugs: ["github-actions"],
+        trustedProducers: ["github-actions"],
       }),
+    ).toBeNull();
+  });
+
+  it("finds a failed GitLab pipeline eligible from the adapter's own snapshot", async () => {
+    // Built by the real GitLab adapter, not by hand: the defect was in what the
+    // adapter reported (checks with no producer), which a hand-made snapshot
+    // would have papered over.
+    const { GitLabAdapter } = await import("../../../../../integrations/gitlab/vcs.js");
+    const { gitLabRestAnswers } = await import("../../test-support/gitlab-rest.js");
+    const project = "/api/v4/projects/platform/api";
+    const answers: Record<string, unknown> = {
+      [`${project}/merge_requests/17`]: {
+        web_url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+        source_branch: "feature/manual",
+        target_branch: "main",
+        title: "Manual dispatch",
+        author: { username: "alice" },
+        state: "opened",
+        diff_refs: { head_sha: "head-sha" },
+        head_pipeline: { id: 901, status: "failed" },
+      },
+      [`${project}/pipelines/901/jobs`]: [{ id: 11, name: "lint", status: "failed" }],
+      [`${project}/pipelines/901`]: { id: 901, source: "merge_request_event" },
+      [`${project}/merge_requests/17/notes`]: [],
+      [`${project}/merge_requests/17/discussions`]: [],
+    };
+    const gitLabSnapshot = await new GitLabAdapter({
+      http: gitLabRestAnswers((path) => answers[path]),
+      token: "t",
+      projectId: "platform/api",
+      baseBranch: "main",
+    }).getManualDispatchPullRequest(17);
+    const gitLabPr: PrTriggerPayload = {
+      ...pr,
+      provider: "gitlab",
+      repoPath: "platform/api",
+      prNumber: 17,
+      prUrl: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+    };
+
+    const selected = selectManualTriggerEvent(
+      "trigger_pr_checks_failed",
+      gitLabPr,
+      gitLabSnapshot,
+      {},
+    );
+
+    expect(selected?.delivery).toMatchObject({
+      producer: "gitlab-ci",
+      source: "merge_request_event",
+    });
+    expect(selected?.pr.failedChecks?.map((check) => check.name)).toEqual(["lint"]);
+  });
+
+  it("trusts a producer by the integration's own rule, not core's list of old names", () => {
+    // An integration this build ships later reports its own default producer;
+    // core's list for envelopes recorded before the bit existed knows only two
+    // names and must not be what decides a manual dispatch.
+    const failed = snapshot({
+      failedChecks: [
+        {
+          name: "build",
+          conclusion: "failure",
+          producer: "acme-ci",
+          trustedByDefault: true,
+        },
+      ],
+    });
+
+    expect(selectManualTriggerEvent("trigger_pr_checks_failed", pr, failed, {})).not.toBeNull();
+    expect(
+      selectManualTriggerEvent(
+        "trigger_pr_checks_failed",
+        pr,
+        snapshot({
+          failedChecks: [{ ...failed.failedChecks[0]!, trustedByDefault: false }],
+        }),
+        {},
+      ),
     ).toBeNull();
   });
 
@@ -215,7 +330,7 @@ describe("manual pull request input", () => {
     expect(
       selectManualTriggerEvent("trigger_pr_review", pr, reviews, {
         on: ["changes_requested"],
-      })?.pr.review,
+      }, "workflow-bot")?.pr.review,
     ).toEqual({
       state: "changes_requested",
       author: "human-reviewer",
@@ -235,11 +350,19 @@ describe("manual dispatch against a definition repository pin", () => {
 
   const issueTracker = {
     fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }),
-  } as unknown as Parameters<typeof resolveManualDispatch>[0]["issueTracker"];
+  };
+  const issueTrackerResolution = {
+    ok: true,
+    id: "jira",
+    name: "Jira",
+    adapter: issueTracker,
+    wiring: { projectKey: "AIW", connection: "tracker-connection" },
+  } as unknown as Parameters<typeof resolveManualDispatch>[0]["issueTrackerResolution"];
 
   function deployed(
     scope: "any" | "workflow_owned",
     repositoryScope: Record<string, unknown>,
+    extraNodes: Array<{ id: string; type: string }> = [],
   ) {
     return {
       definitionId: 5,
@@ -257,6 +380,15 @@ describe("manual dispatch against a definition repository pin", () => {
             inputs: {},
             additionalInputs: [],
           },
+          ...extraNodes.map((node, index) => ({
+            id: node.id,
+            type: node.type,
+            x: 0,
+            y: index + 1,
+            configuration: {},
+            inputs: {},
+            additionalInputs: [],
+          })),
         ],
         edges: [],
       },
@@ -271,7 +403,6 @@ describe("manual dispatch against a definition repository pin", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mocks.getManualDispatchPullRequest.mockResolvedValue(snapshot());
-    mocks.isConfiguredTriggerRepository.mockResolvedValue(true);
     mocks.hasDispatchBlockingApprovalForTicket.mockResolvedValue(false);
     mocks.findWorkflowOwnedPullRequest.mockResolvedValue({ ticketKey: "AIW-1" });
     catalogDb = await createTestDb();
@@ -314,7 +445,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -331,7 +462,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -339,6 +470,164 @@ describe("manual dispatch against a definition repository pin", () => {
       }),
     ).resolves.toMatchObject({
       inputPayload: { scope: "any", pr: expect.objectContaining({ repoPath: "acme/api" }) },
+    });
+  });
+
+  it("never starts a run off a check our own gate reported", async () => {
+    // The gate's checks carry a managed prefix in either naming generation. A
+    // run started off one would have the gate chase its own tail.
+    const graph = deployed("any", { repositories: [{ provider: "github", repoPath: "acme/api" }] });
+    graph.definition.nodes[0]!.type = "trigger_pr_checks_failed";
+    graph.definition.nodes[0]!.configuration = { scope: "any", trustedProducers: ["github-actions"] } as never;
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(graph);
+    const failed = (name: string, id: number) => ({
+      name,
+      conclusion: "failure",
+      handle: { id, owner: "github-actions" } as never,
+      producer: "github-actions",
+    });
+    const request = {
+      db: definitionDb,
+      issueTrackerResolution,
+      definitionId: 5,
+      triggerNodeId: "trigger",
+      dispatchInput: { kind: "pull_request" as const, url: pr.prUrl },
+      repositoryCatalog,
+    };
+
+    mocks.getManualDispatchPullRequest.mockResolvedValue(
+      snapshot({
+        failedChecks: [failed("AI Workflow / code-hygiene", 1), failed("blazebot / lint", 2)],
+      }),
+    );
+    await expect(resolveManualDispatch(request)).rejects.toThrow("does not match this trigger");
+
+    mocks.getManualDispatchPullRequest.mockResolvedValue(
+      snapshot({
+        failedChecks: [failed("AI Workflow / code-hygiene", 1), failed("ci / build", 3)],
+      }),
+    );
+    const resolved = await resolveManualDispatch(request);
+    expect(
+      (resolved.inputPayload as { pr: PrTriggerPayload }).pr.failedChecks?.map((check) => check.name),
+    ).toEqual(["ci / build"]);
+  });
+
+  function pullRequestRequest() {
+    return {
+      db: definitionDb,
+      issueTrackerResolution,
+      definitionId: 5,
+      triggerNodeId: "trigger",
+      dispatchInput: { kind: "pull_request" as const, url: pr.prUrl },
+      repositoryCatalog,
+    };
+  }
+
+  // A mistyped number, or a pull request the connection may not see, is the
+  // person's to fix: waiting would not change the answer.
+  it("tells the person a pull request this connection cannot read is not eligible", async () => {
+    const { PullRequestUnreadableError } = await import("@integrations/sdk");
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      new PullRequestUnreadableError("GitHub PR #42 in acme/api cannot be read"),
+    );
+
+    await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+      statusCode: 422,
+      code: "not_eligible",
+    });
+  });
+
+  it("tells the person when the provider cannot read pull requests at all", async () => {
+    const { ManualDispatchUnsupportedError } = await import("../../adapters/vcs/types.js");
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      new ManualDispatchUnsupportedError("github"),
+    );
+
+    await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+      statusCode: 422,
+      code: "not_eligible",
+      message: expect.stringContaining("cannot read pull requests"),
+    });
+  });
+
+  it("calls any other failure to read the pull request an outage", async () => {
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      Object.assign(new Error("Bad credentials"), { status: 401 }),
+    );
+
+    await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+      statusCode: 502,
+      code: "provider_unavailable",
+    });
+  });
+
+  it("blames our settings, not the provider, when they could not be read a second time", async () => {
+    // The URL was matched on the first read; building the provider's adapter
+    // reads the settings again, and that read is the one that failed. Filed as
+    // an outage, the person was told GitHub could not be reached.
+    const { IntegrationSettingsUnreadableError } = await import("../integrations/usable.js");
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      new IntegrationSettingsUnreadableError(
+        "so version control provider github could not be used",
+        "connection terminated unexpectedly",
+      ),
+    );
+
+    const refusal = await resolveManualDispatch(pullRequestRequest()).catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({ statusCode: 503, code: "integration_unavailable" });
+    expect((refusal as Error).message).not.toContain("connection terminated");
+  });
+
+  // Without the account, a review the workflow itself left would look like a
+  // person's, and the run would answer its own comment.
+  it("refuses a review dispatch while the automation account cannot be read", async () => {
+    const graph = deployed("any", {});
+    graph.definition.nodes[0]!.type = "trigger_pr_review";
+    graph.definition.nodes[0]!.configuration = { scope: "any", on: ["commented"] } as never;
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(graph);
+    botLogin.reading = { readable: false, reason: "connection terminated unexpectedly" };
+
+    try {
+      const refusal = await resolveManualDispatch(pullRequestRequest()).catch(
+        (error: unknown) => error,
+      );
+      // The same answer every unread settings read gives, and nothing the
+      // database said.
+      expect(refusal).toMatchObject({ statusCode: 503, code: "integration_unavailable" });
+      expect((refusal as Error).message).toContain("automation account for github");
+      expect((refusal as Error).message).not.toContain("connection terminated");
+    } finally {
+      botLogin.reading = { readable: true, login: "workflow-bot" };
+    }
+  });
+
+  it("reports every block type the deployed graph carries, so the preflight can ask about its integrations", async () => {
+    // The preflight decides whether an integration this workflow uses is in a
+    // state to run, and this list is the only thing it has to ask about.
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+      deployed("any", { repositories: [{ provider: "github", repoPath: "Acme/API" }] }, [
+        { id: "announce", type: "acmenotify_announce" },
+        { id: "comment", type: "post_pr_comment" },
+      ]),
+    );
+
+    await expect(
+      resolveManualDispatch({
+        db: definitionDb,
+        issueTrackerResolution,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog,
+      }),
+    ).resolves.toMatchObject({
+      blockTypes: ["trigger_pr_created", "acmenotify_announce", "post_pr_comment"],
     });
   });
 
@@ -351,7 +640,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -371,7 +660,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -394,7 +683,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -411,7 +700,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -430,7 +719,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -453,7 +742,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -470,7 +759,7 @@ describe("manual dispatch against a definition repository pin", () => {
     await expect(
       resolveManualDispatch({
         db: definitionDb,
-        issueTracker,
+        issueTrackerResolution,
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
@@ -479,6 +768,99 @@ describe("manual dispatch against a definition repository pin", () => {
     ).resolves.toMatchObject({
       subjectKey: "pr:github:acme/api#42",
       ticketKey: "AIW-1",
+    });
+  });
+
+  describe("on a deployment with no usable issue tracker", () => {
+    const NOTHING_CONNECTED =
+      "No issue tracker is connected on this deployment, so there is no ticket to work from. Connect one on the Integrations page.";
+    const nothingConnected = {
+      ok: false,
+      refusal: "not_connected",
+      reason: NOTHING_CONNECTED,
+    } as Parameters<typeof resolveManualDispatch>[0]["issueTrackerResolution"];
+    const unreadable = {
+      ok: false,
+      refusal: "unreadable",
+      reason:
+        "This deployment's integration settings could not be read (neon: connection reset), so its issue tracker was not used.",
+    } as Parameters<typeof resolveManualDispatch>[0]["issueTrackerResolution"];
+
+    it("resolves a pull request whose trigger accepts any pull request", async () => {
+      // The subject is the pull request alone, so a GitHub-only deployment has
+      // everything this dispatch needs.
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTrackerResolution: nothingConnected,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "pull_request", url: pr.prUrl },
+          repositoryCatalog,
+        }),
+      ).resolves.toMatchObject({ subjectKey: "pr:github:acme/api#42", ticketKey: null });
+    });
+
+    it("refuses a workflow-owned pull request, whose ticket it cannot verify, as a refusal and not an outage", async () => {
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+        deployed("workflow_owned", {}),
+      );
+
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTrackerResolution: nothingConnected,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "pull_request", url: pr.prUrl },
+          repositoryCatalog,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "integration_unavailable",
+        message: NOTHING_CONNECTED,
+      });
+    });
+
+    it("refuses a ticket input with the sentence that says where to fix it", async () => {
+      const ticketTrigger = deployed("any", {});
+      ticketTrigger.definition.nodes[0]!.type = "trigger_ticket_ai";
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(ticketTrigger);
+
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTrackerResolution: nothingConnected,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "ticket", ticketKey: "AIW-1" },
+          repositoryCatalog,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "integration_unavailable",
+        message: NOTHING_CONNECTED,
+      });
+    });
+
+    it("answers settings it could not read as retryable, without the database's words", async () => {
+      const ticketTrigger = deployed("any", {});
+      ticketTrigger.definition.nodes[0]!.type = "trigger_ticket_ai";
+      mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(ticketTrigger);
+
+      const refusal = await resolveManualDispatch({
+        db: definitionDb,
+        issueTrackerResolution: unreadable,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "ticket", ticketKey: "AIW-1" },
+        repositoryCatalog,
+      }).catch((error: unknown) => error);
+
+      expect(refusal).toMatchObject({ statusCode: 503, code: "integration_unavailable" });
+      expect((refusal as Error).message).not.toContain("neon");
     });
   });
 });

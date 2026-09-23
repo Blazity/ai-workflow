@@ -208,6 +208,11 @@ async function saveAndDeploy(
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // The builtin templates carry the messaging block, and messaging comes from
+  // an integration now. This deployment connects Slack the way an upgraded one
+  // does: through the variables it already had.
+  vi.stubEnv("CHAT_SDK_SLACK_TOKEN", "xoxb-test");
+  vi.stubEnv("CHAT_SDK_CHANNEL_ID", "C1");
   state.sessionUserId = "user_admin";
   state.failValidation = false;
   db = await createTestDb();
@@ -226,6 +231,16 @@ beforeEach(async () => {
 // The 0013 migration seeds one enabled definition ("Ticket workflow", id 1,
 // trigger_ticket_ai) with no versions, the default a single-definition install
 // starts from.
+
+// GitHub configured the way a deployment configures it. Version control is an
+// integration since S11, so without a connection every block that needs the
+// capability is correctly unavailable, and these cases are not about that.
+Object.assign(process.env, {
+  GITHUB_APP_ID: "1",
+  GITHUB_APP_PRIVATE_KEY: "private-key",
+  GITHUB_INSTALLATION_ID: "2",
+  GITHUB_WEBHOOK_SECRET: "webhook-secret",
+});
 
 describe("GET /api/v1/workflow-definitions", () => {
   it("lists the seeded definition with its meta plus default + options", async () => {

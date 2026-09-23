@@ -1,4 +1,5 @@
 import type {
+  IntegrationConnectionPin,
   SettingsSnapshot,
   WorkflowExecutionBudgets,
   WorkflowRepositoryScope,
@@ -15,6 +16,9 @@ import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 // registry.
 import { describeWorkflowDefinitionIssues, parse } from "@shared/workflow-graph";
 import type { WorkflowDefinitionVersionRow } from "../../db/repositories/definitions.js";
+// Type only, so it erases before the Workflow DevKit ever sees this file.
+import type { DeploymentIntegrations } from "../definition/integration-availability.js";
+import type { RunIntegrationBlocker } from "../definition/integration-run.js";
 import {
   BUILTIN_FALLBACK_DEFINITION_VERSION,
   type WorkflowDefinitionVersionPin,
@@ -34,6 +38,22 @@ export interface LoadedWorkflowPlan {
   budgets?: WorkflowExecutionBudgets;
   /** Repositories pinned to the definition, inherited by every run it dispatches. */
   repositoryScope?: WorkflowRepositoryScope;
+  /**
+   * The connection each integration this graph uses had when the run started.
+   *
+   * Recorded here, inside the step that loaded the definition, so the Workflow
+   * DevKit replays the pin from its own result rather than reading a database
+   * that has moved on. A run suspended across a deploy therefore comes back
+   * holding what it started with and learns at its next use that the
+   * connection changed, instead of quietly adopting the new one.
+   *
+   * Absent on a plan replayed from before this shipped, which is what makes
+   * this additive for every run in flight.
+   */
+  integrationPins?: readonly IntegrationConnectionPin[];
+  /** Set when an integration the graph uses cannot run at all right now. The
+   *  run fails before any work, naming it, and records the reason as a code. */
+  integrationBlocker?: RunIntegrationBlocker;
 }
 
 interface ZodLikeError extends Error {
@@ -86,7 +106,15 @@ export async function loadWorkflowDefinitionFor(
     await import("../definition/block-contract-resolver.js");
   const { workflowBlockRegistryContext } =
     await import("../definition/block-contract-environment.js");
-  const { BLOCK_PARAMS_SCHEMAS } = await import("../definition/block-params-schemas.js");
+  const { blockParamsSchemasFor } = await import("../definition/block-params-schemas.js");
+  const { deploymentIntegrations, NO_INTEGRATIONS } = await import(
+    "../definition/integration-availability.js"
+  );
+  const { integrationPinsFor, runIntegrationBlocker } = await import(
+    "../definition/integration-run.js"
+  );
+  const { integrationManifests } = await import("@integrations/registry");
+  const { readIntegrationStates } = await import("../../services/integrations/runtime.js");
   const { defaultWorkflowDefinitionV2 } = await import("../definition/default.js");
   const { logger } = await import("../../infra/logger.js");
 
@@ -111,12 +139,33 @@ export async function loadWorkflowDefinitionFor(
     };
   };
 
-  const toPlan = (
+  /**
+   * What each integration this graph uses looks like right now.
+   *
+   * Read here, inside the step, and frozen into the plan: the run then carries
+   * the connection it started with, and the Workflow DevKit replays it from
+   * this step's own result rather than reading the database again.
+   */
+  const integrationsNow = async () => {
+    // Nothing to read on a build that ships no integration, which is every
+    // deployment until the first one lands.
+    if (integrationManifests.length === 0) return NO_INTEGRATIONS;
+    return deploymentIntegrations({
+      manifests: integrationManifests,
+      states: await readIntegrationStates(),
+    });
+  };
+
+  const toPlan = async (
     def: WorkflowDefinition,
     planVersion: number | null,
     id: number | null,
-  ): LoadedWorkflowPlan => {
+    /** The read the caller already made, so one load sees one deployment. */
+    known?: DeploymentIntegrations,
+  ): Promise<LoadedWorkflowPlan> => {
     const normalized = toRuntimeShape(def);
+    const integrations = known ?? (await integrationsNow());
+    const blocker = runIntegrationBlocker(def.nodes, integrations);
     return {
       definition: def,
       version: planVersion,
@@ -124,13 +173,17 @@ export async function loadWorkflowDefinitionFor(
       nodes: normalized.nodes,
       edges: normalized.edges,
       reviewEnabled: def.nodes.some((node) => node.type === "review_agent"),
+      integrationPins: integrationPinsFor(def.nodes, integrations),
+      ...(blocker ? { integrationBlocker: blocker } : {}),
       ...(def.budgets ? { budgets: def.budgets } : {}),
       ...(def.repositoryScope ? { repositoryScope: def.repositoryScope } : {}),
     };
   };
 
   const isTicket = triggerType === "trigger_ticket_ai";
-  const buildDefault = (selectedDefinitionId: number | null = null): LoadedWorkflowPlan =>
+  const buildDefault = (
+    selectedDefinitionId: number | null = null,
+  ): Promise<LoadedWorkflowPlan> =>
     toPlan(
       defaultWorkflowDefinitionV2({
         includeReview: false,
@@ -152,7 +205,7 @@ export async function loadWorkflowDefinitionFor(
       { definitionId, version, reviewEnabled: false },
       "workflow_definition_default",
     );
-    return buildDefault(definitionId);
+    return await buildDefault(definitionId);
   }
 
   let row: WorkflowDefinitionVersionRow | null;
@@ -175,7 +228,7 @@ export async function loadWorkflowDefinitionFor(
             { definitionId, version, reviewEnabled: false },
             "workflow_definition_default",
           );
-          return buildDefault();
+          return await buildDefault();
         }
         logger.info({ triggerType, definitionId, version }, "workflow_definition_none");
         return null;
@@ -185,7 +238,7 @@ export async function loadWorkflowDefinitionFor(
       if (!match || !match.current) {
         if (isTicket && match) {
           logger.info({ reviewEnabled: false }, "workflow_definition_default");
-          return buildDefault();
+          return await buildDefault();
         }
         logger.info({ triggerType }, "workflow_definition_none");
         return null;
@@ -212,12 +265,17 @@ export async function loadWorkflowDefinitionFor(
     throw new Error(RETIRED_SCHEMA_MESSAGE);
   }
   const parsed = parse(row.definition);
-  const registryContext = workflowBlockRegistryContext();
+  // The same integrations the plan pins below. Without them every integration
+  // block resolves to the contract for a block nothing provides, the walk
+  // refuses the graph, and a run using a perfectly healthy integration would
+  // die here as an invalid definition: no failure reason, no ticket comment.
+  const integrations = await integrationsNow();
+  const registryContext = workflowBlockRegistryContext(undefined, integrations);
   const graphIssues = parsed.definition
     ? validateWorkflowDefinitionForRunLoad(
         parsed.definition,
         createWorkflowBlockContractResolver(registryContext),
-        BLOCK_PARAMS_SCHEMAS,
+        blockParamsSchemasFor(integrations),
         registryContext.vcsProviders,
       )
     : [];
@@ -233,6 +291,6 @@ export async function loadWorkflowDefinitionFor(
     return null;
   }
 
-  return toPlan(parsed.definition, row.version, row.definitionId);
+  return await toPlan(parsed.definition, row.version, row.definitionId, integrations);
 }
 loadWorkflowDefinitionFor.maxRetries = 0;

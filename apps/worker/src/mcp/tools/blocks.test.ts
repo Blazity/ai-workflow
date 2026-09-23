@@ -18,6 +18,7 @@ import { BLOCK_TYPE_SPECS } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { organization } from "../../db/schema.js";
+import { integrationManifests } from "@integrations/registry";
 import { depsFor } from "../../test-support/mcp.js";
 import { registerBlockTools } from "./blocks.js";
 
@@ -59,7 +60,19 @@ function errorPayload(result: ToolResult): { code: string; message: string } {
   return (JSON.parse(text) as { error: { code: string; message: string } }).error;
 }
 
-const ALL_BLOCK_TYPES = Object.keys(BLOCK_TYPE_SPECS).sort();
+/**
+ * Every block type this build offers: core's generated catalog plus the blocks
+ * the integrations it ships contribute.
+ *
+ * Derived rather than frozen, because `blocks.list` answers for the deployment
+ * and the second half of that answer appears the day an integration ships. A
+ * hard-coded core list passed only while the generated registry was empty, and
+ * would have turned red on the stage that added the first one.
+ */
+const ALL_BLOCK_TYPES = [
+  ...Object.keys(BLOCK_TYPE_SPECS),
+  ...integrationManifests.flatMap((manifest) => manifest.blocks.map((block) => block.type)),
+].sort();
 
 describe("blocks.list", () => {
   it("covers every WorkflowBlockType with an input and output contract", async () => {

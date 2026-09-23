@@ -1,0 +1,6 @@
+Source URL: https://github.com/mem0ai/mem0/blob/fdfb763d6e5e5509bdb35d4ddc9ca8003f6af009/docs/openapi.json
+Raw bytes: https://raw.githubusercontent.com/mem0ai/mem0/fdfb763d6e5e5509bdb35d4ddc9ca8003f6af009/docs/openapi.json
+What it is: Mem0's 200 answer to GET /v1/ping/, which its SDKs call on construction to validate a key and resolve the organization and project it belongs to.
+How these bytes were made: Composed: the schema lists status (example "ok"), org_id, project_id and user_email and gives no example for the last three, so their values here are placeholders. Mem0's Python client reads org_id and project_id from this answer only when both are present (mem0/client/main.py, _validate_api_key).
+Retrieved: 2026-09-23
+SHA-256: 695f7e983508c93109740b3a77809fda4d2ad2e58212433ec5f421c8817508c9

@@ -14,6 +14,15 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 
+// This deployment has an issue tracker connected. Which one, and what it is
+// wired to, is an integration connection since S12 and is resolved from the
+// database; this suite is about what happens to a RUN, so it says the one
+// thing it means and leaves the resolution to its own tests.
+vi.mock("../../engine/support/issue-tracker-runtime.js", async () => {
+  const support = await import("../../test-support/issue-tracker.js");
+  return support.connectedIssueTracker({});
+});
+
 import type {
   IssueTrackerAdapter,
   TicketContent,
@@ -22,11 +31,11 @@ import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js
 import type { Db } from "../../db/client.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import type { Adapters } from "../../engine/support/adapters.js";
 import type { ActiveRunEntry } from "../../adapters/run-registry/types.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { policyFor } from "../policy.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import { adaptersFor } from "../../test-support/issue-tracker.js";
 import { registerTicketWriteTools } from "./ticket-write.js";
 
 const TICKET = "PROJ-1";
@@ -78,7 +87,15 @@ function fakeIssueTracker(
     fetchTicket: vi.fn().mockResolvedValue(ticketContent()),
     moveTicket: vi.fn().mockResolvedValue(undefined),
     postComment: vi.fn().mockResolvedValue("https://jira.example/browse/PROJ-1?c=1"),
-    searchTickets: vi.fn().mockResolvedValue([]),
+    ticketsInStatus: vi.fn().mockResolvedValue([]),
+    // A tracker that CAN look a label up, which is what makes ticket creation
+    // idempotent. The tool refuses outright without it rather than risking a
+    // duplicate, and the tests for that refusal override this deliberately.
+    ticketsWithLabel: vi.fn().mockResolvedValue([]),
+    // Not the account any test's payload says acted, so a test that does not
+    // override this never accidentally exercises "the product recognises its
+    // own move".
+    getCurrentUserAccountId: vi.fn().mockResolvedValue("bot-not-the-actor"),
     ...overrides,
   };
 }
@@ -108,7 +125,7 @@ function ownedBy(runId: string | null): ActiveRunEntry {
 }
 
 async function connectedClient(
-  issueTracker: IssueTrackerAdapter,
+  issueTracker: Parameters<typeof adaptersFor>[0],
   over: {
     runRegistry?: ReturnType<typeof fakeRunRegistry>;
     actor?: Partial<McpActorContext>;
@@ -119,10 +136,9 @@ async function connectedClient(
     server,
     depsFor(db, () => new Date("2026-08-13T12:00:00.000Z"), {
       actor: actorFor({ scopes: WRITE_ONLY, ...over.actor }),
-      adapters: {
-        issueTracker,
+      adapters: adaptersFor(issueTracker, {
         runRegistry: over.runRegistry ?? fakeRunRegistry(null),
-      } as unknown as Adapters,
+      }),
     }),
   );
   const client = new Client({ name: "ticket-write-test-client", version: "1.0.0" });
@@ -283,6 +299,48 @@ describe("tickets.comment", () => {
     expect(issueTracker.postComment).not.toHaveBeenCalled();
     expect(policyFor("tickets.comment").scope).toBe("tickets:write");
   });
+});
+
+describe("ticket writes without a usable issue tracker", () => {
+  const calls = [
+    ["tickets.comment", { ticketKey: TICKET, body: "Deployed to preview.", idempotencyKey: KEY_ONE }],
+    ["tickets.transition", { ticketKey: TICKET, target: "Ai", idempotencyKey: KEY_ONE }],
+    ["tickets.create", { summary: "Fix the login redirect", idempotencyKey: KEY_ONE }],
+  ] as const;
+
+  // Each tool used to read a getter that throws a plain error with no tracker:
+  // INTERNAL_ERROR, which told the agent nothing, and a key spent on a call that
+  // did nothing. Refused by name now, before any effect.
+  it.each(calls)("%s refuses with the deployment's answer", async (name, args) => {
+    const runRegistry = fakeRunRegistry(null);
+    const client = await connectedClient("not_connected", { runRegistry });
+
+    const result = await client.callTool({ name, arguments: { ...args } });
+
+    expect(errorPayload(result)).toMatchObject({ code: "VALIDATION_FAILED", retryable: false });
+    expect(errorPayload(result).message).toContain("Integrations page");
+    expect(runRegistry.get).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["nothing is connected", "not_connected", "VALIDATION_FAILED", false],
+    ["the settings cannot be read", "unreadable", "DEPENDENCY_UNAVAILABLE", true],
+  ] as const)(
+    "gives the key back when %s, so the same call succeeds once a tracker is there",
+    async (_shape, tracker, code, retryable) => {
+      const args = { ticketKey: TICKET, body: "Deployed to preview.", idempotencyKey: KEY_ONE };
+      const refusing = await connectedClient(tracker);
+      const refused = await refusing.callTool({ name: "tickets.comment", arguments: args });
+      expect(errorPayload(refused)).toMatchObject({ code, retryable });
+
+      const issueTracker = fakeIssueTracker();
+      const connected = await connectedClient(issueTracker);
+      const posted = await connected.callTool({ name: "tickets.comment", arguments: args });
+
+      expect(dataOf(posted)).toMatchObject({ ticketKey: TICKET, alreadyPosted: false });
+      expect(issueTracker.postComment).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("tickets.transition", () => {
@@ -480,7 +538,7 @@ describe("tickets.create", () => {
     const createTicket = vi.fn();
     const issueTracker = fakeIssueTracker({
       createTicket,
-      searchTickets: vi.fn().mockResolvedValue(["PROJ-7"]),
+      ticketsWithLabel: vi.fn().mockResolvedValue(["PROJ-7"]),
       fetchTicket: vi
         .fn()
         .mockResolvedValue(ticketContent({ identifier: "PROJ-7", trackerStatus: "Ai" })),
@@ -493,16 +551,16 @@ describe("tickets.create", () => {
 
     expect(dataOf(result)).toMatchObject({ ticketKey: "PROJ-7", alreadyCreated: true });
     expect(createTicket).not.toHaveBeenCalled();
-    const jql = (issueTracker.searchTickets as ReturnType<typeof vi.fn>).mock
+    const marker = (issueTracker.ticketsWithLabel as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as string;
-    expect(jql).toContain("labels = ");
+    expect(marker).toContain("mcp-");
   });
 
   it("creates nothing when the marker search fails", async () => {
     const createTicket = vi.fn();
     const issueTracker = fakeIssueTracker({
       createTicket,
-      searchTickets: vi.fn().mockRejectedValue(new Error("search unavailable")),
+      ticketsWithLabel: vi.fn().mockRejectedValue(new Error("search unavailable")),
     });
     const client = await connectedClient(issueTracker);
 

@@ -7,17 +7,15 @@ import type {
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
-import {
-  findSettingDefinition,
-} from "@shared/contracts";
-import { buildSetupOverview } from "./overview";
+import { settingDefinition } from "@integrations/registry";
+import { buildSetupOverview, oneProviderRow } from "./overview";
 
 function entry(
   key: string,
   value: boolean | number | string | readonly string[] | null,
   overrides: Partial<SettingsEntryView> = {},
 ): SettingsEntryView {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   assert.ok(definition, `${key} is not a registry key`);
   return {
     key: key as SettingsEntryView["key"],
@@ -119,6 +117,43 @@ test("jira live mode makes issue tracker Connected", () => {
   assert.ok(issueTrackerRow);
   assert.equal(issueTrackerRow.value, "Connected");
   assert.equal(issueTrackerRow.tone, "ok");
+});
+
+test("two trackers switched on read as no provider chosen, not as the healthier one", () => {
+  // The worker uses neither of two connected trackers, a failing one included,
+  // so a row reading Connected would describe a deployment that does not exist.
+  const row = oneProviderRow(
+    "issue-tracker",
+    "Issue tracker",
+    [integration("jira", "live"), integration("linear", "down")],
+    true,
+  );
+  assert.equal(row.value, "No provider chosen");
+  assert.equal(row.tone, "bad");
+  assert.match(row.detail, /jira Integration and linear Integration are all switched on/);
+});
+
+test("one tracker failing reads as failing even when another is switched off", () => {
+  const row = oneProviderRow(
+    "issue-tracker",
+    "Issue tracker",
+    [integration("jira", "misconfigured"), integration("linear", "disabled")],
+    true,
+  );
+  assert.equal(row.value, "Needs configuration");
+  assert.equal(row.tone, "warn");
+  assert.equal(row.detail, "jira Integration. Also seen: linear Integration disabled.");
+});
+
+test("trackers that are all off or unconnected read as not configured", () => {
+  const row = oneProviderRow(
+    "issue-tracker",
+    "Issue tracker",
+    [integration("jira", "disabled")],
+    true,
+  );
+  assert.equal(row.value, "Not configured");
+  assert.equal(row.tone, "off");
 });
 
 test("github live and gitlab not-configured reports github state", () => {

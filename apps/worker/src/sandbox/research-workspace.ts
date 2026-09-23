@@ -34,8 +34,9 @@ export interface ResearchMaterializationSandbox extends ResearchWorkspaceSandbox
 }
 
 export interface ResearchWorkspaceProvider {
-  kind: "github" | "gitlab";
+  kind: string;
   host: string;
+  authUser?: string;
   getToken(): Promise<string>;
   commitAuthor: string;
   commitEmail: string;
@@ -347,8 +348,8 @@ async function materializeOne(
   const archivePath = `${temporaryPath}.tgz`;
   const token = await provider.getToken();
   const urls = buildVcsUrls({
-    kind: provider.kind,
     host: provider.host,
+    authUser: provider.authUser,
     repoPath: repository.repoPath,
   });
   try {

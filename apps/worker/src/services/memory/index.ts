@@ -11,4 +11,9 @@ export {
   isUsableMemoryKeyPart,
   listMemoryDocumentSummaries,
   readMemoryDocument,
+  type MemoryErasure,
+  type MemoryListing,
+  type MemoryRead,
+  type MemoryStoredDocument,
+  type MemoryStoredSummary,
 } from "./memory-documents.js";

@@ -4,7 +4,7 @@ import type { CostResponse, RunStatus } from "@shared/contracts";
 
 
 import type { McpStatsWindow } from "../../services/mcp/tool-services.js";
-import { issueTrackerBaseUrl } from "../../services/settings/integration-settings.js";
+import { issueTrackerTicketLinks } from "../../services/settings/integration-settings.js";
 import { isTerminalRunStatus, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { registerCatalogTool } from "../tool-catalog.js";
@@ -60,7 +60,7 @@ export function registerRunStatsTools(server: McpServer, deps: McpToolDependenci
               window,
               q: null,
               now,
-              jiraBaseUrl: issueTrackerBaseUrl(),
+              ticketLinks: await issueTrackerTicketLinks(),
               limit,
             }),
             deps.services.costAgg({ window, now }),

@@ -72,7 +72,6 @@ export const repositories = pgTable(
   },
   (t) => [
     uniqueIndex("repositories_provider_path_unique").on(t.provider, t.path),
-    check("repositories_provider_check", sql`${t.provider} in ('github', 'gitlab')`),
     check(
       "repositories_source_check",
       sql`${t.source} in ('imported', 'manual', 'seeded', 'migrated')`,

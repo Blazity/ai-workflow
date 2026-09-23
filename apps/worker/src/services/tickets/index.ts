@@ -10,7 +10,7 @@ export {
 } from "./ai-review-destination.js";
 export { aiColumnMoveTarget } from "./move-targets.js";
 export {
-  PREMATURE_AI_REVIEW_CANCELLATION_REASON,
+  prematureAiReviewCancellationReason,
   decideAiReviewRun,
   decideConnectedAiReviewRun,
 } from "./ai-review-transition.js";

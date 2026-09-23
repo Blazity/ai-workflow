@@ -1,4 +1,5 @@
 import type { WorkflowPrCheckReference } from "@shared/contracts";
+import type { IntegrationConnectionPin } from "@shared/contracts";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import {
@@ -14,6 +15,7 @@ async function createPrCheckStep(args: {
   attempt: number;
   activationScope: string;
   name: string;
+  integrationPins?: readonly IntegrationConnectionPin[];
 }) {
   "use step";
   const {
@@ -27,6 +29,7 @@ async function createPrCheckStep(args: {
     attempt: args.attempt,
     activationScope: args.activationScope,
     name: args.name,
+    integrationPins: args.integrationPins,
   });
 }
 createPrCheckStep.maxRetries = 0;
@@ -73,6 +76,7 @@ export const execute: BlockExecuteFn = async (
       attempt: execution?.attempt ?? 1,
       activationScope: execution?.activationScopeId ?? "root",
       name,
+      integrationPins: ctx.integrationPins,
     });
     return { kind: "next", output: { status: "ok", check } };
   } catch (error) {

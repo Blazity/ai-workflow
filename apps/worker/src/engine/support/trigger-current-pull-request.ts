@@ -1,31 +1,32 @@
-import type { PullRequestHead } from "../../adapters/vcs/types.js";
+import type { VcsHandleIdentity } from "@integrations/sdk";
 import type { TriggerEvent } from "@shared/contracts";
-import { createRepositoryVCS } from "./vcs-runtime.js";
+import type { PullRequestHead, VcsOpaqueHandle } from "../../adapters/vcs/types.js";
+import { createRepositoryVCS, type RepositoryVcsOptions, vcsHandleIdentity } from "./vcs-runtime.js";
 
-/** Re-read the provider facts needed to prove that a queued/bound trigger is
- * still the exact event that was accepted. */
+/**
+ * What the provider says about the pull request now, and how its handles
+ * compare. The head needs this repository's connection; the comparison needs
+ * none and comes from the provider itself. A caller with a deadline passes it
+ * as the `lifetime`, and the read ends with it.
+ */
 export async function readProviderCurrentPullRequest(
   event: Pick<TriggerEvent, "triggerType" | "pr">,
-): Promise<PullRequestHead> {
+  options: RepositoryVcsOptions = {},
+): Promise<{ current: PullRequestHead; handles: VcsHandleIdentity }> {
   const { pr } = event;
-  const vcs = createRepositoryVCS({
-    provider: pr.provider,
-    repoPath: pr.repoPath,
-    baseBranch: pr.baseRef,
-  });
-  let current = await vcs.getPRHead(pr.prNumber);
-  if (pr.provider === "github" && (pr.failedChecks?.length ?? 0) > 0) {
-    const latestCheckRuns =
-      current.latestCheckRuns ??
-      (vcs.getLatestCheckRuns
-        ? await vcs.getLatestCheckRuns(current.headSha)
-        : null);
-    if (!latestCheckRuns) {
-      throw new Error("GitHub latest Check Runs are unavailable");
-    }
-    current = { ...current, latestCheckRuns };
-  }
-  return current;
+  const vcs = createRepositoryVCS(
+    {
+      provider: pr.provider,
+      repoPath: pr.repoPath,
+      baseBranch: pr.baseRef,
+    },
+    options,
+  );
+  const [current, handles] = await Promise.all([
+    vcs.getPRHead(pr.prNumber),
+    vcsHandleIdentity(pr.provider),
+  ]);
+  return { current, handles };
 }
 
 /** Bind a saved trigger envelope to current provider state. A null result is a
@@ -33,60 +34,53 @@ export async function readProviderCurrentPullRequest(
 export function bindCurrentPullRequest<T extends TriggerEvent>(
   event: T,
   current: PullRequestHead | null,
+  handles: VcsHandleIdentity,
 ): T | null {
   if (!current) return null;
   const { pr } = event;
-  // Review triggers are about the PR, not a specific head. A comment event may
-  // carry no base ref (issue_comment), so an empty pr.baseRef means "unknown,
-  // adopt the provider-authoritative value" rather than "stale".
+  // Review triggers are about the PR, not a specific head (see `headSha` on
+  // `PrTriggerPayload`). A comment event may carry no base ref (issue_comment),
+  // so an empty pr.baseRef means "unknown, adopt the provider-authoritative
+  // value" rather than "stale".
   const isReview = event.triggerType === "trigger_pr_review";
   if (current.baseRef !== pr.baseRef && !(isReview && pr.baseRef === "")) return null;
   const expectedState =
     event.triggerType === "trigger_pr_merged" ? "merged" : "open";
   if (current.state !== expectedState) return null;
-  if (pr.provider === "github") {
-    if (isReview) {
-      // Empty pr.headSha (issue_comment) is unknown, not stale: adopt current.
-      if (pr.headSha && pr.headSha !== current.headSha) return null;
-      // headRef feeds the agent's checkout branch and the owned-branch lookups,
-      // so an unknown one must come from the provider read. Fail closed rather
-      // than dispatch a run that would check out an empty branch name.
-      const headRef = pr.headRef || current.headRef || "";
-      if (!headRef) return null;
-      return {
-        ...event,
-        pr: { ...pr, headRef, headSha: current.headSha, baseRef: current.baseRef },
-      };
-    }
-    if (current.headSha !== pr.headSha) return null;
-    if (event.triggerType !== "trigger_pr_checks_failed") return event;
-    const failedChecks = (pr.failedChecks ?? []).filter((failed) =>
-      current.latestCheckRuns?.some(
-        (latest) =>
-          latest.id === failed.checkRunId &&
-          latest.name === failed.name &&
-          latest.appSlug === failed.appSlug &&
-          latest.status === "completed" &&
-          latest.conclusion === failed.conclusion,
-      ),
+  if (isReview) {
+    if (pr.headSha && pr.headSha !== current.headSha) return null;
+    const headRef = pr.headRef || current.headRef || "";
+    if (!headRef) return null;
+    return {
+      ...event,
+      pr: { ...pr, headRef, headSha: current.headSha, baseRef: current.baseRef },
+    };
+  }
+  // What an empty head means per trigger is the contract's (`headSha` on
+  // `PrTriggerPayload`): for a checks event, the failed-check handles below
+  // are what prove it is about this head.
+  const headUnknown = pr.headSha === "" && event.triggerType === "trigger_pr_checks_failed";
+  if (!headUnknown && current.headSha !== pr.headSha) return null;
+  if (event.triggerType !== "trigger_pr_checks_failed") return event;
+  if (!current.checks || current.checks.state !== "red") return null;
+  const currentChecks = current.checks;
+  const failedChecks = (pr.failedChecks ?? []).filter((failed) => {
+    // An envelope recorded before checks carried a handle still binds: the
+    // provider that wrote it rebuilds the handle from its own old fields.
+    const recorded =
+      (failed.handle as VcsOpaqueHandle | undefined) ??
+      handles.recordedCheckHandle?.(failed, pr as unknown as Readonly<Record<string, unknown>>) ??
+      null;
+    return (
+      recorded !== null &&
+      currentChecks.failed.some(
+        (currentFailed) =>
+          currentFailed.name === failed.name &&
+          currentFailed.conclusion === failed.conclusion &&
+          handles.sameHandle(currentFailed.handle, recorded),
+      )
     );
-    if (failedChecks.length === 0) return null;
-    return { ...event, pr: { ...pr, failedChecks } };
-  }
-  if (pr.pipelineId === undefined) {
-    return current.headSha === pr.headSha ? event : null;
-  }
-  if (current.headPipelineId !== pr.pipelineId) return null;
-  if (current.headPipelineStatus !== "failed") return null;
-  if (pr.headSha && pr.headSha !== current.headSha) return null;
-  const failedChecks = (pr.failedChecks ?? []).filter((failed) =>
-    // GitLab may omit builds from a Pipeline Hook. The explicit pipeline
-    // sentinel is backed by exact pipeline id plus current failed status above.
-    failed.name === "pipeline" ||
-    current.headPipelineFailedChecks?.some(
-      (currentFailed) => currentFailed.name === failed.name,
-    ),
-  );
+  });
   if (failedChecks.length === 0) return null;
   return {
     ...event,

@@ -342,8 +342,22 @@ describe("repository key", () => {
     expect(repositoryKeySchema.safeParse("blazity/ai-workflow").success).toBe(false);
   });
 
-  it("refuses a provider the catalog does not know and a path with no slash", () => {
-    expect(repositoryKeySchema.safeParse("bitbucket:blazity/ai-workflow").success).toBe(false);
+  it("refuses without offering a key that names no provider", () => {
+    // The message is read by a person on the MCP surface and by a model
+    // answering an API refusal, and both act on it. An example key here can
+    // only be a guess at which providers a deployment connected, because this
+    // package may not read the registry, and a guess is copied back verbatim.
+    const refusal = repositoryKeySchema.safeParse("blazity/ai-workflow");
+    expect(refusal.success).toBe(false);
+    const message = refusal.success ? "" : (refusal.error.issues[0]?.message ?? "");
+
+    expect(message.includes("provider id")).toBe(true);
+    // Nothing shaped like a key a reader could paste back.
+    expect(/[a-z]+:[a-z]+\/[a-z]+/u.test(message)).toBe(false);
+  });
+
+  it("accepts an open provider value and refuses a path with no slash", () => {
+    expect(repositoryKeySchema.safeParse("bitbucket:blazity/ai-workflow").success).toBe(true);
     expect(repositoryKeySchema.safeParse("github:blazity").success).toBe(false);
   });
 });
@@ -695,6 +709,10 @@ describe("work scope subject key", () => {
     // the sentence this replaces.
     const message = refused.success === false ? refused.error.issues[0].message : "";
     expect(message.includes("ticket:") && message.includes("pr:")).toBe(true);
+    // The same rule as the repository key's refusal: this package may not read
+    // the registry, so an example key would name a provider by guess, and a
+    // reader copies an example back verbatim.
+    expect(/\b(?:ticket|pr|repo|org):[a-z]+:/u.test(message)).toBe(false);
   });
 
   it("refuses a bare pull request path, which is the other shape people write", () => {

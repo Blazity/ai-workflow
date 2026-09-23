@@ -128,8 +128,6 @@ export interface PrePrChecksOptions {
   budget?: PrePrFixBudgetContext;
   /** @deprecated As budget. */
   runtime?: ResolvedHarnessRuntime;
-  /** @deprecated As budget. */
-  arthurTaskId?: string | null;
 }
 
 /**
@@ -791,7 +789,10 @@ export function checksBudgetExhaustedFailure(
   return {
     // Attributed to the first repository it cost, which is the one whose turn
     // came when the budget ran out.
-    provider: first?.provider ?? "github",
+    // Empty rather than a guessed provider: this record is read back as the
+    // repository the budget ran out on, and naming one nobody skipped would
+    // send an operator to the wrong repository.
+    provider: first?.provider ?? "",
     repoPath: first?.repoPath ?? "",
     command: "(checks budget)",
     exitCode: -1,

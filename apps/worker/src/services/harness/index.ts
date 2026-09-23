@@ -35,7 +35,7 @@ export type {
 } from "./profile-reads.js";
 export {
   discoverDeploymentSkills,
-  discoverGitHubSkillSource,
+  discoverRepositorySkillSource,
   importDeploymentSkills,
-  importGitHubSkillSelection,
+  importRepositorySkillSelection,
 } from "./skill-sources.js";

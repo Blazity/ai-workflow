@@ -36,7 +36,6 @@ import {
   type RepositorySuggestionUsage,
 } from "@shared/contracts";
 import { CALL_LLM_DEFAULT_MODEL } from "@shared/harness";
-import { createRepositoryProfileSource } from "../../adapters/vcs/create-vcs.js";
 import {
   RepositoryMissingAtProviderError,
   type RepositoryProfileBundle,
@@ -50,7 +49,6 @@ import { generateProviderText } from "../../infra/llm.js";
 import { resolveLlmProvider } from "../../infra/llm-provider.js";
 import { env } from "../../infra/vcs-config.js";
 import { getConnectedDashboardUserLabel } from "../auth/index.js";
-import { configuredVcsProviders } from "../settings/index.js";
 import { requireCatalogManager, type RepositoryCatalogActor } from "./authoring.js";
 import { publicSuggestionFailureReason } from "./suggestion-failure.js";
 
@@ -241,17 +239,18 @@ async function runSuggestion(input: {
   // tokens would show it as indistinguishable from an instant refusal.
   const startedAt = Date.now();
   try {
-    const provider = configuredVcsProviders().find(
-      (candidate) => candidate.kind === row.provider,
-    );
-    if (!provider) {
-      throw new Error(`no ${row.provider} provider is configured on this deployment`);
-    }
     // Inside the try, so the 60 second profile deadline records a row and
     // answers retryable exactly as a model timeout does. A bundle fetch that
     // hung outside this block would be the one way to spend most of an
     // invocation and leave no trace of having done so.
-    const bundle = await createRepositoryProfileSource(provider, row.path).loadProfile();
+    const { loadRepositoryVcsProfile } = await import(
+      "../../engine/support/vcs-runtime.js"
+    );
+    const bundle = await loadRepositoryVcsProfile({
+      provider: row.provider,
+      repoPath: row.path,
+      baseBranch: row.defaultBranch,
+    });
     phase = "provider call";
     const result = await generateProviderText({
       model,

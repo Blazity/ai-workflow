@@ -1,7 +1,6 @@
 ---
 paths:
   - "apps/worker/src/sandbox/agents/**"
-  - "apps/worker/src/sandbox/arthur-*.ts"
   - "apps/worker/src/harness-profiles/**"
   - "packages/prompts/**"
 ---

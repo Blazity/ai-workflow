@@ -1,7 +1,9 @@
 import { start, getRun } from "workflow/api";
 import type { WorkflowBlockType } from "@shared/contracts";
-import { hasGateStatusCapability } from "../../adapters/vcs/types.js";
-import { createAdapters } from "../../engine/support/adapters.js";
+import {
+  hasGateStatusCapability,
+  type VcsOpaqueHandle,
+} from "../../adapters/vcs/types.js";
 import { logger } from "../../infra/logger.js";
 import { isManagedBranch } from "../../engine/support/workflow-naming.js";
 import { GateStore, type CurrentGateRun } from "../../post-pr-gate/gate-store.js";
@@ -153,15 +155,27 @@ async function cancelPreviousRun(
 
   if (previous.gateStatusRefs.length === 0) return;
 
-  const adapters = createAdapters({
-    provider: input.provider,
-    repoPath: input.ownerRepo,
-    baseBranch: input.baseRef,
-  });
-  if (!hasGateStatusCapability(adapters.vcs)) return;
+  const { resolveRepositoryVCS } = await import("../../engine/support/vcs-runtime.js");
+  let vcs;
+  try {
+    vcs = await resolveRepositoryVCS({
+      provider: input.provider,
+      repoPath: input.ownerRepo,
+      baseBranch: input.baseRef,
+    });
+  } catch (err) {
+    // Logged like any status that could not be cancelled: the new commit's
+    // run is not held up by a provider that did not resolve for the old one.
+    logger.warn(
+      { ownerRepo: input.ownerRepo, err: (err as Error).message },
+      "post_pr_gate_cancel_status_failed",
+    );
+    return;
+  }
+  if (!hasGateStatusCapability(vcs)) return;
 
   for (const ref of previous.gateStatusRefs) {
-    await adapters.vcs.updateGateStatus(ref, {
+    await vcs.updateGateStatus(ref as VcsOpaqueHandle, {
       status: "completed",
       conclusion: "cancelled",
       summary: "Cancelled - newer commit replaces this gate run.",

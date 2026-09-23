@@ -7,9 +7,9 @@ import {
 import { describe, expect, it } from "vitest";
 import { sanitizeMcpData } from "../mcp/sanitize-result.js";
 import { sanitizeReplayValue } from "./sanitizer.js";
+import { environmentSecretValues } from "./configured-secrets.js";
 import {
   BRIEFING_REDACTS_PERSONAL_DATA,
-  configuredVisibilityDetector,
   createVisibilityDetector,
   redactForStorage,
 } from "./visibility-detector.js";
@@ -218,9 +218,11 @@ describe("the capture detector: what it removes", () => {
   });
 
   it("reads the database connection string and the webhook trigger key as configured secrets", () => {
-    const fromEnvironment = configuredVisibilityDetector({
-      DATABASE_URL: "postgres://app:neon-pw@ep-1.neon.tech/main",
-      WEBHOOK_TRIGGER_ENCRYPTION_KEY: "whk-encryption-value",
+    const fromEnvironment = createVisibilityDetector({
+      secrets: environmentSecretValues({
+        DATABASE_URL: "postgres://app:neon-pw@ep-1.neon.tech/main",
+        WEBHOOK_TRIGGER_ENCRYPTION_KEY: "whk-encryption-value",
+      }),
     });
     expect(
       redactForStorage(

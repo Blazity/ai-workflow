@@ -9,94 +9,94 @@
  * module per case.
  */
 import type { SettingsSnapshot } from "@shared/contracts";
+import type { ResolvedIssueTracker } from "../../engine/support/issue-tracker-runtime.js";
 import {
-  env,
-  getConfiguredVcsProviders,
-  getVcsProviderConfig,
-  type VcsProviderConfig,
-  type VcsProviderKind,
-} from "../../infra/vcs-config.js";
+  NO_TICKET_LINKS,
+  ticketLinksOf,
+  type TicketLinks,
+} from "../../engine/support/ticket-url.js";
+import { env } from "../../infra/vcs-config.js";
 
-/** Provider ids that carry a signed webhook, as system health observes them. */
-export type WebhookProviderId = "github" | "gitlab" | "jira" | "slack" | "email";
-
-/** The issue-tracker columns and project the ticket triggers are scoped to.
- *  The project key and the transition id are tracker wiring, not settings.
+/**
+ * The board the ticket triggers are scoped to: where a ticket has to be for a
+ * run to start, where a run puts it when it finishes, fails or parks, and how
+ * the tracker is wired to reach those places.
  *
- *  The snapshot is required. It used to be optional, and the three trigger
- *  entry points that left it out resolved their columns from the environment
- *  on the spot: a deployment whose operator had renamed a column on the
- *  Settings page kept dispatching against the old name from the poller while
- *  the dashboard showed the new one. */
-export function ticketBoardSettings(settings: SettingsSnapshot): TicketBoardSettings {
+ * THE ONE SEAM where the two halves meet, and it has to stay the one seam. The
+ * columns are operator behaviour and live in stored settings; the project and
+ * the transition ids are provider wiring and live on the tracker's connection.
+ * The snapshot argument used to be optional, and the three trigger entry
+ * points that left it out resolved their columns separately: a deployment
+ * whose operator had renamed a column kept dispatching against the old name
+ * from the poller while the dashboard showed the new one. Reading either half
+ * anywhere else brings that back.
+ *
+ * ASYNCHRONOUS since S12: the wiring half is an integration's connection now
+ * rather than an environment variable, and reading a connection is a database
+ * read. A deployment with no issue tracker connected has no board, and this
+ * says so rather than handing back empty strings that would match nothing and
+ * silently ignore every ticket.
+ */
+export async function ticketBoardSettings(
+  settings: SettingsSnapshot,
+): Promise<TicketBoardSettings> {
+  const { resolveActiveIssueTracker } = await import(
+    "../../engine/support/issue-tracker-runtime.js"
+  );
+  const tracker = await resolveActiveIssueTracker();
+  if (!tracker.ok) throw new Error(tracker.reason);
+  return ticketBoardOf(tracker, settings);
+}
+
+/**
+ * The same board, from a tracker resolution the caller already holds. The
+ * poller resolves the tracker once per tick for everything it does with it,
+ * and a second read here could answer differently from the first.
+ */
+export async function ticketBoardOf(
+  tracker: Extract<ResolvedIssueTracker, { ok: true }>,
+  settings: SettingsSnapshot,
+): Promise<TicketBoardSettings> {
+  const { trackerIdentityOf } = await import("../../engine/support/issue-tracker-runtime.js");
   return {
-    projectKey: env.JIRA_PROJECT_KEY,
+    trackerName: tracker.name,
+    trackerIdentity: trackerIdentityOf(tracker.id, tracker.wiring.connection),
+    projectKey: tracker.wiring.projectKey,
     aiColumn: settings.COLUMN_AI,
     aiReviewColumn: settings.COLUMN_AI_REVIEW,
     backlogColumn: settings.COLUMN_BACKLOG,
-    backlogTransitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+    ...(tracker.wiring.backlogTransitionId
+      ? { backlogTransitionId: tracker.wiring.backlogTransitionId }
+      : {}),
+    ...(tracker.wiring.aiTransitionId ? { aiTransitionId: tracker.wiring.aiTransitionId } : {}),
+    ...(tracker.wiring.aiReviewTransitionId
+      ? { aiReviewTransitionId: tracker.wiring.aiReviewTransitionId }
+      : {}),
   };
 }
 
-interface TicketBoardSettings {
+export interface TicketBoardSettings {
+  /**
+   * What this deployment's issue tracker calls itself, for the sentences a
+   * person reads about it: a cancellation reason on a ticket, an error in the
+   * dashboard. Core writes the sentence and the provider supplies its own
+   * name, so the words a person sees are unchanged while core spells no
+   * provider.
+   */
+  trackerName: string;
+  /** Which tracker instance this board belongs to, as an opaque string.
+   *  Compared, never parsed: it is what stops a value cached against one
+   *  connection being reused after an admin repointed it. */
+  trackerIdentity: string;
   projectKey: string;
   aiColumn: string;
   aiReviewColumn: string;
   backlogColumn: string;
-  /** Set only where the tracker needs a transition id to reach the backlog. */
+  /** Set only where the tracker needs a transition id to reach the column,
+   *  rather than being able to move a ticket by its status name. */
   backlogTransitionId?: string;
-}
-
-/** The shared secret Jira signs its webhook deliveries with, when configured. */
-export function jiraWebhookSecret(): string | undefined {
-  return env.JIRA_WEBHOOK_SECRET;
-}
-
-/** GitHub webhook secret plus the single repository legacy deliveries name. */
-export function githubWebhookSettings(): {
-  secret?: string;
-  owner?: string;
-  repo?: string;
-} {
-  return {
-    secret: env.GITHUB_WEBHOOK_SECRET,
-    owner: env.GITHUB_OWNER,
-    repo: env.GITHUB_REPO,
-  };
-}
-
-/**
- * Every VCS provider this deployment has credentials for. Re-exposed rather than
- * re-derived: which fields make a provider "configured" is the environment
- * schema's own question, and a second answer to it would drift.
- */
-export function configuredVcsProviders(): VcsProviderConfig[] {
-  return getConfiguredVcsProviders();
-}
-
-/** GitLab webhook token plus the single project legacy deliveries name. */
-export function gitlabWebhookSettings(): { secret?: string; projectId?: string } {
-  return {
-    secret: env.GITLAB_WEBHOOK_SECRET,
-    projectId: env.GITLAB_PROJECT_ID,
-  };
-}
-
-/** Slack request signing secret, absent when the integration is unconfigured. */
-export function slackSigningSecret(): string | undefined {
-  return env.SLACK_SIGNING_SECRET;
-}
-
-/**
- * The Slack user ids allowed to drive the slash command, already split and
- * trimmed. An empty list means the allowlist is not in force, which is what an
- * unset variable and a variable holding only separators both mean.
- */
-export function slackAllowedUserIds(): string[] {
-  if (!env.SLACK_ALLOWED_USER_IDS) return [];
-  return env.SLACK_ALLOWED_USER_IDS.split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
+  aiTransitionId?: string;
+  aiReviewTransitionId?: string;
 }
 
 /** Svix signing secret for Resend delivery events. */
@@ -114,34 +114,21 @@ export function webhookTriggerEncryptionKey(): string | undefined {
   return env.WEBHOOK_TRIGGER_ENCRYPTION_KEY;
 }
 
-/** The configured secret for one provider, used to scope health observations. */
-export function providerWebhookSecret(
-  integrationId: WebhookProviderId,
-): string | undefined {
-  switch (integrationId) {
-    case "github":
-      return env.GITHUB_WEBHOOK_SECRET;
-    case "gitlab":
-      return env.GITLAB_WEBHOOK_SECRET;
-    case "jira":
-      return env.JIRA_WEBHOOK_SECRET;
-    case "slack":
-      return env.SLACK_SIGNING_SECRET;
-    case "email":
-      return env.RESEND_WEBHOOK_SECRET;
-  }
-}
-
 /**
- * The one provider of this kind this deployment is configured for. Throws when
- * there is none, which is the existing contract: a caller that names a provider
- * has already decided it must exist.
+ * How the active issue tracker links a ticket, for the run reads that publish
+ * ticket links: the port's `ticketUrl`, resolved once per read.
+ *
+ * No links when no tracker is usable, and that is the right answer here
+ * rather than a refusal: every caller is building a link beside something else
+ * it is already showing, and a run list that refused to render because a
+ * tracker was disconnected would take away the page somebody needs in order to
+ * see what happened. A link is dropped, the rest of the row stands, and a run
+ * that recorded its own link keeps it (`ticketLinkFor`).
  */
-export function vcsProviderConfig(kind: VcsProviderKind): VcsProviderConfig {
-  return getVcsProviderConfig(kind);
-}
-
-/** The issue tracker's base URL, for the ticket links run reads publish. */
-export function issueTrackerBaseUrl(): string {
-  return env.JIRA_BASE_URL;
+export async function issueTrackerTicketLinks(): Promise<TicketLinks> {
+  const { resolveActiveIssueTracker } = await import(
+    "../../engine/support/issue-tracker-runtime.js"
+  );
+  const tracker = await resolveActiveIssueTracker();
+  return tracker.ok ? ticketLinksOf(tracker.adapter) : NO_TICKET_LINKS;
 }

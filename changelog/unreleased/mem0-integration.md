@@ -1,0 +1,1 @@
+- Mem0 can hold this deployment's memory: connect it with an API key on the Integrations page, where Test names the Mem0 organization and project the key writes into, and what runs learn, their notebooks and the memory screen's documents then live in that project. Disabling it brings back the built-in memory as it was, and nothing is copied either way.

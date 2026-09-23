@@ -22,6 +22,43 @@ export function blockPresentation(
   return options.blockRegistry[type].presentation;
 }
 
+/** A block on the canvas this deployment cannot run, and the reason the engine
+ *  gave for it. One entry per block type, because a workflow with four blocks
+ *  of one disconnected integration has one thing wrong with it, not four. */
+export interface UnavailableBlockNotice {
+  readonly type: string;
+  readonly label: string;
+  readonly reason: string;
+}
+
+/**
+ * What the canvas has to warn about, from the same `availability` the palette
+ * greys a block out with.
+ *
+ * The sentence is the engine's: the palette, this warning, the publish refusal
+ * and the failed run all say the same thing, because they answer the same
+ * question for the same person. A block type the registry does not describe at
+ * all is skipped here and is already the editor's unknown-block case.
+ */
+export function unavailableBlockNotices(
+  options: WorkflowEditorOptions,
+  types: readonly string[],
+): UnavailableBlockNotice[] {
+  // Keyed by block type, which is what collapses a workflow's four nodes of one
+  // disconnected integration into the one thing that is wrong with it.
+  const notices = new Map<string, UnavailableBlockNotice>();
+  for (const type of types) {
+    const contract = options.blockRegistry[type as WorkflowBlockType];
+    if (!contract || contract.availability.available) continue;
+    notices.set(type, {
+      type,
+      label: contract.presentation.label,
+      reason: contract.availability.unavailableReason,
+    });
+  }
+  return [...notices.values()];
+}
+
 function truncate(text: string, max = 48): string {
   const clean = text.trim().replace(/\s+/g, " ");
   return clean.length > max ? clean.slice(0, max - 1) + "…" : clean;
@@ -38,14 +75,23 @@ function agentModelSummary(node: FlowNodeDef): string | null {
   return provider === "claude" || provider === "codex" ? `${provider} · ${model}` : model;
 }
 
-/** The investigate block's enabled context providers, read from v2.configuration
+/** The investigate block's enabled context sources, read from v2.configuration
  *  for a deployed node and from params for a freshly edited one. An absent list
  *  means both are on, matching the param's own default: a node nobody has
- *  configured yet investigates every source it can reach. */
-export function investigateProviders(node: FlowNodeDef): { jira: boolean; slack: boolean } {
-  const raw: unknown = node.v2?.configuration.providers ?? node.params.providers;
-  if (!Array.isArray(raw)) return { jira: true, slack: true };
-  return { jira: raw.includes("jira"), slack: raw.includes("slack") };
+ *  configured yet investigates every source it can reach. Also accepts the old
+ *  vocabulary (`providers: ["jira","slack"]`) so a definition saved before the
+ *  rename still draws correctly instead of showing nothing selected. */
+export function investigateSources(node: FlowNodeDef): { issueTracker: boolean; chat: boolean } {
+  const raw: unknown =
+    node.v2?.configuration.sources ??
+    node.params.sources ??
+    node.v2?.configuration.providers ??
+    node.params.providers;
+  if (!Array.isArray(raw)) return { issueTracker: true, chat: true };
+  return {
+    issueTracker: raw.includes("issue_tracker") || raw.includes("jira"),
+    chat: raw.includes("chat") || raw.includes("slack"),
+  };
 }
 
 function rateLimitSummary(node: FlowNodeDef): string | null {
@@ -66,8 +112,11 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
   // type arrives here as a plain string once the worker ships the block.
   const nodeType: string = node.type;
   if (nodeType === "investigate") {
-    const providers = investigateProviders(node);
-    return joinSummary([providers.jira ? "jira" : null, providers.slack ? "slack" : null]);
+    const sources = investigateSources(node);
+    return joinSummary([
+      sources.issueTracker ? "issue tracker" : null,
+      sources.chat ? "chat" : null,
+    ]);
   }
   switch (node.type) {
     case "trigger_ticket_ai":
@@ -176,7 +225,7 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       const custom = str(target);
       return custom !== "" ? custom : null;
     }
-    case "send_slack_message": {
+    case "send_message": {
       const message = str(node.params.message);
       return message !== "" ? message : null;
     }
@@ -221,7 +270,6 @@ const GROUP_ORDER = [
   "vcs",
   "human",
   "utility",
-  "arthur",
 ] as const;
 
 const GROUP_LABELS: Record<string, string> = {
@@ -233,7 +281,6 @@ const GROUP_LABELS: Record<string, string> = {
   vcs: "Version control",
   human: "Human",
   utility: "Utility",
-  arthur: "Arthur",
 };
 
 function paletteDefaults(
@@ -250,6 +297,18 @@ function paletteDefaults(
   return defaults;
 }
 
+/** Title Case from a group id, for a group a newer worker sends. */
+function groupLabel(group: string): string {
+  return (
+    GROUP_LABELS[group] ??
+    group
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ")
+  );
+}
+
 export function buildPaletteItems(
   options: WorkflowEditorOptions,
 ): PaletteGroup[] {
@@ -262,12 +321,28 @@ export function buildPaletteItems(
       // "add a new one" affordance is gone.
       contract.type !== "run_checks",
   );
-  const groups: PaletteGroup[] = GROUP_ORDER.flatMap((group) => {
+  // The order is core's, then any group this dashboard does not know, in
+  // registry order. The type says the list is closed, but the registry comes
+  // from the worker at runtime, and a worker one deploy ahead can send a group
+  // this build has never heard of; iterating only the known order would drop
+  // its blocks out of the palette with no sign that anything was missing.
+  // Integration blocks are NOT such a group: the worker files them under
+  // `utility` until the contract names the integration that owns a block
+  // (plan decision 13), which is what grouping them by name needs.
+  const knownGroups = new Set<string>(GROUP_ORDER);
+  const contributedGroups = [
+    ...new Set(
+      contracts
+        .map((contract) => contract.presentation.group)
+        .filter((group) => !knownGroups.has(group)),
+    ),
+  ];
+  const groups: PaletteGroup[] = [...GROUP_ORDER, ...contributedGroups].flatMap((group) => {
     const groupContracts = contracts.filter((contract) => contract.presentation.group === group);
     if (groupContracts.length === 0) return [];
     return [{
       group,
-      label: GROUP_LABELS[group],
+      label: groupLabel(group),
       color: groupContracts[0]!.presentation.color,
       items: groupContracts.map((contract) => ({
         id: `block:${contract.type}`,

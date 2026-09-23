@@ -12,6 +12,7 @@ import {
   sourceHint,
   sourceLabel,
 } from "./format";
+import { SETTING_LIST_ENTRY_RULE } from "@shared/contracts";
 import { formatDateTime } from "../date-time";
 
 test("settingLabel converts MAX_CONCURRENT_AGENTS to Max concurrent agents", () => {
@@ -40,8 +41,19 @@ test("settingLabel converts V2_MAX_BLOCK_CONCURRENCY to V2 max block concurrency
   );
 });
 
-test("settingLabel converts GITHUB_BOT_LOGIN to GitHub bot login", () => {
-  assert.equal(settingLabel("GITHUB_BOT_LOGIN"), "GitHub bot login");
+// The casing table is the SETTINGS vocabulary. A provider's own variables are
+// connection fields, labelled by the manifest that declares them, and this
+// function is never handed one: a spelling kept here for a provider would be
+// core carrying a provider's name for a key that cannot arrive.
+test("settingLabel keeps no spelling for a provider's connection variable", () => {
+  assert.equal(settingLabel("GITHUB_BOT_LOGIN"), "Github bot login");
+});
+
+test("settingLabel converts ATTACHMENT_MAX_FILE_SIZE_MB to Attachment max file size MB", () => {
+  assert.equal(
+    settingLabel("ATTACHMENT_MAX_FILE_SIZE_MB"),
+    "Attachment max file size MB",
+  );
 });
 
 test("settingLabel converts COLUMN_AI to Column AI", () => {
@@ -185,6 +197,12 @@ test("settingIssuesFromMessage returns empty object for message with no keys", (
   const message = "Invalid reason";
   const issues = settingIssuesFromMessage(message);
   assert.deepEqual(issues, {});
+});
+
+test("settingIssuesFromMessage says to send one value per entry, as the worker's refusal does", () => {
+  const message = `Invalid settings: SLACK_ALLOWED_USER_IDS (list_entry_invalid). ${SETTING_LIST_ENTRY_RULE}`;
+  const issues = settingIssuesFromMessage(message);
+  assert.deepEqual(issues, { SLACK_ALLOWED_USER_IDS: SETTING_LIST_ENTRY_RULE });
 });
 
 test("settingIssuesFromMessage handles null_not_allowed reason", () => {
