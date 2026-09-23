@@ -8,7 +8,7 @@ import { AREAS, type Area } from "./areas.ts";
  * rather than asking the model a second time, so both readers see one text.
  */
 
-export interface AreaNotes {
+interface AreaNotes {
   area: Area;
   /** One plain sentence about the area, written by the model or the fallback. */
   summary: string;

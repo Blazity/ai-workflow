@@ -81,7 +81,7 @@ export function areaOfPath(path: string): Area {
 }
 
 /** The area most of these paths land in, or undefined when none lands in a named area. */
-export function areaOfPaths(paths: readonly string[]): Area | undefined {
+function areaOfPaths(paths: readonly string[]): Area | undefined {
   const counts = new Map<Area, number>();
   for (const path of paths) {
     if (isNoise(path)) continue;
@@ -97,7 +97,7 @@ export function areaOfPaths(paths: readonly string[]): Area | undefined {
   return best;
 }
 
-export function areaOfScope(subject: string): Area | undefined {
+function areaOfScope(subject: string): Area | undefined {
   const scope = SCOPE_PATTERN.exec(subject)?.[1];
   return scope ? SCOPE_AREAS[scope] : undefined;
 }

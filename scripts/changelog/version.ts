@@ -19,7 +19,7 @@ export function parseVersion(value: string): ParsedVersion | undefined {
   return { month: Number(match[2]), n: Number(match[3]), year: Number(match[1]) };
 }
 
-export function formatVersion({ month, n, year }: ParsedVersion): string {
+function formatVersion({ month, n, year }: ParsedVersion): string {
   return `v${year}.${String(month).padStart(2, "0")}.${n}`;
 }
 

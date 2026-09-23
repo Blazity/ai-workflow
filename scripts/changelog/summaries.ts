@@ -30,7 +30,7 @@ export interface Summaries {
   reason?: string;
 }
 
-export interface ModelRequest {
+interface ModelRequest {
   system: string;
   user: string;
   schema: Record<string, unknown>;
@@ -74,7 +74,7 @@ export async function readToneRule(root: string): Promise<string> {
   return readme.slice(start, next === -1 ? undefined : next).trim();
 }
 
-export function buildRequest(groups: readonly AreaGroup[], toneRule: string): ModelRequest {
+function buildRequest(groups: readonly AreaGroup[], toneRule: string): ModelRequest {
   const system = [
     "You write the prose around the release notes of AI Workflow, a product that turns engineering events into agent runs.",
     "The readers are the people using the product. Follow this tone rule exactly:",
@@ -176,12 +176,12 @@ function parseAnswer(text: string, groups: readonly AreaGroup[]): Omit<Summaries
 const COUNT_WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
 
 /** A plain line that needs no model: how many changes the area carries. */
-export function fallbackSummary(count: number): string {
+function fallbackSummary(count: number): string {
   const number = COUNT_WORDS[count] ?? String(count);
   return `${number} ${count === 1 ? "change" : "changes"} in this area.`;
 }
 
-export function fallbackSummaries(groups: readonly AreaGroup[], reason: string): Summaries {
+function fallbackSummaries(groups: readonly AreaGroup[], reason: string): Summaries {
   return {
     areaSummaries: new Map(groups.map((group) => [group.area, fallbackSummary(group.bullets.length)])),
     generatedBy: "fallback",
