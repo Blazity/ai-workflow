@@ -36,12 +36,28 @@ describe("the tracker's links", () => {
 });
 
 describe("the link a run is shown with", () => {
-  it("keeps the link the run recorded, whatever the tracker says now", () => {
-    // A run recorded before the tracker was reconnected, or before this rule
-    // moved into the tracker, keeps the link it was shown with.
+  it("keeps the link the run recorded when the tracker now links another site", () => {
+    // Reconnected to another site since, or another tracker: the run's ticket
+    // lives where it was read.
     expect(
       ticketLinkFor("https://acme.atlassian.net/browse/AWT-7", "AWT-7", ticketLinksOf(tracker)),
     ).toBe("https://acme.atlassian.net/browse/AWT-7");
+  });
+
+  it("repairs a recorded link when the tracker links the same site differently", () => {
+    // Core once spelled `<Site URL>/browse/KEY`, and a Site URL saved with a
+    // path recorded a page that does not exist. The same site's tracker knows
+    // the page.
+    const jira = { ticketUrl: (key: string) => `https://acme.atlassian.net/browse/${key}` };
+    expect(
+      ticketLinkFor("https://acme.atlassian.net/jira/browse/AWT-7", "AWT-7", ticketLinksOf(jira)),
+    ).toBe("https://acme.atlassian.net/browse/AWT-7");
+  });
+
+  it("keeps the recorded link when no tracker answers any more", () => {
+    expect(
+      ticketLinkFor("https://acme.atlassian.net/jira/browse/AWT-7", "AWT-7", NO_TICKET_LINKS),
+    ).toBe("https://acme.atlassian.net/jira/browse/AWT-7");
   });
 
   it("asks the tracker in force for a run that recorded none", () => {

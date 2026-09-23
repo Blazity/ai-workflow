@@ -50,16 +50,31 @@ export function ticketLinksOf(
 /**
  * The link shown for a run's ticket.
  *
- * The one the run recorded wins: it is the link the tracker gave when the run
- * read its ticket, so a run recorded before a tracker was reconnected, or
- * before this rule moved into the tracker, keeps the link it was shown with.
- * Without one, the active tracker links the key now; without a key or a
- * tracker, there is none.
+ * The tracker in force wins when it links the key ON THE SAME HOST as the link
+ * the run recorded: that is the same site, and its answer today is the right
+ * one, which repairs the links core used to spell itself (a Site URL saved
+ * with a path gave `.../jira/browse/KEY`, a page that does not exist). A
+ * recorded link on another host is kept: the tracker was reconnected to
+ * another site since, or is another tracker, and the run's ticket lives where
+ * it was read. With no recorded link the tracker in force links the key; with
+ * neither, there is none.
  */
 export function ticketLinkFor(
   recorded: string | null | undefined,
   ticketKey: string | null | undefined,
   links: TicketLinks,
 ): string | null {
-  return recorded ?? (ticketKey ? links(ticketKey) : null);
+  const current = ticketKey ? links(ticketKey) : null;
+  if (!recorded) return current;
+  return current !== null && hostOf(current) !== null && hostOf(current) === hostOf(recorded)
+    ? current
+    : recorded;
+}
+
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host.toLowerCase();
+  } catch {
+    return null;
+  }
 }

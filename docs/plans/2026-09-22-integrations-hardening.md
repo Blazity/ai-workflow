@@ -217,9 +217,14 @@ that went nowhere. Chosen: an optional `ticketUrl(key)` on
 ticket; additive, ADR-010 change log), and one pair of functions every core
 link site calls (`engine/support/ticket-url.ts`, a leaf with no imports
 because the workflow body reads it). A ticket run records the tracker's link
-on its ticket snapshot and in `runs.ticket_url`; every surface shows the
-recorded link first and asks the tracker in force only when there is none, so
-old runs keep the links they were shown with. `RunStartTracker.baseUrl` is
+on its ticket snapshot and in `runs.ticket_url`. Every surface asks the
+tracker in force and shows its link when it is on the same host as the
+recorded one, which repairs the `<Site URL>/browse/KEY` links core recorded
+from a Site URL with a path; a recorded link on another host (the tracker was
+reconnected to another site, or replaced) or a tracker that gives none keeps
+the recorded link. (Revised after the gate: the first version showed the
+recorded link whenever there was one, which kept those broken links forever.)
+`RunStartTracker.baseUrl` is
 still written and no longer read, so a rollback finds it. Rejected: fixing the
 path inside core (the rule stays in core and a second tracker still gets Jira
 URLs); a required port member (breaks every tracker written against the
