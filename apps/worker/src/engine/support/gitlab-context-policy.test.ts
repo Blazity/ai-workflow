@@ -3,9 +3,11 @@ import { integrationManifest } from "@integrations/registry";
 import { integrationRuntime } from "@integrations/registry/worker";
 
 /**
- * GitLab's repository listing through the context core hands the integration,
- * both real.
+ * GitLab's requests through the context core hands the integration, both
+ * real: the retry policy every integration gets, applied to what the GitLab
+ * adapter actually sends (Gitbeaker's calls included).
  *
+ * The listing:
  * The listing is retried by the context's HTTP policy, the one every
  * integration gets: a page GitLab failed on its own side or never answered is
  * asked again, a refusal never is. A GitLab failure that carried nothing once
@@ -17,7 +19,13 @@ const { buildIntegrationContext } = await import("../../services/integrations/co
 
 const fetchMock = vi.fn();
 
-function gitlab() {
+interface GitLabUnderTest {
+  listRepositories(): Promise<Array<{ repoPath: string }>>;
+  getPRHead(prId: number): Promise<{ headSha: string }>;
+  postPRComment(prId: number, body: string): Promise<{ url: string | null }>;
+}
+
+function gitlab(): GitLabUnderTest {
   const manifest = integrationManifest("gitlab")!;
   const ctx = buildIntegrationContext({
     manifest,
@@ -28,7 +36,7 @@ function gitlab() {
   return (integrationRuntime("gitlab")!.capabilities.vcs as (
     context: typeof ctx,
     repository: { repoPath: string; baseBranch: string },
-  ) => { listRepositories(): Promise<Array<{ repoPath: string }>> })(ctx, {
+  ) => GitLabUnderTest)(ctx, {
     repoPath: "platform/api",
     baseBranch: "main",
   });
@@ -87,5 +95,40 @@ describe("listing GitLab projects through the context's HTTP", () => {
       "GitLab projects list timed out after 18000ms",
     );
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("GitLab's reads and writes through the context's HTTP", () => {
+  it("never sends a note again after GitLab failed on its own side", async () => {
+    // The note may have been posted before the 502; a second one would be a
+    // duplicate on somebody's merge request.
+    fetchMock.mockResolvedValue(new Response("bad gateway", { status: 502, statusText: "Bad Gateway" }));
+
+    await expect(gitlab().postPRComment(7, "hello")).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+  });
+
+  it("asks for a merge request again once GitLab's rate limit says it may", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: { "retry-after": "0" } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            sha: "4f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c",
+            target_branch: "main",
+            state: "opened",
+            head_pipeline: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+
+    await expect(gitlab().getPRHead(7)).resolves.toMatchObject({
+      headSha: "4f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
