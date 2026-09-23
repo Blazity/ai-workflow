@@ -110,9 +110,6 @@ export async function loadWorkflowDefinitionFor(
   const { deploymentIntegrations, NO_INTEGRATIONS } = await import(
     "../definition/integration-availability.js"
   );
-  const { builtinCapabilitiesOfDeployment } = await import(
-    "../definition/block-contract-environment.js"
-  );
   const { integrationPinsFor, runIntegrationBlocker } = await import(
     "../definition/integration-run.js"
   );
@@ -156,7 +153,6 @@ export async function loadWorkflowDefinitionFor(
     return deploymentIntegrations({
       manifests: integrationManifests,
       states: await readIntegrationStates(),
-      builtinCapabilities: await builtinCapabilitiesOfDeployment(),
     });
   };
 

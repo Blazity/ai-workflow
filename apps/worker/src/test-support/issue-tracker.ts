@@ -25,8 +25,14 @@ import { ticketSubjectKey } from "../engine/support/subject-key.js";
 export interface ConnectedIssueTrackerDouble {
   /** The project this deployment watches. Defaults to `PROJ`. */
   projectKey?: string;
-  /** Where a person opens a ticket. Empty means no link is published. */
+  /** Where the tracker's site is, which identifies the connection. */
   baseUrl?: string;
+  /**
+   * How this tracker links a ticket (the port's `ticketUrl`), for a suite
+   * about the links core publishes. Absent, the tracker gives no links. Used
+   * only when the suite passes no `adapter` of its own.
+   */
+  ticketUrl?: (ticketKey: string) => string | null;
   backlogTransitionId?: string;
   aiTransitionId?: string;
   aiReviewTransitionId?: string;
@@ -57,11 +63,10 @@ export function connectedIssueTracker(options: ConnectedIssueTrackerDouble = {})
   };
   const name = options.name ?? "Jira";
   const id = "jira";
-  const adapter = options.adapter ?? {};
+  const adapter = options.adapter ?? (options.ticketUrl ? { ticketUrl: options.ticketUrl } : {});
   const resolved = { ok: true as const, id, name, adapter, wiring };
   return {
     resolveActiveIssueTracker: vi.fn(async () => resolved),
-    coreServesIssueTracker: vi.fn(async () => true),
     issueTrackerWiring: vi.fn(async () => wiring),
     issueTrackerName: vi.fn(async () => name),
     // The real derivation, not a second one: the subject key is compared as a
@@ -107,7 +112,6 @@ export function noIssueTrackerConnected(
       refusal: "not_connected" as const,
       reason,
     })),
-    coreServesIssueTracker: vi.fn(async () => false),
     issueTrackerWiring: vi.fn(refuse),
     issueTrackerName: vi.fn(async () => "the issue tracker"),
     trackerIdentityOf: (trackerId: string, baseUrl: string) =>

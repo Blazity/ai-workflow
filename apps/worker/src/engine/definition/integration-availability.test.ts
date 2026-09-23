@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IntegrationManifest } from "@integrations/sdk";
 import type { IntegrationState } from "@shared/contracts";
 import {
+  activeProviderOf,
   coreBlockCapabilities,
   deploymentIntegrations,
   integrationBlockAvailability,
@@ -201,14 +202,29 @@ describe("a block that asks for a capability rather than a provider", () => {
     ],
   });
 
-  it("runs on the capability core still serves itself", () => {
+  const tracker = manifest({
+    id: "acmetrack",
+    name: "Acme Track",
+    capabilities: ["issue_tracker"],
+  });
+
+  it("runs when the one connected tracker provides the capability, counted once", () => {
+    // Until S12 the connected tracker was also counted as core's own built-in
+    // issue tracker, so "Acme Track and this deployment's built-in provider"
+    // were two providers of one capability and every block that required the
+    // issue tracker was refused on every deployment that had one connected.
     const integrations = deploymentIntegrations({
-      manifests: [research],
-      states: new Map([["acmedocs", state("acmedocs")]]),
-      builtinCapabilities: ["issue_tracker"],
+      manifests: [research, tracker],
+      states: new Map([
+        ["acmedocs", state("acmedocs")],
+        ["acmetrack", state("acmetrack")],
+      ]),
     });
 
-    expect(integrationBlockAvailability("acmedocs_research", integrations)?.available).toBe(true);
+    expect(integrationBlockAvailability("acmedocs_research", integrations)).toEqual({
+      available: true,
+      unavailableReason: null,
+    });
   });
 
   it("refuses when nothing on this deployment provides the capability", () => {
@@ -222,69 +238,85 @@ describe("a block that asks for a capability rather than a provider", () => {
     expect(availability?.unavailableReason).toContain("issue tracker");
   });
 
-  it("refuses a capability only an integration provides, because execution would use core's", () => {
-    // Availability and execution have to agree about WHICH provider serves the
-    // block. Execution hands core's own adapters today, so offering the block
-    // on the strength of an integration's declaration would promise one
-    // provider in the palette and use another in the run.
-    const tracker = manifest({
-      id: "acmetrack",
-      name: "Acme Track",
-      capabilities: ["issue_tracker"],
-    });
+  it("refuses to pick for the admin when two trackers are connected", () => {
+    const other = manifest({ id: "othertrack", name: "Other Track", capabilities: ["issue_tracker"] });
     const integrations = deploymentIntegrations({
-      manifests: [research, tracker],
+      manifests: [research, tracker, other],
       states: new Map([
         ["acmedocs", state("acmedocs")],
         ["acmetrack", state("acmetrack")],
+        ["othertrack", state("othertrack")],
       ]),
     });
 
     const availability = integrationBlockAvailability("acmedocs_research", integrations);
     expect(availability?.available).toBe(false);
-    expect(availability?.unavailableReason).toContain("Acme Track");
-    expect(availability?.unavailableReason).toContain("core still owns");
-  });
-
-  it("refuses to pick for the admin when an integration joins core on one capability", () => {
-    const tracker = manifest({
-      id: "acmetrack",
-      name: "Acme Track",
-      capabilities: ["issue_tracker"],
-    });
-    const integrations = deploymentIntegrations({
-      manifests: [research, tracker],
-      states: new Map([
-        ["acmedocs", state("acmedocs")],
-        ["acmetrack", state("acmetrack")],
-      ]),
-      builtinCapabilities: ["issue_tracker"],
-    });
-
-    const availability = integrationBlockAvailability("acmedocs_research", integrations);
-    expect(availability?.available).toBe(false);
-    expect(availability?.unavailableReason).toContain("Acme Track");
-    // No selection control exists before S6, so the sentence must not send an
-    // admin looking for one.
+    expect(availability?.unavailableReason).toContain("Acme Track and Other Track both provide");
+    // No selection control exists yet, so the sentence must not send an admin
+    // looking for one.
     expect(availability?.unavailableReason).toContain("Disable the ones you do not want");
   });
 
   it("ignores a provider an admin disabled when counting who can serve", () => {
-    const tracker = manifest({
-      id: "acmetrack",
-      name: "Acme Track",
-      capabilities: ["issue_tracker"],
+    const other = manifest({ id: "othertrack", name: "Other Track", capabilities: ["issue_tracker"] });
+    const integrations = deploymentIntegrations({
+      manifests: [research, tracker, other],
+      states: new Map([
+        ["acmedocs", state("acmedocs")],
+        ["acmetrack", state("acmetrack")],
+        ["othertrack", state("othertrack", { enabled: false, status: "disabled", usable: false })],
+      ]),
     });
+
+    expect(integrationBlockAvailability("acmedocs_research", integrations)?.available).toBe(true);
+  });
+
+  it("names the switched-off tracker rather than sending the admin to connect a second one", () => {
     const integrations = deploymentIntegrations({
       manifests: [research, tracker],
       states: new Map([
         ["acmedocs", state("acmedocs")],
         ["acmetrack", state("acmetrack", { enabled: false, status: "disabled", usable: false })],
       ]),
-      builtinCapabilities: ["issue_tracker"],
     });
 
-    expect(integrationBlockAvailability("acmedocs_research", integrations)?.available).toBe(true);
+    const availability = integrationBlockAvailability("acmedocs_research", integrations);
+    expect(availability?.unavailableReason).toContain("Acme Track would provide");
+    expect(availability?.unavailableReason).toContain("switched off");
+  });
+
+  it("refuses a capability execution cannot hand a block, however many declare it", () => {
+    // Availability and execution have to agree about WHICH provider serves the
+    // block: tracing is applied around a run by core, never handed to a block,
+    // so offering a block on it would promise something the run cannot give.
+    const tracing = manifest({ id: "acmetrace", name: "Acme Trace", capabilities: ["agent_tracing"] });
+    const traced = manifest({
+      id: "acmedocs",
+      name: "Acme Docs",
+      blocks: [{ type: "acmedocs_research", requires: { capabilities: ["agent_tracing"] } }],
+    });
+    const integrations = deploymentIntegrations({
+      manifests: [traced, tracing],
+      states: new Map([
+        ["acmedocs", state("acmedocs")],
+        ["acmetrace", state("acmetrace")],
+      ]),
+    });
+
+    const availability = integrationBlockAvailability("acmedocs_research", integrations);
+    expect(availability?.available).toBe(false);
+    expect(availability?.unavailableReason).toContain("Acme Trace");
+  });
+});
+
+describe("who serves a capability one provider serves at a time", () => {
+  it("is nobody, the one, or every name when several are usable, never the first", () => {
+    expect(activeProviderOf([])).toEqual({ kind: "none" });
+    expect(activeProviderOf(["jira"])).toEqual({ kind: "one", provider: "jira" });
+    expect(activeProviderOf(["jira", "linear"])).toEqual({
+      kind: "ambiguous",
+      providers: ["jira", "linear"],
+    });
   });
 });
 

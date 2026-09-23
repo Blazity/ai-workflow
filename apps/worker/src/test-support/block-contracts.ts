@@ -31,16 +31,15 @@ import { validateWorkflowDefinitionIssuesForDeployment } from "../engine/definit
 export function testBlockContractResolver(
   context: WorkflowBlockRegistryContext,
 ): WorkflowBlockContractResolver {
+  // A context that names version control providers and no integration serving
+  // them is a test about something else: its providers are made the ones that
+  // serve version control, as they would be on a deployment that has them.
   const integrations =
     context.vcsProviders.length > 0 &&
-    !context.integrations.builtinCapabilities.has("vcs") &&
     (context.integrations.providers.get("vcs")?.length ?? 0) === 0
       ? {
           ...context.integrations,
-          builtinCapabilities: new Set([
-            ...context.integrations.builtinCapabilities,
-            "vcs",
-          ]),
+          providers: new Map([...context.integrations.providers, ["vcs", context.vcsProviders]]),
         }
       : context.integrations;
   return createWorkflowBlockContractResolver({ ...context, integrations });

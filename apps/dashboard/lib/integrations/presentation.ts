@@ -732,8 +732,9 @@ function impactReasonLine(
  * Where a run compares the connection it pinned for this integration, which is
  * where a changed connection stops it: the integration's own blocks, the Send
  * message block for a messaging provider, a repository on a version control
- * provider. The tracker, tracing and memory compare nothing today (the
- * worker's `runsThatMayStop` counts by the same list).
+ * provider. The tracker and memory compare nothing today, and tracing compares
+ * its pin only to stop tracing that run, never the run itself (the worker's
+ * `runsThatMayStop` counts by the same list).
  */
 function pinCheckPaths(integration: IntegrationDto): string[] {
   const paths: string[] = [];
@@ -741,6 +742,21 @@ function pinCheckPaths(integration: IntegrationDto): string[] {
   if (integration.capabilities.includes("messaging")) paths.push("a Send message block");
   if (integration.capabilities.includes("vcs")) paths.push(`a repository on ${integration.name}`);
   return paths;
+}
+
+/**
+ * How the list of enabled workflows is introduced. A workflow reaches a
+ * version control provider through the repository it picks for each ticket,
+ * so the worker lists every workflow whose repository scope leaves room for
+ * the provider (`definitionMayReach` in the worker's impact.ts): whether the
+ * next run of an unscoped workflow lands on this provider or another is not
+ * knowable before the ticket arrives, and "may use" is the claim the list can
+ * back. Every other reach is read off the graph, and is certain.
+ */
+function workflowsUsing(integration: IntegrationDto): string {
+  return integration.capabilities.includes("vcs")
+    ? `Enabled workflows that may use ${integration.name}`
+    : `Enabled workflows using ${integration.name}`;
 }
 
 /** "that uses its issue tracker", or "that uses it" for one with no capability. */
@@ -778,7 +794,7 @@ export function integrationImpactLines(
   const unmeasured = impact?.unmeasuredCapabilities ?? [];
   if (definitions === null && unmeasured.length > 0) {
     lines.push(
-      `Enabled workflows using ${integration.name}: unknown. This preview cannot yet see which workflows use its ${andList(
+      `${workflowsUsing(integration)}: unknown. This preview cannot yet see which workflows use its ${andList(
         unmeasured.map((id) => capabilityLabel(id).toLowerCase()),
       )}, so it names none rather than claim none.`,
     );
@@ -786,13 +802,13 @@ export function integrationImpactLines(
     lines.push("Enabled workflows: unknown. The worker could not read the deployed definitions.");
   } else if (definitions.length === 0) {
     lines.push(
-      `Enabled workflows using ${integration.name}: none. Drafts and disabled workflows are not included.`,
+      `${workflowsUsing(integration)}: none. Drafts and disabled workflows are not included.`,
     );
   } else {
     const shown = definitions.slice(0, IMPACT_NAME_LIMIT).map(({ name }) => name);
     const remainder = definitions.length - shown.length;
     lines.push(
-      `Enabled workflows using ${integration.name}: ${shown.join(", ")}${
+      `${workflowsUsing(integration)}: ${shown.join(", ")}${
         remainder > 0 ? `, and ${remainder} more` : ""
       }.`,
     );

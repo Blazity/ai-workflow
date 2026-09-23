@@ -26,11 +26,9 @@ import { isHarnessProfileReference } from "@shared/contracts";
 import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import { integrationManifests } from "@integrations/registry";
 import { trackerQueryRuleFor, type TrackerQueryRule } from "./tracker-query-templates.js";
+import { workflowBlockRegistryContext } from "../../engine/definition/block-contract-environment.js";
 import {
-  builtinCapabilitiesOfDeployment,
-  workflowBlockRegistryContext,
-} from "../../engine/definition/block-contract-environment.js";
-import {
+  activeProviderOf,
   deploymentIntegrations,
   NO_INTEGRATIONS,
   type DeploymentIntegrations,
@@ -117,6 +115,9 @@ export interface RequestBlockContracts {
  * it ended up being read behind everyone's back in the first place.
  */
 export type { DeploymentIntegrations };
+/** And the rule for reading who serves a single-provider capability in it,
+ *  for the same layers, so none of them states that rule a second time. */
+export { activeProviderOf };
 
 export async function connectedDeploymentIntegrations(): Promise<DeploymentIntegrations> {
   // A build that ships no integration has nothing to read and no block to
@@ -130,18 +131,14 @@ export async function connectedDeploymentIntegrations(): Promise<DeploymentInteg
 /**
  * The assembly, over states somebody else read.
  *
- * Pure, and the only place manifests, states and the deployment's built-in
- * capabilities are put together. Every entry point above ends here, so
- * "what this build offers" has one answer however the state was obtained.
+ * Pure, and the only place this build's manifests and a deployment's states
+ * are put together. Every entry point above ends here, so "what this build
+ * offers" has one answer however the state was obtained.
  */
-async function deploymentIntegrationsFrom(
+function deploymentIntegrationsFrom(
   states: Map<string, IntegrationState>,
-): Promise<DeploymentIntegrations> {
-  return deploymentIntegrations({
-    manifests: integrationManifests,
-    states,
-    builtinCapabilities: await builtinCapabilitiesOfDeployment(),
-  });
+): DeploymentIntegrations {
+  return deploymentIntegrations({ manifests: integrationManifests, states });
 }
 
 /** The same, for a caller holding its own database handle. Goes through the

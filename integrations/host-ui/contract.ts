@@ -48,9 +48,10 @@ export interface IntegrationPageProps {
  * last two is how "nothing to show" comes to mean "your provider is down".
  *
  * "Could not ask" has three causes a reader acts on differently, so it says
- * which: our own worker did not answer (ours to fix, nothing is known about
- * the provider), the integration is not connected here (an admin connects
- * it), or the provider was asked and failed (its reason, redacted).
+ * which: our own side could not answer (the worker did not reply, or could not
+ * read this deployment's own settings: ours to fix, nothing is known about the
+ * provider), the integration is not connected here (an admin connects it), or
+ * the provider was asked and failed (its reason, redacted).
  */
 export type IntegrationPageData =
   | { readonly status: "ok"; readonly value: unknown }

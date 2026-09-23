@@ -31,7 +31,7 @@ function list() {
     window: "all",
     q: null,
     now,
-    ticketOrigin: "https://jira.example",
+    ticketLinks: (key: string) => `https://jira.example/browse/${key}`,
   });
 }
 

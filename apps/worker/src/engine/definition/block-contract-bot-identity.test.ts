@@ -12,7 +12,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
     VCS_BOT_LOGIN: undefined,
   },
 }));
-vi.mock("../support/adapters.js", () => ({ coreServesIssueTracker: () => false }));
 
 const { deploymentIntegrations } = await import("./integration-availability.js");
 const { workflowBlockRegistryContext } = await import("./block-contract-environment.js");

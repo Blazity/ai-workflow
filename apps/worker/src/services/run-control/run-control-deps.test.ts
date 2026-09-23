@@ -28,6 +28,5 @@ describe("runControlDeps without an issue tracker", () => {
     expect(deps.registry).toBe(registry);
     expect(deps.issueTracker).toBeUndefined();
     expect(deps.backlog).toBeUndefined();
-    expect(deps.trackerBaseUrl).toBe("");
   });
 });

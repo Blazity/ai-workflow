@@ -1,6 +1,6 @@
 // The Evals page, rendered once for each answer a reader has to tell apart.
 //
-// "Nothing graded", "our worker did not answer", "the engine could not be
+// "Nothing graded", "our worker could not answer", "the engine could not be
 // read" and "here are real failures" send a person to four different places,
 // so each is asserted on the words it puts on screen and on the words it must
 // not borrow from its neighbours.
@@ -43,7 +43,7 @@ const graded = {
 
 test("our worker not answering is ours, and says nothing about the engine", () => {
   const text = screen({ status: "unavailable", cause: "worker", reason: "timeout" });
-  assert.match(text, /Our worker did not answer/);
+  assert.match(text, /Our worker could not answer/);
   assert.doesNotMatch(text, /could not be read/);
   assert.doesNotMatch(text, /Nothing was graded/);
 });
