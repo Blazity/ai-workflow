@@ -61,7 +61,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
 // A tracing integration's key is inside the sandbox by design, so the scan has
 // to cover it too, and core no longer knows its variable name: it asks the
 // connected integrations. That is the seam this stands in for.
-vi.mock("../../services/integrations/runtime.js", () => ({
+vi.mock("../../services/integrations/runtime.js", async () => ({
   integrationSecretValues: (options?: unknown) => mocks.integrationSecretValues(options),
   // Nothing is connected in this test, so a restored sandbox is configured
   // with no tracing at all.
@@ -71,6 +71,8 @@ vi.mock("../../services/integrations/runtime.js", () => ({
     states: new Map(),
     connectionFailures: new Map(),
   }),
+  // The real rule: tracing compares each tracer's pin with it.
+  checkIntegrationPin: (await import("../../services/integrations/resolve.js")).checkIntegrationPin,
 }));
 vi.mock("../../db/repositories/clarification-hooks.js", () => ({
   recordConnectedHookClarificationSnapshot: (...args: unknown[]) =>
