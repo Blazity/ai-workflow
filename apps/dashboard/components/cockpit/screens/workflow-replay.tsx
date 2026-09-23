@@ -790,6 +790,37 @@ function GroupStatusChip({ status }: { status: string | null }) {
   );
 }
 
+/** Why a repository was not entered, per the reason the worker records beside
+ *  each `skipped` entry. `unrecorded`, a token this build does not know, and
+ *  output recorded before the field existed all fall back to the one sentence
+ *  the replay could say before: the run knows nothing more about it. */
+const NOT_ENTERED_BECAUSE: Record<string, string> = {
+  not_in_workspace: "not in this run's workspace",
+  unchanged: "unchanged by this run",
+  not_reached: "not reached before the run stopped",
+};
+const NOT_ENTERED_UNKNOWN = "repository was not part of this run";
+
+/** A group's skipped repositories, grouped by why, in the order first seen. */
+function notEnteredByReason(
+  skipped: string[],
+  recorded: JsonValue[] | null,
+): Array<{ because: string; repos: string[] }> {
+  const reasonOf = new Map<string, string>();
+  for (const row of recorded ?? []) {
+    const r = asRecord(row);
+    const repo = r ? asStringField(r.repo) : null;
+    const reason = r ? asStringField(r.reason) : null;
+    if (repo && reason) reasonOf.set(repo, reason);
+  }
+  const groups = new Map<string, string[]>();
+  for (const repo of skipped) {
+    const because = NOT_ENTERED_BECAUSE[reasonOf.get(repo) ?? ""] ?? NOT_ENTERED_UNKNOWN;
+    groups.set(because, [...(groups.get(because) ?? []), repo]);
+  }
+  return [...groups].map(([because, repos]) => ({ because, repos }));
+}
+
 /** Block types whose output tab renders the humanized script panel instead
  *  of raw JSON: the two current palette entries plus the retired
  *  "run_checks" type, whose deployed definitions still emit the same shape.
@@ -844,7 +875,8 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
   // list here renders nothing new rather than a misleading "fully covered".
   // missing: repositories that took part in the run and do not declare the
   // group. skipped: repositories the run never entered at all (not in the
-  // workspace, HEAD unchanged, batch never started).
+  // workspace, HEAD unchanged, batch never started), each with the reason the
+  // run recorded, where it recorded one.
   const coverageGaps = (groupCoverage ?? [])
     .map((row) => {
       const r = asRecord(row);
@@ -857,11 +889,14 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
         .map((s) => asStringField(s))
         .filter((s): s is string => s !== null);
       if (!group || (missing.length === 0 && skipped.length === 0)) return null;
-      return { group, missing, skipped };
+      return {
+        group,
+        missing,
+        skipped,
+        notEntered: notEnteredByReason(skipped, asArray(r.skippedReasons)),
+      };
     })
-    .filter(
-      (entry): entry is { group: string; missing: string[]; skipped: string[] } => entry !== null,
-    );
+    .filter((entry) => entry !== null);
 
   return (
     <div className="flex flex-col gap-3">
@@ -931,13 +966,13 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
             Not entered
           </div>
           <div className="flex flex-col gap-0.5">
-            {coverageGaps
-              .filter((gap) => gap.skipped.length > 0)
-              .map((gap) => (
-                <div key={gap.group} className="font-mono text-[10px] text-neutral-500">
-                  {gap.group}: {gap.skipped.join(", ")} (repository was not part of this run)
+            {coverageGaps.flatMap((gap) =>
+              gap.notEntered.map(({ because, repos }) => (
+                <div key={`${gap.group}:${because}`} className="font-mono text-[10px] text-neutral-500">
+                  {gap.group}: {repos.join(", ")} ({because})
                 </div>
-              ))}
+              )),
+            )}
           </div>
         </div>
       ) : null}

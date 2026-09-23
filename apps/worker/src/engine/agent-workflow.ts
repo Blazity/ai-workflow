@@ -6,6 +6,7 @@ import { ticketRunUrl, hasDashboardLinkComment } from "./support/dashboard-links
 // workflow isolate stays free of Node builtins.
 import {
   catalogRefusalExecutionOptions,
+  isSameRepository,
   repositoryKey,
   workflowNeedsRepositoryAccess,
 } from "./support/repository-access.js";
@@ -2902,9 +2903,7 @@ async function agentWorkflowBody(
           const alreadyPromoted = writeRepositories.every((requested) =>
             approvedManifest.repositories.some(
               (repository) =>
-                repository.access === "write" &&
-                repository.provider === requested.provider &&
-                repository.repoPath.toLowerCase() === requested.repoPath.toLowerCase(),
+                repository.access === "write" && isSameRepository(repository, requested),
             ),
           );
           if (!alreadyPromoted) {

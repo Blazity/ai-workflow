@@ -108,6 +108,10 @@ export function repositoryScriptsOutput(
     declaredIn: entry.declaredIn,
     missing: entry.missing,
     skipped: entry.skipped,
+    skippedReasons: entry.skippedReasons.map((skipped) => ({
+      repo: skipped.repo,
+      reason: skipped.reason,
+    })),
   }));
   const selected = new Set(run.selectedGroupKeys);
   const decisive = [

@@ -9,10 +9,10 @@ import {
 // Discovery runs as part of engine preparation and carries no service composition.
 import type { PreSandboxRepositoryDiscovery } from "../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../sandbox/agents/types.js";
-import {
-  repositoryCatalogKey,
-  type RepositoryCatalogEntry,
-} from "./catalog.js";
+import type { RepositoryCatalogEntry } from "./catalog.js";
+// The engine-spelled repository identity, under the name these call sites
+// have always used for it; there is one definition, in repository-access.
+import { repositoryKey as repositoryCatalogKey } from "../support/repository-access.js";
 import { providerNestsRepositoryPaths } from "../../repository-map/provider-shape.js";
 import { repositoryPathExamples } from "../../repository-map/repository-path-example.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";

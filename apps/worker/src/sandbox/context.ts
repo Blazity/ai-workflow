@@ -4,7 +4,7 @@ import type {
   ReviewThread,
   ReviewThreadFeed,
 } from "../adapters/vcs/types.js";
-import type { ReviewResult } from "@shared/contracts";
+import { repositoryCatalogKey, type ReviewResult } from "@shared/contracts";
 import {
   concatPromptParts,
   joinPromptParts,
@@ -1246,7 +1246,7 @@ function workspaceAttachments(
     seen.add(localPath);
     const pr = isReviewSibling(repo) ? repo.reviewPullRequest : undefined;
     return {
-      key: `${repo.provider}:${repo.repoPath.toLowerCase()}`,
+      key: repositoryCatalogKey({ provider: repo.provider, path: repo.repoPath }),
       localPath,
       access: selectedRepositoryAccess(repo, manifest),
       rationale: repo.selectedRationale,
