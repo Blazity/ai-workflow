@@ -531,8 +531,6 @@ describe("a block that requires a capability core applies around the run", () =>
     blocks: [{ type: "acmerecall_search", requires: { capabilities: ["memory"] } }],
   });
   const secondMemory = manifest({ id: "acmenotes", name: "Acme Notes", capabilities: ["memory"] });
-  const tracer = manifest({ id: "acmetracer", name: "Acme Tracer", capabilities: ["agent_tracing"] });
-  const otherTracer = manifest({ id: "acmespans", name: "Acme Spans", capabilities: ["agent_tracing"] });
   const tracedBlock = manifest({
     id: "acmeaudit",
     name: "Acme Audit",
