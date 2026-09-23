@@ -178,6 +178,64 @@ describe("the values an integration actually receives", () => {
   });
 });
 
+describe("a value that cannot be what its field is", () => {
+  it("refuses a stored secret with a line break in it, naming the field and not the value", () => {
+    // Stored secrets are ciphertext to the resolver, so this read is the only
+    // place a wrapped one can be caught before a provider is sent it (inside
+    // Basic auth it would travel base64-encoded and come back as a refusal).
+    const result = readConnectionValues({
+      manifest,
+      source: "stored",
+      environment: environmentReaderFrom({}),
+      active: {
+        version: 1,
+        config: { baseUrl: "https://fixture.example/stored", appId: "7" },
+        secrets: {
+          apiToken: encryptIntegrationSecret("stored-to\nken-9f3a", KEY, {
+            integrationId: "fixture",
+            fieldKey: "apiToken",
+          }),
+        },
+        secretDigests: {},
+        testStatus: "passed",
+        testReason: null,
+        testMessage: null,
+        testedAt: null,
+        createdAt: "2026-09-18T10:00:00.000Z",
+      },
+      secretsKey: SECRETS_KEY,
+    });
+    expect(result).toEqual({
+      ok: false,
+      failure: {
+        reason: "value_malformed",
+        message: "The API token has a line break inside it, and it has to be a single line. Enter it again.",
+      },
+    });
+  });
+
+  it("refuses an integer field that is not a number, instead of handing the provider NaN", () => {
+    const result = readConnectionValues({
+      manifest,
+      source: "environment",
+      environment: environmentReaderFrom({
+        FIXTURE_BASE_URL: "https://fixture.example/site",
+        FIXTURE_API_TOKEN: "token-abcdef",
+        FIXTURE_APP_ID: "Iv1.8a61f9b3a7aba766",
+      }),
+      active: null,
+      secretsKey: SECRETS_KEY,
+    });
+    expect(result).toEqual({
+      ok: false,
+      failure: {
+        reason: "value_malformed",
+        message: "The App id has to be a whole number. Set FIXTURE_APP_ID again on this deployment.",
+      },
+    });
+  });
+});
+
 describe("what a provider's own words may carry back", () => {
   it("takes the credential out of a message that echoed it (INT-023)", () => {
     const message = redactIntegrationText(

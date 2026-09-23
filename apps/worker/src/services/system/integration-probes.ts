@@ -84,6 +84,6 @@ function runProbe(
     // that shipped a manifest without its runtime. It is one failing check.
     throw new Error("This build ships no probe for that check.");
   }
-  const context = buildIntegrationContext({ manifest, values, secrets, signal });
+  const context = buildIntegrationContext({ manifest, values, secrets, lifetime: signal });
   return (probe as (ctx: unknown) => Promise<IntegrationHealthResult>)(context);
 }

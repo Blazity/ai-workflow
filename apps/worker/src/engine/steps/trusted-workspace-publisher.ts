@@ -85,6 +85,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   const { assertOpenSourcePullRequest, isSourcePullRequestRepository } = await import(
     "../helpers/source-pull-request.js"
   );
+  const { isPullRequestUnreadableError } = await import("@integrations/sdk");
 
   const source = await Sandbox.get({
     sandboxId: input.sourceSandboxId,
@@ -530,9 +531,21 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         continue;
       }
       if (input.sourcePullRequest && sourceVcs && expectedSourceHead) {
+        let sourceHead;
+        try {
+          sourceHead = await sourceVcs.getPRHead(input.sourcePullRequest.prId);
+        } catch (error) {
+          // The pull request this run answers is gone, or this connection may
+          // no longer read it. Asking again cannot change that, and a retry of
+          // this step redoes the sandbox, the clone and the bundle import, so
+          // the repository fails here as a preflight, which is not retried.
+          if (!isPullRequestUnreadableError(error)) throw error;
+          failPrepared(item, error.message, "preflight_failed");
+          continue;
+        }
         assertOpenSourcePullRequest(
           { ...input.sourcePullRequest, headSha: expectedSourceHead },
-          await sourceVcs.getPRHead(input.sourcePullRequest.prId),
+          sourceHead,
         );
       }
       const push = await publisher.runCommand("git", [

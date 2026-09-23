@@ -1,5 +1,7 @@
 import {
   defineIntegrationRuntime,
+  readProviderFailure,
+  refusedOrThrow,
   type IntegrationContext,
   type IntegrationRuntimeDefinition,
 } from "@integrations/sdk";
@@ -27,23 +29,41 @@ async function statuses(ctx: JiraContext): Promise<Array<{ id: string; name: str
 
 const definition: IntegrationRuntimeDefinition<JiraManifest> = {
   webhook,
+  /**
+   * The account first, then the project, each refusal naming the value to fix.
+   * Jira answers 401 for credentials it does not accept and 404 for a project
+   * the account cannot see; anything that is not such an answer (a timeout, a
+   * 5xx, a rate limit) throws, so an outage is not recorded as a bad token.
+   */
   testConnection: async (ctx) => {
+    let accountId: string;
     try {
-      const accountId = await account(ctx);
-      const found = await statuses(ctx);
-      if (found.length === 0) {
-        return {
-          ok: false,
-          reason: `Connected as ${accountId}, but project ${ctx.connection.projectKey} has no statuses this account can see. Check the project key and this account's access to it.`,
-        };
-      }
-      return {
-        ok: true,
-        message: `Connected to ${ctx.connection.projectKey}, ${found.length} status${found.length === 1 ? "" : "es"} visible.`,
-      };
+      accountId = await account(ctx);
     } catch (error) {
-      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      return refusedOrThrow(
+        error,
+        `Jira did not accept this Site URL and API token (${messageOf(error)}). Check both values.`,
+      );
     }
+    let found: Array<{ id: string; name: string }>;
+    try {
+      found = await statuses(ctx);
+    } catch (error) {
+      return refusedOrThrow(
+        error,
+        `Connected as ${accountId}, but project ${ctx.connection.projectKey} is not visible to this account (${messageOf(error)}). Check the project key and this account's access to it.`,
+      );
+    }
+    if (found.length === 0) {
+      return {
+        ok: false,
+        reason: `Connected as ${accountId}, but project ${ctx.connection.projectKey} has no statuses this account can see. Check the project key and this account's access to it.`,
+      };
+    }
+    return {
+      ok: true,
+      message: `Connected to ${ctx.connection.projectKey}, ${found.length} status${found.length === 1 ? "" : "es"} visible.`,
+    };
   },
   capabilities: {
     issue_tracker: (ctx) =>
@@ -60,18 +80,23 @@ const definition: IntegrationRuntimeDefinition<JiraManifest> = {
       try {
         await account(ctx);
         return { status: "live", message: "Jira accepts the token." };
-      } catch {
-        // Two separate checks on purpose, and the sentence is the one core's
-        // probe used to say. A deployment whose runs flow through webhooks can
-        // hide a stale project key for weeks, and one blended message made
-        // that undiagnosable from the Health screen. The underlying error is
-        // not repeated here because it is a transport line an operator cannot
-        // act on, while the two values named below are the ones they can.
-        return {
-          status: "down",
-          message:
-            "Jira authentication failed: the Site URL or the API token was not accepted.",
-        };
+      } catch (error) {
+        // Two separate checks on purpose, and the refusal sentence is the one
+        // core's probe used to say. A deployment whose runs flow through
+        // webhooks can hide a stale project key for weeks, and one blended
+        // message made that undiagnosable from the Health screen. A Jira that
+        // did not answer is not a refusal: blaming the token for a timeout
+        // sends the operator to rotate a credential that works.
+        return readProviderFailure(error).kind === "refused"
+          ? {
+              status: "down",
+              message:
+                "Jira authentication failed: the Site URL or the API token was not accepted.",
+            }
+          : {
+              status: "down",
+              message: `Jira did not answer, so the token could not be checked (${messageOf(error)}).`,
+            };
       }
     },
     /**
@@ -95,11 +120,16 @@ const definition: IntegrationRuntimeDefinition<JiraManifest> = {
               status: "down",
               message: `Project ${ctx.connection.projectKey} has no statuses this account can see. Either the project key is wrong or the account has no access to it, and until it is fixed every delivery about a ticket is ignored as belonging to another project.`,
             };
-      } catch {
-        return {
-          status: "down",
-          message: `Jira authenticated, but project ${ctx.connection.projectKey} is not accessible; check the Project key on this integration and the token account's access to that project.`,
-        };
+      } catch (error) {
+        return readProviderFailure(error).kind === "refused"
+          ? {
+              status: "down",
+              message: `Jira authenticated, but project ${ctx.connection.projectKey} is not accessible; check the Project key on this integration and the token account's access to that project.`,
+            }
+          : {
+              status: "down",
+              message: `Jira did not answer, so project ${ctx.connection.projectKey} could not be checked (${messageOf(error)}).`,
+            };
       }
     },
     "webhook-registration": async (ctx) => {
@@ -147,6 +177,10 @@ const definition: IntegrationRuntimeDefinition<JiraManifest> = {
     },
   },
 };
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function withoutQuery(url: string): string {
   return (url.split("?")[0] ?? "").replace(/\/+$/u, "").toLowerCase();

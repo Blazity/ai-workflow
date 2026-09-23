@@ -11,19 +11,12 @@ import { resolveUsableIntegrations } from "./usable.js";
  * environment is not read here; a connection sourced from it already reaches
  * this through the resolver, and a second read would disagree with the first
  * the moment an admin stored values in the dashboard instead.
- */
-export async function getVcsBotLogin(kind: VcsProviderKind): Promise<string | undefined> {
-  const reading = await readVcsBotLogin(kind);
-  return reading.readable ? reading.login : undefined;
-}
-
-/**
- * The same answer, with "could not be read" kept apart from "none is set".
  *
- * A caller that ACTS on the answer needs the difference. Not knowing the
+ * "Could not be read" is kept apart from "none is set", and there is no reader
+ * that folds the two: every caller acts on the answer. Not knowing the
  * automation account means every comment and push it made reads as somebody
  * else's, so the workflow answers its own review and starts a run off its own
- * push. A caller that only decorates a record can keep taking `undefined`.
+ * push.
  */
 export async function readVcsBotLogin(
   kind: VcsProviderKind,
@@ -34,7 +27,7 @@ export async function readVcsBotLogin(
   const legacyByProvider: Record<string, string | undefined> = {};
   const providers: string[] = [];
   const resolved = await resolveUsableIntegrations({
-    signal: AbortSignal.timeout(30_000),
+    lifetime: AbortSignal.timeout(30_000),
     filter: (manifest) => manifest.capabilities.includes("vcs"),
   });
   if (!resolved.readable) return { readable: false, reason: resolved.reason };

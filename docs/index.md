@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-20
+Last-verified: 2026-09-22
 
 # Documentation index
 
@@ -34,6 +34,7 @@ checking the smaller set that is left (ADR-007).
 | [architecture/workflow-definition.md](./architecture/workflow-definition.md) | The definition schema v2: nodes, edges, bindings, triggers, harness profiles, loops, validation, deployment, the MCP authoring surface |
 | [architecture/repository-scripts.md](./architecture/repository-scripts.md) | The repository scripts config contract: named command groups, how a block selects them |
 | [architecture/blocks.md](./architecture/blocks.md) | How block manifests, executor modules, generated catalogs, and the reviewer walkthrough fit together |
+| [architecture/integrations.md](./architecture/integrations.md) | Writing an integration from nothing to connected: capabilities, the connection and its pin, health checks, blocks, webhooks, pages, testing without production credentials, and what breaks if you do what it says not to |
 | [architecture/skills.md](./architecture/skills.md) | Product skill manifests, artifact integrity, source boundaries, and the repository-root `skills/` convention |
 | [architecture/overview.md](./architecture/overview.md) | The `services/` tier: what each cluster owns, what it may import, and what its `index.ts` promises |
 | [architecture/data-model.md](./architecture/data-model.md) | The worker's 75 SQL tables, ownership and principal callers |
@@ -114,6 +115,7 @@ research file records what was true on its date.
 | [plans/2026-09-14-product-changelog.md](./plans/2026-09-14-product-changelog.md) | The product changelog: an entry folder authors fill per pull request, a daily collation workflow, and the CI check that a product change carries an entry |
 | [plans/2026-09-15-repository-work-scope.md](./plans/2026-09-15-repository-work-scope.md) | Draft, in delivery: one durable record per subject of work for which repositories it touches, a repository policy per trigger, a decision trail readable through MCP, and a repository map in the agent's prompt (AIW-402, AIW-377, roadmap P1 repository scope per trigger) |
 | [plans/2026-09-18-integrations.md](./plans/2026-09-18-integrations.md) | Draft: every third party (Arthur, Slack, GitHub, GitLab, Jira) as one package under `integrations/` that unlocks blocks, screens, health checks and MCP tools once connected; memory as a capability; the guide for writing a new integration (AIW-395, AIW-394, AIW-396, roadmap P3) |
+| [plans/2026-09-22-integrations-hardening.md](./plans/2026-09-22-integrations-hardening.md) | Draft: the round between S14 and S15 of the integrations plan: every finding of the whole-branch review with its outcome, and the decisions it forced (adapter lifetime, memory budget, one home for secrets, trigger parameters and connection verdicts, the memory contract before Mem0) |
 | [plans/2026-09-19-agent-visibility.md](./plans/2026-09-19-agent-visibility.md) | Draft, in delivery: record and show exactly what every agent send was given (Agent Briefing, Clarification Rounds) in the dashboard and MCP, prompt runtime text as named parts with origin, and the Repository Map wired into every repository-working prompt |
 
 Every other file in `plans/` is a historical delivery plan. It stays in place

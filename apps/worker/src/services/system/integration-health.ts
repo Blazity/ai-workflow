@@ -20,9 +20,9 @@ import type {
   SystemHealthMode,
 } from "@shared/contracts";
 
-import { PublicHealthProbeError } from "./collect.js";
-import { getLatestSystemHealthObservations } from "./observations.js";
-import { redactIntegrationText } from "../integrations/index.js";
+import { PublicHealthProbeError, WEBHOOK_DELIVERY_CHECK_ID } from "./collect.js";
+import { latestWebhookDeliveries } from "./observations.js";
+import { failureReason, redactIntegrationText } from "../integrations/index.js";
 
 import type {
   CheckBase,
@@ -54,7 +54,6 @@ export interface IntegrationHealthContributions {
 
 /** The id of the check core adds to every integration, before its own. */
 const CONNECTION_CHECK_ID = "connection";
-const WEBHOOK_DELIVERY_CHECK_ID = "webhook-delivery";
 const WEBHOOK_OBSERVATION_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
@@ -138,10 +137,7 @@ function webhookDeliveryCheck(entry: IntegrationHealthEntry): CheckBase {
 }
 
 async function webhookDeliveryResult(integrationId: string): Promise<SystemHealthProbeResult> {
-  const observations = await getLatestSystemHealthObservations(
-    integrationId,
-    WEBHOOK_DELIVERY_CHECK_ID,
-  );
+  const observations = await latestWebhookDeliveries(integrationId);
   const latest = observations[0];
   if (
     !latest ||
@@ -207,22 +203,8 @@ async function runIntegrationProbe(
     // anywhere. The reason is redacted and bounded first, because a provider
     // that echoes a token in an error body is normal and this text is read on
     // a screen.
-    throw new PublicHealthProbeError(safe(reasonOf(error)));
+    throw new PublicHealthProbeError(safe(failureReason(error)));
   }
-}
-
-/**
- * What an error says, including what it hides in its cause: `fetch` throws a
- * flat "fetch failed" and keeps "connect ECONNREFUSED" underneath, and the
- * second half is the one somebody can act on.
- */
-function reasonOf(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
-  const cause = error.cause;
-  const detail = cause instanceof Error ? cause.message : undefined;
-  return detail && !error.message.includes(detail)
-    ? `${error.message}: ${detail}`
-    : error.message;
 }
 
 /** The only answers a probe may give. Anything else is not a measurement. */

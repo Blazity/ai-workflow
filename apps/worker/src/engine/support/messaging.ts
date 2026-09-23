@@ -179,7 +179,7 @@ async function activeMessaging(
 ): Promise<ResolvedMessaging> {
   const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
   const resolved = await resolveUsableIntegrations({
-    signal: AbortSignal.timeout(MESSAGING_TIMEOUT_MS),
+    lifetime: AbortSignal.timeout(MESSAGING_TIMEOUT_MS),
     filter: (manifest) => manifest.capabilities.includes("messaging"),
   });
   // Settings we could not read are not a deployment with nothing connected.

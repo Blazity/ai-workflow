@@ -13,7 +13,7 @@ import type { IssueTrackerAdapter } from "./issue-tracker";
 import type { IntegrationBlockManifest, IntegrationManifest } from "./manifest";
 import type { MemoryAdapter } from "./memory";
 import type { MessagingAdapter } from "./messaging";
-import type { VCSAdapter } from "./vcs";
+import type { VCSAdapter, VcsHandleIdentity } from "./vcs";
 import type { IntegrationWebhook, IntegrationWebhookReception } from "./webhook";
 
 /**
@@ -35,7 +35,17 @@ import type { IntegrationWebhook, IntegrationWebhookReception } from "./webhook"
  * there and never retries the call, wherever it was made from.
  */
 export type IntegrationRuntimeDefinition<M extends IntegrationManifest> =
-  IntegrationRuntimeBase<M> & RunStateSlot<M>;
+  IntegrationRuntimeBase<M> & RunStateSlot<M> & VcsHandlesSlot<M>;
+
+/**
+ * `vcsHandles`, required exactly when the manifest declares the `vcs`
+ * capability and refused otherwise: how this provider's handles compare, for
+ * core to call without a connection (see `VcsHandleIdentity`). A provider that
+ * could mint handles and not compare them would bind no failed check at all.
+ */
+type VcsHandlesSlot<M extends IntegrationManifest> = "vcs" extends M["capabilities"][number]
+  ? { readonly vcsHandles: VcsHandleIdentity }
+  : { readonly vcsHandles?: never };
 
 /**
  * `beginRun`, required exactly when the manifest declares `runState` and
@@ -68,7 +78,7 @@ interface IntegrationRuntimeBase<M extends IntegrationManifest> {
    * Proves that `ctx.connection` works, cheaply. Core runs it before stored
    * values become active and when an admin presses Test. A refusal reports
    * the provider's own reason; core redacts secrets from it before anyone
-   * sees it.
+   * sees it. When to refuse and when to throw: `ConnectionTestResult`.
    */
   readonly testConnection: (ctx: IntegrationContext<M>) => Promise<ConnectionTestResult>;
   readonly capabilities: {
@@ -95,8 +105,9 @@ interface IntegrationRuntimeBase<M extends IntegrationManifest> {
    * What each of this integration's pages reads, keyed by the page id its
    * manifest declares. A page is a component in the dashboard's process with
    * no session, no database and no client of ours in its props, so this is the
-   * only way it sees anything: core resolves the connection, calls the reader
-   * on the server, and hands the page what it returned.
+   * only way it sees anything of ours or of its connection: core resolves the
+   * connection, calls the reader on the server, and hands the page what it
+   * returned.
    *
    * Read-only and optional per page. A reader receives the ordinary context
    * and returns JSON, which is what reaches the browser, so nothing it returns
@@ -137,6 +148,9 @@ export interface ErasedIntegrationRuntime {
   readonly health: Readonly<Record<string, ErasedIntegrationCall<IntegrationHealthResult>>>;
   /** Present exactly when the manifest declares `runState`. */
   readonly beginRun?: ErasedIntegrationCall<IntegrationRunState | null>;
+  /** Present exactly when the manifest declares the `vcs` capability. Pure:
+   *  nothing in it takes a context, so nothing needs erasing. */
+  readonly vcsHandles?: VcsHandleIdentity;
   /** One reader per page that has data behind it, keyed by page id. */
   readonly api?: Readonly<Record<string, ErasedIntegrationCall<JsonValue>>>;
   /** Present exactly when the manifest's integration answers a webhook. */
@@ -158,10 +172,57 @@ export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
   agent_tracing: (ctx: IntegrationContext<M>) => AgentTracingAdapter;
 }
 
+/**
+ * What a connection test answers, and the difference between answering and
+ * throwing is the whole contract.
+ *
+ * `{ ok: false, reason }` means the provider ANSWERED and refused this
+ * configuration: a rejected token, a project that does not exist, a scope the
+ * key lacks. Core files it as `credential_rejected` and the card goes
+ * Failing, which stops every run that needs this integration. Return it only
+ * for a verdict.
+ *
+ * A throw means there was no verdict: the provider could not be reached, or it
+ * answered something that is not an answer about these values (a 429, a 5xx,
+ * an HTML error page from a proxy, a body that does not parse). Core files it
+ * as `provider_unreachable` and keeps the connection as it was, because an
+ * outage during a Test says nothing about the credential. Catching every error
+ * and returning `{ ok: false }` turns a thirty second outage into a Failing
+ * card that only a person pressing Test again can clear.
+ *
+ * Which is which is not for each integration to decide:
+ * `refusedOrThrow(responseOrError, reason)` returns the refusal for a failure
+ * that is one and throws for every other, by the one rule in
+ * `provider-failure.ts`. Provider vocabulary on top of HTTP (a Slack error
+ * code, say) is the integration's to translate into those two meanings.
+ *
+ * `malformed` marks a refusal no provider made: the values could not form a
+ * request (a token with a line break, a URL that does not parse). Core files
+ * it as `value_malformed` rather than `credential_rejected`. `refusedOrThrow`
+ * sets it; an integration that checks a value itself before sending (a key
+ * that does not parse) may set it too.
+ *
+ * Either way, values being saved do not become active: only a pass does that.
+ *
+ * Core redacts the connection's secrets from `reason`, `message` and a thrown
+ * message before anyone sees them.
+ */
 export type ConnectionTestResult =
   | { readonly ok: true; readonly message?: string }
-  | { readonly ok: false; readonly reason: string };
+  | { readonly ok: false; readonly reason: string; readonly malformed?: true };
 
+/**
+ * What one health check measured.
+ *
+ * A failure reads by the same rule as a connection test
+ * (`readProviderFailure`), and the status is the same either way, because
+ * from this deployment the provider is not working: `down`. The MESSAGE is
+ * where the two differ, and it has to: a refusal names the value to fix ("the
+ * token was not accepted"), and no verdict says the provider did not answer,
+ * so nobody rotates a working credential over an outage. `degraded` is for a
+ * check that passed with something to say (a probe message it could not
+ * delete, an installation that grants no repository).
+ */
 export interface IntegrationHealthResult {
   readonly status: Extract<SystemHealthMode, "live" | "degraded" | "down">;
   readonly message?: string;

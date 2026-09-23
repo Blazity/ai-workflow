@@ -315,19 +315,30 @@ export async function openPullRequestsForPublication(input: {
   return { status: "published", repositories: input.repositories, prs };
 }
 
-async function verifySourcePullRequestStep(
+/** Exported for its test; the workflow calls it from this module. */
+export async function verifySourcePullRequestStep(
   input: SourcePullRequestIdentity & {
     integrationPins?: readonly IntegrationConnectionPin[];
   },
 ): Promise<PullRequestHead> {
   "use step";
   const { createRepositoryVcsRuntime } = await import("../support/vcs-runtime.js");
-  return createRepositoryVcsRuntime({
-    provider: input.provider,
-    repoPath: input.repoPath,
-    baseBranch: input.baseRef,
-    integrationPins: input.integrationPins,
-  }).vcs.getPRHead(input.prId);
+  const { FatalError, isPullRequestUnreadableError } = await import("@integrations/sdk");
+  try {
+    return await createRepositoryVcsRuntime({
+      provider: input.provider,
+      repoPath: input.repoPath,
+      baseBranch: input.baseRef,
+      integrationPins: input.integrationPins,
+    }).vcs.getPRHead(input.prId);
+  } catch (error) {
+    // The pull request that started this run existed when it did; gone or
+    // forbidden now, it stays so. Fatal, so the DevKit does not spend three
+    // retries on it; the caller turns it into a failed publication. Anything
+    // else is retried as before.
+    if (isPullRequestUnreadableError(error)) throw new FatalError(error.message);
+    throw error;
+  }
 }
 verifySourcePullRequestStep.maxRetries = 3;
 

@@ -1,9 +1,12 @@
 import {
   defineIntegrationRuntime,
+  readProviderFailure,
+  refusedOrThrow,
   type IntegrationContext,
   type IntegrationRuntimeDefinition,
 } from "@integrations/sdk";
 import { buildOctokit, readPrivateKey, type GitHubAppCredential } from "./auth";
+import { githubHandleIdentity } from "./handles";
 import { manifest } from "./manifest";
 import { GitHubAdapter } from "./vcs";
 import { webhook } from "./webhook";
@@ -37,14 +40,18 @@ function adapter(ctx: GitHubContext, repository?: { repoPath: string; baseBranch
     owner,
     repo,
     baseBranch: target.baseBranch,
-    ...(ctx.connection.botLogin ? { botLogin: ctx.connection.botLogin } : {}),
     log: ctx.log,
   });
 }
 
+/** The connection's own Octokit, on the context's HTTP (see `buildOctokit`). */
+function octokitOf(ctx: GitHubContext) {
+  return buildOctokit(credentialOf(ctx), { fetch: ctx.http.fetch });
+}
+
 /** The App itself, on the App JWT. Fails when the key or the App id is wrong. */
 async function authenticatedApp(ctx: GitHubContext): Promise<{ slug?: string; name?: string }> {
-  const { data } = await buildOctokit(credentialOf(ctx)).apps.getAuthenticated();
+  const { data } = await octokitOf(ctx).apps.getAuthenticated();
   return { slug: data?.slug ?? undefined, name: data?.name ?? undefined };
 }
 
@@ -58,7 +65,7 @@ async function authenticatedApp(ctx: GitHubContext): Promise<{ slug?: string; na
  * discover it when a run tries to open a pull request.
  */
 async function installationRepositories(ctx: GitHubContext): Promise<number> {
-  const { data } = await buildOctokit(credentialOf(ctx)).apps.listReposAccessibleToInstallation({
+  const { data } = await octokitOf(ctx).apps.listReposAccessibleToInstallation({
     per_page: 1,
   });
   return data.total_count ?? data.repositories?.length ?? 0;
@@ -72,6 +79,25 @@ function trimUrl(value: string): string {
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A health check GitHub did not pass, read with the SDK's rule. Down either
+ * way, because the check did not pass; the sentence is what differs, since a
+ * refusal sends the admin to a value and an answer that says nothing about
+ * the values (a 5xx, a spent rate limit, no answer at all) sends them to wait.
+ * Read on Octokit's own error, whose headers carry the rate limit.
+ */
+function checkFailed(
+  error: unknown,
+  sentences: { readonly refused: string; readonly unanswered: string },
+): { status: "down"; message: string } {
+  return readProviderFailure(error).kind === "refused"
+    ? { status: "down", message: sentences.refused }
+    : {
+        status: "down",
+        message: `GitHub did not answer, so ${sentences.unanswered} could not be checked (${reason(error)}).`,
+      };
 }
 
 /**
@@ -107,7 +133,7 @@ async function appWebhookState(ctx: GitHubContext): Promise<{
   status: "live" | "degraded" | "down";
   message: string;
 }> {
-  const octokit = buildOctokit(credentialOf(ctx));
+  const octokit = octokitOf(ctx);
   const [app, hook, deliveries] = await Promise.all([
     octokit.apps.getAuthenticated(),
     octokit.request("GET /app/hook/config"),
@@ -160,13 +186,15 @@ async function appWebhookState(ctx: GitHubContext): Promise<{
       message: `The latest delivery to ${url} was rejected with 401: the App's webhook secret differs from the one this connection holds.`,
     };
   }
-  // A 5xx is this deployment's own answer, and the one it gives deliberately
-  // is "busy, nothing was started". That is worth seeing and it is not a
-  // broken App, so it is amber with the code rather than down.
+  // A 5xx is this deployment's own answer: the delivery arrived and was
+  // signed correctly, and the worker then failed to act on it (a dispatch
+  // error, settings it could not read, an integration switched off since).
+  // Being busy is not among them any more: that is answered 202. So it is
+  // amber with the code, pointing at this side rather than at the App.
   if (typeof code === "number" && code >= 500) {
     return {
       status: "degraded",
-      message: `The latest delivery to ${url} was answered ${code} by this deployment, so that event started nothing. The delivery itself is fine; check the run capacity and the worker's own rows.`,
+      message: `The latest delivery to ${url} was answered ${code} by this deployment, so that event started nothing. The App and its webhook are fine; the worker failed to act on the delivery, and its webhook delivery log and diagnostics say why.`,
     };
   }
   return {
@@ -182,7 +210,9 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
     // thing is told what was expected instead of reading GitHub's opinion of
     // some bytes we mangled. A failed test never becomes the active connection.
     const key = readPrivateKey(ctx.connection.privateKey);
-    if (!key.ok) return { ok: false, reason: key.reason };
+    // A key that does not read as one is a verdict about that value, which
+    // core files as malformed rather than as GitHub refusing it.
+    if (!key.ok) return { ok: false, reason: key.reason, malformed: true };
     try {
       const app = await authenticatedApp(ctx);
       const repositories = await installationRepositories(ctx);
@@ -193,12 +223,16 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
         } can see ${repositories} repositor${repositories === 1 ? "y" : "ies"}.`,
       };
     } catch (error) {
-      return { ok: false, reason: reason(error) };
+      // Octokit's error carries the status GitHub answered. A 401 on the App
+      // JWT or a 404 for the installation is a verdict on these values; a 5xx,
+      // a spent rate limit or a request that never got an answer is not.
+      return refusedOrThrow(error);
     }
   },
   capabilities: {
     vcs: (ctx, repository) => adapter(ctx, repository),
   },
+  vcsHandles: githubHandleIdentity,
   blocks: {},
   health: {
     app: async (ctx) => {
@@ -211,7 +245,10 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
           message: `Authenticated as ${app.slug ?? app.name ?? "the configured App"}.`,
         };
       } catch (error) {
-        return { status: "down", message: reason(error) };
+        return checkFailed(error, {
+          refused: `GitHub did not accept the App (${reason(error)}). Check the App id and the private key.`,
+          unanswered: "the App",
+        });
       }
     },
     installation: async (ctx) => {
@@ -231,7 +268,10 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
               message: `Installation ${ctx.connection.installationId} exists but grants access to no repository. Add repositories to it on GitHub.`,
             };
       } catch (error) {
-        return { status: "down", message: reason(error) };
+        return checkFailed(error, {
+          refused: `GitHub refused installation ${ctx.connection.installationId} (${reason(error)}). Check the Installation id and that the App is still installed.`,
+          unanswered: `installation ${ctx.connection.installationId}`,
+        });
       }
     },
     webhook: async (ctx) => {
@@ -247,7 +287,10 @@ const definition: IntegrationRuntimeDefinition<GitHubManifest> = {
       try {
         return await appWebhookState(ctx);
       } catch (error) {
-        return { status: "down", message: reason(error) };
+        return checkFailed(error, {
+          refused: `GitHub refused to show the App's webhook settings (${reason(error)}). Check the App id and the private key.`,
+          unanswered: "the App's webhook settings",
+        });
       }
     },
   },

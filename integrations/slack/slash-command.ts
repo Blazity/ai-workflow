@@ -27,6 +27,13 @@ export interface SlashCommandConfig {
   readonly signingSecret: string | undefined;
   /** Comma-separated ids, exactly as the connection field holds them. */
   readonly allowedUserIds: string | undefined;
+  /**
+   * Who asked for what is the audit trail of the command: a refusal and every
+   * command handed to core are logged with the Slack user who typed it,
+   * because `reset` carries no actor of its own and nothing else records who
+   * cleared a ticket's registry state.
+   */
+  readonly log: { info(fields: Record<string, unknown>, event: string): void };
 }
 
 /** Only ever visible to the person who typed the command. */
@@ -68,7 +75,10 @@ export async function receiveSlashCommand(
   const responseUrl = fields.get("response_url") ?? "";
   const command = fields.get("command") ?? "/ai-workflow";
 
-  if (!isUserAllowed(userId, config.allowedUserIds)) return ephemeral("Not authorized.");
+  if (!isUserAllowed(userId, config.allowedUserIds)) {
+    config.log.info({ userId, command }, "slack_command_user_not_allowed");
+    return ephemeral("Not authorized.");
+  }
 
   const parsed = parseCommand(text);
   if (parsed.kind === "help") return ephemeral(HELP_TEXT);
@@ -89,6 +99,7 @@ export async function receiveSlashCommand(
     };
   }
 
+  config.log.info({ userId, kind: parsed.kind }, "slack_command_dispatching");
   return {
     kind: "run_control",
     command: toRunControlCommand(parsed, userId),

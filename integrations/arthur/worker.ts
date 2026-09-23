@@ -16,6 +16,7 @@ import {
   type IntegrationContext,
   type IntegrationRuntimeDefinition,
   defineIntegrationRuntime,
+  refusedOrThrow,
 } from "@integrations/sdk";
 import { ArthurClient, engineBaseUrl, type PromptValidationFinding } from "./client";
 import { detectBlatantInjection } from "./injection-markers";
@@ -68,15 +69,19 @@ function arthurTracing(ctx: ArthurContext): AgentTracingAdapter {
           GENAI_ENGINE_API_KEY: ctx.connection.apiKey,
           GENAI_ENGINE_TASK_ID: taskId,
           GENAI_ENGINE_TRACE_ENDPOINT: ctx.connection.traceEndpoint,
-          // Not read by the tracer; there so a person looking at a sandbox, or
-          // at the engine's task, can find the run it belongs to.
-          AIW_RUN_ID: invocation.run.runId,
-          ...(invocation.invocation
-            ? {
-                AIW_NODE_ID: invocation.invocation.nodeId,
-                AIW_ATTEMPT: String(invocation.invocation.attempt),
-              }
-            : {}),
+          // Read by OpenTelemetry itself: the tracer builds its resource with
+          // `Resource.create`, which merges this variable in. So every span at
+          // the engine names the run it belongs to, and two sandboxes of one
+          // run (another node, another attempt) are told apart.
+          OTEL_RESOURCE_ATTRIBUTES: resourceAttributes({
+            "aiw.run_id": invocation.run.runId,
+            ...(invocation.invocation
+              ? {
+                  "aiw.node_id": invocation.invocation.nodeId,
+                  "aiw.attempt": String(invocation.invocation.attempt),
+                }
+              : {}),
+          }),
         },
         hooks: [
           { event: "prompt_submitted", command: `${tracer} user_prompt_submit` },
@@ -88,6 +93,17 @@ function arthurTracing(ctx: ArthurContext): AgentTracingAdapter {
       };
     },
   };
+}
+
+/**
+ * `key=value` pairs the way `OTEL_RESOURCE_ATTRIBUTES` spells them: comma
+ * separated, each value percent-encoded, because a comma or an equals sign in
+ * a node id would otherwise split one attribute into two.
+ */
+function resourceAttributes(attributes: Readonly<Record<string, string>>): string {
+  return Object.entries(attributes)
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join(",");
 }
 
 /**
@@ -113,9 +129,10 @@ function verdict(
 const definition: IntegrationRuntimeDefinition<ArthurManifest> = {
   /**
    * The cheapest call the engine offers, read directly rather than through the
-   * client so the two answers stay apart: a status the engine chose is a
-   * refusal of the credential, and a request that never arrived is the network,
-   * which core must not read as a bad key.
+   * client so the two answers stay apart: a refusal of the key or of the
+   * endpoint is a verdict, and a request that never arrived, timed out, was
+   * rate limited or met a failing engine is not, which core must not read as a
+   * bad key.
    */
   testConnection: async (ctx) => {
     const response = await ctx.http.fetch(
@@ -130,16 +147,12 @@ const definition: IntegrationRuntimeDefinition<ArthurManifest> = {
       },
     );
     if (response.ok) return { ok: true };
-    if (response.status >= 500) {
-      throw new Error(`The engine answered ${response.status} at ${ctx.connection.traceEndpoint}.`);
-    }
-    if (response.status === 401 || response.status === 403) {
-      return { ok: false, reason: "The engine refused this API key." };
-    }
-    return {
-      ok: false,
-      reason: `The engine answered ${response.status} for the task API. Check that the trace endpoint ends in /api/v1/traces.`,
-    };
+    return refusedOrThrow(
+      response,
+      response.status === 401 || response.status === 403
+        ? "The engine refused this API key."
+        : `The engine answered ${response.status} for the task API. Check that the trace endpoint ends in /api/v1/traces.`,
+    );
   },
 
   /**

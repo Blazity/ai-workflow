@@ -137,15 +137,19 @@ function availabilityFor(
     );
   }
   if (type === "trigger_pr_review") {
-    const states = Array.isArray(params.on) ? params.on : [];
+    const states = Array.isArray(params.on)
+      ? params.on.filter((state): state is string => typeof state === "string")
+      : [];
+    // The providers this trigger can hear from: the ones it names that are
+    // connected, or every connected one when it names none.
+    const effectiveProviders = selectedProviders.length > 0
+      ? selectedProviders.filter((provider) => context.vcsProviders.includes(provider))
+      : context.vcsProviders;
+    const unreported = unreportedReviewStatesIssue(states, effectiveProviders, context);
+    if (unreported) return unavailable(unreported);
     if (states.includes("commented")) {
-      const effectiveProviders = selectedProviders.length > 0
-        ? selectedProviders
-        : context.vcsProviders;
       const missingBotIdentities = effectiveProviders.filter(
-        (provider) =>
-          context.vcsProviders.includes(provider) &&
-          !context.vcsBotIdentities.includes(provider),
+        (provider) => !context.vcsBotIdentities.includes(provider),
       );
       if (missingBotIdentities.length > 0) {
         return unavailable(
@@ -193,6 +197,39 @@ function availabilityFor(
     }
   }
   return available;
+}
+
+/**
+ * Why a review trigger could never start a run, when none of its providers
+ * reports a review in any state it waits for; null when one does.
+ *
+ * Each provider's states come from its own manifest (`webhook.reviewStates`),
+ * so the sentence names the provider and what it does report: GitLab delivers
+ * a merge request note and nothing else, and a trigger waiting only for
+ * "changes_requested" there would sit silent with nothing on any screen.
+ */
+function unreportedReviewStatesIssue(
+  states: readonly string[],
+  providers: readonly string[],
+  context: WorkflowBlockRegistryContext,
+): string | null {
+  // Judged only against a manifest this build ships: a provider nothing is
+  // declared for is the providers check's business, above, not a silent "no".
+  const reported = providers.flatMap((provider) => {
+    const presence = context.integrations.byId.get(provider);
+    return presence ? [{ name: presence.name, states: presence.reviewStates }] : [];
+  });
+  if (states.length === 0 || reported.length === 0) return null;
+  if (reported.some((provider) => provider.states.some((state) => states.includes(state)))) {
+    return null;
+  }
+  const quoted = (list: readonly string[]) => list.map((state) => `"${state}"`).join(" or ");
+  const phrases = reported.map((provider) =>
+    provider.states.length > 0
+      ? `${provider.name} reports a review only as ${quoted(provider.states)}`
+      : `${provider.name} reports no reviews`,
+  );
+  return `${phrases.join("; ")}, so a trigger waiting for ${quoted(states)} would never start a run.`;
 }
 
 /**
@@ -273,12 +310,32 @@ export function buildWorkflowBlockRegistry(
   ]) as Record<WorkflowBlockType, WorkflowBlockContract>;
 }
 
+/**
+ * A block's defaults on this deployment.
+ *
+ * A review trigger starts on the shared default states unless no connected
+ * provider reports any of them. Then it starts on the states they do report:
+ * on a deployment whose only version control is GitLab, "changes_requested"
+ * would place a block that is refused the moment it lands.
+ */
 function defaultsForContext(
   type: WorkflowBlockType,
   defaults: Record<string, WorkflowParamValue>,
-  _context: WorkflowBlockRegistryContext,
+  context: WorkflowBlockRegistryContext,
 ): Record<string, WorkflowParamValue> {
-  return defaults;
+  if (type !== "trigger_pr_review") return defaults;
+  const states = Array.isArray(defaults.on) ? defaults.on : [];
+  const reported = [
+    ...new Set(
+      context.vcsProviders.flatMap(
+        (provider) => context.integrations.byId.get(provider)?.reviewStates ?? [],
+      ),
+    ),
+  ];
+  if (reported.length === 0 || states.some((state) => reported.includes(state as string))) {
+    return defaults;
+  }
+  return { ...defaults, on: reported };
 }
 
 /**

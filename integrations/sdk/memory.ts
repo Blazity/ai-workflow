@@ -11,11 +11,18 @@
  * what you know about this subject"; the provider decides what to keep, what
  * supersedes what and what to forget. It is deliberately NOT "read the
  * document, merge it and write it back with the version you read": that shape
- * can be implemented by nobody except the built-in store, because a hosted
- * memory engine does the merging itself, and that merging is the product. It
- * is deliberately not "add, update by id, delete by id" either: two runs that
- * both add and nobody reconciles is a memory that silently contradicts itself
- * weeks later.
+ * fits only a store core owns, and it would put the merging in core, away from
+ * whatever the engine knows. It is deliberately not "add, update by id, delete
+ * by id" either: two runs that both add and nobody reconciles is a memory that
+ * silently contradicts itself weeks later.
+ *
+ * RECONCILING IS THE ADAPTER'S JOB whenever the engine does not do it. Some
+ * engines merge what they are given; others only add, and keep an assertion
+ * and its refutation side by side, so the next recall answers both. Against an
+ * engine like that, the adapter does the merge itself before `observe`
+ * answers: it forgets what `refuted` names and does not store a `learned`
+ * entry that restates one already held. Passing observations straight through
+ * to an add-only engine satisfies these types and breaks the promise above.
  *
  * `MemoryStoreAdapter` is the admin half, reached from the memory screen and
  * its MCP tools: list what is there, read one, erase one. A different caller
@@ -35,6 +42,15 @@
  * compared and stored, never parsed. It is stable across deployments of this
  * product and is the only thing that ties a run to what an earlier run
  * learned, so a provider that rewrites it orphans everything already stored.
+ *
+ * MATCHED EXACTLY, ALWAYS, and the same holds for a notebook's `name`. Never
+ * hand either to an engine call that reads it as a pattern, a prefix or a
+ * filter (a glob, a regular expression, a search query, a metadata filter
+ * with wildcards). A key that happens to contain `*`, or an empty one, then
+ * addresses every subject, and against an engine that deletes by filter, a
+ * wildcard delete across all users is one request away. Use the engine's
+ * exact-match form or escape the value, and refuse the call when the engine
+ * offers neither.
  *
  * `label` is the same subject in words, for a heading a person or a model
  * reads (`acme/api`, `acme`). A provider may render it and may ignore it; it
@@ -68,8 +84,9 @@ export type MemoryScope =
       readonly kind: "notebook";
       /**
        * Core's own name for the piece of work (a ticket identifier, a pull
-       * request's subject key). Opaque to a provider: stored and compared,
-       * never parsed, and never shown as a heading.
+       * request's subject key). Opaque to a provider: stored and compared
+       * exactly (see `MemorySubject.key`), never parsed, and never shown as a
+       * heading.
        */
       readonly name: string;
     };
@@ -204,11 +221,11 @@ export type MemoryWrite =
        * True when the provider took this observation, false when it decided
        * this changed nothing it already holds.
        *
-       * NOT a promise that the next recall returns it. Mem0 answers an add
-       * with an event id to poll and Zep answers one with 202 and a task id,
-       * so an engine legitimately accepts work it has not finished. A caller
-       * that reads this as read-after-write is wrong about every provider
-       * except the built-in one.
+       * NOT a promise that the next recall returns it. An engine may answer
+       * an add with an id of work to poll, or with 202 and a task id, so it
+       * legitimately accepts work it has not finished. A caller that reads
+       * this as read-after-write is wrong about every provider except the
+       * built-in one.
        */
       readonly stored: boolean;
       /** Entries it forgot because this run refuted them. */
@@ -224,7 +241,9 @@ export type MemoryWrite =
  * Why memory could not answer. One union for the whole path, so a caller and
  * the run's record speak one vocabulary.
  *
- * `unavailable`, `contended` and `rejected` are a provider's answers.
+ * `unavailable`, `contended` and `rejected` are a provider's answers, and
+ * core answers `unavailable` too when it will not call the provider: its
+ * connection is failing, or it used up the time core gives memory in a step.
  * `no_provider`, `ambiguous`, `unreadable` and `moved` are core's answers
  * about the deployment, produced before any provider is called; a provider
  * never returns one.
@@ -233,7 +252,8 @@ export type MemoryWrite =
  * with no entries.
  */
 export type MemoryFailure =
-  /** The provider could not be reached, or it threw. Worth retrying. */
+  /** The provider could not be reached, threw, did not answer in time, or its
+   *  connection is failing. Worth retrying on a later step or run. */
   | "unavailable"
   /** Another writer kept winning, so this run's observation was not stored. */
   | "contended"
@@ -268,9 +288,10 @@ export interface MemoryAdapter {
    * usable for runs. Core then says so on the screen rather than showing an
    * empty list.
    *
-   * Core hands this object to its admin callers unwrapped
+   * Core hands it to its admin callers without catching what it throws
    * (`engine/support/memory-runtime.ts`, `wrap`), because it is not a run path
-   * and the two halves do not share a failure rule.
+   * and the two halves do not share a failure rule. It does redact what it
+   * throws, and its calls spend the same time budget as the two above.
    */
   readonly store?: MemoryStoreAdapter;
 }

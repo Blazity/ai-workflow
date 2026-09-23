@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import { expect } from "./test-expect.js";
-import { canonicalizeWorkflowBlockTypes } from "./workflow-graph.js";
+import {
+  canonicalizeWorkflowBlockTypes,
+  RENAMED_WORKFLOW_BLOCK_PARAMS,
+} from "./workflow-graph.js";
 
 /**
  * `investigate`'s parameters moved from provider names to capability ids
@@ -95,5 +98,65 @@ describe("canonicalizeWorkflowBlockTypes: investigate parameter rename", () => {
     const result = canonicalizeWorkflowBlockTypes(raw);
 
     expect(result).toBe(raw);
+  });
+});
+
+describe("canonicalizeWorkflowBlockTypes: check trigger producer filters", () => {
+  function checksNode(configuration: Record<string, unknown>) {
+    return {
+      schemaVersion: 2,
+      nodes: [
+        {
+          id: "checks",
+          type: "trigger_pr_checks_failed",
+          x: 0,
+          y: 0,
+          configuration,
+          inputs: {},
+          additionalInputs: [],
+        },
+      ],
+      edges: [],
+    };
+  }
+
+  it("folds both retired lists into the one it already has, without repeats", () => {
+    const raw = checksNode({
+      trustedProducers: ["buildkite", "github-actions"],
+      githubAppSlugs: ["github-actions", "circleci"],
+      gitlabPipelineSources: ["push"],
+    });
+
+    const result = canonicalizeWorkflowBlockTypes(raw) as typeof raw;
+
+    expect(result.nodes[0]!.configuration).toEqual({
+      trustedProducers: ["buildkite", "github-actions", "circleci", "push"],
+    });
+  });
+
+  it("leaves a node that already carries only the new list unchanged, by reference", () => {
+    const raw = checksNode({ trustedProducers: ["circleci"] });
+
+    expect(canonicalizeWorkflowBlockTypes(raw)).toBe(raw);
+  });
+
+  // No rename is listed for this block today. The day one is, a stored node
+  // must get both: the renamed key and the folded list, whichever comes first
+  // in the code.
+  it("applies a parameter rename listed for this block as well as the fold", () => {
+    const table = RENAMED_WORKFLOW_BLOCK_PARAMS as Record<string, Record<string, string>>;
+    table.trigger_pr_checks_failed = { failedCheckNames: "checkNames" };
+    try {
+      const raw = checksNode({ failedCheckNames: ["ci / build"], githubAppSlugs: ["circleci"] });
+
+      const result = canonicalizeWorkflowBlockTypes(raw) as typeof raw;
+
+      expect(result.nodes[0]!.configuration).toEqual({
+        checkNames: ["ci / build"],
+        trustedProducers: ["circleci", "merge_request_event"],
+      });
+    } finally {
+      delete table.trigger_pr_checks_failed;
+    }
   });
 });

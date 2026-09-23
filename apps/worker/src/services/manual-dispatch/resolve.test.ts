@@ -32,14 +32,18 @@ vi.mock("../../infra/vcs-config.js", () => ({
   ],
 }));
 
+const botLogin = vi.hoisted(() => ({
+  reading: { readable: true, login: "workflow-bot" } as
+    | { readable: true; login: string | undefined }
+    | { readable: false; reason: string },
+}));
 vi.mock("../vcs/index.js", () => ({
-  getVcsBotLogin: () => "workflow-bot",
+  readVcsBotLogin: async () => botLogin.reading,
 }));
 
 const mocks = vi.hoisted(() => ({
   getDeployedWorkflowDefinitionVersion: vi.fn(),
   getManualDispatchPullRequest: vi.fn(),
-  isConfiguredTriggerRepository: vi.fn(),
   findWorkflowOwnedPullRequest: vi.fn(),
   hasDispatchBlockingApprovalForTicket: vi.fn(),
 }));
@@ -73,7 +77,6 @@ vi.mock("../../engine/support/vcs-runtime.js", () => ({
 // helpers this module shares with automatic dispatch stay real.
 vi.mock("../dispatch/dispatch-trigger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../dispatch/dispatch-trigger.js")>()),
-  isConfiguredTriggerRepository: mocks.isConfiguredTriggerRepository,
 }));
 vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequest: mocks.findWorkflowOwnedPullRequest,
@@ -83,9 +86,6 @@ vi.mock("../../db/repositories/approvals.js", () => ({
   hasDispatchBlockingApprovalForTicket: mocks.hasDispatchBlockingApprovalForTicket,
   hasConnectedDispatchBlockingApprovalForTicket:
     mocks.hasDispatchBlockingApprovalForTicket,
-}));
-vi.mock("../../post-pr-gate/config.js", () => ({
-  loadPostPrGateConfig: () => ({ postPrGate: { steps: [] } }),
 }));
 
 const { parsePullRequestUrl, resolveManualDispatch, selectManualTriggerEvent } =
@@ -212,6 +212,83 @@ describe("manual pull request input", () => {
     ).toBeNull();
   });
 
+  it("finds a failed GitLab pipeline eligible from the adapter's own snapshot", async () => {
+    // Built by the real GitLab adapter, not by hand: the defect was in what the
+    // adapter reported (checks with no producer), which a hand-made snapshot
+    // would have papered over.
+    const { GitLabAdapter } = await import("../../../../../integrations/gitlab/vcs.js");
+    const client = {
+      MergeRequests: {
+        show: vi.fn().mockResolvedValue({
+          web_url: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+          source_branch: "feature/manual",
+          target_branch: "main",
+          title: "Manual dispatch",
+          author: { username: "alice" },
+          state: "opened",
+          diff_refs: { head_sha: "head-sha" },
+          head_pipeline: { id: 901, status: "failed" },
+        }),
+      },
+      Jobs: { all: vi.fn().mockResolvedValue([{ id: 11, name: "lint", status: "failed" }]) },
+      Pipelines: { show: vi.fn().mockResolvedValue({ id: 901, source: "merge_request_event" }) },
+      MergeRequestNotes: { all: vi.fn().mockResolvedValue([]) },
+      MergeRequestDiscussions: { all: vi.fn().mockResolvedValue([]) },
+    };
+    const gitLabSnapshot = await new GitLabAdapter(
+      { token: "t", projectId: "platform/api", baseBranch: "main" },
+      client as never,
+    ).getManualDispatchPullRequest(17);
+    const gitLabPr: PrTriggerPayload = {
+      ...pr,
+      provider: "gitlab",
+      repoPath: "platform/api",
+      prNumber: 17,
+      prUrl: "https://gitlab.example.com/platform/api/-/merge_requests/17",
+    };
+
+    const selected = selectManualTriggerEvent(
+      "trigger_pr_checks_failed",
+      gitLabPr,
+      gitLabSnapshot,
+      {},
+    );
+
+    expect(selected?.delivery).toMatchObject({
+      producer: "gitlab-ci",
+      source: "merge_request_event",
+    });
+    expect(selected?.pr.failedChecks?.map((check) => check.name)).toEqual(["lint"]);
+  });
+
+  it("trusts a producer by the integration's own rule, not core's list of old names", () => {
+    // An integration this build ships later reports its own default producer;
+    // core's list for envelopes recorded before the bit existed knows only two
+    // names and must not be what decides a manual dispatch.
+    const failed = snapshot({
+      failedChecks: [
+        {
+          name: "build",
+          conclusion: "failure",
+          producer: "acme-ci",
+          trustedByDefault: true,
+        },
+      ],
+    });
+
+    expect(selectManualTriggerEvent("trigger_pr_checks_failed", pr, failed, {})).not.toBeNull();
+    expect(
+      selectManualTriggerEvent(
+        "trigger_pr_checks_failed",
+        pr,
+        snapshot({
+          failedChecks: [{ ...failed.failedChecks[0]!, trustedByDefault: false }],
+        }),
+        {},
+      ),
+    ).toBeNull();
+  });
+
   it("uses the latest eligible non-bot review matching configured states", () => {
     const reviews = snapshot({
       reviews: [
@@ -303,7 +380,6 @@ describe("manual dispatch against a definition repository pin", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mocks.getManualDispatchPullRequest.mockResolvedValue(snapshot());
-    mocks.isConfiguredTriggerRepository.mockResolvedValue(true);
     mocks.hasDispatchBlockingApprovalForTicket.mockResolvedValue(false);
     mocks.findWorkflowOwnedPullRequest.mockResolvedValue({ ticketKey: "AIW-1" });
     catalogDb = await createTestDb();
@@ -372,6 +448,117 @@ describe("manual dispatch against a definition repository pin", () => {
     ).resolves.toMatchObject({
       inputPayload: { scope: "any", pr: expect.objectContaining({ repoPath: "acme/api" }) },
     });
+  });
+
+  it("never starts a run off a check our own gate reported", async () => {
+    // The gate's checks carry a managed prefix in either naming generation. A
+    // run started off one would have the gate chase its own tail.
+    const graph = deployed("any", { repositories: [{ provider: "github", repoPath: "acme/api" }] });
+    graph.definition.nodes[0]!.type = "trigger_pr_checks_failed";
+    graph.definition.nodes[0]!.configuration = { scope: "any", trustedProducers: ["github-actions"] } as never;
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(graph);
+    const failed = (name: string, id: number) => ({
+      name,
+      conclusion: "failure",
+      handle: { id, owner: "github-actions" } as never,
+      producer: "github-actions",
+    });
+    const request = {
+      db: definitionDb,
+      issueTrackerResolution,
+      definitionId: 5,
+      triggerNodeId: "trigger",
+      dispatchInput: { kind: "pull_request" as const, url: pr.prUrl },
+      repositoryCatalog,
+    };
+
+    mocks.getManualDispatchPullRequest.mockResolvedValue(
+      snapshot({
+        failedChecks: [failed("AI Workflow / code-hygiene", 1), failed("blazebot / lint", 2)],
+      }),
+    );
+    await expect(resolveManualDispatch(request)).rejects.toThrow("does not match this trigger");
+
+    mocks.getManualDispatchPullRequest.mockResolvedValue(
+      snapshot({
+        failedChecks: [failed("AI Workflow / code-hygiene", 1), failed("ci / build", 3)],
+      }),
+    );
+    const resolved = await resolveManualDispatch(request);
+    expect(
+      (resolved.inputPayload as { pr: PrTriggerPayload }).pr.failedChecks?.map((check) => check.name),
+    ).toEqual(["ci / build"]);
+  });
+
+  function pullRequestRequest() {
+    return {
+      db: definitionDb,
+      issueTrackerResolution,
+      definitionId: 5,
+      triggerNodeId: "trigger",
+      dispatchInput: { kind: "pull_request" as const, url: pr.prUrl },
+      repositoryCatalog,
+    };
+  }
+
+  // A mistyped number, or a pull request the connection may not see, is the
+  // person's to fix: waiting would not change the answer.
+  it("tells the person a pull request this connection cannot read is not eligible", async () => {
+    const { PullRequestUnreadableError } = await import("@integrations/sdk");
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      new PullRequestUnreadableError("GitHub PR #42 in acme/api cannot be read"),
+    );
+
+    await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+      statusCode: 422,
+      code: "not_eligible",
+    });
+  });
+
+  it("tells the person when the provider cannot read pull requests at all", async () => {
+    const { ManualDispatchUnsupportedError } = await import("../../adapters/vcs/types.js");
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      new ManualDispatchUnsupportedError("github"),
+    );
+
+    await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+      statusCode: 422,
+      code: "not_eligible",
+      message: expect.stringContaining("cannot read pull requests"),
+    });
+  });
+
+  it("calls any other failure to read the pull request an outage", async () => {
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      Object.assign(new Error("Bad credentials"), { status: 401 }),
+    );
+
+    await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+      statusCode: 502,
+      code: "provider_unavailable",
+    });
+  });
+
+  // Without the account, a review the workflow itself left would look like a
+  // person's, and the run would answer its own comment.
+  it("refuses a review dispatch while the automation account cannot be read", async () => {
+    const graph = deployed("any", {});
+    graph.definition.nodes[0]!.type = "trigger_pr_review";
+    graph.definition.nodes[0]!.configuration = { scope: "any", on: ["commented"] } as never;
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(graph);
+    botLogin.reading = { readable: false, reason: "settings unreadable" };
+
+    try {
+      await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
+        statusCode: 503,
+        code: "provider_unavailable",
+      });
+    } finally {
+      botLogin.reading = { readable: true, login: "workflow-bot" };
+    }
   });
 
   it("reports every block type the deployed graph carries, so the preflight can ask about its integrations", async () => {

@@ -97,7 +97,7 @@ function usable(manifest: IntegrationManifest, botLogin: string) {
             repoPath: repository.repoPath,
             baseBranch: repository.baseBranch,
           });
-          return { getPRHead, sameHandle: () => true };
+          return { getPRHead };
         },
       },
     },
@@ -129,9 +129,6 @@ const integrationStore = {
   },
   usableIntegrations: async () => connected(),
   checkIntegrationPin: () => ({ ok: true }),
-  // The adapter resolution asks the facade for this; the case that is actually
-  // about the automation account calls the real resolver below instead.
-  getVcsBotLogin: async () => "forgejo-bot",
 };
 
 vi.mock("../../services/integrations/runtime.js", () => integrationStore);
@@ -156,7 +153,7 @@ const { providerNestsRepositoryPaths } = await import(
   "../repository-discovery/provider-shape.js"
 );
 const { createRepositoryVcsRuntime } = await import("./vcs-runtime.js");
-const { getVcsBotLogin } = await import("../../services/integrations/vcs-bot-login.js");
+const { readVcsBotLogin } = await import("../../services/integrations/vcs-bot-login.js");
 
 function repository(repoPath: string) {
   return {
@@ -250,8 +247,8 @@ describe("a version control provider core has never heard of", () => {
 
   it("resolves its automation account, so its own comments cannot start a run", async () => {
     shipped.manifests = [forgejo, gitea];
-    await expect(getVcsBotLogin("forgejo")).resolves.toBe("forgejo-bot");
-    await expect(getVcsBotLogin("gitea")).resolves.toBe("gitea-bot");
+    await expect(readVcsBotLogin("forgejo")).resolves.toEqual({ readable: true, login: "forgejo-bot" });
+    await expect(readVcsBotLogin("gitea")).resolves.toEqual({ readable: true, login: "gitea-bot" });
   });
 
   it("refuses work for a provider that is not registered at all", async () => {

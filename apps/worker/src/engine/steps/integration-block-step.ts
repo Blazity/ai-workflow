@@ -169,7 +169,7 @@ export async function runIntegrationBlockStep(
     manifest,
     values: values.values,
     secrets,
-    signal: AbortSignal.timeout(INTEGRATION_BLOCK_TIMEOUT_MS),
+    lifetime: AbortSignal.timeout(INTEGRATION_BLOCK_TIMEOUT_MS),
   });
   const executor = runtime.blocks[input.blockType];
   if (!executor) {

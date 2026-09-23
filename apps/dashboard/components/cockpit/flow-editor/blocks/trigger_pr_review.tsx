@@ -1,5 +1,6 @@
 "use client";
 
+import { BLOCK_CATALOG } from "@shared/contracts";
 import { toggleRequiredArrayValue } from "@/lib/workflow-editor/params";
 import { usePromptAuthoringContext } from "../prompt-authoring-context";
 import { CheckboxRow, ConfigField, ConfigNote, NumberField, TriggerRateLimitFields, arr } from "./shared";
@@ -11,7 +12,10 @@ export function TriggerPrReviewFields(props: BlockRendererProps) {
   const promptAuthoring = usePromptAuthoringContext();
   const triggerDefinitionId = promptAuthoring?.previewCandidate?.definitionId;
   const onStates = arr(node.params.on);
-  const effective = onStates.length > 0 ? onStates : ["changes_requested"];
+  // A node that names no states waits for the block's default, which the
+  // worker's schema applies too: both read the block manifest's one constant.
+  const effective =
+    onStates.length > 0 ? onStates : arr(BLOCK_CATALOG.trigger_pr_review.defaults.on);
   const toggle = (value: string) => (checked: boolean) => {
     onChange("params.on", toggleRequiredArrayValue(effective, value, checked));
   };

@@ -233,6 +233,21 @@ describe("dispatchTicket owner reservation", () => {
     ]);
   });
 
+  it("reads the tracker connection once for the project it watches and the run's key", async () => {
+    // Each resolution reads every integration's settings and decrypts the
+    // connection, and two of them could answer from two different moments.
+    const runtime = await import("../../engine/support/issue-tracker-runtime.js");
+    vi.mocked(runtime.resolveActiveIssueTracker).mockClear();
+    vi.mocked(runtime.issueTrackerWiring).mockClear();
+    vi.mocked(runtime.ticketSubject).mockClear();
+
+    await dispatchTicket("PROJ-42", adapters(registry()), 3);
+
+    expect(runtime.resolveActiveIssueTracker).toHaveBeenCalledTimes(1);
+    expect(runtime.issueTrackerWiring).not.toHaveBeenCalled();
+    expect(runtime.ticketSubject).not.toHaveBeenCalled();
+  });
+
   it("pins the built-in fallback selection while retaining owner identity", async () => {
     mockGetEnabled.mockResolvedValue({
       definition: { id: 1 },

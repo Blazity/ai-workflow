@@ -19,16 +19,12 @@ export {
 export {
   issueTrackerBaseUrl,
   outboundEmailSettings,
-  providerWebhookSecret,
   resendWebhookSecret,
   ticketBoardOf,
   ticketBoardSettings,
   webhookTriggerEncryptionKey,
 } from "./integration-settings.js";
-export type {
-  TicketBoardSettings,
-  WebhookProviderId,
-} from "./integration-settings.js";
+export type { TicketBoardSettings } from "./integration-settings.js";
 export {
   getRequestSettingsSnapshot,
 } from "./request-snapshot.js";

@@ -29,6 +29,7 @@ export { readIntegrationStates, secretsKeyMaterial } from "./authoring.js";
 export { checkIntegrationPin, environmentReaderFrom } from "./resolve.js";
 
 export { resolveUsableIntegrations, usableIntegrations } from "./usable.js";
+export type { IntegrationRedaction } from "./usable.js";
 
 // The secrets core redacts and scans for. One source: see secret-values.ts for
 // the rule and for the failure policy every caller shares.
@@ -37,10 +38,3 @@ export {
   integrationSecretValues,
   knownSecretValues,
 } from "./secret-values.js";
-
-export async function getVcsBotLogin(
-  kind: import("@shared/contracts").VcsProviderKind,
-): Promise<string | undefined> {
-  const resolver = await import("./vcs-bot-login.js");
-  return resolver.getVcsBotLogin(kind);
-}

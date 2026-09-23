@@ -29,9 +29,6 @@ import type {
   IssueTrackerMoveTarget,
 } from "../../adapters/issue-tracker/types.js";
 
-/** Comfortably under the 300 s a plain function is killed at. */
-const ISSUE_TRACKER_TIMEOUT_MS = 30_000;
-
 const NO_PROVIDER =
   "No issue tracker is connected on this deployment, so there is no ticket to work from. Connect one on the Integrations page.";
 
@@ -114,8 +111,10 @@ export async function resolveActiveIssueTracker(
   pins?: readonly IntegrationConnectionPin[],
 ): Promise<ResolvedIssueTracker> {
   const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
+  // No lifetime: the adapter is held by whoever asked (a poll pass, a resume,
+  // a run's attachment downloads) for as long as their work takes, and each of
+  // its requests is bounded on its own.
   const resolved = await resolveUsableIntegrations({
-    signal: AbortSignal.timeout(ISSUE_TRACKER_TIMEOUT_MS),
     filter: (manifest) => manifest.capabilities.includes("issue_tracker"),
   });
   // Settings we could not read are not a deployment with nothing connected.
