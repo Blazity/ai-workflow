@@ -15,6 +15,7 @@ import {
   buildSaveRequest,
   conflictDifferenceLines,
   disableConsequence,
+  enableConsequence,
   disconnectConsequence,
   fieldHint,
   missingRequiredFields,
@@ -333,8 +334,20 @@ test("disconnecting with nothing else configured says everything using it stops"
 
 test("disabling says runs fail and that the stored values survive it", () => {
   const lines = disableConsequence(integration());
-  assert.match(lines.join(" "), /fails naming Demo/);
+  assert.match(lines.join(" "), /A run that uses Demo fails naming it/);
   assert.match(lines.join(" "), /enabling it again finds exactly these values/);
+});
+
+test("an integration with no blocks is not said to grey any out, on or off", () => {
+  // Jira has no blocks; "Jira's blocks grey out" and "its blocks return" sent
+  // an admin looking for blocks that do not exist.
+  const tracker = integration({ blocks: [] });
+  const said = [
+    ...disableConsequence(tracker),
+    enableConsequence(tracker),
+    ...disconnectConsequence(tracker),
+  ].join(" ");
+  assert.doesNotMatch(said, /blocks/);
 });
 
 test("switching to an environment that does not configure the integration is refused by name", () => {

@@ -11,6 +11,7 @@ import type {
   IntegrationConnectionFieldDto,
   IntegrationDto,
   IntegrationFailure,
+  IntegrationImpactPreviewRequest,
   IntegrationImpactPreviewResponse,
   IntegrationState,
   IntegrationVerification,
@@ -598,15 +599,24 @@ export function testOutcomeLines(
  * workflows reach the integration and how many runs in flight stop.
  */
 export function disableConsequence(integration: IntegrationDto): string[] {
+  const name = integration.name;
+  // Said about blocks only when there are some: Jira has none, and "Jira's
+  // blocks grey out" sent an admin looking for blocks that do not exist.
   return [
-    `${integration.name}'s blocks grey out in the workflow editor at once, each carrying the reason, and publishing a workflow that uses one is refused.`,
-    `A run that reaches one of them fails naming ${integration.name}. A step already running finishes.`,
+    ...(integration.blocks.length > 0
+      ? [
+          `${name}'s blocks grey out in the workflow editor at once, each carrying the reason, and publishing a workflow that uses one is refused.`,
+        ]
+      : []),
+    `A run that uses ${name} fails naming it at its next use. A step already running finishes.`,
     "Nothing stored is touched, so enabling it again finds exactly these values.",
   ];
 }
 
 export function enableConsequence(integration: IntegrationDto): string {
-  return `${integration.name} goes back to the values stored for it, and its blocks return to the workflow editor.`;
+  return integration.blocks.length > 0
+    ? `${integration.name} goes back to the values stored for it, and its blocks return to the workflow editor.`
+    : `${integration.name} goes back to the values stored for it, and workflows may use it again.`;
 }
 
 /**
@@ -629,7 +639,9 @@ export function disconnectConsequence(integration: IntegrationDto): string[] {
     );
   } else {
     lines.push(
-      `Nothing else on this deployment configures ${integration.name}, so it becomes Not connected: its blocks grey out in the editor and runs that need it fail until it is connected again.`,
+      integration.blocks.length > 0
+        ? `Nothing else on this deployment configures ${integration.name}, so it becomes Not connected: its blocks grey out in the editor and runs that need it fail until it is connected again.`
+        : `Nothing else on this deployment configures ${integration.name}, so it becomes Not connected: runs that need it fail until it is connected again.`,
     );
   }
   return lines;
@@ -641,12 +653,21 @@ const IMPACT_NAME_LIMIT = 5;
 export const READING_IMPACT_LINE =
   "Reading enabled workflows and runs in flight before anything changes.";
 
-/** The four changes decision 9 asks the impact of before they are made. */
-export type IntegrationImpactAction = "save" | "disconnect" | "source" | "disable";
+/** The four changes decision 9 asks the impact of before they are made: the
+ *  contract's own list, so a preview added there is a case every table below
+ *  has to answer. */
+export type IntegrationImpactAction = IntegrationImpactPreviewRequest["preview"];
 
 /**
- * Why runs in flight stop, or do not, for one change. The first line of every
- * confirmation, because it is the answer to "what does this break".
+ * Why runs in flight may stop, or do not, for one change. The first line of
+ * every confirmation, because it is the answer to "what does this break".
+ * Every sentence follows the worker's `stops`; none decides it again.
+ *
+ * Save and a switch of source are only ever confirmed when runs may stop or
+ * the read failed (the screen goes ahead otherwise), so they have no sentence
+ * for "nothing stops": a second-guess of a case nobody sees is how "both
+ * sources hold the same connection" came to be said about two different
+ * tokens.
  */
 function impactReasonLine(
   integration: IntegrationDto,
@@ -654,26 +675,60 @@ function impactReasonLine(
   action: IntegrationImpactAction,
 ): string {
   const name = integration.name;
-  switch (action) {
-    case "save":
-      return impact === null
-        ? `The worker could not determine whether these values move ${name}'s connection fingerprint. A moved fingerprint stops runs already in flight at their next use instead of letting them follow the edit.`
-        : `If ${name} accepts these values, its connection fingerprint changes. Runs already in flight keep the fingerprint they started with and stop at their next use instead of following this edit.`;
-    case "disconnect":
-      return impact === null
-        ? "The worker could not determine whether disconnecting changes the connection a run has pinned. A changed pin stops runs already in flight at their next use."
-        : impact.changesFingerprint
-          ? "Disconnecting changes the connection a run has pinned. Runs already in flight stop at their next use instead of following the new connection."
-          : "This deployment falls back to the same connection fingerprint, so disconnecting the stored values does not stop a run already in flight.";
-    case "source":
-      return impact === null
-        ? "The worker could not determine whether the two sources hold the same connection. If they differ, runs already in flight stop at their next use."
-        : impact.changesFingerprint
-          ? `The two sources hold different values for ${name}, so switching changes the connection a run has pinned. Runs already in flight stop at their next use instead of following the switch.`
-          : `Both sources hold the same connection for ${name}, so switching stops no run in flight.`;
-    case "disable":
-      return `Turning ${name} off is read at every use, so every run in flight that reaches it stops at its next use.`;
+  if (impact === null) {
+    switch (action) {
+      case "save":
+        return `The worker could not determine whether these values change the connection runs already in flight are using. If they do, a run that checks the one it started with may stop at its next use of ${name} instead of following the edit.`;
+      case "disconnect":
+        return `The worker could not determine what disconnecting leaves. A run in flight may stop, or go on without ${name}, at its next use of ${name}.`;
+      case "source":
+        return `The worker could not determine whether the two sources hold the same connection. If they differ, a run that checks the one it started with may stop at its next use of ${name}.`;
+      case "disable":
+        return `Turning ${name} off is read at every use, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`;
+    }
   }
+  switch (impact.stops) {
+    case "none":
+      return integration.state.usable
+        ? `This deployment falls back to the same connection for ${name}, so disconnecting the stored values stops no run already in flight.`
+        : `${name} is not working right now, so no run in flight is using it and this stops none.`;
+    case "unusable":
+      return action === "disable"
+        ? `Turning ${name} off is read at every use, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`
+        : `Nothing else configures ${name} after this, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`;
+    case "reconfigured": {
+      const change =
+        action === "save"
+          ? `If ${name} accepts these values, the connection changes.`
+          : `This changes the values ${name} is used with.`;
+      const paths = pinCheckPaths(integration);
+      return paths.length === 0
+        ? `${change} Nothing a run does with ${name} compares the connection it started with, so a run in flight follows the change.`
+        : `${change} A run in flight that uses ${andList(paths)} checks the connection it started with, and may stop at its next use of ${name}.`;
+    }
+  }
+}
+
+/**
+ * Where a run compares the connection it pinned for this integration, which is
+ * where a changed connection stops it: the integration's own blocks, the Send
+ * message block for a messaging provider, a repository on a version control
+ * provider. The tracker, tracing and memory compare nothing today (the
+ * worker's `runsThatMayStop` counts by the same list).
+ */
+function pinCheckPaths(integration: IntegrationDto): string[] {
+  const paths: string[] = [];
+  if (integration.blocks.length > 0) paths.push(`${integration.name}'s own blocks`);
+  if (integration.capabilities.includes("messaging")) paths.push("a Send message block");
+  if (integration.capabilities.includes("vcs")) paths.push(`a repository on ${integration.name}`);
+  return paths;
+}
+
+/** "that uses its issue tracker", or "that uses it" for one with no capability. */
+function usingItsCapabilities(integration: IntegrationDto): string {
+  return integration.capabilities.length === 0
+    ? "that uses it"
+    : `that uses its ${andList(integration.capabilities.map((id) => capabilityLabel(id).toLowerCase()))}`;
 }
 
 /**
@@ -701,7 +756,14 @@ export function integrationImpactLines(
       }.`,
     );
   }
-  if (definitions === null) {
+  const unmeasured = impact?.unmeasuredCapabilities ?? [];
+  if (definitions === null && unmeasured.length > 0) {
+    lines.push(
+      `Enabled workflows using ${integration.name}: unknown. This preview cannot yet see which workflows use its ${andList(
+        unmeasured.map((id) => capabilityLabel(id).toLowerCase()),
+      )}, so it names none rather than claim none.`,
+    );
+  } else if (definitions === null) {
     lines.push("Enabled workflows: unknown. The worker could not read the deployed definitions.");
   } else if (definitions.length === 0) {
     lines.push(
@@ -718,30 +780,28 @@ export function integrationImpactLines(
   }
   const runs = impact?.inFlightRuns ?? null;
   lines.push(
-    runs === null
-      ? "Runs in flight that would stop: unknown. The worker could not measure them, so this confirmation does not claim zero."
+    runs === null && unmeasured.length > 0
+      ? "Runs in flight that may stop: unknown, for the same reason, so this confirmation does not claim zero."
+      : runs === null
+      ? "Runs in flight that may stop: unknown. The worker could not measure them, so this confirmation does not claim zero."
       : runs === 1
-        ? "1 run in flight will stop."
-        : `${runs} runs in flight will stop.`,
+        ? "1 run in flight may stop."
+        : `${runs} runs in flight may stop.`,
   );
   return lines;
 }
 
 const CONFIRM_LABELS: Record<
   IntegrationImpactAction,
-  { readonly unknown: string; readonly none: string; readonly stopping: string }
+  { readonly unknown: string; readonly go: string }
 > = {
-  save: { unknown: "Save with unknown impact", none: "Save the configuration", stopping: "Save and stop" },
-  disconnect: {
-    unknown: "Erase values with unknown impact",
-    none: "Erase the stored values",
-    stopping: "Erase values and stop",
-  },
-  source: { unknown: "Switch with unknown impact", none: "Switch the source", stopping: "Switch and stop" },
-  disable: { unknown: "Turn it off with unknown impact", none: "Turn it off", stopping: "Turn it off and stop" },
+  save: { unknown: "Save with unknown impact", go: "Save the configuration" },
+  disconnect: { unknown: "Erase values with unknown impact", go: "Erase the stored values" },
+  source: { unknown: "Switch with unknown impact", go: "Switch the source" },
+  disable: { unknown: "Turn it off with unknown impact", go: "Turn it off" },
 };
 
-/** The confirm button says what pressing it costs, or that nobody could tell. */
+/** The confirm button says what pressing it may cost, or that nobody could tell. */
 export function integrationImpactConfirmLabel(
   impact: IntegrationImpactPreviewResponse | null,
   action: IntegrationImpactAction,
@@ -749,8 +809,8 @@ export function integrationImpactConfirmLabel(
   const labels = CONFIRM_LABELS[action];
   const runs = impact?.inFlightRuns ?? null;
   if (runs === null) return labels.unknown;
-  if (runs === 0) return labels.none;
-  return `${labels.stopping} ${runs} ${runs === 1 ? "run" : "runs"}`;
+  if (runs === 0) return labels.go;
+  return `${labels.go}, ${runs} ${runs === 1 ? "run" : "runs"} may stop`;
 }
 
 /**

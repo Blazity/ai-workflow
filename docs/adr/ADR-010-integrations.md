@@ -921,12 +921,32 @@ not move the fingerprint continues without another confirmation.
 
 The review fix round extended the same preview to the other two changes
 decision 9 names, over the same transport: `{ preview: "source", source }`
-and `{ preview: "disable" }`. `previewedChange` answers two questions, because
-the kill switch separates them: whether the pin moves, and whether runs in
-flight stop. Disabling moves no pin (it is read live) yet stops every run that
-reaches the integration, so it always counts. A switch of source stops runs
-exactly when the two sources hold different connections; when they hold the
-same one the screen switches without asking, as it saves without asking.
+and `{ preview: "disable" }`. `previewedChange` builds the state each change
+leaves (the kill switch is the stored row with `enabled: false`) and checks
+the pin a run holds against it the way the run checks it at its next use
+(`checkIntegrationPin`), which yields one answer, `stops`, in three values:
+`none`; `reconfigured`, the integration stays usable with values a pin no
+longer matches; `unusable`, turned off or disconnected with nothing to fall
+back to. A connection not usable now stops nothing, because no run holds a
+pin for it. The two stop runs by different mechanisms, so `runsThatMayStop`
+counts them differently. An `unusable` integration fails or degrades every run
+whose graph reaches it (`integrationsUsedBy`, the reached set), pin or no pin:
+a ticket run asks for the tracker and none is there. A `reconfigured` one stops
+only a run whose next use compares its pin: its own blocks in the graph,
+`send_message` for a messaging provider (a notification alone is withheld and
+the run goes on), or a repository its definition's scope allows on a version
+control provider; the run needs a recorded pin for it at the fingerprint in
+force now. The issue tracker, tracing and memory compare no pin today, so a
+Jira edit counts zero while the workflow list still names every ticket
+workflow as using Jira. The confirmation says a run "may stop" at its next use
+of the integration, because whether it gets there is the run's. The screen
+changes without asking when `stops` is `none` or no run in flight may stop,
+for a save and a switch of source; disconnect and the kill switch always ask.
+Closing the dialog while the read is out cancels the change for good. When the
+integration serves a capability the reach calculation cannot see a workflow
+use at all (`unmeasuredCapabilities`, derived from `integrationsUsedBy` over
+every block type), the preview reports the list and the runs as unknown rather
+than none.
 
 The active provider selection for a single-provider capability was assigned
 here to S4 and moved to S6 during it: choosing between two providers is a

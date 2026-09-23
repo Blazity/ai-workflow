@@ -1405,9 +1405,29 @@ export interface IntegrationImpactDefinition {
 export interface IntegrationImpactPreviewResponse {
   /** Whether this action changes the pin a run compares at its next use. */
   readonly changesFingerprint: boolean;
+  /**
+   * Whether runs in flight may stop once this change is made, and by which
+   * mechanism: the check a run makes at its next use, applied to the state
+   * the change leaves. `none`: no run stops. `reconfigured`: the integration
+   * stays usable with values a run's pin no longer matches, so a run stops
+   * only where its next use compares that pin. `unusable`: it can no longer
+   * be used (turned off, or disconnected with nothing to fall back to), so
+   * every run that reaches it stops or goes on without it at its next use.
+   * The one answer to "does this stop runs"; the dashboard asks for
+   * confirmation on it and says why from it.
+   */
+  readonly stops: "none" | "reconfigured" | "unusable";
+  /**
+   * Capabilities this integration serves that the worker cannot see a
+   * workflow use at all. Non-empty means `enabledDefinitions` is null, and
+   * `inFlightRuns` too when runs stop, because the worker could not measure
+   * them, not because a read failed.
+   */
+  readonly unmeasuredCapabilities: readonly string[];
   /** Enabled definitions only, from each definition's deployed graph. */
   readonly enabledDefinitions: readonly IntegrationImpactDefinition[] | null;
-  /** In-flight runs on those definitions that would stop. */
+  /** In-flight runs on those definitions that may stop, counted by the
+   *  mechanism `stops` names. */
   readonly inFlightRuns: number | null;
   /** Catalog repositories whose provider is this integration. */
   readonly repositories: readonly { provider: string; path: string }[] | null;

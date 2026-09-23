@@ -63,12 +63,11 @@ export type IntegrationImpactPreviewRequest = z.infer<
   typeof integrationImpactPreviewRequestSchema
 >;
 
+/** The previews above, plus the write itself: one list of previews, so a new
+ *  one is added in one place and the route parses it the day it exists. */
 const integrationConnectionCommandSchema = z.discriminatedUnion("preview", [
   integrationConnectionSaveFieldsSchema.extend({ preview: z.literal("write") }),
-  integrationConnectionSaveFieldsSchema.extend({ preview: z.literal("save") }),
-  z.object({ preview: z.literal("disconnect") }),
-  z.object({ preview: z.literal("source"), source: integrationSourceFieldSchema }),
-  z.object({ preview: z.literal("disable") }),
+  ...integrationImpactPreviewRequestSchema.options,
 ]);
 
 /**

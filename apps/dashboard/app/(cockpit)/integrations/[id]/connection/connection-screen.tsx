@@ -240,6 +240,10 @@ export function ConnectionScreen({
   const [dirty, setDirty] = useState(false);
   const [changedElsewhere, setChangedElsewhere] = useState(false);
   const inFlight = useRef(false);
+  // Which impact read is the live one. Closing the dialog moves it on, so a
+  // read that lands after the admin cancelled finds itself stale and neither
+  // shows its answer nor makes the change it was asked about.
+  const previewToken = useRef(0);
   // Which inputs this admin has been in. Only used when a conflict has to
   // decide whose value an input holds, so it is a ref: touching a field is not
   // a reason to re-render.
@@ -411,29 +415,36 @@ export function ConnectionScreen({
    * Read what a change would stop before making it (decision 9), with the
    * confirmation open and saying so while the read is out.
    *
-   * `unlessPinMoves` is the change itself, for the two kinds a run follows
-   * when nothing it pinned moves: a save and a switch of source. When the read
-   * says the pin stays, that change goes ahead without a question nobody needs
-   * to answer. Disconnect and the kill switch always ask, because each takes
-   * something away whatever the pin does.
+   * `unlessRunsStop` is the change itself, for the two kinds a run follows
+   * when nothing it holds breaks: a save and a switch of source. When the
+   * worker says no run in flight may stop, that change goes ahead without a
+   * question nobody needs to answer. Disconnect and the kill switch always
+   * ask, because each takes something away whatever runs do.
+   *
+   * Cancelling while the read is out is final: the admin said no before the
+   * answer came, and "nothing stops" is not a yes. A switch of source that
+   * stops no run can still hand every later run a different token.
    */
   async function previewChange(
     preview: IntegrationImpactPreviewRequest,
     action: IntegrationImpactAction,
-    unlessPinMoves?: () => void,
+    unlessRunsStop?: () => void,
   ) {
     if (inFlight.current) return;
     inFlight.current = true;
+    const token = ++previewToken.current;
     setBusy("impact");
     setImpact(null);
     setConfirming(action);
     let proceed: (() => void) | null = null;
     try {
       const result = await apiClient.integrations.previewImpact(integration.id, preview);
+      if (token !== previewToken.current) return;
       if (result.ok) {
         setImpact(result.data);
-        if (!result.data.changesFingerprint && unlessPinMoves) {
-          proceed = unlessPinMoves;
+        const noRunStops = result.data.stops === "none" || result.data.inFlightRuns === 0;
+        if (noRunStops && unlessRunsStop) {
+          proceed = unlessRunsStop;
           closeConfirmation();
         }
       }
@@ -467,6 +478,7 @@ export function ConnectionScreen({
   }
 
   function closeConfirmation() {
+    previewToken.current += 1;
     setConfirming(null);
     setImpact(null);
     setPendingSave(null);
