@@ -3,29 +3,33 @@
  *
  * ONE SOURCE. `knownSecretValues()` is the environment's secret-named values
  * (`environmentSecretValues`, the one rule for which variable holds a secret)
- * plus the secret fields of every connected integration. The second half is
- * the reason this module exists: a connection an admin stored in the dashboard
- * is decrypted from `integration_connections` and never reaches the
- * environment, so a set built from `process.env` alone printed a pasted token
- * into run logs, replays and ticket comments in the clear. Every redaction set
- * in core is this one; the per-site lists it replaced are gone.
+ * plus every integration's secrets (`integrationSecretValues`: what its secret
+ * fields hold in the environment, and every stored version a disconnect has not
+ * redacted). The stored half is the reason this module exists: a connection an
+ * admin stored in the dashboard is decrypted from `integration_connection_versions`
+ * and never reaches the environment, so a set built from `process.env` alone
+ * printed a pasted token into run logs and replays in the clear. Every
+ * redaction set in core is this one; the per-site lists it replaced are gone.
  *
  * Workflow scope cannot call it (no database, and a step result holding every
  * secret would put them all in the run's event log). It redacts with the
  * environment half before a value crosses into a step, and the step that
- * writes or publishes the value applies this whole set.
+ * writes or publishes the value applies this whole set, at the boundaries
+ * `engine/support/publication-redaction.ts` lists (the tracker and version
+ * control adapters, the messaging sender, and the steps that write
+ * workflow-scope text to core's own rows and logs).
  *
- * FAILURE POLICY, one for every caller: when the integration settings cannot
- * be read, both functions below throw `IntegrationSecretsUnreadableError`, and
- * no caller catches it to carry on with the environment half. Every caller is
- * about to write core's own tables or publish outside the process. A smaller
- * set there is a stored secret written in the clear, silently; a throw costs
- * one step attempt (retried by the Workflow runtime or reported by the
- * caller's own error path) on a database that is failing that write anyway.
- * A connection whose values cannot be opened (no secrets key, a key that does
- * not match the one it was sealed with) is a different case and is skipped:
- * this process cannot hand that secret to a sandbox or a provider either, so
- * there is nothing of it to leak from here.
+ * FAILURE POLICY, one for every caller: when the stored versions cannot be
+ * read (after a short retry that rides out a blink), both functions below
+ * throw `IntegrationSecretsUnreadableError`, and no caller catches it to carry
+ * on with the environment half. Every caller is about to write core's own
+ * tables or publish outside the process, and a smaller set there is a stored
+ * secret written in the clear, silently. What each caller does instead is its
+ * own to say (refuse, withhold the text, degrade to a gap, retry the step),
+ * never "use part of it". A stored version whose values cannot be opened (no
+ * secrets key, a key that does not match the one it was sealed with) is a
+ * different case and is skipped: this process cannot hand that secret to a
+ * sandbox or a provider either, so there is nothing of it to leak from here.
  */
 import type { IntegrationManifest } from "@integrations/sdk";
 import type { Db } from "../../db/types.js";
@@ -52,7 +56,7 @@ export class IntegrationSecretsUnreadableError extends Error {
   }
 }
 
-export const INTEGRATION_SECRETS_UNREADABLE =
+const INTEGRATION_SECRETS_UNREADABLE =
   "The integration settings could not be read, so the secrets they hold could not be redacted.";
 
 /**
@@ -162,7 +166,9 @@ async function readRetainedSecrets(
   let lastError: unknown;
   for (let attempt = 0; attempt <= READ_RETRY_DELAYS_MS.length; attempt++) {
     if (attempt > 0) {
-      await new Promise((resolve) => setTimeout(resolve, READ_RETRY_DELAYS_MS[attempt - 1]));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, READ_RETRY_DELAYS_MS[attempt - 1]);
+      });
     }
     try {
       return db ? await readRetainedIntegrationSecrets(db) : await readConnectedRetainedIntegrationSecrets();

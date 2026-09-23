@@ -373,6 +373,30 @@ async function blockInvestigateRetrievalStep(input: {
   } | null;
 }): Promise<{ evidence: InvestigateEvidence[]; gaps: RetrievalGap[] }> {
   "use step";
+  // Every secret the deployment knows, read BEFORE anything is searched:
+  // ticket and chat evidence is text other people wrote, and a token pasted
+  // into it must not ride out in this step's durable result. A set that
+  // cannot be read is the one failure this block used to turn into a failed
+  // run; it degrades the way a provider failure does instead, into gaps for
+  // each source it was asked to search, and no evidence at all.
+  const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
+  let secrets: string[];
+  try {
+    secrets = await knownSecretValues();
+  } catch (error) {
+    const { logger } = await import("../../../infra/logger.js");
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      "investigate_evidence_withheld",
+    );
+    return {
+      evidence: [],
+      gaps: [
+        ...(input.issueTracker ? [{ provider: "issue_tracker" as const, reason: "unavailable" as const, scope: "" }] : []),
+        ...(input.chat ? [{ provider: "chat" as const, reason: "unavailable" as const, scope: "" }] : []),
+      ],
+    };
+  }
   // The issue tracker scopes its own search from its connection; no block
   // param can widen what it is allowed to reach. The chat side has no
   // credential to fetch: it goes through the messaging capability, which
@@ -421,11 +445,6 @@ async function blockInvestigateRetrievalStep(input: {
   const { redactConfiguredSecretsInText } = await import(
     "../../../run-observability/sanitizer.js"
   );
-  // Every secret the deployment knows: ticket and chat evidence is text other
-  // people wrote, and a token pasted into it must not ride out in the step
-  // result. A set that cannot be read fails this step (maxRetries 0).
-  const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
-  const secrets = await knownSecretValues();
   return {
     evidence: evidence.map((item) => Object.assign({}, item, {
       title: redactConfiguredSecretsInText(item.title, secrets),

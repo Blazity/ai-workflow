@@ -151,11 +151,20 @@ describe("clarification sandbox snapshot Workflow steps", () => {
   // and the snapshot is taken with the tracing key never scanned for.
   it("takes no snapshot when the integration settings cannot be read", async () => {
     const { writeFiles, snapshot } = runningSource();
-    mocks.integrationSecretValues.mockRejectedValue(new Error("integration settings unreadable"));
+    const unreadable = new Error("integration settings unreadable");
+    mocks.integrationSecretValues.mockRejectedValue(unreadable);
 
-    await expect(snapshotClarificationSandboxStep(snapshotInput)).rejects.toThrow(
-      "clarification credential scan could not be prepared",
+    const failure = await snapshotClarificationSandboxStep(snapshotInput).catch(
+      (error: unknown) => error,
     );
+
+    // Its own sentence, so an operator does not read a settings outage as the
+    // sandbox refusing the pattern file, and the cause beside it.
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(
+      "clarification credential scan could not be prepared: the integration settings could not be read",
+    );
+    expect((failure as Error).cause).toBe(unreadable);
     expect(writeFiles).not.toHaveBeenCalled();
     expect(snapshot).not.toHaveBeenCalled();
   });

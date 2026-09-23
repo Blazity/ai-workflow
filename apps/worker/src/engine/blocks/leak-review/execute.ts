@@ -1,5 +1,6 @@
 import type { JsonValue } from "@shared/contracts";
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
+import { RetryableError } from "workflow";
 import { redactConfiguredSecretsInText } from "../../../run-observability/sanitizer.js";
 import {
   workspaceRepositoryAccess,
@@ -391,6 +392,11 @@ async function readGitOutput(
  * the tail of a huge diff, or in a repository the cap already excluded from the
  * LLM material, still fails the run.
  */
+/** The sentence the collect step retries with, and the block recognises once
+ *  the retries are spent (the runtime prefixes it with the step's own). */
+const LEAK_REVIEW_SETTINGS_UNREADABLE =
+  "Leak review could not run: this deployment's integration settings could not be read, so the secrets to scan for are not known.";
+
 async function blockLeakReviewCollectStep(input: {
   sandboxId: string;
   repositories: LeakReviewRepository[];
@@ -406,10 +412,23 @@ async function blockLeakReviewCollectStep(input: {
 
   // Every secret the deployment knows, a token an admin stored in the
   // dashboard included: this scan is the backstop that stops an agent from
-  // publishing one, and the environment alone never holds a stored one. A set
-  // that cannot be read fails the step; nothing is published unscanned.
-  const { knownSecretValues } = await import("../../../services/integrations/runtime.js");
-  const secrets = scannableConfiguredSecrets(await knownSecretValues());
+  // publishing one, and the environment alone never holds a stored one.
+  // Nothing is published unscanned, so a set that cannot be read is retried,
+  // spaced, within this step's retries (a blink passes on the next attempt),
+  // and after the last one fails the block with a sentence that says so.
+  const { IntegrationSecretsUnreadableError, knownSecretValues } = await import(
+    "../../../services/integrations/runtime.js"
+  );
+  let known: string[];
+  try {
+    known = await knownSecretValues();
+  } catch (error) {
+    if (error instanceof IntegrationSecretsUnreadableError) {
+      throw new RetryableError(LEAK_REVIEW_SETTINGS_UNREADABLE, { retryAfter: "5s" });
+    }
+    throw error;
+  }
+  const secrets = scannableConfiguredSecrets(known);
   const sections: string[] = [];
   const diffStats: string[] = [];
   const scanned: string[] = [];
@@ -510,7 +529,9 @@ async function blockLeakReviewCollectStep(input: {
     unchanged,
   };
 }
-blockLeakReviewCollectStep.maxRetries = 0;
+// Two, for the settings read above: every git read here is idempotent, so a
+// retry of any of them costs time and nothing else.
+blockLeakReviewCollectStep.maxRetries = 2;
 
 /**
  * Report-only LLM pass. Provider failures are logged inside the step (pino is a
@@ -690,9 +711,18 @@ export const execute: BlockExecuteFn = async (
     });
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return executionError(err instanceof Error ? err.message : String(err), {
-      category: "sandbox",
-    });
+    const detail = err instanceof Error ? err.message : String(err);
+    if (detail.includes(LEAK_REVIEW_SETTINGS_UNREADABLE)) {
+      // Not the workspace's failure, and not a leak: the deployment could not
+      // say which secrets to scan for, so nothing was published. The fixed
+      // sentence is the cause, not the runtime's "failed after N retries"
+      // wrapping of it, which is the same fact in worse words.
+      return executionError(LEAK_REVIEW_SETTINGS_UNREADABLE, {
+        category: "engine",
+        message: "Nothing was published. Retry the run once the deployment's settings can be read.",
+      });
+    }
+    return executionError(detail, { category: "sandbox" });
   }
 
   if (collected.hits.length > 0) {

@@ -352,16 +352,26 @@ export async function snapshotClarificationSandboxStep(
     // integration's token, a GitHub App private key and the database URL were
     // never in here, and writing them into a pattern file would hand them to
     // whatever the agent left running. A tracing key stored in the dashboard is
-    // covered the same as one from the environment. Settings that cannot be
-    // read throw, and the snapshot is refused below rather than taken with the
-    // tracing key unscanned.
+    // covered the same as one from the environment.
+    //
+    // Settings that cannot be read FAIL THE RUN, deliberately: a snapshot lives
+    // seven days and is restored into later sandboxes, so it is never taken
+    // with the tracing key unscanned. This step keeps the runtime's default
+    // retries, which ride out a blink; once they are spent the park rethrows
+    // (the snapshot call in agent-workflow.ts has no catch of its own) and the
+    // run fails. It does not park without a snapshot. The message is this
+    // failure's own, so an operator can tell a settings outage from a sandbox
+    // that refused the pattern file, and the cause rides with it.
     let tracingSecrets: string[];
     try {
       tracingSecrets = await integrationSecretValues({
         include: (manifest) => manifest.capabilities.includes("agent_tracing"),
       });
-    } catch {
-      throw new Error("clarification credential scan could not be prepared");
+    } catch (error) {
+      throw new Error(
+        "clarification credential scan could not be prepared: the integration settings could not be read",
+        { cause: error },
+      );
     }
     const credentialValues = [
       env.ANTHROPIC_API_KEY,

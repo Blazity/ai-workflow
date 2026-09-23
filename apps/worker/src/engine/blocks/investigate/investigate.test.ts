@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   /** Configured secrets the retrieval step redacts with. Fixed here so the test
    *  does not depend on the machine's environment. */
   secrets: [] as string[],
+  /** Set to make the secret source fail the way unreadable settings do. */
+  secretsUnreadable: false,
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
@@ -21,7 +23,10 @@ vi.mock("../../../engine/support/adapters.js", () => ({
 }));
 vi.mock("../../../services/integrations/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/integrations/runtime.js")>()),
-  knownSecretValues: async () => mocks.secrets,
+  knownSecretValues: async () => {
+    if (mocks.secretsUnreadable) throw new Error("settings unreadable");
+    return mocks.secrets;
+  },
 }));
 
 import {
@@ -528,6 +533,35 @@ describe("investigate execute", () => {
       "Matches AWT-9.\n\nNot searched: the issue tracker (no access).",
     );
     expectOutputConformsToRegistry("investigate", result.output!);
+  });
+
+  // Red when: a set of secrets that cannot be read fails the block (and with
+  // it the run) after both searches already succeeded. Every provider failure
+  // degrades into a gap by design; the settings blink is one more, and the
+  // evidence is withheld rather than stored unredacted.
+  it("withholds the evidence and reports both sources as gaps when the secrets cannot be read", async () => {
+    mockHappyPath();
+    mocks.secretsUnreadable = true;
+    try {
+      const result = await execute(
+        makeNode("investigate", { chatChannels: ["C1"] }),
+        {},
+        makeCtx(),
+      );
+
+      expect(result.kind).toBe("next");
+      expect(result.output!.evidence).toEqual([]);
+      expect(result.output!.partialReasons).toEqual([
+        { provider: "issue_tracker", reason: "unavailable", scope: "" },
+        { provider: "chat", reason: "unavailable", scope: "" },
+      ]);
+      // Nothing was searched with a set that could not redact what came back.
+      expect(mocks.findTickets).not.toHaveBeenCalled();
+      expect(mocks.searchMessages).not.toHaveBeenCalled();
+      expectOutputConformsToRegistry("investigate", result.output!);
+    } finally {
+      mocks.secretsUnreadable = false;
+    }
   });
 
   it("tells a tracker outage apart from a tracker timeout", async () => {
