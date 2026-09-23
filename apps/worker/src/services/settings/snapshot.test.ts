@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SETTINGS_REGISTRY } from "@shared/contracts";
+import { settingDefinitions } from "@integrations/registry";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { writeManySettings } from "../../db/repositories/settings.js";
@@ -97,7 +97,9 @@ describe("settings snapshot", () => {
     const snapshot = await loadSettingsSnapshot();
     const synchronous = settingsSnapshotFromEnvironment();
 
-    for (const definition of SETTINGS_REGISTRY) {
+    // This build's settings: core's registry and every setting an integration
+    // declares, which a request resolves beside core's.
+    for (const definition of settingDefinitions) {
       const key = definition.key as keyof typeof snapshot;
       expect(snapshot).toHaveProperty(definition.key);
       const value: unknown = snapshot[key];
@@ -108,7 +110,7 @@ describe("settings snapshot", () => {
       expect(synchronous[key]).toEqual(value);
     }
     expect(Object.keys(snapshot).sort()).toEqual(
-      SETTINGS_REGISTRY.map((definition) => definition.key).sort(),
+      settingDefinitions.map((definition) => definition.key).sort(),
     );
   });
 

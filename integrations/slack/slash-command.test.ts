@@ -69,7 +69,7 @@ function recordedRequest(): IntegrationWebhookRequest {
 }
 
 const silent = { info: () => {} };
-const config = { signingSecret: SIGNING_SECRET, allowedUserIds: undefined, log: silent };
+const config = { signingSecret: SIGNING_SECRET, allowedUserIds: [], log: silent };
 
 /** A log that keeps what it was told, for the audit trail's assertions. */
 function recordingLog() {
@@ -81,7 +81,7 @@ test("Slack's recorded signature verifies without being regenerated in the test"
   const reception = await atTimestamp(RECORDED.timestamp, 0, () =>
     receiveSlashCommand(recordedRequest(), {
       signingSecret: RECORDED.signingSecret,
-      allowedUserIds: undefined,
+      allowedUserIds: [],
       log: silent,
     }),
   );
@@ -105,10 +105,11 @@ test("a signed slash command becomes the run control command it asked for", asyn
     response_type: "ephemeral",
     text: "Working on `/ai-workflow cancel AWT-42`...",
   });
-  // Where the answer goes, opaque to core.
+  // Where the answer goes, and what was asked, opaque to core.
   assert.deepEqual(reception.deliverTo, {
     responseUrl:
       "https://hooks.slack.com/commands/T0001/1234567890/abcdefghijklmnopqrstuvwX",
+    asked: "/ai-workflow cancel AWT-42",
   });
 });
 
@@ -124,7 +125,7 @@ test("the externally signed request is accepted at exactly 300 seconds", async (
   const reception = await atTimestamp(RECORDED.timestamp, 300, () =>
     receiveSlashCommand(recordedRequest(), {
       signingSecret: RECORDED.signingSecret,
-      allowedUserIds: undefined,
+      allowedUserIds: [],
       log: silent,
     }),
   );
@@ -135,7 +136,7 @@ test("the externally signed request is refused at 301 seconds", async () => {
   const reception = await atTimestamp(RECORDED.timestamp, 301, () =>
     receiveSlashCommand(recordedRequest(), {
       signingSecret: RECORDED.signingSecret,
-      allowedUserIds: undefined,
+      allowedUserIds: [],
       log: silent,
     }),
   );
@@ -144,23 +145,13 @@ test("the externally signed request is refused at 301 seconds", async () => {
   assert.equal(reception.status, 401);
 });
 
-test("a deployment with no signing secret answers 503, not 401 and not 500", async () => {
-  // Nothing is wrong with the request: this deployment was never given what it
-  // needs to read one, and an admin reading 401 would go looking at Slack.
-  const reception = await receiveSlashCommand(request(), {
-    signingSecret: undefined,
-    allowedUserIds: undefined,
-    log: silent,
-  });
-  assert.equal(reception.kind, "refused");
-  if (reception.kind !== "refused") return;
-  assert.equal(reception.status, 503);
-});
-
-test("an empty allowlist means everyone, and separators alone are still empty", async () => {
-  // SETUP.md has promised this since the command existed. Reading " , , " as
-  // "nobody" would lock a whole workspace out of its own runs.
-  for (const allowedUserIds of [undefined, "", " , , "]) {
+test("an empty allowlist means everyone, and blank entries are still empty", async () => {
+  // SETUP.md has promised this since the command existed. Reading a list of
+  // blanks as "nobody" would lock a whole workspace out of its own runs. (A
+  // deployment with no signing secret never reaches this code: core answers
+  // 503 because the manifest's webhook requires the secret; see the route's
+  // own test.)
+  for (const allowedUserIds of [[], [""], [" ", "  "]]) {
     const reception = await atSigningTime(() =>
       receiveSlashCommand(request(), { signingSecret: SIGNING_SECRET, allowedUserIds, log: silent }),
     );
@@ -173,7 +164,7 @@ test("an allowlist that does not name the caller refuses, and says so only to th
   const reception = await atSigningTime(() =>
     receiveSlashCommand(request(), {
       signingSecret: SIGNING_SECRET,
-      allowedUserIds: "U000000001, U000000002",
+      allowedUserIds: ["U000000001", "U000000002"],
       log: audit.log,
     }),
   );
@@ -212,7 +203,7 @@ test("the allowlist ignores the spaces somebody typed around the ids", async () 
   const reception = await atSigningTime(() =>
     receiveSlashCommand(request(), {
       signingSecret: SIGNING_SECRET,
-      allowedUserIds: " U000000001 , U2147483697 ",
+      allowedUserIds: [" U000000001 ", " U2147483697 "],
       log: silent,
     }),
   );
@@ -252,31 +243,54 @@ test("help and an unknown command are answered here and never reach core", async
   }
 });
 
-test("a command whose work failed is answered, not left at \"Working on ...\"", async () => {
-  // The defect this replaces: the deferred handler logged the error and the
-  // person watched an acknowledgement that never turned into anything.
-  const posted: { url: string; body: unknown }[] = [];
+/** What `deliverSlashCommandOutcome` posted to the response_url. */
+async function delivered(to: unknown, outcome: RunControlOutcome) {
+  const posted: { url: string; body: { response_type: string; text: string } }[] = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     posted.push({ url: String(url), body: JSON.parse(String(init?.body)) });
     return new Response("ok", { status: 200 });
   }) as typeof fetch;
   try {
-    const outcome: RunControlOutcome = { kind: "failed", message: "the database refused" };
-    await deliverSlashCommandOutcome(
-      { responseUrl: "https://hooks.slack.com/commands/T0001/1/abc" },
-      outcome,
-      { warn: () => {} },
-    );
+    await deliverSlashCommandOutcome(to as never, outcome, { warn: () => {} });
   } finally {
     globalThis.fetch = realFetch;
   }
+  return posted;
+}
+
+test("a command whose work failed is answered, not left at \"Working on ...\"", async () => {
+  // The defect this replaces: the deferred handler logged the error and the
+  // person watched an acknowledgement that never turned into anything.
+  const posted = await delivered(
+    {
+      responseUrl: "https://hooks.slack.com/commands/T0001/1/abc",
+      asked: "/ai-workflow cancel AWT-42",
+    },
+    { kind: "failed", reference: "AIW-DIAG-run-control-7f3a" },
+  );
   assert.equal(posted.length, 1);
   assert.equal(posted[0]!.url, "https://hooks.slack.com/commands/T0001/1/abc");
+  // Only the person who typed it: they are the one waiting, and a channel,
+  // which may be shared with another company, learns nothing from a command
+  // that did not happen. The sentence names the command, what to do, and the
+  // reference the worker's log line carries.
   assert.deepEqual(posted[0]!.body, {
-    response_type: "in_channel",
-    text: ":warning: That command failed: the database refused",
+    response_type: "ephemeral",
+    text:
+      ":warning: `/ai-workflow cancel AWT-42` could not be completed because of an error on the AI Workflow side. " +
+      "Try it again in a minute; if it keeps failing, give an admin the reference `AIW-DIAG-run-control-7f3a`, " +
+      "which names the error in the worker's log.",
   });
+});
+
+test("an answer is still posted for the whole channel to read", async () => {
+  const posted = await delivered(
+    { responseUrl: "https://hooks.slack.com/commands/T0001/1/abc", asked: "/ai-workflow list" },
+    { kind: "answered", answer: { kind: "runs", runs: [] } },
+  );
+  assert.equal(posted[0]!.body.response_type, "in_channel");
+  assert.equal(posted[0]!.body.text, "No active workflows.");
 });
 
 /**

@@ -1,5 +1,9 @@
-import type { ConnectionField, IntegrationManifest } from "@integrations/sdk";
-import type { IntegrationFailure, IntegrationSource } from "@shared/contracts";
+import { type ConnectionField, type IntegrationManifest, integrationSettingKey } from "@integrations/sdk";
+import type {
+  IntegrationFailure,
+  IntegrationMovedValueDto,
+  IntegrationSource,
+} from "@shared/contracts";
 
 import {
   IntegrationSecretCorruptedError,
@@ -73,6 +77,77 @@ export function readConnectionValues(input: {
     values[field.key] = field.format === "integer" ? Number(resolved) : resolved;
   }
   return { ok: true, values };
+}
+
+/**
+ * What a stored connection version holds under the key of one of the
+ * integration's operator settings, and is therefore not read.
+ *
+ * Slack's allowlist was a connection field (`allowedUserIds`) until it became
+ * a setting. A version saved before that still carries it in `config`, and no
+ * reader of a connection knows the key any more: the setting applies instead,
+ * read from its stored row, else its variable, else its default. With neither
+ * set, a stored allowlist that used to keep the command to a few people now
+ * lets the whole workspace in, so this is what the card shows and the webhook
+ * read logs instead of staying quiet. It disappears on the next save, which
+ * builds a version from the connection fields alone.
+ */
+export function storedValuesMovedToSettings(
+  manifest: IntegrationManifest,
+  active: StoredIntegrationVersion | null,
+): IntegrationMovedValueDto[] {
+  if (!active) return [];
+  return (manifest.settings ?? [])
+    .filter((setting) => (active.config[setting.key] ?? "").trim().length > 0)
+    .map((setting) => ({ key: setting.key, setting: integrationSettingKey(manifest.id, setting.key) }));
+}
+
+/**
+ * The part of a connection a webhook that declared what it reads
+ * (`webhook.requires`) is served on, read now.
+ *
+ * One question with two askers: the webhook route serves on the answer
+ * (through `resolveUsableIntegrations`), and the integration's card says from
+ * it whether the webhook is answered (`IntegrationDto.webhook`), so the card
+ * cannot call a command answered that the route refuses, or the other way
+ * round. Nothing else of the connection is asked for: Slack's slash command is
+ * answered on its signing secret alone.
+ *
+ * Not served with a failure: a declared field could not be read (a stored
+ * secret under another key, a value its field refuses). Without one: a declared
+ * field has no value in the active source. Whether the integration is switched
+ * on is each caller's first question, as it is for every other use.
+ */
+export function readWebhookConnection(input: {
+  readonly manifest: IntegrationManifest;
+  readonly requires: readonly string[];
+  readonly source: IntegrationSource;
+  readonly environment: IntegrationEnvironmentReader;
+  readonly active: StoredIntegrationVersion | null;
+  readonly secretsKey: IntegrationSecretsKeyMaterial;
+}):
+  | {
+      readonly served: true;
+      /** The manifest narrowed to the declared fields, which is what the
+       *  webhook's context is built from. */
+      readonly manifest: IntegrationManifest;
+      readonly values: Record<string, ConnectionValue>;
+    }
+  | { readonly served: false; readonly failure: IntegrationFailure | null } {
+  const manifest: IntegrationManifest = {
+    ...input.manifest,
+    connection: {
+      fields: input.manifest.connection.fields.filter((field) =>
+        input.requires.includes(field.key),
+      ),
+    },
+  };
+  const read = readConnectionValues({ ...input, manifest });
+  if (!read.ok) return { served: false, failure: read.failure };
+  if (input.requires.some((key) => read.values[key] === undefined)) {
+    return { served: false, failure: null };
+  }
+  return { served: true, manifest, values: read.values };
 }
 
 /**

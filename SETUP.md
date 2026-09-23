@@ -167,7 +167,7 @@ The Slack app powers two things: **notifications** (run start, success, failure 
 5. Pick (or create) the channel where ai-workflow should post — e.g. `#ai-workflow` or your team's engineering channel. Public is simplest; private works as long as you invite the bot.
 6. In Slack, open the channel → **Channel details → Integrations → Add apps** → select the ai-workflow app you just installed. (Or run `/invite @ai-workflow` in the channel.) Without this the bot's posts will fail with `not_in_channel`.
 7. Right-click the channel → **View channel details** → copy the channel ID at the bottom (looks like `C0123456789`) → `CHAT_SDK_CHANNEL_ID`.
-8. Optional: restrict who can invoke the slash command by setting `SLACK_ALLOWED_USER_IDS` to a comma-separated list of Slack user IDs (`U0123…`). When unset, anyone in the workspace can run it.
+8. Optional: restrict who can invoke the slash command by setting `SLACK_ALLOWED_USER_IDS` to a comma-separated list of Slack user IDs (`U0123…`). When unset, anyone in the workspace can run it. After deploy the same list is a setting (dashboard Settings page, Integrations panel, or MCP `settings.set`); a value saved there takes precedence over the variable, needs no redeploy, and stays in force if you later switch Slack's connection to stored values.
 
 Slack uses the bot name configured on the app itself as the visible message
 author. Change that name in the Slack app configuration.
@@ -303,8 +303,8 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `GITLAB_HOST`                                 | `https://gitlab.com`                                                                                                                                        | GitLab instance URL. Set it for a self-hosted instance; the sandbox clone URL is `<host>/<project path>.git`.                     |
 | `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID` | unset                                                                                                                                                       | Slack bot. Required together: one without the other reads as Failing. When both are unset, runs proceed silently and the messaging blocks are unavailable. |
-| `SLACK_SIGNING_SECRET`                        | unset                                                                                                                                                       | Required only if you register the `/ai-workflow` slash command. When unset, `/webhooks/slack` rejects all requests.              |
-| `SLACK_ALLOWED_USER_IDS`                      | empty (anyone)                                                                                                                                              | Comma-separated user IDs allowed to run slash commands                                                                           |
+| `SLACK_SIGNING_SECRET`                        | unset                                                                                                                                                       | Required only if you register the `/ai-workflow` slash command, and the only variable the command needs. When unset, `/webhooks/slack` rejects all requests. |
+| `SLACK_ALLOWED_USER_IDS`                      | empty (anyone)                                                                                                                                              | Comma-separated user IDs allowed to run slash commands. Read while no value is saved for it on the Settings page, which then takes precedence. |
 | `CRON_SECRET`                                 | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, `/cron/poll` accepts unauthenticated callers — strongly recommended in production. |
 | `JIRA_WEBHOOK_SECRET`                         | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, dispatch is cron-bound (1-min latency).                                            |
 | `COMMIT_AUTHOR`, `COMMIT_EMAIL`               | _unset_ on GitHub → auto-derived from the App (commits author as `<app-slug>[bot]`); GitLab falls back to `ai-workflow-blazity` / `ai-workflow@blazity.com` | Optional override; set both or neither                                                                                           |
@@ -432,7 +432,7 @@ Test in Slack:
 /ai-workflow list
 ```
 
-If you set `SLACK_ALLOWED_USER_IDS`, only those Slack user IDs can invoke the command — useful for limiting to your engineering team.
+If you set `SLACK_ALLOWED_USER_IDS` (or save the list on the Settings page), only those Slack user IDs can invoke the command, which is useful for limiting it to your engineering team.
 
 > See `.claude/skills/init-slack/references/slash-commands.md` for the full walkthrough.
 

@@ -100,7 +100,17 @@ test("a reset says what it cleared, what it could not, and what it refused to to
 
 test("a command that failed says so instead of pretending it answered", () => {
   assert.equal(
-    renderOutcome({ kind: "failed", message: "the database refused" }),
-    ":warning: That command failed: the database refused",
+    renderOutcome({ kind: "failed", reference: "AIW-DIAG-run-control-1" }),
+    ":warning: That command could not be completed because of an error on the AI Workflow side. " +
+      "Try it again in a minute; if it keeps failing, give an admin the reference `AIW-DIAG-run-control-1`, " +
+      "which names the error in the worker's log.",
   );
+});
+
+test("a failure names the command that was asked, with no backtick left to break its span", () => {
+  const text = renderOutcome(
+    { kind: "failed", reference: "AIW-DIAG-run-control-2" },
+    "/ai-workflow status `AWT-1`",
+  );
+  assert.match(text, /^:warning: `\/ai-workflow status 'AWT-1'` could not be completed/u);
 });

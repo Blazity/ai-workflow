@@ -31,7 +31,11 @@ import type {
   TrackerTicketEvent,
   TriggerEvent,
 } from "@shared/contracts";
-import type { IntegrationContext } from "./context";
+import type {
+  IntegrationContext,
+  IntegrationSettingValues,
+  WebhookConnectionValues,
+} from "./context";
 import type { IntegrationManifest } from "./manifest";
 
 export type { PrTriggerPayload, TrackerTicketEvent, TriggerEvent } from "@shared/contracts";
@@ -145,6 +149,25 @@ export type IntegrationWebhookReception =
    */
   | { readonly kind: "refused"; readonly status: number; readonly reason: string };
 
+/**
+ * What `receive` and `deliver` are handed: the integration's context, with the
+ * connection narrowed to what the webhook declared it requires, and its
+ * operator settings.
+ *
+ * `settings` are read when the request arrives, from the store every other
+ * setting lives in, so an allowlist an admin edited a minute ago is the one in
+ * force. When they cannot be read, core does not call the webhook at all and
+ * answers 503: an allowlist nobody could read must not be taken for an empty
+ * one.
+ */
+export type IntegrationWebhookContext<M extends IntegrationManifest> = Omit<
+  IntegrationContext<M>,
+  "connection"
+> & {
+  readonly connection: WebhookConnectionValues<M>;
+  readonly settings: IntegrationSettingValues<M>;
+};
+
 export interface IntegrationWebhook<M extends IntegrationManifest> {
   /**
    * Verify the request and say what it is. Runs on the provider's clock, so it
@@ -152,7 +175,7 @@ export interface IntegrationWebhook<M extends IntegrationManifest> {
    */
   readonly receive: (
     request: IntegrationWebhookRequest,
-    ctx: IntegrationContext<M>,
+    ctx: IntegrationWebhookContext<M>,
   ) => Promise<IntegrationWebhookReception>;
   /**
    * Render and send core's outcome, after the acknowledgement. Required in
@@ -164,6 +187,6 @@ export interface IntegrationWebhook<M extends IntegrationManifest> {
    */
   readonly deliver?: (
     delivery: { readonly to: JsonValue; readonly outcome: RunControlOutcome },
-    ctx: IntegrationContext<M>,
+    ctx: IntegrationWebhookContext<M>,
   ) => Promise<void>;
 }

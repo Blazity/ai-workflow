@@ -11,11 +11,8 @@
  * its deployment variable. The outcome names the value that took over rather
  * than leaving the caller to work it out.
  */
-import {
-  findSettingDefinition,
-  resolveSettingWithoutStoredRow,
-  type SettingsEntryView,
-} from "@shared/contracts";
+import { settingDefinition } from "@integrations/registry";
+import { resolveSettingWithoutStoredRow, type SettingsEntryView } from "@shared/contracts";
 import { deleteConnectedSetting } from "../../db/repositories/settings-reset.js";
 import { settingsEnvironment } from "../../infra/settings-environment.js";
 import { SettingsValidationError, readSettings } from "./store.js";
@@ -36,7 +33,7 @@ export async function resetSetting(input: {
 }): Promise<SettingsResetOutcome> {
   // Refused the way a patch of an unknown key is refused, and for the same
   // reason: a typo answered with "nothing was stored" reads as success.
-  if (!findSettingDefinition(input.key)) {
+  if (!settingDefinition(input.key)) {
     throw new SettingsValidationError([{ key: input.key, reason: "unknown_key" }]);
   }
 
@@ -47,7 +44,7 @@ export async function resetSetting(input: {
   // (the MCP result limit staying under the request limit) is a rule about what
   // may be STORED, checked on the write path, and it cannot change what a key
   // resolves to. If a future bound ever does, this is where it has to be read.
-  const after = resolveSettingWithoutStoredRow(input.key, settingsEnvironment);
+  const after = resolveSettingWithoutStoredRow(input.key, settingsEnvironment, settingDefinition);
   // Whether a row existed is the delete's own answer, so nothing here asks
   // first: the statement returns the row it removed, or none.
   const removed = await deleteConnectedSetting({

@@ -11,6 +11,12 @@ import {
   type SettingsEnvironmentReader,
 } from "./settings-resolution";
 
+/** Core's keys alone. The worker and the dashboard pass the joined lookup
+ *  (`settingDefinition` in `@integrations/registry`), which this package
+ *  cannot import; these tests are about core's registry. */
+const core = (key: string): SettingDefinition | undefined =>
+  (SETTINGS_REGISTRY as readonly SettingDefinition[]).find((definition) => definition.key === key);
+
 test("every key is declared once and only redeploy keys name environment variables", () => {
   const keys = SETTINGS_REGISTRY.map((definition) => definition.key);
   assert.equal(new Set(keys).size, keys.length);
@@ -105,45 +111,59 @@ test("a key the workflow body reads may only apply to the next run", () => {
 test("a default matches the type it is declared with", () => {
   for (const definition of SETTINGS_REGISTRY) {
     if (definition.default === null) continue;
-    const issues = validateSettingsPatch({ [definition.key]: definition.default });
+    const issues = validateSettingsPatch({ [definition.key]: definition.default }, core);
     assert.deepEqual(issues, [], definition.key);
   }
 });
 
 test("an unknown key is refused by name", () => {
-  assert.deepEqual(validateSettingsPatch({ NOT_A_SETTING: 1 }), [
+  assert.deepEqual(validateSettingsPatch({ NOT_A_SETTING: 1 }, core), [
     { key: "NOT_A_SETTING", reason: "unknown_key" },
   ]);
 });
 
 test("a wrong type is refused per key and every refusal is reported", () => {
   assert.deepEqual(
-    validateSettingsPatch({ MAX_CONCURRENT_AGENTS: "3", MCP_ENABLED: "true" }),
+    validateSettingsPatch({ MAX_CONCURRENT_AGENTS: "3", MCP_ENABLED: "true" }, core),
     [
       { key: "MAX_CONCURRENT_AGENTS", reason: "wrong_type" },
       { key: "MCP_ENABLED", reason: "wrong_type" },
     ],
   );
-  assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: 2.5 }), [
+  assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: 2.5 }, core), [
     { key: "MAX_CONCURRENT_AGENTS", reason: "wrong_type" },
   ]);
-  assert.deepEqual(validateSettingsPatch({ PRE_PR_CHECKS_ALLOWED_ENV: ["A", 2] }), [
+  assert.deepEqual(validateSettingsPatch({ PRE_PR_CHECKS_ALLOWED_ENV: ["A", 2] }, core), [
     { key: "PRE_PR_CHECKS_ALLOWED_ENV", reason: "wrong_type" },
   ]);
 });
 
 test("a value below a declared minimum is refused", () => {
-  assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: 0 }), [
+  assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: 0 }, core), [
     { key: "MAX_CONCURRENT_AGENTS", reason: "below_minimum" },
   ]);
-  assert.deepEqual(validateSettingsPatch({ MCP_TOOL_TIMEOUT_MS: 999 }), [
+  assert.deepEqual(validateSettingsPatch({ MCP_TOOL_TIMEOUT_MS: 999 }, core), [
     { key: "MCP_TOOL_TIMEOUT_MS", reason: "below_minimum" },
   ]);
 });
 
+test("a list entry that is blank or holds a comma is refused, one value per entry is kept", () => {
+  // `["U1,U2"]` would be one id nobody has (everyone locked out of an
+  // allowlist), `[" "]` would read as no entry (everyone let in).
+  for (const entries of [["U1,U2"], [" "], [""], ["U1", "  "], ["U1", "U2,"]]) {
+    assert.deepEqual(
+      validateSettingsPatch({ PRE_PR_CHECKS_ALLOWED_ENV: entries }, core),
+      [{ key: "PRE_PR_CHECKS_ALLOWED_ENV", reason: "list_entry_invalid" }],
+      JSON.stringify(entries),
+    );
+  }
+  assert.deepEqual(validateSettingsPatch({ PRE_PR_CHECKS_ALLOWED_ENV: ["U1", "U2"] }, core), []);
+  assert.deepEqual(validateSettingsPatch({ PRE_PR_CHECKS_ALLOWED_ENV: [] }, core), []);
+});
+
 test("null clears a key that has no default and is refused for one that has", () => {
-  assert.deepEqual(validateSettingsPatch({ V2_MAX_BLOCK_CONCURRENCY: null }), []);
-  assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: null }), [
+  assert.deepEqual(validateSettingsPatch({ V2_MAX_BLOCK_CONCURRENCY: null }, core), []);
+  assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: null }, core), [
     { key: "MAX_CONCURRENT_AGENTS", reason: "null_not_allowed" },
   ]);
 });
@@ -189,4 +209,71 @@ test("the environment branch exists only for redeploy keys", () => {
   assert.equal(sources.get("DASHBOARD_ORG_SLUG"), "environment");
   assert.equal(snapshot.COLUMN_AI, "AI");
   assert.equal(sources.get("COLUMN_AI"), "default");
+});
+
+/**
+ * A setting an integration declares, shaped as `integrationSettingDefinition`
+ * in the SDK builds Slack's: an ordinary key that names the variable it was
+ * before it was a setting.
+ */
+const ALLOWLIST: SettingDefinition = {
+  key: "SLACK_ALLOWED_USER_IDS",
+  group: "integrations",
+  type: "string-list",
+  default: [],
+  description: "Slack: who may run the slash command.",
+  appliesToRunsInFlight: "immediate",
+  overridablePerTrigger: false,
+  environmentVariable: "SLACK_ALLOWED_USER_IDS",
+};
+
+test("a contributed key reads its variable as main split it while nothing is stored", () => {
+  // origin/main apps/worker/src/services/settings/integration-settings.ts:96-99:
+  // split(",").map(trim).filter(Boolean), and an empty list lets everyone in.
+  const cases: [string | undefined, readonly string[], "environment" | "default"][] = [
+    ["U1, U2,,", ["U1", "U2"], "environment"],
+    [" , , ", [], "environment"],
+    [undefined, [], "default"],
+  ];
+  for (const [variable, expected, source] of cases) {
+    const environment = environmentOf(variable === undefined ? {} : { SLACK_ALLOWED_USER_IDS: variable });
+    const { snapshot, sources } = resolveSettingsSnapshot(new Map(), environment, [ALLOWLIST]);
+    const values = snapshot as unknown as Record<string, unknown>;
+    assert.deepEqual(values.SLACK_ALLOWED_USER_IDS, expected, JSON.stringify(variable));
+    assert.equal(sources.get("SLACK_ALLOWED_USER_IDS"), source, JSON.stringify(variable));
+  }
+});
+
+test("a stored value shadows a contributed key's variable, and is validated like core's", () => {
+  const { snapshot, sources } = resolveSettingsSnapshot(
+    new Map([["SLACK_ALLOWED_USER_IDS", ["U3"]]]),
+    environmentOf({ SLACK_ALLOWED_USER_IDS: "U1,U2" }),
+    [ALLOWLIST],
+  );
+  assert.deepEqual((snapshot as unknown as Record<string, unknown>).SLACK_ALLOWED_USER_IDS, ["U3"]);
+  assert.equal(sources.get("SLACK_ALLOWED_USER_IDS"), "stored");
+
+  const find = (key: string) => (key === ALLOWLIST.key ? ALLOWLIST : undefined);
+  assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: ["U3"] }, find), []);
+  assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: "U3" }, find), [
+    { key: "SLACK_ALLOWED_USER_IDS", reason: "wrong_type" },
+  ]);
+  assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: ["U1,U2"] }, find), [
+    { key: "SLACK_ALLOWED_USER_IDS", reason: "list_entry_invalid" },
+  ]);
+  // Core's registry alone does not know it, which is why the lookup is an
+  // argument every surface passes rather than a default of core's.
+  assert.deepEqual(validateSettingsPatch({ SLACK_ALLOWED_USER_IDS: ["U3"] }, core), [
+    { key: "SLACK_ALLOWED_USER_IDS", reason: "unknown_key" },
+  ]);
+});
+
+test("the checks allowlist read from its raw variable is split the same way", () => {
+  // The worker hands over the raw text of a variable its schema does not
+  // declare, and PRE_PR_CHECKS_ALLOWED_ENV is one: the list rule is here now.
+  const { snapshot } = resolveSettingsSnapshot(
+    new Map(),
+    environmentOf({ PRE_PR_CHECKS_ALLOWED_ENV: " NPM_TOKEN , ,SENTRY_DSN" }),
+  );
+  assert.deepEqual(snapshot.PRE_PR_CHECKS_ALLOWED_ENV, ["NPM_TOKEN", "SENTRY_DSN"]);
 });

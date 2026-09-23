@@ -32,10 +32,27 @@ const RESET_TARGET_LABEL: Record<RunControlResetTarget, string> = {
   conversation: "thread anchor",
 };
 
-export function renderOutcome(outcome: RunControlOutcome): string {
+/**
+ * `asked` is what the person typed, when the command's callback kept it, so
+ * the sentence can name what did not happen.
+ */
+export function renderOutcome(outcome: RunControlOutcome, asked?: string): string {
   return outcome.kind === "failed"
-    ? `:warning: That command failed: ${outcome.message}`
+    ? renderFailure(outcome.reference, asked)
     : renderAnswer(outcome.answer);
+}
+
+/**
+ * What a person reads when core could not run their command: that it did not
+ * complete, what to do, and the reference an admin needs. Never the error
+ * itself, which core writes to the worker's log under that reference (a failed
+ * query quotes its SQL and its parameters), and never a guess about whether
+ * anything changed: a cancel that failed half way may have stopped the run.
+ */
+function renderFailure(reference: string, asked: string | undefined): string {
+  // A backtick the person typed would close the code span early.
+  const what = asked ? `\`${asked.replaceAll("`", "'")}\`` : "That command";
+  return `:warning: ${what} could not be completed because of an error on the AI Workflow side. Try it again in a minute; if it keeps failing, give an admin the reference \`${reference}\`, which names the error in the worker's log.`;
 }
 
 function renderAnswer(answer: RunControlAnswer): string {

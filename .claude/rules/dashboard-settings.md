@@ -9,6 +9,7 @@ paths:
   - "apps/dashboard/components/cockpit/screens/memory.tsx"
   - "apps/dashboard/components/cockpit/logout-button.tsx"
   - "packages/contracts/settings-registry.ts"
+  - "integrations/registry/index.ts"
 ---
 
 # Dashboard settings
@@ -18,7 +19,9 @@ paths:
   cadence with `appliesToNote` in
   `apps/dashboard/lib/settings/format.ts`. Guard:
   `apps/dashboard/lib/settings/format.test.ts`.
-- Keep the Settings screen registry-driven. Group entries in registry order,
+- Keep the Settings screen registry-driven: look a key up with `settingDefinition`
+  from `@integrations/registry` (core's keys and integrations' declared ones),
+  never core's registry alone. Group entries in that list's order,
   build PATCH bodies from changed keys only, and keep validation refusals keyed
   to their fields in `apps/dashboard/lib/settings/groups.ts` and
   `apps/dashboard/lib/settings/patch.ts`. Guard:
