@@ -1,5 +1,5 @@
 {
-  "contractHash": "c7d39b415727496b77c04272f51c7d38f55a39f44e4da0c13159831ae888c690",
+  "contractHash": "065ef5677398ed7aa7cb3f9dd3054c8cca11cdfce584447d2f56276928f05519",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -736,7 +736,7 @@
     },
     {
       "name": "tickets.transition",
-      "description": "Move a ticket to a status. Read this before using it: moving a ticket INTO the configured AI column is exactly what starts a workflow run, with real cost, and moving one OUT of that column while a run is live is what a human abort looks like to this platform. So the move is refused with CONFLICT while any run owns the ticket, naming the run: stop it with runs.cancel first if that is what you mean. There is no force flag on purpose. `target` is a status name, or an object naming the transition or status id when a board needs a specific transition rather than a name. A target that does not resolve from where the ticket currently sits comes back as VALIDATION_FAILED listing the statuses that do, because status names are per project and not guessable. A ticket already at the target is reported as `alreadyAtTarget: true` and nothing is written.",
+      "description": "Move a ticket to a status. Read this before using it: moving a ticket INTO the configured AI column is exactly what starts a workflow run, with real cost. A move made through this tool is made by the workflow's own account, whose tracker events are ignored, so the run starts at the next poll (up to 15 minutes later), not at once; and moving one OUT of that column while a run is live is what a human abort looks like to this platform. So the move is refused with CONFLICT while any run owns the ticket, naming the run: stop it with runs.cancel first if that is what you mean. There is no force flag on purpose. `target` is a status name, or an object naming the transition or status id when a board needs a specific transition rather than a name. A target that does not resolve from where the ticket currently sits comes back as VALIDATION_FAILED listing the statuses that do, because status names are per project and not guessable. A ticket already at the target is reported as `alreadyAtTarget: true` and nothing is written.",
       "inputSchema": {
         "type": "object",
         "properties": {

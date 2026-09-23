@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestDb } from "../../test-db.js";
 import type { Db } from "../../client.js";
-import { workflowRuns } from "../../schema.js";
+import { workflowDefinitions, workflowRuns } from "../../schema.js";
+import { listTicketRunRows } from "./dashboard-query-rows.js";
+import { listMcpTicketRunPage } from "../mcp.js";
 import type { HarnessRunManifestRecord } from "@shared/contracts";
 import { fetchRunDetailFromDb, fetchRunRefs } from "../../../services/run-lifecycle/durable-run-detail.js";
 import { buildResearchAnalysisReport } from "../../../engine/support/run-analysis-report.js";
@@ -25,6 +27,52 @@ beforeEach(async () => {
 });
 
 const base = { ticketLinks: LINKS, secrets: [] as string[] };
+
+describe("what a run is called", () => {
+  // Every run executes in the one Workflow DevKit function the row stores as
+  // "Agent", so that name told nobody whether a run was an autofix or a
+  // ticket run. The definition the run ran, and its version, does.
+  it("names a run by the definition and version it ran, on every read", async () => {
+    await db.insert(workflowDefinitions).values({
+      id: 29,
+      name: "Autofix PR checks",
+      createdById: "test",
+      createdByLabel: "Test",
+    });
+    await db.insert(workflowRuns).values([
+      {
+        runId: "r-autofix",
+        workflowId: "wf_agent",
+        workflowName: "Agent",
+        ticketKey: "AWP-269",
+        definitionId: 29,
+        definitionVersion: 3,
+        startedAt: new Date("2026-09-23T10:00:00Z"),
+      },
+      {
+        runId: "r-legacy",
+        workflowId: "wf_agent",
+        workflowName: "Agent",
+        ticketKey: "AWP-269",
+        startedAt: new Date("2026-09-23T09:00:00Z"),
+      },
+    ]);
+
+    const detail = await fetchRunDetailFromDb({ db, runId: "r-autofix", ...base });
+    expect(detail?.run.workflowName).toBe("Autofix PR checks v3");
+    expect(detail?.run.workflow).toBe("wf_agent");
+
+    const ticketRows = await listTicketRunRows(db, "AWP-269");
+    expect(ticketRows.map((row) => [row.runId, row.workflowName])).toEqual([
+      ["r-autofix", "Autofix PR checks v3"],
+      // A run that names no definition keeps what its row stored.
+      ["r-legacy", "Agent"],
+    ]);
+
+    const mcpRows = await listMcpTicketRunPage(db, "AWP-269", 10);
+    expect(mcpRows.map((row) => row.workflowName)).toEqual(["Autofix PR checks v3", "Agent"]);
+  });
+});
 
 describe("fetchRunDetailFromDb", () => {
   it("returns null for an unknown run id", async () => {

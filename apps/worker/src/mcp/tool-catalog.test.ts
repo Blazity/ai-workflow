@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it, vi } from "vitest";
 
@@ -115,6 +116,22 @@ describe("MCP tool catalog", () => {
   it("covers the whole published surface and nothing outside it", () => {
     expect(Object.keys(MCP_TOOL_CATALOG).sort()).toEqual([...CATALOGUED].sort());
     expect([...FIRST_SLICE_TOOLS].sort()).toEqual([...CATALOGUED].sort());
+  });
+
+  it("tells a caller that a move by the workflow's own account starts a run at the next poll, not now", () => {
+    // Tracker events from the workflow's own account are ignored
+    // (`ticket-events.ts`, "workflow_actor"), so a ticket this tool moves into
+    // the AI column is picked up by the cron poll. An agent told the move
+    // "starts a run" waits for one that is up to a poll interval away.
+    const vercel = JSON.parse(
+      readFileSync(new URL("../../vercel.json", import.meta.url), "utf8"),
+    ) as { crons: Array<{ path: string; schedule: string }> };
+    const poll = vercel.crons.find((cron) => cron.path === "/cron/poll");
+    expect(poll?.schedule).toBe("*/15 * * * *");
+    const description = MCP_TOOL_CATALOG["tickets.transition"].description;
+    expect(description).toMatch(/next poll/u);
+    expect(description).toMatch(/up to 15 minutes/u);
+    expect(description).toMatch(/own account/u);
   });
 
   it("reports exactly the domains represented by the published tools", () => {

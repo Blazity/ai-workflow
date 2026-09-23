@@ -30,6 +30,7 @@ const mockGetCurrentVersion = vi.fn();
 const mockGetDeployedVersion = vi.fn();
 const mockGetDefinition = vi.fn();
 const mockGetVersion = vi.fn();
+const mockGetName = vi.fn();
 const mockGetEnabled = vi.fn();
 vi.mock("../definition-trigger-routing.js", () => ({
   getConnectedEnabledWorkflowDefinitionForTrigger: (...args: unknown[]) =>
@@ -49,6 +50,7 @@ vi.mock("../../db/repositories/definitions/connected.js", () => ({
     mockGetDeployedVersion(...args),
   getConnectedWorkflowDefinition: (...args: unknown[]) => mockGetDefinition(...args),
   getConnectedWorkflowDefinitionVersion: (...args: unknown[]) => mockGetVersion(...args),
+  getConnectedWorkflowDefinitionName: (...args: unknown[]) => mockGetName(...args),
   getConnectedEnabledWorkflowDefinitionForTrigger: (...args: unknown[]) =>
     mockGetEnabled(...args),
 }));
@@ -123,6 +125,7 @@ function enabled(definition: WorkflowDefinitionV2, version = 3, definitionId = 1
 
 describe("loadWorkflowDefinitionFor", () => {
   beforeEach(async () => {
+    mockGetName.mockReset().mockResolvedValue({ name: "Autofix PR checks" });
     mockGetCurrentVersion.mockReset();
     mockGetDeployedVersion.mockReset();
     mockGetDefinition.mockReset();
@@ -141,6 +144,16 @@ describe("loadWorkflowDefinitionFor", () => {
     expect(plan!.definitionId).toBe(55);
     expect(mockGetDeployedVersion).toHaveBeenCalledWith(55);
     expect(mockGetEnabled).not.toHaveBeenCalled();
+    // What the run calls itself when it writes about a failure.
+    expect(plan!.definitionName).toBe("Autofix PR checks");
+  });
+
+  it("loads the plan without a name when the name cannot be read", async () => {
+    mockGetDeployedVersion.mockResolvedValue(row(defaultWorkflowDefinitionV2({ includeReview: true }), 3, 55));
+    mockGetName.mockRejectedValueOnce(new Error("connection reset"));
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai", 55);
+    expect(plan!.version).toBe(3);
+    expect(plan!.definitionName).toBeUndefined();
   });
 
   it("loads the pinned version when an explicit version is given", async () => {
