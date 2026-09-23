@@ -183,7 +183,7 @@ context and returns the port's adapter.
 | Capability | Port (in `integrations/sdk`) | Providers at once | Served today by | Read first |
 |---|---|---|---|---|
 | `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueryRule` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. |
-| `vcs` | `VCSAdapter` (`vcs.ts`) | many, chosen per repository | GitHub, GitLab | `integrations/gitlab`: a provider chosen per repository, self-hosted, with nested paths. `integrations/github`: a credential that is not a token (an App id, an installation id and a private key, read in `auth.ts`). A `vcs` manifest also declares `repositories` (host and whether paths nest). |
+| `vcs` | `VCSAdapter` (`vcs.ts`), plus the optional surfaces in `vcs-extensions.ts` | many, chosen per repository | GitHub, GitLab | `integrations/gitlab`: a provider chosen per repository, self-hosted, with nested paths. `integrations/github`: a credential that is not a token (an App id, an installation id and a private key, read in `auth.ts`). A `vcs` manifest also declares `repositories` (host and whether paths nest) and the connection field for its automation account's login (below). |
 | `messaging` | `MessagingAdapter` (`messaging.ts`) | one | Slack | `integrations/slack`: one active provider, run notifications in one thread per ticket, a slash command. |
 | `memory` | `MemoryAdapter` (`memory.ts`) | one | built-in, in core | `apps/worker/src/memory/builtin/adapter.ts`, and "Memory" below. |
 | `agent_tracing` | `AgentTracingAdapter` (`agent-tracing.ts`) | many | Arthur | `integrations/arthur`: a description of files, packages, environment and hooks that core applies to every agent sandbox. `otelFixtureRuntime` in `integrations/sdk/fixture-runtime.ts` is a second, minimal provider. |
@@ -232,6 +232,32 @@ word in a shared type. S11 is the example: core read GitLab's word for a push
 the fix was a flag that states the fact (`headMoved` in
 `integrations/sdk/webhook.ts`). The leftovers that still name a provider are
 listed in ADR-010, "Debt the moved ports carry", with who removes each.
+
+**A `vcs` provider may serve more than the port.** Publishing a gate status
+(and its details), listing a pull request's changed files, publishing a
+review, and reading a pull request for a manual dispatch are optional
+surfaces, each an interface in `integrations/sdk/vcs-extensions.ts` with a
+guard beside it (`hasPRFilesCapability` and the rest). Implement the ones your
+provider can; a run that needs one its provider lacks stops with an error
+saying so. Core asks the adapter it resolved for the repository, because the
+deferred adapter it hands out before the connection resolves forwards the
+port's members only. Three more things are the contract, not your choice:
+
+- **Every marker the workflow writes into a pull request** (the bot marker,
+  the review ledger's replies and failure notes, the review round's summary,
+  head and finding markers) is built and read by
+  `integrations/sdk/review-markers.ts`. Use those functions rather than a
+  string of your own: a marker already posted on somebody's pull request must
+  keep reading, and `review-markers.test.ts` holds the literals it must.
+- **The automation account's login** is a non-secret connection field keyed
+  `VCS_BOT_LOGIN_FIELD` (`botLogin`), which conformance requires of a `vcs`
+  manifest (`vcs_bot_login_missing`). Your webhook reads it to leave the
+  workflow's own activity out (compare with `vcsLoginsMatch`), and core
+  filters again against the account it resolves.
+- **A head read fails one way.** `getPRHead` and `getPRHeadSha` throw
+  `PullRequestUnreadableError` exactly when `isPullRequestRefusal` says this
+  connection can never read that pull request, and throw anything else as it
+  came, with the provider's answer where the client keeps it.
 
 ### Memory
 
@@ -622,9 +648,13 @@ widens to `string`.
   health check that compares it with what the provider holds. Absent when
   the deployment does not know its public URL.
 
-Most of GitHub's and GitLab's calls go through their own provider SDKs
-(Octokit, gitbeaker) rather than `ctx.http`, so none of the above applies to
-those calls. Prefer `ctx.http`; Arthur, Slack and Jira go through it.
+A provider SDK is fine as long as it sends through `ctx.http`. GitHub's
+Octokit is built with `request: { fetch: ctx.http.fetch }`, which covers the
+App's installation token minting as well (`integrations/github/auth.ts`), and
+GitLab's Gitbeaker is handed a requester that sends through the same fetch
+(`integrations/gitlab/client.ts`), so neither reaches the global `fetch` or
+retries on its own; each package's `client.test.ts` runs the real SDK with a
+global `fetch` that throws. Arthur, Slack and Jira call `ctx.http` directly.
 
 ### What the run pin does to you
 
@@ -833,10 +863,12 @@ export const webhook: IntegrationWebhook<typeof manifest> = {
 };
 ```
 
-Header names arrive lowercased. Two connection keys are not yours in a
-webhook: the route removes `legacyBotLogin` from the connection it hands
-`receive` and sets `botLogin` to the automation account of a `vcs` provider,
-`undefined` for anything else, so do not give a field either name. The URLs
+Header names arrive lowercased. One connection key is not yours in a
+webhook: the route removes `legacyBotLogin` (`VCS_LEGACY_BOT_LOGIN_FIELD`)
+from the connection it hands `receive`, so do not give a field that name. A
+`vcs` provider's own `botLogin` field reaches `receive` as the operator set
+it, unset included; it is a first filter only, and core filters review
+authors and check producers again against the account it resolves. The URLs
 providers already call
 (`/webhooks/jira`, `/webhooks/github`, `/webhooks/gitlab`, `/webhooks/slack`)
 are the same generic route, which is why an integration's id can never
