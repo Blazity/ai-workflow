@@ -1,18 +1,30 @@
 name: Changelog
 
+# Two jobs, one release. `collate` folds the pending changelog/unreleased/
+# entries into a new vYYYY.MM.N section of CHANGELOG.md and opens the pull
+# request that lands it. `release` runs once that section is on main: it tags
+# the main commit the collation read and publishes the GitHub Release. It is
+# idempotent, so the push, the daily schedule and a manual dispatch may all
+# run it. How releases work: changelog/README.md.
+
 on:
   schedule:
     - cron: "30 23 * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [CHANGELOG.md]
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   collate:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +42,12 @@ jobs:
         run: |
           set -euo pipefail
           echo "value=$(date -u +%F)" >> "$GITHUB_OUTPUT"
-      - name: Collate pending changelog entries
+      - name: Collate pending changelog entries into a release section
+        id: collate
+        env:
+          # Writes the short version and the area summaries. Optional: without
+          # it, or when the call fails, the release ships with plain summaries.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: pnpm run changelog:collate -- --date "${{ steps.date.outputs.value }}"
       - name: Check for changes
         id: diff
@@ -63,9 +80,9 @@ jobs:
             changelog/unreleased/*
           branch: chore/changelog-${{ steps.date.outputs.value }}
           base: main
-          commit-message: "docs(changelog): collate entries for ${{ steps.date.outputs.value }}"
-          title: "docs(changelog): collate entries for ${{ steps.date.outputs.value }}"
-          body: "Folds the pending files in `changelog/unreleased/` into `CHANGELOG.md`. Opened automatically by the daily collation; merges on its own once `ci` passes."
+          commit-message: "docs(changelog): release ${{ steps.collate.outputs.version }}"
+          title: "docs(changelog): release ${{ steps.collate.outputs.version }}"
+          body: "Folds the pending files in `changelog/unreleased/` into the `${{ steps.collate.outputs.version }}` section of `CHANGELOG.md`. Opened automatically by the daily collation; merges on its own once `ci` passes, and the Changelog workflow then tags the collated commit and publishes the GitHub Release."
           delete-branch: true
       - name: Enable auto-merge
         if: steps.diff.outputs.changed == 'true' && steps.pr.outputs.pull-request-number
@@ -76,3 +93,29 @@ jobs:
         run: |
           set -euo pipefail
           gh pr merge --auto --merge "$PR_NUMBER" --repo "$REPO"
+
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: changelog-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Tag and publish the newest release section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm run changelog:release

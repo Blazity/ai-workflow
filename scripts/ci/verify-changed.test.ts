@@ -220,6 +220,7 @@ test("scope table selects only exact narrow commands", () => {
     [["apps/worker/.agents/skills/workflow/SKILL.md"], ["pnpm run gate:docs-status"]],
     [[".dependency-cruiser.cjs"], [GATES]],
     [["scripts/gates/boundaries.mjs"], ["pnpm run test:ci", GATES]],
+    [["scripts/changelog/publish.ts"], ["pnpm run test:ci", GATES]],
   ];
   for (const [paths, expected] of rows) assert.deepEqual(commands(paths), expected, paths.join(","));
 });
