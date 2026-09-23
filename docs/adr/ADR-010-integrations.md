@@ -964,7 +964,9 @@ S4 (AIW-408) as `apps/worker/src/engine/definition/integration-availability.ts`,
 
 ### Availability is one pure function over declared data
 
-`deploymentIntegrations({ manifests, states, selected, builtinCapabilities })`
+`deploymentIntegrations({ manifests, states })` (as decided here it also took
+`selected` and `builtinCapabilities`; neither is a parameter any more, and
+the hardening round's H1.3 records why `builtinCapabilities` went)
 turns the registry and S2's states into the one value the engine reasons over,
 and `integrationBlockAvailability(type, integrations)` is the only place a block
 of an integration is judged. Both are pure: every input is an argument, so a

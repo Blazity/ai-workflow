@@ -1191,8 +1191,8 @@ function errorText(err: unknown): string {
  * choice anyway. The definition pin already excludes everything it could have
  * offered, so the surviving listing is exactly what selection would have seen had
  * the provider answered, and the run proceeds on its normal path. A provider
- * carrying a workflow-owned branch for this ticket never qualifies: listedVcsProviders
- * queries it precisely so an in-flight pull request is not stranded, and treating
+ * carrying a workflow-owned branch for this ticket never qualifies: `neededVcsProviders`
+ * keeps it in the listing precisely so an in-flight pull request is not stranded, and treating
  * its silence as harmless would strand that pull request without saying so.
  */
 function failedProviderCannotAffectSelection(

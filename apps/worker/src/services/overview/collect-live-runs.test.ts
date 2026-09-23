@@ -193,7 +193,10 @@ describe("collectLiveRuns", () => {
     ]);
   });
 
-  it("links each ticket the way the tracker does, whatever its Site URL looks like", async () => {
+  it("links each live ticket with the tracker's own answer", async () => {
+    // The fake tracker's links sit on its origin; what a Site URL with a path
+    // does to them is the tracker's rule, pinned in the Jira package and in
+    // ticket-links-chain.test.ts, not here.
     const registry = makeRegistry([{ ticketKey: "AWT-7", runId: "run_z" }]);
     const tracker = makeTracker({
       fetchTicket: vi.fn(async () => ({
