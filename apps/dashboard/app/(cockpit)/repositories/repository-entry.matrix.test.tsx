@@ -124,7 +124,7 @@ function render(t: TestContext): ReactTestInstance {
           versions={[version(3), version(2)]}
           catalog={[REPOSITORY]}
           allowedEnv={undefined}
-          memory={[]}
+          memory={{ state: "listed", complete: true, documents: [] }}
           canManage
         />
       </AppRouterContext.Provider>,

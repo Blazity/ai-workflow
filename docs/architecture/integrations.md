@@ -477,10 +477,12 @@ deletes every memory under the pair. `list({ ticketKey })` lists what
 observations carrying that ticket left (store `ticketKey` where you can filter
 on it); an engine that refuses a listing without an entity filter lists under
 your namespace, never under a wildcard. Newest first, and `complete: false`
-whenever you stopped before the end. One exception you will meet: the
-repository page (`/repositories/<id>`) still reads the pairs
-`repo:<provider>:<path>` with `facts` and `lessons` directly rather than from
-your listing, so those two `docPath`s are the ones it can show.
+whenever you stopped before the end. The repository page
+(`/repositories/<id>`) shows what your unfiltered `list` returns under that
+repository's subject key (`repo:<provider>:<path>`), whatever `docPath`s you
+chose, and reads and erases only those pairs. A repository whose documents
+fall past the end of a listing you cut short shows your `complete: false`
+notice instead of them, which is one more reason to list newest first.
 
 This is the shape, compiled and checked with everything else on this page:
 
