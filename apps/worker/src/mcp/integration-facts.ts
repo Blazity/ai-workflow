@@ -214,28 +214,25 @@ export async function agentFacingDeploymentIntegrations(
 }
 
 /**
- * Every integration this deployment ships, as `system.capabilities` reports it,
- * or `null` when that state could not be read at all.
+ * This deployment's integrations, read ONCE for a `system.capabilities` call,
+ * or `null` when they could not be read.
  *
- * `null` and `[]` are different answers and an agent has to be able to tell
- * them apart: the empty list means this build ships no integration, and null
- * means the read failed and nothing should be concluded from it.
+ * Every field of that answer that depends on them is built from this one
+ * value, so one call describes one moment, and each says "could not be read"
+ * (null) rather than "none" when the read failed: an agent told that nothing
+ * watches its authoring writes, or that nothing serves a capability, because
+ * a database did not answer for a moment would act on a falsehood.
  *
  * It never throws. This is the first call every client makes, and it is where
  * protocol versions, the contract hash and the announcement channel come from;
  * a build that ships integrations would otherwise turn a database hiccup into a
  * dependency failure on the one call a client needs to get its bearings.
  */
-export async function deploymentIntegrationFacts(
+export async function readDeploymentIntegrationsForFacts(
   read: () => Promise<DeploymentIntegrations>,
-): Promise<McpIntegrationFact[] | null> {
+): Promise<DeploymentIntegrations | null> {
   try {
-    const { contracts, integrations } = agentFacingBlockData(await read());
-    // The registry is built only when there is something to report: a
-    // deployment with no integration has no fact to publish and should not
-    // resolve forty core contracts to say so.
-    if (integrations.byId.size === 0) return [];
-    return integrationFactsOf(integrations, contracts.blockRegistry());
+    return await read();
   } catch (error) {
     logger.warn(
       { err: error instanceof Error ? error.message : String(error) },
@@ -243,6 +240,26 @@ export async function deploymentIntegrationFacts(
     );
     return null;
   }
+}
+
+/**
+ * Every integration this deployment ships, as `system.capabilities` reports it,
+ * or `null` when that state could not be read at all.
+ *
+ * `null` and `[]` are different answers and an agent has to be able to tell
+ * them apart: the empty list means this build ships no integration, and null
+ * means the read failed and nothing should be concluded from it.
+ */
+export function deploymentIntegrationFacts(
+  deployment: DeploymentIntegrations | null,
+): McpIntegrationFact[] | null {
+  if (deployment === null) return null;
+  const { contracts, integrations } = agentFacingBlockData(deployment);
+  // The registry is built only when there is something to report: a
+  // deployment with no integration has no fact to publish and should not
+  // resolve forty core contracts to say so.
+  if (integrations.byId.size === 0) return [];
+  return integrationFactsOf(integrations, contracts.blockRegistry());
 }
 
 /**
@@ -281,15 +298,18 @@ function agentFacingCapabilities(
 }
 
 /**
- * The capability rows `system.capabilities` publishes, or `null` when they
- * could not be read, which is not "nothing serves anything". It never throws,
- * for the reason `deploymentIntegrationFacts` gives.
+ * The capability rows `system.capabilities` publishes, over the deployment the
+ * call already read, or `null` when they could not be read, which is not
+ * "nothing serves anything". It never throws, for the reason
+ * `readDeploymentIntegrationsForFacts` gives.
  */
 export async function deploymentCapabilityFacts(
-  read: () => Promise<IntegrationCapabilitiesResponse>,
+  deployment: DeploymentIntegrations | null,
+  read: (deployment: DeploymentIntegrations) => Promise<IntegrationCapabilitiesResponse>,
 ): Promise<IntegrationCapabilityDto[] | null> {
+  if (deployment === null) return null;
   try {
-    return agentFacingCapabilities((await read()).capabilities);
+    return agentFacingCapabilities((await read(deployment)).capabilities);
   } catch (error) {
     logger.warn(
       { err: error instanceof Error ? error.message : String(error) },

@@ -52,6 +52,21 @@ export const INTEGRATION_CAPABILITIES = {
 
 export type IntegrationCapabilityId = keyof typeof INTEGRATION_CAPABILITIES;
 
+/**
+ * What a person reads for a capability id: its `label` above, or null for an
+ * id this build does not know, which a worker a deploy ahead can send.
+ *
+ * The one reader of the labels. The editor's refusals (lowercased into a
+ * sentence) and the dashboard's capability rows both call it, so a capability
+ * added to the table arrives with one name everywhere instead of whatever each
+ * side would have guessed from its id.
+ */
+export function capabilityLabel(id: string): string | null {
+  return Object.hasOwn(INTEGRATION_CAPABILITIES, id)
+    ? INTEGRATION_CAPABILITIES[id as IntegrationCapabilityId].label
+    : null;
+}
+
 /** What a provider of each capability implements. Only ported capabilities appear. */
 export interface IntegrationCapabilityPorts {
   issue_tracker: IssueTrackerAdapter;

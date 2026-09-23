@@ -64,6 +64,14 @@ export type IntegrationBlockStepResult =
       readonly reason: IntegrationUnavailableReason;
       readonly message: string;
     }
+  /**
+   * This deployment's integration settings could not be read, so nothing was
+   * asked of the integration. Kept apart from `error` because the two send a
+   * person to different places: this one is ours and a retry is the fix, and
+   * reporting it as the block's own failure blamed the provider for a
+   * database that did not answer.
+   */
+  | { readonly kind: "unreadable"; readonly reason: string }
   /** The block threw, or core could not reach its connection values. */
   | { readonly kind: "error"; readonly message: string };
 
@@ -73,26 +81,12 @@ export async function runIntegrationBlockStep(
   "use step";
   const { integrationManifest, integrationManifests } = await import("@integrations/registry");
   const { integrationRuntime } = await import("@integrations/registry/worker");
-  const {
-    buildIntegrationContext,
-    environmentReaderFrom,
-    readConnectionValues,
-    readIntegrationStates,
-    secretsKeyMaterial,
-    secretValuesOf,
-  } = await import("../../services/integrations/runtime.js");
-  const { readConnectedIntegrationConnections } = await import(
-    "../../db/repositories/integrations.js"
-  );
+  const { resolveUsableIntegrations } = await import("../../services/integrations/runtime.js");
   const { deploymentIntegrations } = await import("../definition/integration-availability.js");
-  const { builtinCapabilitiesOfDeployment } = await import(
-    "../definition/block-contract-environment.js"
-  );
   const { checkRunIntegrationUse } = await import("../definition/integration-run.js");
   const { integrationCapabilityAccess, integrationLlm } = await import(
     "../support/integration-capabilities.js"
   );
-  const { redactIntegrationText } = await import("../../services/integrations/runtime.js");
   const { isRunControlError } = await import("../helpers/run-control-error.js");
 
   const manifest = integrationManifest(input.integrationId);
@@ -108,12 +102,21 @@ export async function runIntegrationBlockStep(
 
   // The live state, every time. Disabling is the kill switch an admin reaches
   // for, so it is read at the use rather than trusted from the run's start.
-  const states = await readIntegrationStates();
-  const integrations = deploymentIntegrations({
-    manifests: integrationManifests,
-    states,
-    builtinCapabilities: await builtinCapabilitiesOfDeployment(),
+  // One read for the states and the values behind them, through the one
+  // reader, which keeps "could not read" apart from "not connected". The
+  // context it builds lives as long as the block may run: the block is
+  // single-shot work with a real deadline, which is exactly what a lifetime is
+  // for (a block runs inside one invocation, and an invocation is killed rather
+  // than failed when it runs out of time, so the bound sits below the plain
+  // function's 300 s and a block that hangs reports a failure a person can
+  // read).
+  const resolved = await resolveUsableIntegrations({
+    lifetime: AbortSignal.timeout(INTEGRATION_BLOCK_TIMEOUT_MS),
+    filter: (candidate) => candidate.id === input.integrationId,
   });
+  if (!resolved.readable) return { kind: "unreadable", reason: resolved.reason };
+  const states = resolved.states;
+  const integrations = deploymentIntegrations({ manifests: integrationManifests, states });
   const state = states.get(input.integrationId);
   if (!state) {
     return {
@@ -131,19 +134,15 @@ export async function runIntegrationBlockStep(
     return { kind: "unavailable", reason: failure.reason, message: failure.message };
   }
 
-  const stored = (await readConnectedIntegrationConnections()).get(input.integrationId) ?? null;
-  const values = readConnectionValues({
-    manifest,
-    source: state.source,
-    environment: environmentReaderFrom(),
-    active: stored?.active ?? null,
-    secretsKey: secretsKeyMaterial(),
-  });
-  if (!values.ok) {
+  const usable = resolved.usable.find((candidate) => candidate.manifest.id === input.integrationId);
+  if (!usable) {
+    const unreadable = resolved.connectionFailures.get(input.integrationId);
     return {
       kind: "unavailable",
       reason: "disconnected",
-      message: `${manifest.name} could not be read: ${values.failure.message}.`,
+      message: unreadable
+        ? `${manifest.name} could not be read: ${unreadable.message}.`
+        : `${manifest.name} is no longer connected, so the run stopped at its next use of it.`,
     };
   }
 
@@ -155,22 +154,13 @@ export async function runIntegrationBlockStep(
     };
   }
 
-  // A block runs inside one invocation, and an invocation is killed rather
-  // than failed when it runs out of time. The bound is below the plain
-  // function's 300 s ceiling, so a block that hangs reports a failure a person
-  // can read instead of a run that stops mid-sentence. Long or multi-phase
-  // work stays in core and is reached through a capability, which is why one
-  // bound covers every integration block.
+  // Long or multi-phase work stays in core and is reached through a
+  // capability, which is why one bound covers every integration block.
   // Providers echo credentials in error bodies, and that body is what a person
-  // reads on the run and in the ticket comment.
-  const secrets = secretValuesOf(manifest, values.values);
-  const redact = (text: string) => redactIntegrationText(text, secrets);
-  const context = buildIntegrationContext({
-    manifest,
-    values: values.values,
-    secrets,
-    lifetime: AbortSignal.timeout(INTEGRATION_BLOCK_TIMEOUT_MS),
-  });
+  // reads on the run and in the ticket comment, so the block's outcome and
+  // what it throws are redacted with this connection's secrets.
+  const redact = usable.redaction.text;
+  const context = usable.ctx;
   const executor = runtime.blocks[input.blockType];
   if (!executor) {
     return {

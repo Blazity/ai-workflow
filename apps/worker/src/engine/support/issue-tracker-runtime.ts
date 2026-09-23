@@ -22,6 +22,7 @@
  *   reason recorded there, and this module is the half it reads.
  */
 import type { IntegrationConnectionPin } from "@shared/contracts";
+import { activeProviderOf } from "../definition/integration-availability.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import { ISSUE_TRACKER_PUBLICATIONS, redactingPublications } from "./publication-redaction.js";
 import type {
@@ -43,6 +44,12 @@ const NO_PROVIDER =
  */
 export interface IssueTrackerWiring {
   readonly projectKey: string;
+  /**
+   * Where the tracker's site is, as its connection says, for telling one
+   * connection from another (`trackerIdentityOf`). Never a link: how a ticket
+   * is linked is the tracker's own answer (`ticketUrl` on the port,
+   * `ticket-url.ts`).
+   */
   readonly baseUrl: string;
   readonly backlogTransitionId?: string;
   readonly aiTransitionId?: string;
@@ -83,8 +90,8 @@ export type IssueTrackerRefusal = "not_connected" | "ambiguous" | "unusable" | "
  * Several usable trackers with nobody chosen is a refusal by name, never a
  * silent pick of the first: a run that read a ticket out of one of two
  * connected trackers because it happened to be first in the registry is the
- * failure nobody can explain afterwards. Mirrors `messaging.ts`, which refuses
- * the same case in the same shape.
+ * failure nobody can explain afterwards. Who serves is `activeProviderOf`,
+ * the rule messaging, the palette and the Integrations page read too.
  *
  * WHO CATCHES A THROW OUT OF THIS FUNCTION, and why it is not this function.
  * It answers a refusal for every state it knows about, so a throw means
@@ -119,18 +126,17 @@ export async function resolveActiveIssueTracker(
       reason: `This deployment's integration settings could not be read (${resolved.reason}), so its issue tracker was not used.`,
     };
   }
-  const usable = resolved.usable;
-  if (usable.length === 0) return { ok: false, refusal: "not_connected", reason: NO_PROVIDER };
-  if (usable.length > 1) {
-    const names = usable.map((entry) => entry.manifest.name).join(" and ");
+  const active = activeProviderOf(resolved.usable);
+  if (active.kind === "none") return { ok: false, refusal: "not_connected", reason: NO_PROVIDER };
+  if (active.kind === "ambiguous") {
+    const names = active.providers.map((entry) => entry.manifest.name).join(" and ");
     return {
       ok: false,
       refusal: "ambiguous",
       reason: `${names} both provide issue tracking on this deployment and no active provider is selected, so no ticket was read.`,
     };
   }
-  const [only] = usable;
-  if (!only) return { ok: false, refusal: "not_connected", reason: NO_PROVIDER };
+  const only = active.provider;
 
   /**
    * THE TRACKER IS PINNED BUT THE PIN IS NEVER COMPARED, and the comparison
@@ -251,19 +257,6 @@ export async function trackerMoveTarget(
         ? wiring.aiTransitionId
         : wiring.aiReviewTransitionId;
   return transitionId ? { name: columnName, transitionId } : columnName;
-}
-
-/**
- * Whether this deployment can serve the issue tracker capability at all.
- *
- * Asked by the block palette, which offers a ticket block only where core can
- * serve it. It lives beside the resolution for the reason the sentence it
- * replaced gave: a caller that decided for itself would name a provider, and
- * the same question answered in two places is how a palette comes to offer a
- * block whose call then fails.
- */
-export async function coreServesIssueTracker(): Promise<boolean> {
-  return (await resolveActiveIssueTracker()).ok;
 }
 
 function text(value: unknown): string {

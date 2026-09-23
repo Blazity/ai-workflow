@@ -11,7 +11,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
     VCS_BOT_LOGIN: undefined,
   },
 }));
-vi.mock("../support/adapters.js", () => ({ coreServesIssueTracker: () => false }));
 
 const { manifest: github } = await import("../../../../../integrations/github/manifest.js");
 const { manifest: gitlab } = await import("../../../../../integrations/gitlab/manifest.js");

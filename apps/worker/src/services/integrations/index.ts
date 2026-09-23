@@ -62,6 +62,7 @@ export async function readVcsBotLogin(
 // The secrets core redacts and scans for, and the one failure policy every
 // caller shares: see secret-values.ts.
 export { integrationSecretValues, knownSecretValues } from "./secret-values.js";
+export { IntegrationSettingsUnreadableError } from "./usable.js";
 
 export {
   databaseEnvironment,

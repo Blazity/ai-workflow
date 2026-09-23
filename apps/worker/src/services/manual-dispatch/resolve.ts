@@ -50,7 +50,12 @@ import {
 import type { PrTriggerPayload } from "../../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
-import { issueTrackerForDispatch, ManualDispatchError } from "./errors.js";
+import {
+  issueTrackerForDispatch,
+  ManualDispatchError,
+  settingsUnreadableForDispatch,
+} from "./errors.js";
+import { IntegrationSettingsUnreadableError } from "../integrations/index.js";
 import { readVcsBotLogin } from "../vcs/index.js";
 import {
   readConnectedDeployedWorkflowDefinitionVersion,
@@ -648,7 +653,15 @@ export async function parsePullRequestUrl(urlText: string): Promise<{
   } catch {
     throw new ManualDispatchError(422, "invalid_input", "Enter a valid pull or merge request URL.");
   }
-  return resolveConfiguredPullRequestUrl(url);
+  try {
+    return await resolveConfiguredPullRequestUrl(url);
+  } catch (error) {
+    // Not "the pull request provider is not configured": nobody could look.
+    if (error instanceof IntegrationSettingsUnreadableError) {
+      throw settingsUnreadableForDispatch("the pull request URL could not be matched to a provider");
+    }
+    throw error;
+  }
 }
 
 function normalizeTicketKey(value: string): string {

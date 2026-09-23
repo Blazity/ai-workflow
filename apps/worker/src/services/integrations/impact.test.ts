@@ -162,6 +162,107 @@ describe("which enabled workflows use an integration", () => {
   });
 });
 
+describe("a version control provider, which a workflow reaches through the repository it picks", () => {
+  const hubWithBlock = defineIntegration({
+    ...hub,
+    blocks: [
+      {
+        type: "acmehub_label",
+        paramsSchema: { parse: (value: unknown) => value } as never,
+        contract: { ports: ["out"], allowsFailurePort: false },
+        ui: {
+          label: "Label",
+          description: "Labels a pull request.",
+          glyph: "L",
+          color: "#445566",
+          softColor: "#EEF1F4",
+        },
+        output: { properties: {}, statusVariants: ["labelled"] },
+      },
+    ],
+  });
+  const integrations = deploymentIntegrations({
+    manifests: [hubWithBlock],
+    states: new Map([["acmehub", state("acmehub")]]),
+  });
+  const agentWork = ["prepare_workspace", "open_pr"];
+  const definitions = [
+    { id: 1, name: "Any repository", definition: definition(agentWork) },
+    { id: 2, name: "GitLab only", definition: definition(agentWork, { providers: ["gitlab"] }) },
+    {
+      id: 3,
+      name: "One GitLab repository",
+      definition: definition(agentWork, {
+        repositories: [{ provider: "gitlab", repoPath: "acme/api" }],
+      }),
+    },
+    { id: 4, name: "Hub only", definition: definition(agentWork, { providers: ["acmehub"] }) },
+    {
+      id: 5,
+      name: "GitLab work, Hub labels",
+      definition: definition([...agentWork, "acmehub_label"], { providers: ["gitlab"] }),
+    },
+  ];
+  const turnedOff = () =>
+    summarizeIntegrationImpact({
+      integrationId: "acmehub",
+      changesFingerprint: false,
+      stops: "unusable",
+      currentFingerprint: "acmehub-now",
+      definitions,
+      integrations,
+      readInFlightRuns: async () => definitions.map(({ id }) => run(id, null)),
+    });
+
+  it("names no workflow whose repository scope rules the provider out", async () => {
+    // Every workflow that does agent work pins every connected provider at its
+    // start, because its repository is chosen later. Listing by that reach
+    // told an admin turning Hub off that a GitLab-only workflow would feel it.
+    const impact = await turnedOff();
+
+    expect(impact.enabledDefinitions).toEqual([
+      { id: 1, name: "Any repository" },
+      { id: 4, name: "Hub only" },
+      { id: 5, name: "GitLab work, Hub labels" },
+    ]);
+  });
+
+  it("counts a run in flight only where its workflow may still reach the provider", async () => {
+    // The kill switch count follows the list: a run of a GitLab-only workflow
+    // never asks Hub for anything, and the one that uses Hub's own block does.
+    const impact = await turnedOff();
+
+    expect(impact.inFlightRuns).toBe(3);
+  });
+
+  it("rules a provider out the way repository selection does, when both lists are set", async () => {
+    // A scope naming GitLab as its provider and a Hub repository selects
+    // nothing on Hub: repository selection intersects the two, and the preview
+    // reads the same rule rather than a copy of it.
+    const impact = await summarizeIntegrationImpact({
+      integrationId: "acmehub",
+      changesFingerprint: false,
+      stops: "unusable",
+      currentFingerprint: "acmehub-now",
+      definitions: [
+        {
+          id: 6,
+          name: "Contradictory scope",
+          definition: definition(agentWork, {
+            providers: ["gitlab"],
+            repositories: [{ provider: "acmehub", repoPath: "acme/api" }],
+          }),
+        },
+      ],
+      integrations,
+      readInFlightRuns: async () => [run(6, null)],
+    });
+
+    expect(impact.enabledDefinitions).toEqual([]);
+    expect(impact.inFlightRuns).toBe(0);
+  });
+});
+
 describe("a Jira change, in front of every ticket run in flight", () => {
   const jira = integrationManifest("jira");
   if (!jira) throw new Error("this build ships Jira");

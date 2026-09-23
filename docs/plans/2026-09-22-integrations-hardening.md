@@ -1,5 +1,5 @@
 Status: draft
-Last-verified: 2026-09-22
+Last-verified: 2026-09-23
 
 # Integrations hardening: what the branch review found and what we decided
 
@@ -203,7 +203,77 @@ and the worker build runs migrations.
 package tests and conformance locally, and on production through the
 Connection form after merge. No step anywhere suggests deploying to demo.
 
-### D12. A provider id is an integration id, on every path (round H2)
+### Round H1: core consolidation
+
+Numbered H1.x rather than D12 onward, because other rounds write their
+decisions into this file at the same time.
+
+**H1.1. The tracker owns its links (F16, F122).** Core built
+`<Site URL>/browse/<KEY>` from the raw connection value and filtered keys with
+a Jira pattern, while Jira built its own links from the site's origin, so a
+Site URL saved with a path gave every run view, message and MCP answer a link
+that went nowhere. Chosen: an optional `ticketUrl(key)` on
+`IssueTrackerAdapter` (pure, never throws, null for a key that is not a
+ticket; additive, ADR-010 change log), and one pair of functions every core
+link site calls (`engine/support/ticket-url.ts`, a leaf with no imports
+because the workflow body reads it). A ticket run records the tracker's link
+on its ticket snapshot and in `runs.ticket_url`; every surface shows the
+recorded link first and asks the tracker in force only when there is none, so
+old runs keep the links they were shown with. `RunStartTracker.baseUrl` is
+still written and no longer read, so a rollback finds it. Rejected: fixing the
+path inside core (the rule stays in core and a second tracker still gets Jira
+URLs); a required port member (breaks every tracker written against the
+current SDK).
+
+**H1.2. Unreadable is not "none" (F61, F128, F112, second half of F124).**
+`usableIntegrations` turned "the settings could not be read" into an empty
+list, which every caller then read as "nothing is connected". It is deleted;
+`resolveUsableIntegrations` is the one reader and answers `readable: false`
+with the reason, and each caller says what that means where it is: a block
+fails as an engine fault naming the unread settings (never "not connected"),
+the Integrations page answers `cause: "worker"`, a sandbox is not traced and
+the log says why, the VCS lookups throw `IntegrationSettingsUnreadableError`,
+and manual dispatch answers 503. `system.capabilities` reads the deployment
+once and hands the same read to all three fields (F112).
+
+**H1.3. Capabilities are counted once (F121, F127).**
+`builtinCapabilitiesOfDeployment` is deleted: the issue tracker, messaging and
+version control are served only by integrations
+(`INTEGRATION_SERVED_CAPABILITIES`), and `activeProviderOf` is the one answer
+to "which provider serves this `one` capability", used by the editor, the
+runtime, the capability overview and MCP. An integration block that requires
+`llm` goes through the same credential gate as Call LLM, one function for
+both.
+
+**H1.4. Tracing follows its pin and never gates a run (first half of F124).**
+Tracing providers were already pinned at run start and never compared. Now
+the run-state step and each sandbox compare the pin; a tracer reconfigured
+since the run started is not asked, and what that costs is that run's tracing
+and nothing else, because a disabled tracer has always meant an untraced run
+rather than a failed one. `recordedPinFor` gains the `every_provider`
+selection for this. The impact preview does not count these runs as stopping.
+
+**H1.5. The impact preview for version control says "may" and counts by
+scope.** A workflow reaches a version control provider through the
+repository it picks per ticket, so the pinned reach names every provider.
+The preview now reads repository selection's own rule
+(`pinnedScopeExcludesProvider`, replacing a copy that disagreed with it when a
+scope sets both lists) to leave out workflows, and runs, whose scope rules the
+provider out, and the dashboard says "Enabled workflows that may use" for a
+version control provider, because an unscoped workflow's next repository is
+not knowable before its ticket. Rejected: counting only runs whose selected
+repository is on the provider (that fact lives in the run's repository record
+and is not read here; worth doing when the record is).
+
+**H1.6. One home for a capability's label.** `capabilityLabel` lives in the
+SDK beside `INTEGRATION_CAPABILITIES`; the registry re-exports it and the
+editor lowercases it into sentences.
+
+### Round H2: hygiene
+
+Numbered H2.x for the same reason as H1.
+
+#### H2.1. A provider id is an integration id, on every path
 
 **Problem.** The provider rule `[a-z][a-z0-9_-]{2,31}` was written out about
 28 times (contracts, the graph schema, nine trigger manifests, the MCP catalog,
@@ -239,7 +309,7 @@ The probes found one reader that disagreed: the repository key accepted
 schema. A key is compared as the string it is, so the key rule now tests the
 half with `INTEGRATION_ID` directly, as `main`'s enum did.
 
-### D13. A cancel names the claim it holds; a reconcile pass reads its tracker once (round H2)
+#### H2.2. A cancel names the claim it holds; a reconcile pass reads its tracker once
 
 **Problem.** `cancelRunDetailed` derived the subject to cancel from the ticket
 key, which resolved the issue tracker again. The reconciler and the stall
@@ -254,7 +324,7 @@ pull request run that carried a ticket key was never settled.
 derives it. The watchdog takes the pass's tracker id and decides whether a
 claim follows its ticket with `ticketSubjectKey`, never asking the deployment.
 
-### D14. Tracing never fails a run, and one function keeps that promise (round H2)
+#### H2.3. Tracing never fails a run, and one function keeps that promise
 
 **Problem.** The SDK and `tracing.ts` promise that tracing never fails a run,
 but a rejected sandbox write or command escaped the install, and the hook merge
@@ -295,7 +365,7 @@ The table is generated from the review's own records plus each executor's
 report, so an entry cannot be lost between the two.
 
 <!-- ledger:start -->
-Totals: 169 findings; FIXED 113, OPEN 53, DEFERRED 3.
+Totals: 169 findings; FIXED 122, OPEN 44, DEFERRED 3.
 
 | Id | Severity | Review | Where | Problem | Group | Outcome |
 |---|---|---|---|---|---|---|
@@ -368,7 +438,7 @@ Totals: 169 findings; FIXED 113, OPEN 53, DEFERRED 3.
 | F10 | minor | CONFIRMED | `integrations/sdk/messaging.ts:181` | The messaging port's contract says a vanished handle is re-anchored 'without re-anchoring on an event that is not `started`'. | E-sdk-gates | FIXED `a9bb49b4`: contract text states what Slack does; Slack pinning test at assembly |
 | F14 | minor | CONFIRMED | `integrations/jira/issue-tracker.test.ts:814` | The seven buildInvestigateJql tests that guarded the tenant scope were deleted with the function (origin/main investigate.test.ts:207-250). | E-sdk-gates | FIXED `a9bb49b4`: group E, merged |
 | F15 | minor | CONFIRMED | `integrations/jira/issue-tracker.test.ts:11` | The 47 adapter tests all build JiraAdapter without `config.fetch`, so they exercise the global-fetch default that no production path uses: worker.ts:54 and webhook.ts:123 always pass ctx.http.fetch. | E-sdk-gates | FIXED `a9bb49b4`: group E, merged |
-| F16 | minor | CONFIRMED | `integrations/jira/issue-tracker.ts:104` | The `browseOrigin` getter was added in this branch ('for a link core shows next to a run'), but it is not on the port and nothing reads it. | E-sdk-gates | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |
+| F16 | minor | CONFIRMED | `integrations/jira/issue-tracker.ts:104` | The `browseOrigin` getter was added in this branch ('for a link core shows next to a run'), but it is not on the port and nothing reads it. | E-sdk-gates | FIXED `32a212e1`: optional ticketUrl(key) on the tracker port; Jira builds every link in one method |
 | F17 | minor | CONFIRMED | `integrations/jira/worker.ts:63` | The `api` health check reports every error as 'Jira authentication failed: the Site URL or the API token was not accepted.' (lines 63-75), and the `project` check reports every error as 'project is not accessible' (lines... | B-connections | FIXED `865233f1`: D6: one verdict rule in integrations/sdk/provider-failure.ts, used by every provider and the template (merged) |
 | F18 | minor | CONFIRMED | `integrations/jira/webhook.ts:25` | Several comments state history that is false. | E-sdk-gates | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
 | F24 | minor | CONFIRMED | `apps/worker/src/engine/support/trigger-current-pull-request.ts:58` | Pending or error-retry PR envelopes recorded before this branch carry failedChecks with checkRunId/appSlug (and pipelineId) but no handle. | A-triggers | FIXED `8267544f`: legacy envelopes rebuilt by the provider that wrote them (recordedCheckIdentity); live path fixed in round 3 (merged) |
@@ -392,8 +462,8 @@ Totals: 169 findings; FIXED 113, OPEN 53, DEFERRED 3.
 | F52 | minor | CONFIRMED | `apps/dashboard/app/(cockpit)/integrations/[id]/connection/connection-screen.tsx:113` | The credential form registers with trackUnsavedSettings (line 250) but installs no `beforeunload` listener, which the dashboard-settings rule requires of every form (settings-group-form.tsx:184, repository-entry.tsx:268 ... | D-dashboard | FIXED `8b4816dd`: group D: unsaved work guard on reload and back (merged) |
 | F53 | minor | CONFIRMED | `apps/dashboard/app/memory-data.tsx:39` | The memory provider's reason is parsed out of getJSON's error message, which carries only `res.statusText`, the HTTP reason phrase. | D-dashboard | FIXED `a7e53d63`: group D: refusal reason read from the body (merged) |
 | F54 | minor | CONFIRMED | `apps/dashboard/components/cockpit/flow-editor/blocks/pr-trigger-fields.tsx:52` | The PR trigger 'Providers' field went from two checkboxes to a free-text list of provider ids, although the registry already lists them (PINNABLE_PROVIDERS / integrationsProviding("vcs") in repository-scope.ts, used for ... | A-triggers | FIXED `f1a8ec8f`: group D: one checkbox per VCS integration (merged) |
-| F61 | minor | CONFIRMED | `apps/worker/src/services/integrations/usable.ts:42` | `usableIntegrations` turns "could not read this deployment's integration settings" into an empty list. | B-connections | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |
-| F62 | minor | CONFIRMED | `apps/worker/src/services/integrations/vcs-bot-login.ts:17` | `getVcsBotLogin` became an async database read and maps "unreadable" to `undefined`, meaning no automation account. | B-connections | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |
+| F61 | minor | CONFIRMED | `apps/worker/src/services/integrations/usable.ts:42` | `usableIntegrations` turns "could not read this deployment's integration settings" into an empty list. | B-connections | FIXED `32a212e1`: usableIntegrations deleted; each caller says what unreadable settings mean |
+| F62 | minor | CONFIRMED | `apps/worker/src/services/integrations/vcs-bot-login.ts:17` | `getVcsBotLogin` became an async database read and maps "unreadable" to `undefined`, meaning no automation account. | B-connections | FIXED `60fe42b4`: webhook route, dispatch and manual dispatch fail closed on an unreadable bot login (group A) |
 | F63 | minor | CONFIRMED | `apps/worker/src/services/integrations/usable.ts:93` | `resolveUsableIntegrations` reads the connections twice: `readIntegrationStates()` already runs `readConnectedIntegrationConnections()`, then line 94 runs it again. | B-connections | FIXED `865233f1`: connections read once (no dedicated test) (merged) |
 | F64 | minor | CONFIRMED | `apps/worker/src/routes/webhooks/[id].post.ts:455` | Webhook observations are now written under the default `deployment` scope, and integration-health.ts:141-144 reads them across all scopes. | A-triggers | FIXED `8267544f`: observations scoped by a hash of the deployment public base URL, one write/read pair (merged) |
 | F65 | minor | CONFIRMED | `apps/worker/src/services/integrations/resolve.ts:303` | The format check for `url` and `integer` connection values was lost in the move. | B-connections | FIXED `865233f1`: value_malformed: format rule in the SDK, applied to status, stored values and ctx.http; compatibility with main under review (merged) |
@@ -432,18 +502,18 @@ Totals: 169 findings; FIXED 113, OPEN 53, DEFERRED 3.
 | F109 | minor | UNVERIFIED | `apps/worker/src/adapters/vcs/types.ts:39` | The optional VCS capability contracts (ManualDispatchPullRequestSnapshot, GateStatusCapableVCS, RichGateStatusCapableVCS, PRFilesCapableVCS, PRReviewCapableVCS, PRReviewPublication, CheckRunAnnotation) stay in core, whil... | C-engine | FIXED `a370cb93`: extension types in the SDK and type-checked through VcsIntegrationAdapter; digest stays in core, its package copies gone |
 | F110 | minor | UNVERIFIED | `apps/worker/src/sandbox/agents/types.ts:341` | The research output's provider field is constrained differently in its two schemas. | C-engine | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
 | F111 | minor | UNVERIFIED | `apps/worker/src/mcp/execute-tool.ts:236` | prepare() now resolves integrationSecretValues() before the rate limiter, whose comment still says 'Cheapest guard first'. | C-engine | FIXED `ecd612a2`: secret set read in one statement, every stored version not yet redacted |
-| F112 | minor | UNVERIFIED | `apps/worker/src/mcp/server.ts:60` | system.capabilities calls deps.loadDeploymentIntegrations twice, once for authoringAnnouncements (line 60) and once for integrations (line 67). | C-engine | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |
+| F112 | minor | UNVERIFIED | `apps/worker/src/mcp/server.ts:60` | system.capabilities calls deps.loadDeploymentIntegrations twice, once for authoringAnnouncements (line 60) and once for integrations (line 67). | C-engine | FIXED `32a212e1`: system.capabilities reads the deployment once |
 | F113 | minor | UNVERIFIED | `apps/worker/src/sandbox/context.ts:26` | sandbox/ now imports engine/support/repository-path-example.ts. | C-engine | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
 | F114 | minor | UNVERIFIED | `apps/worker/src/mcp/tools/repositories.test.ts:1469` | The 'nothing is connected that can read this repository' case no longer exercises that state. | C-engine | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
 | F115 | minor | UNVERIFIED | `apps/worker/src/sandbox/agents/tracing.ts:174` | The module header (line 10) and the SDK contract (integrations/sdk/agent-tracing.ts:69-72) both promise that a tracing install or file write 'never fails the run'. | C-engine | OPEN: round H2 (hygiene), brief lanes/fix-groups/brief-hygiene.md |
-| F121 | minor | UNVERIFIED | `apps/worker/src/engine/definition/block-contract-environment.ts:74` | builtinCapabilitiesOfDeployment still lists issue_tracker as core's built-in whenever coreServesIssueTracker() is true. | C-engine | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |
-| F122 | minor | UNVERIFIED | `apps/worker/src/engine/support/ticket-url.ts:24` | Core builds every ticket link as `${base}/browse/${KEY}` and filters keys with a Jira-shaped pattern. | C-engine | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |
+| F121 | minor | UNVERIFIED | `apps/worker/src/engine/definition/block-contract-environment.ts:74` | builtinCapabilitiesOfDeployment still lists issue_tracker as core's built-in whenever coreServesIssueTracker() is true. | C-engine | FIXED `32a212e1`: builtinCapabilities removed |
+| F122 | minor | UNVERIFIED | `apps/worker/src/engine/support/ticket-url.ts:24` | Core builds every ticket link as `${base}/browse/${KEY}` and filters keys with a Jira-shaped pattern. | C-engine | FIXED `32a212e1`: every core link site goes through ticketLinksOf/ticketLinkFor; a ticket run records the tracker link |
 | F123 | minor | UNVERIFIED | `apps/worker/src/engine/definition/integration-availability.ts:384` | integrationsUsedBy passes `node.params` to coreBlockCapabilities, but every caller (definition-step.ts:172,180, services/integrations/impact.ts:55,138, manual-dispatch) passes v2 nodes, which carry `configuration`. | C-engine | FIXED `ecd612a2`: group C (merged) |
-| F124 | minor | UNVERIFIED | `apps/worker/src/engine/support/integration-tracing.ts:48` | agent_tracing providers are never pinned (integrationsUsedBy has no rule for agent nodes), and neither the run-state step (integration-run-state-step.ts:100) nor agentTracingPlans compares a pin. | C-engine | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |
+| F124 | minor | UNVERIFIED | `apps/worker/src/engine/support/integration-tracing.ts:48` | agent_tracing providers are never pinned (integrationsUsedBy has no rule for agent nodes), and neither the run-state step (integration-run-state-step.ts:100) nor agentTracingPlans compares a pin. | C-engine | FIXED `32a212e1`: tracing and the run-state step compare their pin; unreadable is not none |
 | F125 | minor | UNVERIFIED | `apps/worker/src/engine/steps/memory-steps.ts:291` | Secret redaction of memory text (prepareMemoryContent, fail closed) used to run in core before every store write. | C-engine | OPEN: memory contract round (M1), brief lanes/fix-groups/brief-memory-contract.md |
 | F126 | minor | UNVERIFIED | `apps/worker/src/engine/steps/run-start-settings.ts:288` | readTrackerWiring swallows every failure (`.catch(() => null)`, `!resolved?.ok → undefined`) with no log. | C-engine | FIXED `ecd612a2`: group C (merged) |
-| F127 | minor | UNVERIFIED | `apps/worker/src/engine/definition/integration-availability.ts:181` | An integration block that declares requires.llm is offered without the LLM-credential gate core applies to call_llm (block-contract-resolver.ts:157). | C-engine | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |
-| F128 | minor | UNVERIFIED | `apps/worker/src/engine/steps/integration-block-step.ts:111` | readIntegrationStates() and readConnectedIntegrationConnections() (lines 111, 134) run outside the step's try, so a settings read failure throws out of a maxRetries=0 step. | C-engine | OPEN: round H1 (core consolidation), brief lanes/fix-groups/brief-core-consolidation.md |
+| F127 | minor | UNVERIFIED | `apps/worker/src/engine/definition/integration-availability.ts:181` | An integration block that declares requires.llm is offered without the LLM-credential gate core applies to call_llm (block-contract-resolver.ts:157). | C-engine | FIXED `32a212e1`: an integration block requiring llm passes the Call LLM credential gate |
+| F128 | minor | UNVERIFIED | `apps/worker/src/engine/steps/integration-block-step.ts:111` | readIntegrationStates() and readConnectedIntegrationConnections() (lines 111, 134) run outside the step's try, so a settings read failure throws out of a maxRetries=0 step. | C-engine | FIXED `32a212e1`: integration block step returns unreadable, an engine failure |
 | S14-6 | minor | gate:reviewer | `scripts/ci/integration-guide-samples.test.ts:97-105 (self-check item 1 in the report)` | CI compiles the guide's webhook.test.ts sample with tsc but never executes it, so a sample that typechecks but is behaviorally wrong would pass CI silently. | S14-gate | FIXED `a9bb49b4`: group E tooling |
 | S14-7 | minor | gate:reviewer | `engine/support/issue-tracker-runtime.ts and memory-runtime.ts, cited in ADR-010's new 'Lef` | The connection/run pin comparison exists in code but nothing calls it with real pins yet, so the documented protection against a mid-run provider swap does nothing today for issue_tracker and memory. | S14-gate | OPEN |
 | S14-20 | minor | gate:fresh-reader | `Plan S9; integrations.md:229-332 (Hippo treats all scopes alike); SDK memory.ts:139-184; a` | The guide never says which observation kinds core sends for which scope. | S14-gate | OPEN: memory contract and guide round |

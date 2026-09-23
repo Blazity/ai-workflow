@@ -36,7 +36,6 @@ vi.mock("../../db/repositories/active-runs.js", () => ({
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
 const {
-  coreServesIssueTracker,
   issueTrackerName,
   issueTrackerWiring,
   resolveActiveIssueTracker,
@@ -358,14 +357,6 @@ describe("what core asks of the resolution", () => {
     readable();
 
     await expect(issueTrackerWiring()).rejects.toThrow(NO_PROVIDER);
-  });
-
-  it("answers the palette without a tracker rather than failing the page", async () => {
-    readable();
-    expect(await coreServesIssueTracker()).toBe(false);
-
-    readable(provider("Test Tracker"));
-    expect(await coreServesIssueTracker()).toBe(true);
   });
 
   it("calls a missing tracker by a name a sentence can be built around", async () => {

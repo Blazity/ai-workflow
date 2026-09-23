@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import type { IntegrationManifest } from "@integrations/sdk";
 import {
   AUTHORED_SUBJECT_TEXT_TRIGGER_TYPES,
   BLOCK_CATALOG,
@@ -30,7 +32,7 @@ import { MESSAGING_CONNECTED, MESSAGING_DISABLED } from "./messaging-deployment.
 
 const VCS_AVAILABLE = {
   ...NO_INTEGRATIONS,
-  builtinCapabilities: new Set(["vcs"]),
+  providers: new Map([["vcs", ["github"]]]),
 };
 
 const context: WorkflowBlockRegistryContext = {
@@ -844,6 +846,62 @@ describe("workflow block registry", () => {
       available: false,
       unavailableReason: "Codex API credentials are not configured for Call LLM.",
     });
+  });
+
+  it("asks an integration block that uses ctx.llm the same credential question Call LLM asks", () => {
+    // The block spends the run default provider's key directly, as Call LLM
+    // does. Offered without the question, it published on a deployment whose
+    // only Claude credential is an OAuth token, and the token was then sent
+    // as an API key at the block's first model call.
+    const summarize: IntegrationManifest = {
+      id: "acmesummary",
+      name: "Acme Summary",
+      description: "A provider core has never heard of.",
+      connection: { fields: [] },
+      capabilities: [],
+      blocks: [
+        {
+          type: "acmesummary_digest",
+          paramsSchema: z.object({}).strict(),
+          contract: { ports: ["out"], allowsFailurePort: false },
+          ui: {
+            label: "Digest",
+            description: "Summarises a thread.",
+            glyph: "D",
+            color: "#445566",
+            softColor: "#EEF1F4",
+          },
+          output: { properties: {}, statusVariants: ["done"] },
+          requires: { llm: true },
+        },
+      ],
+      pages: [],
+      health: [{ id: "reachable", label: "Reachable", description: "", critical: true }],
+    };
+    const deployment = deploymentIntegrations({
+      manifests: [summarize],
+      states: new Map([["acmesummary", { usable: true, status: "connected" } as IntegrationState]]),
+    });
+    const oauthOnly: WorkflowBlockRegistryContext = {
+      ...context,
+      agentProviders: { claude: true, codex: false },
+      llmProviders: { claude: false, codex: false },
+      defaultAgent: { provider: "claude", model: "claude-test" },
+      integrations: deployment,
+    };
+    const registry = buildWorkflowBlockRegistry(oauthOnly) as Record<
+      string,
+      { availability: unknown }
+    >;
+
+    expect(registry.acmesummary_digest?.availability).toEqual({
+      available: false,
+      unavailableReason: "Claude API credentials are not configured for Digest.",
+    });
+    expect(
+      (buildWorkflowBlockRegistry({ ...oauthOnly, llmProviders: { claude: true, codex: false } }) as
+        Record<string, { availability: unknown }>).acmesummary_digest?.availability,
+    ).toEqual({ available: true, unavailableReason: null });
   });
 
   it("uses runtime model inference for Call LLM across a different run default", () => {

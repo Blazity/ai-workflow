@@ -1,13 +1,14 @@
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { Run } from "@shared/contracts";
+import { ticketLinkFor, ticketLinksOf } from "../../engine/support/ticket-url.js";
 
 export interface CollectLiveRunsOptions {
   registry: RunRegistryAdapter;
   /** Absent on a deployment with no usable tracker: every row is then titled
-   *  by its ticket or subject key, as it is when a lookup fails. */
+   *  by its ticket or subject key, as it is when a lookup fails, and carries
+   *  no ticket link. Present, it also links each ticket (`ticketUrl`). */
   issueTracker?: IssueTrackerAdapter;
-  ticketOrigin: string;
   /** Attributed models for the in-flight run ids (fetchRunModels). The registry
    * knows nothing about models, and these rows override the store's on the runs
    * and ticket screens, so they take their model from the same evidence the
@@ -29,9 +30,9 @@ export interface CollectLiveRunsOptions {
 export async function collectLiveRuns(
   opts: CollectLiveRunsOptions,
 ): Promise<Run[]> {
-  const { registry, issueTracker, ticketOrigin, resolveModels } = opts;
+  const { registry, issueTracker, resolveModels } = opts;
   const entries = await registry.listAll();
-  const tenantOrigin = ticketOrigin.replace(/\/+$/, "");
+  const links = ticketLinksOf(issueTracker);
 
   const liveEntries = entries.filter(
     (entry): entry is typeof entry & { runId: string } =>
@@ -73,7 +74,7 @@ export async function collectLiveRuns(
         guardrailHits: null,
         ticketTitle,
         prNumber: null,
-        ticketUrl: ticketKey ? `${tenantOrigin}/browse/${ticketKey}` : "",
+        ticketUrl: ticketLinkFor(null, ticketKey, links) ?? "",
         prUrl: null,
         prs: null,
       };

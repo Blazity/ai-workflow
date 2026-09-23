@@ -37,6 +37,8 @@ const NOW = new Date("2026-06-16T12:00:00.000Z");
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const JIRA = "https://blazity.atlassian.net";
+/** How the tracker these runs were on links a ticket: its answer, which core carries. */
+const LINKS = (key: string) => `${JIRA}/browse/${key}`;
 
 const REGISTRY: WorkflowMeta[] = [
   { id: "wf_agent", name: "Agent", blurb: "", gateway: "anthropic", primary: true },
@@ -131,7 +133,7 @@ describe("parseSearch", () => {
 });
 
 describe("listRuns", () => {
-  const base = { ticketOrigin: JIRA, now: NOW };
+  const base = { ticketLinks: LINKS, now: NOW };
 
   it("returns the persisted model while a run is still in flight", async () => {
     await seed({
@@ -347,7 +349,7 @@ describe("runKpis", () => {
 });
 
 describe("workflowAgg", () => {
-  const base = { ticketOrigin: JIRA, now: NOW, registry: REGISTRY };
+  const base = { ticketLinks: LINKS, now: NOW, registry: REGISTRY };
 
   it("aggregates per registry workflow over the window", async () => {
     await seed({ workflowId: "wf_agent", status: "success", durationSec: 100 });
@@ -400,7 +402,7 @@ describe("costAgg", () => {
 });
 
 describe("listRunsForTicket", () => {
-  const base = { db: undefined as unknown as Db, now: NOW, ticketOrigin: JIRA };
+  const base = { db: undefined as unknown as Db, now: NOW, ticketLinks: LINKS };
 
   it("returns only exact ticket_key matches, newest first", async () => {
     await seed({ runId: "r_old", ticketKey: "AWT-738", startedAt: new Date(NOW.getTime() - 2 * HOUR) });
@@ -477,7 +479,7 @@ describe("listRunsForTicket", () => {
       window: "all",
       q: null,
       now: NOW,
-      ticketOrigin: JIRA,
+      ticketLinks: LINKS,
     });
 
     const byId = (runs: { id: string; model: string | null }[], id: string) =>

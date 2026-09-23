@@ -202,7 +202,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
     // The connected read, named here where a reader can see that this call may
     // touch a database. The tools take the value.
     loadDeploymentIntegrations: () => connectedDeploymentIntegrations(),
-    loadCapabilityOverview: () => readCapabilityOverview(),
+    loadCapabilityOverview: (deployment) => readCapabilityOverview(deployment),
     loadKnownSecrets: () => knownSecretValues(),
     requestId,
     traceId: requestId,

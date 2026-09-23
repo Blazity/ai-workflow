@@ -179,7 +179,6 @@ vi.mock("../../services/integrations/runtime.js", async () => ({
       states: new Map([["jira", { usable: true, enabled: true, source: "environment" }]]),
     };
   },
-  usableIntegrations: async () => [connectedJira()],
   checkIntegrationPin: () => ({ ok: true }),
 }));
 
@@ -584,7 +583,7 @@ describe("POST /webhooks/jira, against recorded Jira deliveries", () => {
 
       expect(result.body).toMatchObject({ status: "cancelled", reason: "left_ai_column" });
       expect(state.cancel).toHaveBeenCalledWith({
-        // The claim it holds, named by the caller since D13 in
+        // The claim it holds, named by the caller since H2.2 in
         // docs/plans/2026-09-22-integrations-hardening.md.
         subjectKey: "ticket:jira:TEST-1",
         ticketKey: "TEST-1",

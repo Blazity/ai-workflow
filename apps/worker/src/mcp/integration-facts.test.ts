@@ -108,22 +108,26 @@ function stateOf(overrides: Partial<IntegrationState> & { status: IntegrationSta
   };
 }
 
+/** `serving` names who else serves a capability here: messaging, unless said. */
 function deploymentWith(
   state: IntegrationState,
-  builtinCapabilities: readonly string[] = ["messaging"],
+  serving: Readonly<Record<string, readonly string[]>> = { messaging: ["chat"] },
 ) {
-  return deploymentIntegrations({
+  const deployment = deploymentIntegrations({
     manifests: [DEMO],
     states: new Map([["demo", state]]),
-    builtinCapabilities,
   });
+  return {
+    ...deployment,
+    providers: new Map([...deployment.providers, ...Object.entries(serving)]),
+  };
 }
 
 function factsFor(
   state: IntegrationState,
-  builtinCapabilities: readonly string[] = ["messaging"],
+  serving: Readonly<Record<string, readonly string[]>> = { messaging: ["chat"] },
 ) {
-  const integrations = deploymentWith(state, builtinCapabilities);
+  const integrations = deploymentWith(state, serving);
   const registry = blockContractsFor(undefined, agentFacingIntegrations(integrations)).blockRegistry();
   return integrationFactsOf(integrations, registry);
 }
@@ -179,7 +183,7 @@ describe("what system.capabilities tells an agent about integrations", () => {
   });
 
   it("keeps a capability refusal, which names no configuration", () => {
-    const facts = factsFor(stateOf({ status: "connected", usable: true }), []);
+    const facts = factsFor(stateOf({ status: "connected", usable: true }), {});
 
     expect(facts[0]?.blocks).toEqual([
       { type: "demo_echo", available: true, unavailableReason: null },
@@ -200,12 +204,12 @@ describe("what system.capabilities tells an agent about integrations", () => {
     expect(integrationFactsOf(integrations, registry)).toEqual([]);
   });
 
-  it("names no provider core happens to be configured with", () => {
-    const facts = factsFor(stateOf({ status: "not_connected", usable: false }), [
-      "issue_tracker",
-      "vcs",
-      "messaging",
-    ]);
+  it("names no provider that serves a capability its blocks need", () => {
+    const facts = factsFor(stateOf({ status: "not_connected", usable: false }), {
+      issue_tracker: ["jira"],
+      vcs: ["github", "gitlab"],
+      messaging: ["slack"],
+    });
 
     const serialized = JSON.stringify(facts);
     for (const provider of ["github", "gitlab", "slack", "jira", "arthur"]) {

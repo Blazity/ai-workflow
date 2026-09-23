@@ -17,12 +17,14 @@ function harnessManifest(nodeId: string, modelId: string): HarnessRunManifestRec
 }
 
 const JIRA = "https://blazity.atlassian.net";
+/** How the tracker these runs were on links a ticket: its answer, which core carries. */
+const LINKS = (key: string) => `${JIRA}/browse/${key}`;
 let db: Db;
 beforeEach(async () => {
   db = await createTestDb();
 });
 
-const base = { ticketOrigin: JIRA, secrets: [] as string[] };
+const base = { ticketLinks: LINKS, secrets: [] as string[] };
 
 describe("fetchRunDetailFromDb", () => {
   it("returns null for an unknown run id", async () => {
@@ -362,7 +364,7 @@ describe("fetchRunDetailFromDb", () => {
 
 describe("fetchRunRefs", () => {
   it("returns null for an unknown run id", async () => {
-    expect(await fetchRunRefs(db, "nope", JIRA)).toBeNull();
+    expect(await fetchRunRefs(db, "nope", LINKS)).toBeNull();
   });
 
   it("returns the persisted ticket + PR refs", async () => {
@@ -373,7 +375,7 @@ describe("fetchRunRefs", () => {
       prUrl: "https://github.com/acme/demo/pull/42",
       prNumber: 42,
     });
-    expect(await fetchRunRefs(db, "r1", JIRA)).toEqual({
+    expect(await fetchRunRefs(db, "r1", LINKS)).toEqual({
       ticketKey: "AWT-981",
       ticketUrl: "https://blazity.atlassian.net/browse/AWT-981",
       ticketTitle: "Add greeting endpoint",
@@ -405,7 +407,7 @@ describe("fetchRunRefs", () => {
         },
       ],
     });
-    expect((await fetchRunRefs(db, "r1", JIRA))?.prs).toEqual([
+    expect((await fetchRunRefs(db, "r1", LINKS))?.prs).toEqual([
       {
         provider: "github",
         repoPath: "acme/backend",
@@ -427,13 +429,13 @@ describe("fetchRunRefs", () => {
       status: "blocked",
       statusReason: "Cancelled via Slack /ai-workflow cancel",
     });
-    const refs = await fetchRunRefs(db, "r1", JIRA);
+    const refs = await fetchRunRefs(db, "r1", LINKS);
     expect(refs?.statusReason).toBe("Cancelled via Slack /ai-workflow cancel");
   });
 
   it("derives the ticket url from the key when none is stored", async () => {
     await db.insert(workflowRuns).values({ runId: "r1", ticketKey: "AWT-5" });
-    const refs = await fetchRunRefs(db, "r1", JIRA);
+    const refs = await fetchRunRefs(db, "r1", LINKS);
     expect(refs?.ticketUrl).toBe("https://blazity.atlassian.net/browse/AWT-5");
   });
 });
@@ -472,7 +474,7 @@ describe("a failed run that carries no failure code", () => {
   it("keeps the refs read to the fields it always returned", async () => {
     await db.insert(workflowRuns).values(failure);
 
-    const refs = await fetchRunRefs(db, "r-nocode", JIRA);
+    const refs = await fetchRunRefs(db, "r-nocode", LINKS);
 
     expect(Object.keys(refs ?? {}).sort()).toEqual([
       "prNumber",

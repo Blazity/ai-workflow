@@ -19,7 +19,7 @@ import type {
 import {
   sanitizeRunDetailForResponse,
 } from "../../services/overview/sanitize-run-detail.js";
-import { issueTrackerBaseUrl } from "../../services/settings/integration-settings.js";
+import { issueTrackerTicketLinks } from "../../services/settings/integration-settings.js";
 import { mcpSettings } from "../../services/settings/runtime-settings.js";
 import {
   MAX_REPLAY_PAGE_LIMIT,
@@ -106,7 +106,7 @@ async function loadSanitizedRun(
   // come from the live harness manifest instead of an env-derived guess, and
   // fetchRunDetailFromDb dropped the option. Passing one here would have been
   // silently ignored at runtime while claiming to influence the answer.
-  const loaded = await services.fetchRunDetail(runId, await issueTrackerBaseUrl(), secrets);
+  const loaded = await services.fetchRunDetail(runId, await issueTrackerTicketLinks(), secrets);
   if (!loaded) throw new McpPublicError("NOT_FOUND", "Run not found", false);
   // The code is not sanitized with the prose because it is not prose: it is a
   // member of a closed set this build owns, so there is nothing in it to redact
@@ -714,7 +714,7 @@ export function registerRunLogsTool(server: McpServer, deps: McpToolDependencies
           // NOT_FOUND, exactly like every sibling run read.
           const loaded = await deps.services.fetchRunDetail(
             input.runId,
-            await issueTrackerBaseUrl(),
+            await issueTrackerTicketLinks(),
             secrets,
           );
           if (!loaded) throw new McpPublicError("NOT_FOUND", "Run not found", false);

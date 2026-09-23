@@ -70,10 +70,6 @@ vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../engine/support/adapters.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../engine/support/adapters.js")>()),
   createAdapters: state.createAdapters,
-  // Read whenever this build ships an integration, because the palette has to
-  // say which capabilities core itself already serves. A partial mock of this
-  // module was invisible while the generated registry was empty.
-  coreServesIssueTracker: () => true,
 }));
 // Seam S3, as in tools/workflows.test.ts: the dispatch domain owns its own rules
 // and its own tests. Faking it is what makes "exactly one service call" visible.

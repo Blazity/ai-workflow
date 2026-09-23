@@ -2,6 +2,7 @@ import type { RunDetail, RunFailureCode, RunStep, SettingsSnapshot } from "@shar
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { Db } from "../../db/types.js";
+import type { TicketLinks } from "../../engine/support/ticket-url.js";
 import {
   findLiveRunClaimByRunId,
   findRunOutcomeByRunId,
@@ -148,7 +149,7 @@ export interface McpToolServices extends McpGateServices {
    *  reader that matched on it would break the first time we improved it. */
   fetchRunDetail(
     runId: string,
-    ticketOrigin: string,
+    ticketLinks: TicketLinks,
     /** The set the calling tool resolved; persisted step errors are redacted with it. */
     secrets: readonly string[],
   ): Promise<{
@@ -178,7 +179,7 @@ export interface McpToolServices extends McpGateServices {
     window: TimeWindow;
     q: string | null;
     now: Date;
-    ticketOrigin: string;
+    ticketLinks: TicketLinks;
     limit: number;
   }): ReturnType<typeof listRuns>;
   costAgg(input: { window: TimeWindow; now: Date }): ReturnType<typeof costAgg>;
@@ -288,11 +289,11 @@ export function createMcpToolServices(
       return savePromptVersionWithPolicy(db, { ...input, body: validatePromptBody(input.body) });
     },
 
-    fetchRunDetail: (runId, ticketOrigin, secrets) =>
+    fetchRunDetail: (runId, ticketLinks, secrets) =>
       fetchRunDetailFromDb({
         db,
         runId,
-        ticketOrigin,
+        ticketLinks,
         secrets,
       }),
     getRunReplay: (input) => getRunReplay({ db, ...input }),

@@ -58,6 +58,8 @@ function makeTracker(
     postComment: vi.fn().mockResolvedValue(null),
     ticketsInStatus: vi.fn(),
     getCurrentUserAccountId: vi.fn().mockResolvedValue("bot-not-the-actor"),
+    // The tracker's own links, in the shape it serves them; core carries them.
+    ticketUrl: (key: string) => `https://example.atlassian.net/browse/${key}`,
     ...overrides,
   };
 }
@@ -86,7 +88,6 @@ describe("collectLiveRuns", () => {
     const rows = await collectLiveRuns({
       registry,
       issueTracker: tracker,
-      ticketOrigin: "https://example.atlassian.net",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
 
@@ -115,7 +116,6 @@ describe("collectLiveRuns", () => {
     const rows = await collectLiveRuns({
       registry,
       issueTracker: makeTracker(),
-      ticketOrigin: "https://example.atlassian.net",
       // Only the first run has attributable evidence; the second must not be
       // labelled with the org default (AIW-253).
       resolveModels: async (runIds) => {
@@ -139,7 +139,6 @@ describe("collectLiveRuns", () => {
     const rows = await collectLiveRuns({
       registry,
       issueTracker: tracker,
-      ticketOrigin: "https://example.atlassian.net",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
 
@@ -156,19 +155,23 @@ describe("collectLiveRuns", () => {
 
     const rows = await collectLiveRuns({
       registry,
-      ticketOrigin: "",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
 
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ id: "run_a", ticket: "AWT-101", ticketTitle: "AWT-101" });
+    expect(rows[0]).toMatchObject({
+      id: "run_a",
+      ticket: "AWT-101",
+      ticketTitle: "AWT-101",
+      // No tracker, so no page to send anybody to.
+      ticketUrl: "",
+    });
   });
 
   it("returns an empty array when the registry is empty", async () => {
     const rows = await collectLiveRuns({
       registry: makeRegistry([]),
       issueTracker: makeTracker(),
-      ticketOrigin: "https://example.atlassian.net",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
     expect(rows).toEqual([]);
@@ -181,7 +184,6 @@ describe("collectLiveRuns", () => {
         { ticketKey: "AWT-2", runId: "run-parked", state: "parked" },
       ]),
       issueTracker: makeTracker(),
-      ticketOrigin: "https://example.atlassian.net",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
 
@@ -191,7 +193,7 @@ describe("collectLiveRuns", () => {
     ]);
   });
 
-  it("strips trailing slashes from the Jira base URL when building ticketUrl", async () => {
+  it("links each ticket the way the tracker does, whatever its Site URL looks like", async () => {
     const registry = makeRegistry([{ ticketKey: "AWT-7", runId: "run_z" }]);
     const tracker = makeTracker({
       fetchTicket: vi.fn(async () => ({
@@ -211,7 +213,6 @@ describe("collectLiveRuns", () => {
     const rows = await collectLiveRuns({
       registry,
       issueTracker: tracker,
-      ticketOrigin: "https://example.atlassian.net/",
       resolveModels: attributeAll("claude-opus-4-7"),
     });
 
