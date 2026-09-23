@@ -18,7 +18,7 @@ export const manifest = defineIntegration({
         label: "API key",
         description:
           "A key from app.mem0.ai, Settings, API Keys, made for the one Mem0 project this deployment should write into. The key decides the organization and project; Test names both.",
-        env: "MEM0_API_KEY",
+        env: "AIW_MEM0_API_KEY",
         secret: true,
       },
     ],

@@ -231,7 +231,7 @@
     "fields": [
       {
         "key": "apiKey",
-        "env": "MEM0_API_KEY",
+        "env": "AIW_MEM0_API_KEY",
         "secret": true,
         "identity": false,
         "optional": false,
