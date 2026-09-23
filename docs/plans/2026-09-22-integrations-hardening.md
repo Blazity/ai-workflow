@@ -365,7 +365,7 @@ The table is generated from the review's own records plus each executor's
 report, so an entry cannot be lost between the two.
 
 <!-- ledger:start -->
-Totals: 169 findings; FIXED 158, DEFERRED 4, OPEN 6, REFUTED 1.
+Totals: 169 findings; FIXED 164, DEFERRED 4, REFUTED 1.
 
 | Id | Severity | Review | Where | Problem | Group | Outcome |
 |---|---|---|---|---|---|---|
@@ -528,14 +528,14 @@ Totals: 169 findings; FIXED 158, DEFERRED 4, OPEN 6, REFUTED 1.
 | S14-29 | minor | gate:fresh-reader | `Plan S8; integrations.md:483-485` | The rule treats any 403 as a wrong credential. | S14-gate | FIXED `c5eb72a5`: memory contract and guide round (SDK, guide, core scrub and budget) |
 | S14-30 | minor | gate:fresh-reader | `Plan S0; integrations.md:52-54 and 939-949` | The guide says to read 'the version this repository pins' of zod, the DevKit, Next.js and the test runner, but never says where the pins live, so I could not look them up within the allowed files. | S14-gate | FIXED `c5eb72a5`: memory contract and guide round (SDK, guide, core scrub and budget) |
 | S14-31 | minor | gate:fresh-reader | `integrations.md:9-11 versus 166 and 1019` | The guide claims that the guide, the template and the SDK are enough on their own, yet for memory it says 'Read first: apps/worker/src/memory/builtin/adapter.ts'. | S14-gate | FIXED `c5eb72a5`: memory contract and guide round (SDK, guide, core scrub and budget) |
-| S14-38 | minor | gate:skeptic | `docs/architecture/integrations.md:140, :547, :568-570; apps/worker/src/engine/support/memo` | S15 follows Mem0's quickstart and adds `mem0ai`. | S14-gate | OPEN |
-| S14-39 | minor | gate:skeptic | `docs/architecture/integrations.md:149-150, :708-716` | (a) A reader building an Atlassian 3LO or Google integration stores the refresh token as a secret field and refreshes on each call. | S14-gate | OPEN |
+| S14-38 | minor | gate:skeptic | `docs/architecture/integrations.md:140, :547, :568-570; apps/worker/src/engine/support/memo` | S15 follows Mem0's quickstart and adds `mem0ai`. | S14-gate | FIXED `c5eb72a5`: memory contract and guide round |
+| S14-39 | minor | gate:skeptic | `docs/architecture/integrations.md:149-150, :708-716` | (a) A reader building an Atlassian 3LO or Google integration stores the refresh token as a secret field and refreshes on each call. | S14-gate | FIXED `c5eb72a5`: memory contract and guide round |
 | S14-40 | minor | gate:skeptic | `AGENTS.md:57-59 (uncommitted, wt-integrations only)` | The user asked that agents always read docs with ctx7 before they start. | S14-gate | DEFERRED: ctx7 line in AGENTS.md is configuration, its own PR to main |
-| S14-1 | nit | prove:samples+scaffold | `docs/architecture/integrations.md:819-820 (same sentence in integrations/host-ui/README.md` | The guide says "a component nobody declared is a compile error", but that only holds when the manifest declares at least one page. | S14-gate | OPEN |
-| S14-2 | nit | prove:samples+scaffold | `integrations/host-ui/README.md:13` | This tsx sample has no `file=` tag, and scripts/ci/integration-guide-samples.test.ts:27 reads only docs/architecture/integrations.md, so nothing compiles this sample. | S14-gate | OPEN |
+| S14-1 | nit | prove:samples+scaffold | `docs/architecture/integrations.md:819-820 (same sentence in integrations/host-ui/README.md` | The guide says "a component nobody declared is a compile error", but that only holds when the manifest declares at least one page. | S14-gate | FIXED `c5eb72a5`: memory contract and guide round |
+| S14-2 | nit | prove:samples+scaffold | `integrations/host-ui/README.md:13` | This tsx sample has no `file=` tag, and scripts/ci/integration-guide-samples.test.ts:27 reads only docs/architecture/integrations.md, so nothing compiles this sample. | S14-gate | FIXED `c5eb72a5`: memory contract and guide round |
 | S14-3 | nit | prove:samples+scaffold | `scripts/gates/new-integration.ts:176-177` | The id is lost when the display name is spelled the same as the id. | S14-gate | FIXED `a9bb49b4`: group E tooling |
 | S14-4 | nit | prove:samples+scaffold | `scripts/gates/new-integration.ts:154-156` | A display name containing the word Example (`--name "Example Co"`) is refused with "README.md still carries a name of the template after the rename. | S14-gate | FIXED `a9bb49b4`: group E tooling |
-| S14-5 | nit | prove:samples+scaffold | `integrations/_template/manifest.ts:30-32` | The rename does not touch the block's `glyph: "E"` or its template colours. | S14-gate | OPEN |
+| S14-5 | nit | prove:samples+scaffold | `integrations/_template/manifest.ts:30-32` | The rename does not touch the block's `glyph: "E"` or its template colours. | S14-gate | FIXED `c5eb72a5`: memory contract and guide round |
 | S14-8 | nit | gate:fresh-reader | `PLAN (context for the gaps below, not a gap). Worktree /Users/filip/Desktop/Blazity/ai-wor` | The plan, from an empty directory to a Mem0 memory integration an operator can test. | S14-gate | REFUTED: context by its own text, not a gap |
-| S14-41 | nit | gate:skeptic | `docs/architecture/integrations.md:547-563` | Scenario 22: the guide quotes 30 s, 2 retries, 240, 20, 120, 60, about 4 and 30 s without naming INTEGRATION_HTTP_DEFAULTS, INTEGRATION_BLOCK_TIMEOUT_MS, TEST_TIMEOUT_MS, PAGE_READ_TIMEOUT_MS, WEBHOOK_TIMEOUT_MS, RUN_STA... | S14-gate | OPEN |
+| S14-41 | nit | gate:skeptic | `docs/architecture/integrations.md:547-563` | Scenario 22: the guide quotes 30 s, 2 retries, 240, 20, 120, 60, about 4 and 30 s without naming INTEGRATION_HTTP_DEFAULTS, INTEGRATION_BLOCK_TIMEOUT_MS, TEST_TIMEOUT_MS, PAGE_READ_TIMEOUT_MS, WEBHOOK_TIMEOUT_MS, RUN_STA... | S14-gate | FIXED `c5eb72a5`: memory contract and guide round |
 <!-- ledger:end -->
