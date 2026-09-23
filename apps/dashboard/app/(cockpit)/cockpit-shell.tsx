@@ -31,6 +31,7 @@ import {
   DISCARD_UNSAVED_PROMPT,
   hasUnsavedSettings,
 } from "@/lib/settings/unsaved";
+import { guardHistoryTraversal, type HistoryTraversalGuard } from "@/lib/settings/back-guard";
 import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
 import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
@@ -103,6 +104,29 @@ export function CockpitShell({
   useEffect(() => {
     leaving.current = false;
   }, [pathname]);
+
+  // The browser's Back and Forward, and a phone's back gesture, reach the
+  // router without passing `navigate`, so the same question is asked there
+  // (`back-guard.ts`). One guard for the whole cockpit, never one per form.
+  const backGuard = useRef<HistoryTraversalGuard | null>(null);
+  useEffect(() => {
+    const guard = guardHistoryTraversal(window, {
+      holdsUnsavedWork: () => hasUnsavedSettings() && !leaving.current,
+      agreedToLeave: () => {
+        leaving.current = true;
+      },
+    });
+    backGuard.current = guard;
+    return () => {
+      guard.dispose();
+      backGuard.current = null;
+    };
+  }, []);
+  // After every render: the entry on screen is the one to put back, and the
+  // router rewrites its state as it goes.
+  useEffect(() => {
+    backGuard.current?.remember();
+  });
 
   // Answers false when the navigation was called off, so a caller that also
   // tears down its own UI (the Spotlight overlay) can leave it standing.

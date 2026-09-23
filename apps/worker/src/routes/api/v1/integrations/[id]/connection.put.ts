@@ -19,9 +19,10 @@ import { previewIntegrationImpact } from "../../../../../services/integrations/i
 import { integrationIdFrom } from "../route-id.js";
 
 /**
- * Preview the impact of a connection change, or store values for one
- * integration: tested first, in use only if the test passed. A preview reads
- * definitions and live runs but never contacts the provider or writes.
+ * Preview the impact of a connection change (a save, a disconnect, a switch of
+ * source, the kill switch), or store values for one integration: tested first,
+ * in use only if the test passed. A preview reads definitions and live runs but
+ * never contacts the provider or writes.
  *
  * A stale `expectedVersion` is answered with 409 and a BODY naming the current
  * version, the way a stale repository profile save is: a bare status would leave
@@ -48,7 +49,9 @@ export default defineEventHandler(
       if (!parsed.ok) {
         throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
-      if (parsed.value.preview === "save" || parsed.value.preview === "disconnect") {
+      // Every command but `write` is a read-only preview, including the source
+      // switch and the kill switch whose writes are other routes.
+      if (parsed.value.preview !== "write") {
         return await previewIntegrationImpact({
           actor: { role: actor.role, id: actor.userId },
           integrationId,

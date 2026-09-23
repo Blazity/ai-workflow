@@ -68,6 +68,14 @@ export const MEMORY_CALL_BUDGET_MS = 60_000;
 interface MemoryRefusal {
   readonly code: MemoryFailure;
   readonly detail: string;
+  /**
+   * The integrations this refusal is about, in registry order: every chosen
+   * one for `ambiguous`, the one chosen for `unavailable`, `moved` and
+   * `no_provider`, none for `unreadable`. Carried so a page that shows the
+   * decision (the Integrations page's capability overview) names who it is
+   * about from the resolver's own answer rather than working it out again.
+   */
+  readonly providers: readonly string[];
 }
 
 /**
@@ -162,6 +170,7 @@ export async function activeMemory(
       return refusing({
         code: "unreadable",
         detail: `this deployment's integration settings could not be read (${resolved.reason}), so memory was not used`,
+        providers: [],
       });
     }
     // Who answers memory here is one rule, shared with the palette
@@ -193,6 +202,7 @@ export async function activeMemory(
       return refusing({
         code: "ambiguous",
         detail: ambiguousReason(choice.ids.map((id) => manifestOf(id)?.name ?? id)),
+        providers: choice.ids,
       });
     }
     const selected = manifestOf(choice.id);
@@ -208,6 +218,7 @@ export async function activeMemory(
       return refusing({
         code: "unavailable",
         detail: failingReason(selected, selected && resolved.states.get(selected.id)),
+        providers: selected ? [selected.id] : [],
       });
     }
 
@@ -226,6 +237,7 @@ export async function activeMemory(
         return refusing({
           code: "moved",
           detail: movedReason(check.reason, only.manifest.name),
+          providers: [only.manifest.id],
         });
       }
     }
@@ -235,6 +247,7 @@ export async function activeMemory(
       return refusing({
         code: "no_provider",
         detail: `${only.manifest.name} declares memory and ships no code for it, so memory was not used`,
+        providers: [only.manifest.id],
       });
     }
     const adapter = (factory as (ctx: unknown) => MemoryAdapter)(only.ctx);
@@ -248,6 +261,7 @@ export async function activeMemory(
       detail: `this deployment's memory provider could not be resolved (${
         error instanceof Error ? error.message : String(error)
       }), so memory was not used`,
+      providers: [],
     });
   }
 }

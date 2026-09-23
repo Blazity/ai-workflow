@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { primaryPullRequestLabel, runPullRequests, soleVcsProvider } from "./run-prs";
+import { changeRequestNaming } from "@integrations/registry";
+import { runPullRequests, soleVcsProvider } from "./run-prs";
 
 test("a multi-repo run returns every PR/MR in stored order", () => {
   assert.deepEqual(
@@ -76,16 +77,15 @@ test("a legacy merge request URL keeps its link and is still read as an MR", () 
       },
     ],
   );
-  // The noun a person reads comes from the URL the row did store, so losing the
-  // guessed provider did not turn this link into a pull request.
-  assert.equal(
-    primaryPullRequestLabel({
-      prs: null,
-      prUrl: "https://gitlab.com/acme/api/-/merge_requests/18",
-      prNumber: 18,
-    }),
-    "MR !18",
-  );
+  // The noun a person reads comes from the link the row did store, matched
+  // against the shape each provider declares, so losing the guessed provider
+  // did not turn this link into a pull request.
+  const [legacy] = runPullRequests({
+    prs: null,
+    prUrl: "https://gitlab.com/acme/api/-/merge_requests/18",
+    prNumber: 18,
+  });
+  assert.deepEqual(changeRequestNaming(legacy!), { noun: "MR", reference: "!18" });
 });
 
 test("a deployment with one version control provider attributes a legacy row to it", () => {
@@ -105,21 +105,5 @@ test("a run with only half a legacy ref is not rendered as a broken link", () =>
   assert.deepEqual(
     runPullRequests({ prs: null, prUrl: "https://github.com/a/b/pull/4", prNumber: null }),
     [],
-  );
-});
-
-test("the primary reference uses the provider's noun and punctuation", () => {
-  assert.equal(
-    primaryPullRequestLabel({
-      prs: [{
-        provider: "gitlab",
-        repoPath: "acme/app",
-        id: 51,
-        url: "https://gitlab.example/acme/app/-/merge_requests/51",
-      }],
-      prUrl: "https://gitlab.example/acme/app/-/merge_requests/51",
-      prNumber: 51,
-    }),
-    "MR !51",
   );
 });

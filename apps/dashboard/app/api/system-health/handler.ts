@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 
 const ACTIVE_SCAN_TIMEOUT_MS = 15_000;
 
@@ -20,8 +21,7 @@ export async function handleSystemHealthScan(proxy: WorkerProxy) {
       headers: { "cache-control": "no-store" },
     });
   } catch (error) {
-    const candidate = error as { name?: unknown; code?: unknown };
-    if (candidate.name === "TimeoutError" || candidate.code === 23) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json(
         { error: "System health scan timed out" },
         { status: 504, headers: { "cache-control": "no-store" } },

@@ -1,16 +1,11 @@
 import { NextResponse } from "next/server";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 
 type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 
 /** A registry key: the worker rejects anything else, but the query parameter is
  *  re-encoded here so a hostile value cannot leave the one parameter it is in. */
 const SAFE_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$/;
-
-function isWorkerTimeoutError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; name?: unknown };
-  return candidate.name === "TimeoutError" || candidate.code === 23;
-}
 
 async function forward(
   workerProxy: WorkerProxy,
@@ -24,7 +19,7 @@ async function forward(
       headers: { "cache-control": "no-store" },
     });
   } catch (error) {
-    if (isWorkerTimeoutError(error)) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json(
         { error: "Worker request timed out" },
         { status: 504, headers: { "cache-control": "no-store" } },

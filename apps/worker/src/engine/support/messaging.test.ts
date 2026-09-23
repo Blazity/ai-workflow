@@ -110,6 +110,36 @@ describe("messagingSender", () => {
     });
   });
 
+  it("hands the provider each pull request with the reference its own provider uses", async () => {
+    // A GitLab team read `#12` in the channel, which is issue 12 there, while
+    // the run view said `MR !12`. The integration cannot ask the registry, so
+    // core stamps the reference before the event leaves.
+    const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>(async () => ({
+      delivered: true,
+    }));
+    readable(provider("Test Chat", { notifyForTicket }));
+
+    await messagingSender().notifyForTicket("AWT-42", {
+      kind: "pr_ready",
+      usageReport: "",
+      prs: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/app",
+          id: 12,
+          url: "https://gitlab.example/acme/app/-/merge_requests/12",
+        },
+        { provider: "github", repoPath: "acme/api", id: 7, url: "https://github.com/acme/api/pull/7" },
+      ],
+    });
+
+    const sent = notifyForTicket.mock.calls[0]![1];
+    expect(sent.kind === "pr_ready" ? sent.prs.map((pr) => pr.reference) : null).toEqual([
+      "!12",
+      "#7",
+    ]);
+  });
+
   // Red when: the sender hands the provider the reason workflow scope built,
   // which only the environment's secrets were taken out of. A tracing key an
   // admin stored in the dashboard, echoed by an agent, reached the channel in

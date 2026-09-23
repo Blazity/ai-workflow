@@ -8,7 +8,7 @@
  * tools keep importing them from one place, and adds the one type that only makes
  * sense up here: what a registered tool is handed when it runs.
  */
-import type { SettingsSnapshot } from "@shared/contracts";
+import type { IntegrationCapabilitiesResponse, SettingsSnapshot } from "@shared/contracts";
 import type { Adapters } from "../services/vcs/adapters.js";
 import type { McpActorContext } from "../services/mcp/contracts.js";
 import type { McpToolServices } from "../services/mcp/tool-services.js";
@@ -83,10 +83,16 @@ export type McpToolDependencies = {
    */
   loadDeploymentIntegrations: () => Promise<DeploymentIntegrations>;
   /**
+   * Which provider serves each capability, the built-in memory store included:
+   * the answer the dashboard's Integrations page shows, on demand. A thunk for
+   * the reason the two above are: only `system.capabilities` asks.
+   */
+  loadCapabilityOverview: () => Promise<IntegrationCapabilitiesResponse>;
+  /**
    * Every secret this deployment knows, which every result is redacted with
    * before it leaves (`knownSecretValues`: the environment's and every
    * connected integration's, a token stored in the dashboard included). A
-   * thunk for the reason the two above are: the transport passes the connected
+   * thunk for the reason the ones above are: the transport passes the connected
    * read, a test passes a value. It throws when the integration settings cannot
    * be read, and the call is refused before anything runs.
    */

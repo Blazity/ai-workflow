@@ -21,6 +21,7 @@
  * happens.
  */
 import type { IntegrationConnectionPin, IntegrationUnavailableReason } from "@shared/contracts";
+import { withChangeRequestReferences } from "./change-request-references.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import { withKnownSecretsRedacted } from "./publication-redaction.js";
 
@@ -60,7 +61,8 @@ const NO_PROVIDER =
  */
 export function messagingSender(pins?: readonly IntegrationConnectionPin[]): CoreMessagingSender {
   return {
-    async notifyForTicket(ticketKey: string, event: TicketEvent): Promise<MessagingDelivery> {
+    async notifyForTicket(ticketKey: string, unstamped: TicketEvent): Promise<MessagingDelivery> {
+      const event = withChangeRequestReferences(unstamped);
       const resolved = await activeMessaging(pins);
       if (!resolved.ok) {
         const { logger } = await import("../../infra/logger.js");

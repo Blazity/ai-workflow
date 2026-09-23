@@ -291,6 +291,7 @@ describe("a deployment that connected one engine", () => {
     expect(memory.refusal).toEqual({
       code: "no_provider",
       detail: expect.stringContaining("ships no code"),
+      providers: ["recall engine"],
     });
     // NOT the built-in store. An admin who connected an engine and got our own
     // store instead would have their memory written somewhere they did not
@@ -309,6 +310,7 @@ describe("a deployment that connected two engines", () => {
       code: "ambiguous",
       detail:
         "Recall Engine and Second Engine both provide memory on this deployment and no active provider is selected, so memory was not used. Disable all but one of them on the Integrations page",
+      providers: ["recall engine", "second engine"],
     });
     expect(await memory.recall(RECALL)).toMatchObject({ ok: false, code: "ambiguous" });
     expect(builtinRecall).not.toHaveBeenCalled();
@@ -328,6 +330,7 @@ describe("a deployment whose settings could not be read", () => {
     expect(memory.refusal).toEqual({
       code: "unreadable",
       detail: expect.stringContaining("db down"),
+      providers: [],
     });
     expect(builtinRecall).not.toHaveBeenCalled();
   });
@@ -343,6 +346,7 @@ describe("a deployment whose settings could not be read", () => {
     expect(memory.refusal).toEqual({
       code: "unreadable",
       detail: expect.stringContaining("module missing"),
+      providers: [],
     });
   });
 });
@@ -359,6 +363,7 @@ describe("a run that started before the engine was connected", () => {
       code: "moved",
       detail:
         "Recall Engine became this deployment's memory after this run started, so this run did not use it",
+      providers: ["recall engine"],
     });
   });
 
@@ -390,6 +395,7 @@ describe("a run that started before the engine was connected", () => {
     expect(memory.refusal).toEqual({
       code: "moved",
       detail: "Recall Engine's configuration changed after this run started, so memory was not used",
+      providers: ["recall engine"],
     });
   });
 });
@@ -536,6 +542,7 @@ describe("a memory integration that is switched on and failing", () => {
       code: "unavailable",
       detail:
         "Recall Engine is switched on for memory and its connection is failing (The engine refused the API key), so memory was not used. Fix it on the Integrations page, or disable it there to use the built-in memory",
+      providers: ["recall engine"],
     });
     expect(await memory.observe(OBSERVE)).toMatchObject({ ok: false, code: "unavailable" });
     expect(builtinObserve).not.toHaveBeenCalled();
@@ -577,6 +584,9 @@ describe("a memory integration that is switched on and failing", () => {
     expect((await activeMemory()).refusal).toMatchObject({
       code: "ambiguous",
       detail: expect.stringContaining("Disable all but one of them on the Integrations page"),
+      // The failing one is named too: it is the one an admin may mean to
+      // switch off, and a page that listed only the working one hid it.
+      providers: ["recall engine", "second engine"],
     });
   });
 });

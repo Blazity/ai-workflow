@@ -2,8 +2,9 @@
 
 import React from "react";
 import { Spark } from "@/components/charts";
-import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
+import { pullRequestRepoLabels } from "@shared/contracts";
 import type { RunPullRequest } from "@shared/contracts";
+import { changeRequestNaming } from "@integrations/registry";
 import { runPullRequests } from "@/lib/run-prs";
 import type { RunStatus } from "@/lib/types";
 import { Button } from "./ui/button";
@@ -348,6 +349,7 @@ function PRLink({
   repoLabel?: string;
   size?: "sm" | "lg";
 }) {
+  const naming = changeRequestNaming(pr);
   return (
     <a
       href={pr.url}
@@ -366,8 +368,8 @@ function PRLink({
           {repoLabel}
         </span>
       )}
-      <span className="opacity-60">PR</span>
-      {pullRequestRef(pr)}
+      <span className="opacity-60">{naming.noun}</span>
+      {naming.reference}
       <span className="text-[9px] opacity-70">↗</span>
     </a>
   );

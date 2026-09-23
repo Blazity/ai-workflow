@@ -85,6 +85,36 @@ export interface IntegrationRepositoryShape {
    * path is exactly the first two segments whatever follows them.
    */
   readonly nestedPaths?: boolean;
+  /**
+   * What this provider calls a change request, and how a person references
+   * one. Core used to know that GitLab says `MR !12` where GitHub says
+   * `PR #12`; on GitLab `#12` names issue 12, so the wrong prefix points at
+   * something else. Omitted means `PR` and `#`.
+   *
+   * Core reads it in one place, `changeRequestNaming` in
+   * `@integrations/registry`: the dashboard's links call it, and core stamps
+   * its answer on every pull request it hands a messaging integration
+   * (`RunPullRequest.reference`), so a chat message and the run view name one
+   * change request the same way.
+   */
+  readonly changeRequest?: IntegrationChangeRequestShape;
+}
+
+/** How one provider's change requests are named and linked. */
+export interface IntegrationChangeRequestShape {
+  /** What a person calls one: `PR`, `MR`. */
+  readonly noun: string;
+  /** The character a reference to one starts with: `#`, `!`. */
+  readonly referencePrefix: string;
+  /**
+   * A path segment every link to one carries, such as `/-/merge_requests/`.
+   * It names a change request recorded with its link and no provider this
+   * build ships: every gate run, every run from before the provider was
+   * stored, and a row whose provider was since removed. Omit it when the
+   * provider's links have no path of their own; such a row then reads as
+   * `PR` and `#`.
+   */
+  readonly linkSegment?: string;
 }
 
 /** How a version-control provider reports a review. */

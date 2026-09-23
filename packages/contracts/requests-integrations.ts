@@ -37,25 +37,37 @@ export type IntegrationConnectionSaveRequest = z.infer<
   typeof integrationConnectionSaveFieldsSchema
 >;
 
+const integrationSourceFieldSchema = z.enum(["environment", "stored"], {
+  message: "source must be environment or stored",
+});
+
 /**
  * A read-only consequence preview carried over the connection PUT transport.
  * The dashboard already proxies that path and body; the combined command
  * schema below discriminates on `preview`, so it can never be ignored and
  * fall through into a write.
+ *
+ * One per change decision 9 asks the impact of: a save (a reconfiguration), a
+ * disconnect, a switch of source, and the kill switch. The last two are
+ * carried here although their writes are other routes, so the one preview
+ * reads definitions and runs one way for all four.
  */
 export const integrationImpactPreviewRequestSchema = z.discriminatedUnion("preview", [
   integrationConnectionSaveFieldsSchema.extend({ preview: z.literal("save") }),
   z.object({ preview: z.literal("disconnect") }),
+  z.object({ preview: z.literal("source"), source: integrationSourceFieldSchema }),
+  z.object({ preview: z.literal("disable") }),
 ]);
 
 export type IntegrationImpactPreviewRequest = z.infer<
   typeof integrationImpactPreviewRequestSchema
 >;
 
+/** The previews above, plus the write itself: one list of previews, so a new
+ *  one is added in one place and the route parses it the day it exists. */
 const integrationConnectionCommandSchema = z.discriminatedUnion("preview", [
   integrationConnectionSaveFieldsSchema.extend({ preview: z.literal("write") }),
-  integrationConnectionSaveFieldsSchema.extend({ preview: z.literal("save") }),
-  z.object({ preview: z.literal("disconnect") }),
+  ...integrationImpactPreviewRequestSchema.options,
 ]);
 
 /**
@@ -67,14 +79,12 @@ const integrationConnectionCommandSchema = z.discriminatedUnion("preview", [
  * change itself if one field goes missing between the browser and here. That
  * is the one outcome this whole preview exists to prevent, so the safety sits
  * in the shape of the request rather than in a default. A missing or
- * misspelled command is a 400 that names the three it could have been.
+ * misspelled command is a 400 that names the ones it could have been.
  */
 export const integrationConnectionSaveRequestSchema = integrationConnectionCommandSchema;
 
 export const integrationSourceRequestSchema = z.object({
-  source: z.enum(["environment", "stored"], {
-    message: "source must be environment or stored",
-  }),
+  source: integrationSourceFieldSchema,
 });
 
 export type IntegrationSourceRequest = z.infer<typeof integrationSourceRequestSchema>;

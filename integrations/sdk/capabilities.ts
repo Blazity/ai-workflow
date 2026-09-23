@@ -16,11 +16,16 @@ import type { VCSAdapter, VcsIntegrationAdapter } from "./vcs";
  * A capability whose `reservedFor` is set has an id and a cardinality but no
  * port yet. Declaring it is a type error and a conformance failure until the
  * named stage designs its port; nothing here guesses that shape.
+ *
+ * `label` is what a person reads for the capability, capitalised as a heading
+ * (the Integrations page's capability rows); a sentence lowercases it. One
+ * home, so the editor's refusals and the dashboard cannot name the same
+ * capability two ways, and a capability added here arrives with its name.
  */
 export const INTEGRATION_CAPABILITIES = {
-  issue_tracker: { cardinality: "one", reservedFor: null },
-  vcs: { cardinality: "many", reservedFor: null },
-  messaging: { cardinality: "one", reservedFor: null },
+  issue_tracker: { cardinality: "one", reservedFor: null, label: "Issue tracker" },
+  vcs: { cardinality: "many", reservedFor: null, label: "Version control" },
+  messaging: { cardinality: "one", reservedFor: null, label: "Messaging" },
   /**
    * Designed in S13 against the built-in store and two external engines.
    *
@@ -30,14 +35,18 @@ export const INTEGRATION_CAPABILITIES = {
    * first one. A deployment that never opens the Integrations page keeps
    * exactly the memory it has.
    */
-  memory: { cardinality: "one", reservedFor: null },
+  memory: { cardinality: "one", reservedFor: null, label: "Memory" },
   /** Every connected provider watches every agent sandbox; see `agent-tracing.ts`. */
-  agent_tracing: { cardinality: "many", reservedFor: null },
+  agent_tracing: { cardinality: "many", reservedFor: null, label: "Agent tracing" },
   /** MCP servers handed to sandbox agents; waits for AIW-392, a later plan. */
-  agent_tools: { cardinality: "many", reservedFor: "a later plan, after AIW-392" },
+  agent_tools: {
+    cardinality: "many",
+    reservedFor: "a later plan, after AIW-392",
+    label: "Agent tools",
+  },
 } as const satisfies Record<
   string,
-  { cardinality: "one" | "many"; reservedFor: string | null }
+  { cardinality: "one" | "many"; reservedFor: string | null; label: string }
 >;
 
 export type IntegrationCapabilityId = keyof typeof INTEGRATION_CAPABILITIES;

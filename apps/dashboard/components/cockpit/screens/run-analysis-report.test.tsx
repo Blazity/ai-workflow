@@ -75,3 +75,30 @@ test("distinguishes missing evidence and hides runs without a report", () => {
   const active = renderToStaticMarkup(<RunAnalysisReportCard report={null} runStatus="running" currentRunId="live" />);
   assert.equal(active, "");
 });
+
+test("a GitLab merge request in the Published list reads as its provider names it", () => {
+  // On GitLab `#12` is issue 12. The list used to print `gitlab:group/app #12`
+  // in the same trace view whose publish buttons already said `MR !12`.
+  const html = renderToStaticMarkup(
+    <RunAnalysisReportCard
+      report={{
+        ...base,
+        publication: {
+          prs: [
+            {
+              provider: "gitlab",
+              repoPath: "group/app",
+              id: 12,
+              url: "https://gitlab.example/group/app/-/merge_requests/12",
+            },
+          ],
+          changeSummary: "Implemented the change.",
+        },
+      }}
+      runStatus="success"
+      currentRunId="run-report"
+    />,
+  );
+  assert.match(html, /GitLab group\/app MR !12/);
+  assert.doesNotMatch(html, /#12/);
+});

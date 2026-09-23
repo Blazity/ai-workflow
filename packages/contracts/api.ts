@@ -1322,6 +1322,63 @@ export interface IntegrationsListResponse {
   readonly writes: IntegrationWriteAccess;
 }
 
+/**
+ * Who serves one capability on this deployment right now, as a run would find
+ * out. Decided by the worker from the same resolvers the engine uses; a screen
+ * only puts it into words.
+ */
+export type IntegrationCapabilityServing =
+  /** The integrations serving it, in manifest order: exactly one for a `one`
+   *  capability, every usable provider for a `many` capability. */
+  | { readonly kind: "integrations"; readonly ids: readonly string[] }
+  /** Core's own provider. It needs no connection and has no card of its own;
+   *  connecting an integration that provides the capability replaces it. */
+  | { readonly kind: "builtin"; readonly name: string }
+  /** Nothing on this deployment serves it. */
+  | { readonly kind: "none" }
+  /** Several integrations are switched on for a `one` capability and none is
+   *  chosen, so none of them is used. For memory a failing one counts, as the
+   *  resolver counts it: picking the one that works today moves the day the
+   *  other recovers. */
+  | { readonly kind: "ambiguous"; readonly ids: readonly string[] }
+  /** The resolver chose these integrations and refused to use them (switched
+   *  on and failing, or shipping no code for the capability); its own sentence
+   *  says why. Nothing serves the capability until that is fixed. */
+  | { readonly kind: "refused"; readonly ids: readonly string[]; readonly reason: string }
+  /** The deployment could not say; the resolver's own sentence says why. */
+  | { readonly kind: "unknown"; readonly reason: string };
+
+/** One capability core asks a provider for, and who answers it here. */
+export interface IntegrationCapabilityDto {
+  readonly id: string;
+  /** What a person reads for it, from the SDK's one table of capabilities. */
+  readonly label: string;
+  /** `one`: a single active provider. `many`: every usable provider at once. */
+  readonly cardinality: "one" | "many";
+  /** Every integration this build ships that declares it, usable or not. */
+  readonly declaredBy: readonly string[];
+  readonly serving: IntegrationCapabilityServing;
+}
+
+export interface IntegrationCapabilitiesResponse {
+  /** Every capability a provider can serve today, in the SDK's order. */
+  readonly capabilities: readonly IntegrationCapabilityDto[];
+}
+
+/**
+ * How long the worker gives a provider while a person waits on the answer: a
+ * connection test (Save and test, Test what is in use) and the read behind a
+ * page an integration contributes.
+ *
+ * One number, because three things have to agree on it: the worker bounds the
+ * call with it, the dashboard waits longer than it so the answer a person
+ * reads is the worker's and never the dashboard's own timeout, and the
+ * connection screen tells the admin how long the wait can be. Two copies of it
+ * is how a provider answering in fifteen seconds came to be reported as our
+ * outage.
+ */
+export const INTEGRATION_PROVIDER_WAIT_MS = 20_000;
+
 export type IntegrationTestOutcome =
   | { readonly ok: true; readonly message?: string }
   | { readonly ok: false; readonly failure: IntegrationFailure };
@@ -1348,9 +1405,29 @@ export interface IntegrationImpactDefinition {
 export interface IntegrationImpactPreviewResponse {
   /** Whether this action changes the pin a run compares at its next use. */
   readonly changesFingerprint: boolean;
+  /**
+   * Whether runs in flight may stop once this change is made, and by which
+   * mechanism: the check a run makes at its next use, applied to the state
+   * the change leaves. `none`: no run stops. `reconfigured`: the integration
+   * stays usable with values a run's pin no longer matches, so a run stops
+   * only where its next use compares that pin. `unusable`: it can no longer
+   * be used (turned off, or disconnected with nothing to fall back to), so
+   * every run that reaches it stops or goes on without it at its next use.
+   * The one answer to "does this stop runs"; the dashboard asks for
+   * confirmation on it and says why from it.
+   */
+  readonly stops: "none" | "reconfigured" | "unusable";
+  /**
+   * Capabilities this integration serves that the worker cannot see a
+   * workflow use at all. Non-empty means `enabledDefinitions` is null, and
+   * `inFlightRuns` too when runs stop, because the worker could not measure
+   * them, not because a read failed.
+   */
+  readonly unmeasuredCapabilities: readonly string[];
   /** Enabled definitions only, from each definition's deployed graph. */
   readonly enabledDefinitions: readonly IntegrationImpactDefinition[] | null;
-  /** In-flight runs on those definitions that would stop. */
+  /** In-flight runs on those definitions that may stop, counted by the
+   *  mechanism `stops` names. */
   readonly inFlightRuns: number | null;
   /** Catalog repositories whose provider is this integration. */
   readonly repositories: readonly { provider: string; path: string }[] | null;

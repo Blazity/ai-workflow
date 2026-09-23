@@ -13,30 +13,14 @@
 import { INTEGRATION_ID } from "@shared/contracts";
 import { NextResponse } from "next/server";
 
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
+import { PROVIDER_CALL_CEILING_MS } from "@/lib/integrations/provider-wait";
+
 type WorkerProxy = (
   path: string,
   init?: RequestInit,
   timeoutMs?: number,
 ) => Promise<Response>;
-
-/**
- * How long a call that contacts the provider is given.
- *
- * The worker bounds a connection test at 20 seconds
- * (`TEST_TIMEOUT_MS`, apps/worker/src/services/integrations/authoring.ts), and
- * both saving and testing run one. proxyWorker's default ceiling is 10, so a
- * slow but healthy provider would have handed the admin a failure that never
- * happened and sent them off to rotate a perfectly good token. This sits above
- * the worker's own ceiling, so the answer an admin reads is always the
- * provider's and never the proxy's.
- */
-export const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
-
-function isWorkerTimeoutError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; name?: unknown };
-  return candidate.name === "TimeoutError" || candidate.code === 23;
-}
 
 async function forward(
   workerProxy: WorkerProxy,
@@ -51,7 +35,7 @@ async function forward(
       headers: { "cache-control": "no-store" },
     });
   } catch (error) {
-    if (isWorkerTimeoutError(error)) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json(
         { error: "Worker request timed out" },
         { status: 504, headers: { "cache-control": "no-store" } },
@@ -93,7 +77,8 @@ export function handleIntegrationsList(workerProxy: WorkerProxy) {
 }
 
 /** Store values. The worker tests them before they become the ones in use, so
- *  this call waits on the provider and carries the longer ceiling. */
+ *  this call waits on the provider and carries the longer ceiling: proxyWorker's
+ *  default of 10 seconds would hand the admin a failure that never happened. */
 export async function handleIntegrationConnectionPut(
   id: string,
   request: Request,
@@ -105,7 +90,7 @@ export async function handleIntegrationConnectionPut(
     workerProxy,
     path,
     { method: "PUT", ...(await body(request)) },
-    INTEGRATION_TEST_TIMEOUT_MS,
+    PROVIDER_CALL_CEILING_MS,
   );
 }
 
@@ -117,7 +102,7 @@ export function handleIntegrationTest(id: string, workerProxy: WorkerProxy) {
     workerProxy,
     path,
     { method: "POST" },
-    INTEGRATION_TEST_TIMEOUT_MS,
+    PROVIDER_CALL_CEILING_MS,
   );
 }
 
