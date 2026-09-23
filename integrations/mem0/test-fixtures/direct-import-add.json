@@ -1,0 +1,17 @@
+{
+  "message": "Memories stored successfully",
+  "status": "SUCCEEDED",
+  "event_id": "8c1f5e2b-3d47-4a9e-b6c1-5f2a7d3e9b04",
+  "results": [
+    {
+      "id": "19d6d7aa-2454-4e58-96fc-e74d9e9f8dd1",
+      "data": { "memory": "Alice loves playing badminton" },
+      "event": "ADD"
+    },
+    {
+      "id": "8557f05d-7b3c-47e5-b409-9886f9e314fc",
+      "data": { "memory": "Alice mostly cooks at home because of her gym plan" },
+      "event": "ADD"
+    }
+  ]
+}

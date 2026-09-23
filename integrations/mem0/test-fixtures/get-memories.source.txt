@@ -1,0 +1,6 @@
+Source URL: https://github.com/mem0ai/mem0/blob/b2ff3aeda5375c9354ae6b0cf9c9d78f101344d0/docs/api-reference/memory/get-memories.mdx
+Raw bytes: https://raw.githubusercontent.com/mem0ai/mem0/b2ff3aeda5375c9354ae6b0cf9c9d78f101344d0/docs/api-reference/memory/get-memories.mdx
+What it is: Mem0's answer to POST /v3/memories/ (get all), as the page rendered at https://docs.mem0.ai/api-reference/memory/get-memories shows it. The id of the second record is not a valid UUID in Mem0's own example; it is kept as printed.
+How these bytes were made: The "python Output" code block of that file, copied as printed and dedented by its fence's indentation.
+Retrieved: 2026-09-23
+SHA-256: 95400217b49fb9418e427ebac8523e47c94dbfbf029970dccf30fdb02e06d73c

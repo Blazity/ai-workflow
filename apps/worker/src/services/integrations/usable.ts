@@ -13,7 +13,6 @@
  * derivation of either is exactly what ADR-010 says not to build, which is also
  * why this lives here rather than in the engine that calls it.
  */
-import { INTEGRATION_SETTINGS_UNREADABLE_ERROR_NAME } from "../../engine/helpers/integration-settings-unreadable.js";
 import {
   type ErasedIntegrationRuntime,
   type IntegrationContext,
@@ -155,7 +154,6 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
     readWebhookConnection,
     redactIntegrationText,
     secretValuesOf,
-    storedValuesMovedToSettings,
   } = await import("./connection-values.js");
   const { environmentReaderFrom } = await import("./resolve.js");
   const { buildIntegrationContext, redactedError } = await import("./context.js");
@@ -178,7 +176,8 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
   let states: ReturnType<typeof readIntegrationStatesFrom>;
   let stored: Awaited<ReturnType<typeof readConnectedIntegrationConnections>>;
   try {
-    stored = await readConnectedIntegrationConnections();
+    const { readIntegrationTables } = await import("./unreadable.js");
+    stored = await readIntegrationTables(readConnectedIntegrationConnections);
     states = readIntegrationStatesFrom(stored);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -235,15 +234,6 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
     }
     let settings: Record<string, readonly string[]> | undefined;
     if (input.forWebhook && (manifest.settings?.length ?? 0) > 0) {
-      // A value stored before its setting existed is not what applies now; it
-      // is said on every request that would have used it, not only on a card
-      // an admin may never open.
-      for (const moved of storedValuesMovedToSettings(manifest, reading.active)) {
-        logger.warn(
-          { integration: manifest.id, key: moved.key, setting: moved.setting, source: state.source },
-          "integration_stored_value_not_read",
-        );
-      }
       try {
         settingsSnapshot ??= await input.forWebhook.settings();
         settings = integrationSettingValues(manifest, settingsSnapshot);
@@ -276,34 +266,8 @@ export async function resolveUsableIntegrations(input: ContextLifetime & Webhook
   return { readable: true, usable, states, connectionFailures };
 }
 
-/**
- * What a caller throws when it cannot do its work without this deployment's
- * integration settings and could not read them.
- *
- * A class rather than a sentence, because the caller that catches it is often
- * not the one that read (manual dispatch catches what the version control
- * runtime threw) and has to answer "try again", never "not configured".
- *
- * The message is fixed apart from what could not be done, and the database's
- * own words ride in `cause`, the way `IntegrationSecretsUnreadableError` does
- * it: the message lands where people read it (a run's failure, a dispatch
- * refusal), and a driver's error text there helps nobody act. The resolver
- * logs the cause once, where it read (`integration_states_unreadable`).
- */
-export class IntegrationSettingsUnreadableError extends Error {
-  constructor(
-    /** What could not be done, as the end of a sentence: "so no sandbox was built". */
-    consequence: string,
-    cause: string,
-  ) {
-    super(
-      `This deployment's integration settings could not be read, ${consequence}. Nothing is known about any provider from this; try again shortly.`,
-      { cause },
-    );
-    // The name is what engine code recognises after a step boundary.
-    this.name = INTEGRATION_SETTINGS_UNREADABLE_ERROR_NAME;
-  }
-}
+/** Defined beside the one retry rule; exported here too for its callers. */
+export { IntegrationSettingsUnreadableError } from "./unreadable.js";
 
 /**
  * Where what an integration throws is redacted on its way into core.

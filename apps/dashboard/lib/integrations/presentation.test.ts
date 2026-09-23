@@ -16,6 +16,7 @@ import {
   conflictDifferenceLines,
   disableConsequence,
   enableConsequence,
+  integrationImpactLines,
   disconnectConsequence,
   fieldHint,
   missingRequiredFields,
@@ -248,17 +249,22 @@ test("a webhook that agrees with the rest of the integration adds nothing to the
   assert.doesNotMatch(off, /slash command/, "switched off says so once, above");
 });
 
-test("an allowlist stored before it became a setting is named as not used, with where it went", () => {
-  // Nothing reads it, and the setting that replaced it applies with its
-  // default (everyone) when nothing sets it: a card that stayed quiet would
-  // leave the admin believing the command is still kept to a few people.
-  const rendered = statusDetailLines(
-    commandOnlySlack({ movedToSettings: [{ key: "allowedUserIds", setting: "SLACK_ALLOWED_USER_IDS" }] }),
-  ).join(" ");
-  assert.match(rendered, /The value stored here under allowedUserIds is not used/);
-  assert.match(rendered, /Slack allowed user ids \(SLACK_ALLOWED_USER_IDS\) on the Settings page, under Integrations/);
-  assert.match(rendered, /saving this connection again removes the stored value/);
-  assert.doesNotMatch(statusDetailLines(commandOnlySlack()).join(" "), /is not used/);
+test("values saved beside a working environment are said to be stored, tested and not in use", () => {
+  // The worker keeps a connected environment as the source. "Accepted" alone
+  // read as "in use", and an admin who then revoked the old credential
+  // stopped every run.
+  const beside = integration({
+    state: state({ source: "environment", environment: { setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"], missingVariables: [], complete: true } }),
+  });
+  const rendered = testOutcomeLines({ ok: true }, beside, "save").join(" ");
+  assert.match(rendered, /stored and tested, and not in use: runs still use this deployment's environment variables/);
+  assert.match(rendered, /Use the stored values/);
+  assert.match(rendered, /Keep the old credential/);
+
+  const inUse = testOutcomeLines({ ok: true }, integration(), "save").join(" ");
+  assert.equal(inUse, "Demo accepted these values.");
+  // A Test of what is in use is about the environment itself: no switch to offer.
+  assert.doesNotMatch(testOutcomeLines({ ok: true }, beside, "test").join(" "), /not in use/);
 });
 
 test("a save that failed its test is reported as stored and not in use", () => {
@@ -368,6 +374,25 @@ test("a required field holding only whitespace is missing", () => {
     state: state(),
   });
   assert.deepEqual(empty, ["Site URL"]);
+});
+
+test("a failed Test of the environment in use says runs that need it stop", () => {
+  const failing = integration({
+    state: state({
+      source: "environment",
+      status: "failing",
+      connection: "failing",
+      usable: false,
+      environment: { setVariables: ["DEMO_BASE_URL", "DEMO_API_TOKEN"], missingVariables: [], complete: true },
+      failure: { reason: "credential_rejected", message: "401 unauthorised" },
+    }),
+  });
+  const rendered = testOutcomeLines(
+    { ok: false, failure: { reason: "credential_rejected", message: "401 unauthorised" } },
+    failing,
+    "test",
+  ).join(" ");
+  assert.match(rendered, /runs that need it stop until the variables are corrected/);
 });
 
 test("a refused credential leaves the working connection in place and says so", () => {
@@ -481,6 +506,35 @@ test("an integration with no blocks is not said to grey any out, on or off", () 
     ...disconnectConsequence(tracker),
   ].join(" ");
   assert.doesNotMatch(said, /blocks/);
+});
+
+test("the cost of a change names repositories only for version control", () => {
+  const impact = {
+    changesFingerprint: false,
+    stops: "none",
+    unmeasuredCapabilities: [],
+    enabledDefinitions: [],
+    inFlightRuns: 0,
+    repositories: [],
+  } as const;
+  // "Repositories using Jira: none" read as a finding about Jira.
+  const tracker = integrationImpactLines(integration({ name: "Jira", capabilities: ["issue_tracker"] }), impact, "disable");
+  assert.doesNotMatch(tracker.join(" "), /[Rr]epositories/);
+  const vcs = integrationImpactLines(integration({ name: "GitHub", capabilities: ["vcs"] }), impact, "disable");
+  assert.match(vcs.join(" "), /Repositories using GitHub: none\./);
+  const unread = integrationImpactLines(
+    integration({ name: "GitHub", capabilities: ["vcs"] }),
+    { ...impact, repositories: null },
+    "disable",
+  );
+  assert.match(unread.join(" "), /Affected repositories: unknown/);
+});
+
+test("enabling again goes back to where the values come from", () => {
+  const fromEnvironment = integration({ blocks: [], state: state({ source: "environment" }) });
+  assert.match(enableConsequence(fromEnvironment), /goes back to this deployment's environment variables/);
+  assert.doesNotMatch(enableConsequence(fromEnvironment), /stored/);
+  assert.match(enableConsequence(integration({ blocks: [] })), /goes back to the values stored for it/);
 });
 
 test("switching to an environment that does not configure the integration is refused by name", () => {

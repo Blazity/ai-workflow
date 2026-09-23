@@ -1,9 +1,5 @@
-import { type ConnectionField, type IntegrationManifest, integrationSettingKey } from "@integrations/sdk";
-import type {
-  IntegrationFailure,
-  IntegrationMovedValueDto,
-  IntegrationSource,
-} from "@shared/contracts";
+import type { ConnectionField, IntegrationManifest } from "@integrations/sdk";
+import type { IntegrationFailure, IntegrationSource } from "@shared/contracts";
 
 import {
   IntegrationSecretCorruptedError,
@@ -16,6 +12,7 @@ import {
   type StoredIntegrationVersion,
   normalizeConnectionValue,
 } from "./resolve.js";
+import { secretForms } from "../../run-observability/configured-secrets.js";
 import { malformedValueFailure } from "./value-problems.js";
 
 /**
@@ -77,29 +74,6 @@ export function readConnectionValues(input: {
     values[field.key] = field.format === "integer" ? Number(resolved) : resolved;
   }
   return { ok: true, values };
-}
-
-/**
- * What a stored connection version holds under the key of one of the
- * integration's operator settings, and is therefore not read.
- *
- * Slack's allowlist was a connection field (`allowedUserIds`) until it became
- * a setting. A version saved before that still carries it in `config`, and no
- * reader of a connection knows the key any more: the setting applies instead,
- * read from its stored row, else its variable, else its default. With neither
- * set, a stored allowlist that used to keep the command to a few people now
- * lets the whole workspace in, so this is what the card shows and the webhook
- * read logs instead of staying quiet. It disappears on the next save, which
- * builds a version from the connection fields alone.
- */
-export function storedValuesMovedToSettings(
-  manifest: IntegrationManifest,
-  active: StoredIntegrationVersion | null,
-): IntegrationMovedValueDto[] {
-  if (!active) return [];
-  return (manifest.settings ?? [])
-    .filter((setting) => (active.config[setting.key] ?? "").trim().length > 0)
-    .map((setting) => ({ key: setting.key, setting: integrationSettingKey(manifest.id, setting.key) }));
 }
 
 /**
@@ -219,29 +193,14 @@ function secretFailure(error: unknown, field: ConnectionField): IntegrationFailu
  * that was sent, and that message is the one an admin reads on the card, the one
  * stored on the version row, and the one this worker writes to its log.
  *
- * A value the manifest declares secret is removed by exact match whatever its
- * length. A short credential is a bad credential, not a public one, and leaving
- * a four-character token in the log because it was short is exactly the leak
- * this function exists to prevent. The length floor applies only to the
- * heuristic pass below, which looks for the value inside longer runs of text
- * where a two-character match would be a coincidence rather than a credential.
+ * Every written form of each secret goes (`secretForms`, the one list every
+ * redactor uses): the value as written whatever its length, its
+ * percent-encoded, base64 and JSON-escaped forms once it is long enough not to
+ * match by coincidence, and each substantial line of a multiline one.
  */
-const HEURISTIC_FLOOR = 8;
-
 export function redactIntegrationText(text: string, secrets: readonly string[]): string {
   let out = text;
-  for (const secret of secrets) {
-    if (secret.length === 0) continue;
-    out = out.split(secret).join("[redacted]");
-    if (secret.length < HEURISTIC_FLOOR) continue;
-    // Providers percent-encode, JSON-escape and base64 what they echo. The
-    // encoded forms of a value long enough to be unmistakable are worth
-    // catching too; a short one is not, because a coincidence would mangle the
-    // sentence an admin has to read.
-    for (const encoded of [encodeURIComponent(secret), Buffer.from(secret, "utf8").toString("base64")]) {
-      if (encoded !== secret) out = out.split(encoded).join("[redacted]");
-    }
-  }
+  for (const form of secretForms(secrets)) out = out.split(form).join("[redacted]");
   return out;
 }
 

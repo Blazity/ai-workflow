@@ -194,6 +194,53 @@ describe("an admin connecting an integration for the first time", () => {
   });
 });
 
+describe("a field stored values must carry", () => {
+  // GitHub's and GitLab's webhook secret: optional on the environment, where
+  // deployments run without it, and required here, since stored values
+  // without it read Connected while every delivery is refused.
+  const HOOK = {
+    key: "hookSecret",
+    label: "Webhook secret",
+    env: "DEMO_HOOK_SECRET",
+    secret: true,
+    optional: true,
+    requiredWhenStored: true,
+  } as const;
+  const fields = manifest.connection.fields as unknown as object[];
+
+  it("refuses a save that leaves it empty, naming it, and writes nothing", async () => {
+    fields.push(HOOK);
+    try {
+      await expect(save(GOOD)).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining("Webhook secret is required in values stored here"),
+      });
+      expect(testConnection).not.toHaveBeenCalled();
+      const [listed] = (await listIntegrations()).integrations;
+      expect(listed?.state.stored.latestVersion).toBe(0);
+      // The form asks for it too, from the same rule.
+      expect(listed?.fields.find((field) => field.key === "hookSecret")?.optional).toBe(false);
+
+      const saved = await save({ ...GOOD, hookSecret: "hook-0123456789" });
+      expect(saved.integration.state.status).toBe("connected");
+    } finally {
+      fields.pop();
+    }
+  });
+
+  it("is still optional on the environment, which main ran without", async () => {
+    fields.push(HOOK);
+    try {
+      process.env.DEMO_BASE_URL = "https://demo.example/site";
+      process.env.DEMO_API_TOKEN = GOOD_TOKEN;
+      const [listed] = (await listIntegrations()).integrations;
+      expect(listed?.state.status).toBe("connected");
+    } finally {
+      fields.pop();
+    }
+  });
+});
+
 describe("a provider that does not answer at all (INT-012)", () => {
   it("is told apart from a provider that answered no, because the fix is different", async () => {
     testConnection.mockImplementationOnce(async () => {

@@ -21,7 +21,6 @@ import { INTEGRATION_PROVIDER_WAIT_MS } from "@shared/contracts";
 
 import { capabilityLabel as sdkCapabilityLabel } from "@integrations/registry";
 import { formatDateTime } from "@/lib/date-time";
-import { settingLabel } from "@/lib/settings/format";
 
 /** The chip tones the cockpit already ships, named by what they mean here. */
 export type IntegrationTone = "success" | "failed" | "quiet" | "off";
@@ -390,14 +389,6 @@ export function statusDetailLines(integration: IntegrationDto): string[] {
   if (state.failure) lines.push(failureLine(state.failure));
   const webhook = webhookLine(integration);
   if (webhook) lines.push(webhook);
-  // A stored value nothing reads any more, most likely an allowlist: said
-  // here because the setting that replaced it applies with its own default
-  // when nothing sets it, which can let everyone in.
-  for (const moved of integration.movedToSettings ?? []) {
-    lines.push(
-      `The value stored here under ${moved.key} is not used: it moved to the setting ${settingLabel(moved.setting)} (${moved.setting}) on the Settings page, under Integrations, which applies instead, with its default when nothing sets it. Set it there; saving this connection again removes the stored value.`,
-    );
-  }
 
   const neverConfigured =
     state.connection === "not_connected" &&
@@ -591,6 +582,11 @@ export function buildSaveRequest(
  * Both facts come from the state the response carried, never from a guess made
  * here.
  */
+/** A Test of what is in use on a deployment reading its environment did not try
+ *  what is typed in the form, so it says which values failed. */
+const ENVIRONMENT_TEST_FAILED_LINE =
+  "What failed is this deployment's environment variables, not the values typed above. Change them on the deployment, or fill the values in above and save to use those instead.";
+
 export function testOutcomeLines(
   test: { readonly ok: true; readonly message?: string } | { readonly ok: false; readonly failure: IntegrationFailure },
   integration: IntegrationDto,
@@ -598,6 +594,21 @@ export function testOutcomeLines(
   origin: "save" | "test",
 ): string[] {
   if (test.ok) {
+    // A save on a deployment whose environment already connects the
+    // integration stores and tests the values and leaves the source alone
+    // (the worker never takes over a working environment). "Accepted" alone
+    // read as "in use", and an admin who then revoked the old credential
+    // stopped every run.
+    if (origin === "save" && integration.state.source === "environment") {
+      const lines = [
+        `${integration.name} accepted these values. They are stored and tested, and not in use: runs still use this deployment's environment variables.`,
+      ];
+      if (test.message) lines.push(readableProviderText(test.message));
+      lines.push(
+        "To use them, choose Use the stored values below, which first shows what the switch would interrupt. Keep the old credential until then.",
+      );
+      return lines;
+    }
     const lines = [`${integration.name} accepted these values.`];
     if (test.message) lines.push(readableProviderText(test.message));
     return lines;
@@ -615,6 +626,16 @@ export function testOutcomeLines(
   // one of which cannot be sent at all), turns the connection Failing: those
   // values are what every run sends. Said before the generic advice, which
   // would tell this admin nothing changed.
+  if (origin === "test" && state.source === "environment" && state.connection === "failing") {
+    // The same stop as for stored values: the environment's variables are
+    // what every run sends. Saying only "change them on the deployment" left
+    // out that runs have already stopped.
+    lines.push(
+      `These are the values in use, and ${integration.name} refused them: the integration is now Failing, and runs that need it stop until the variables are corrected and a later Test passes.`,
+      ENVIRONMENT_TEST_FAILED_LINE,
+    );
+    return lines;
+  }
   if (origin === "test" && state.source === "stored" && state.connection === "failing") {
     lines.push(
       test.failure.reason === "value_malformed"
@@ -636,7 +657,7 @@ export function testOutcomeLines(
   // again sends them to edit values nothing is reading.
   lines.push(
     origin === "test" && state.source === "environment"
-      ? "What failed is this deployment's environment variables, not the values typed above. Change them on the deployment, or fill the values in above and save to use those instead."
+      ? ENVIRONMENT_TEST_FAILED_LINE
       : "Nothing was activated, so the integration is still not connected. Correct the values above and save again.",
   );
   return lines;
@@ -663,9 +684,15 @@ export function disableConsequence(integration: IntegrationDto): string[] {
 }
 
 export function enableConsequence(integration: IntegrationDto): string {
+  // Where the values come from: an integration read from the environment has
+  // nothing stored to go back to.
+  const values =
+    integration.state.source === "environment"
+      ? "this deployment's environment variables"
+      : "the values stored for it";
   return integration.blocks.length > 0
-    ? `${integration.name} goes back to the values stored for it, and its blocks return to the workflow editor.`
-    : `${integration.name} goes back to the values stored for it, and workflows may use it again.`;
+    ? `${integration.name} goes back to ${values}, and its blocks return to the workflow editor.`
+    : `${integration.name} goes back to ${values}, and workflows may use it again.`;
 }
 
 /**
@@ -805,6 +832,21 @@ function usingItsCapabilities(integration: IntegrationDto): string {
  * The measured cost shown before a connection change. Null is an unread fact,
  * never an empty fact, so every unknown has its own sentence.
  */
+function repositoriesLine(
+  integration: IntegrationDto,
+  repositories: IntegrationImpactPreviewResponse["repositories"] | null,
+): string {
+  if (repositories === null) {
+    return "Affected repositories: unknown. The worker could not read the repository catalog.";
+  }
+  if (repositories.length === 0) return `Repositories using ${integration.name}: none.`;
+  const shown = repositories.slice(0, IMPACT_NAME_LIMIT).map(({ path }) => path);
+  const remainder = repositories.length - shown.length;
+  return `Repositories using ${integration.name}: ${shown.join(", ")}${
+    remainder > 0 ? `, and ${remainder} more` : ""
+  }.`;
+}
+
 export function integrationImpactLines(
   integration: IntegrationDto,
   impact: IntegrationImpactPreviewResponse | null,
@@ -813,19 +855,9 @@ export function integrationImpactLines(
   const lines = [impactReasonLine(integration, impact, action)];
   const definitions = impact?.enabledDefinitions ?? null;
   const repositories = impact?.repositories ?? null;
-  if (repositories === null) {
-    lines.push("Affected repositories: unknown. The worker could not read the repository catalog.");
-  } else if (repositories.length === 0) {
-    lines.push(`Repositories using ${integration.name}: none.`);
-  } else {
-    const shown = repositories.slice(0, IMPACT_NAME_LIMIT).map(({ path }) => path);
-    const remainder = repositories.length - shown.length;
-    lines.push(
-      `Repositories using ${integration.name}: ${shown.join(", ")}${
-        remainder > 0 ? `, and ${remainder} more` : ""
-      }.`,
-    );
-  }
+  // Repositories belong to a version control provider; "Repositories using
+  // Jira: none" read as a finding about Jira.
+  if (integration.capabilities.includes("vcs")) lines.push(repositoriesLine(integration, repositories));
   const unmeasured = impact?.unmeasuredCapabilities ?? [];
   if (definitions === null && unmeasured.length > 0) {
     lines.push(

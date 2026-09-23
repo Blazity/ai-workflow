@@ -78,13 +78,22 @@ vi.mock("../../services/integrations/runtime.js", async (importOriginal) => {
     await importOriginal<typeof import("../../services/integrations/runtime.js")>();
   return {
     ...actual,
+    // Nothing connected: with a memory integration in the registry, resolving
+    // who serves memory reads the integration rows, and several cases swap
+    // the database for a fake that answers only the store's own calls.
+    resolveUsableIntegrations: async () => ({
+      readable: true as const,
+      usable: [],
+      states: new Map(),
+      connectionFailures: new Map(),
+    }),
     knownSecretValues: async () => {
       mocks.secretReads += 1;
       if (mocks.redactionThrows) {
-        const { IntegrationSecretsUnreadableError } = await import(
+        const { IntegrationSettingsUnreadableError } = await import(
           "../../services/integrations/secret-values.js"
         );
-        throw new IntegrationSecretsUnreadableError(new Error("secret source unavailable"));
+        throw new IntegrationSettingsUnreadableError("so the secrets they hold could not be redacted", new Error("secret source unavailable"));
       }
       // A deployment with nothing connected: its environment's secrets. Read
       // from the environment rather than the database, because several cases
@@ -1601,8 +1610,10 @@ describe("distillRepoMemoryStep", () => {
     // under the cap the way any other is, never cut mid-bullet or inside a
     // provenance comment, and the secret is nowhere in it. Scrubbing inside the
     // store, after its merge, is what used to make this a refused write.
+    // A credential named on the known list is redacted however short; a
+    // short value found only by its variable name is not (configured-secrets.ts).
     const SECRET = "zz9";
-    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    vi.stubEnv("CRON_SECRET", SECRET);
     const secretFact = `deploy uses ${SECRET} from the pipeline`;
     const measure = (fillerChars: number) =>
       Buffer.byteLength(
@@ -1655,7 +1666,7 @@ describe("distillRepoMemoryStep", () => {
     const heldFact = `Deploys read ${SECRET} from the vault`;
     const disproved = `The staging key is ${SECRET}`;
     await storeRepoDocument("facts", [heldFact, disproved]);
-    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    vi.stubEnv("CRON_SECRET", SECRET);
     respond({
       repositories: [
         {
@@ -1682,7 +1693,7 @@ describe("distillRepoMemoryStep", () => {
     // list is the provider's recall, and it reaches a paid model.
     const SECRET = "tok-2b8e5a1c9d";
     await storeRepoDocument("facts", [`Deploys read ${SECRET} from the vault`]);
-    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    vi.stubEnv("CRON_SECRET", SECRET);
     respond({ repositories: [{ repository: REPO_KEY, facts: [], lessons: [] }] });
 
     await distillRepoMemoryStep(input);
@@ -2660,8 +2671,10 @@ describe("distillRepoMemoryStep org promotion", () => {
     // The org-scope counterpart of the case above: the secret is taken out
     // before the store merges, so the promoted document is whole, inside its
     // cap and free of the secret.
+    // A credential named on the known list is redacted however short; a
+    // short value found only by its variable name is not (configured-secrets.ts).
     const SECRET = "zz9";
-    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    vi.stubEnv("CRON_SECRET", SECRET);
     const secretFact = `deploy uses ${SECRET} from the pipeline`;
     const measure = (fillerChars: number) =>
       Buffer.byteLength(
@@ -3168,7 +3181,7 @@ describe("loadRepoMemorySourcesStep", () => {
     // rendering on its way there, whichever provider holds it.
     const SECRET = "tok-4c1d8e2f9a";
     await storeRepoDocument("facts", [`Deploys read ${SECRET} from the vault`]);
-    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    vi.stubEnv("CRON_SECRET", SECRET);
 
     const sources = await loadSources({ repositories });
 

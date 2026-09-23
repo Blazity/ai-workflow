@@ -271,6 +271,15 @@ export interface ConnectionField {
   readonly identity?: boolean;
   /** Absent means required: the connection is incomplete without it. */
   readonly optional?: boolean;
+  /**
+   * Optional in the environment and required in values stored from the
+   * dashboard. For a value deployments already run without, so a new rule on
+   * the environment would turn a working deployment Failing on the deploy,
+   * but whose absence breaks a whole path silently: without GitHub's or
+   * GitLab's webhook secret every delivery is refused while the card reads
+   * Connected. A save that leaves it empty is refused, naming the field.
+   */
+  readonly requiredWhenStored?: boolean;
   /** Used when the source leaves the field unset. A secret has none. */
   readonly default?: string;
   /**
@@ -280,6 +289,19 @@ export interface ConnectionField {
    * each accepts is `connectionValueProblem`'s to say.
    */
   readonly format?: "text" | "multiline" | "url" | "integer";
+}
+
+/**
+ * Whether a field needs a value for the connection to be complete, read from
+ * the given source: not optional and without a default, or, in stored values,
+ * `requiredWhenStored`. The one rule the resolver, a save and the form use.
+ */
+export function connectionFieldRequired(
+  field: Pick<ConnectionField, "optional" | "default" | "requiredWhenStored">,
+  source: "environment" | "stored",
+): boolean {
+  if (source === "stored" && field.requiredWhenStored === true) return true;
+  return field.optional !== true && field.default === undefined;
 }
 
 /** Why a value cannot be what its field's `format` says it is. */

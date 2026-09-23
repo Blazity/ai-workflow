@@ -1276,6 +1276,9 @@ export interface IntegrationConnectionFieldDto {
   readonly description?: string;
   readonly env: string;
   readonly secret: boolean;
+  /** Whether values stored here may leave it empty (`connectionFieldRequired`
+   *  for stored values): a webhook secret the environment may omit is still
+   *  required in the form. */
   readonly optional: boolean;
   readonly format: "text" | "multiline" | "url" | "integer";
   /** Whether this deployment's environment sets the variable. */
@@ -1315,21 +1318,6 @@ export interface IntegrationDto {
    * an integration without such a webhook.
    */
   readonly webhook?: IntegrationWebhookDto;
-  /**
-   * Values the stored version in use still holds under the key of one of the
-   * integration's operator settings: saved as a connection value before the
-   * setting existed (Slack's `allowedUserIds`), and read by nothing since,
-   * because the setting applies instead. Derived on each read, never stored.
-   * Absent when there are none.
-   */
-  readonly movedToSettings?: readonly IntegrationMovedValueDto[];
-}
-
-export interface IntegrationMovedValueDto {
-  /** The key it is stored under in the connection version. */
-  readonly key: string;
-  /** The setting that applies instead: `SLACK_ALLOWED_USER_IDS`. */
-  readonly setting: string;
 }
 
 export interface IntegrationWebhookDto {

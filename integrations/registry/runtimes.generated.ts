@@ -12,6 +12,7 @@ import { runtime as arthur } from "../arthur/worker";
 import { runtime as github } from "../github/worker";
 import { runtime as gitlab } from "../gitlab/worker";
 import { runtime as jira } from "../jira/worker";
+import { runtime as mem0 } from "../mem0/worker";
 import { runtime as slack } from "../slack/worker";
 
 export const generatedIntegrationRuntimes: readonly ErasedIntegrationRuntime[] = [
@@ -19,5 +20,6 @@ export const generatedIntegrationRuntimes: readonly ErasedIntegrationRuntime[] =
   github,
   gitlab,
   jira,
+  mem0,
   slack,
 ];

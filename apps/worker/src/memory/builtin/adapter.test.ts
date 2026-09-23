@@ -292,11 +292,11 @@ describe("a secret it learned after storing it", () => {
   it("writes nothing when the secrets to take out cannot be read", async () => {
     await store([`Deploy with ${TOKEN} in the header`]);
     const before = await storedText();
-    const { IntegrationSecretsUnreadableError } = await import(
+    const { IntegrationSettingsUnreadableError } = await import(
       "../../services/integrations/secret-values.js"
     );
     mocks.secrets = async () => {
-      throw new IntegrationSecretsUnreadableError(new Error("db down"));
+      throw new IntegrationSettingsUnreadableError("so the secrets they hold could not be redacted", new Error("db down"));
     };
 
     const write = await memory.observe({
@@ -317,11 +317,11 @@ describe("a create-only write", () => {
     // Nothing held is merged into, so nothing held needs cleaning: a seed that
     // finds a document says so even when the set cannot be read.
     await store(["a fact a run distilled"]);
-    const { IntegrationSecretsUnreadableError } = await import(
+    const { IntegrationSettingsUnreadableError } = await import(
       "../../services/integrations/secret-values.js"
     );
     mocks.secrets = async () => {
-      throw new IntegrationSecretsUnreadableError(new Error("db down"));
+      throw new IntegrationSettingsUnreadableError("so the secrets they hold could not be redacted", new Error("db down"));
     };
 
     const write = await memory.observe({

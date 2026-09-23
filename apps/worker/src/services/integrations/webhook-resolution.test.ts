@@ -24,10 +24,17 @@ import { encryptIntegrationSecret } from "../../infra/secrets-crypto.js";
 const state = vi.hoisted(() => ({
   connections: new Map<string, unknown>(),
   settingsRows: [] as { key: string; value: unknown }[],
+  failReads: 0,
 }));
 
 vi.mock("../../db/repositories/integrations.js", () => ({
-  readConnectedIntegrationConnections: async () => state.connections,
+  readConnectedIntegrationConnections: async () => {
+    if (state.failReads > 0) {
+      state.failReads -= 1;
+      throw new Error("connection reset");
+    }
+    return state.connections;
+  },
 }));
 vi.mock("../../db/repositories/settings.js", () => ({
   readAllConnectedSettings: async () => state.settingsRows,
@@ -45,7 +52,6 @@ const { resolveUsableIntegrations } = await import("./usable.js");
 const { integrationSecretDigest } = await import("./resolve.js");
 const { loadSettingsSnapshot } = await import("../settings/snapshot.js");
 const { listIntegrations } = await import("./authoring.js");
-const { logger } = await import("../../infra/logger.js");
 
 const SIGNING_SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
 const SECRETS_KEY = "a".repeat(64);
@@ -55,6 +61,7 @@ const CALLER = "U2147483697";
 beforeEach(() => {
   state.connections = new Map();
   state.settingsRows = [];
+  state.failReads = 0;
 });
 
 afterEach(() => {
@@ -146,6 +153,17 @@ describe("the slash command needs only what it uses", () => {
     expect(resolved.slack.ctx.connection).toEqual({ signingSecret: SIGNING_SECRET });
     const reception = await receive(resolved.slack, "cancel AWT-42");
     expect(reception.kind).toBe("run_control");
+  });
+
+  it("rides out a blink of the database, on the same retry rule as the secret set", async () => {
+    // One failed read of the connections used to answer 503 at once, while the
+    // redaction read of the same tables retried (`unreadable.ts`).
+    vi.stubEnv("SLACK_SIGNING_SECRET", SIGNING_SECRET);
+    state.failReads = 1;
+
+    const resolved = await slackForWebhook();
+
+    expect(resolved.readable && resolved.slack?.manifest.id).toBe("slack");
   });
 
   it("is not served when the signing secret is missing, whatever else is set", async () => {
@@ -288,62 +306,6 @@ describe("who may run it is an operator setting", () => {
     expect(resolved).toEqual({ readable: false, reason: "the settings read timed out" });
   });
 
-  it("does not read the retired connection field of a stored version", async () => {
-    // A version stored before the allowlist became a setting may still carry
-    // it under `config`. It is not read (a stored row or the variable
-    // decides), and reading the version does not fail over it.
-    vi.stubEnv("INTEGRATION_SECRETS_KEY", SECRETS_KEY);
-    vi.stubEnv("SLACK_ALLOWED_USER_IDS", "U000000001");
-    const legacy = storedSlack();
-    state.connections.set("slack", {
-      ...legacy,
-      active: { ...legacy.active!, config: { ...legacy.active!.config, allowedUserIds: CALLER } },
-    });
 
-    const resolved = await slackForWebhook();
 
-    if (!resolved.readable || !resolved.slack) throw new Error("Slack was not served");
-    expect(resolved.slack.ctx.settings).toEqual({ allowedUserIds: ["U000000001"] });
-    expect((await receive(resolved.slack, "cancel AWT-42")).kind).toBe("answered");
-  });
-
-  it("says so on the card and in the log when the stored allowlist it replaced now lets everyone in", async () => {
-    // The widening case: Slack on stored values that still carry the old
-    // allowlist, and neither a setting row nor the variable. The setting
-    // applies with its default, empty, which is everyone; the stored value
-    // that used to keep the command to one person is read by nothing. That is
-    // the decision (a connection reader does not know the key), and it must
-    // not be a quiet one.
-    vi.stubEnv("INTEGRATION_SECRETS_KEY", SECRETS_KEY);
-    vi.stubEnv("SLACK_ALLOWED_USER_IDS", undefined);
-    const legacy = storedSlack();
-    state.connections.set("slack", {
-      ...legacy,
-      active: { ...legacy.active!, config: { ...legacy.active!.config, allowedUserIds: "U000000001" } },
-    });
-    const warn = vi.spyOn(logger, "warn");
-
-    const resolved = await slackForWebhook();
-
-    if (!resolved.readable || !resolved.slack) throw new Error("Slack was not served");
-    expect(resolved.slack.ctx.settings).toEqual({ allowedUserIds: [] });
-    expect(warn).toHaveBeenCalledWith(
-      { integration: "slack", key: "allowedUserIds", setting: "SLACK_ALLOWED_USER_IDS", source: "stored" },
-      "integration_stored_value_not_read",
-    );
-    expect((await slackCard()).movedToSettings).toEqual([
-      { key: "allowedUserIds", setting: "SLACK_ALLOWED_USER_IDS" },
-    ]);
-  });
-
-  it("names nothing on the card or in the log when no stored value was left behind", async () => {
-    vi.stubEnv("INTEGRATION_SECRETS_KEY", SECRETS_KEY);
-    state.connections.set("slack", storedSlack());
-    const warn = vi.spyOn(logger, "warn");
-
-    await slackForWebhook();
-
-    expect(warn).not.toHaveBeenCalledWith(expect.anything(), "integration_stored_value_not_read");
-    expect((await slackCard()).movedToSettings).toBeUndefined();
-  });
 });

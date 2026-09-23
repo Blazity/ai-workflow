@@ -44,6 +44,9 @@ export const manifest = defineIntegration({
         env: "GITLAB_WEBHOOK_SECRET",
         secret: true,
         optional: true,
+        // Deployments run without it on their variables; stored values without it
+        // would read Connected while every delivery is refused.
+        requiredWhenStored: true,
       },
       {
         key: "legacyProjectId",

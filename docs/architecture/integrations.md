@@ -120,13 +120,16 @@ from the repository root.
    run pin does to you"); for a new integration the change is only the
    addition. It reads the generated registry and the committed snapshot and
    nothing else: no database, no network, safe on any machine.
-5. **Check it.** `pnpm --filter @integrations/<id> run typecheck` and
+5. **Check it.** `pnpm --filter @integrations/<id> run typecheck`,
+   `pnpm --filter @integrations/<id> run test` (your own tests, and
+   `run test:zod4` for the same under zod 4) and
    `pnpm --filter @integrations/registry run test` (the conformance suite).
-   Both pass before you have edited anything. From here on, run them after
+   All pass before you have edited anything. From here on, run them after
    every change.
 6. **Make it yours:** the manifest, then the worker, then the tests, using
    the sections below. The scaffold sets the block's `glyph` to your name's
-   initial; choose its `color` and `softColor` too. Delete what you do not
+   initial; choose its `color` and `softColor` too, and replace the
+   placeholder `description` in `package.json`. Delete what you do not
    need, and what goes with it:
    - **No page:** delete `dashboard.tsx`, set `pages: []`, remove the
      `./dashboard` entry from `exports` in `package.json`, the
@@ -219,7 +222,7 @@ context and returns the port's adapter.
 | `issue_tracker` | `IssueTrackerAdapter` (`issue-tracker.ts`), plus `issueTrackerQueryRule` on the runtime | one | Jira | `integrations/jira`: the tracker a deployment runs its board on. The board's columns are settings of the capability, not connection fields, so the next tracker reads the same ones. `jql.ts` is its rule for a query an author typed. The optional `ticketUrl(key)` is the page a person opens for a ticket: core records it on the run and never spells a tracker's URL itself, so a tracker without it gets no links rather than wrong ones. |
 | `vcs` | `VCSAdapter` (`vcs.ts`), plus the optional surfaces in `vcs-extensions.ts` | many, chosen per repository | GitHub, GitLab | `integrations/gitlab`: a provider chosen per repository, self-hosted, with nested paths. `integrations/github`: a credential that is not a token (an App id, an installation id and a private key, read in `auth.ts`). A `vcs` manifest also declares `repositories` (host, whether paths nest, and in `changeRequest` what a person calls a change request and how one is referenced) and the connection field for its automation account's login (below). |
 | `messaging` | `MessagingAdapter` (`messaging.ts`) | one | Slack | `integrations/slack`: one active provider, run notifications in one thread per ticket, a slash command. |
-| `memory` | `MemoryAdapter` (`memory.ts`) | one | built-in, in core | "Memory" below, which states every rule an engine needs. The built-in store (`apps/worker/src/memory/builtin/adapter.ts`) is the one implementation today, for reference. |
+| `memory` | `MemoryAdapter` (`memory.ts`) | one | built-in, in core; Mem0 | "Memory" below, which states every rule an engine needs. `integrations/mem0`: a hosted engine that only adds, reconciled by its adapter (dedup, delete by id, notebook replacement), with its namespace on every call and the admin half. The built-in store (`apps/worker/src/memory/builtin/adapter.ts`) is core's own. |
 | `agent_tracing` | `AgentTracingAdapter` (`agent-tracing.ts`) | many | Arthur | `integrations/arthur`: a description of files, packages, environment and hooks that core applies to every agent sandbox. `otelFixtureRuntime` in `integrations/sdk/fixture-runtime.ts` is a second, minimal provider. |
 | `agent_tools` | reserved | many | nobody | Declaring it is a type error and a conformance failure until a later plan designs it. |
 
@@ -314,9 +317,10 @@ Memory is the one capability core serves by itself. A deployment that
 connects nothing uses the built-in store, a core module rather than a package
 because it needs core's database. Everything the author of a memory engine
 needs is in this section and in the port's comments
-(`integrations/sdk/memory.ts`, read them whole). The built-in store
-(`apps/worker/src/memory/builtin/adapter.ts`) is the one implementation today:
-useful to read, not required.
+(`integrations/sdk/memory.ts`, read them whole). Two implementations exist:
+the built-in store (`apps/worker/src/memory/builtin/adapter.ts`), core's own,
+and `integrations/mem0`, a hosted engine that only adds, which is the one to
+copy from.
 
 **Who serves.** Connecting a memory integration **replaces** the built-in
 store; disabling the integration returns the deployment to the built-in
@@ -383,6 +387,12 @@ do them and cannot get them wrong:
   `unavailable` at once. Core races your call against the budget, so even an
   adapter that ignores its signal is bounded; still turn an aborted request
   into `unavailable`, never a throw.
+- **Your adapter lives one step.** Core calls your `memory` factory once per
+  step with a fresh context and drops the adapter when the step ends
+  (`activeMemory` in `memory-runtime.ts`). State you keep in the adapter lasts exactly that long: a flag that stops
+  asking once a request got no answer at all is safe, and keeps one hanging
+  provider from spending the whole budget (`integrations/mem0/client.ts` does
+  this); a cache across steps or runs is not possible, and not wanted.
 - **Core never retries.** A `recall` or `observe` that answered, with any code,
   is not repeated: the next step or the next run asks again. So the only repeat
   a write can suffer is one your adapter makes.
@@ -444,7 +454,23 @@ Read them in the worker's runtime logs by the run id.
   last text stored, not joined to the one before it. Against an engine that
   only adds, that is an add of the whole text and a delete of the previous
   version. Prefer a write that is done when it answers: the same run reads the
-  notebook back seconds later to distil it.
+  notebook back seconds later to distil it. Four details decide whether that
+  holds:
+  - **Add first, confirm, then delete.** A failure in between then leaves two
+    versions, never none, so `recall` reads the newest by the engine's own
+    timestamp (a listing's order is rarely documented) and the next write
+    clears the older one.
+  - **An unchanged notebook is left alone.** An engine that deduplicates an
+    exact repeat (Mem0 does, by a hash of the text) answers the second add
+    with nothing new, and "delete the previous version" then deletes the only
+    copy. Compare the text with what you hold before adding.
+  - **Check what the engine says it stored.** A notebook can be 256 KiB, and an
+    engine may not document how much one memory holds. When the add answers
+    with the stored text, compare it with what you sent; if it is shorter,
+    delete it, keep the previous version and answer `rejected` naming both
+    sizes. A notebook that silently ends early is worse than an older one.
+  - **An add the engine only queued confirms nothing.** Answer `stored: true`
+    and keep the previous version; delete it only after an add you saw land.
 - **`stored` is acceptance, not read-after-write.** An engine that accepts a
   write and merges it later answers `stored: true`. `removed`, `dropped` and
   `remaining` are only logged, and only when one of the first two is above
@@ -454,6 +480,14 @@ Read them in the worker's runtime logs by the run id.
   unavailable`. Answering `held: false` for it makes the seed write into a store
   that is already full, and makes a run take an old committed file for the
   ticket's notebook.
+- **A subject holds at most `MEMORY_ITEMS_MAX` entries per scope** (40 facts,
+  30 lessons, the built-in store's numbers, declared once in the port). A
+  distilling run may add eight facts and five lessons, so an engine that only
+  adds grows without end unless the adapter trims: after an add that takes a
+  subject past the limit, delete the oldest entries a run learned (never a
+  `derived` one) by id and report them as `dropped`. A pure retraction never
+  trims. Check `onlyIfEmpty` before any refusal about size: a seed on a full
+  subject answers `stored: false`.
 - **`onlyIfEmpty` is yours to honour**: a deterministic seed may create a
   subject's memory and never edit what a run wrote. Check `held` first.
 - **`subject.key` and a notebook's `name` are addresses, not text.** Store
@@ -472,7 +506,11 @@ Read them in the worker's runtime logs by the run id.
   intended: write a namespace of your own (the engine's application or agent
   field, or a metadata key) on every write and require it on every read, list
   and delete, so a chatbot's memories in the same project never reach a
-  prompt, the memory screen or an erasure.
+  prompt, the memory screen or an erasure. Read how the engine files a write
+  tagged with several such fields before you filter on a combination: Mem0's
+  default add sets `user_id` or `agent_id` on each memory, never both, so a
+  filter requiring both finds nothing, while its Direct Import sets every
+  field it is given.
 - **`store` is optional** and has the opposite rule: its three methods may
   throw. An engine that cannot list what it holds leaves it out, and the memory
   screen and the three MCP tools say so instead of showing an empty list; a
@@ -754,6 +792,12 @@ What each field property does, and what it costs to get wrong:
   connection shape is permanent once shipped.
 - **`optional`** and **`default`**: absent means required. `default` is used
   when the source leaves the field unset; a secret has none.
+- **`requiredWhenStored: true`** keeps a field optional on the environment and
+  requires it in values stored from the dashboard: a save without it is
+  refused, naming it. For a value deployments already run without, whose
+  absence breaks a path silently (GitHub's and GitLab's webhook secret: every
+  delivery refused while the card reads Connected). `connectionFieldRequired`
+  is the one rule the resolver, the save and the form read.
 - **`format`**: `text`, `multiline` (a PEM key), `url`, or `integer`, which
   reaches `ctx.connection` as a number. There is no `pem` format: GitHub reads
   both a raw PEM and its base64 form itself (`integrations/github/auth.ts`)
@@ -802,10 +846,6 @@ settings: [
   setting: it is read while nothing is stored, as a comma-separated list, and a
   stored value shadows it. A new setting needs none. A stored list is one value
   per entry: core refuses an entry that is blank or holds a comma.
-- A value a stored connection version still holds under a setting's key (a
-  field that became a setting) is read by nothing; core names it on the card
-  (`movedToSettings`) and logs `integration_stored_value_not_read` from the
-  webhook read, and the next save drops it.
 - Your webhook reads it as `ctx.settings.<key>`, loaded when the request
   arrives. When the settings cannot be read core answers 503 and never calls
   you, so an empty list always means the admin left it empty.
@@ -870,6 +910,15 @@ every other, by one rule for every integration
 and a 403 that carries rate-limit headers). Where your provider documents a
 status differently, a bare 403 that means a quota for instance, read that
 status yourself first and hand the rest to `refusedOrThrow`.
+
+**A value you can see is wrong is refused before it is sent.** A key with a
+space or a line break in it (pasted from a wrapped terminal), or a key of the
+wrong kind that you can recognise (Mem0's self-hosted server issues `m0sk_`
+keys its hosted platform answers with a bare 401), is answered
+`{ ok: false, reason, malformed: true }` for the first and `{ ok: false, reason }`
+for the second, with a sentence that names what to fix and quotes none of the
+value. Nothing reaches the provider, and core files the first as
+`value_malformed` rather than a refused credential.
 
 **A pass names what the values reached.** Return `{ ok: true, message }` with
 the account, workspace or project the key reached, as the provider names it.
@@ -1402,7 +1451,13 @@ test("says the deployment was never given a secret, rather than that the sender 
 A memory adapter is tested the same way: a context whose `http.fetch` answers
 from the provider's recorded bodies, and one case for each rule a run depends
 on (what it renders, what an unreadable answer is, that it answers rather than
-throws, that a seed never edits what a run wrote):
+throws, that a seed never edits what a run wrote). Keep the `init` your
+adapter passed as well as the request, because `retries` and `timeoutMs` never
+reach a `Request`: a test that an add asks for no retries has to read them
+there. For the rules that span calls (a refuted fact is gone from the next
+recall, a notebook written twice comes back as the second), a small in-memory
+double of the engine answering in its documented shapes is worth its hundred
+lines; `integrations/mem0/test-support.ts` has one. The example below:
 
 ```ts file=memory.test.ts
 import assert from "node:assert/strict";
@@ -1515,7 +1570,28 @@ A test of how you read a provider's payload is worth what its bytes are
 worth. Record real ones and keep their provenance beside them, as
 `integrations/github/test-fixtures/*.source.txt` do: the URL, the pinned
 revision, the retrieval date and the SHA-256 of the bytes, with the digest
-pinned in a test so a fixture reshaped to make an assertion pass fails loudly.
+pinned in a test so a fixture reshaped to make an assertion pass fails loudly
+(`integrations/mem0/fixtures.test.ts` checks every fixture against its
+`.source.txt` in a dozen lines).
+
+Most providers do not publish answers as files, and three cases need a line of
+their own in the `.source.txt`, under "How these bytes were made":
+
+- **An example inside a page.** The URL and revision are the page's; say which
+  code block, and how it was copied (as printed, dedented by its fence), so
+  anyone can make the same bytes again. The SHA-256 is of your fixture file.
+- **A body the documentation gives only as a schema.** Compose it from the
+  schema's documented example values, say it is composed and which values are
+  placeholders, and never assert on a placeholder.
+- **A status the provider documents nowhere** (many document no 429 and no
+  5xx): there is no body to record. Answer with the bare status in the test,
+  say beside the helper that it is not the provider's, and assert only on how
+  your code reads the status. Say in your README that the provider documents
+  no such answer.
+
+`ctx7` indexes a repository's default branch at some earlier moment, so a file
+it cites may since have moved or gone. Fetch the file at the revision you pin
+before you copy from it; if it is gone, the page is not a source.
 
 A recorded payload **signed by the same function that verifies it proves
 nothing**: sign and verify agree with each other whatever the header, the
@@ -1644,11 +1720,44 @@ that works:
 pnpm install
 pnpm run gen:integrations
 pnpm --filter @integrations/<id> run typecheck
+pnpm --filter @integrations/<id> run test
+pnpm --filter @integrations/<id> run test:zod4
 pnpm --filter @integrations/registry run test
 pnpm --dir apps/worker exec vitest run src/services/integrations/connection-shape.test.ts
 pnpm run gate:core-references
+pnpm run gate:lint
+pnpm run gate:unused
 pnpm run verify:changed -- --worktree
 ```
+
+- `gate:lint` (oxlint) and `gate:unused` read every package, yours included,
+  and `verify:changed` fails on their first diagnostic
+  (`scripts/ci/gates.test.ts`, "lint and unused-code gates are
+  unconditional"). Lint refuses, among others, a useless `undefined` (write
+  `.catch(() => null)`), unsafe optional chaining and a spread inside a `map`;
+  the unused-code gate refuses an export or an exported type nothing imports,
+  as well as a dependency. Run both early rather than meet them last.
+- **The first provider of a capability changes core's path in core's tests.**
+  With no integration serving a capability, core resolves it without reading
+  the integration rows (`resolveUsableIntegrations` in
+  `apps/worker/src/services/integrations/usable.ts` returns early); with one in
+  the registry, every call site reads them first. Core tests that swapped the
+  database for a fake answering only their own calls then fail at that read.
+  Mem0 met this in `memory-steps.test.ts` and `repo-memory-steps.test.ts` and
+  fixed it the way those files already state their other premises: the
+  resolver answers "nothing connected" in the test's mock. `verify:changed`
+  runs these files; if you are the first provider of a capability, expect it.
+  It changes production too: since Mem0 shipped, every `activeMemory` call on
+  every deployment reads the integration rows before choosing the built-in
+  store, so a database that does not answer for a moment makes that step's
+  memory `unreadable` (memory not used, said on the run) where it used to go
+  straight to the built-in store, which lives in the same database.
+- No em dash and no en dash anywhere in the package: code, comments, strings,
+  the README, fixtures' `.source.txt` and the changelog. The repository writes
+  with commas, colons and parentheses instead.
+- Your own tests have each been seen failing once: break the line a test
+  guards, watch it go red, put the line back. A test that never failed may
+  not be testing what its name says.
 
 - The package's README says what it connects, which values an admin needs and
   where to find them, what connecting unlocks, and which provider pages you
@@ -1680,5 +1789,6 @@ pnpm run verify:changed -- --worktree
 | A credential that is not a token, recorded webhook payloads with provenance | `integrations/github` |
 | The one issue tracker, ticket events, a permanent id | `integrations/jira` |
 | The built-in memory provider | `apps/worker/src/memory/builtin/adapter.ts`, `apps/worker/src/engine/support/memory-runtime.ts` |
+| A memory engine, fixtures composed from documentation pages, an in-memory double of a provider | `integrations/mem0` |
 | A provider with no network, for demos | `integrations/_fixtures/demo` |
 | Why any of this is shaped the way it is | [ADR-010](../adr/ADR-010-integrations.md) |

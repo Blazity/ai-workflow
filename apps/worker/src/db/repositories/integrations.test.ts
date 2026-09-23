@@ -212,7 +212,7 @@ describe("a save that activates after a failed test", () => {
   // and the update kept the previous ones whenever the new value was null, so
   // the card read "passed" beside the words of the failure it replaced.
   it("clears the failure's reason and message rather than keeping them beside a pass", async () => {
-    await save();
+    await save({ takeOverSource: true });
     await recordIntegrationTest(db, {
       integrationId: "fixture",
       status: "failed",
@@ -231,6 +231,43 @@ describe("a save that activates after a failed test", () => {
       message: null,
       fingerprint: "fp-1",
     });
+  });
+});
+
+describe("a save beside a working environment", () => {
+  // The environment connects the integration, so the save stores and tests
+  // the values without putting them in use. The connection's last test is the
+  // verdict on the values in use, the environment's: overwriting it made the
+  // card say "tested, before these values changed" about variables nobody
+  // changed.
+  it("keeps the environment's verdict and records the save's on its version", async () => {
+    await recordIntegrationTest(db, {
+      integrationId: "fixture",
+      status: "passed",
+      reason: null,
+      message: "Signed in as ops",
+      fingerprint: "fp-env",
+      actorId: "u",
+    });
+
+    await save({ takeOverSource: false, test: { ...PASSED, fingerprint: "fp-stored" } });
+
+    const stored = (await readIntegrationConnections(db)).get("fixture");
+    expect(stored?.source).toBe("environment");
+    expect(stored?.activeVersion).toBe(1);
+    expect(stored?.lastTest).toMatchObject({ status: "passed", fingerprint: "fp-env", message: "Signed in as ops" });
+    expect(stored?.active?.testStatus).toBe("passed");
+  });
+
+  it("records nothing as the connection's verdict on the first save of a fresh row", async () => {
+    await save({ takeOverSource: false });
+    expect((await readIntegrationConnections(db)).get("fixture")?.lastTest).toBeNull();
+  });
+
+  it("writes the verdict once the saved version is the one in use", async () => {
+    await save({ takeOverSource: true });
+    await save({ expectedVersion: 1, takeOverSource: false, test: { ...PASSED, fingerprint: "fp-3" } });
+    expect((await readIntegrationConnections(db)).get("fixture")?.lastTest?.fingerprint).toBe("fp-3");
   });
 });
 

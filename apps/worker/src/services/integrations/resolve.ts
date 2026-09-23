@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import type { ConnectionField, IntegrationManifest } from "@integrations/sdk";
+import {
+  type ConnectionField,
+  type IntegrationManifest,
+  VCS_LEGACY_BOT_LOGIN_FIELD,
+  connectionFieldRequired,
+} from "@integrations/sdk";
 import type {
   IntegrationConnectionPin,
   IntegrationConnectionStatus,
@@ -319,7 +324,7 @@ function resolveEnvironment(
     }
     // A default covers a field the source leaves unset, so it is never missing;
     // an optional field without one is simply absent.
-    if (field.optional === true || field.default !== undefined) continue;
+    if (!connectionFieldRequired(field, "environment")) continue;
     missingVariables.push(field.env);
   }
   return {
@@ -348,7 +353,7 @@ function resolveStored(
     for (const field of fields) {
       const value = field.secret ? active.secrets[field.key] : active.config[field.key];
       if (isSet(value)) continue;
-      if (field.optional === true || field.default !== undefined) continue;
+      if (!connectionFieldRequired(field, "stored")) continue;
       missingFields.push(field.key);
     }
   }
@@ -466,7 +471,11 @@ function environmentReadiness(presence: IntegrationEnvironmentPresence): Readine
   // Some variables set and some not is a typo, not a decision to use the
   // dashboard instead. Falling back to stored values here would make the two
   // indistinguishable, so it says which variables are missing and stops.
-  if (presence.setVariables.length > 0) {
+  //
+  // Except a variable every version control provider declares: `VCS_BOT_LOGIN`
+  // (the SDK's legacy bot login field) is read by GitHub and by GitLab, so a
+  // deployment on GitHub alone sets it without half-configuring GitLab.
+  if (presence.setVariables.some((variable) => variable !== VCS_LEGACY_BOT_LOGIN_FIELD.env)) {
     return {
       connection: "failing",
       failure: {

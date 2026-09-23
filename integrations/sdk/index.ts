@@ -70,6 +70,7 @@ export {
 } from "./pull-request-unreadable";
 
 export {
+  connectionFieldRequired,
   connectionValueProblem,
   defineIntegration,
   defineIntegrationBlock,
@@ -303,7 +304,7 @@ export type {
   MemorySubject,
   MemoryWrite,
 } from "./memory";
-export { MEMORY_NOTEBOOK_MAX_BYTES, MEMORY_PROMPT_BUDGET_BYTES } from "./memory";
+export { MEMORY_ITEMS_MAX, MEMORY_NOTEBOOK_MAX_BYTES, MEMORY_PROMPT_BUDGET_BYTES } from "./memory";
 
 export type {
   MessageRetrievalFailure,

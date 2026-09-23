@@ -735,9 +735,10 @@ test("disconnecting names affected repositories and what is erased", async (t) =
         }),
       };
     }
-    return { status: 200, body: { integration: integration() } };
+    return { status: 200, body: { integration: integration({ capabilities: ["vcs"] }) } };
   }, false);
-  const root = render(t);
+  // Repositories are named for version control only.
+  const root = render(t, { integration: integration({ capabilities: ["vcs"] }) });
   await press(button(root, "Disconnect"));
 
   assert.equal(sent.length, 1, "only the impact preview runs before confirmation");

@@ -179,7 +179,11 @@ export interface ErasedIntegrationRuntime {
 /** A call whose arguments core builds from the manifest rather than the type. */
 export type ErasedIntegrationCall<R> = (...args: never[]) => Promise<R>;
 
-/** Core creates adapters through these, with a fresh context whenever the connection changes. */
+/**
+ * Core creates adapters through these, with a fresh context whenever the
+ * connection changes. `memory` is called more often than that: once per step,
+ * and the adapter is dropped when the step ends, so its state lasts one step.
+ */
 export interface IntegrationCapabilityFactories<M extends IntegrationManifest> {
   issue_tracker: (ctx: IntegrationContext<M>) => IssueTrackerAdapter;
   /** The port, plus whichever of the optional surfaces in `vcs-extensions.ts`

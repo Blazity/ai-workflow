@@ -63,7 +63,7 @@ vi.mock("@integrations/registry/worker", () => ({
 }));
 
 const { saveIntegrationConnection } = await import("./authoring.js");
-const { IntegrationSecretsUnreadableError, integrationSecretValues, knownSecretValues } =
+const { IntegrationSettingsUnreadableError, integrationSecretValues, knownSecretValues } =
   await import("./secret-values.js");
 
 /** Shaped like nothing a pattern would catch: only redaction by value finds it. */
@@ -133,7 +133,7 @@ describe("the secrets this deployment knows", () => {
     await store("tracker", "apiToken", STORED_TRACKER_TOKEN);
     databaseDown = true;
 
-    await expect(knownSecretValues()).rejects.toBeInstanceOf(IntegrationSecretsUnreadableError);
+    await expect(knownSecretValues()).rejects.toBeInstanceOf(IntegrationSettingsUnreadableError);
   });
 
   // Red when: the snapshot scan's narrower ask returns every integration's
@@ -193,7 +193,7 @@ describe("the secrets this deployment knows", () => {
 
     const refusal = await knownSecretValues().catch((error: unknown) => error);
 
-    expect(refusal).toBeInstanceOf(IntegrationSecretsUnreadableError);
+    expect(refusal).toBeInstanceOf(IntegrationSettingsUnreadableError);
     expect((refusal as Error).message).not.toContain("unreachable");
     expect(((refusal as Error).cause as Error).message).toBe("database unreachable");
   });
