@@ -45,7 +45,8 @@ import {
   type RepositoryProfileDraft,
   type RepositoryProfileField,
 } from "@/lib/repository-catalog/profile";
-import { DISCARD_UNSAVED_PROMPT, trackUnsavedSettings } from "@/lib/settings/unsaved";
+import { DISCARD_UNSAVED_PROMPT } from "@/lib/settings/unsaved";
+import { useUnsavedWork } from "@/lib/settings/use-unsaved-work";
 import { RepositoryScriptGroupsEditor } from "@/components/cockpit/screens/repositories/script-groups";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
 import { Button, Input, Select } from "@/components/ui";
@@ -248,26 +249,11 @@ export function RepositoryEntryScreen({
     ? repositoryRulesVariablesError(draft.rules)
     : null;
 
-  // The shell asks this set before it navigates, and the logout button asks it
-  // before it ends the session. Registering per repository means two entries
-  // open in two tabs cannot clear each other's flag.
-  useEffect(
-    () => trackUnsavedSettings(`repository:${repository.id}`, dirty),
-    [repository.id, dirty],
-  );
-
-  // A closed tab loses whatever is not saved. Back and forward are not covered
-  // by this event; the shell's own guard covers a router.push.
-  useEffect(() => {
-    if (!dirty || typeof window === "undefined") return;
-    const w = window;
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = true;
-    };
-    w.addEventListener("beforeunload", onBeforeUnload);
-    return () => w.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
+  // The shell asks the dirty registry before it navigates, the logout button
+  // before it ends the session, and the browser before a closed tab. Keyed per
+  // repository so two entries open in two tabs cannot clear each other's flag.
+  // Back and forward are not covered by any of them.
+  useUnsavedWork(`repository:${repository.id}`, dirty);
 
   const blocker =
     scriptsBlocker ??

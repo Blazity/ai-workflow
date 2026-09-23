@@ -327,7 +327,7 @@ const workflowGraphSchema = z
 export const MCP_TOOL_CATALOG = {
   "system.capabilities": {
     description:
-      "Describe this authenticated MCP deployment: protocol versions, server version, contract hash, enabled domains, read scopes, whether authoring announcements reach anybody, and `integrations` - every integration this build ships with its status and the blocks it makes available, or null when that state could not be read. Integrations are read-only here; connecting, testing, enabling and configuring one is a dashboard action.",
+      "Describe this authenticated MCP deployment: protocol versions, server version, contract hash, enabled domains, read scopes, whether authoring announcements reach anybody, `integrations` - every integration this build ships with its status and the blocks it makes available, or null when that state could not be read - and `capabilities` - for each capability core asks a provider for, who serves it on this deployment (`integrations` with their ids, the `builtin` provider, `none`, `ambiguous` when several are switched on and none is chosen, `refused` when the chosen one is not working, or `unknown`), or null when that could not be read. Integrations are read-only here; connecting, testing, enabling and configuring one is a dashboard action.",
     // `.default({})` rather than a bare strict object: CallToolRequest makes
     // `arguments` optional, so a call that sends only a name is legal, and a bare
     // z.object() answers `undefined` with invalid_type. That refusal cost the

@@ -11,10 +11,12 @@
  * arguments beyond the context, and nothing a page does can reach the write
  * surface of a connection.
  */
-import type { JsonValue } from "@shared/contracts";
+import { INTEGRATION_PROVIDER_WAIT_MS, type JsonValue } from "@shared/contracts";
 
-/** Bounded well under the invocation ceiling; a page is a person waiting. */
-const PAGE_READ_TIMEOUT_MS = 20_000;
+/** Bounded well under the invocation ceiling; a page is a person waiting. The
+ *  dashboard waits this long plus its own margin, so the one number lives in
+ *  the contract both sides read. */
+const PAGE_READ_TIMEOUT_MS = INTEGRATION_PROVIDER_WAIT_MS;
 
 export type IntegrationPageDataResult =
   | { readonly status: "ok"; readonly value: JsonValue }
@@ -46,9 +48,14 @@ export async function readIntegrationPageData(
     return { status: "none" };
   }
 
+  // The provider's budget starts once the connection is resolved, not before:
+  // a cold database read spent from it cut an 18 second provider off at 20
+  // and reported the wait as the provider's. The resolution is bounded by the
+  // dashboard's margin above this budget (`PROVIDER_CALL_CEILING_MS`).
+  const lifetime = new AbortController();
   const { usableIntegrations } = await import("./usable.js");
   const [usable] = await usableIntegrations({
-    lifetime: AbortSignal.timeout(PAGE_READ_TIMEOUT_MS),
+    lifetime: lifetime.signal,
     filter: (candidate) => candidate.id === integrationId,
   });
   if (!usable) {
@@ -67,6 +74,10 @@ export async function readIntegrationPageData(
   // person reads on a screen. The boundary wraps every reader the registry's
   // runtime has, so the one found above is here.
   const read = usable.runtime.api?.[pageId] as (context: typeof usable.ctx) => Promise<JsonValue>;
+  const budget = setTimeout(
+    () => lifetime.abort(new DOMException("The page read ran out of time", "TimeoutError")),
+    PAGE_READ_TIMEOUT_MS,
+  );
   try {
     const value = await read(usable.ctx);
     return { status: "ok", value };
@@ -76,7 +87,19 @@ export async function readIntegrationPageData(
       { integration: integrationId, page: pageId },
       "integration_page_data_failed",
     );
+    // Our own budget running out reads as the provider not answering, in a
+    // sentence, never as the runtime's "The operation was aborted due to
+    // timeout".
+    if (lifetime.signal.aborted) {
+      return {
+        status: "unavailable",
+        cause: "provider",
+        reason: `${manifest.name} did not answer within ${PAGE_READ_TIMEOUT_MS / 1000} seconds.`,
+      };
+    }
     const message = error instanceof Error ? error.message : String(error);
     return { status: "unavailable", cause: "provider", reason: message.slice(0, 300) };
+  } finally {
+    clearTimeout(budget);
   }
 }

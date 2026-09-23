@@ -1,5 +1,13 @@
-export function messageFromErrorPayload(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "Request failed";
+/**
+ * The sentence a worker error body carries, or null when it carries none.
+ *
+ * The worker answers a refusal with a JSON body (`{ statusMessage, message }`
+ * from h3, `{ error }` from a route that shapes its own), and that body is the
+ * only place the full sentence survives: the HTTP reason phrase is sanitised
+ * to visible ASCII by h3 and does not exist at all over HTTP/2.
+ */
+export function errorPayloadMessage(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
 
   const body = payload as {
     error?: unknown;
@@ -10,9 +18,12 @@ export function messageFromErrorPayload(payload: unknown): string {
   return (
     stringValue(body.error) ??
     stringValue(body.message) ??
-    stringValue(body.statusMessage) ??
-    "Request failed"
+    stringValue(body.statusMessage)
   );
+}
+
+export function messageFromErrorPayload(payload: unknown): string {
+  return errorPayloadMessage(payload) ?? "Request failed";
 }
 
 export async function readErrorMessage(res: Response): Promise<string> {

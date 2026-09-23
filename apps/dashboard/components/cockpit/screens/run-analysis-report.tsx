@@ -6,11 +6,14 @@ import type {
   RunAnalysisPhaseUsage,
   RunAnalysisReport,
   RunAnalysisUsageSnapshot,
+  RunPullRequest,
   RunStatus,
 } from "@shared/contracts";
+import { changeRequestNaming } from "@integrations/registry";
 import { Button, CkCard, CkChip } from "@/components/ui";
 import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import { runHref } from "@/lib/run-href";
+import { providerLabel } from "@/lib/workflow-editor/repository-scope";
 
 function stageLabel(stage: RunAnalysisReport["stage"]): string {
   if (stage === "published") return "PR/MR published";
@@ -164,10 +167,24 @@ export function RunAnalysisReportCard({ report, runStatus: _runStatus, currentRu
           <div className="min-w-0 overflow-hidden"><PromptPreview body={report.planMarkdown || "No implementation plan was retained."} /></div>
         </Disclosure>
         <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Usage</h3><UsageTable report={report} /></div>
-        {report.publication && <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Published</h3><div className="flex flex-col gap-2"><div className="flex flex-wrap gap-2">{report.publication.prs.map((pr) => <a key={`${pr.provider}:${pr.repoPath}:${pr.id}`} href={pr.url} target="_blank" rel="noreferrer" className="max-w-full break-all text-mariner underline-offset-2 hover:underline">{pr.provider}:{pr.repoPath} #{pr.id} ↗</a>)}</div><p className="m-0 whitespace-pre-wrap break-words text-neutral-800">{report.publication.changeSummary}</p></div></div>}
+        {report.publication && <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Published</h3><div className="flex flex-col gap-2"><div className="flex flex-wrap gap-2">{report.publication.prs.map((pr) => <PublishedLink key={`${pr.provider}:${pr.repoPath}:${pr.id}`} pr={pr} />)}</div><p className="m-0 whitespace-pre-wrap break-words text-neutral-800">{report.publication.changeSummary}</p></div></div>}
         <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Jira delivery</h3><div className="grid gap-1 font-mono text-[11px] text-neutral-700 md:grid-cols-2"><DeliveryStatus label="Research" delivery={report.jira.research} /><DeliveryStatus label="PR/MR" delivery={report.jira.pullRequest} /></div>{(report.jira.research.state === "failed" || report.jira.pullRequest.state === "failed") && <p className="m-0 mt-2 text-[12px] text-fail-fg">Automatic retries exhausted; code delivery was not blocked.</p>}</div>
       </div>
     </CkCard>
+  );
+}
+
+/**
+ * One published change request, named the way its provider names it: a GitLab
+ * team reads `GitLab group/app MR !12`, because `#12` is issue 12 there.
+ */
+function PublishedLink({ pr }: { pr: RunPullRequest }) {
+  const naming = changeRequestNaming(pr);
+  const where = pr.provider ? `${providerLabel(pr.provider)} ${pr.repoPath}` : pr.repoPath;
+  return (
+    <a href={pr.url} target="_blank" rel="noreferrer" className="max-w-full break-all text-mariner underline-offset-2 hover:underline">
+      {`${where} ${naming.noun} ${naming.reference}`.trim()} ↗
+    </a>
   );
 }
 

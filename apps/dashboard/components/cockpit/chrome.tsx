@@ -5,6 +5,7 @@ import { BlazityLogo, NavItem } from "@/components/ui";
 import {
   CORE_NAV_GROUPS,
   INTEGRATIONS_GROUP_LABEL,
+  browserHandlesClick,
   integrationNavEntries,
   type CockpitIntegration,
   type NavEntry,
@@ -25,11 +26,6 @@ import {
  * screen the day somebody connected a fifth provider would be our fault, not
  * theirs.
  */
-
-/** A modified click is the browser's: cmd-click on a nav entry opens a tab. */
-function browserHandlesClick(event: React.MouseEvent): boolean {
-  return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
-}
 
 function SidebarEntry({
   entry,

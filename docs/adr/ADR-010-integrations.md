@@ -919,6 +919,35 @@ for reads that completed. The screen lists five names before "and N more" and
 labels an action with unknown impact explicitly. A save whose candidate does
 not move the fingerprint continues without another confirmation.
 
+The review fix round extended the same preview to the other two changes
+decision 9 names, over the same transport: `{ preview: "source", source }`
+and `{ preview: "disable" }`. `previewedChange` builds the state each change
+leaves (the kill switch is the stored row with `enabled: false`) and checks
+the pin a run holds against it the way the run checks it at its next use
+(`checkIntegrationPin`), which yields one answer, `stops`, in three values:
+`none`; `reconfigured`, the integration stays usable with values a pin no
+longer matches; `unusable`, turned off or disconnected with nothing to fall
+back to. A connection not usable now stops nothing, because no run holds a
+pin for it. The two stop runs by different mechanisms, so `runsThatMayStop`
+counts them differently. An `unusable` integration fails or degrades every run
+whose graph reaches it (`integrationsUsedBy`, the reached set), pin or no pin:
+a ticket run asks for the tracker and none is there. A `reconfigured` one stops
+only a run whose next use compares its pin: its own blocks in the graph,
+`send_message` for a messaging provider (a notification alone is withheld and
+the run goes on), or a repository its definition's scope allows on a version
+control provider; the run needs a recorded pin for it at the fingerprint in
+force now. The issue tracker, tracing and memory compare no pin today, so a
+Jira edit counts zero while the workflow list still names every ticket
+workflow as using Jira. The confirmation says a run "may stop" at its next use
+of the integration, because whether it gets there is the run's. The screen
+changes without asking when `stops` is `none` or no run in flight may stop,
+for a save and a switch of source; disconnect and the kill switch always ask.
+Closing the dialog while the read is out cancels the change for good. When the
+integration serves a capability the reach calculation cannot see a workflow
+use at all (`unmeasuredCapabilities`, derived from `integrationsUsedBy` over
+every block type), the preview reports the list and the runs as unknown rather
+than none.
+
 The active provider selection for a single-provider capability was assigned
 here to S4 and moved to S6 during it: choosing between two providers is a
 control on the Integrations page, and a stored selection with nothing to write
@@ -1499,12 +1528,10 @@ it renders from one read and nothing on it can be clicked into a refusal.
   only when something was typed. Emptying one is `clearSecrets`, an action, not
   a blank input. After a save the secret inputs are cleared, because characters
   left on screen would suggest the field holds the stored value.
-- **It never invents a number.** Disable and disconnect name their consequences
-  and count nothing: how many published workflows and runs in flight depend on
-  an integration is not in this API (see "What S2 does not decide"), and a count
-  guessed in the browser is worse than a sentence. Delivering the count needs a
-  worker endpoint S6 was scoped out of; it is the one part of decision 9's
-  "impact before change" that is still open.
+- **It never invents a number.** A count guessed in the browser is worse than
+  a sentence, so every number a confirmation shows is the worker's impact
+  preview (below, "Impact preview"), and one it could not read is labelled
+  unknown on the button itself.
 - **It never enforces a permission.** A member is shown no control because
   offering one that 403s is rude, not because the hiding is the rule. The worker
   refuses, and `canManageIntegrations(session.role)` on a server-verified role is
@@ -1615,11 +1642,33 @@ to no fields. The last one is a gap rather than a fix: an integration block's
 parameters are declared by its own schema and this build has no form for them.
 The stage that ships the first real integration block owns that form.
 
+### Who serves each capability
+
+Added in the review fix round after S13. The page opens with a Capabilities
+section: every capability a provider can serve today, one row each, saying
+who answers it on this deployment. It reads `GET
+/api/v1/integrations/capabilities` (`services/capabilities/overview.ts`).
+Memory is `activeMemory`'s own answer, carried as it came: the call a run
+makes, whose refusal names the providers it weighed, so a switched-on memory
+integration that is failing is named next to the working one (both are
+chosen, so neither serves) and a single failing one reads as refused rather
+than as unknown. That is also how the built-in memory provider appears here
+with no connection fields (decision 10) without a second statement of
+decision 21's rule. Every other capability is read off the engine's
+`deploymentIntegrations`, and the overview states one rule itself: two usable
+providers of a `one` capability serve neither, and read as a choice nobody
+made, never as the first. The issue tracker, messaging and the palette each
+state that rule too; until one helper holds it, a change to it is made in all
+four. It is its own endpoint because the list is read on every cockpit page
+for the sidebar and this answer is only wanted here, and MCP's
+`system.capabilities` carries the same rows for an agent, with a failure
+sentence replaced by the agent-facing one. Choosing the active provider is
+still a write this build does not have.
+
 ### What is open
 
 | Question | Owner |
 |---|---|
-| The numeric impact preview before a disable, a disconnect or a reconfiguration | a worker read that counts published workflows and runs in flight |
 | A settings form built from an integration's parameter schema | the first stage that ships a real integration block |
 | Choosing the active provider of a capability two integrations serve | S13, which is the first stage with two |
 | A throw raised while building a request out of unconfigured values is reported as `provider_unreachable`, so a non-answer is recorded as a failed verification | S2, which owns the classifier; the dashboard only stops sending |
@@ -2860,6 +2909,7 @@ names the stage, what was added, and why the context or a port needed it.
 
 | Date | Stage | Change | Reason |
 |---|---|---|---|
+| 2026-09-23 | review fixes | `IntegrationRepositoryShape.changeRequest` with the type `IntegrationChangeRequestShape` (`noun`, `referencePrefix`, an optional `linkSegment`), read by one function, `changeRequestNaming` in `@integrations/registry`; `RunPullRequest.reference`, which core stamps on every pull request it hands a messaging integration, and `pullRequestRef`, now that stamp or `#id`; a `label` on each entry of `INTEGRATION_CAPABILITIES`; `capabilities` in `RESERVED_INTEGRATION_IDS` | On GitLab `#12` names issue 12, and core wrote `#` for every provider: the dashboard sniffed `/-/merge_requests/` out of a link to say `MR`, and Slack said `#12` under a comment that promised `!12`. How a provider names a change request is now its manifest's, and one function reads it, so the run view and a chat message name one merge request the same way. An integration cannot import the registry, so core stamps the reference where the event leaves it (`engine/support/change-request-references.ts`), and `pullRequestRef` falls back to `#id` only for a pull request nothing stamped. `linkSegment` names a row recorded with a link and no provider this build ships (a gate run, a run from before the provider was stored, a provider since removed); it is optional because a provider with no path of its own should not have to invent one. The capability `label` gives the capability overview and the dashboard one name per capability instead of two tables. The reserved id keeps an integration from shadowing `/api/v1/integrations/capabilities`. Additive: every field is optional or core's to fill, and a manifest without `changeRequest` reads `PR` and `#` as before. |
 | 2026-09-23 | review fixes | `ConnectionValueError`, `connectionValueProblem` and `ConnectionValueProblem`; `malformed` on a connection test's refusal and on `ProviderFailure`; the failure reason `value_malformed` in `@shared/contracts` | A value that cannot form a request (a token with a line break inside it, a site address without `https://`, an App id that is not a number, a PEM block missing a line) was filed as the provider being unreachable, because Node refuses it with an error that carries no status, so a card stayed Connected while every request failed, and the error quoted the value. It is a verdict about the value. What a field's `format` allows is the SDK's rule (`connectionValueProblem`, the one conformance already applies to a manifest's defaults), and it REFUSES ONLY WHAT COULD NEVER HAVE WORKED, because main deploys itself and a value running today that a new rule refuses turns that integration Failing on the deploy: a `url` has to be an http or https address (a line break inside one is dropped by the URL parser, as `fetch` drops it); an `integer` is whatever `Number()` reads as a whole number that is not negative, which is what `z.coerce.number()` accepted before ("+123", "123.0", "0x7b"); a one-line secret holds no line break, since it goes into a header or is a signing key a provider shows on one line; and nothing else is checked, since a setting that is never sent (Slack's allowlist, read as comma separated) may hold a line break and work. The characterization tests in `services/integrations/main-values.test.ts` feed the forms main's parsers accepted, each citing the main line. Core applies it wherever values are read (the resolved status, so a card reads Failing before anyone presses Test, and the values a run and a test receive); `ctx.http` refuses a header value no request can carry before sending, with a `ConnectionValueError` that names the field and never the value; and `refusedOrThrow` answers any of these, a URL the platform could not parse and key data WebCrypto rejected included, as `{ ok: false, reason, malformed: true }`, which core files as `value_malformed`. Additive: an optional field on the refusal and a reason only core assigns. |
 | 2026-09-23 | review fixes | `NESTED_ADAPTER_MEMBERS` and `NestedAdapterRole` | Core redacts what integration code throws at one boundary (`redactingRuntime` in `services/integrations/usable.ts`), and that boundary missed an adapter reached through a port member: `vcs.skillSource()` returns a skill source running on GitHub's own Octokit. The members that return or hold another adapter are now named per port (`vcs.skillSource` returns one, `memory.store` holds one), typed against the ports so a misspelt member does not compile, and the boundary follows exactly those, the async results included; any other value a port hands over is data and passes untouched. A port that grows such a member lists it in the same change. The boundary covers every capability adapter, `beginRun`, each page reader and `webhook.receive` and `deliver`; the rest redacts where it is called: the connection test in `services/integrations/authoring.ts`, health probes in `services/system/integration-health.ts`, blocks in `engine/steps/integration-block-step.ts`, and the webhook route until it calls `usable.runtime.webhook` rather than the registry's. Additive. |
 | 2026-09-22 | S12 | `IssueTrackerQueryRule`, carried by a tracker's runtime as `issueTrackerQueryRule`, required exactly when the manifest declares `issue_tracker`; conformance codes `issue_tracker_query_rule_missing` and `issue_tracker_query_rule_undeclared` | The investigate block's query template is written in the tracker's own language, and core kept a copy of JQL's quoting to check it at save time. The copy knew only double quotes, so it refused valid JQL (`summary ~ 'fix)'`) and saved templates Jira's adapter then dropped at run time, when the block searched without them and nobody was told. The rule is the tracker's: a pure function of the text, reached without a connection (the shape `VcsHandleIdentity` set), which the adapter applies before it sends a query and core asks only when exactly one usable tracker is connected: on save and deploy it refuses a template the deployed version does not already run (one it runs comes back as a validation notice, and rollback, restore and enable do not ask, so the rule never takes away what a stored definition runs today), and the investigate block asks it again before it searches and says in its theory when it left a template out. Not additive for a tracker, whose runtime must now carry it: Jira and the SDK fixture do in the same change, and no manifest field changes. |

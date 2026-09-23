@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { canEditSettings } from "@shared/contracts";
 import { getJSON, withQuery } from "@/lib/api/server";
+import { isWorkerStatus } from "@/lib/api/worker-errors";
 import { UnauthorizedError } from "@/lib/auth/errors";
 import { requireSession, type DashboardSession } from "@/lib/auth/session";
 import { MemoryScreen } from "@/components/cockpit/screens/memory";
@@ -11,12 +12,6 @@ import type {
   MemoryDocumentsResponse,
   SettingsReadResponse,
 } from "@shared/contracts";
-
-/** getJSON puts the status into the error message (lib/api/server.ts), which is
- *  the only way to tell a missing document from a broken worker. */
-function isNotFound(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("→ 404");
-}
 
 /**
  * The two statuses the worker answers when this deployment's memory provider
@@ -27,19 +22,14 @@ function isNotFound(error: unknown): boolean {
  * NEITHER may land as an empty list. A person who reads "nothing remembered
  * yet" for a store nobody could read concludes their agent has forgotten
  * everything, which is the one wrong answer this screen can give.
+ *
+ * The sentence is the worker's, read from the body it answered with: the
+ * reason phrase is sanitised to visible ASCII on the way out and is absent
+ * over HTTP/2, so it is only the last resort.
  */
-function providerUnavailable(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message.includes("→ 503") || error.message.includes("→ 501"))
-  );
-}
-
-/** The worker puts its reason in the status message, after the arrow. */
-function reasonOf(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const [, reason] = message.split(/→ \d+ /);
-  return reason?.trim() ? reason.trim() : "This deployment's memory could not be read.";
+function providerUnavailableReason(error: unknown): string | null {
+  if (!isWorkerStatus(error, 503, 501)) return null;
+  return error.reason ?? "This deployment's memory could not be read.";
 }
 
 /** Mirrors canDeleteAgentMemory on the worker, which is what actually enforces
@@ -62,8 +52,9 @@ export async function MemoryData({
       requireSession(),
       getJSON<MemoryDocumentsResponse>("/api/v1/memory").catch(
         (error): MemoryDocumentsResponse | { unavailable: string } => {
-          if (!providerUnavailable(error)) throw error;
-          return { unavailable: reasonOf(error) };
+          const unavailable = providerUnavailableReason(error);
+          if (unavailable === null) throw error;
+          return { unavailable };
         },
       ),
       selection
@@ -79,13 +70,12 @@ export async function MemoryData({
               // is gone when nobody deleted anything is the exact answer the
               // worker's 503 exists to prevent. The listing can succeed while
               // one read fails, so this is not covered by the listing above.
-              if (providerUnavailable(error)) {
-                return { unavailable: reasonOf(error) };
-              }
+              const unavailable = providerUnavailableReason(error);
+              if (unavailable !== null) return { unavailable };
               // Only a stale link (the document was replaced or dropped) renders
               // the empty preview; a worker failure or timeout must still
               // surface.
-              if (!isNotFound(error)) throw error;
+              if (!isWorkerStatus(error, 404)) throw error;
               return null;
             },
           )

@@ -15,9 +15,11 @@ import type {
   IntegrationWriteAccess,
 } from "@shared/contracts";
 
+import { useCockpit } from "@/components/cockpit/context";
 import { Button, CkChip, Field, Input, Switch, Textarea, Modal } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
-import { trackUnsavedSettings } from "@/lib/settings/unsaved";
+import { browserHandlesClick } from "@/lib/cockpit/navigation";
+import { useUnsavedWork } from "@/lib/settings/use-unsaved-work";
 import {
   publishIntegrationChange,
   useIntegrationChangeRefresh,
@@ -37,6 +39,7 @@ import {
   sourceSwitchRefusal,
   statusChip,
   statusDetailLines,
+  storesValues,
   testOutcomeLines,
   testRefusal,
   unlocksLines,
@@ -45,6 +48,8 @@ import {
   CHANGED_ELSEWHERE_LINE,
   CONFLICT_REREAD_FAILED_LINE,
   MEMBER_READ_ONLY_LINE,
+  READING_IMPACT_LINE,
+  type IntegrationImpactAction,
   type IntegrationTone,
 } from "@/lib/integrations/presentation";
 
@@ -102,17 +107,29 @@ function isConflict(
   return "error" in body && body.error === "integration_version_conflict";
 }
 
+const INTEGRATIONS_HREF = "/integrations";
+
 /**
  * The way back, in the shape the run trace already uses for the same job
  * (`screens/trace.tsx`): an arrow, the name of the list, and no chrome. A link
  * rather than that screen's button, because this one changes the URL and so has
  * to survive a middle click and a bookmark.
+ *
+ * A plain click goes through the cockpit's `navigate`, the way a sidebar entry
+ * does: the anchor alone is a full document navigation, which walked past the
+ * guard that asks before a half-typed token is thrown away.
  */
 function BackToIntegrations() {
+  const { navigate } = useCockpit();
   return (
     <Button
       variant="text"
-      href="/integrations"
+      href={INTEGRATIONS_HREF}
+      onClick={(event) => {
+        if (browserHandlesClick(event)) return;
+        event.preventDefault();
+        navigate(INTEGRATIONS_HREF);
+      }}
       className="self-start border-0 bg-transparent p-0 font-mono text-[11px] uppercase tracking-[0.04em] text-mariner no-underline hover:underline"
     >
       ← Integrations
@@ -181,8 +198,8 @@ function ConfirmDialog({
           </p>
         ))}
         <div className="mt-2 flex gap-2">
-          {/* Both confirmations take something away: one stops every run that
-              needs the integration, the other erases stored credentials. */}
+          {/* Every confirmation here takes something away: runs in flight,
+              stored credentials, or the integration itself. */}
           <Button variant="danger" loading={busy} onClick={onConfirm}>
             {confirmLabel}
           </Button>
@@ -214,16 +231,19 @@ export function ConnectionScreen({
   >(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
-  const [confirming, setConfirming] = useState<
-    null | "disable" | "disconnect" | "save"
-  >(null);
+  const [confirming, setConfirming] = useState<IntegrationImpactAction | null>(null);
   const [impact, setImpact] = useState<IntegrationImpactPreviewResponse | null>(null);
   const [pendingSave, setPendingSave] = useState<IntegrationConnectionSaveRequest | null>(null);
+  const [pendingSource, setPendingSource] = useState<IntegrationSource | null>(null);
   // Set when this page stopped following the server because somebody was
   // typing. State rather than a ref: it is on screen.
   const [dirty, setDirty] = useState(false);
   const [changedElsewhere, setChangedElsewhere] = useState(false);
   const inFlight = useRef(false);
+  // Which impact read is the live one. Closing the dialog moves it on, so a
+  // read that lands after the admin cancelled finds itself stale and neither
+  // shows its answer nor makes the change it was asked about.
+  const previewToken = useRef(0);
   // Which inputs this admin has been in. Only used when a conflict has to
   // decide whose value an input holds, so it is a ref: touching a field is not
   // a reason to re-render.
@@ -241,15 +261,10 @@ export function ConnectionScreen({
     enabled: !dirty,
     onSuppressed: () => setChangedElsewhere(true),
   });
-  // The cockpit's own guard: leaving this screen with a half-typed token, by a
-  // sidebar entry, a tab of this area or a spotlight jump, asks first. The form
-  // did not register when this screen stood alone, because nothing but a
-  // sidebar entry could take somebody off it; S7 put a tab strip directly above
-  // it, which is one click away from the field.
-  useEffect(
-    () => trackUnsavedSettings(`integration:${integration.id}`, dirty),
-    [integration.id, dirty],
-  );
+  // Leaving with a half-typed token asks first: by a sidebar entry, a tab of
+  // this area, a spotlight jump or the link back (the cockpit's guard), and by
+  // a reload or a closed tab (the browser's).
+  useUnsavedWork(`integration:${integration.id}`, dirty);
 
   function typeInto(key: string, value: string) {
     touched.current.add(key);
@@ -266,7 +281,7 @@ export function ConnectionScreen({
   const state = integration.state;
   const chip = statusChip(state);
   const writable = canManage && writes.allowed;
-  const stored = state.stored.latestVersion > 0;
+  const stored = storesValues(integration);
 
   function applied(next: IntegrationDto) {
     setIntegration(next);
@@ -396,26 +411,41 @@ export function ConnectionScreen({
     );
   }
 
+  /**
+   * Read what a change would stop before making it (decision 9), with the
+   * confirmation open and saying so while the read is out.
+   *
+   * `unlessRunsStop` is the change itself, for the two kinds a run follows
+   * when nothing it holds breaks: a save and a switch of source. When the
+   * worker says no run in flight may stop, that change goes ahead without a
+   * question nobody needs to answer. Disconnect and the kill switch always
+   * ask, because each takes something away whatever runs do.
+   *
+   * Cancelling while the read is out is final: the admin said no before the
+   * answer came, and "nothing stops" is not a yes. A switch of source that
+   * stops no run can still hand every later run a different token.
+   */
   async function previewChange(
     preview: IntegrationImpactPreviewRequest,
-    action: "save" | "disconnect",
-    saveRequest?: IntegrationConnectionSaveRequest,
+    action: IntegrationImpactAction,
+    unlessRunsStop?: () => void,
   ) {
     if (inFlight.current) return;
     inFlight.current = true;
+    const token = ++previewToken.current;
     setBusy("impact");
     setImpact(null);
     setConfirming(action);
-    let saveWithoutConfirmation: IntegrationConnectionSaveRequest | null = null;
+    let proceed: (() => void) | null = null;
     try {
       const result = await apiClient.integrations.previewImpact(integration.id, preview);
+      if (token !== previewToken.current) return;
       if (result.ok) {
         setImpact(result.data);
-        if (action === "save" && !result.data.changesFingerprint && saveRequest) {
-          saveWithoutConfirmation = saveRequest;
-          setConfirming(null);
-          setImpact(null);
-          setPendingSave(null);
+        const noRunStops = result.data.stops === "none" || result.data.inFlightRuns === 0;
+        if (noRunStops && unlessRunsStop) {
+          proceed = unlessRunsStop;
+          closeConfirmation();
         }
       }
       // A failed read deliberately leaves impact null. The dialog renders that
@@ -427,7 +457,8 @@ export function ConnectionScreen({
       inFlight.current = false;
       setBusy(null);
     }
-    if (saveWithoutConfirmation) performSave(saveWithoutConfirmation);
+    // After the flag is down: the change takes the same single-flight guard.
+    proceed?.();
   }
 
   function save() {
@@ -443,13 +474,15 @@ export function ConnectionScreen({
     }
     const request = buildSaveRequest(form);
     setPendingSave(request);
-    void previewChange({ preview: "save", ...request }, "save", request);
+    void previewChange({ preview: "save", ...request }, "save", () => performSave(request));
   }
 
   function closeConfirmation() {
+    previewToken.current += 1;
     setConfirming(null);
     setImpact(null);
     setPendingSave(null);
+    setPendingSource(null);
   }
 
   function test() {
@@ -498,11 +531,18 @@ export function ConnectionScreen({
             : [`${integration.name} is off. ${disableConsequence(integration)[0]}`],
         });
       },
-      () => setConfirming(null),
+      closeConfirmation,
     );
   }
 
+  /** Switching source moves the pin whenever the two sources differ, so it
+   *  is previewed like a save and confirmed only when a run would stop. */
   function switchSource(source: IntegrationSource) {
+    setPendingSource(source);
+    void previewChange({ preview: "source", source }, "source", () => performSourceSwitch(source));
+  }
+
+  function performSourceSwitch(source: IntegrationSource) {
     void run(
       "source",
       () => apiClient.integrations.setSource(integration.id, source),
@@ -521,6 +561,7 @@ export function ConnectionScreen({
           ],
         });
       },
+      closeConfirmation,
     );
   }
 
@@ -764,7 +805,7 @@ export function ConnectionScreen({
                       ? ", none of it in use yet"
                       : `, version ${state.stored.activeVersion} is the one that passed its test`
                   }.`
-                : "Nothing stored yet."}
+                : "Nothing is stored here."}
             </div>
             {writable && state.source !== "stored" && (
               <Button
@@ -795,7 +836,9 @@ export function ConnectionScreen({
             checked={state.enabled}
             disabled={busy !== null}
             aria-label={`Let workflows use ${integration.name}`}
-            onCheckedChange={(next) => (next ? setEnabled(true) : setConfirming("disable"))}
+            onCheckedChange={(next) =>
+              next ? setEnabled(true) : void previewChange({ preview: "disable" }, "disable")
+            }
           >
             <span className="font-body text-[12px] text-neutral-800">
               {state.enabled ? "Workflows may use it" : "Turned off"}
@@ -829,10 +872,40 @@ export function ConnectionScreen({
       {confirming === "disable" && (
         <ConfirmDialog
           title={`Turn ${integration.name} off?`}
-          lines={disableConsequence(integration)}
-          confirmLabel="Turn it off"
-          busy={busy === "enabled"}
+          lines={
+            busy === "impact"
+              ? [READING_IMPACT_LINE]
+              : [
+                  ...integrationImpactLines(integration, impact, "disable"),
+                  ...disableConsequence(integration),
+                ]
+          }
+          confirmLabel={
+            busy === "impact" ? "Reading impact" : integrationImpactConfirmLabel(impact, "disable")
+          }
+          busy={busy === "impact" || busy === "enabled"}
           onConfirm={() => setEnabled(false)}
+          onClose={closeConfirmation}
+        />
+      )}
+
+      {confirming === "source" && (
+        <ConfirmDialog
+          title={
+            pendingSource === "environment"
+              ? `Switch ${integration.name} to the environment?`
+              : `Switch ${integration.name} to the stored values?`
+          }
+          lines={
+            busy === "impact"
+              ? [READING_IMPACT_LINE]
+              : integrationImpactLines(integration, impact, "source")
+          }
+          confirmLabel={
+            busy === "impact" ? "Reading impact" : integrationImpactConfirmLabel(impact, "source")
+          }
+          busy={busy === "impact" || busy === "source"}
+          onConfirm={() => pendingSource && performSourceSwitch(pendingSource)}
           onClose={closeConfirmation}
         />
       )}
@@ -842,7 +915,7 @@ export function ConnectionScreen({
           title={`Save ${integration.name}'s new connection?`}
           lines={
             busy === "impact"
-              ? ["Reading enabled workflows and runs in flight before anything changes."]
+              ? [READING_IMPACT_LINE]
               : integrationImpactLines(integration, impact, "save")
           }
           confirmLabel={
@@ -861,7 +934,7 @@ export function ConnectionScreen({
           title={`Disconnect ${integration.name}?`}
           lines={
             busy === "impact"
-              ? ["Reading enabled workflows and runs in flight before anything changes."]
+              ? [READING_IMPACT_LINE]
               : [
                   ...integrationImpactLines(integration, impact, "disconnect"),
                   ...disconnectConsequence(integration),

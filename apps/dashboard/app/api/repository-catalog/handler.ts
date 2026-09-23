@@ -9,6 +9,7 @@
 // and that 403 is what the screen renders, so a second copy of the rule cannot
 // drift away from the one that is enforced.
 import { NextResponse } from "next/server";
+import { isWorkerTimeout } from "@/lib/api/worker-errors";
 
 /** proxyWorker's own shape, third parameter included: the suggestion route is
  *  the one call that needs a longer ceiling than the default. */
@@ -30,12 +31,6 @@ type WorkerProxy = (
  */
 export const SUGGEST_TIMEOUT_MS = 160_000;
 
-function isWorkerTimeoutError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; name?: unknown };
-  return candidate.name === "TimeoutError" || candidate.code === 23;
-}
-
 async function forward(
   workerProxy: WorkerProxy,
   path: string,
@@ -49,7 +44,7 @@ async function forward(
       headers: { "cache-control": "no-store" },
     });
   } catch (error) {
-    if (isWorkerTimeoutError(error)) {
+    if (isWorkerTimeout(error)) {
       return NextResponse.json(
         { error: "Worker request timed out" },
         { status: 504, headers: { "cache-control": "no-store" } },

@@ -10,15 +10,16 @@ import type {
 } from "@shared/contracts";
 
 import { getJSON, withQuery } from "@/lib/api/server";
+import { isWorkerStatus } from "@/lib/api/worker-errors";
 import { UnauthorizedError } from "@/lib/auth/errors";
 import { requireSession } from "@/lib/auth/session";
 
 import { RepositoryEntryScreen } from "../repository-entry";
 
-/** getJSON puts the status into the error message (lib/api/server.ts), which is
- *  the only way to tell a missing row from a broken worker. */
+/** A missing row, told apart from a broken worker by the status getJSON
+ *  carries on what it throws. */
 function isNotFound(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("→ 404");
+  return isWorkerStatus(error, 404);
 }
 
 /** Repository-scoped agent memory is two documents under one subject key, which

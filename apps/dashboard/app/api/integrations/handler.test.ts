@@ -4,8 +4,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { INTEGRATION_PROVIDER_WAIT_MS } from "@shared/contracts";
+
+import { PROVIDER_CALL_CEILING_MS } from "@/lib/integrations/provider-wait";
+
 import {
-  INTEGRATION_TEST_TIMEOUT_MS,
   handleIntegrationConnectionDelete,
   handleIntegrationConnectionPut,
   handleIntegrationEnabledPatch,
@@ -76,15 +79,16 @@ test("every route forwards to its worker path with the body untouched", async ()
 });
 
 test("the two calls that wait on a provider outlive the worker's own test ceiling", async () => {
-  // The worker bounds a connection test at 20 seconds. A proxy that gave up at
-  // its 10 second default would hand the admin a failure that never happened.
+  // The worker bounds a connection test at INTEGRATION_PROVIDER_WAIT_MS. A
+  // proxy that gave up at its 10 second default would hand the admin a
+  // failure that never happened.
   const { calls, proxy } = recorder(() => Response.json({}));
   await handleIntegrationConnectionPut("demo", request("PUT", {}), proxy);
   await handleIntegrationTest("demo", proxy);
 
-  assert.ok(INTEGRATION_TEST_TIMEOUT_MS > 20_000);
-  assert.equal(calls[0]!.timeoutMs, INTEGRATION_TEST_TIMEOUT_MS);
-  assert.equal(calls[1]!.timeoutMs, INTEGRATION_TEST_TIMEOUT_MS);
+  assert.ok(PROVIDER_CALL_CEILING_MS > INTEGRATION_PROVIDER_WAIT_MS);
+  assert.equal(calls[0]!.timeoutMs, PROVIDER_CALL_CEILING_MS);
+  assert.equal(calls[1]!.timeoutMs, PROVIDER_CALL_CEILING_MS);
 });
 
 test("the calls that contact nothing keep the default ceiling", async () => {

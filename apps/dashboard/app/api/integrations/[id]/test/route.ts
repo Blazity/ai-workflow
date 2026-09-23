@@ -1,7 +1,8 @@
 import { proxyWorker } from "@/lib/api/proxy";
 import { handleIntegrationTest } from "../../handler";
 
-// Contacts the provider, so the same ceiling the save route carries.
+// Contacts the provider, so the same ceiling the save route carries, held
+// above `PROVIDER_CALL_CEILING_MS` by `../../route-durations.test.ts`.
 export const maxDuration = 60;
 
 export async function POST(

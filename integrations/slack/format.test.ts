@@ -48,6 +48,23 @@ test("the pull request card links every pull request and carries the author's ow
   );
 });
 
+test("a merge request links with the reference core stamped, not GitHub's form", () => {
+  // On GitLab `#12` names issue 12. Core stamps `!12` from the provider's
+  // manifest, and the line a GitLab team reads has to say what the run view says.
+  const mergeRequest = {
+    provider: "gitlab",
+    repoPath: "acme/app",
+    id: 12,
+    url: "https://gitlab.example/acme/app/-/merge_requests/12",
+    reference: "!12",
+  };
+  assert.equal(
+    formatTicketStatus({ kind: "pr_ready", prs: [mergeRequest], usageReport: "" }, TICKET),
+    ":white_check_mark: <https://acme.atlassian.net/browse/AWT-42|AWT-42> STATUS: PR ready " +
+      "(<https://gitlab.example/acme/app/-/merge_requests/12|!12>)",
+  );
+});
+
 test("a note is the person's own message and nothing else", () => {
   assert.equal(
     formatTicketEvent({ kind: "note", text: "AWT-42: Add rate limiting needs a look" }, TICKET),

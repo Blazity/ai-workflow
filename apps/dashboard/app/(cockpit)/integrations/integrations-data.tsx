@@ -1,10 +1,14 @@
 import { canManageIntegrations } from "@shared/contracts";
-import type { WorkflowDefinitionsResponse } from "@shared/contracts";
+import type {
+  IntegrationCapabilitiesResponse,
+  WorkflowDefinitionsResponse,
+} from "@shared/contracts";
 
 import { authAwareFallback, getJSON } from "@/lib/api/server";
+import { isWorkerStatus } from "@/lib/api/worker-errors";
 import { requireSession } from "@/lib/auth/session";
 import { readIntegrationsList } from "@/lib/integrations/list";
-import { blockAvailabilityOf } from "@/lib/integrations/presentation";
+import { blockAvailabilityOf, type CapabilitiesUnread } from "@/lib/integrations/presentation";
 
 import { IntegrationsScreen } from "./integrations-screen";
 
@@ -22,14 +26,27 @@ import { IntegrationsScreen } from "./integrations-screen";
  * parallel with the integrations read, and a deployment that refuses it (a
  * role, a worker that did not answer) leaves the card describing the blocks
  * instead of promising them.
+ *
+ * The third read says which provider serves each capability, the built-in one
+ * included. It is its own endpoint rather than part of the list because the
+ * list is read on every cockpit page for the sidebar, and this answer is only
+ * wanted here. A worker that does not answer it (or one a deploy behind that
+ * does not have it yet) leaves the section saying so and the cards standing.
  */
 export async function IntegrationsData() {
   const session = await requireSession();
 
-  const [list, editor] = await Promise.all([
+  const [list, editor, capabilities] = await Promise.all([
     readIntegrationsList(),
     getJSON<WorkflowDefinitionsResponse>("/api/v1/workflow-definitions").catch((error) =>
       authAwareFallback(error, (): WorkflowDefinitionsResponse | null => null),
+    ),
+    getJSON<IntegrationCapabilitiesResponse>("/api/v1/integrations/capabilities").then(
+      (response) => response.capabilities,
+      // A 404 is a worker from before the overview: reloading will not help
+      // until it is deployed, so the page says that instead of "try again".
+      (error): CapabilitiesUnread =>
+        isWorkerStatus(error, 404) ? "older_worker" : authAwareFallback(error, () => "unreadable"),
     ),
   ]);
 
@@ -44,6 +61,7 @@ export async function IntegrationsData() {
       availability={
         editor ? blockAvailabilityOf(editor.options.blockRegistry, integrations) : undefined
       }
+      capabilities={capabilities}
     />
   );
 }
