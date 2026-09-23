@@ -18,6 +18,7 @@ import type {
 import type { IntegrationConnectionSaveRequest } from "@shared/contracts";
 import { INTEGRATION_PROVIDER_WAIT_MS } from "@shared/contracts";
 
+import { capabilityLabel as sdkCapabilityLabel } from "@integrations/registry";
 import { formatDateTime } from "@/lib/date-time";
 
 /** The chip tones the cockpit already ships, named by what they mean here. */
@@ -118,11 +119,16 @@ export function readableProviderText(text: string): string {
     : flattened;
 }
 
+/** Outside text made readable, and ended as a sentence. */
+function sentence(text: string): string {
+  return readableProviderText(text).replace(/\s*\.?$/, ".");
+}
+
 /** The provider's own sentence, plus the names an admin has to go and set. */
 function failureLine(failure: IntegrationFailure): string {
   const missingVariables = failure.missingVariables ?? [];
   const missingFields = failure.missingFields ?? [];
-  const parts = [readableProviderText(failure.message).replace(/\s*\.?$/, ".")];
+  const parts = [sentence(failure.message)];
   if (missingVariables.length > 0) {
     parts.push(`Not set here: ${andList(missingVariables)}.`);
   }
@@ -249,20 +255,26 @@ export function unlocksLines(
   return lines;
 }
 
-const CAPABILITY_LABELS: Readonly<Record<string, string>> = {
-  issue_tracker: "Issue tracker",
-  vcs: "Version control",
-  messaging: "Messaging",
-  memory: "Memory",
-  agent_tracing: "Agent tracing",
-};
-
-/** A capability id as a person reads it, including one a newer worker adds. */
+/**
+ * A capability id as a person reads it: the SDK's one label, or, for an id a
+ * newer worker added, the id's words, which is at least what that worker calls
+ * it.
+ */
 export function capabilityLabel(id: string): string {
-  const known = CAPABILITY_LABELS[id];
+  const known = sdkCapabilityLabel(id);
   if (known) return known;
   const words = id.replace(/_/g, " ");
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+/**
+ * The heading of one capability row: the label the worker sent, which names a
+ * capability even a newer worker added, or this build's own for a worker from
+ * before the overview carried labels.
+ */
+export function capabilityHeading(capability: IntegrationCapabilityDto): string {
+  const sent: string | undefined = capability.label;
+  return sent || capabilityLabel(capability.id);
 }
 
 /** How many providers a capability takes at once, in a few words. */
@@ -296,6 +308,10 @@ export function capabilityServingLine(
       return serving.ids.length === 2
         ? `${names(serving.ids)} both provide it and none is chosen, so neither is used. Until this page can choose, switch off the one you do not want.`
         : `${names(serving.ids)} all provide it and none is chosen, so none of them is used. Until this page can choose, switch off the ones you do not want.`;
+    case "refused":
+      // The resolver's sentence names the provider and what to do, so it is
+      // said whole rather than wrapped in a second naming of the same one.
+      return `Nothing serves it: ${sentence(serving.reason)}`;
     case "unknown":
       return `Who serves it could not be worked out: ${readableProviderText(serving.reason)}`;
     default:
@@ -310,16 +326,33 @@ export function capabilityServingLine(
  * connection. It has no values, no test and no switch, so the card says why
  * rather than showing an empty form.
  */
-export function builtinProviderLines(capability: IntegrationCapabilityDto): string[] {
+export function builtinProviderLines(
+  capability: IntegrationCapabilityDto,
+  nameOf: (id: string) => string,
+): string[] {
+  const replacements = capability.declaredBy;
   return [
     "It ships with AI Workflow and keeps its data in this deployment's own database, so there is nothing to connect.",
-    `Connecting an integration that provides ${capabilityLabel(capability.id).toLowerCase()} replaces it.`,
+    // Said by name, because "an integration that provides it" sent a
+    // first-time admin scrolling the cards for one this build does not ship.
+    replacements.length === 0
+      ? "No integration in this build can replace it."
+      : `Connecting ${andList(replacements.map(nameOf))} below replaces it.`,
   ];
 }
 
-/** Said when the worker did not say who serves what. */
-export const CAPABILITIES_UNREADABLE_LINE =
-  "Which provider serves each capability could not be read just now. The integrations below are unaffected; reload in a moment.";
+/**
+ * Why the capability rows are missing. A worker from before the overview
+ * answers 404, and reloading does nothing until that worker is deployed; any
+ * other failure is worth a reload.
+ */
+export type CapabilitiesUnread = "older_worker" | "unreadable";
+
+export function capabilitiesUnreadLine(reason: CapabilitiesUnread): string {
+  return reason === "older_worker"
+    ? "This worker does not report which provider serves each capability yet; it will once the worker is deployed with this page. The integrations below are unaffected."
+    : "Which provider serves each capability could not be read just now. The integrations below are unaffected; reload in a moment.";
+}
 
 /**
  * Whether anything is stored here for this integration right now.

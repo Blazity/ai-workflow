@@ -7,13 +7,13 @@ import type {
 import { IntegrationChangeRefresh } from "@/components/cockpit/integration-change-refresh";
 import { Button, CkChip } from "@/components/ui";
 import {
-  CAPABILITIES_UNREADABLE_LINE,
   CORE_CAPABILITIES_LINE,
   MEMBER_READ_ONLY_LINE,
   NO_INTEGRATIONS_LINE,
   builtinProviderLines,
+  capabilitiesUnreadLine,
   capabilityCardinalityLine,
-  capabilityLabel,
+  capabilityHeading,
   capabilityServingLine,
   statusChip,
   statusDetailLines,
@@ -21,6 +21,7 @@ import {
   unlocksLines,
   workerUnreachableLine,
   type BlockAvailability,
+  type CapabilitiesUnread,
   type IntegrationTone,
 } from "@/lib/integrations/presentation";
 
@@ -142,9 +143,11 @@ const BUILTIN_SCREENS: Readonly<Record<string, { href: string; label: string }>>
 function BuiltinProviderCard({
   capability,
   name,
+  nameOf,
 }: {
   capability: IntegrationCapabilityDto;
   name: string;
+  nameOf: (id: string) => string;
 }) {
   const screen = BUILTIN_SCREENS[capability.id];
   return (
@@ -153,7 +156,7 @@ function BuiltinProviderCard({
         <span className="font-display text-[13px] font-medium text-coal">{name}</span>
         <CkChip tone="neutral">Built in</CkChip>
       </div>
-      {builtinProviderLines(capability).map((line, index) => (
+      {builtinProviderLines(capability, nameOf).map((line, index) => (
         <span key={index} className="font-body text-[11px] text-neutral-600 break-words">
           {line}
         </span>
@@ -183,7 +186,7 @@ function CapabilitiesSection({
   capabilities,
   integrations,
 }: {
-  capabilities: readonly IntegrationCapabilityDto[] | null;
+  capabilities: readonly IntegrationCapabilityDto[] | CapabilitiesUnread;
   integrations: readonly IntegrationDto[];
 }) {
   const nameOf = (id: string) =>
@@ -201,9 +204,9 @@ function CapabilitiesSection({
           What core asks a provider for, and which one answers on this deployment.
         </p>
       </div>
-      {capabilities === null ? (
+      {typeof capabilities === "string" ? (
         <p className="m-0 rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[12px] text-neutral-600">
-          {CAPABILITIES_UNREADABLE_LINE}
+          {capabilitiesUnreadLine(capabilities)}
         </p>
       ) : (
         <ul className="list-none m-0 p-0 rounded-[4px] border border-neutral-200 bg-panel divide-y divide-neutral-200">
@@ -214,7 +217,7 @@ function CapabilitiesSection({
             >
               <div className="shrink-0 sm:w-[168px]">
                 <div className="font-display text-[14px] font-medium text-coal">
-                  {capabilityLabel(capability.id)}
+                  {capabilityHeading(capability)}
                 </div>
                 <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
                   {capabilityCardinalityLine(capability)}
@@ -225,7 +228,11 @@ function CapabilitiesSection({
                   {capabilityServingLine(capability, nameOf)}
                 </p>
                 {capability.serving.kind === "builtin" && (
-                  <BuiltinProviderCard capability={capability} name={capability.serving.name} />
+                  <BuiltinProviderCard
+                    capability={capability}
+                    name={capability.serving.name}
+                    nameOf={nameOf}
+                  />
                 )}
               </div>
             </li>
@@ -242,7 +249,7 @@ export function IntegrationsScreen({
   canManage,
   available,
   availability,
-  capabilities = null,
+  capabilities = "unreadable",
 }: {
   integrations: readonly IntegrationDto[];
   writes: IntegrationWriteAccess;
@@ -252,8 +259,8 @@ export function IntegrationsScreen({
   available: boolean;
   /** Which of the declared blocks this build can run, when that was readable. */
   availability?: BlockAvailability;
-  /** Who serves each capability; null when the worker did not say. */
-  capabilities?: readonly IntegrationCapabilityDto[] | null;
+  /** Who serves each capability, or why the worker did not say. */
+  capabilities?: readonly IntegrationCapabilityDto[] | CapabilitiesUnread;
 }) {
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">

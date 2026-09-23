@@ -71,6 +71,7 @@ describe("which provider serves each capability", () => {
     const rows = overview([manifest("tracker", ["issue_tracker"])], []);
 
     expect(rows.get("memory")).toMatchObject({
+      label: "Memory",
       cardinality: "one",
       declaredBy: [],
       serving: { kind: "builtin", name: "Built-in memory" },
@@ -128,16 +129,37 @@ describe("which provider serves each capability", () => {
   });
 
   it("reports memory's own refusal rather than the built-in store it did not fall back to", () => {
+    // Zep is switched on and failing, so it is not usable: the ids have to
+    // come from the resolver's refusal, not from who is usable.
     const ambiguous = overview(
       [manifest("recall", ["memory"]), manifest("zep", ["memory"])],
-      ["recall", "zep"],
+      ["recall"],
       {
         id: null,
         name: "no memory provider",
-        refusal: { code: "ambiguous", detail: "Recall and Zep both provide memory" },
+        refusal: {
+          code: "ambiguous",
+          detail: "Recall and Zep both provide memory",
+          providers: ["recall", "zep"],
+        },
       },
     );
     expect(ambiguous.get("memory")?.serving).toEqual({ kind: "ambiguous", ids: ["recall", "zep"] });
+
+    const failing = overview([manifest("recall", ["memory"])], [], {
+      id: null,
+      name: "no memory provider",
+      refusal: {
+        code: "unavailable",
+        detail: "Recall is switched on for memory and its connection is failing",
+        providers: ["recall"],
+      },
+    });
+    expect(failing.get("memory")?.serving).toEqual({
+      kind: "refused",
+      ids: ["recall"],
+      reason: "Recall is switched on for memory and its connection is failing",
+    });
 
     const unreadable = overview([], [], {
       id: null,
@@ -145,6 +167,7 @@ describe("which provider serves each capability", () => {
       refusal: {
         code: "unreadable",
         detail: "this deployment's integration settings could not be read (timeout), so memory was not used",
+        providers: [],
       },
     });
     expect(unreadable.get("memory")?.serving).toEqual({

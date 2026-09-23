@@ -1336,15 +1336,23 @@ export type IntegrationCapabilityServing =
   | { readonly kind: "builtin"; readonly name: string }
   /** Nothing on this deployment serves it. */
   | { readonly kind: "none" }
-  /** Several usable integrations serve a `one` capability and none is chosen,
-   *  so none of them is used. */
+  /** Several integrations are switched on for a `one` capability and none is
+   *  chosen, so none of them is used. For memory a failing one counts, as the
+   *  resolver counts it: picking the one that works today moves the day the
+   *  other recovers. */
   | { readonly kind: "ambiguous"; readonly ids: readonly string[] }
+  /** The resolver chose these integrations and refused to use them (switched
+   *  on and failing, or shipping no code for the capability); its own sentence
+   *  says why. Nothing serves the capability until that is fixed. */
+  | { readonly kind: "refused"; readonly ids: readonly string[]; readonly reason: string }
   /** The deployment could not say; the resolver's own sentence says why. */
   | { readonly kind: "unknown"; readonly reason: string };
 
 /** One capability core asks a provider for, and who answers it here. */
 export interface IntegrationCapabilityDto {
   readonly id: string;
+  /** What a person reads for it, from the SDK's one table of capabilities. */
+  readonly label: string;
   /** `one`: a single active provider. `many`: every usable provider at once. */
   readonly cardinality: "one" | "many";
   /** Every integration this build ships that declares it, usable or not. */

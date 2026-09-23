@@ -5,9 +5,10 @@ import type {
 } from "@shared/contracts";
 
 import { authAwareFallback, getJSON } from "@/lib/api/server";
+import { isWorkerStatus } from "@/lib/api/worker-response-error";
 import { requireSession } from "@/lib/auth/session";
 import { readIntegrationsList } from "@/lib/integrations/list";
-import { blockAvailabilityOf } from "@/lib/integrations/presentation";
+import { blockAvailabilityOf, type CapabilitiesUnread } from "@/lib/integrations/presentation";
 
 import { IntegrationsScreen } from "./integrations-screen";
 
@@ -40,8 +41,12 @@ export async function IntegrationsData() {
     getJSON<WorkflowDefinitionsResponse>("/api/v1/workflow-definitions").catch((error) =>
       authAwareFallback(error, (): WorkflowDefinitionsResponse | null => null),
     ),
-    getJSON<IntegrationCapabilitiesResponse>("/api/v1/integrations/capabilities").catch((error) =>
-      authAwareFallback(error, (): IntegrationCapabilitiesResponse | null => null),
+    getJSON<IntegrationCapabilitiesResponse>("/api/v1/integrations/capabilities").then(
+      (response) => response.capabilities,
+      // A 404 is a worker from before the overview: reloading will not help
+      // until it is deployed, so the page says that instead of "try again".
+      (error): CapabilitiesUnread =>
+        isWorkerStatus(error, 404) ? "older_worker" : authAwareFallback(error, () => "unreadable"),
     ),
   ]);
 
@@ -56,7 +61,7 @@ export async function IntegrationsData() {
       availability={
         editor ? blockAvailabilityOf(editor.options.blockRegistry, integrations) : undefined
       }
-      capabilities={capabilities?.capabilities ?? null}
+      capabilities={capabilities}
     />
   );
 }

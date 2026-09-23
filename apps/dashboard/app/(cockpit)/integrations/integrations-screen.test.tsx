@@ -9,7 +9,7 @@ import React from "react";
 import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
-import type { IntegrationDto, IntegrationState } from "@shared/contracts";
+import type { IntegrationCapabilityDto, IntegrationDto, IntegrationState } from "@shared/contracts";
 
 import { IntegrationsScreen } from "./integrations-screen";
 
@@ -351,21 +351,29 @@ test("the card promises the blocks this build can run, and says why about the re
 
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
-const CAPABILITIES = [
+const CAPABILITIES: IntegrationCapabilityDto[] = [
   {
     id: "issue_tracker",
+    label: "Issue tracker",
     cardinality: "one",
     declaredBy: ["demo", "other"],
     serving: { kind: "ambiguous", ids: ["demo", "other"] },
   },
-  { id: "vcs", cardinality: "many", declaredBy: ["demo"], serving: { kind: "none" } },
+  {
+    id: "vcs",
+    label: "Version control",
+    cardinality: "many",
+    declaredBy: ["demo"],
+    serving: { kind: "none" },
+  },
   {
     id: "memory",
+    label: "Memory",
     cardinality: "one",
     declaredBy: [],
     serving: { kind: "builtin", name: "Built-in memory" },
   },
-] as const;
+];
 
 test("the page says which provider serves memory, and the built-in one needs no connection", (t) => {
   // Decision 10: the built-in provider appears on this screen with no
@@ -379,7 +387,9 @@ test("the page says which provider serves memory, and the built-in one needs no 
   assert.match(rendered, /Memory/);
   assert.match(rendered, /Served by Built-in memory/);
   assert.match(rendered, /nothing to connect/);
-  assert.match(rendered, /Connecting an integration that provides memory replaces it/);
+  // No memory integration ships in this build, so the card must not send a
+  // first-time admin looking for one.
+  assert.match(rendered, /No integration in this build can replace it/);
   assert.ok(links(root).includes("/memory"), "what the built-in store holds is one click away");
   assert.equal(
     inputs(root).length,
@@ -405,8 +415,58 @@ test("a capability nothing serves names who could, by name", (t) => {
 });
 
 test("capabilities that could not be read say so and leave the cards standing", (t) => {
-  const root = render(t, { capabilities: null });
+  const root = render(t, { capabilities: "unreadable" });
   const rendered = text(root);
   assert.match(rendered, /Which provider serves each capability could not be read/);
+  assert.match(rendered, /reload in a moment/);
   assert.ok(links(root).includes("/integrations/demo/connection"), "the cards are still there");
+});
+
+test("a worker from before the overview is named as such, not as a read worth retrying", (t) => {
+  // During a deploy skew the worker answers 404 for the route, and reloading
+  // never helps until it ships.
+  const rendered = text(render(t, { capabilities: "older_worker" }));
+  assert.match(rendered, /This worker does not report which provider serves each capability yet/);
+  assert.doesNotMatch(rendered, /reload/);
+});
+
+test("the built-in card names the integrations that could replace it", (t) => {
+  const root = render(t, {
+    integrations: [integration(), integration({ id: "other", name: "Other" })],
+    capabilities: [
+      {
+        id: "memory",
+        label: "Memory",
+        cardinality: "one",
+        declaredBy: ["demo", "other"],
+        serving: { kind: "builtin", name: "Built-in memory" },
+      },
+    ],
+  });
+  assert.match(text(root), /Connecting Demo and Other below replaces it/);
+});
+
+test("a memory provider the resolver chose and refused is named with its reason, not as unknown", (t) => {
+  const root = render(t, {
+    capabilities: [
+      {
+        id: "memory",
+        label: "Memory",
+        cardinality: "one",
+        declaredBy: ["demo"],
+        serving: {
+          kind: "refused",
+          ids: ["demo"],
+          reason:
+            "Demo is switched on for memory and its connection is failing (the key was refused), so memory was not used",
+        },
+      },
+    ],
+  });
+  const rendered = text(root);
+  assert.match(
+    rendered,
+    /Nothing serves it: Demo is switched on for memory and its connection is failing \(the key was refused\), so memory was not used\./,
+  );
+  assert.doesNotMatch(rendered, /could not be worked out/);
 });
