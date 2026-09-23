@@ -48,7 +48,7 @@ import type {
   MemoryWrite,
 } from "@integrations/sdk";
 import { prepareMemoryContent, utf8Bytes } from "../content.js";
-import { takeOutKnownSecrets } from "../known-secrets.js";
+import { takeOutKnownSecrets, unscrubbedWrite } from "../known-secrets.js";
 import {
   mergeRepoMemoryItems,
   parseRepoMemoryDocument,
@@ -451,7 +451,7 @@ async function heldItems(subjectKey: string, kind: RepoMemoryDocKind): Promise<H
   const cleaned = await takeOutKnownSecrets((clean) =>
     stored.map((item) => ({ ...item, text: clean(item.text) })),
   );
-  if (!cleaned.ok) return cleaned;
+  if (!cleaned.ok) return { ok: false, refusal: unscrubbedWrite(cleaned.why) };
   return { ok: true, exists: true, stored, items: cleaned.value, version };
 }
 

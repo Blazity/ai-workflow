@@ -28,7 +28,13 @@ import type {
   IntegrationUnavailableReason,
 } from "@shared/contracts";
 import type { IntegrationRedaction } from "../../services/integrations/runtime.js";
-import { takeOutKnownSecrets } from "../../memory/known-secrets.js";
+import {
+  KNOWN_SECRETS_UNREADABLE,
+  readKnownSecretCleaner,
+  takeOutKnownSecrets,
+  unscrubbedWrite,
+  type KnownSecretCleaner,
+} from "../../memory/known-secrets.js";
 import { recordedPinFor } from "./recorded-pins.js";
 import type {
   IntegrationManifest,
@@ -291,9 +297,10 @@ function servesMemory(manifest: IntegrationManifest): boolean {
 
 /**
  * What core puts around a provider: the redaction for the words a refusal
- * RETURNS, and the budget its calls spend. (What core takes OUT of the text it
- * sends is the same for every provider and needs no guard of its own:
- * `withoutKnownSecrets`, applied to every observation.) What a provider throws needs no
+ * RETURNS, and the budget its calls spend. (The secrets core takes out of the
+ * text it sends and of the rendering it gets back are the same for every
+ * provider and need no guard of their own: `withoutKnownSecrets` on every
+ * observation, `renderingWithoutKnownSecrets` on every recall.) What a provider throws needs no
  * redaction here: it comes from the runtime `usable.ts` built, which already
  * took the connection's secrets out of every error its adapters (and the
  * `store` inside them) throw.
@@ -335,6 +342,17 @@ function wrap(
 ): ActiveMemory {
   const said = (error: unknown) => (error instanceof Error ? error.message : String(error));
   const spent = () => ({ ok: false, code: "unavailable", detail: budget.spentReason }) as const;
+  // The secret set, read once for this resolved memory, which lives one step:
+  // every call in the step cleans with the same set instead of reading the
+  // connection tables per document. A read that failed is tried again by the
+  // next call rather than remembered.
+  let cleaner: Promise<KnownSecretCleaner> | undefined;
+  const knownSecrets = async (): Promise<KnownSecretCleaner> => {
+    cleaner ??= readKnownSecretCleaner();
+    const read = await cleaner;
+    if (!read.ok) cleaner = undefined;
+    return read;
+  };
   return {
     id,
     name,
@@ -344,7 +362,8 @@ function wrap(
       try {
         const answer = await budget.spend(() => adapter.recall(request));
         if (answer === SPENT) return spent();
-        return answer.ok ? answer : { ...answer, detail: redaction.text(answer.detail) };
+        if (!answer.ok) return { ...answer, detail: redaction.text(answer.detail) };
+        return await renderingWithoutKnownSecrets(answer, knownSecrets());
       } catch (error) {
         return {
           ok: false,
@@ -354,7 +373,7 @@ function wrap(
       }
     },
     async observe(request) {
-      const cleaned = await withoutKnownSecrets(request);
+      const cleaned = await withoutKnownSecrets(request, knownSecrets());
       if (!cleaned.ok) return cleaned.refusal;
       try {
         const answer = await budget.spend(() => adapter.observe(cleaned.request));
@@ -389,6 +408,7 @@ function wrap(
  */
 async function withoutKnownSecrets(
   request: MemoryObserveRequest,
+  cleaner: Promise<KnownSecretCleaner>,
 ): Promise<
   | { readonly ok: true; readonly request: MemoryObserveRequest }
   | { readonly ok: false; readonly refusal: MemoryWrite }
@@ -408,8 +428,44 @@ async function withoutKnownSecrets(
             : { ...observation, text: clean(observation.text) },
       };
     },
+    cleaner,
   );
-  return cleaned.ok ? { ok: true, request: cleaned.value } : cleaned;
+  return cleaned.ok
+    ? { ok: true, request: cleaned.value }
+    : { ok: false, refusal: unscrubbedWrite(cleaned.why) };
+}
+
+/**
+ * The recalled `rendering` with every secret this deployment knows taken out,
+ * before it reaches a prompt or a workspace. A provider can hold a value it
+ * stored before that value became a known secret, and a hosted engine's
+ * stored text is out of core's reach, so this is the last place it can be
+ * stopped.
+ *
+ * `entries` are handed on exactly as the provider gave them: a run quotes an
+ * entry back to retract it, and the provider matches that quote against what
+ * it holds (core cleans the quote on its way back, in `withoutKnownSecrets`).
+ *
+ * FAILS CLOSED: a set that cannot be read, or a rendering the redaction cannot
+ * process, is `unavailable`, which every caller of `recall` already answers by
+ * going on without that memory.
+ */
+async function renderingWithoutKnownSecrets(
+  answer: Extract<MemoryRecall, { ok: true }>,
+  cleaner: Promise<KnownSecretCleaner>,
+): Promise<MemoryRecall> {
+  const cleaned = await takeOutKnownSecrets((clean) => clean(answer.rendering), cleaner);
+  if (!cleaned.ok) {
+    return {
+      ok: false,
+      code: "unavailable",
+      detail:
+        cleaned.why === "unreadable"
+          ? `${KNOWN_SECRETS_UNREADABLE}, so memory was not read`
+          : "the recalled text could not be scrubbed of this deployment's secrets, so it was not used",
+    };
+  }
+  return cleaned.value === answer.rendering ? answer : { ...answer, rendering: cleaned.value };
 }
 
 function guardedStore(store: MemoryStoreAdapter, budget: MemoryBudget): MemoryStoreAdapter {

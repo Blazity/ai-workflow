@@ -508,9 +508,11 @@ describe("seedRepoMemoryStep", () => {
     });
     expect(stepUpserts()).toEqual([]);
     expect(await repoRows()).toHaveLength(0);
+    // Refused at the read that decides whether a seed is needed: core cleans
+    // what memory hands back too, so without the set nothing is read either.
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.objectContaining({ repo: "github:acme/api", code: "unavailable" }),
-      "repo_memory_seed_refused",
+      "memory_provider_unavailable",
     );
   });
 
@@ -1098,8 +1100,8 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(stepUpserts()).toEqual([]);
     expect(await factTexts()).toEqual(["Run lint with: pnpm lint"]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api" }),
-      "repo_memory_prune_refused",
+      expect.objectContaining({ repo: "github:acme/api", code: "unavailable" }),
+      "memory_provider_unavailable",
     );
   });
 });

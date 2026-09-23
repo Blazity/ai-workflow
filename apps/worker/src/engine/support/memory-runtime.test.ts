@@ -650,7 +650,7 @@ describe("what memory copies out of a provider", () => {
   });
 });
 
-describe("what an observation carries out of this deployment", () => {
+describe("the secrets memory text carries in and out of this deployment", () => {
   // A token an admin pasted into the dashboard is decrypted from the database
   // and never reaches the environment, so an engine's own code cannot know it.
   // Core takes it out before the engine sees the text, for every provider.
@@ -692,13 +692,94 @@ describe("what an observation carries out of this deployment", () => {
         sourceTruncated: true,
       },
     ]);
+  });
+
+  it("leaves core's addresses as they were sent, even when a secret is spelled in them", async () => {
     // Addresses are core's, compared exactly: rewriting one would orphan what
-    // is stored under it, so they arrive as they were sent.
-    expect(observe.mock.calls[1]?.[0]).toMatchObject({
-      subject: SUBJECT,
-      scope: { kind: "notebook", name: "AIW-1" },
-      runId: "run_1",
+    // is stored under it. A known value inside one is the case that tells
+    // "left alone" from "happened not to match".
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    const observe = vi.fn<MemoryAdapter["observe"]>(async () => written);
+    readable(provider("Recall Engine", { recall: vi.fn(), observe }));
+    const addressed = {
+      subject: { key: `ticket:jira:${STORED_TOKEN}`, label: STORED_TOKEN },
+      scope: { kind: "notebook", name: STORED_TOKEN },
+      runId: `run_${STORED_TOKEN}`,
+      ticketKey: STORED_TOKEN,
+    } as const;
+
+    await (await activeMemory()).observe({
+      ...addressed,
+      observation: { kind: "document", text: `uses ${STORED_TOKEN}` },
     });
+
+    expect(observe.mock.calls[0]?.[0]).toEqual({
+      ...addressed,
+      observation: { kind: "document", text: "uses [REDACTED:configured_secret]" },
+    });
+  });
+
+  it("takes a secret out of what a recall renders, and hands the entries on as they were", async () => {
+    // An engine can hold a value it stored before that value was a known
+    // secret. The rendering is what reaches a prompt and a workspace; the
+    // entries are what a run quotes back to retract one, and the engine
+    // matches that quote against what it holds.
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    const entries = [{ text: `Deploy with ${STORED_TOKEN} in the header` }];
+    const recall = vi.fn<MemoryAdapter["recall"]>(async () => ({
+      ok: true,
+      held: true,
+      entries,
+      rendering: `- Deploy with ${STORED_TOKEN} in the header`,
+    }));
+    readable(provider("Recall Engine", { recall, observe: vi.fn() }));
+
+    const recalled = await (await activeMemory()).recall(RECALL);
+
+    expect(recalled).toEqual({
+      ok: true,
+      held: true,
+      entries,
+      rendering: "- Deploy with [REDACTED:configured_secret] in the header",
+    });
+  });
+
+  it("uses nothing it recalled when the secrets to take out cannot be read", async () => {
+    const { IntegrationSecretsUnreadableError } = await import(
+      "../../services/integrations/secret-values.js"
+    );
+    knownSecretValues.mockRejectedValue(new IntegrationSecretsUnreadableError(new Error("db down")));
+    readable(
+      provider("Recall Engine", {
+        recall: async () => ({ ok: true, held: true, entries: [], rendering: "- a fact" }),
+        observe: vi.fn(),
+      }),
+    );
+
+    expect(await (await activeMemory()).recall(RECALL)).toEqual({
+      ok: false,
+      code: "unavailable",
+      detail: "this deployment's secrets could not be read, so memory was not read",
+    });
+  });
+
+  it("reads the secret set once for every call a step makes", async () => {
+    // One resolution serves one step. Reading the connection tables per
+    // document would cost a prompt with eight repositories seventeen reads.
+    knownSecretValues.mockResolvedValue([STORED_TOKEN]);
+    readable(
+      provider("Recall Engine", {
+        recall: async () => ({ ok: true, held: true, entries: [], rendering: "- a fact" }),
+        observe: async () => written,
+      }),
+    );
+    const memory = await activeMemory();
+
+    await memory.recall(RECALL);
+    await memory.recall(RECALL);
+    await memory.observe(OBSERVE);
+
+    expect(knownSecretValues).toHaveBeenCalledTimes(1);
   });
 
   it("cleans what the built-in store is given in the same place", async () => {

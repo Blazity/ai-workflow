@@ -1562,31 +1562,30 @@ describe("distillRepoMemoryStep", () => {
     ]);
   });
 
-  it("does not store a document when the secrets to redact it with cannot be read", async () => {
+  it("reads, stores and pays for nothing when this deployment's secrets cannot be read", async () => {
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
     mocks.redactionThrows = true;
     respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
 
-    // Fail closed: unscrubbed text never reaches the store, and the step still
-    // returns rather than falling through into the truncation check on a null.
-    // The model did produce candidates, so this reports as a refused write and
-    // not as a run that learned nothing.
+    // Fail closed, and at the first step that needs the set: core cleans what
+    // memory hands back as well as what it is sent, so without the set nothing
+    // is read. The model is never called, so nothing is paid for a write that
+    // could not have been stored. The write-side refusal has its own guards
+    // (`memory-runtime.test.ts`, `memory/builtin/adapter.test.ts`).
     expect(await distillRepoMemoryStep(input)).toEqual({
       written: 0,
-      usage: USAGE,
-      providerCalled: true,
-      skipped: "write_skipped",
-      // S13: the provider's own reason for refusing, so a person can tell a
-      // contended write from an unscrubbable one without reading the log.
-      unavailable: expect.any(String),
+      usage: null,
+      providerCalled: false,
+      skipped: "memory_unavailable",
+      unavailable: expect.stringContaining("could not be read"),
     });
     expect(stepUpserts()).toEqual([]);
     expect(await readRepoItems("facts")).toEqual([
       { text: "Package manager is pnpm", runId: null },
     ]);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: REPO_KEY, docPath: "facts", code: "unavailable" }),
-      "repo_memory_write_refused",
+      expect.objectContaining({ code: "unavailable" }),
+      "memory_provider_unavailable",
     );
   });
 
@@ -2046,7 +2045,15 @@ describe("distillRepoMemoryStep outcome reporting", () => {
 
   it("names write_skipped when the step had something to store and refused", async () => {
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
-    mocks.redactionThrows = true;
+    // A refusal the store answers for this write alone: every read still works.
+    mocks.db = {
+      select: db.select.bind(db),
+      insert: () => {
+        throw Object.assign(new Error("exceeds the memory document size limit"), {
+          code: "memory_document_too_large",
+        });
+      },
+    };
     respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
 
     await distillRepoMemoryStep(input);
@@ -2585,7 +2592,7 @@ describe("distillRepoMemoryStep org promotion", () => {
     );
   });
 
-  it("does not store an owner document when the secrets to redact it with cannot be read", async () => {
+  it("reads and stores no owner document when this deployment's secrets cannot be read", async () => {
     await storeFacts("github", REPO_PATH, ["Package manager is pnpm"]);
     await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm"]);
     mocks.redactionThrows = true;
@@ -2598,17 +2605,16 @@ describe("distillRepoMemoryStep org promotion", () => {
       }),
     ).toEqual({
       written: 0,
-      usage: USAGE,
-      providerCalled: true,
-      skipped: "write_skipped",
-      // S13: the provider's own reason for refusing.
-      unavailable: expect.any(String),
+      usage: null,
+      providerCalled: false,
+      skipped: "memory_unavailable",
+      unavailable: expect.stringContaining("could not be read"),
     });
     expect(orgUpserts()).toEqual([]);
     expect(await orgRows()).toHaveLength(0);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ org: `github:${OWNER}`, docPath: "facts", code: "unavailable" }),
-      "repo_memory_write_refused",
+      expect.objectContaining({ code: "unavailable" }),
+      "memory_provider_unavailable",
     );
   });
 
@@ -3116,6 +3122,21 @@ describe("loadRepoMemorySourcesStep", () => {
 
   it("returns nothing when the repository has no stored documents", async () => {
     expect(await loadSources({ repositories })).toEqual([]);
+  });
+
+  it("takes a secret known since it was stored out of what reaches the prompt", async () => {
+    // Stored before the value was a known secret, and not rewritten since:
+    // the prompt is where it would leave this deployment, so core cleans the
+    // rendering on its way there, whichever provider holds it.
+    const SECRET = "tok-4c1d8e2f9a";
+    await storeRepoDocument("facts", [`Deploys read ${SECRET} from the vault`]);
+    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+
+    const sources = await loadSources({ repositories });
+
+    expect(sources.map((source) => source.docPath)).toEqual(["facts"]);
+    expect(sources[0]?.content).not.toContain(SECRET);
+    expect(sources[0]?.content).toContain("- Deploys read [REDACTED:configured_secret] from the vault");
   });
 
   it("strips provenance before a document reaches the prompt", async () => {
