@@ -31,3 +31,23 @@ test("isOlderThanHours distinguishes a stale scan from a current one", () => {
   assert.equal(isOlderThanHours("2026-08-22T13:56:30.000Z", 24, now), false);
   assert.equal(isOlderThanHours("not-a-date", 24, now), false);
 });
+
+// Red when: the zone's name is asked of the runtime (`timeZoneName: "short"`),
+// which is free to call UTC "GMT" or something else (review of #511).
+test("the UTC suffix is written by us, whatever the runtime calls the zone", async () => {
+  const RealFormat = Intl.DateTimeFormat;
+  // A runtime that names UTC "GMT" when asked for a zone name.
+  const Renaming = function (locale?: string | string[], options?: Intl.DateTimeFormatOptions) {
+    const real = new RealFormat(locale, options);
+    return options?.timeZoneName
+      ? Object.assign(Object.create(real), { format: (date: Date) => real.format(date).replace("UTC", "GMT") })
+      : real;
+  } as unknown as typeof Intl.DateTimeFormat;
+  Intl.DateTimeFormat = Renaming;
+  try {
+    const fresh = (await import(`./date-time.ts?renaming=${Date.now()}`)) as typeof import("./date-time");
+    assert.equal(fresh.formatDateTime("2026-08-21T13:56:30.000Z"), "Aug 21, 2026, 1:56:30 PM UTC");
+  } finally {
+    Intl.DateTimeFormat = RealFormat;
+  }
+});
