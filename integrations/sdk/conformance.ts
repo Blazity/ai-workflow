@@ -447,7 +447,10 @@ function checkConnection(manifest: ParsedManifest, report: Report) {
  * one of this connection's, or one variable would mean two things.
  */
 function checkSettings(manifest: ParsedManifest, report: Report) {
-  const keys = new Set<string>();
+  // By the key each one is STORED under, not the key it was written with:
+  // `allowedIDs` and `allowedIds` are two keys here and one row there, and the
+  // joined list would keep whichever came last.
+  const stored = new Map<string, string>();
   const connectionEnvs = new Set(manifest.connection.fields.map((field) => field.env));
   (manifest.settings ?? []).forEach((setting, index) => {
     const path = `settings[${index}]`;
@@ -459,16 +462,23 @@ function checkSettings(manifest: ParsedManifest, report: Report) {
       );
       return;
     }
-    if (keys.has(setting.key)) {
-      report("duplicate", `${path}.key`, `Setting key "${setting.key}" is declared twice.`);
+    const storedKey = integrationSettingKey(manifest.id, setting.key);
+    const earlier = stored.get(storedKey);
+    if (earlier !== undefined) {
+      report(
+        "duplicate",
+        `${path}.key`,
+        earlier === setting.key
+          ? `Setting key "${setting.key}" is declared twice.`
+          : `Settings "${earlier}" and "${setting.key}" would both be stored as ${storedKey}. Rename one.`,
+      );
     }
-    keys.add(setting.key);
-    const stored = integrationSettingKey(manifest.id, setting.key);
-    if (SETTINGS_REGISTRY.some((definition) => definition.key === stored)) {
+    stored.set(storedKey, setting.key);
+    if (SETTINGS_REGISTRY.some((definition) => definition.key === storedKey)) {
       report(
         "setting_invalid",
         `${path}.key`,
-        `Setting "${setting.key}" would be stored as ${stored}, which is one of core's own settings. Choose another key.`,
+        `Setting "${setting.key}" would be stored as ${storedKey}, which is one of core's own settings. Choose another key.`,
       );
     }
     if (setting.env === undefined) return;

@@ -623,6 +623,17 @@ test("a setting declared twice is refused", () => {
   hasIssue(manifest, runtime, "duplicate", "settings[1].key");
 });
 
+test("two settings that would be stored under one key are refused", () => {
+  // `allowedIDs` and `allowedIds` are different keys in the manifest and the
+  // same row, ACME_ALLOWED_IDS, in the settings store.
+  const { manifest, runtime } = withSettingAndWebhook();
+  manifest.settings = [
+    { key: "allowedIDs", description: "One.", type: "string-list", default: [] },
+    { key: "allowedIds", description: "Two.", type: "string-list", default: [] },
+  ];
+  hasIssue(manifest, runtime, "duplicate", "settings[1].key");
+});
+
 test("a setting stored under one of core's own keys is refused", () => {
   // `mcp` + `enabled` is `MCP_ENABLED`, core's switch for the whole transport.
   // The id is reserved as well; the setting rule stands on its own.
