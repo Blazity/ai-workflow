@@ -388,6 +388,12 @@ async function resolvePullRequestDispatch(
     if (error instanceof ManualDispatchUnsupportedError) {
       throw new ManualDispatchError(422, "not_eligible", error.message);
     }
+    // Ours, not the provider's: the read that failed was this deployment's own
+    // settings, taken again when the provider's adapter was built. A 502 here
+    // sent the person to GitHub for a database that did not answer.
+    if (error instanceof IntegrationSettingsUnreadableError) {
+      throw settingsUnreadableForDispatch("the pull request could not be read");
+    }
     throw new ManualDispatchError(
       502,
       "provider_unavailable",
@@ -686,9 +692,7 @@ function projectKey(identifier: string): string | null {
 async function knownBotLogin(provider: string): Promise<string | undefined> {
   const reading = await readVcsBotLogin(provider);
   if (reading.readable) return reading.login;
-  throw new ManualDispatchError(
-    503,
-    "provider_unavailable",
-    `The automation account for ${provider} could not be read on this deployment (${reading.reason}). Try again once its integration settings can be read.`,
-  );
+  // The database's own words are not for the person dispatching; the reader
+  // that failed is what they need, and the same 503 every settings read gives.
+  throw settingsUnreadableForDispatch(`the automation account for ${provider} could not be read`);
 }

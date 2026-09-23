@@ -186,6 +186,19 @@ describe("settings that could not be read", () => {
     await expect(refusal).rejects.toBeInstanceOf(IntegrationSettingsUnreadableError);
     await expect(refusal).rejects.toThrow(/could not be read, so the pull request URL could not be matched/);
   });
+
+  it("says the same when building the provider's adapter reads them again and that read fails", async () => {
+    // Manual dispatch matches the URL on one read and reads the pull request
+    // through an adapter built on a second. A plain error from the second read
+    // was filed as the provider being unreachable.
+    settingsUnreadable();
+
+    const reading = createManualDispatchPrReader({ provider: "github", repoPath: "acme/api" })
+      .getManualDispatchPullRequest(42);
+
+    await expect(reading).rejects.toBeInstanceOf(IntegrationSettingsUnreadableError);
+    await expect(reading).rejects.toThrow(/so version control provider github could not be used/);
+  });
 });
 
 describe("createRepositoryVcsRuntime", () => {

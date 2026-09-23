@@ -565,6 +565,25 @@ describe("manual dispatch against a definition repository pin", () => {
     });
   });
 
+  it("blames our settings, not the provider, when they could not be read a second time", async () => {
+    // The URL was matched on the first read; building the provider's adapter
+    // reads the settings again, and that read is the one that failed. Filed as
+    // an outage, the person was told GitHub could not be reached.
+    const { IntegrationSettingsUnreadableError } = await import("../integrations/usable.js");
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(deployed("any", {}));
+    mocks.getManualDispatchPullRequest.mockRejectedValue(
+      new IntegrationSettingsUnreadableError(
+        "so version control provider github could not be used",
+        "connection terminated unexpectedly",
+      ),
+    );
+
+    const refusal = await resolveManualDispatch(pullRequestRequest()).catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({ statusCode: 503, code: "integration_unavailable" });
+    expect((refusal as Error).message).not.toContain("connection terminated");
+  });
+
   // Without the account, a review the workflow itself left would look like a
   // person's, and the run would answer its own comment.
   it("refuses a review dispatch while the automation account cannot be read", async () => {
@@ -572,13 +591,17 @@ describe("manual dispatch against a definition repository pin", () => {
     graph.definition.nodes[0]!.type = "trigger_pr_review";
     graph.definition.nodes[0]!.configuration = { scope: "any", on: ["commented"] } as never;
     mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(graph);
-    botLogin.reading = { readable: false, reason: "settings unreadable" };
+    botLogin.reading = { readable: false, reason: "connection terminated unexpectedly" };
 
     try {
-      await expect(resolveManualDispatch(pullRequestRequest())).rejects.toMatchObject({
-        statusCode: 503,
-        code: "provider_unavailable",
-      });
+      const refusal = await resolveManualDispatch(pullRequestRequest()).catch(
+        (error: unknown) => error,
+      );
+      // The same answer every unread settings read gives, and nothing the
+      // database said.
+      expect(refusal).toMatchObject({ statusCode: 503, code: "integration_unavailable" });
+      expect((refusal as Error).message).toContain("automation account for github");
+      expect((refusal as Error).message).not.toContain("connection terminated");
     } finally {
       botLogin.reading = { readable: true, login: "workflow-bot" };
     }

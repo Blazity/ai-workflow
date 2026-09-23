@@ -161,16 +161,19 @@ async function resolveIntegrationAdapter(
     );
   }
 
-  const { resolveUsableIntegrations, checkIntegrationPin } = await import(
-    "../../services/integrations/runtime.js"
-  );
+  const { IntegrationSettingsUnreadableError, resolveUsableIntegrations, checkIntegrationPin } =
+    await import("../../services/integrations/runtime.js");
   const resolved = await resolveUsableIntegrations({
     ...(lifetime ? { lifetime } : {}),
     filter: (candidate) => candidate.id === target.provider,
   });
+  // The typed error, so every caller that maps "our settings did not answer"
+  // (manual dispatch's 503) recognises it here too, rather than filing it as
+  // the provider being unreachable.
   if (!resolved.readable) {
-    throw new Error(
-      `Version control provider ${target.provider} could not read its integration settings: ${resolved.reason}`,
+    throw new IntegrationSettingsUnreadableError(
+      `so version control provider ${target.provider} could not be used`,
+      resolved.reason,
     );
   }
   // By id, not by position. The filter above already narrows to one, and that
@@ -508,16 +511,14 @@ export async function resolveRepositorySkillSource(
   provider: string;
   source: import("@integrations/sdk").RepositorySkillSource;
 }> {
-  const { resolveUsableIntegrations } = await import(
+  const { IntegrationSettingsUnreadableError, resolveUsableIntegrations } = await import(
     "../../services/integrations/runtime.js"
   );
   const resolved = await resolveUsableIntegrations({
     filter: (manifest) => manifest.capabilities.includes("vcs"),
   });
   if (!resolved.readable) {
-    throw new Error(
-      `Version control integration settings could not be read (${resolved.reason}), so no provider can import skills.`,
-    );
+    throw new IntegrationSettingsUnreadableError("so no provider can import skills", resolved.reason);
   }
 
   const offering = new Map<string, VcsIntegrationAdapter>();
