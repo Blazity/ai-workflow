@@ -359,9 +359,11 @@ export function memoryProviderChoice(
 }
 
 /**
- * Why memory is not served on this deployment, in the one wording the
- * palette and a run's refusal both use: the refusal's, which the capability
- * report and MCP already quote. Without a full stop, because a screen that
+ * Why memory is not served on this deployment, in one wording for both
+ * audiences, told apart only by what follows: a run's refusal says what
+ * happened to that run ("memory was not used"), the palette, before any run
+ * exists, says what will happen ("runs go without memory"). The cause and the
+ * fix are the same words in both. Without a full stop, because a screen that
  * quotes a refusal adds its own. `failure` is the connection's own message,
  * when it has one.
  */
@@ -369,17 +371,19 @@ export function memoryNotServedReason(
   problem:
     | { readonly kind: "ambiguous"; readonly names: readonly string[] }
     | { readonly kind: "failing"; readonly name: string; readonly failure?: string | undefined },
+  audience: "run" | "deployment",
 ): string {
+  const consequence = audience === "run" ? "so memory was not used" : "so runs go without memory";
   if (problem.kind === "ambiguous") {
     const { names } = problem;
     const listed =
       names.length === 2
         ? `${names[0]} and ${names[1]} both provide`
         : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} all provide`;
-    return `${listed} memory on this deployment and no active provider is selected, so memory was not used. Disable all but one of them on the Integrations page`;
+    return `${listed} memory on this deployment and no active provider is selected, ${consequence}. Disable all but one of them on the Integrations page`;
   }
   const failure = problem.failure ? ` (${problem.failure})` : "";
-  return `${problem.name} is switched on for memory and its connection is failing${failure}, so memory was not used. Fix it on the Integrations page, or disable it there to use the built-in memory`;
+  return `${problem.name} is switched on for memory and its connection is failing${failure}, ${consequence}. Fix it on the Integrations page, or disable it there to use the built-in memory`;
 }
 
 /** The palette's sentence for the memory rule above, or null when runs here remember. */
@@ -389,12 +393,15 @@ function memoryIssue(integrations: DeploymentIntegrations): string | null {
   const nameOf = (id: string) => integrations.byId.get(id)?.name ?? id;
   const reason =
     choice.kind === "ambiguous"
-      ? memoryNotServedReason({ kind: "ambiguous", names: choice.ids.map(nameOf) })
-      : memoryNotServedReason({
-          kind: "failing",
-          name: nameOf(choice.id),
-          failure: integrations.byId.get(choice.id)?.failure?.message,
-        });
+      ? memoryNotServedReason({ kind: "ambiguous", names: choice.ids.map(nameOf) }, "deployment")
+      : memoryNotServedReason(
+          {
+            kind: "failing",
+            name: nameOf(choice.id),
+            failure: integrations.byId.get(choice.id)?.failure?.message,
+          },
+          "deployment",
+        );
   return `${reason}.`;
 }
 

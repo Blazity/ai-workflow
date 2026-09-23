@@ -574,7 +574,7 @@ describe("a block that requires a capability core applies around the run", () =>
     expect(integrationBlockAvailability("acmeaudit_recall", integrations)).toEqual({
       available: false,
       unavailableReason:
-        "Acme Recall is switched on for memory and its connection is failing (the key was refused), so memory was not used. Fix it on the Integrations page, or disable it there to use the built-in memory.",
+        "Acme Recall is switched on for memory and its connection is failing (the key was refused), so runs go without memory. Fix it on the Integrations page, or disable it there to use the built-in memory.",
     });
   });
 
@@ -591,7 +591,7 @@ describe("a block that requires a capability core applies around the run", () =>
     expect(integrationBlockAvailability("acmeaudit_recall", integrations)).toEqual({
       available: false,
       unavailableReason:
-        "Acme Recall and Acme Notes both provide memory on this deployment and no active provider is selected, so memory was not used. Disable all but one of them on the Integrations page.",
+        "Acme Recall and Acme Notes both provide memory on this deployment and no active provider is selected, so runs go without memory. Disable all but one of them on the Integrations page.",
     });
   });
 

@@ -209,10 +209,10 @@ export async function activeMemory(
       // silent pick, and it moves the day the other one recovers.
       return refusing({
         code: "ambiguous",
-        detail: memoryNotServedReason({
-          kind: "ambiguous",
-          names: choice.ids.map((id) => manifestOf(id)?.name ?? id),
-        }),
+        detail: memoryNotServedReason(
+          { kind: "ambiguous", names: choice.ids.map((id) => manifestOf(id)?.name ?? id) },
+          "run",
+        ),
         providers: choice.ids,
       });
     }
@@ -228,11 +228,14 @@ export async function activeMemory(
       // told. The run goes on without memory and says why.
       return refusing({
         code: "unavailable",
-        detail: memoryNotServedReason({
-          kind: "failing",
-          name: selected?.name ?? "The memory integration",
-          failure: selected ? resolved.states.get(selected.id)?.failure?.message : undefined,
-        }),
+        detail: memoryNotServedReason(
+          {
+            kind: "failing",
+            name: selected?.name ?? "The memory integration",
+            failure: selected ? resolved.states.get(selected.id)?.failure?.message : undefined,
+          },
+          "run",
+        ),
         providers: selected ? [selected.id] : [],
       });
     }
