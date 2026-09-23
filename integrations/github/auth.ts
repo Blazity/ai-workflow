@@ -1,7 +1,7 @@
 import { createPrivateKey } from "node:crypto";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
-import { FatalError, type IntegrationHttp } from "@integrations/sdk";
+import { FatalError, INTEGRATION_HTTP_DEFAULTS, type IntegrationHttp } from "@integrations/sdk";
 
 /**
  * The App credential, as this integration holds it.
@@ -133,6 +133,10 @@ export function requirePrivateKey(value: string | undefined): string {
  * deadline, core's retry policy (a read retried after a network error, a 429
  * or a 5xx; a write sent once), the context's lifetime, and throws with the
  * connection's secrets redacted.
+ *
+ * GraphQL is always a POST, which the context takes for a write, so a
+ * GraphQL document that is not a mutation is marked as the read it is
+ * (`graphqlReadRetries`); a mutation keeps the rule for writes.
  */
 export function buildOctokit(
   credential: GitHubAppCredential,
@@ -145,8 +149,35 @@ export function buildOctokit(
       privateKey: requirePrivateKey(credential.privateKey),
       installationId: credential.installationId,
     },
-    request: { fetch },
+    request: {
+      fetch: (input: string | URL | Request, init?: RequestInit) =>
+        fetch(input, { ...init, ...graphqlReadRetries(input, init) }),
+    },
   });
+}
+
+/**
+ * The read policy's retries for a GraphQL document that changes nothing.
+ * Conservative on purpose: a document that mentions `mutation` anywhere is
+ * left to the rule for writes, because sending a write twice is the mistake
+ * that costs, and a read sent once only fails sooner.
+ */
+function graphqlReadRetries(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+): { retries?: number } {
+  if (init?.method?.toUpperCase() !== "POST" || typeof init.body !== "string") return {};
+  const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+  if (!new URL(url).pathname.endsWith("/graphql")) return {};
+  let query: unknown;
+  try {
+    query = (JSON.parse(init.body) as { query?: unknown }).query;
+  } catch {
+    return {};
+  }
+  return typeof query === "string" && !/\bmutation\b/u.test(query)
+    ? { retries: INTEGRATION_HTTP_DEFAULTS.retries }
+    : {};
 }
 
 /**

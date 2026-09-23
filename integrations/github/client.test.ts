@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { isPullRequestUnreadableError } from "@integrations/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { buildOctokit } from "./auth";
 import { runtime } from "./worker";
 
 /**
@@ -122,5 +123,49 @@ describe("the head sha is read like the head", () => {
 
     await expect(vcs.getPRHead(8)).rejects.toSatisfy(isPullRequestUnreadableError);
     await expect(vcs.getPRHeadSha(8)).rejects.toSatisfy(isPullRequestUnreadableError);
+  });
+});
+
+/**
+ * GraphQL is always a POST, so the context's rule for a write (sent once)
+ * applied to every review thread read as well, and a read GitHub failed on its
+ * own side was not asked again. A document that is not a mutation is a read,
+ * and the client says so to the context; a mutation is still sent once.
+ */
+describe("GraphQL through the context", () => {
+  function graphqlClient() {
+    const asked: Array<{ query: string; retries: unknown }> = [];
+    const fetch = vi.fn(async (input: unknown, init?: RequestInit & { retries?: number }) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/graphql") {
+        asked.push({
+          query: (JSON.parse(String(init?.body)) as { query: string }).query,
+          retries: init?.retries,
+        });
+        return json(200, { data: { viewer: { login: "ai-workflow[bot]" } } });
+      }
+      return github(url);
+    });
+    const octokit = buildOctokit(
+      { appId: 11, privateKey: PRIVATE_KEY, installationId: 22 },
+      fetch as never,
+    );
+    return { octokit, asked };
+  }
+
+  it("asks for a query to be retried like any other read", async () => {
+    const { octokit, asked } = graphqlClient();
+
+    await octokit.graphql("query { viewer { login } }");
+
+    expect(asked).toEqual([{ query: "query { viewer { login } }", retries: 2 }]);
+  });
+
+  it("leaves a mutation to the rule for writes", async () => {
+    const { octokit, asked } = graphqlClient();
+
+    await octokit.graphql('mutation { resolveReviewThread(input: { threadId: "T" }) { clientMutationId } }');
+
+    expect(asked).toEqual([expect.objectContaining({ retries: undefined })]);
   });
 });
