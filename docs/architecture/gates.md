@@ -1,12 +1,15 @@
 Status: current
-Last-verified: 2026-09-14
+Last-verified: 2026-09-23
 
 # Delivery gates
 
 The table below is every gate that can turn a pull request red. Most of its
 rows are the static ladder, which `pnpm run gates` runs in table order. Two are
-not: `engine-canary` is a path-scoped CI job, and `Changelog completeness` is a
-step of the `source-checks` job that runs on pull requests only. Both name
+not: `engine-canary` is an on-demand job outside the required `ci` (it runs
+only for a pull request labelled `run-canary` or a manual dispatch, and red on
+it does not block a merge; ADR-004, change log 2026-09-23), and `Changelog
+completeness` is a step of the `source-checks` job that runs on pull requests
+only. Both name
 their workflow in the `Script` column. A gate exits non-zero when its check
 fails.
 
@@ -25,7 +28,7 @@ fails.
 | Model catalog drift | Model literals outside the catalog's declared exclusions | `scripts/gates/model-catalog-drift.mjs` | A model identifier is duplicated outside an approved owner or exclusion |
 | Dependency consistency | Shared dependency versions against the pnpm catalog | `scripts/gates/check-deps-consistency.mjs` | A shared dependency is not cataloged, is split across specifiers, or is missing from the catalog |
 | Documentation status | Headers, freshness, status targets, and reachability for current documents; a passing run prints how many documents it checked and how many it skipped for frontmatter | `scripts/gates/docs-status.mjs` | A document header is invalid, a current document is stale or unreachable, a superseded target is missing, one of the paths the checked set is computed from is gone, or `docs/` holds no Markdown at all |
-| engine-canary | Pull request changes under the prefixes listed in `scripts/ci/engine-canary-scope.ts`: the deployed surfaces the canary drives, three directories of `apps/worker/src/services/**`, the canary's own runners and job, and the dependency inputs `pnpm-lock.yaml`, `pnpm-workspace.yaml` and `apps/worker/package.json`; skips deployment when `apps/worker/drizzle/**` changes; exact deployment commit and declared production database identity on the `ai-workflow-demo` custom environment | `.github/workflows/ci.yml`, `scripts/ci/engine-canary-scope.ts`, `scripts/ci/engine-canary-preflight.ts` | No target is declared, an armed target is incomplete, the target name is `production`, deployment identity is unproven, the database environment or fingerprint is mismatched, or either live canary fails |
+| engine-canary | Runs only on the `run-canary` label or a manual dispatch; by default the custom Haiku fixture, all three fixtures with `cases: all`. `scripts/ci/engine-canary-scope.ts` lists the changes that warrant the label: the deployed surfaces the canary drives, three directories of `apps/worker/src/services/**`, the canary's own runners and job, and the dependency inputs `pnpm-lock.yaml`, `pnpm-workspace.yaml` and `apps/worker/package.json`; skips deployment when `apps/worker/drizzle/**` changes; exact deployment commit and declared production database identity on the `ai-workflow-demo` custom environment | `.github/workflows/engine-canary.yml`, `scripts/ci/engine-canary-scope.ts`, `scripts/ci/engine-canary-preflight.ts` | No target is declared, an armed target is incomplete, the target name is `production`, deployment identity is unproven, the database environment or fingerprint is mismatched, or a selected live canary fails |
 | Changelog completeness | Whether a pull request touching `apps/**` or `packages/**` leaves an entry under `changelog/unreleased/` that yields at least one bullet, unless it carries the `changelog: skip` label | `scripts/ci/changelog-entry-gate.ts`, `.github/workflows/ci.yml` | A product change adds no entry, the entry it names is deleted, blank or carries no Markdown bullet, an entry cannot be read from the checkout, or the pull request's file list comes back empty |
 
 A gate proves an invariant over a set, and an empty set proves nothing, so a
