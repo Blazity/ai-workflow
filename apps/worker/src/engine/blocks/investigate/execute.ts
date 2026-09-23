@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readProviderFailure } from "@integrations/sdk";
 import type { TicketSummary } from "../../../adapters/issue-tracker/types.js";
 import type {
   MessageRetrievalFailure,
@@ -275,25 +276,18 @@ type ProviderOutcome<T> =
   | { status: "failed"; reason: MessageRetrievalFailure };
 
 /**
- * Coarse class for a tracker error, from what the adapter actually throws: a
- * refused credential is somebody's configuration to fix, an abort is a timeout,
- * anything else is treated as an outage.
+ * Coarse class for a tracker error, from what the adapter actually throws: an
+ * abort is a timeout, a provider that answered and said no (the SDK's
+ * `readProviderFailure`, read from the `status` the client puts on its errors)
+ * is somebody's configuration to fix, and anything else is an outage.
  *
- * This is a weak signal: the port (`IssueTrackerAdapter`) does not carry typed
- * errors, so all this has to go on is the message text. It matches a 401 or
- * 403 appearing as a standalone number anywhere in the message rather than one
- * provider's exact wording, so a differently worded permission error still
- * classifies. The cost of getting it wrong either way is the same: a
- * permission failure may be reported to the run as merely "unavailable",
- * which reads as an outage rather than something the tenant's connection
- * needs fixed.
+ * Under that rule a 400 or a 404 from a search reads as "permission", because
+ * it is the provider refusing what it was sent rather than failing to answer.
  */
 export function classifyTrackerFailure(error: unknown): MessageRetrievalFailure {
   const name = error instanceof Error ? error.name : "";
   if (name === "TimeoutError" || name === "AbortError") return "timeout";
-  const message = error instanceof Error ? error.message : "";
-  const permission = /(?<![0-9])(401|403)(?![0-9])/.test(message);
-  return permission ? "permission" : "unavailable";
+  return readProviderFailure(error).kind === "refused" ? "permission" : "unavailable";
 }
 
 async function searchTrackerSource(adapters: Adapters, input: {

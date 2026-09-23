@@ -204,20 +204,30 @@ describe("investigate paramsSchema", () => {
 });
 
 describe("classifyTrackerFailure", () => {
+  // What a tracker client throws for an answer that was not a success: the
+  // provider's sentence, and the status it answered with on the error.
+  const answered = (message: string, status: number) =>
+    Object.assign(new Error(message), { status });
+
   it("separates a refused credential from an outage and a timeout", () => {
-    expect(
-      classifyTrackerFailure(new Error("Jira API error: 403 Forbidden on /rest/api/3/search/jql")),
-    ).toBe("permission");
-    expect(
-      classifyTrackerFailure(new Error("Jira API error: 401 Unauthorized on /rest/api/3/search/jql")),
-    ).toBe("permission");
-    expect(
-      classifyTrackerFailure(new Error("Jira API error: 503 Service Unavailable on /x")),
-    ).toBe("unavailable");
+    expect(classifyTrackerFailure(answered("Jira search failed: Forbidden", 403))).toBe("permission");
+    expect(classifyTrackerFailure(answered("Jira search failed: Unauthorized", 401))).toBe("permission");
+    expect(classifyTrackerFailure(answered("Jira search failed: Service Unavailable", 503))).toBe(
+      "unavailable",
+    );
     expect(
       classifyTrackerFailure(Object.assign(new Error("aborted"), { name: "TimeoutError" })),
     ).toBe("timeout");
     expect(classifyTrackerFailure(new TypeError("fetch failed"))).toBe("unavailable");
+  });
+
+  it("reads the verdict from the status, not from numbers in the sentence", () => {
+    // A rate limit is no verdict on the credential, whatever the words say.
+    expect(classifyTrackerFailure(answered("Jira search failed: 403 quota", 429))).toBe("unavailable");
+    // A query the tracker refuses is the provider saying no.
+    expect(classifyTrackerFailure(answered("Jira search failed: Bad Request", 400))).toBe("permission");
+    // A sentence with no status says nothing about the values.
+    expect(classifyTrackerFailure(new Error("Jira API error: 401 Unauthorized"))).toBe("unavailable");
   });
 });
 
@@ -642,7 +652,7 @@ describe("investigate execute", () => {
     mockHappyPath();
     mocks.findTickets.mockReset();
     mocks.findTickets.mockRejectedValue(
-      new Error("Jira API error: 403 Forbidden on /rest/api/3/search/jql"),
+      Object.assign(new Error("Jira search failed: Forbidden"), { status: 403 }),
     );
 
     const result = await execute(
