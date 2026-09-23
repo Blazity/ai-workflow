@@ -1633,8 +1633,8 @@ describe("binding a failed pipeline through the production version control path"
     // GitLab's REST API as the real client calls it: the merge request, then
     // the jobs of its head pipeline. Anything else is a request this path was
     // not expected to make.
-    vi.stubGlobal("fetch", async (request: Request) => {
-      const path = new URL(request.url).pathname;
+    vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+      const path = new URL(typeof input === "string" || input instanceof URL ? input : input.url).pathname;
       const refusal = gitlabProvider.refusal;
       if (refusal && path.endsWith("/merge_requests/7")) {
         return new Response(JSON.stringify(refusal.body), {

@@ -13,9 +13,16 @@ import type { AddressInfo } from "node:net";
 
 import { integrationManifest } from "@integrations/registry";
 import { integrationRuntime } from "@integrations/registry/worker";
-import { IssueTrackerNotFoundError, type IntegrationManifest } from "@integrations/sdk";
+import {
+  isPullRequestRefusal,
+  IssueTrackerNotFoundError,
+  readProviderFailure,
+  type IntegrationManifest,
+} from "@integrations/sdk";
+import { Octokit } from "@octokit/rest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { GitLabRequestError } from "../../../../../integrations/gitlab/client.js";
 import { buildIntegrationContext, redactedError } from "./context.js";
 
 const manifest = integrationManifest("jira") as IntegrationManifest;
@@ -272,6 +279,117 @@ describe("retries", () => {
   });
 });
 
+/**
+ * An answer whose body the server is still sending when the attempt's
+ * deadline passes. The status and headers arrived in time, so a policy that
+ * returned at the headers handed back a Response whose body then failed, and
+ * Octokit reads a body that failed as an empty one: a pull request's files
+ * page came back as 200 with nothing in it, and a review saw no files.
+ */
+function lateBody(options: { lateMs: number; onlyFirst?: boolean }) {
+  let answered = 0;
+  return (_req: http.IncomingMessage, res: http.ServerResponse) => {
+    answered += 1;
+    const late = options.onlyFirst !== true || answered === 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.write('{"items":[1,');
+    const finish = () => {
+      if (!res.destroyed) res.end("2]}");
+    };
+    if (late) setTimeout(finish, options.lateMs);
+    else finish();
+  };
+}
+
+describe("an attempt ends when its body has been read", () => {
+  it("tries a read again when its body arrives after the deadline, and then fails loudly", async () => {
+    const server = await serve(lateBody({ lateMs: 600 }));
+
+    const error = await rejection(
+      context().http.fetch(server.url, { timeoutMs: 150 }).then((response) => response.text()),
+    );
+
+    expect(error.name).toBe("TimeoutError");
+    expect(server.hits).toEqual(["GET", "GET", "GET"]);
+  });
+
+  it("keeps the next attempt's body when it arrives in time", async () => {
+    const server = await serve(lateBody({ lateMs: 600, onlyFirst: true }));
+
+    const response = await context().http.fetch(server.url, { timeoutMs: 150 });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ items: [1, 2] });
+    expect(server.hits).toEqual(["GET", "GET"]);
+  });
+
+  it("never sends a write again because its answer was cut", async () => {
+    // The write landed; only its answer did not arrive whole.
+    const server = await serve(lateBody({ lateMs: 600 }));
+
+    const error = await rejection(
+      context().http.fetch(server.url, { method: "POST", timeoutMs: 150 }),
+    );
+
+    expect(error.name).toBe("TimeoutError");
+    expect(server.hits).toEqual(["POST"]);
+  });
+
+  it("reads every page Octokit asks for, a late one included", async () => {
+    let secondPage = 0;
+    const server = await serve((req, res) => {
+      const page = new URL(req.url ?? "/", "http://x").searchParams.get("page") ?? "1";
+      if (page === "1") {
+        res.writeHead(200, {
+          "content-type": "application/json",
+          link: `<${server.url}items?page=2>; rel="next"`,
+        });
+        res.end("[1,2]");
+        return;
+      }
+      secondPage += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write("[3,");
+      if (secondPage === 1) setTimeout(() => !res.destroyed && res.end("4]"), 600);
+      else res.end("4]");
+    });
+    const ctx = context();
+    const octokit = new Octokit({
+      baseUrl: server.url.replace(/\/$/u, ""),
+      request: {
+        fetch: (input: string | URL | Request, init?: RequestInit) =>
+          ctx.http.fetch(input, { ...init, timeoutMs: 150 }),
+      },
+    });
+
+    await expect(octokit.paginate("GET /items")).resolves.toEqual([1, 2, 3, 4]);
+  });
+
+  it("hands a streamed body to its caller as it arrives, when the caller asks", async () => {
+    // A download too large to hold in memory opts out of the read above and
+    // brings its own deadline, which then covers its own reading of the body.
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = await serve((_req, res) => {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.write("first ");
+      void released.then(() => res.end("last"));
+    });
+
+    const response = await Promise.race([
+      context().http.fetch(server.url, { streamBody: true, timeoutMs: 5_000 }),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("the answer waited for the whole body")), 1_000),
+      ),
+    ]);
+    release();
+
+    await expect(response.text()).resolves.toBe("first last");
+  });
+});
+
 describe("what a failed request throws", () => {
   const KEY = "tok-4f9a2c1e8b\n7d3e";
 
@@ -449,6 +567,87 @@ describe("the copy core passes on of what a provider threw", () => {
     expect(copy.code).toBe("E_[redacted]");
     expect(copy.fatal).toBe(true);
     expect(copy.request).toBeUndefined();
+    expect(everythingIn(copy)).not.toContain(SECRET);
+  });
+
+  // GitHub answers a spent primary rate limit with 403 and
+  // `x-ratelimit-remaining: 0` (REST "Rate limits" docs); Octokit's
+  // RequestError carries the status and the answer's headers, lowercased.
+  it("keeps a rate limit that only the answer's headers mark, and nothing else of the answer", () => {
+    const original = Object.assign(new Error("API rate limit exceeded for installation ID 4242."), {
+      name: "HttpError",
+      status: 403,
+      request: { headers: { authorization: `token ${SECRET}` } },
+      response: {
+        status: 403,
+        url: "https://api.github.com/repos/acme/api/pulls/7",
+        headers: {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": "1758600000",
+          "set-cookie": `session=${SECRET}`,
+        },
+        data: { message: "API rate limit exceeded" },
+      },
+    });
+
+    const copy = redactedError(original, (text) => text.replaceAll(SECRET, "[redacted]"));
+
+    expect(readProviderFailure(original).kind).toBe("no_verdict");
+    expect(readProviderFailure(copy).kind).toBe("no_verdict");
+    expect((copy as { response?: unknown }).response).toEqual({
+      status: 403,
+      headers: { "x-ratelimit-remaining": "0" },
+    });
+    expect(everythingIn(copy)).not.toContain(SECRET);
+  });
+
+  // Gitbeaker puts no status on what it throws and keeps GitLab's answer as
+  // `cause.response`; GitLab answers 401 for a token it does not accept.
+  describe("what the GitLab client throws", () => {
+    const gitLabFailure = (status: number, headers: Record<string, string> = {}, description = String(status)) =>
+      redactedError(
+        new GitLabRequestError(description, new Response(null, { status, headers })),
+        (text) => text,
+      );
+
+    it("reads a token GitLab refused as refused, with its status", () => {
+      expect(readProviderFailure(gitLabFailure(401, {}, "401 Unauthorized"))).toMatchObject({
+        kind: "refused",
+        status: 401,
+      });
+    });
+
+    it("reads GitLab's spent rate limit, marked only in its headers, as no verdict", () => {
+      // GitLab marks a throttled request with RateLimit-Remaining; a copy that
+      // lost the header would read this 403 as a refused token.
+      expect(readProviderFailure(gitLabFailure(403, { "RateLimit-Remaining": "0" })).kind).toBe(
+        "no_verdict",
+      );
+    });
+
+    it("keeps the scope GitLab said the token lacks, so the merge request is not closed for it", () => {
+      const copy = gitLabFailure(403, {
+        "WWW-Authenticate": 'Bearer realm="GitLab", error="insufficient_scope"',
+      });
+
+      expect(isPullRequestRefusal(copy)).toBe(false);
+    });
+  });
+
+  it("keeps a refusal whose client kept the answer on the error's cause", () => {
+    const original = Object.assign(new Error("401 Unauthorized"), {
+      cause: {
+        description: "401 Unauthorized",
+        request: new Request("https://gitlab.example.com/api/v4/projects/1", {
+          headers: { "private-token": SECRET },
+        }),
+        response: new Response(null, { status: 401 }),
+      },
+    });
+
+    const copy = redactedError(original, (text) => text.replaceAll(SECRET, "[redacted]"));
+
+    expect(readProviderFailure(copy)).toMatchObject({ kind: "refused", status: 401 });
     expect(everythingIn(copy)).not.toContain(SECRET);
   });
 });

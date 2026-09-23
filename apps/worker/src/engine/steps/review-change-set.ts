@@ -94,9 +94,9 @@ export async function fetchPullRequestChangeSetStep(
   target: PullRequestChangeSetTarget,
 ): Promise<PreSandboxPromptAddition> {
   "use step";
-  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
+  const { resolveRepositoryVCS } = await import("../support/vcs-runtime.js");
   const { hasPRFilesCapability } = await import("../../adapters/vcs/types.js");
-  const vcs = createRepositoryVCS({
+  const vcs = await resolveRepositoryVCS({
     provider: target.provider,
     repoPath: target.repoPath,
     baseBranch: target.baseRef,

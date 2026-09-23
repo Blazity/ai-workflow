@@ -80,6 +80,16 @@ aborts on its own), the *attempt deadline* (per request attempt, in
 overwritten). Single-shot work with a real deadline (a webhook request, a page
 read, a block, a probe) keeps that deadline as its lifetime.
 
+The attempt deadline covers reading the body (amended in the VCS
+consolidation round). `fetch` settles at the headers while the deadline keeps
+running, so a body still arriving when it passed failed in the caller's hands,
+outside the retry loop, and Octokit reads a failed body as an empty one: a
+late page of pull request files was a 200 with nothing in it. `ctx.http` now
+reads the body inside the attempt and hands back a buffered Response, so a cut
+body is a failed attempt (a read goes again, a write throws). Streaming is an
+opt-in (`streamBody`) for a download too large to hold in memory, and that
+request brings its own `timeoutMs` for the whole download.
+
 **Rejected.** A longer resolution timeout (moves the cliff, does not remove it);
 a signal tied to the invocation deadline (nothing carries one today, and it
 would mean threading it through about 40 callers).

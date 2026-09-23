@@ -1,20 +1,45 @@
 import { createHash } from "node:crypto";
-import { Gitlab } from "@gitbeaker/rest";
+import type { Gitlab } from "@gitbeaker/rest";
 import {
+  AI_WORKFLOW_COMMENT_MARKER,
   FatalError,
+  hasReviewLedgerFailureMarker,
   isPullRequestRefusal,
-  providerAnswerOf,
-  readProviderFailure,
+  isReopenedLedgerThread,
+  isReviewLedgerNote,
   isReviewLedgerWorkItem,
+  legacyReviewCommentMarker,
+  markReviewLedgerReplyResolved,
+  markReviewLedgerReplyStale,
+  providerAnswer,
   PullRequestUnreadableError,
+  readAnyReviewLedgerMarker,
+  readProviderFailure,
+  readReviewFindingDigest,
+  readReviewLedgerMarker,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
+  reviewFallbackBullet,
+  reviewFindingMarker,
+  reviewHeadMarker,
+  reviewLedgerFailureMarker,
+  reviewSummaryMarker,
   type CheckRunResult,
+  type GateStatusCapableVCS,
   type GateStatusRef,
   type GateStatusUpdate,
+  type IntegrationHttp,
   type IntegrationLogger,
+  type ManualDispatchPrCapableVCS,
+  type ManualDispatchPullRequestSnapshot,
   type PostRunFailureNoteInput,
   type PRComment,
+  type PRFile,
+  type PRFilesCapableVCS,
+  type PRReviewCapableVCS,
+  type PRReviewInlineComment,
+  type PRReviewPublication,
+  type PRReviewPublicationResult,
   type PullRequest,
   type PullRequestHead,
   type ReviewThread,
@@ -22,7 +47,7 @@ import {
   type ReviewThreadSource,
   type SettleReviewThreadInput,
   type SettleReviewThreadResult,
-  type VCSAdapter,
+  type VcsIntegrationAdapter,
   type VcsRepositoryMetadata,
   type VcsOpaqueHandle,
 } from "@integrations/sdk";
@@ -33,92 +58,8 @@ import {
   jobCheck,
   pipelineCheck,
 } from "./pipeline-checks";
+import { gitLabClient, GitLabRequestError, type GitLabClient, type GitLabRequestInit } from "./client";
 import { createGitLabProfileSource } from "./profile-source";
-import {
-  AI_WORKFLOW_COMMENT_MARKER,
-  hasReviewLedgerFailureMarker,
-  isReopenedLedgerThread,
-  isReviewLedgerNote,
-  markReviewLedgerReplyResolved,
-  markReviewLedgerReplyStale,
-  readAnyReviewLedgerMarker,
-  readReviewLedgerMarker,
-  reviewLedgerFailureMarker,
-  readReviewFindingDigest,
-  reviewFallbackBullet,
-  type PRReviewInlineComment,
-} from "./review-markers";
-
-export interface PRFile {
-  path: string;
-  additions: number;
-  deletions: number;
-  changeType: "added" | "removed" | "modified" | "renamed";
-  patch?: string;
-}
-
-interface PRReviewPublication {
-  idempotencyKey: string;
-  priorIdempotencyKeys?: string[];
-  commentFindingDigests: string[];
-  deferredFindingDigests?: string[];
-  headSha: string;
-  decision: "approve" | "request_changes";
-  summary: string;
-  comments: PRReviewInlineComment[];
-}
-
-interface PRReviewPublicationResult {
-  id: string;
-  commentIds: Array<string | null>;
-}
-
-interface ManualDispatchPullRequestSnapshot {
-  prNumber: number;
-  prUrl: string;
-  headRef: string;
-  headSha: string;
-  baseRef: string;
-  title: string;
-  author: string;
-  isDraft: boolean;
-  state: "open" | "closed" | "merged";
-  mergeSha?: string;
-  mergedAt?: string;
-  failedChecks: Array<{
-    name: string;
-    conclusion: string;
-    handle?: VcsOpaqueHandle;
-    producer: string;
-    source?: string;
-    trustedByDefault?: boolean;
-  }>;
-  reviews: Array<{
-    state: "changes_requested" | "commented";
-    author: string;
-    body: string;
-  }>;
-}
-
-interface GateStatusCapableVCS {
-  createGateStatus(name: string, headSha: string, ownershipKey?: string): Promise<GateStatusRef>;
-  updateGateStatus(ref: GateStatusRef, update: GateStatusUpdate): Promise<void>;
-}
-
-interface PRFilesCapableVCS {
-  listPRFiles(prId: number): Promise<PRFile[]>;
-}
-
-interface PRReviewCapableVCS {
-  publishPRReview(
-    prId: number,
-    publication: PRReviewPublication,
-  ): Promise<PRReviewPublicationResult>;
-}
-
-interface ManualDispatchPrCapableVCS {
-  getManualDispatchPullRequest(prId: number): Promise<ManualDispatchPullRequestSnapshot>;
-}
 
 function clampBothEnds(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
@@ -228,6 +169,9 @@ const COMMIT_STATUS_409_RETRY_DELAYS_MS = [500, 1_000, 2_000];
 const PROJECTS_LIST_TIMEOUT_MS = 18_000;
 
 export interface GitLabConfig {
+  /** The context's HTTP: every request this adapter makes goes through it
+   *  (see `client.ts`). */
+  http: IntegrationHttp;
   token: string;
   projectId: string;
   baseBranch: string;
@@ -270,84 +214,59 @@ interface OwnedReviewDiscussion {
   hasSupersededNote: boolean;
 }
 
-/**
- * The error Gitbeaker threw, with the status GitLab answered put on it.
- *
- * Gitbeaker keeps GitLab's answer on `cause.response` and no status on the
- * error. Core reads a copy of what an adapter throws (it redacts it), and the
- * copy keeps an error's own `status` but not its cause's response, so without
- * this a refused token reads in core as a provider that gave no answer.
- */
-function withProviderStatus(err: unknown): unknown {
-  const answer = providerAnswerOf(err);
-  if (err instanceof Error && answer instanceof Response) {
-    Object.defineProperty(err, "status", {
-      value: answer.status,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
-  return err;
-}
-
 export class GitLabAdapter implements
-  VCSAdapter,
+  VcsIntegrationAdapter,
   GateStatusCapableVCS,
   PRFilesCapableVCS,
   PRReviewCapableVCS,
   ManualDispatchPrCapableVCS
 {
-  private gl: InstanceType<typeof Gitlab>;
+  private client: GitLabClient;
+  /** Gitbeaker's resources, built the first time a call needs them. */
+  private get gl(): InstanceType<typeof Gitlab> {
+    return this.client.api;
+  }
   private projectId: string;
   private baseBranch: string;
   /** `undefined` until looked up; `null` when GitLab returned no username. */
   private cachedUsername: string | null | undefined;
 
-  constructor(
-    private config: GitLabConfig,
-    client?: InstanceType<typeof Gitlab>,
-  ) {
-    this.gl =
-      client ??
-      new Gitlab({
-        token: config.token,
-        ...(config.host ? { host: config.host } : {}),
-      });
+  constructor(private config: GitLabConfig) {
+    this.client = gitLabClient({
+      http: config.http,
+      host: config.host ?? "https://gitlab.com",
+      token: config.token,
+    });
     this.projectId = config.projectId;
     this.baseBranch = config.baseBranch;
   }
 
-
   /**
-   * Every project the token is a member of. A failure carries `status` or
-   * `timedOut`, because core's listing retry reads exactly those to tell a
-   * GitLab outage it can wait out from a credential it would replay unchanged.
+   * Every project the token is a member of, one page at a time inside the
+   * catalog import's budget. The context retries a page GitLab failed on its
+   * own side or never answered; a failure that reaches the caller carries
+   * GitLab's status, or says the page ran out of time.
    */
   async listRepositories(): Promise<VcsRepositoryMetadata[]> {
     const projects: any[] = [];
-    const baseUrl = (this.config.host ?? "https://gitlab.com").replace(/\/$/u, "");
     let page = "1";
     while (page) {
-      const response = await fetch(
-        `${baseUrl}/api/v4/projects?membership=true&per_page=100&page=${page}`,
-        {
-          headers: { "PRIVATE-TOKEN": this.config.token },
-          signal: AbortSignal.timeout(PROJECTS_LIST_TIMEOUT_MS),
-        },
-      ).catch((error: unknown) => {
-        if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-          throw Object.assign(
-            new Error(`GitLab projects list timed out after ${PROJECTS_LIST_TIMEOUT_MS}ms`),
-            { timedOut: true },
-          );
-        }
-        throw error;
-      });
+      const response = await this.client
+        .send(`/projects?membership=true&per_page=100&page=${page}`, {
+          timeoutMs: PROJECTS_LIST_TIMEOUT_MS,
+        })
+        .catch((error: unknown) => {
+          if (error instanceof Error && error.name === "TimeoutError") {
+            throw new Error(`GitLab projects list timed out after ${PROJECTS_LIST_TIMEOUT_MS}ms`, {
+              cause: error,
+            });
+          }
+          throw error;
+        });
       if (!response.ok) {
-        throw Object.assign(
-          new Error(`GitLab projects list failed: ${response.status} ${response.statusText}`),
-          { status: response.status },
+        throw new GitLabRequestError(
+          `GitLab projects list failed: ${response.status} ${response.statusText}`,
+          response,
         );
       }
       projects.push(...((await response.json()) as any[]));
@@ -357,10 +276,7 @@ export class GitLabAdapter implements
   }
 
   loadRepositoryProfile(repoPath: string) {
-    return createGitLabProfileSource(
-      { token: this.config.token, host: this.config.host ?? "https://gitlab.com" },
-      repoPath,
-    ).loadProfile();
+    return createGitLabProfileSource(this.client, repoPath).loadProfile();
   }
 
   async sandboxCredentials() {
@@ -371,10 +287,6 @@ export class GitLabAdapter implements
       commitAuthor: "ai-workflow-blazity",
       commitEmail: "ai-workflow@blazity.com",
     };
-  }
-
-  private get apiBaseUrl(): string {
-    return `${(this.config.host ?? "https://gitlab.com").replace(/\/+$/, "")}/api/v4`;
   }
 
   private get encodedProjectId(): string {
@@ -414,7 +326,14 @@ export class GitLabAdapter implements
     // attempt re-runs this path and the create re-establishes it (the MR is
     // reopened/recreated downstream). This is only ever invoked for a branch the
     // database proves the workflow owns.
-    await this.gl.Branches.remove(this.projectId, name);
+    try {
+      await this.gl.Branches.remove(this.projectId, name);
+    } catch (err) {
+      // Already gone: an earlier attempt's remove landed and answered badly (a
+      // 502 after GitLab deleted the branch). Stopping here would fail every
+      // retry at this line and never re-create the branch.
+      if (this.getStatusCode(err) !== 404) throw err;
+    }
     await this.gl.Branches.create(this.projectId, name, base);
   }
 
@@ -434,24 +353,15 @@ export class GitLabAdapter implements
     }
   }
 
-  private getStatusCode(err: any): number | undefined {
-    // gitbeaker error shapes vary across versions and transports:
-    // - fetch-based: err.cause.response.status
-    // - got-based:   err.response.statusCode / err.response.status
-    // - normalized:  err.status / err.statusCode
-    return (
-      err?.cause?.response?.status ??
-      err?.response?.status ??
-      err?.response?.statusCode ??
-      err?.status ??
-      err?.statusCode
-    );
+  /** GitLab's status in a failure, read where the SDK reads it. */
+  private getStatusCode(err: unknown): number | undefined {
+    return providerAnswer(err)?.status;
   }
 
   /** A refusal of the values sent is final for this call; anything else,
    *  including a rate limit or GitLab failing on its own side, is retried. */
   private throwWithProviderRetrySemantics(err: any): never {
-    if (readProviderFailure(providerAnswerOf(err)).kind === "refused") {
+    if (readProviderFailure(err).kind === "refused") {
       throw new FatalError(err instanceof Error ? err.message : String(err));
     }
     throw err;
@@ -477,23 +387,20 @@ export class GitLabAdapter implements
       retryOn409?: boolean;
     },
   ): Promise<{ data: T; headers: Headers }> {
-    const headers: Record<string, string> = {
-      "PRIVATE-TOKEN": this.config.token,
-    };
-    const init: RequestInit = {
+    const init: GitLabRequestInit = {
       method: options.method,
-      headers,
+      ...(options.body !== undefined
+        ? {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(options.body),
+          }
+        : {}),
     };
-
-    if (options.body !== undefined) {
-      headers["Content-Type"] = "application/json";
-      init.body = JSON.stringify(options.body);
-    }
 
     const retryDelays = options.retryOn409 ? COMMIT_STATUS_409_RETRY_DELAYS_MS : [];
     const maxAttempts = retryDelays.length + 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const response = await fetch(`${this.apiBaseUrl}${path}`, init);
+      const response = await this.client.send(path, init);
       if (response.ok) {
         return {
           data:
@@ -514,11 +421,10 @@ export class GitLabAdapter implements
         // Best-effort diagnostic body.
       }
       const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-      const error = new Error(
+      throw new GitLabRequestError(
         `GitLab REST ${options.method} ${path} failed with ${status}${details ? `: ${details}` : ""}`,
+        response,
       );
-      Object.assign(error, { status: response.status });
-      throw error;
     }
 
     throw new Error(`GitLab REST ${options.method} ${path} failed`);
@@ -640,14 +546,15 @@ export class GitLabAdapter implements
       // or not. That, and one that no longer exists, is closed for good. A
       // token GitLab no longer accepts (401) or one without the scope to read
       // at all (403 `insufficient_scope`) refuses every merge request: that is
-      // the connection's fault and is thrown as it came, with its status.
+      // the connection's fault and is thrown as it came (core's copy of it
+      // carries GitLab's status, read from where the client kept it).
       if (isPullRequestRefusal(err)) {
         throw new PullRequestUnreadableError(
           `GitLab merge request !${prId} in ${this.projectId} cannot be read with this token`,
           { cause: err },
         );
       }
-      throw withProviderStatus(err);
+      throw err;
     }
     const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
     if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);
@@ -789,22 +696,6 @@ export class GitLabAdapter implements
     }
   }
 
-  async getPRHeadSha(prId: number): Promise<string> {
-    try {
-      const mr = (await this.gl.MergeRequests.show(
-        this.projectId,
-        prId,
-      )) as unknown as GitLabMR;
-      if (!mr.sha) {
-        throw new FatalError(`GitLab merge request !${prId} did not include a head SHA`);
-      }
-      return mr.sha;
-    } catch (err) {
-      if (err instanceof FatalError) throw err;
-      this.throwWithProviderRetrySemantics(err);
-    }
-  }
-
   async listPRFiles(prId: number): Promise<PRFile[]> {
     const diffs: GitLabMRDiff[] = [];
     let nextPath: string | null = this.mrDiffsPath(prId, "1");
@@ -853,28 +744,25 @@ export class GitLabAdapter implements
     prId: number,
     publication: PRReviewPublication,
   ): Promise<PRReviewPublicationResult> {
-    const reviewMarker = (key: string) => `<!-- ai-workflow-review:${key} -->`;
-    const marker = reviewMarker(publication.idempotencyKey);
+    const marker = reviewSummaryMarker(publication.idempotencyKey);
     // The merge request's marker, on the one summary note. Only the current key is
     // ever written; prior keys are recognised because a note published before the
     // key identified the merge request carries one of those, and this is what turns
     // such a note into the note every later round edits.
     const priorKeys = publication.priorIdempotencyKeys ?? [];
-    const knownMarkers = [marker, ...priorKeys.map(reviewMarker)];
+    const knownMarkers = [marker, ...priorKeys.map(reviewSummaryMarker)];
     // The round's marker, and on GitLab it rides in the summary note because there
     // is no review object to hang it from. Its one job is to recognise a round this
     // adapter has already published, now that the summary marker no longer says
     // which head it describes.
-    const headMarker = `<!-- ai-workflow-review-head:${publication.headSha} -->`;
+    const headMarker = reviewHeadMarker(publication.headSha);
     // The marker family from before findings had an identity of their own. Never
     // written again, still recognised: within one round the index it carries does
     // identify the finding, and the prior keys are the same round's earlier
     // attempts, so an attempt that failed after posting its discussions does not
     // post them twice.
     const legacyCommentMarkers = (index: number) =>
-      [publication.idempotencyKey, ...priorKeys].map(
-        (key) => `<!-- ai-workflow-review-comment:${key}:${index} -->`,
-      );
+      [publication.idempotencyKey, ...priorKeys].map((key) => legacyReviewCommentMarker(key, index));
     const existingNotes = (await this.gl.MergeRequestNotes.all(
       this.projectId,
       prId,
@@ -1000,8 +888,7 @@ export class GitLabAdapter implements
     for (const [index, comment] of publication.comments.entries()) {
       // The marker travels with the note because the discussion it opens is what a
       // later round has to recognise.
-      const commentMarker =
-        `<!-- ai-workflow-review-finding:${digests[index]!} -->`;
+      const commentMarker = reviewFindingMarker(digests[index]!);
       const priorDiscussion = matched[index];
       if (priorDiscussion) {
         commentIds.push(
@@ -1417,8 +1304,14 @@ export class GitLabAdapter implements
         mapped.conclusion !== "cancelled"
       ) {
         try {
-          const log = await this.gl.Jobs.showLog(this.projectId, job.id);
-          entry.logs = String(log);
+          const log: unknown = await this.gl.Jobs.showLog(this.projectId, job.id);
+          // Only text is a log; anything else would reach the agent as
+          // "[object Object]". Without logs it is shown the conclusion.
+          if (typeof log === "string") {
+            entry.logs = log;
+          } else {
+            this.config.log?.warn({ check: job.name, jobId: job.id }, "check_logs_unreadable");
+          }
         } catch {
           // Log fetching is best-effort
         }

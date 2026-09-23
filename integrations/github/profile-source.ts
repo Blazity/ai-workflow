@@ -1,9 +1,9 @@
 /**
  * What a GitHub repository says about itself.
  *
- * Built on the same App-authenticated Octokit the rest of the GitHub adapter
- * uses (`buildOctokit`), so a deployment that can list its installation can
- * read a profile with no second credential and no second code path.
+ * Read through the adapter's own client (`buildOctokit`), so a deployment
+ * that can list its installation can read a profile with no second
+ * credential and no second code path.
  *
  * Every read here is best effort by design. A repository with no README, no
  * manifests and no workflows is a perfectly ordinary repository, and the one
@@ -23,7 +23,7 @@ import {
   type RepositoryProfileFile,
   type RepositoryProfileSource,
 } from "@integrations/sdk";
-import { buildOctokit, type GitHubAppCredential } from "./auth";
+import type { Octokit } from "@octokit/rest";
 
 const WORKFLOWS_PATH = ".github/workflows";
 
@@ -69,7 +69,7 @@ function decode(value: unknown, encoding: unknown): string {
 
 class GitHubProfileSource implements RepositoryProfileSource {
   constructor(
-    private readonly credential: GitHubAppCredential,
+    private readonly client: Octokit,
     private readonly owner: string,
     private readonly repo: string,
     private readonly repoPath: string,
@@ -77,10 +77,10 @@ class GitHubProfileSource implements RepositoryProfileSource {
 
   async loadProfile(): Promise<RepositoryProfileBundle> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const octokit = buildOctokit(this.credential) as any;
-    // `buildOctokit` sets no timeout of its own, so without this a GitHub that
-    // accepts the connection and never answers holds the invocation until the
-    // platform kills it. One signal for the whole read, threaded into every
+    const octokit = this.client as any;
+    // Each request has core's attempt deadline; this bounds the whole read,
+    // so a GitHub that answers slowly on every call cannot hold the
+    // invocation until the platform kills it. One signal, threaded into every
     // call below through Octokit's `request.signal`.
     const signal = AbortSignal.timeout(REPOSITORY_PROFILE_DEADLINE_MS);
     const target: GitHubProfileTarget = {
@@ -191,7 +191,7 @@ class GitHubProfileSource implements RepositoryProfileSource {
  * guessed at when it is spelled any other way.
  */
 export function createGitHubProfileSource(
-  credential: GitHubAppCredential,
+  octokit: Octokit,
   repoPath: string,
 ): RepositoryProfileSource {
   const parts = repoPath.split("/");
@@ -200,5 +200,5 @@ export function createGitHubProfileSource(
       `Invalid repoPath for GitHub: expected exactly "owner/repo", got "${repoPath}"`,
     );
   }
-  return new GitHubProfileSource(credential, parts[0], parts[1], repoPath);
+  return new GitHubProfileSource(octokit, parts[0], parts[1], repoPath);
 }

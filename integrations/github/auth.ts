@@ -1,7 +1,7 @@
 import { createPrivateKey } from "node:crypto";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
-import { FatalError, type IntegrationHttp } from "@integrations/sdk";
+import { FatalError, INTEGRATION_HTTP_DEFAULTS, type IntegrationHttp } from "@integrations/sdk";
 
 /**
  * The App credential, as this integration holds it.
@@ -121,20 +121,26 @@ export function requirePrivateKey(value: string | undefined): string {
 }
 
 /**
- * Octokit pre-wired with the App auth strategy. Octokit mints and refreshes the
- * installation token internally per request, so every REST call from the
- * adapter goes through one of these.
+ * The one GitHub client this integration has: Octokit with the App auth
+ * strategy, sending every request through the context's `fetch`.
  *
- * `fetch` is the context's (`ctx.http.fetch`), and a caller that has a context
- * passes it: every request then has core's timeout, is bound to the context's
- * lifetime (a connection test that runs out of time stops waiting on GitHub)
- * and throws with the connection's secrets redacted. Octokit hands the same
- * fetch to the App auth strategy, so minting the installation token goes
- * through it too.
+ * Every call the integration makes goes through one of these, built from the
+ * context: the adapter's REST and GraphQL calls, the connection test and the
+ * health checks, a repository profile, a skill import, minting an
+ * installation token and reading the App's bot identity. Octokit hands its
+ * request to the App auth strategy, so the JWT exchange and the installation
+ * token are fetched the same way. Each request then has core's attempt
+ * deadline, core's retry policy (a read retried after a network error, a 429
+ * or a 5xx; a write sent once), the context's lifetime, and throws with the
+ * connection's secrets redacted.
+ *
+ * GraphQL is always a POST, which the context takes for a write, so a
+ * GraphQL document that is not a mutation is marked as the read it is
+ * (`graphqlReadRetries`); a mutation keeps the rule for writes.
  */
 export function buildOctokit(
   credential: GitHubAppCredential,
-  options: { readonly fetch?: IntegrationHttp["fetch"] } = {},
+  fetch: IntegrationHttp["fetch"],
 ): Octokit {
   return new Octokit({
     authStrategy: createAppAuth,
@@ -143,26 +149,49 @@ export function buildOctokit(
       privateKey: requirePrivateKey(credential.privateKey),
       installationId: credential.installationId,
     },
-    ...(options.fetch ? { request: { fetch: options.fetch } } : {}),
+    request: {
+      fetch: (input: string | URL | Request, init?: RequestInit) =>
+        fetch(input, { ...init, ...graphqlReadRetries(input, init) }),
+    },
   });
 }
 
 /**
- * Mint an installation access token explicitly. Used where a raw token string
- * has to go into a git remote URL (the push site, a sandbox's source password).
- * Each call asks GitHub for a fresh token that lives about an hour; do not cache
- * it outside the operation that needs it.
+ * The read policy's retries for a GraphQL document that changes nothing.
+ * Conservative on purpose: a document that mentions `mutation` anywhere is
+ * left to the rule for writes, because sending a write twice is the mistake
+ * that costs, and a read sent once only fails sooner.
  */
-export async function mintInstallationToken(
-  credential: GitHubAppCredential,
-): Promise<string> {
-  const appAuth = createAppAuth({
-    appId: credential.appId,
-    privateKey: requirePrivateKey(credential.privateKey),
-    installationId: credential.installationId,
-  });
-  const result = await appAuth({ type: "installation" });
-  return result.token;
+function graphqlReadRetries(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+): { retries?: number } {
+  if (init?.method?.toUpperCase() !== "POST" || typeof init.body !== "string") return {};
+  const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+  if (!new URL(url).pathname.endsWith("/graphql")) return {};
+  let query: unknown;
+  try {
+    query = (JSON.parse(init.body) as { query?: unknown }).query;
+  } catch {
+    return {};
+  }
+  return typeof query === "string" && !/\bmutation\b/u.test(query)
+    ? { retries: INTEGRATION_HTTP_DEFAULTS.retries }
+    : {};
+}
+
+/**
+ * A fresh installation access token, for where a raw token string has to go
+ * into a git remote URL (the push site, a sandbox's source password). Minted
+ * through the client's own auth strategy, and `refresh` so it is never a
+ * cached one close to expiry: GitHub's lives about an hour from now. Do not
+ * cache it outside the operation that needs it.
+ */
+export async function mintInstallationToken(octokit: Octokit): Promise<string> {
+  const { token } = (await octokit.auth({ type: "installation", refresh: true })) as {
+    token: string;
+  };
+  return token;
 }
 
 /**
@@ -171,13 +200,12 @@ export async function mintInstallationToken(
  * rather than as the human who registered the App. The format is GitHub's own
  * noreply convention: `<bot-user-id>+<app-slug>[bot]@users.noreply.github.com`.
  *
- * Two calls, both on the App JWT: `GET /app` for the slug and
- * `GET /users/{slug}[bot]` for the numeric id. No installation token is spent.
+ * Two calls: `GET /app` for the slug, on the App JWT, and
+ * `GET /users/{slug}[bot]` for the numeric id, which the App auth strategy
+ * sends on the installation token (only `/app` routes and a few others take
+ * the JWT; see `requiresAppAuth` in `@octokit/auth-app`).
  */
-export async function getBotIdentity(
-  credential: GitHubAppCredential,
-): Promise<{ name: string; email: string }> {
-  const octokit = buildOctokit(credential);
+export async function getBotIdentity(octokit: Octokit): Promise<{ name: string; email: string }> {
   const { data: app } = await octokit.apps.getAuthenticated();
   const slug = app?.slug;
   if (!slug) {

@@ -65,7 +65,6 @@ export {
 export {
   isPullRequestRefusal,
   isPullRequestUnreadableError,
-  providerAnswerOf,
   PullRequestUnreadableError,
 } from "./pull-request-unreadable";
 
@@ -120,8 +119,11 @@ export {
 export { ConnectionValueError, FatalError } from "./errors";
 
 export {
+  PROVIDER_VERDICT_HEADERS,
+  providerAnswer,
   readProviderFailure,
   refusedOrThrow,
+  type ProviderAnswer,
   type ProviderFailure,
 } from "./provider-failure";
 
@@ -188,19 +190,18 @@ export {
 } from "./issue-tracker";
 
 export {
-  AI_WORKFLOW_MARKER_PATTERN,
   GATE_CHECK_NAME_PREFIX,
   LEGACY_GATE_CHECK_NAME_PREFIX,
   isManagedGateCheckName,
-  isOurOwnVcsComment,
   isReviewLedgerWorkItem,
+  normalizeVcsLogin,
   selectReviewLedgerWorkItems,
+  vcsLoginsMatch,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
+  VCS_BOT_LOGIN_FIELD,
+  VCS_LEGACY_BOT_LOGIN_FIELD,
   type CheckRunResult,
-  type CheckRunConclusion,
-  type GateStatusRef,
-  type GateStatusUpdate,
   type PostRunFailureNoteInput,
   type PRComment,
   type PullRequest,
@@ -219,11 +220,57 @@ export {
   type SettleReviewThreadResult,
   type VCSAdapter,
   type VcsHandleIdentity,
-  type VcsIntegrationAdapter,
   type VcsOpaqueHandle,
   type VcsRepositoryMetadata,
   type VcsSandboxCredentials,
 } from "./vcs";
+
+export {
+  hasGateStatusCapability,
+  hasManualDispatchPrCapability,
+  hasPRFilesCapability,
+  hasPRReviewCapability,
+  hasRichGateStatusCapability,
+  reviewFallbackBullet,
+  type CheckRunAnnotation,
+  type CheckRunConclusion,
+  type GateStatusCapableVCS,
+  type GateStatusRef,
+  type GateStatusUpdate,
+  type ManualDispatchPrCapableVCS,
+  type ManualDispatchPullRequestSnapshot,
+  type PRFile,
+  type PRFilesCapableVCS,
+  type PRReviewCapableVCS,
+  type PRReviewInlineComment,
+  type PRReviewPublication,
+  type PRReviewPublicationResult,
+  type RichGateStatusCapableVCS,
+  type RichGateStatusUpdate,
+  type VcsIntegrationAdapter,
+} from "./vcs-extensions";
+
+export {
+  AI_WORKFLOW_COMMENT_MARKER,
+  AI_WORKFLOW_MARKER_PATTERN,
+  hasAiWorkflowCommentMarker,
+  hasReviewLedgerFailureMarker,
+  hasUnquotedAiWorkflowCommentMarker,
+  isOurOwnVcsComment,
+  isReopenedLedgerThread,
+  isReviewLedgerNote,
+  legacyReviewCommentMarker,
+  markReviewLedgerReplyResolved,
+  markReviewLedgerReplyStale,
+  readAnyReviewLedgerMarker,
+  readReviewFindingDigest,
+  readReviewLedgerMarker,
+  reviewFindingMarker,
+  reviewHeadMarker,
+  reviewLedgerFailureMarker,
+  reviewLedgerMarker,
+  reviewSummaryMarker,
+} from "./review-markers";
 
 export type {
   MemoryAdapter,
