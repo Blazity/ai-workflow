@@ -726,11 +726,20 @@ function findTransition(
     if (statusTransition) return statusTransition;
   }
 
+  // A configured target may name the transition action ("Mark as done") or the
+  // status it lands on ("已完成"); Jira localizes statuses but not transitions,
+  // so the two can read completely differently, and `listStatuses` (what
+  // callers are told is available) only ever knows status names. Accepting
+  // either keeps a caller who quotes the status name from the error message
+  // working, not just one who happens to know the transition's own label.
   const normalizedColumn = target.name.toLowerCase();
-  const exact = transitions.find(
+  const byTransitionName = transitions.find(
     (transition) => transition.name?.toLowerCase() === normalizedColumn,
   );
-  return exact;
+  if (byTransitionName) return byTransitionName;
+  return transitions.find(
+    (transition) => transition.to?.name?.toLowerCase() === normalizedColumn,
+  );
 }
 
 function toAdfParagraphs(text: string) {

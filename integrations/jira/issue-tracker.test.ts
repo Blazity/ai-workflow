@@ -1256,6 +1256,30 @@ describe("JiraAdapter", () => {
         transition: { id: "31" },
       });
     });
+
+    it("matches a bare status name even when it differs from the transition's own name", async () => {
+      // Jira localizes statuses but not transitions: the action is named "Mark
+      // as done" while the status it lands on reads "已完成". A caller quoting
+      // the status name the error message offers (listStatuses, project
+      // statuses) must resolve, not just one who knows the transition label.
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            transitions: [
+              { id: "11", name: "Start progress", to: { id: "3", name: "进行中" } },
+              { id: "31", name: "Mark as done", to: { id: "11416", name: "已完成" } },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      await jiraAdapter().moveTicket("10001", { name: "已完成" });
+
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({
+        transition: { id: "31" },
+      });
+    });
   });
 
   describe("resolveMoveTargetStatus", () => {
@@ -1298,6 +1322,19 @@ describe("JiraAdapter", () => {
       await expect(
         jiraAdapter().resolveMoveTargetStatus("PROJ-1", "REVIEW"),
       ).resolves.toBeNull();
+    });
+
+    it("resolves a target named after the status rather than the transition", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          transitions: [{ id: "31", name: "Mark as done", to: { id: "11416", name: "已完成" } }],
+        }),
+      });
+
+      await expect(
+        jiraAdapter().resolveMoveTargetStatus("PROJ-1", "已完成"),
+      ).resolves.toEqual({ id: "11416", name: "已完成" });
     });
   });
 

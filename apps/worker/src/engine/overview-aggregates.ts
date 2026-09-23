@@ -115,7 +115,12 @@ export async function collectConnectedCostAggregate(
   const { cutoff } = bounds(parseWindow(windowParam), now);
   const rows = await connectedDashboardRunQueries.listCosts(cutoff);
   const enriched = rows.map((row) => ({
-    workflowId: row.workflowId ?? "wf_unknown",
+    // Group by the stored workflow definition (the ticket workflow, almost
+    // every run) when there is one, so each definition gets its own bucket
+    // instead of every one of them collapsing into the single Workflow
+    // DevKit function ("wf_agent") they all run through. A run with no
+    // definition (pre-sandbox, the post-PR gate) keeps the raw workflow id.
+    groupKey: row.definitionId != null ? `def_${row.definitionId}` : (row.workflowId ?? "wf_unknown"),
     workflowName: row.workflowName ?? row.workflowId ?? "-",
     cost: row.costUsd ?? 0,
     tokens: (row.tokensInput ?? 0) + (row.tokensOutput ?? 0),
@@ -124,11 +129,11 @@ export async function collectConnectedCostAggregate(
   const byId = new Map<string, { name: string; runs: number; tokens: number; cost: number }>();
   const byDay = new Map<string, { cost: number; tokens: number }>();
   for (const row of enriched) {
-    const workflow = byId.get(row.workflowId) ?? { name: row.workflowName, runs: 0, tokens: 0, cost: 0 };
+    const workflow = byId.get(row.groupKey) ?? { name: row.workflowName, runs: 0, tokens: 0, cost: 0 };
     workflow.runs += 1;
     workflow.tokens += row.tokens;
     workflow.cost += row.cost;
-    byId.set(row.workflowId, workflow);
+    byId.set(row.groupKey, workflow);
     const day = row.time.toISOString().slice(0, 10);
     const daily = byDay.get(day) ?? { cost: 0, tokens: 0 };
     daily.cost += row.cost;

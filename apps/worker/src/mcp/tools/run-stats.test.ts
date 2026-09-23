@@ -17,7 +17,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
 
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
-import { organization, workflowRuns } from "../../db/schema.js";
+import { organization, workflowDefinitions, workflowRuns } from "../../db/schema.js";
 import { depsFor } from "../../test-support/mcp.js";
 import { registerRunStatsTools } from "./run-stats.js";
 
@@ -61,6 +61,8 @@ async function seedRun(over: {
   costUsd?: number | null;
   tokensInput?: number | null;
   tokensOutput?: number | null;
+  definitionId?: number | null;
+  definitionVersion?: number | null;
 }): Promise<string> {
   runSeq += 1;
   const runId = `wrun_${runSeq}`;
@@ -75,6 +77,8 @@ async function seedRun(over: {
     costUsd: over.costUsd ?? null,
     tokensInput: over.tokensInput ?? null,
     tokensOutput: over.tokensOutput ?? null,
+    definitionId: over.definitionId ?? null,
+    definitionVersion: over.definitionVersion ?? null,
   });
   return runId;
 }
@@ -173,5 +177,44 @@ describe("runs.stats", () => {
     expect(narrow.cost).toMatchObject({ totals: { traceCount: 0 } });
     expect((wide.runs as unknown[]).length).toBe(1);
     expect(wide.cost).toMatchObject({ totals: { traceCount: 1 } });
+  });
+
+  it("breaks cost.byWorkflow down by workflow definition instead of one Agent bucket", async () => {
+    // Both runs execute the same "wf_agent" Workflow DevKit function, so
+    // grouping the cost breakdown by that raw function id merged every
+    // ticket workflow definition into a single "Agent" bucket
+    // (qa-findings-integrations.md, "runs.stats cost.byWorkflow still
+    // reports a single Agent/wf_agent bucket").
+    const [autofix] = await db
+      .insert(workflowDefinitions)
+      .values({ name: "Autofix PR checks", createdById: "admin", createdByLabel: "Admin" })
+      .returning({ id: workflowDefinitions.id });
+    const [ticketWorkflow] = await db
+      .insert(workflowDefinitions)
+      .values({ name: "Default ticket workflow", createdById: "admin", createdByLabel: "Admin" })
+      .returning({ id: workflowDefinitions.id });
+
+    await seedRun({
+      ticketKey: "PROJ-AUTOFIX",
+      startedAt: new Date("2026-08-16T09:00:00.000Z"),
+      costUsd: 2,
+      definitionId: autofix!.id,
+      definitionVersion: 3,
+    });
+    await seedRun({
+      ticketKey: "PROJ-TICKET",
+      startedAt: new Date("2026-08-16T09:00:00.000Z"),
+      costUsd: 5,
+      definitionId: ticketWorkflow!.id,
+      definitionVersion: 11,
+    });
+
+    const data = dataOf(await callStats());
+    const byWorkflow = (data.cost as { byWorkflow: Array<{ name: string; cost: number }> }).byWorkflow;
+
+    expect(byWorkflow).toHaveLength(2);
+    expect(byWorkflow.find((w) => w.name === "Autofix PR checks v3")?.cost).toBeCloseTo(2);
+    expect(byWorkflow.find((w) => w.name === "Default ticket workflow v11")?.cost).toBeCloseTo(5);
+    expect(byWorkflow.some((w) => w.name === "Agent")).toBe(false);
   });
 });

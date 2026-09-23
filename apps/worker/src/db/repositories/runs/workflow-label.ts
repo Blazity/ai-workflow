@@ -13,9 +13,12 @@ import { workflowDefinitions, workflowRuns } from "../../schema.js";
  * `definition_id` and `definition_version`, so a renamed definition renames its
  * past runs too, and no migration or backfill is needed.
  *
- * One expression for every run read that shows a name. The cost view keeps the
- * raw column on purpose: it groups by the Workflow DevKit function id, and one
- * definition's name there would label every definition's cost.
+ * One expression for every run read that shows a name, including the cost
+ * view's per-workflow breakdown: grouping that view by `workflow_id` alone
+ * merged every ticket workflow definition into the single "wf_agent" bucket
+ * ("Agent"), so it groups by `definition_id` first and this label alongside
+ * it, falling back to the raw Workflow DevKit function id and name only for a
+ * run (pre-sandbox, the post-PR gate) that names no definition.
  */
 export const runWorkflowLabel: SQL<string | null> = sql<string | null>`coalesce(
   (select ${workflowDefinitions.name} || coalesce(' v' || ${workflowRuns.definitionVersion}::text, '')
