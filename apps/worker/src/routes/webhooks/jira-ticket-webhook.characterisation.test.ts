@@ -176,7 +176,21 @@ vi.mock("../../services/integrations/runtime.js", async () => ({
     return {
       readable: true,
       usable: wanted ? [jira] : [],
-      states: new Map([["jira", { usable: true, enabled: true, source: "environment" }]]),
+      // The state the resolver reads for a connected tracker: `status` is what
+      // decides who serves the one-provider capability, and the pin's
+      // fingerprint is the tracker's identity.
+      states: new Map([
+        [
+          "jira",
+          {
+            status: "connected",
+            usable: true,
+            enabled: true,
+            source: "environment",
+            pin: { integrationId: "jira", configFingerprint: "jira@fingerprint" },
+          },
+        ],
+      ]),
     };
   },
   checkIntegrationPin: () => ({ ok: true }),
