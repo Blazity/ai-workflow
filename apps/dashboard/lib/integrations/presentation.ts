@@ -536,8 +536,8 @@ export function fieldHint(
     : `${field.env} is not set on this deployment.`;
   // What the field is comes first for a secret too: "Nothing is stored yet"
   // alone left the admin guessing which token, from where.
-  const withDescription = (sentence: string) =>
-    [field.description, sentence, environment].filter(Boolean).join(" ");
+  const withDescription = (what: string) =>
+    [field.description, what, environment].filter(Boolean).join(" ");
   if (!field.secret) return [field.description, environment].filter(Boolean).join(" ");
   if (!state.secretsKeyAvailable) {
     return withDescription("It cannot be stored here until INTEGRATION_SECRETS_KEY is set, see above.");
