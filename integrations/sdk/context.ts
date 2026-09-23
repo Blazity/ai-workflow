@@ -4,6 +4,7 @@ import type {
   ConnectionField,
   IntegrationBlockManifest,
   IntegrationManifest,
+  IntegrationSetting,
 } from "./manifest";
 import type { IntegrationRunState } from "./run-state";
 
@@ -15,14 +16,19 @@ import type { IntegrationRunState } from "./run-state";
  * `process.env` and its own dependencies need no import from us. It is trusted
  * code we review, and everything it needs from an operator comes through
  * `connection`, which is what makes the value follow the source an admin
- * chose, the run's pin and the redaction. Core builds the context for every
- * call, so a value here is always current (a rotated secret included).
+ * chose, the run's pin and the redaction, or, for behaviour an admin decides
+ * rather than a way to reach the provider, through the webhook context's
+ * `settings`. Core builds the context for every call, so a value here is
+ * always current (a rotated secret included).
  *
- * Two shapes:
+ * Three shapes:
  * - `IntegrationContext`: what a capability adapter, a connection test and a
  *   health probe receive.
  * - `IntegrationBlockContext`: a block executor adds the run it is part of and
  *   exactly the capabilities and `llm` its manifest `requires`.
+ * - `IntegrationWebhookContext` (`webhook.ts`): the webhook's, with the
+ *   connection narrowed to what `webhook.requires` names and the operator
+ *   `settings` the manifest declares.
  */
 export interface IntegrationContext<M extends IntegrationManifest> {
   /**
@@ -111,6 +117,31 @@ export interface IntegrationRunIdentity {
 export type ConnectionValues<M extends IntegrationManifest> = {
   readonly [F in M["connection"]["fields"][number] as F["key"]]: ConnectionFieldValue<F>;
 };
+
+/**
+ * `ctx.settings` on a webhook's context, typed from the manifest's `settings`:
+ * one list of strings per declared key, read when the request arrived.
+ */
+export type IntegrationSettingValues<M extends IntegrationManifest> = M extends {
+  readonly settings: readonly (infer S)[];
+}
+  ? { readonly [K in S & IntegrationSetting as K["key"]]: readonly string[] }
+  : Record<never, never>;
+
+/**
+ * `ctx.connection` on a webhook's context. With `webhook.requires` declared it
+ * holds exactly those fields, each present (core serves the webhook only when
+ * they are); without it, the whole connection, as everywhere else.
+ */
+export type WebhookConnectionValues<M extends IntegrationManifest> = M extends {
+  readonly webhook: { readonly requires: readonly (infer K)[] };
+}
+  ? {
+      readonly [F in M["connection"]["fields"][number] as F["key"] extends K
+        ? F["key"]
+        : never]: FieldValue<F>;
+    }
+  : ConnectionValues<M>;
 
 type FieldValue<F extends ConnectionField> = F extends { readonly format: "integer" }
   ? number

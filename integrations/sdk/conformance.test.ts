@@ -647,6 +647,90 @@ test("the fixture closes only a pull request it cannot read, never a refused cre
   assert.notEqual((await refusedWith(502)).name, "PullRequestUnreadableError");
 });
 
+/** The valid integration with one operator setting and a webhook that reads only its token. */
+function withSettingAndWebhook() {
+  const { manifest, runtime } = validIntegration();
+  manifest.settings = [
+    {
+      key: "allowedUserIds",
+      description: "Who may run a command.",
+      type: "string-list",
+      default: [],
+      env: "ACME_ALLOWED_USER_IDS",
+    },
+  ];
+  manifest.webhook = { requires: ["apiToken"], label: "/acme command" };
+  runtime.webhook = { receive: async () => ({ kind: "refused", status: 401, reason: "unsigned" }) };
+  return { manifest, runtime };
+}
+
+test("an operator setting and a webhook that reads part of the connection conform", () => {
+  const { manifest, runtime } = withSettingAndWebhook();
+  assert.deepEqual(issues(manifest, runtime), []);
+});
+
+test("a setting key that could not spell back its stored key is refused", () => {
+  for (const key of ["AllowedUsers", "allowed_users", "allowed-users", ""]) {
+    const { manifest, runtime } = withSettingAndWebhook();
+    manifest.settings[0].key = key;
+    hasIssue(manifest, runtime, "setting_invalid", "settings[0].key");
+  }
+});
+
+test("a setting declared twice is refused", () => {
+  const { manifest, runtime } = withSettingAndWebhook();
+  manifest.settings.push({ ...manifest.settings[0], env: undefined });
+  hasIssue(manifest, runtime, "duplicate", "settings[1].key");
+});
+
+test("two settings that would be stored under one key are refused", () => {
+  // `allowedIDs` and `allowedIds` are different keys in the manifest and the
+  // same row, ACME_ALLOWED_IDS, in the settings store.
+  const { manifest, runtime } = withSettingAndWebhook();
+  manifest.settings = [
+    { key: "allowedIDs", description: "One.", type: "string-list", default: [] },
+    { key: "allowedIds", description: "Two.", type: "string-list", default: [] },
+  ];
+  hasIssue(manifest, runtime, "duplicate", "settings[1].key");
+});
+
+test("a setting stored under one of core's own keys is refused", () => {
+  // `mcp` + `enabled` is `MCP_ENABLED`, core's switch for the whole transport.
+  // The id is reserved as well; the setting rule stands on its own.
+  const { manifest, runtime } = withSettingAndWebhook();
+  manifest.id = "mcp";
+  manifest.settings[0].key = "enabled";
+  hasIssue(manifest, runtime, "setting_invalid", "settings[0].key");
+});
+
+test("a setting's variable may be neither core's, nor badly named, nor a connection field's", () => {
+  for (const env of ["DATABASE_URL", "acme_allowed", "ACME_API_TOKEN"]) {
+    const { manifest, runtime } = withSettingAndWebhook();
+    manifest.settings[0].env = env;
+    hasIssue(manifest, runtime, "setting_invalid", "settings[0].env");
+  }
+});
+
+test("webhook.requires names fields this connection has, and something to serve", () => {
+  const unknown = withSettingAndWebhook();
+  unknown.manifest.webhook.requires = ["signingSecret"];
+  hasIssue(unknown.manifest, unknown.runtime, "webhook_requires_invalid", "webhook.requires[0]");
+
+  const empty = withSettingAndWebhook();
+  empty.manifest.webhook.requires = [];
+  hasIssue(empty.manifest, empty.runtime, "webhook_requires_invalid", "webhook.requires");
+
+  const noWebhook = withSettingAndWebhook();
+  delete noWebhook.runtime.webhook;
+  hasIssue(noWebhook.manifest, noWebhook.runtime, "webhook_requires_invalid", "webhook.requires");
+
+  // The card names what is answered on part of the connection, so it has to
+  // have a name.
+  const unnamed = withSettingAndWebhook();
+  delete (unnamed.manifest.webhook as { label?: string }).label;
+  hasIssue(unnamed.manifest, unnamed.runtime, "webhook_requires_invalid", "webhook.label");
+});
+
 test("the fixture hands a refused token to core as the provider's answer, not as fatal", async () => {
   // Authors copy this fixture. A FatalError on every 401 stopped the retries
   // of whichever core step called the adapter, whatever that step would have

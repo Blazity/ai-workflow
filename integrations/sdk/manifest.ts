@@ -29,6 +29,11 @@ export interface IntegrationManifest {
   readonly description: string;
   readonly docsUrl?: string;
   readonly connection: IntegrationConnection;
+  /**
+   * Operator settings this integration reads: behaviour an admin decides, as
+   * opposed to what it takes to reach the provider (see `IntegrationSetting`).
+   */
+  readonly settings?: readonly IntegrationSetting[];
   /** The capabilities this integration can serve. Each needs an adapter in the runtime. */
   readonly capabilities: readonly ProvidedCapabilityId[];
   /** How this provider's repository paths and links are shaped, for a `vcs` integration. */
@@ -129,6 +134,82 @@ export interface IntegrationWebhookManifest {
    * `commented`. Omitted means the webhook reports no review at all.
    */
   readonly reviewStates?: readonly VcsReviewState[];
+  /**
+   * The connection fields this webhook reads, when that is fewer than the
+   * whole connection.
+   *
+   * Core serves `/webhooks/<id>` while the integration is enabled and these
+   * fields have values in the active source, even when the rest of the
+   * connection is incomplete or its test failed, and the webhook's
+   * `ctx.connection` then holds exactly these fields, each present. Slack's
+   * slash command is the case: it verifies with the signing secret and answers
+   * through Slack's `response_url`, so a deployment that registered only the
+   * command needs no bot token and no channel.
+   *
+   * Omitted means the webhook needs the whole connection, Connected: a
+   * webhook that goes on to call the provider (a tracker reading the ticket, a
+   * VCS reading the pull request) must not be served by half a connection.
+   */
+  readonly requires?: readonly string[];
+  /**
+   * What this webhook answers, as the person who set it up calls it:
+   * `/ai-workflow slash command`. Required with `requires`, because that is
+   * when the integration's card has to say it is answered while the rest of
+   * the integration is not (or refused while the rest is Connected).
+   */
+  readonly label?: string;
+}
+
+/**
+ * One operator setting: behaviour an admin decides, such as who may run a
+ * chat command, as opposed to what it takes to reach the provider.
+ *
+ * It is not a connection field, and the difference is what happens when it
+ * changes. A connection value belongs to one source (environment or stored)
+ * and a run pins it, so editing one stops runs in flight with `reconfigured`
+ * and switching the source replaces it. A setting is stored once for the
+ * deployment, the same whichever source the connection uses, and it is read
+ * when it is used and never pinned: adding a colleague to an allowlist changes
+ * nothing for a run already posting.
+ *
+ * Core stores, validates, versions and shows it with every other setting (the
+ * dashboard Settings page, the MCP `settings.*` tools, the settings history),
+ * under the key `integrationSettingKey` derives: `SLACK_ALLOWED_USER_IDS` for
+ * Slack's `allowedUserIds`. Integration code reads it as `ctx.settings.<key>`,
+ * on the context its webhook receives, read when the request arrives.
+ *
+ * One kind today, a list of strings, because that is what the one setting an
+ * integration has needs. A switch, a number or a single value is added the day
+ * an integration reads one, with the rule for reading its variable.
+ */
+export interface IntegrationSetting {
+  /** The value's key in `ctx.settings`, in camelCase. */
+  readonly key: string;
+  /** What it decides and what an empty value means, for the Settings page,
+   *  which puts the integration's name in front of it: say "User ids", not
+   *  "Slack user ids". */
+  readonly description: string;
+  readonly type: "string-list";
+  /** What it holds while nobody stored a value and `env` is unset. */
+  readonly default: readonly string[];
+  /**
+   * A variable read while nothing is stored, for a setting that was an
+   * environment variable before it was a setting, so a deployment that set it
+   * keeps its value with nothing to import. A stored value shadows it. The
+   * list is read as comma separated, each entry trimmed, empties dropped.
+   */
+  readonly env?: string;
+}
+
+/**
+ * The key an integration's setting is stored and served under: the id and the
+ * key in UPPER_SNAKE_CASE, joined, so `slack` and `allowedUserIds` are
+ * `SLACK_ALLOWED_USER_IDS`. The id prefix keeps two integrations apart, and an
+ * id has no underscore, so the prefix cannot be read two ways.
+ */
+export function integrationSettingKey(integrationId: string, key: string): string {
+  const words = key.replace(/([a-z0-9])([A-Z])/gu, "$1_$2");
+  return `${integrationId}_${words}`.toUpperCase();
 }
 
 /**
@@ -211,8 +292,8 @@ export type ConnectionValueProblem = "line_break" | "not_a_url" | "not_an_intege
  * - a secret that is one line (anything but `multiline`) holds no line break
  *   inside it: it goes into a header, which cannot carry one, or it is a
  *   signing key the provider shows on one line.
- * - anything else, nothing. A setting that is never sent (an allowlist read as
- *   comma separated, a project key) may hold a line break and still work, and
+ * - anything else, nothing. A value that is never sent (a project key, a bot
+ *   login compared with an author) may hold a line break and still work, and
  *   the one that does end up in a header is refused by `ctx.http` when sent.
  */
 export function connectionValueProblem(
@@ -347,7 +428,19 @@ type LiteralNames<M extends IntegrationManifest> = string extends M["id"]
     ? "Every block type must be a literal, so declare blocks with defineIntegrationBlock rather than annotating them : IntegrationBlockManifest"
     : string extends M["connection"]["fields"][number]["key"]
       ? "Every connection field key must be a literal, so write the fields in the manifest rather than through a widened type"
-      : unknown;
+      : M extends { readonly settings: readonly { readonly key: infer K }[] }
+        ? string extends K
+          ? "Every setting key must be a literal, so write the settings in the manifest rather than through a widened type"
+          : LiteralRequires<M>
+        : LiteralRequires<M>;
+
+type LiteralRequires<M extends IntegrationManifest> = M extends {
+  readonly webhook: { readonly requires: readonly (infer K)[] };
+}
+  ? string extends K
+    ? "Every field webhook.requires names must be a literal, so write the list in the manifest rather than through a widened type"
+    : unknown
+  : unknown;
 
 type LiteralBlockName<B extends IntegrationBlockManifest> = string extends B["type"]
   ? "A block type must be a literal, so write it here rather than through a widened type"

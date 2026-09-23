@@ -294,11 +294,11 @@ describe("workflow owner steps", () => {
         runId: "run-winning",
       }),
     );
-    expect(createRepositoryVcsRuntime).toHaveBeenCalledWith({
-      provider: "github",
-      repoPath: "acme/api",
-      baseBranch: "main",
-    });
+    // No lifetime: a step has no request deadline to hand the read.
+    expect(createRepositoryVcsRuntime).toHaveBeenCalledWith(
+      { provider: "github", repoPath: "acme/api", baseBranch: "main" },
+      {},
+    );
     expect(getPRHead).toHaveBeenCalledWith(7);
   });
 

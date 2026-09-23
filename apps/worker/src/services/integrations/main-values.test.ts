@@ -13,12 +13,13 @@
  * values a run receives: a card that reads Connected while the run's values
  * are refused would be the same outage, only quieter.
  */
-import { integrationManifest } from "@integrations/registry";
+import { integrationManifest, integrationSettingDefinitions } from "@integrations/registry";
 import type { IntegrationManifest } from "@integrations/sdk";
+import { resolveSettingsSnapshot } from "@shared/contracts";
 import { describe, expect, it } from "vitest";
 
 import { readConnectionValues } from "./connection-values.js";
-import { environmentReaderFrom, resolveIntegrationState } from "./resolve.js";
+import { checkIntegrationPin, environmentReaderFrom, resolveIntegrationState } from "./resolve.js";
 
 function onEnvironment(id: string, env: Record<string, string>) {
   const manifest = integrationManifest(id) as IntegrationManifest;
@@ -41,6 +42,17 @@ function onEnvironment(id: string, env: Record<string, string>) {
 }
 
 const SLACK = { CHAT_SDK_SLACK_TOKEN: "xoxb-1-2-abc", CHAT_SDK_CHANNEL_ID: "C0123" };
+
+/** Who may run the slash command, as the settings a request loads resolve it
+ *  from this environment with nothing stored. */
+function allowlistFrom(env: Record<string, string>): unknown {
+  const snapshot = resolveSettingsSnapshot(
+    new Map(),
+    { value: (name) => env[name], isSet: (name) => (env[name] ?? "") !== "" },
+    integrationSettingDefinitions,
+  ).snapshot as unknown as Record<string, unknown>;
+  return snapshot.SLACK_ALLOWED_USER_IDS;
+}
 const GITHUB = {
   GITHUB_APP_ID: "123",
   GITHUB_INSTALLATION_ID: "456",
@@ -56,13 +68,27 @@ describe("values main ran with stay connected", () => {
   it("a Slack allowlist with a line break between its ids", () => {
     // origin/main apps/worker/src/services/settings/integration-settings.ts:96-99
     // split SLACK_ALLOWED_USER_IDS on commas and trimmed each id, and it is
-    // never sent anywhere; the slash command parses it the same way today.
-    const { state, values } = onEnvironment("slack", {
-      ...SLACK,
-      SLACK_ALLOWED_USER_IDS: "U01,\nU02",
-    });
+    // never sent anywhere. It is an operator setting now, read the same way.
+    const env = { ...SLACK, SLACK_ALLOWED_USER_IDS: "U01,\nU02" };
+    const { state, values } = onEnvironment("slack", env);
     expect(state.status).toBe("connected");
-    expect(values.ok && values.values.allowedUserIds).toBe("U01,\nU02");
+    expect(values.ok).toBe(true);
+    expect(allowlistFrom(env)).toEqual(["U01", "U02"]);
+  });
+
+  // The same parser: empties dropped, so separators alone name nobody, which
+  // is "everyone may run it"; unset is the same.
+  for (const [variable, expected] of [
+    ["U1, U2,,", ["U1", "U2"]],
+    [" , , ", []],
+    ["", []],
+  ] as const) {
+    it(`a Slack allowlist written as ${JSON.stringify(variable)}`, () => {
+      expect(allowlistFrom({ ...SLACK, SLACK_ALLOWED_USER_IDS: variable })).toEqual(expected);
+    });
+  }
+  it("a Slack allowlist that is not set at all", () => {
+    expect(allowlistFrom(SLACK)).toEqual([]);
   });
 
   // origin/main apps/worker/src/infra/runtime-env.ts:34 and :36 read both ids
@@ -90,6 +116,21 @@ describe("values main ran with stay connected", () => {
     });
     expect(state.status).toBe("connected");
     expect(values.ok).toBe(true);
+  });
+});
+
+describe("who may run the slash command is not part of Slack's connection", () => {
+  it("adding a user id to the allowlist leaves the pin a run holds where it was", () => {
+    // A run with a Send message block pinned Slack at its start. As a
+    // connection field, the allowlist was in that pin, so adding a colleague
+    // stopped the run at its next message with `reconfigured`.
+    const before = onEnvironment("slack", { ...SLACK, SLACK_ALLOWED_USER_IDS: "U01" }).state;
+    const after = onEnvironment("slack", { ...SLACK, SLACK_ALLOWED_USER_IDS: "U01,U02" }).state;
+
+    expect(after.pin).toEqual(before.pin);
+    expect(checkIntegrationPin(before.pin, after)).toEqual({ ok: true });
+    // It is not among what the connection is made of, either.
+    expect(after.configuredFields).not.toContain("allowedUserIds");
   });
 });
 

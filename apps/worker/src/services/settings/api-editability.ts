@@ -16,7 +16,7 @@
  * refusal names the dashboard Settings page, which is a person on a session
  * this transport cannot reach.
  */
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition } from "@integrations/registry";
 
 /** The group no tool on the MCP surface may write: this transport's own
  *  configuration. Editable through the dashboard, and through the HTTP patch
@@ -40,7 +40,7 @@ const NON_MCP_WRITABLE_KEYS: ReadonlySet<string> = new Set(["MCP_ENABLED"]);
  *  answering "not editable" here would send the caller looking for a screen
  *  that does not exist. */
 export function isSettingEditableThroughApi(key: string): boolean {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   if (definition === undefined) return true;
   // The running code reads these variables at module load or inside a step,
   // so the resolution ignores a stored row for it. Accepting the write would
@@ -50,7 +50,7 @@ export function isSettingEditableThroughApi(key: string): boolean {
 
 /** Whether the environment, rather than the store, is this key's only answer. */
 function isEnvironmentOwned(key: string): boolean {
-  return findSettingDefinition(key)?.requiresRedeploy === true;
+  return settingDefinition(key)?.requiresRedeploy === true;
 }
 
 /**
@@ -89,7 +89,7 @@ export function settingEditRole(key: string): typeof SETTINGS_EDIT_ROLE | null {
 /** Whether a tool on the MCP surface may write this key: everything the HTTP
  *  patch may write, minus this transport's own group. */
 export function isSettingEditableThroughMcp(key: string): boolean {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   return (
     isSettingEditableThroughApi(key) &&
     !NON_MCP_WRITABLE_KEYS.has(key) &&

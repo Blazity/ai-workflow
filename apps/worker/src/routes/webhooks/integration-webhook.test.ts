@@ -10,6 +10,11 @@
  *
  * `/webhooks/slack` is the address Slack already calls, and it still answers
  * here: the static route was deleted, so this dynamic one takes it.
+ *
+ * The resolver is a double here, handing out whatever each case set. Which
+ * values a webhook is served on is proved through the real one:
+ * `slack-signing-secret-only.test.ts` beside this file, and
+ * `services/integrations/webhook-resolution.test.ts`.
  */
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -35,13 +40,17 @@ const state = vi.hoisted(() => ({
   pushSuppressionInputs: [] as Record<string, unknown>[],
   botLogin: vi.fn(async (_provider: string) => "ai-workflow-bot" as string | undefined),
   botLoginReadable: true,
+  /** The lifetime the route resolved its integration with. */
+  resolvedLifetime: undefined as AbortSignal | undefined,
 }));
 
 vi.mock("../../services/integrations/runtime.js", () => ({
-  resolveUsableIntegrations: async () =>
-    state.readable
+  resolveUsableIntegrations: async (input?: { lifetime?: AbortSignal }) => {
+    state.resolvedLifetime = input?.lifetime;
+    return state.readable
       ? { readable: true, usable: state.usable, states: state.states }
-      : { readable: false, reason: "the settings read timed out" },
+      : { readable: false, reason: "the settings read timed out" };
+  },
 }));
 
 const executeRunControlCommand = vi.fn();
@@ -119,23 +128,23 @@ vi.mock("../../services/system/observations.js", () => ({
 }));
 
 const handler = (await import("./[id].post.js")).default;
+const { logger } = await import("../../services/system/logger.js");
 const { integrationRuntime } = await import("@integrations/registry/worker");
 // The real Slack runtime out of the registry, which is exactly what the route
 // reaches for: a hand-written double here would prove the double works.
 const runtime = integrationRuntime("slack")!;
 
-/** The Slack context the resolver would have built for a connected deployment. */
+/**
+ * The Slack context the resolver would have built for its webhook: exactly
+ * the field the webhook requires, and the operator settings it declares.
+ */
 function connectedSlack(): unknown {
   return {
     manifest: { id: "slack", name: "Slack" },
     runtime,
     ctx: {
-      connection: {
-        botToken: "xoxb-test",
-        channelId: "C1",
-        signingSecret: SIGNING_SECRET,
-        allowedUserIds: undefined,
-      },
+      connection: { signingSecret: SIGNING_SECRET },
+      settings: { allowedUserIds: [] },
       signal: new AbortController().signal,
       log: { debug() {}, info() {}, warn() {}, error() {} },
       http: { fetch: globalThis.fetch },
@@ -476,10 +485,35 @@ describe("POST /webhooks/:id", () => {
     await Promise.all(deferred);
 
     expect(response.status).toBe(200);
-    expect(posted[0]!.body).toEqual({
-      response_type: "in_channel",
-      text: ":warning: That command failed: the database refused",
-    });
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.body).toMatchObject({ response_type: "ephemeral" });
+    expect((posted[0]!.body as { text: string }).text).toMatch(
+      /^:warning: `\/ai-workflow list` could not be completed/u,
+    );
+  });
+
+  it("posts no SQL and no parameters when a command fails on a database error, only a reference to the log", async () => {
+    // drizzle-orm 0.45 spells a failed query as its SQL, then its parameters
+    // (DrizzleQueryError); this is what reached a channel that may be shared
+    // with another company. The error goes to the log, under the reference
+    // the person is given.
+    executeRunControlCommand.mockRejectedValue(
+      new Error(
+        "Failed query: select \"run_id\" from \"active_runs\" where \"ticket_key\" = $1\nparams: AWT-42",
+      ),
+    );
+
+    await app()(request("slack", "cancel AWT-42"));
+    await Promise.all(deferred);
+
+    const text = (posted[0]!.body as { text: string }).text;
+    expect(text).not.toMatch(/Failed query|select|active_runs|params/u);
+    const logged = vi.mocked(logger.error).mock.calls.find(
+      ([, event]) => event === "run_control_command_failed",
+    )?.[0] as { diagnosticId: string; error: string } | undefined;
+    expect(logged?.error).toContain("Failed query");
+    expect(logged?.diagnosticId).toMatch(/^AIW-DIAG-run-control-/u);
+    expect(text).toContain(`\`${logged!.diagnosticId}\``);
   });
 
   it("answers help itself without deferring run-control work", async () => {
@@ -561,6 +595,19 @@ describe("POST /webhooks/:id", () => {
         reason: "integration_disconnected",
       }),
     ]);
+    expect(executeRunControlCommand).not.toHaveBeenCalled();
+  });
+
+  it("names what the webhook is missing when the rest of the connection works", async () => {
+    // Slack posts run notifications fine and was never given its signing
+    // secret: "not connected" would send the admin to a connection that works.
+    state.usable = [];
+    state.states = new Map([["slack", { enabled: true, connection: "connected" }]]);
+
+    const response = await app()(request("slack", "list"));
+
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("webhook needs its Signing secret");
     expect(executeRunControlCommand).not.toHaveBeenCalled();
   });
 
@@ -981,6 +1028,23 @@ describe("POST /webhooks/:id", () => {
       // yet, so the post-PR gate does not start beside it.
       expect(await response.json()).toEqual({ status: "ignored", reason: "at_capacity" });
       expect(state.legacyGate).not.toHaveBeenCalled();
+    });
+
+    it("reads the pull request inside the request's own deadline, and answers 5xx with a diagnostic when it passes", async () => {
+      // Dispatch reads the pull request before the trigger is saved. Bounded
+      // only per attempt, a provider that kept failing slowly outlived the
+      // invocation and left no answer and no diagnostic; bounded by the
+      // request, the read gives up in time for this answer.
+      state.dispatch.mockResolvedValue({ result: "error", diagnosticId: "diag-deadline" });
+
+      const response = await app()(githubSyncRequest());
+      await Promise.all(deferred);
+
+      const [, deps] = state.dispatch.mock.calls.at(-1) as [unknown, { lifetime?: AbortSignal }];
+      expect(deps.lifetime).toBeInstanceOf(AbortSignal);
+      expect(deps.lifetime).toBe(state.resolvedLifetime);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ data: { diagnosticId: "diag-deadline" } });
     });
 
     it("still answers 5xx when the dispatch itself failed", async () => {

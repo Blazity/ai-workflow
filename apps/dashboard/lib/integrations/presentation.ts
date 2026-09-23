@@ -21,6 +21,7 @@ import { INTEGRATION_PROVIDER_WAIT_MS } from "@shared/contracts";
 
 import { capabilityLabel as sdkCapabilityLabel } from "@integrations/registry";
 import { formatDateTime } from "@/lib/date-time";
+import { settingLabel } from "@/lib/settings/format";
 
 /** The chip tones the cockpit already ships, named by what they mean here. */
 export type IntegrationTone = "success" | "failed" | "quiet" | "off";
@@ -387,6 +388,16 @@ export function statusDetailLines(integration: IntegrationDto): string[] {
     );
   }
   if (state.failure) lines.push(failureLine(state.failure));
+  const webhook = webhookLine(integration);
+  if (webhook) lines.push(webhook);
+  // A stored value nothing reads any more, most likely an allowlist: said
+  // here because the setting that replaced it applies with its own default
+  // when nothing sets it, which can let everyone in.
+  for (const moved of integration.movedToSettings ?? []) {
+    lines.push(
+      `The value stored here under ${moved.key} is not used: it moved to the setting ${settingLabel(moved.setting)} (${moved.setting}) on the Settings page, under Integrations, which applies instead, with its default when nothing sets it. Set it there; saving this connection again removes the stored value.`,
+    );
+  }
 
   const neverConfigured =
     state.connection === "not_connected" &&
@@ -415,6 +426,30 @@ export function statusDetailLines(integration: IntegrationDto): string[] {
     );
   }
   return lines;
+}
+
+/**
+ * What the card says about a webhook served on part of the connection, when
+ * its answer differs from the rest of the integration: answered while the rest
+ * is not usable (Slack's slash command on its signing secret alone), refused
+ * while the rest is Connected. The worker decided `served` with the read the
+ * webhook route makes; this only words it, and says nothing when the two
+ * agree, since the status above already said it.
+ */
+function webhookLine(integration: IntegrationDto): string | null {
+  const { webhook, state } = integration;
+  if (!webhook || state.status === "disabled") return null;
+  const needs = webhook.requires.map(
+    (key) => integration.fields.find((field) => field.key === key)?.label ?? key,
+  );
+  if (webhook.served && !state.usable) {
+    const rest = integration.capabilities.map((id) => capabilityLabel(id).toLowerCase());
+    return `The ${webhook.label} is still answered here: it needs only the ${andList(needs)}. Everything else ${integration.name} does${rest.length > 0 ? ` (${andList(rest)})` : ""} waits until the rest of the connection works.`;
+  }
+  if (!webhook.served && state.usable) {
+    return `The ${webhook.label} is not answered here: it needs the ${andList(needs)}, which ${needs.length === 1 ? "is" : "are"} not set or cannot be read.`;
+  }
+  return null;
 }
 
 /**

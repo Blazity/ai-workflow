@@ -84,14 +84,22 @@ vi.mock("../integrations/runtime.js", async (importOriginal) => {
       const runtime = redactingRuntime(integrationRuntime("gitlab")!, (error) =>
         redactedError(error, (text) => text),
       );
+      // The caller's lifetime ends every request, as the real context's does.
+      const lifetime = input?.lifetime ?? new AbortController().signal;
       const entry = {
         manifest: runtime.manifest,
         runtime,
         ctx: {
           connection: { token: "token", host: "https://gitlab.example.com" },
-          http: { fetch: (...args: Parameters<typeof fetch>) => fetch(...args) },
+          http: {
+            fetch: (target: Parameters<typeof fetch>[0], init?: RequestInit) =>
+              fetch(target, {
+                ...init,
+                signal: init?.signal ? AbortSignal.any([init.signal, lifetime]) : lifetime,
+              }),
+          },
           log: { debug() {}, info() {}, warn() {}, error() {} },
-          signal: new AbortController().signal,
+          signal: lifetime,
         },
       };
       return {
@@ -1741,6 +1749,30 @@ describe("binding a failed pipeline through the production version control path"
     await expect(
       dispatchTriggerEvent(deliveredFromPipeline31("gl-superseded"), provider()),
     ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("answers unreachable, with a diagnostic, when GitLab does not answer before the webhook's deadline", async () => {
+    // The read happens before the trigger is saved. Bounded only per attempt,
+    // a GitLab that kept failing slowly outlived the invocation, and the
+    // delivery left nothing behind: no answer, no diagnostic, nothing to retry.
+    vi.stubGlobal(
+      "fetch",
+      (_target: unknown, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    const started = Date.now();
+
+    const result = await dispatchTriggerEvent(deliveredFromPipeline31("gl-never-answers"), {
+      ...provider(),
+      lifetime: AbortSignal.timeout(200),
+    });
+
+    expect(result).toEqual({ result: "error", diagnosticId: expect.any(String) });
+    expect(Date.now() - started).toBeLessThan(3_000);
     expect(mockStart).not.toHaveBeenCalled();
   });
 

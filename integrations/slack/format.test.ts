@@ -48,21 +48,51 @@ test("the pull request card links every pull request and carries the author's ow
   );
 });
 
-test("a merge request links with the reference core stamped, not GitHub's form", () => {
-  // On GitLab `#12` names issue 12. Core stamps `!12` from the provider's
-  // manifest, and the line a GitLab team reads has to say what the run view says.
+test("a merge request is called one, with the reference core stamped, not GitHub's form", () => {
+  // On GitLab `#12` names issue 12 and nobody says PR. Core stamps `!12` and
+  // `MR` from the provider's manifest (`changeRequestNaming`), and the line a
+  // GitLab team reads has to say what the run view says.
   const mergeRequest = {
     provider: "gitlab",
     repoPath: "acme/app",
     id: 12,
     url: "https://gitlab.example/acme/app/-/merge_requests/12",
     reference: "!12",
+    noun: "MR",
   };
   assert.equal(
     formatTicketStatus({ kind: "pr_ready", prs: [mergeRequest], usageReport: "" }, TICKET),
-    ":white_check_mark: <https://acme.atlassian.net/browse/AWT-42|AWT-42> STATUS: PR ready " +
+    ":white_check_mark: <https://acme.atlassian.net/browse/AWT-42|AWT-42> STATUS: MR ready " +
       "(<https://gitlab.example/acme/app/-/merge_requests/12|!12>)",
   );
+  assert.equal(
+    formatTicketEvent({ kind: "pr_ready", prs: [mergeRequest], usageReport: "" }, TICKET),
+    ":white_check_mark: Task <https://acme.atlassian.net/browse/AWT-42|AWT-42> " +
+      "MR ready for review: <https://gitlab.example/acme/app/-/merge_requests/12|!12>",
+  );
+});
+
+test("a run that opened one on each provider names both, and one provider names its own", () => {
+  const pullRequest = { ...PRS[0]!, reference: "#128", noun: "PR" };
+  const mergeRequest = {
+    provider: "gitlab",
+    repoPath: "acme/app",
+    id: 12,
+    url: "https://gitlab.example/acme/app/-/merge_requests/12",
+    reference: "!12",
+    noun: "MR",
+  };
+  const both = formatTicketEvent(
+    { kind: "pr_ready", prs: [pullRequest, mergeRequest], usageReport: "" },
+    TICKET,
+  );
+  assert.match(both, /PR\/MR ready for review \(2\):/u);
+  const twoMergeRequests = formatTicketEvent(
+    { kind: "pr_ready", prs: [mergeRequest, { ...mergeRequest, repoPath: "acme/web", id: 3 }], usageReport: "" },
+    TICKET,
+  );
+  assert.match(twoMergeRequests, /MR ready for review \(2\):/u);
+  assert.doesNotMatch(twoMergeRequests, /PR/u);
 });
 
 test("a note is the person's own message and nothing else", () => {

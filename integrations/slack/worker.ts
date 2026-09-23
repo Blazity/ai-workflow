@@ -213,10 +213,13 @@ const definition: IntegrationRuntimeDefinition<SlackManifest> = {
   },
 
   webhook: {
+    // Core serves this only while the signing secret has a value (the
+    // manifest's `webhook.requires`), and hands over the allowlist as it
+    // stands when the command arrives, from the operator's settings.
     receive: (request, ctx) =>
       receiveSlashCommand(request, {
         signingSecret: ctx.connection.signingSecret,
-        allowedUserIds: ctx.connection.allowedUserIds,
+        allowedUserIds: ctx.settings.allowedUserIds,
         log: ctx.log,
       }),
     deliver: (delivery, ctx) =>

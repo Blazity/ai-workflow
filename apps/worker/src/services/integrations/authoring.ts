@@ -11,6 +11,7 @@ import {
   type IntegrationSource,
   type IntegrationState,
   type IntegrationTestOutcome,
+  type IntegrationWebhookDto,
   canManageIntegrations,
 } from "@shared/contracts";
 
@@ -32,7 +33,9 @@ import {
   type ConnectionValue,
   type IntegrationSecretsKeyMaterial,
   readConnectionValues,
+  readWebhookConnection,
   redactIntegrationText,
+  storedValuesMovedToSettings,
   secretValuesOf,
 } from "./connection-values.js";
 import { buildIntegrationContext } from "./context.js";
@@ -139,11 +142,43 @@ function fieldDtos(
   }));
 }
 
+/**
+ * Whether the webhook of an integration that declared what it reads is
+ * answered here, by the read the webhook route itself makes.
+ */
+function webhookOf(
+  manifest: IntegrationManifest,
+  stored: StoredIntegrationConnection | null,
+  material: IntegrationSecretsKeyMaterial,
+  state: IntegrationState,
+): IntegrationWebhookDto | undefined {
+  const requires = manifest.webhook?.requires;
+  if (requires === undefined) return undefined;
+  const read = readWebhookConnection({
+    manifest,
+    requires,
+    source: state.source,
+    environment: environmentReaderFrom(),
+    active: stored?.active ?? null,
+    secretsKey: material,
+  });
+  return {
+    // Conformance requires a label beside `requires`; the name is a floor for
+    // a manifest that has not passed it yet.
+    label: manifest.webhook?.label ?? manifest.name,
+    requires: [...requires],
+    served: state.enabled && read.served,
+  };
+}
+
 function toDto(
   manifest: IntegrationManifest,
   stored: StoredIntegrationConnection | null,
   material: IntegrationSecretsKeyMaterial,
 ): IntegrationDto {
+  const state = stateOf(manifest, stored, material);
+  const webhook = webhookOf(manifest, stored, material, state);
+  const moved = storedValuesMovedToSettings(manifest, stored?.active ?? null);
   return {
     id: manifest.id,
     name: manifest.name,
@@ -153,7 +188,9 @@ function toDto(
     blocks: manifest.blocks.map((block) => ({ type: block.type, label: block.ui.label })),
     pages: manifest.pages.map((page) => ({ id: page.id, label: page.label })),
     fields: fieldDtos(manifest, stored),
-    state: stateOf(manifest, stored, material),
+    state,
+    ...(webhook === undefined ? {} : { webhook }),
+    ...(moved.length === 0 ? {} : { movedToSettings: moved }),
   };
 }
 

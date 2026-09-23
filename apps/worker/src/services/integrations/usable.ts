@@ -17,10 +17,12 @@ import {
   type ErasedIntegrationRuntime,
   type IntegrationContext,
   type IntegrationManifest,
+  integrationSettingValues,
   NESTED_ADAPTER_MEMBERS,
   type NestedAdapterRole,
 } from "@integrations/sdk";
 import type { IntegrationFailure, IntegrationState } from "@shared/contracts";
+import type { ConnectionValue } from "./connection-values.js";
 
 /** One integration this deployment can actually use right now. */
 export interface UsableIntegration {
@@ -35,7 +37,15 @@ export interface UsableIntegration {
    * port should have to remember that.
    */
   readonly runtime: ErasedIntegrationRuntime;
-  readonly ctx: IntegrationContext<IntegrationManifest>;
+  /**
+   * The context its code receives. Resolved `forWebhook`, it is the webhook's
+   * context (`IntegrationWebhookContext` in the SDK): the connection narrowed
+   * to what `webhook.requires` names, and `settings` beside it; `settings`
+   * is absent otherwise.
+   */
+  readonly ctx: IntegrationContext<IntegrationManifest> & {
+    readonly settings?: Readonly<Record<string, readonly string[]>>;
+  };
   /**
    * This connection's secrets taken out of what its adapter hands back, for
    * core and never for the integration. `text` is for what a port RETURNS in
@@ -68,6 +78,30 @@ export interface IntegrationRedaction {
 type ContextLifetime = { readonly lifetime?: AbortSignal };
 
 /**
+ * Resolve for the webhook route rather than for the integration's adapters.
+ *
+ * The route asks a narrower question than "is it Connected": can this
+ * deployment serve the integration's webhook. An integration whose manifest
+ * says what its webhook reads (`webhook.requires`) is served while it is
+ * enabled and those fields have values in the active source, even when the
+ * rest of the connection is incomplete or its test failed; its context then
+ * carries exactly those fields. One that says nothing needs the whole
+ * connection, Connected, as every other caller does. Enabled is still asked
+ * of both: disabling is the kill switch.
+ *
+ * `settings` loads the request's settings snapshot. It is called once, and
+ * only when a candidate declares operator settings, whose values become the
+ * context's `settings`. A snapshot that cannot be loaded makes the whole
+ * answer unreadable, as the connection read does: an allowlist nobody could
+ * read must not be served as an empty one.
+ */
+type WebhookPurpose = {
+  readonly forWebhook?: {
+    readonly settings: () => Promise<Readonly<Record<string, unknown>>>;
+  };
+};
+
+/**
  * Every connected, enabled integration whose connection values can be read,
  * each with the context its own code receives, or the fact that this
  * deployment's integration settings could not be read at all.
@@ -98,7 +132,7 @@ type ContextLifetime = { readonly lifetime?: AbortSignal };
  * could not be read (a secret stored under another key, a value that no
  * longer parses), with the resolver's sentence for it.
  */
-export async function resolveUsableIntegrations(input: ContextLifetime & {
+export async function resolveUsableIntegrations(input: ContextLifetime & WebhookPurpose & {
   readonly filter?: (manifest: IntegrationManifest) => boolean;
 }): Promise<
   | {
@@ -115,9 +149,13 @@ export async function resolveUsableIntegrations(input: ContextLifetime & {
   // which re-exports this file: the boundaries gate reads that round trip as a
   // cycle, and it would be one.
   const { readIntegrationStatesFrom, secretsKeyMaterial } = await import("./authoring.js");
-  const { readConnectionValues, redactIntegrationText, secretValuesOf } = await import(
-    "./connection-values.js"
-  );
+  const {
+    readConnectionValues,
+    readWebhookConnection,
+    redactIntegrationText,
+    secretValuesOf,
+    storedValuesMovedToSettings,
+  } = await import("./connection-values.js");
   const { environmentReaderFrom } = await import("./resolve.js");
   const { buildIntegrationContext, redactedError } = await import("./context.js");
   const { readConnectedIntegrationConnections } = await import(
@@ -148,47 +186,89 @@ export async function resolveUsableIntegrations(input: ContextLifetime & {
   }
   const secretsKey = secretsKeyMaterial();
   const environment = environmentReaderFrom();
+  let settingsSnapshot: Readonly<Record<string, unknown>> | undefined;
 
   const usable: UsableIntegration[] = [];
   const connectionFailures = new Map<string, IntegrationFailure>();
   for (const manifest of candidates) {
     const state = states.get(manifest.id);
-    if (!state?.usable) continue;
+    // What this caller needs of the connection: all of it, or for a webhook
+    // that declared less, exactly the fields it reads.
+    const requires = input.forWebhook ? manifest.webhook?.requires : undefined;
+    if (!state?.enabled || (!state.usable && requires === undefined)) continue;
     const runtime = integrationRuntime(manifest.id);
     if (!runtime) continue;
-    const values = readConnectionValues({
-      manifest,
+    const reading = {
       source: state.source,
       environment,
       active: stored.get(manifest.id)?.active ?? null,
       secretsKey,
-    });
-    if (!values.ok) {
-      // The card already says why. Logged here once, and handed back so a
-      // caller that has to tell a person why the integration is missing can.
-      logger.warn(
-        { integration: manifest.id, reason: values.failure.reason },
-        "integration_connection_unreadable",
-      );
-      connectionFailures.set(manifest.id, values.failure);
-      continue;
+    };
+    // The card already says why a connection cannot be read. Logged here once,
+    // and handed back so a caller that has to tell a person why the
+    // integration is missing can.
+    const unreadable = (failure: IntegrationFailure) => {
+      logger.warn({ integration: manifest.id, reason: failure.reason }, "integration_connection_unreadable");
+      connectionFailures.set(manifest.id, failure);
+    };
+    let read: IntegrationManifest;
+    let values: Record<string, ConnectionValue>;
+    if (requires === undefined) {
+      const whole = readConnectionValues({ manifest, ...reading });
+      if (!whole.ok) {
+        unreadable(whole.failure);
+        continue;
+      }
+      read = manifest;
+      values = whole.values;
+    } else {
+      // Served only when the declared part is there (no signing secret means
+      // nothing to verify a request with); the card reads the same answer.
+      const part = readWebhookConnection({ manifest, requires, ...reading });
+      if (!part.served) {
+        if (part.failure) unreadable(part.failure);
+        continue;
+      }
+      read = part.manifest;
+      values = part.values;
     }
-    const secrets = secretValuesOf(manifest, values.values);
+    let settings: Record<string, readonly string[]> | undefined;
+    if (input.forWebhook && (manifest.settings?.length ?? 0) > 0) {
+      // A value stored before its setting existed is not what applies now; it
+      // is said on every request that would have used it, not only on a card
+      // an admin may never open.
+      for (const moved of storedValuesMovedToSettings(manifest, reading.active)) {
+        logger.warn(
+          { integration: manifest.id, key: moved.key, setting: moved.setting, source: state.source },
+          "integration_stored_value_not_read",
+        );
+      }
+      try {
+        settingsSnapshot ??= await input.forWebhook.settings();
+        settings = integrationSettingValues(manifest, settingsSnapshot);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        logger.warn({ integration: manifest.id, err: reason }, "integration_settings_unreadable");
+        return { readable: false, reason };
+      }
+    }
+    const secrets = secretValuesOf(read, values);
     const redaction: IntegrationRedaction = {
       text: (text) => redactIntegrationText(text, secrets),
       error: (error) => redactedError(error, (text) => redactIntegrationText(text, secrets)),
     };
+    const ctx = buildIntegrationContext({
+      manifest: read,
+      values,
+      secrets,
+      // One per context rather than one shared never-aborting signal, so
+      // whatever a request joins onto it goes away with the context.
+      lifetime: input.lifetime ?? new AbortController().signal,
+    });
     usable.push({
       manifest,
       runtime: redactingRuntime(runtime, redaction.error),
-      ctx: buildIntegrationContext({
-        manifest,
-        values: values.values,
-        secrets,
-        // One per context rather than one shared never-aborting signal, so
-        // whatever a request joins onto it goes away with the context.
-        lifetime: input.lifetime ?? new AbortController().signal,
-      }),
+      ctx: input.forWebhook ? { ...ctx, settings: settings ?? {} } : ctx,
       redaction,
     });
   }

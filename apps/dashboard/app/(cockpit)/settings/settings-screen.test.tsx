@@ -3,7 +3,7 @@ import test, { type TestContext } from "node:test";
 import React from "react";
 import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
-import { findSettingDefinition } from "@shared/contracts";
+import { settingDefinition } from "@integrations/registry";
 import type { RepositoryCatalogState, SettingsEntryView } from "@shared/contracts";
 
 import { hasUnsavedSettings, resetUnsavedSettings } from "@/lib/settings/unsaved";
@@ -24,7 +24,7 @@ function entry(
   value: SettingsEntryView["value"],
   overrides: Partial<SettingsEntryView> = {},
 ): SettingsEntryView {
-  const definition = findSettingDefinition(key);
+  const definition = settingDefinition(key);
   assert.ok(definition, `${key} is not a registry key`);
   return {
     key: key as SettingsEntryView["key"],

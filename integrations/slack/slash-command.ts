@@ -24,9 +24,13 @@ import { verifySlackSignature } from "./verify";
 const RESPONSE_URL_TIMEOUT_MS = 5000;
 
 export interface SlashCommandConfig {
-  readonly signingSecret: string | undefined;
-  /** Comma-separated ids, exactly as the connection field holds them. */
-  readonly allowedUserIds: string | undefined;
+  /** Always there: core serves this webhook only while the secret has a value. */
+  readonly signingSecret: string;
+  /**
+   * Who may run a command, from the operator's `allowedUserIds` setting as it
+   * stands when the command arrives. Empty means everyone.
+   */
+  readonly allowedUserIds: readonly string[];
   /**
    * Who asked for what is the audit trail of the command: a refusal and every
    * command handed to core are logged with the Slack user who typed it,
@@ -45,15 +49,6 @@ export async function receiveSlashCommand(
   request: IntegrationWebhookRequest,
   config: SlashCommandConfig,
 ): Promise<IntegrationWebhookReception> {
-  if (!config.signingSecret) {
-    // Not 500 and not 401: nothing is wrong with the request, this deployment
-    // has not been given the secret that would let it read one.
-    return {
-      kind: "refused",
-      status: 503,
-      reason: "no Slack signing secret is configured on this deployment",
-    };
-  }
   const signature = request.headers["x-slack-signature"];
   const timestamp = request.headers["x-slack-request-timestamp"];
   if (!signature || !timestamp) {
@@ -107,26 +102,35 @@ export async function receiveSlashCommand(
       status: 200,
       body: { response_type: "ephemeral", text: `Working on \`${command} ${text}\`...` },
     },
-    deliverTo: { responseUrl },
+    // What the person typed travels with the callback, so a failure can say
+    // which command did not complete: core hands back a reference, not a
+    // sentence, and the sentence is written here.
+    deliverTo: { responseUrl, asked: `${command} ${text}`.trim() },
   };
 }
 
 /**
  * Post the outcome back to Slack.
  *
- * Failures are swallowed: the command already happened, and a Slack that 5xx'd
- * on the follow-up is not a reason to run it again. `in_channel` keeps today's
- * behaviour, where the answer is visible to everyone in the channel.
+ * An answer is `in_channel`, visible to everyone there, as it always was: a
+ * cancel is news for the people watching the ticket. A failure is `ephemeral`,
+ * shown only to the person who typed the command, who is the one waiting for
+ * it (the "Working on ..." they read was theirs alone too), and the channel
+ * learns nothing from a command that did not happen. Slack's guidance says
+ * the same of an error reply.
+ *
+ * Failures to post are swallowed: the command already happened, and a Slack
+ * that 5xx'd on the follow-up is not a reason to run it again.
  */
 export async function deliverSlashCommandOutcome(
   to: JsonValue,
   outcome: RunControlOutcome,
   log: { warn(fields: Record<string, unknown>, event: string): void },
 ): Promise<void> {
-  const responseUrl =
-    to && typeof to === "object" && !Array.isArray(to) && typeof to.responseUrl === "string"
-      ? to.responseUrl
-      : null;
+  const target: Readonly<Record<string, JsonValue | undefined>> =
+    to && typeof to === "object" && !Array.isArray(to) ? to : {};
+  const responseUrl = typeof target.responseUrl === "string" ? target.responseUrl : null;
+  const asked = typeof target.asked === "string" ? target.asked : undefined;
   if (!responseUrl) {
     log.warn({ outcome: outcome.kind }, "slack_response_url_missing");
     return;
@@ -140,7 +144,10 @@ export async function deliverSlashCommandOutcome(
     const response = await fetch(responseUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ response_type: "in_channel", text: renderOutcome(outcome) }),
+      body: JSON.stringify({
+        response_type: outcome.kind === "failed" ? "ephemeral" : "in_channel",
+        text: renderOutcome(outcome, asked),
+      }),
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -155,15 +162,13 @@ export async function deliverSlashCommandOutcome(
 
 /**
  * Empty means everyone, which is what it has always meant (SETUP.md). A
- * configuration nobody could read never reaches here: the integration is not
- * usable then, and the route refuses the command and says so, rather than
- * reading an unreadable list as an empty one.
+ * setting nobody could read never reaches here: core refuses the request with
+ * 503 rather than reading an unreadable list as an empty one. An entry is
+ * compared trimmed and a blank one counts for nothing, as when the list was
+ * split out of the variable, whichever surface stored it.
  */
-function isUserAllowed(userId: string, allowed: string | undefined): boolean {
-  const ids = (allowed ?? "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter((id) => id !== "");
+function isUserAllowed(userId: string, allowed: readonly string[]): boolean {
+  const ids = allowed.map((id) => id.trim()).filter((id) => id !== "");
   return ids.length === 0 || ids.includes(userId);
 }
 
