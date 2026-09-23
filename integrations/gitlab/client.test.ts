@@ -99,6 +99,35 @@ describe("every GitLab call goes through the context's HTTP", () => {
 
     await expect(vcs.getBranchShaIfExists("gone")).resolves.toBeNull();
   });
+
+  // GitLab's REST pagination docs: a list answers one page and a `Link`
+  // header whose `rel="next"` names the following one; Gitbeaker follows it.
+  it("follows a list to its last page", async () => {
+    const note = (id: number) => ({
+      id,
+      body: `note ${id}`,
+      system: false,
+      type: null,
+      author: { username: "reviewer" },
+    });
+    const notes = "https://gitlab.example.com/api/v4/projects/acme%2Fapi/merge_requests/7/notes";
+    const { vcs, requests } = connected((url) => {
+      const path = decodeURIComponent(url.pathname);
+      if (path.endsWith("/merge_requests/7/discussions")) return json(200, []);
+      if (path.endsWith("/merge_requests/7/notes")) {
+        return url.searchParams.get("page") === "2"
+          ? json(200, [note(2)])
+          : json(200, [note(1)], { link: `<${notes}?page=2&per_page=1>; rel="next"` });
+      }
+      return gitlab(url, undefined);
+    });
+
+    await expect(vcs.getPRComments(7)).resolves.toEqual([
+      expect.objectContaining({ body: "note 1" }),
+      expect.objectContaining({ body: "note 2" }),
+    ]);
+    expect(requests().filter(({ request }) => request.endsWith("/notes"))).toHaveLength(2);
+  });
 });
 
 describe("what GitLab answered survives the client", () => {
