@@ -96,7 +96,9 @@ wrong capability means rewriting the package.
 ### 2. From scaffold to merged
 
 Commands run from the repository root. Each step ends in a checkpoint: do
-not start the next until it holds.
+not start the next until it holds. On a fresh clone, run `pnpm install` once
+before step 1: `new:integration` runs through `tsx`, which does not exist
+until dependencies are installed.
 
 1. **Create the package.**
 
@@ -194,6 +196,10 @@ not start the next until it holds.
      its line in the README.
    - **No webhook:** leave `webhook` out of `worker.ts`; the route answers
      404 for you. A memory integration normally has none.
+
+   Changed a connection field's key, env, secret flag, default or identity?
+   Rerun step 3's connection-shape test with `-u`: it is not one of the four
+   commands below, and nothing regenerates the committed snapshot for you.
 
    Record each provider page you wrote against in the README's table, and
    every recorded payload with its source ("Recorded payloads").
