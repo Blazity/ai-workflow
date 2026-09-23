@@ -4,7 +4,7 @@ import type {
   IntegrationLogger,
   IntegrationRequestInit,
 } from "@integrations/sdk";
-import { ConnectionValueError, INTEGRATION_HTTP_DEFAULTS } from "@integrations/sdk";
+import { ConnectionValueError, INTEGRATION_HTTP_DEFAULTS, providerAnswer } from "@integrations/sdk";
 import type { IntegrationManifest } from "@integrations/sdk";
 
 import { logger } from "../../infra/logger.js";
@@ -321,12 +321,19 @@ const MAX_CAUSE_DEPTH = 4;
  * Kept: the class, because core decides by it (`IssueTrackerNotFoundError` is
  * a ticket that is gone, not an outage; `TypeError` with a cause is Node's
  * "never reached the server"); the `name` (`TimeoutError`, `AbortError`,
- * `FatalError`, which the Workflow DevKit reads); and every string, number and
- * boolean field (`code`, `status`), because core reads those too.
+ * `FatalError`, which the Workflow DevKit reads); every string, number and
+ * boolean field (`code`, `status`), because core reads those too; and the
+ * provider's answer as much as a verdict reads it (`providerAnswer` in the
+ * SDK): its status as `status`, and `response` with that status and the
+ * rate-limit and scope headers, whichever client kept it where. Without that
+ * a GitHub 403 that is a rate limit only by its headers, or a GitLab refusal
+ * whose client kept the answer on its cause, reads differently here than
+ * inside the integration.
  *
- * Left behind: fields that hold objects. A provider's request and response
- * ride on its errors (Octokit's carries the request's headers), nothing core
- * decides reads them, and copying them would make the original reachable.
+ * Left behind: every other field that holds an object. A provider's request
+ * and response ride on its errors (Octokit's carries the request's headers),
+ * nothing core decides reads the rest of them, and copying them would make
+ * the original reachable.
  */
 export function redactedError(
   error: unknown,
@@ -359,6 +366,19 @@ export function redactedError(
     } else if (typeof value === "number" || typeof value === "boolean") {
       Object.defineProperty(copy, key, descriptor);
     }
+  }
+  const answer = providerAnswer(error);
+  if (answer !== null) {
+    const headers = Object.fromEntries(
+      Object.entries(answer.headers).map(([name, value]) => [name, redact(value)]),
+    );
+    Object.defineProperty(copy, "status", { value: answer.status, enumerable: true, configurable: true, writable: true });
+    Object.defineProperty(copy, "response", {
+      value: { status: answer.status, headers },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   if (typeof error.stack === "string") copy.stack = redact(error.stack);
   return copy;

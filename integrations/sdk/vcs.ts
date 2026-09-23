@@ -268,9 +268,9 @@ export interface VCSAdapter {
    * answer. A refused credential (401, an installation token that cannot be
    * minted, a token without the scope or the permission to read pull
    * requests) is the connection's fault and is thrown as it came, with the
-   * provider's HTTP status on it as `status` (core reads a copy of the error
-   * that keeps an own `status` and nothing the client hid elsewhere), so the
-   * delivery stays retryable. So is everything else.
+   * provider's answer where the client keeps it (`providerAnswer` reads it
+   * there, and core's copy of the error carries it), so the delivery stays
+   * retryable. So is everything else.
    */
   getPRHead(prId: number): Promise<PullRequestHead>;
   listReviewThreads(prId: number): Promise<ReviewThreadFeed>;

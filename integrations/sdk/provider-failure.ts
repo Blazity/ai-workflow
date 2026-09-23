@@ -52,10 +52,12 @@ export type ProviderFailure =
  *
  * A thrown error is a refusal only when it carries a verdict:
  *
- * - a numeric `status` with the HTTP status the provider answered, which is
- *   what Octokit's `RequestError` carries (its `response.headers` are read for
- *   the rate limit signs), and what an integration's own client should put on
- *   the errors it throws for a non-2xx answer;
+ * - the provider's answer, wherever its client kept it (see
+ *   {@link providerAnswer}): a numeric `status` on the error, which is what
+ *   Octokit's `RequestError` carries and what an integration's own client
+ *   should put on the errors it throws for a non-2xx answer, or the `Response`
+ *   a client kept as `cause.response` (Gitbeaker does, with no status on the
+ *   error);
  * - this SDK's own words for a verdict: `FatalError` (retrying cannot help),
  *   `IssueTrackerNotFoundError` (the provider says the thing does not exist)
  *   and `ConnectionValueError` (no request could carry a value);
@@ -67,11 +69,10 @@ export type ProviderFailure =
  * back that is about these values (a timeout, a socket that died, a body that
  * does not parse), and is no verdict.
  *
- * READ IT ON THE ORIGINAL where headers matter. Core's copy of an error that
- * crossed into core keeps its class, message and `status` but not the
- * provider's `response`, so a GitHub 403 that is a rate limit only by its
- * headers reads as a refusal there. A connection test and a health probe run
- * inside the integration, before that copy is made.
+ * The same on both sides of core's redaction boundary. Core passes on a copy
+ * of what an integration throws, and the copy keeps the provider's status and
+ * the headers in {@link PROVIDER_VERDICT_HEADERS}, so a GitHub 403 that is a
+ * rate limit only by its headers is no verdict in core as it is here.
  */
 export function readProviderFailure(failure: unknown): ProviderFailure {
   if (failure instanceof Response) {
@@ -94,9 +95,62 @@ export function readProviderFailure(failure: unknown): ProviderFailure {
   if (isMalformedByPlatform(failure)) return refused(true);
   if (failure instanceof Error && failure.name === "FatalError") return refused(false);
   if (failure instanceof IssueTrackerNotFoundError) return refused(false, 404);
-  const status = statusOf(failure);
-  if (status === null) return { kind: "no_verdict", message };
-  return fromStatus(status, headerReaderOf(failure), message);
+  const answer = providerAnswer(failure);
+  if (answer === null) return { kind: "no_verdict", message };
+  return fromStatus(answer.status, (name) => answer.headers[name] ?? null, message);
+}
+
+/**
+ * The response headers a verdict reads: the signs of a rate limit
+ * (`retry-after`, GitHub's `x-ratelimit-remaining`, the IETF draft's
+ * `ratelimit-remaining`) and the challenge that names a missing scope
+ * (`www-authenticate`, RFC 6750, 3.1). Core keeps exactly these, and the
+ * status, on its copy of a failure, and nothing else of the answer.
+ */
+export const PROVIDER_VERDICT_HEADERS = [
+  "retry-after",
+  "x-ratelimit-remaining",
+  "ratelimit-remaining",
+  "www-authenticate",
+] as const;
+
+/** What a provider answered, as much of it as a verdict reads. */
+export interface ProviderAnswer {
+  readonly status: number;
+  /** Only {@link PROVIDER_VERDICT_HEADERS}, by lowercase name, where present. */
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+/**
+ * The provider's answer inside a failure, wherever its client kept it, as
+ * plain data; `null` when the failure carries none.
+ *
+ * - a `Response`;
+ * - an error with a numeric `status`, whose answer's headers are on
+ *   `response.headers` (Octokit's `RequestError`, a `Headers` or a record of
+ *   lowercase names, and core's copy of any failure);
+ * - an error whose client kept the `Response` as `cause.response` and put no
+ *   status on the error (Gitbeaker).
+ */
+export function providerAnswer(failure: unknown): ProviderAnswer | null {
+  if (failure instanceof Response) return answerOf(failure.status, failure.headers);
+  if (!failure || typeof failure !== "object") return null;
+  const status = (failure as { status?: unknown }).status;
+  if (typeof status === "number" && Number.isInteger(status)) {
+    return answerOf(status, (failure as { response?: { headers?: unknown } }).response?.headers);
+  }
+  const kept = (failure as { cause?: { response?: unknown } }).cause?.response;
+  return kept instanceof Response ? answerOf(kept.status, kept.headers) : null;
+}
+
+function answerOf(status: number, headers: unknown): ProviderAnswer {
+  const read = headerReaderOf(headers);
+  const picked: Record<string, string> = {};
+  for (const name of PROVIDER_VERDICT_HEADERS) {
+    const value = read(name);
+    if (value !== null && value !== undefined) picked[name] = value;
+  }
+  return { status, headers: picked };
 }
 
 /**
@@ -187,15 +241,9 @@ function isMalformedByPlatform(failure: unknown): boolean {
   return codeOf(failure) === "ERR_INVALID_URL" || codeOf(failure.cause) === "ERR_INVALID_URL";
 }
 
-function statusOf(failure: unknown): number | null {
-  if (!failure || typeof failure !== "object") return null;
-  const status = (failure as { status?: unknown }).status;
-  return typeof status === "number" && Number.isInteger(status) ? status : null;
-}
-
-/** Octokit keeps the answer's headers on `response.headers`, lowercased. */
-function headerReaderOf(failure: unknown): (name: string) => string | null | undefined {
-  const headers = (failure as { response?: { headers?: unknown } }).response?.headers;
+/** Octokit keeps the answer's headers lowercased, as a record; a `Response`
+ *  keeps a `Headers`. */
+function headerReaderOf(headers: unknown): (name: string) => string | null | undefined {
   if (headers instanceof Headers) return (name) => headers.get(name);
   if (headers && typeof headers === "object") {
     const record = headers as Record<string, unknown>;

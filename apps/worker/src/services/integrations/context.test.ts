@@ -13,7 +13,11 @@ import type { AddressInfo } from "node:net";
 
 import { integrationManifest } from "@integrations/registry";
 import { integrationRuntime } from "@integrations/registry/worker";
-import { IssueTrackerNotFoundError, type IntegrationManifest } from "@integrations/sdk";
+import {
+  IssueTrackerNotFoundError,
+  readProviderFailure,
+  type IntegrationManifest,
+} from "@integrations/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildIntegrationContext, redactedError } from "./context.js";
@@ -449,6 +453,56 @@ describe("the copy core passes on of what a provider threw", () => {
     expect(copy.code).toBe("E_[redacted]");
     expect(copy.fatal).toBe(true);
     expect(copy.request).toBeUndefined();
+    expect(everythingIn(copy)).not.toContain(SECRET);
+  });
+
+  // GitHub answers a spent primary rate limit with 403 and
+  // `x-ratelimit-remaining: 0` (REST "Rate limits" docs); Octokit's
+  // RequestError carries the status and the answer's headers, lowercased.
+  it("keeps a rate limit that only the answer's headers mark, and nothing else of the answer", () => {
+    const original = Object.assign(new Error("API rate limit exceeded for installation ID 4242."), {
+      name: "HttpError",
+      status: 403,
+      request: { headers: { authorization: `token ${SECRET}` } },
+      response: {
+        status: 403,
+        url: "https://api.github.com/repos/acme/api/pulls/7",
+        headers: {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": "1758600000",
+          "set-cookie": `session=${SECRET}`,
+        },
+        data: { message: "API rate limit exceeded" },
+      },
+    });
+
+    const copy = redactedError(original, (text) => text.replaceAll(SECRET, "[redacted]"));
+
+    expect(readProviderFailure(original).kind).toBe("no_verdict");
+    expect(readProviderFailure(copy).kind).toBe("no_verdict");
+    expect((copy as { response?: unknown }).response).toEqual({
+      status: 403,
+      headers: { "x-ratelimit-remaining": "0" },
+    });
+    expect(everythingIn(copy)).not.toContain(SECRET);
+  });
+
+  // Gitbeaker puts no status on what it throws and keeps GitLab's answer as
+  // `cause.response`; GitLab answers 401 for a token it does not accept.
+  it("keeps a refusal whose client kept the answer on the error's cause", () => {
+    const original = Object.assign(new Error("401 Unauthorized"), {
+      cause: {
+        description: "401 Unauthorized",
+        request: new Request("https://gitlab.example.com/api/v4/projects/1", {
+          headers: { "private-token": SECRET },
+        }),
+        response: new Response(null, { status: 401 }),
+      },
+    });
+
+    const copy = redactedError(original, (text) => text.replaceAll(SECRET, "[redacted]"));
+
+    expect(readProviderFailure(copy)).toMatchObject({ kind: "refused", status: 401 });
     expect(everythingIn(copy)).not.toContain(SECRET);
   });
 });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./vcs.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "@integrations/sdk";
+import { AI_WORKFLOW_COMMENT_MARKER, providerAnswer } from "@integrations/sdk";
 
 /**
  * Core's thread identity for a finding (`reviewFindingDigest` in the worker),
@@ -508,9 +508,9 @@ describe("GitLabAdapter", () => {
       const caught = await glAdapter().getPRHead(42).catch((failure) => failure as Error);
 
       expect(caught).toBe(error);
-      // With GitLab's status on it: core reads a copy of this error, which
-      // keeps an own `status` and drops Gitbeaker's `cause.response`.
-      expect(caught).toHaveProperty("status", error.cause.response.status);
+      // With GitLab's answer where the client kept it, which is where the SDK
+      // reads it and what core's copy of this error carries.
+      expect(providerAnswer(caught)?.status).toBe(error.cause.response.status);
     });
   });
 

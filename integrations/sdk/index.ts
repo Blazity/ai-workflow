@@ -65,7 +65,6 @@ export {
 export {
   isPullRequestRefusal,
   isPullRequestUnreadableError,
-  providerAnswerOf,
   PullRequestUnreadableError,
 } from "./pull-request-unreadable";
 
@@ -119,8 +118,11 @@ export {
 export { ConnectionValueError, FatalError } from "./errors";
 
 export {
+  PROVIDER_VERDICT_HEADERS,
+  providerAnswer,
   readProviderFailure,
   refusedOrThrow,
+  type ProviderAnswer,
   type ProviderFailure,
 } from "./provider-failure";
 

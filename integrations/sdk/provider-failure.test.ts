@@ -17,6 +17,8 @@ import {
   ConnectionValueError,
   FatalError,
   IssueTrackerNotFoundError,
+  PROVIDER_VERDICT_HEADERS,
+  providerAnswer,
   readProviderFailure,
   refusedOrThrow,
 } from "./index";
@@ -120,6 +122,48 @@ describe("anything that is not an answer about the values is no verdict", () => 
       readProviderFailure(new SyntaxError("Unexpected token < in JSON")).kind,
       "no_verdict",
     );
+  });
+});
+
+describe("the answer is read wherever the client kept it", () => {
+  /** Gitbeaker 43.8.0's shape: no status on the error, GitLab's answer on
+   *  `cause.response`, GitLab's `error` on `cause.description`. */
+  function gitbeakerError(status: number, headers: Record<string, string> = {}): Error {
+    return Object.assign(new Error(`${status}`), {
+      cause: { description: `${status}`, response: new Response(null, { status, headers }) },
+    });
+  }
+
+  test("a client that keeps the answer on its cause is read like one that keeps a status", () => {
+    // GitLab: 401 for a token that does not authenticate, 403 for one without
+    // the right, 429 with Retry-After for a spent limit.
+    assert.deepEqual(readProviderFailure(gitbeakerError(401)), {
+      kind: "refused",
+      status: 401,
+      malformed: false,
+      message: "401",
+    });
+    assert.equal(readProviderFailure(gitbeakerError(403)).kind, "refused");
+    assert.equal(readProviderFailure(gitbeakerError(429, { "retry-after": "30" })).kind, "no_verdict");
+    assert.equal(readProviderFailure(gitbeakerError(502)).kind, "no_verdict");
+  });
+
+  test("only the headers a verdict reads are taken from an answer", () => {
+    const answer = providerAnswer(
+      octokitError(403, {
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": "1758600000",
+        "x-github-request-id": "C0DE:1234",
+        "set-cookie": "session=secret",
+      }),
+    );
+    assert.deepEqual(answer, { status: 403, headers: { "x-ratelimit-remaining": "0" } });
+    assert.deepEqual([...PROVIDER_VERDICT_HEADERS].sort(), [
+      "ratelimit-remaining",
+      "retry-after",
+      "www-authenticate",
+      "x-ratelimit-remaining",
+    ]);
   });
 });
 

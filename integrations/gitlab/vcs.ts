@@ -11,7 +11,6 @@ import {
   legacyReviewCommentMarker,
   markReviewLedgerReplyResolved,
   markReviewLedgerReplyStale,
-  providerAnswerOf,
   PullRequestUnreadableError,
   readAnyReviewLedgerMarker,
   readProviderFailure,
@@ -209,27 +208,6 @@ interface OwnedReviewDiscussion {
   hasSupersededNote: boolean;
 }
 
-/**
- * The error Gitbeaker threw, with the status GitLab answered put on it.
- *
- * Gitbeaker keeps GitLab's answer on `cause.response` and no status on the
- * error. Core reads a copy of what an adapter throws (it redacts it), and the
- * copy keeps an error's own `status` but not its cause's response, so without
- * this a refused token reads in core as a provider that gave no answer.
- */
-function withProviderStatus(err: unknown): unknown {
-  const answer = providerAnswerOf(err);
-  if (err instanceof Error && answer instanceof Response) {
-    Object.defineProperty(err, "status", {
-      value: answer.status,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
-  return err;
-}
-
 export class GitLabAdapter implements
   VcsIntegrationAdapter,
   GateStatusCapableVCS,
@@ -390,7 +368,7 @@ export class GitLabAdapter implements
   /** A refusal of the values sent is final for this call; anything else,
    *  including a rate limit or GitLab failing on its own side, is retried. */
   private throwWithProviderRetrySemantics(err: any): never {
-    if (readProviderFailure(providerAnswerOf(err)).kind === "refused") {
+    if (readProviderFailure(err).kind === "refused") {
       throw new FatalError(err instanceof Error ? err.message : String(err));
     }
     throw err;
@@ -579,14 +557,15 @@ export class GitLabAdapter implements
       // or not. That, and one that no longer exists, is closed for good. A
       // token GitLab no longer accepts (401) or one without the scope to read
       // at all (403 `insufficient_scope`) refuses every merge request: that is
-      // the connection's fault and is thrown as it came, with its status.
+      // the connection's fault and is thrown as it came (core's copy of it
+      // carries GitLab's status, read from where the client kept it).
       if (isPullRequestRefusal(err)) {
         throw new PullRequestUnreadableError(
           `GitLab merge request !${prId} in ${this.projectId} cannot be read with this token`,
           { cause: err },
         );
       }
-      throw withProviderStatus(err);
+      throw err;
     }
     const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
     if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);
