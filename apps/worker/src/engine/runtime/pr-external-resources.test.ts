@@ -1126,7 +1126,7 @@ describe("terminal PR check settlement", () => {
   });
 
   it("says so when it reconciles a run whose row carries no pins", async () => {
-    // A run row written before `0073_run_integration_pins` has NULL there, and
+    // A run row written before `0072_integrations_contract` has NULL there, and
     // its pins cannot be recovered, so this verdict goes to whichever provider
     // is connected now rather than to the one the run started with. The S10
     // drain is what makes that safe. If the drain did not hold, this line is

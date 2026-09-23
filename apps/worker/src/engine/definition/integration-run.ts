@@ -16,7 +16,7 @@
  * S2 chose workflow state *instead of* a column, on the grounds that a column
  * would say the same thing and cost a migration. S10 reversed that and added
  * the column anyway (`workflow_runs.integration_pins`, migration
- * `0073_run_integration_pins`), because the reasoning had a hole: it assumed
+ * `0072_integrations_contract`), because the reasoning had a hole: it assumed
  * every reader of a pin is the run itself. The reconciler is not. It is a cron
  * pass over rows that closes PR checks a dead run left open
  * (`engine/runtime/pr-external-resources.ts`), it has no workflow state to

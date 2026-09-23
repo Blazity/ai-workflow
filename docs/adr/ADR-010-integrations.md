@@ -2640,9 +2640,14 @@ way back from a deploy nobody told it about. Guard:
 deploy on the path it was already taking". The drain below is still the
 intended route; this is what happens to a run the drain missed.
 
-No step identity is added, removed, moved or renamed.
-`blockInvestigateRetrievalStep` keeps its identity and its recorded input
-shape, and its inner reads changed.
+No step identity is added, removed, moved or renamed here.
+`blockInvestigateRetrievalStep` keeps its identity but not its recorded
+shapes: its input keys were renamed (`jira` and `slack` became `issueTracker`
+and `chat`), and the provider values in its result moved with them (an
+evidence `source` and a gap's `provider` read `issue_tracker` and `chat`, and
+an evidence ref reads `issue_tracker:<KEY>` where it read `jira:<KEY>`). A run
+suspended in it cannot replay across the deploy, which is one of the reasons
+the drain before merge is total (the hardening plan's "Drain before merge").
 
 That is a smaller drain than S8's, which is total for this branch anyway. The
 branch's drain is run once, before it merges, under the protocol in
@@ -2653,8 +2658,10 @@ branch's drain is run once, before it merges, under the protocol in
 S2 decided the pin lives in the run's own workflow state and that no run table
 gets a column, because replay restores it without a read and a column would say
 the same thing for the price of a migration. S10 reverses the second half of
-that: migration `0073_run_integration_pins` adds a nullable jsonb
-`integration_pins` to `workflow_runs`.
+that: migration `0072_integrations_contract` adds a nullable jsonb
+`integration_pins` to `workflow_runs` (written first as a migration of its
+own, `0073`, and folded into 0072 before either shipped, so no database ever
+ran a `0073`).
 
 The hole in the original reasoning was an assumption nobody stated: that every
 reader of a pin is the run. Reconciliation is not. It is a cron pass over rows
@@ -2669,7 +2676,10 @@ is connected now" is a thing that changes while checks are still open, which is
 what made the cost real enough to pay the migration for.
 
 What did not change: workflow state is still where a live run reads its pin, so
-no step's recorded input or result moved. The column is a second copy for
+no step's recorded result moved. One recorded input did:
+`recordBlockStatusesStep` (`engine/steps/telemetry.ts`) takes the pins as an
+optional `integrationPins`, optional so a run recorded without it replays. The
+column is a second copy for
 readers outside the run, written once (`coalesce(existing, excluded)` in
 `db/repositories/runs/telemetry.ts`) so a replay cannot rewrite what the run
 started with.
@@ -2902,14 +2912,15 @@ held by code or corrected here.
   `FatalError`, the health check's `critical`, a page and a webhook refusal's
   `reason` were corrected in the same change.
 
-Left open, each found while writing the guide and each said in it as it is:
+Left open, each found while writing the guide and each said in it as it is
+(the connection tests that refused on a network failure or a 429 were closed
+by the hardening plan's D6: every one now answers through `refusedOrThrow`):
 
 | What | Where |
 |---|---|
 | No control chooses between two providers of a `one` capability; the refusal tells an admin to disable one | `engine/definition/integration-availability.ts` |
 | The `issue_tracker` and `memory` capabilities compare no run pin: the check exists and no caller passes one | `engine/support/issue-tracker-runtime.ts`, `engine/support/memory-runtime.ts` |
 | `ctx.llm` records no usage against the block and is not bound to `ctx.signal` | `engine/support/integration-capabilities.ts` |
-| The GitHub, GitLab and Jira connection tests return a refusal for a network failure, and Arthur's for a 429, which demotes a working connection on a blip | `integrations/{github,gitlab,jira,arthur}/worker.ts` |
 | The webhook route removes `legacyBotLogin` (`VCS_LEGACY_BOT_LOGIN_FIELD.key`) from every integration's connection, `vcs` or not; it no longer writes `botLogin` | `routes/webhooks/[id].post.ts` |
 
 ## Change log
@@ -2921,6 +2932,7 @@ names the stage, what was added, and why the context or a port needed it.
 |---|---|---|---|
 | 2026-09-23 | review fixes | `IntegrationConnection.connectionless`, and conformance codes `connection_required_field_missing` and `connection_connectionless_has_required` | Core treats a connection whose every field is optional as complete from the start, so a manifest that forgot to mark a field required read Connected on every deployment with nothing configured, and a memory integration like that would have replaced the built-in store everywhere. A connection now declares at least one required field, or says it needs nothing. Not additive for a manifest with no required field, which fails conformance until it chooses; none in this repository has one. |
 | 2026-09-23 | review fixes | `ISSUE_TRACKER_BOARD_FIELDS` and conformance code `issue_tracker_board_field_invalid` | Core read a tracker's project and transition ids by Jira's own field names and identified the tracker by its `baseUrl`, so a second tracker would have run its board with no project check and every move by bare name. Core now reads those fields by the SDK's keys, conformance holds a tracker to declaring the project as required and the transition ids as optional, and a tracker's identity is its integration id plus its config fingerprint. Chosen over a port member because it follows `VCS_BOT_LOGIN_FIELD` and needs no runtime code in each tracker. |
+| 2026-09-23 | hardening | `IntegrationRequestInit.streamBody`; `ctx.http.fetch` now reads the body inside the attempt | The attempt deadline ended when the headers arrived, so a body cut off after that read as a short success: GitHub's skill download came back as 200 with zero bytes and the person read "could not be unpacked safely" about a repository that was fine. The body is now read inside the attempt, so a cut body is a failed attempt (a read goes again, a write throws). `streamBody` opts out for a download too large to hold in memory, which the caller then reads under a deadline of its own. |
 | 2026-09-23 | final fixes | `ConnectionField.requiredWhenStored` and `connectionFieldRequired(field, source)`; GitHub's and GitLab's `webhookSecret` set it | Stored GitHub or GitLab values with a blank webhook secret read Connected while every delivery was refused with 503; main refused to boot in that state. Requiring the field everywhere would turn Failing every deployment that runs on its variables without it, so it stays optional on the environment and is required when values are stored: the save refuses before testing, naming the field, and the stored presence and the form read the same rule. Additive. |
 | 2026-09-23 | S15 | `MEMORY_ITEMS_MAX` (40 facts, 30 lessons per subject), moved out of the built-in store, which now reads it from the port | The first engine that only adds (Mem0) had no bound, and a distilling run adds up to eight facts and five lessons, so a repository's memory grew with every run until the adapter could no longer reconcile it. The limit is the same for every provider so that switching engines does not change how much a repository remembers, and it has one home. Additive: a new constant. Two corrections to the S13 row come with it. Mem0's current API (v3) does not merge or supersede what is added: it only adds, so the adapter reconciles, as `MemoryObservation` already says. And the first memory integration in the registry changes core's resolution: every `activeMemory` call now reads the integration rows before choosing the built-in store, so a database that does not answer for a moment makes that step's memory `unreadable` rather than served by the built-in store, which lives in the same database and would not have answered either. |
 | 2026-09-23 | memory contract | `MEMORY_PROMPT_BUDGET_BYTES` (16 KiB of facts and 16 KiB of lessons per agent prompt) and `MEMORY_NOTEBOOK_MAX_BYTES` (256 KiB), which core reads for the limits it enforces; the memory port's comments now state what core does for every provider and what an adapter owes (plan `docs/plans/2026-09-22-integrations-hardening.md`, M1 to M9) | A reader given only the guide and the SDK could not plan an external memory engine: who removes secrets, how big a rendering may be, which `docPath` the admin half receives, whether core retries a write, whether memory is isolated per deployment, whether items go through the engine's own extraction. Each now has one answer. Core removes every secret the deployment knows from each observation before any provider sees it (`withoutKnownSecrets` in `engine/support/memory-runtime.ts`) and from everything a recall hands back, the rendering and every entry, before it reaches a prompt, a workspace or the model that distils (`recallWithoutKnownSecrets`; a retraction still matches, because the quote is cleaned again on its way back and the built-in store matches against its own cleaned items), and the built-in store still cleans what it already holds at its next write into a document, as every write of its whole document always did (both through `memory/known-secrets.ts`), cuts what it injects to the stated budgets with a visible marker whatever a provider returns (`fitMemoryText`), and never repeats a call; the built-in store counts as the memory provider for block availability by the same rule a run is served by (`memoryProviderChoice`). The premise of the S13 entry below, that a hosted engine does the merging itself, does not hold for every engine: the port now says what an adapter owes an engine that only adds (forget what `refuted` names by listing and deleting by id; replace a notebook rather than append). Additive: two exported constants, and comments. |

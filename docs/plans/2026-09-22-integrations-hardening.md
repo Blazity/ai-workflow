@@ -128,7 +128,7 @@ the instruction to disable all but one on the Integrations page. No new
 setting and no new stored field. A Failing one counts toward the two, so a
 refused key cannot quietly hand memory to the other engine.
 
-### D5. Secrets leave through no error (part done, part in group B)
+### D5. Secrets leave through no error (shipped)
 
 **Problem.** The context's own comment promised that a failed request's message
 is redacted, and it was not. Node's `fetch` quotes the whole header, key
@@ -136,9 +136,15 @@ included, when a pasted key contains a line break.
 
 **Decision.** Everything an integration produces that core records (a thrown
 error, a refusal detail) is redacted at one boundary core owns. Done for
-requests through `ctx.http` and for memory refusals (`47c5cd99`). In progress:
-one `adapterFor()` wrapper so a tracker, VCS or messaging adapter's own thrown
-errors are redacted without any caller having to remember (group B).
+requests through `ctx.http` and for memory refusals (`47c5cd99`). Then, in
+group B, shipped as `redactingRuntime` in
+`apps/worker/src/services/integrations/usable.ts` rather than the planned
+per-call `adapterFor()` wrapper: the runtime `resolveUsableIntegrations` hands
+out is wrapped once, so every capability factory, every adapter method (nested
+adapters such as `vcs.skillSource()` and `memory.store` included), `beginRun`,
+page readers and the webhook's `receive` and `deliver` are redacted without any
+caller having to remember. The connection test, health probes and blocks
+redact where they are called, with the same redactor.
 
 ### D6. One rule for "refused" versus "could not answer" (group B)
 

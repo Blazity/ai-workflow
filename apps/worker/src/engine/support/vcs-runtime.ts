@@ -30,7 +30,7 @@ import { redactingPublications, VCS_PUBLICATIONS } from "./publication-redaction
  *   started, so there is no moment to be pinned to and current settings are
  *   the right ones to use.
  * - **The run's row predates the pins column.** Migration
- *   `0073_run_integration_pins` added `workflow_runs.integration_pins` as
+ *   `0072_integrations_contract` added `workflow_runs.integration_pins` as
  *   nullable, so every row written before that deploy carries NULL and its
  *   pins can never be recovered. Such a run proceeds against the provider as
  *   it is configured now, with nothing to compare.

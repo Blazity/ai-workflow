@@ -1092,8 +1092,10 @@ byte-identical to the ones on the branch's start commit, checked by extracting
 the pair from every step-bearing file at `0486b82c` and in the tree. One
 recorded RESULT gains a field:
 
-- `runStartSettingsStep` records an optional `tracker` (the site and up to
-  three transition ids). A run suspended before this change replays a result
+- `loadRunStartSettingsStep` records an optional `tracker` (up to three
+  transition ids; it also carried the site until the final review fixes of
+  2026-09-23 removed it, because nothing read it and the site is the
+  connection's to say). A run suspended before this change replays a result
   without it, so every transition id it builds a move from is absent. That is
   NOT benign on a board that reaches a column only by a named transition: the
   move by column name finds nothing and the ticket is stranded at the end of an

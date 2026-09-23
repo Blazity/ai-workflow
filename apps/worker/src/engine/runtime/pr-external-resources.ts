@@ -558,7 +558,7 @@ async function reconcilePendingPrChecksWithPersistence(
  *
  * Every other caller is handed its pins by the step that loaded the plan. This
  * one reads the run row, so it is the only place where a run written before
- * migration `0073_run_integration_pins` can turn up: its pins are NULL and
+ * migration `0072_integrations_contract` can turn up: its pins are NULL and
  * cannot be recovered, so the provider it publishes this verdict to is
  * whichever one is connected at reconcile time, not the one the run started
  * with. The S10 drain is what makes that safe (no such run should still be
@@ -574,7 +574,7 @@ function warnAboutRunsWithoutIntegrationPins(
     .map((run) => run.runId);
   if (unpinned.length === 0) return;
   logger.warn(
-    { runIds: unpinned, migration: "0073_run_integration_pins" },
+    { runIds: unpinned, migration: "0072_integrations_contract" },
     "pr_check_reconcile_without_integration_pins",
   );
 }

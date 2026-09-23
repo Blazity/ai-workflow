@@ -316,7 +316,7 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`        | unset (commented-review triggers for that provider are unavailable)                                                                                         | Provider-specific login of the bot's own VCS account. Required for every selected, configured provider when `trigger_pr_review.on` includes `commented`, so the bot cannot recursively trigger a run from its own review. For a GitHub App this is usually `<app-slug>[bot]`. |
 | `VCS_BOT_LOGIN`                               | unset                                                                                                                                                        | Legacy fallback for a commented-review bot identity, accepted only when exactly one VCS provider is configured. Mixed GitHub/GitLab deployments require provider-specific logins. |
 
-`apps/worker/src/infra/runtime-env.ts` cross-validates at startup: missing required vars or wrong combinations (e.g. `GITHUB_OWNER` without `GITHUB_REPO`) crash the process with a precise error.
+`apps/worker/src/infra/runtime-env.ts` cross-validates at startup: missing required vars or wrong combinations (e.g. `RESEND_API_KEY` without `RESEND_FROM_EMAIL`, or only some of the four `SSO_*` variables) crash the process with a precise error.
 
 #### Repository access and the retired `AGENT_ALLOWED_REPOS`
 
