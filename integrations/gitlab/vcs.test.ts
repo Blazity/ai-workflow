@@ -226,6 +226,30 @@ describe("GitLabAdapter", () => {
       );
     });
 
+    it("re-creates the branch when an earlier attempt's remove landed and answered badly", async () => {
+      // The remove went through and GitLab answered 502, so the step was
+      // retried; the branch is gone now and the remove answers 404. Stopping
+      // there left the branch deleted and GitLab's auto-closed merge request
+      // closed for good.
+      mockBranches.remove.mockRejectedValueOnce(
+        new GitLabRequestError("404 Branch Not Found", new Response(null, { status: 404 })),
+      );
+      mockBranches.create.mockResolvedValueOnce({});
+
+      await glAdapter().resetOwnedBranch("feat/test", "main");
+
+      expect(mockBranches.create).toHaveBeenCalledWith("blazity/demo-app", "feat/test", "main");
+    });
+
+    it("stops a reset whose remove GitLab refused for any other reason", async () => {
+      mockBranches.remove.mockRejectedValueOnce(
+        new GitLabRequestError("403 Forbidden", new Response(null, { status: 403 })),
+      );
+
+      await expect(glAdapter().resetOwnedBranch("feat/test", "main")).rejects.toBeDefined();
+      expect(mockBranches.create).not.toHaveBeenCalled();
+    });
+
     it("rethrows other 400 errors (invalid ref, invalid name) without deleting branch", async () => {
       const error = new Error("Invalid branch name") as any;
       error.cause = { description: error.message, response: new Response(null, { status: 400 }) };

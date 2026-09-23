@@ -324,7 +324,14 @@ export class GitLabAdapter implements
     // attempt re-runs this path and the create re-establishes it (the MR is
     // reopened/recreated downstream). This is only ever invoked for a branch the
     // database proves the workflow owns.
-    await this.gl.Branches.remove(this.projectId, name);
+    try {
+      await this.gl.Branches.remove(this.projectId, name);
+    } catch (err) {
+      // Already gone: an earlier attempt's remove landed and answered badly (a
+      // 502 after GitLab deleted the branch). Stopping here would fail every
+      // retry at this line and never re-create the branch.
+      if (this.getStatusCode(err) !== 404) throw err;
+    }
     await this.gl.Branches.create(this.projectId, name, base);
   }
 
