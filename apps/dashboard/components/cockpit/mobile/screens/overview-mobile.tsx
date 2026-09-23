@@ -11,6 +11,7 @@ import { windowPhrase, windowShort, type TimeWindow } from "@/lib/window";
 import type { OverviewScreenData } from "@/components/cockpit/screens/overview";
 import { Button } from "@/components/ui/button";
 import { formatAgeMinutes } from "@/lib/date-time";
+import { olderOpenRunsSentence, tallyListedRuns } from "@/lib/runs-display";
 
 const MISSING_VALUE = "n/a";
 
@@ -27,14 +28,15 @@ export function OverviewMobileScreen({
 
   const PAGE_SIZE = 6;
   const [runsPage, setRunsPage] = useState(0);
-  const allRecent = data.recentRuns.rows;
+  const allRecent = data.runs.rows;
   const recent = allRecent.slice(
     runsPage * PAGE_SIZE,
     runsPage * PAGE_SIZE + PAGE_SIZE,
   );
   const runsTotalPages = Math.max(1, Math.ceil(allRecent.length / PAGE_SIZE));
 
-  const liveRows = data.liveRuns.rows;
+  const liveRows = data.runs.rows;
+  const olderOpen = olderOpenRunsSentence(tallyListedRuns(data.runs, "all", window));
   const running = liveRows.filter((r) => r.status === "running");
   const awaiting = liveRows.filter((r) => r.status === "awaiting");
   const workflows = data.workflows.rows;
@@ -154,6 +156,7 @@ export function OverviewMobileScreen({
 
       <div>
         <div className="font-mono text-[10px] tracking-[0.06em] uppercase text-neutral-500 mb-2">Recent runs</div>
+        {olderOpen && <p className="m-0 mb-2 font-body text-xs text-neutral-600">{olderOpen}</p>}
         <div className="flex flex-col gap-2">
           {recent.map((r) => (
             <Button

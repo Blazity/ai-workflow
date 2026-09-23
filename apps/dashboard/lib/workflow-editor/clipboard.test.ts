@@ -346,3 +346,71 @@ test("round-trips the session clipboard and fails closed on corrupt storage", ()
   );
   assert.equal(readSessionWorkflowClipboard(storage), null);
 });
+
+// Red when: a pasted block keeps the name of the block it was copied from.
+// Two blocks called "Block injected run" made every validation and deploy
+// message about either of them ambiguous (QA P1 round 2); the id was always
+// unique, the name a person reads was not.
+test("a pasted block whose name is taken gets its own name, and a second paste another", () => {
+  const original = { ...v2Node("block", "terminate"), name: "Block injected run" };
+  const payload = createWorkflowClipboardPayload({
+    nodes: [original],
+    edges: [],
+    selectedNodeIds: ["block"],
+  })!;
+  const first = planWorkflowClipboardPaste({
+    payload,
+    destinationNodes: [v2Node("trigger", "trigger_ticket_ai"), original],
+    destinationEdges: [],
+  });
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  assert.equal(first.addedNodes[0]?.name, "Block injected run (copy)");
+
+  const second = planWorkflowClipboardPaste({
+    payload: first.nextClipboard,
+    destinationNodes: first.nodes,
+    destinationEdges: first.edges,
+  });
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.equal(second.addedNodes[0]?.name, "Block injected run (copy 2)");
+  const names = second.nodes.map((node) => node.name).filter(Boolean);
+  assert.equal(new Set(names).size, names.length, `names repeat: ${names.join(", ")}`);
+});
+
+test("a pasted block keeps its name where nothing else is called that", () => {
+  const original = { ...v2Node("block", "terminate"), name: "Block injected run" };
+  const payload = createWorkflowClipboardPayload({
+    nodes: [original],
+    edges: [],
+    selectedNodeIds: ["block"],
+  })!;
+  // Another workflow: the name is free there, so it arrives unchanged.
+  const result = planWorkflowClipboardPaste({
+    payload,
+    destinationNodes: [v2Node("trigger", "trigger_ticket_ai")],
+    destinationEdges: [],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.addedNodes[0]?.name, "Block injected run");
+});
+
+test("two blocks pasted together with one name do not share it either", () => {
+  const a = { ...v2Node("a", "terminate"), name: "Stop" };
+  const b = { ...v2Node("b", "terminate"), name: "Stop" };
+  const payload = createWorkflowClipboardPayload({
+    nodes: [a, b],
+    edges: [],
+    selectedNodeIds: ["a", "b"],
+  })!;
+  const result = planWorkflowClipboardPaste({
+    payload,
+    destinationNodes: [v2Node("trigger", "trigger_ticket_ai")],
+    destinationEdges: [],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.addedNodes.map((node) => node.name), ["Stop", "Stop (copy)"]);
+});

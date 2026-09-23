@@ -36,3 +36,18 @@ export function windowPhrase(w: TimeWindow): string {
 export function windowDeltaSuffix(w: TimeWindow): string {
   return w === "all" ? "" : `vs prior ${w}`;
 }
+
+/** How far back a window reaches, in minutes, the way the worker cuts its run
+ *  reads off (`bounds` in its dashboard run data); "all" has no cutoff. */
+export function windowMinutes(window: TimeWindow): number {
+  switch (window) {
+    case "24h":
+      return 24 * 60;
+    case "7d":
+      return 7 * 24 * 60;
+    case "30d":
+      return 30 * 24 * 60;
+    case "all":
+      return Number.POSITIVE_INFINITY;
+  }
+}

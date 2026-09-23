@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
+import { useRouter } from "next/navigation";
 import {
   isManuallyDispatchableTrigger,
   isTriggerBlockType,
@@ -30,7 +31,10 @@ import {
   type WorkflowEditorOptions,
   type WorkflowRepositoryScope,
 } from "@shared/contracts";
-import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
+import {
+  FlowEditor,
+  type FlowEditorMenuAction,
+} from "@/components/cockpit/flow-editor/flow-editor";
 import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { RepositoryCatalogProvider } from "@/components/cockpit/flow-editor/repository-catalog-context";
@@ -45,6 +49,7 @@ import {
   type FlowNodeDef,
 } from "@/lib/flows";
 import { apiClient } from "@/lib/api/client";
+import { useUnsavedWork } from "@/lib/settings/use-unsaved-work";
 import {
   serializeSemanticWorkflowDefinition,
   serializeWorkflowDefinition,
@@ -258,6 +263,7 @@ export function WorkflowEditorScreen({
   actorLabel: string;
   initialNodeId?: string;
 }) {
+  const router = useRouter();
   const seed =
     initialDetail.draft ??
     runnableVersionDefinition(initialDetail.deployed) ??
@@ -598,17 +604,26 @@ export function WorkflowEditorScreen({
   const canResetToDeployed =
     canEdit && deployed !== null && semanticKey !== deployedSemanticKey;
 
+  // An unsaved graph is unsaved work to the whole cockpit, not only to a reload:
+  // the shell's links and its Back guard ask the registry this registers in,
+  // and a reload or a closed tab asks through the same hook's beforeunload. An
+  // editor-only beforeunload let a sidebar click or Back drop the edit silently.
+  useUnsavedWork(`workflow:${selectedId}`, dirty);
+
+  // The address names the open workflow, so a refresh, a shared link, or the
+  // reload "Draft changed; reload before saving" asks for opens this one and not
+  // whichever the address named on arrival. `initialDetail` is what the server
+  // rendered for the current address; when it is another workflow (a switch in
+  // the picker, or a bare /editor from the sidebar while this one is open), the
+  // address is replaced. router.replace rather than the browser's own
+  // replaceState: the router then holds a render of this workflow for this
+  // history entry, so Back into it from another screen reopens the same one.
+  // The screen keeps its state across that render; nothing here follows it.
+  const renderedDefinitionId = initialDetail.meta.id;
   useEffect(() => {
-    if (!dirty) return;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      // Legacy prompt trigger, still required by Chrome/Edge before 119. An empty string
-      // does not count as set, so this has to be truthy.
-      e.returnValue = true;
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
+    if (renderedDefinitionId === selectedId) return;
+    router.replace(`/editor?definition=${selectedId}`, { scroll: false });
+  }, [renderedDefinitionId, router, selectedId]);
 
   useEffect(() => {
     validationKeyRef.current = validationTargetKey;
@@ -1158,6 +1173,39 @@ export function WorkflowEditorScreen({
     }`;
   const repositoryScopeSummary = describeRepositoryScope(repositoryScope);
 
+  // The laptop header's Reset, picker and History, as the phone's More sheet
+  // lists them. From the sheet a panel opens rather than toggles: the sheet has
+  // just closed over it.
+  const headerMenuActions: FlowEditorMenuAction[] = [
+    ...(canEdit && deployed !== null
+      ? [
+          {
+            id: "reset",
+            label: "Reset to deployed",
+            onSelect: resetToDeployed,
+            disabled: !canResetToDeployed || busy !== null,
+            title: "Load the deployed version's nodes and edges into the canvas.",
+          },
+        ]
+      : []),
+    {
+      id: "workflows",
+      label: `Workflows (${metas.length})`,
+      onSelect: () => {
+        setDefsOpen(true);
+        setHistoryOpen(false);
+      },
+    },
+    {
+      id: "history",
+      label: `History (${versions.length})`,
+      onSelect: () => {
+        setHistoryOpen(true);
+        setDefsOpen(false);
+      },
+    },
+  ];
+
   const triggerLabel = (type: WorkflowDefinitionMeta["triggerTypes"][number]) =>
     options.blockRegistry[type]?.presentation.label ?? type;
   const deployedIsRetiredSchema = deployed !== null && deployed.schema !== "v2";
@@ -1303,19 +1351,22 @@ export function WorkflowEditorScreen({
               )}
             </>
           }
+          headerPrimaryAction={
+            canEdit ? (
+              <Button
+                variant="success"
+                onClick={() => void deploy()}
+                disabled={!canDeploy || busy !== null}
+                title={canDeploy ? undefined : (deployDisabledTitle ?? undefined)}
+                className="appearance-none cursor-pointer border border-emerald-600 bg-emerald-600 text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
+              >
+                {busy === "deploy" ? "Deploying…" : "Deploy"}
+              </Button>
+            ) : null
+          }
+          headerMenuActions={headerMenuActions}
           headerExtra={
             <>
-              {canEdit && (
-                <Button
-                  variant="success"
-                  onClick={() => void deploy()}
-                  disabled={!canDeploy || busy !== null}
-                  title={canDeploy ? undefined : (deployDisabledTitle ?? undefined)}
-                  className="appearance-none cursor-pointer border border-emerald-600 bg-emerald-600 text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
-                >
-                  {busy === "deploy" ? "Deploying…" : "Deploy"}
-                </Button>
-              )}
               {canEdit && deployed !== null && (
                 <Button
                   variant="secondary"
@@ -1376,7 +1427,7 @@ export function WorkflowEditorScreen({
           />
         )}
         {defsOpen && (
-          <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
+          <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-w-[calc(100vw-2rem)] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">
               <div>
                 <h2 className="font-body text-[14px] font-semibold text-neutral-900">Workflows</h2>

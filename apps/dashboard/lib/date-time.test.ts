@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import test from "node:test";
 
 import { formatAgeMinutes, formatDateTime, isOlderThanHours } from "./date-time";
@@ -23,6 +25,33 @@ test("formatAgeMinutes moves from minutes to hours and days", () => {
   assert.equal(formatAgeMinutes(60), "1h ago");
   assert.equal(formatAgeMinutes(1383), "23h ago");
   assert.equal(formatAgeMinutes(2880), "2d ago");
+  // A run parked four days ago, as QA read it on the runs list: "6998m ago".
+  assert.equal(formatAgeMinutes(6998), "4d ago");
+});
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : sourceFiles(path);
+    return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
+  });
+}
+
+// Red when: a screen prints a run's age field (startedAtMin, askedAtMin) with a
+// bare "m ago" instead of formatAgeMinutes. Seven places did, so the same run
+// read "6998m ago" on the runs list and "4d ago" on the phone Overview.
+test("no screen prints a run's age in raw minutes", () => {
+  const root = join(import.meta.dirname, "..");
+  const offenders = ["components", "app"].flatMap((dir) =>
+    sourceFiles(join(root, dir)).flatMap((file) =>
+      readFileSync(file, "utf8")
+        .split("\n")
+        .flatMap((line, index) =>
+          /AtMin\}m ago/.test(line) ? [`${relative(root, file)}:${index + 1}`] : [],
+        ),
+    ),
+  );
+  assert.deepEqual(offenders, [], "use formatAgeMinutes from lib/date-time.ts");
 });
 
 test("isOlderThanHours distinguishes a stale scan from a current one", () => {

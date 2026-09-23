@@ -588,7 +588,9 @@ export function SectionRow({
             className={`shrink-0 text-neutral-600 transition-transform duration-[var(--motion-fast)] ${open ? "rotate-90" : ""}`}
           />
           <span className="w-5 shrink-0 font-mono text-[10px] text-neutral-500">{header.index + 1}</span>
-          <span className="min-w-0 flex-1 break-words font-display text-[14px] font-medium text-coal">{header.title}</span>
+          {/* A basis, so on a phone the badges wrap below the title instead of
+              squeezing it into a column three letters wide (QA at 400 px). */}
+          <span className="min-w-0 flex-1 basis-40 break-words font-display text-[14px] font-medium text-coal">{header.title}</span>
           <span className="flex flex-wrap items-center gap-1.5">
             <CkChip>{sectionKindLabel(header.kind)}</CkChip>
             <span className="font-mono text-[10px] text-neutral-600">{formatBytes(header.sentBytes)}</span>

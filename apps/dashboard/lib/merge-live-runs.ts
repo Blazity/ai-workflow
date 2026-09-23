@@ -43,14 +43,26 @@ export function mergeLiveRuns(
   // and list live runs first (most recent activity on top).
   const rows = [...freshLive, ...runs.rows.filter((r) => !liveIds.has(r.id))];
 
-  const counts = { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 };
-  for (const r of rows) counts[r.status]++;
+  // The store's total and counts cover its whole window, while its rows stop at
+  // a page: recounting the rows would shrink a busy window to one page and put
+  // a number beside the Overview's tile that disagrees with it. So the store's
+  // counts stand, a live row that replaces a stored one moves that run between
+  // statuses, and only a run the store did not list is added.
+  const stored = new Map(runs.rows.map((r) => [r.id, r]));
+  const counts = { ...runs.counts };
+  let added = 0;
+  for (const r of freshLive) {
+    const storedRow = stored.get(r.id);
+    if (storedRow) counts[storedRow.status] -= 1;
+    else added += 1;
+    counts[r.status] += 1;
+  }
 
   return {
     generatedAt: runs.generatedAt,
     available: runs.available || liveRows.length > 0,
     rows,
-    total: rows.length,
+    total: runs.total + added,
     counts,
   };
 }
