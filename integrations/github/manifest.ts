@@ -91,7 +91,8 @@ export const manifest = defineIntegration({
       {
         ...VCS_LEGACY_BOT_LOGIN_FIELD,
         label: "Legacy bot username",
-        description: "Used only when this is the deployment's sole version-control provider.",
+        description:
+          "The bot's username from the old VCS_BOT_LOGIN variable, kept for deployments set up before each version control provider had its own. Read only while this is the one version control provider connected here; leave it empty otherwise.",
         secret: false,
         optional: true,
       },

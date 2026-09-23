@@ -1,7 +1,7 @@
 import { canManageIntegrations } from "@shared/contracts";
 
 import { requireSession } from "@/lib/auth/session";
-import { readIntegrationsList } from "@/lib/integrations/list";
+import { readIntegrationsList, readLatestHealthScan } from "@/lib/integrations/list";
 import { workerUnreachableLine } from "@/lib/integrations/presentation";
 
 import { ConnectionScreen, UnknownIntegrationScreen } from "./connection-screen";
@@ -17,7 +17,7 @@ export async function ConnectionData({ id }: { id: string }) {
   const session = await requireSession();
   const canManage = canManageIntegrations(session.role);
 
-  const list = await readIntegrationsList();
+  const [list, scan] = await Promise.all([readIntegrationsList(), readLatestHealthScan()]);
 
   if (list === null) {
     return (
@@ -43,6 +43,7 @@ export async function ConnectionData({ id }: { id: string }) {
       integration={integration}
       writes={list.writes}
       canManage={canManage}
+      scan={scan}
     />
   );
 }

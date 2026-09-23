@@ -48,7 +48,9 @@ export function Switch({
       onClick={toggle}
       onKeyDown={handleKeyDown}
       className={[
-        "inline-flex w-fit self-start appearance-none items-center gap-1.5 border-0 bg-transparent p-0 text-left",
+        // At least 24 px tall however small the track is drawn, so a finger or
+        // an unsteady pointer can hit it (WCAG 2.2 target size, minimum).
+        "inline-flex min-h-[24px] w-fit self-start appearance-none items-center gap-1.5 border-0 bg-transparent p-0 text-left",
         "font-mono text-[11px] text-neutral-700",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1",
         "disabled:cursor-default disabled:opacity-40",

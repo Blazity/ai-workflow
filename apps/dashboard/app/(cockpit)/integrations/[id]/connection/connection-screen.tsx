@@ -1,5 +1,6 @@
 "use client";
 
+import { SECRETS_KEY_SETUP_URL } from "@/lib/docs-links";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -13,6 +14,7 @@ import type {
   IntegrationSource,
   IntegrationVersionConflict,
   IntegrationWriteAccess,
+  SystemHealthResponse,
 } from "@shared/contracts";
 
 import { useCockpit } from "@/components/cockpit/context";
@@ -31,7 +33,11 @@ import {
   disableConsequence,
   disconnectConsequence,
   enableConsequence,
+  availabilityInsteadOfSwitch,
   fieldHint,
+  nothingToDisconnectLine,
+  sourceInUse,
+  secretsKeyNotice,
   integrationImpactConfirmLabel,
   integrationImpactLines,
   missingRequiredFields,
@@ -216,11 +222,14 @@ export function ConnectionScreen({
   integration: initialIntegration,
   writes,
   canManage,
+  scan = null,
 }: {
   integration: IntegrationDto;
   writes: IntegrationWriteAccess;
   /** canManageIntegrations(role): owners and admins. */
   canManage: boolean;
+  /** The last stored health scan, when this role could read one. */
+  scan?: SystemHealthResponse | null;
 }) {
   const router = useRouter();
   const [integration, setIntegration] = useState(initialIntegration);
@@ -589,6 +598,8 @@ export function ConnectionScreen({
 
   const environmentRefusal = sourceSwitchRefusal(integration, "environment");
   const storedRefusal = sourceSwitchRefusal(integration, "stored");
+  const keyNotice = secretsKeyNotice(integration);
+  const availabilityNote = availabilityInsteadOfSwitch(integration);
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8 max-w-[840px]">
@@ -602,7 +613,7 @@ export function ConnectionScreen({
         </div>
         <p className="m-0 font-body text-[13px] text-neutral-600">{integration.description}</p>
         <div className="flex flex-col gap-[2px] mt-1">
-          {statusDetailLines(integration).map((line, index) => (
+          {statusDetailLines(integration, scan).map((line, index) => (
             <span key={index} className="font-body text-[12px] text-neutral-500 break-words">
               {line}
             </span>
@@ -657,6 +668,22 @@ export function ConnectionScreen({
         }
       >
         <div className="flex flex-col gap-3">
+          {keyNotice && (
+            <p
+              role="note"
+              className="m-0 rounded-[3px] border border-neutral-300 bg-neutral-50 px-3 py-2 font-body text-[12px] text-neutral-700"
+            >
+              {keyNotice.text}{" "}
+              <a
+                href={SECRETS_KEY_SETUP_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-neutral-900 underline"
+              >
+                Open SETUP.md
+              </a>
+            </p>
+          )}
           {integration.fields.length === 0 && (
             <p className="m-0 font-body text-[12px] text-neutral-600">
               This integration needs no values.
@@ -724,7 +751,13 @@ export function ConnectionScreen({
         {writable && (
           <div className="flex flex-col gap-2">
             <div className="flex flex-wrap gap-2">
-              <Button variant="primary" loading={busy === "save"} disabled={busy !== null} onClick={save}>
+              <Button
+                variant="primary"
+                loading={busy === "save"}
+                disabled={busy !== null || keyNotice?.blocksSave === true}
+                title={keyNotice?.blocksSave ? keyNotice.text : undefined}
+                onClick={save}
+              >
                 Save and test
               </Button>
               <Button
@@ -761,7 +794,7 @@ export function ConnectionScreen({
             }`}
           >
             <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
-              Environment variables{state.source === "environment" ? " · in use" : ""}
+              Environment variables{sourceInUse(state, "environment") ? " · in use" : ""}
             </div>
             <div className="mt-1 flex flex-col gap-[2px] font-body text-[11px] text-neutral-600">
               {integration.fields.map((field) => (
@@ -798,7 +831,7 @@ export function ConnectionScreen({
             }`}
           >
             <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
-              Stored here{state.source === "stored" ? " · in use" : ""}
+              Stored here{sourceInUse(state, "stored") ? " · in use" : ""}
             </div>
             <div className="mt-1 font-body text-[11px] text-neutral-600">
               {stored
@@ -834,18 +867,22 @@ export function ConnectionScreen({
           title="Availability"
           description="The kill switch works whichever source the values come from, and changes no value."
         >
-          <Switch
-            checked={state.enabled}
-            disabled={busy !== null}
-            aria-label={`Let workflows use ${integration.name}`}
-            onCheckedChange={(next) =>
-              next ? setEnabled(true) : void previewChange({ preview: "disable" }, "disable")
-            }
-          >
-            <span className="font-body text-[12px] text-neutral-800">
-              {state.enabled ? "Workflows may use it" : "Turned off"}
-            </span>
-          </Switch>
+          {availabilityNote ? (
+            <p className="m-0 font-body text-[12px] text-neutral-700">{availabilityNote}</p>
+          ) : (
+            <Switch
+              checked={state.enabled}
+              disabled={busy !== null}
+              aria-label={`Let workflows use ${integration.name}`}
+              onCheckedChange={(next) =>
+                next ? setEnabled(true) : void previewChange({ preview: "disable" }, "disable")
+              }
+            >
+              <span className="font-body text-[12px] text-neutral-800">
+                {state.enabled ? "Workflows may use it" : "Turned off"}
+              </span>
+            </Switch>
+          )}
 
           {stored ? (
             <div className="flex flex-col gap-1 border-t border-neutral-200 pt-3">
@@ -863,9 +900,7 @@ export function ConnectionScreen({
             </div>
           ) : (
             <p className="m-0 border-t border-neutral-200 pt-3 font-body text-[11px] text-neutral-500">
-              Nothing is stored here to disconnect. This connection lives in the
-              deployment&apos;s environment variables, so it is changed by changing them
-              and switched off with the control above.
+              {nothingToDisconnectLine(integration)}
             </p>
           )}
         </Section>

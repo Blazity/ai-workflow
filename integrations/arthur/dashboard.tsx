@@ -128,9 +128,9 @@ function ArthurEvals({ data }: IntegrationPageProps) {
       <Page title="Evals" description={DESCRIPTION}>
         <TruncatedNotice summary={summary} />
         <EmptyState>
-          Nothing was graded in the last {summary.windowHours} hours. The engine received{" "}
-          {count(summary.traceCount)} trace{summary.traceCount === 1 ? "" : "s"}; grading them is
-          configured on the engine, not here.
+          {`Nothing was graded in the last ${summary.windowHours} hours. The engine received ${count(
+            summary.traceCount,
+          )} ${summary.traceCount === 1 ? "trace" : "traces"}; grading them is configured on the engine, not here.`}
         </EmptyState>
         <Section title="Where grading is set up">
           <ExternalLink href="https://docs.arthur.ai/">Arthur Engine documentation</ExternalLink>

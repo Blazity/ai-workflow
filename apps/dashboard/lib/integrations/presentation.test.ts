@@ -163,7 +163,7 @@ test("a fresh deployment is told what the integration needs, not that its values
   );
   const rendered = lines.join(" ");
   assert.match(rendered, /Nothing configures it on this deployment yet/);
-  assert.match(rendered, /Site URL and API token/);
+  assert.match(rendered, /It needs its Site URL and API token\./);
   assert.doesNotMatch(
     rendered,
     /Values come from/,
@@ -267,6 +267,72 @@ test("values saved beside a working environment are said to be stored, tested an
   assert.doesNotMatch(testOutcomeLines({ ok: true }, beside, "test").join(" "), /not in use/);
 });
 
+/** The last health scan, holding one entry for the Demo integration. */
+function scanWith(mode: string, checks: { label: string; mode: string; message?: string }[] = []) {
+  return {
+    generatedAt: "2026-09-23T09:00:00.000Z",
+    summary: {
+      total: 1, live: 0, down: 1, notConfigured: 0, criticalDown: 0,
+      checksTotal: 0, checksLive: 0, checksDown: 0, checksDegraded: 0,
+    },
+    integrations: [
+      {
+        id: "demo", label: "Demo", group: "execution", envVars: [], critical: false,
+        mode, ping: null,
+        checks: checks.map((check, index) => ({
+          id: `c${index}`, description: "", critical: true, envVars: [], evidenceSource: "probe", ...check,
+        })),
+      },
+    ],
+  } as never;
+}
+
+// Red when: a card reads Connected beside a fresh scan that found the
+// integration down, with nothing to say they disagree (QA, Arthur).
+test("a Connected card says when the latest health scan found it down, naming the check", () => {
+  const rendered = statusDetailLines(
+    integration(),
+    scanWith("down", [{ label: "Auth", mode: "down", message: "timeout after 4005 ms" }]),
+  ).join(" ");
+  assert.match(
+    rendered,
+    /The health scan of Sep 23, 2026, 9:00:00 AM UTC found Demo down \(Auth: timeout after 4005 ms\)\. The status here comes from the values in use and the last test; press Test to check again\./,
+  );
+});
+
+test("a scan that agrees, or a card that is not Connected, adds no line", () => {
+  assert.doesNotMatch(statusDetailLines(integration(), scanWith("live")).join(" "), /health scan/);
+  assert.doesNotMatch(statusDetailLines(integration(), null).join(" "), /health scan/);
+  const failing = integration({
+    state: state({ status: "failing", connection: "failing", usable: false, failure: { reason: "credential_rejected", message: "401" } }),
+  });
+  assert.doesNotMatch(statusDetailLines(failing, scanWith("down")).join(" "), /health scan/);
+});
+
+// Red when: turning a tracing integration off says a run "may stop, or go on
+// without it" beside "fails naming it at its next use" (QA, Arthur): tracing
+// never stops a run.
+test("switching off an integration says per capability what a run in flight does", () => {
+  const tracing = integration({ name: "Arthur", capabilities: ["agent_tracing"], blocks: [] });
+  const tracingSaid = [
+    ...disableConsequence(tracing),
+    ...integrationImpactLines(tracing, null, "disable"),
+  ].join(" ");
+  assert.match(tracingSaid, /a run in flight goes on untraced, and is not stopped/i);
+  assert.doesNotMatch(tracingSaid, /may stop, or go on|fails naming/);
+
+  const tracker = integration({ name: "Jira", capabilities: ["issue_tracker"], blocks: [] });
+  const trackerSaid = disableConsequence(tracker).join(" ");
+  assert.match(trackerSaid, /A run in flight that uses its issue tracker fails naming Jira at its next use of it/);
+  assert.doesNotMatch(trackerSaid, /goes on/);
+
+  const mixed = integration({ name: "Hub", capabilities: ["messaging", "agent_tracing"], blocks: [] });
+  assert.match(
+    disableConsequence(mixed).join(" "),
+    /uses its messaging fails naming Hub at its next use of it\. Losing only the rest never stops a run: it goes on untraced\./,
+  );
+});
+
 test("a save that failed its test is reported as stored and not in use", () => {
   const lines = statusDetailLines(
     integration({
@@ -303,6 +369,20 @@ test("a stored secret says blank keeps it, so nobody retypes a token to fix a UR
 test("without the secrets key a secret field says which variable to set, before anything is typed", () => {
   const hint = fieldHint(TOKEN_FIELD, state({ secretsKeyAvailable: false }), false);
   assert.match(hint, /INTEGRATION_SECRETS_KEY/);
+});
+
+test("a secret field says what it is before its state, like every other field", () => {
+  // Red when: a secret's description is dropped and the admin reads only
+  // "Nothing is stored yet" under a field named "API key" (QA, Mem0).
+  const described = { ...TOKEN_FIELD, description: "From Settings, API keys, in your Demo account." };
+  for (const hint of [
+    fieldHint(described, state(), false),
+    fieldHint({ ...described, storedSecretSet: true }, state(), false),
+    fieldHint(described, state({ secretsKeyAvailable: false }), false),
+    fieldHint({ ...described, storedSecretSet: true }, state(), true),
+  ]) {
+    assert.match(hint, /^From Settings, API keys, in your Demo account\. /);
+  }
 });
 
 test("a secret marked for erasure says so rather than saying blank keeps it", () => {
@@ -492,7 +572,7 @@ test("disconnecting with nothing else configured says everything using it stops"
 
 test("disabling says runs fail and that the stored values survive it", () => {
   const lines = disableConsequence(integration());
-  assert.match(lines.join(" "), /A run that uses Demo fails naming it/);
+  assert.match(lines.join(" "), /A run in flight that uses Demo's blocks and its messaging fails naming Demo/);
   assert.match(lines.join(" "), /enabling it again finds exactly these values/);
 });
 

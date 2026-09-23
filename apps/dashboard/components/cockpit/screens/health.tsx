@@ -13,6 +13,7 @@ import type {
 import { integrationManifest } from "@integrations/registry";
 import { apiClient } from "@/lib/api/client";
 import { SetupOverview } from "@/app/(cockpit)/settings/setup-overview";
+import { STALE_SCAN_AFTER_HOURS } from "@/lib/settings/overview";
 import { SettingsCadenceNotice } from "@/app/(cockpit)/settings/settings-cadence-notice";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, isOlderThanHours } from "@/lib/date-time";
@@ -162,7 +163,6 @@ function statusOf(mode: SystemHealthMode): { label: string; dot: string; badge: 
 }
 
 const SCAN_TIMEOUT_MS = 15_000;
-const STALE_SCAN_AFTER_HOURS = 24;
 
 /**
  * Nothing is fetched on mount and nothing polls: the only request this screen
@@ -275,7 +275,7 @@ export function HealthScreen({
 
       {scanIsStale && data ? (
         <div role="note" className="mb-5 rounded-sm border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-neutral-800">
-          This scan is older than 24 hours. Run a new scan before treating these results as current.
+          {`This scan is older than ${STALE_SCAN_AFTER_HOURS} hours. Run a new scan before treating these results as current.`}
         </div>
       ) : null}
 

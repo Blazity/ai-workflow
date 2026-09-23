@@ -15,6 +15,7 @@ import type {
   IntegrationImpactPreviewResponse,
   IntegrationState,
   IntegrationVerification,
+  SystemHealthResponse,
 } from "@shared/contracts";
 import type { IntegrationConnectionSaveRequest } from "@shared/contracts";
 import { INTEGRATION_PROVIDER_WAIT_MS } from "@shared/contracts";
@@ -377,9 +378,15 @@ export function storesValues(integration: IntegrationDto): boolean {
  * Ordered by what an admin does next. A refusal comes first because it is the
  * only line that asks for an afternoon; the rest is context for it.
  */
-export function statusDetailLines(integration: IntegrationDto): string[] {
+export function statusDetailLines(
+  integration: IntegrationDto,
+  /** The last stored health scan, when this role could read one. */
+  scan: SystemHealthResponse | null = null,
+): string[] {
   const state = integration.state;
   const lines: string[] = [];
+  const disagreement = scanDisagreementLine(integration, scan);
+  if (disagreement) lines.push(disagreement);
 
   if (state.status === "disabled") {
     lines.push(
@@ -400,7 +407,7 @@ export function statusDetailLines(integration: IntegrationDto): string[] {
     lines.push(
       required.length === 0
         ? "Nothing configures it on this deployment yet."
-        : `Nothing configures it on this deployment yet. It needs ${andList(required.map((field) => field.label))}.`,
+        : `Nothing configures it on this deployment yet. It needs its ${andList(required.map((field) => field.label))}.`,
     );
   } else {
     lines.push(sourceLine(state));
@@ -444,6 +451,73 @@ function webhookLine(integration: IntegrationDto): string | null {
 }
 
 /**
+ * Whether a source's panel may say "in use": only when that source is the one
+ * selected AND it configures something. A deployment that never configured an
+ * integration reads the environment by default, and "Environment variables ·
+ * in use" there claimed a connection nobody made.
+ */
+export function sourceInUse(state: IntegrationState, source: "environment" | "stored"): boolean {
+  if (state.source !== source) return false;
+  return source === "environment"
+    ? state.environment.setVariables.length > 0
+    : state.stored.activeVersion !== null;
+}
+
+/**
+ * What the Availability section says instead of its switch, or null when the
+ * switch is the truth. An integration that is switched on and not connected
+ * cannot be used by any workflow, so a switch reading "Workflows may use it"
+ * there is false; switched off, the switch stays, since turning it back on is
+ * a real choice.
+ */
+export function availabilityInsteadOfSwitch(integration: IntegrationDto): string | null {
+  const { state } = integration;
+  if (!state.enabled || state.connection !== "not_connected") return null;
+  return `Not connected, so no workflow can use ${integration.name} yet. The switch to turn it off appears once it is connected.`;
+}
+
+/**
+ * The line under Availability when nothing is stored to disconnect.
+ */
+export function nothingToDisconnectLine(integration: IntegrationDto): string {
+  return sourceInUse(integration.state, "environment")
+    ? "This connection lives in the deployment's environment variables, so it is changed by changing them and switched off with the control above."
+    : `There is nothing to disconnect: nothing configures ${integration.name} on this deployment yet.`;
+}
+
+/**
+ * What a card says when the latest health scan disagrees with it.
+ *
+ * Decision (QA, Arthur on production): the card's status is the resolver's,
+ * from the values in use and the last connection test, and it stays so; a
+ * health probe is a separate, later or earlier, observation. When the card
+ * says Connected and the last scan found the integration down, degraded or
+ * misconfigured, the card says so in one line, naming the scan's time and its
+ * first failing check, rather than silently reading green beside a red Health
+ * page. The other way round (card failing, probe live) says nothing: the
+ * card's failure already names its reason and the fix.
+ */
+function scanDisagreementLine(
+  integration: IntegrationDto,
+  scan: SystemHealthResponse | null,
+): string | null {
+  if (!scan || integration.state.status !== "connected") return null;
+  const entry = scan.integrations.find((candidate) => candidate.id === integration.id);
+  if (!entry || !(entry.mode in SCAN_DISAGREES)) return null;
+  const failing = entry.checks.find((check) => check.mode in SCAN_DISAGREES && check.message);
+  const why = failing ? ` (${failing.label}: ${readableProviderText(failing.message!)})` : "";
+  return `The health scan of ${formatDateTime(scan.generatedAt)} found ${integration.name} ${
+    SCAN_DISAGREES[entry.mode as keyof typeof SCAN_DISAGREES]
+  }${why}. The status here comes from the values in use and the last test; press Test to check again.`;
+}
+
+const SCAN_DISAGREES = {
+  down: "down",
+  degraded: "degraded",
+  misconfigured: "in need of configuration",
+} as const;
+
+/**
  * The hint under a connection field.
  *
  * A secret is write-only, so the field never pretends to hold one: it says
@@ -460,17 +534,41 @@ export function fieldHint(
   const environment = field.envSet
     ? `${field.env} is set on this deployment.`
     : `${field.env} is not set on this deployment.`;
+  // What the field is comes first for a secret too: "Nothing is stored yet"
+  // alone left the admin guessing which token, from where.
+  const withDescription = (what: string) =>
+    [field.description, what, environment].filter(Boolean).join(" ");
   if (!field.secret) return [field.description, environment].filter(Boolean).join(" ");
   if (!state.secretsKeyAvailable) {
-    return `Set INTEGRATION_SECRETS_KEY on this deployment before storing a secret here. ${environment}`;
+    return withDescription("It cannot be stored here until INTEGRATION_SECRETS_KEY is set, see above.");
   }
-  if (clearing) {
-    return `The stored value will be removed when this is saved. ${environment}`;
-  }
+  if (clearing) return withDescription("The stored value will be removed when this is saved.");
   if (field.storedSecretSet) {
-    return `A value is stored. Leave this blank to keep it, or type a new one to replace it. ${environment}`;
+    return withDescription("A value is stored. Leave this blank to keep it, or type a new one to replace it.");
   }
-  return `Nothing is stored yet. What you type is encrypted and never shown again. ${environment}`;
+  return withDescription("Nothing is stored yet. What you type is encrypted and never shown again.");
+}
+
+/**
+ * What the connection screen says when this deployment cannot store a secret
+ * (no `INTEGRATION_SECRETS_KEY`), or null when it can or the integration has no
+ * secret. `blocksSave` is true when a required secret has no stored value and
+ * its field is locked: a save could only fail, so the button is off and this
+ * sentence says why.
+ */
+export function secretsKeyNotice(
+  integration: IntegrationDto,
+): { readonly text: string; readonly blocksSave: boolean } | null {
+  if (integration.state.secretsKeyAvailable) return null;
+  const secrets = integration.fields.filter((field) => field.secret);
+  if (secrets.length === 0) return null;
+  const blocked = secrets.filter((field) => !field.optional && !field.storedSecretSet);
+  const text =
+    "Secrets cannot be stored from this page yet: this deployment has no INTEGRATION_SECRETS_KEY, the key that encrypts the credentials saved here. An admin sets it on the deployment (see Integration secrets in SETUP.md)" +
+    (blocked.length > 0
+      ? `, and until then ${integration.name} needs its ${andList(blocked.map((field) => field.label))} from the deployment's environment variables.`
+      : ".");
+  return { text, blocksSave: blocked.length > 0 };
 }
 
 export interface ConnectionFormInput {
@@ -678,7 +776,7 @@ export function disableConsequence(integration: IntegrationDto): string[] {
           `${name}'s blocks grey out in the workflow editor at once, each carrying the reason, and publishing a workflow that uses one is refused.`,
         ]
       : []),
-    `A run that uses ${name} fails naming it at its next use. A step already running finishes.`,
+    `${capitalized(inFlightWithout(integration))} A step already running finishes.`,
     "Nothing stored is touched, so enabling it again finds exactly these values.",
   ];
 }
@@ -756,11 +854,11 @@ function impactReasonLine(
       case "save":
         return `The worker could not determine whether these values change the connection runs already in flight are using. If they do, a run that checks the one it started with may stop at its next use of ${name} instead of following the edit.`;
       case "disconnect":
-        return `The worker could not determine what disconnecting leaves. A run in flight may stop, or go on without ${name}, at its next use of ${name}.`;
+        return `The worker could not determine what disconnecting leaves. If nothing else configures ${name}, ${inFlightWithout(integration)}`;
       case "source":
         return `The worker could not determine whether the two sources hold the same connection. If they differ, a run that checks the one it started with may stop at its next use of ${name}.`;
       case "disable":
-        return `Turning ${name} off is read at every use, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`;
+        return `Turning ${name} off is read at every use, so ${inFlightWithout(integration)}`;
     }
   }
   switch (impact.stops) {
@@ -775,8 +873,8 @@ function impactReasonLine(
         : `This deployment's environment configures ${name} with the same values, so disconnecting stops no run in flight.`;
     case "unusable":
       return action === "disable"
-        ? `Turning ${name} off is read at every use, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`
-        : `Nothing else configures ${name} after this, so a run in flight ${usingItsCapabilities(integration)} may stop, or go on without it, at its next use of ${name}.`;
+        ? `Turning ${name} off is read at every use, so ${inFlightWithout(integration)}`
+        : `Nothing else configures ${name} after this, so ${inFlightWithout(integration)}`;
     case "reconfigured": {
       const change =
         action === "save"
@@ -822,10 +920,43 @@ function workflowsUsing(integration: IntegrationDto): string {
 }
 
 /** "that uses its issue tracker", or "that uses it" for one with no capability. */
-function usingItsCapabilities(integration: IntegrationDto): string {
-  return integration.capabilities.length === 0
-    ? "that uses it"
-    : `that uses its ${andList(integration.capabilities.map((id) => capabilityLabel(id).toLowerCase()))}`;
+/**
+ * What a run in flight does once the integration is gone, capability by
+ * capability, as the end of a sentence. Tracing never stops a run (it goes on
+ * untraced) and memory never does (it goes on without memory, and says why);
+ * everything else a run needs from the integration, its blocks included, fails
+ * the run naming it at its next use. "May stop, or go on without it" was true
+ * of neither case and contradicted the line beside it.
+ */
+function inFlightWithout(integration: IntegrationDto): string {
+  const name = integration.name;
+  const stopping = [
+    ...(integration.blocks.length > 0 ? [`${name}'s blocks`] : []),
+    ...integration.capabilities
+      .filter((id) => !(id in GOES_ON_WITHOUT))
+      .map((id) => `its ${capabilityLabel(id).toLowerCase()}`),
+  ];
+  const goingOn = integration.capabilities
+    .filter((id) => id in GOES_ON_WITHOUT)
+    .map((id) => GOES_ON_WITHOUT[id as keyof typeof GOES_ON_WITHOUT]);
+  if (stopping.length === 0 && goingOn.length === 0) {
+    return `a run in flight that uses ${name} fails naming it at its next use.`;
+  }
+  const stops = `a run in flight that uses ${andList(stopping)} fails naming ${name} at its next use of it.`;
+  if (goingOn.length === 0) return stops;
+  const continues = `a run in flight goes on ${andList(goingOn)}, and is not stopped.`;
+  if (stopping.length === 0) return continues;
+  return `${stops} Losing only the rest never stops a run: it goes on ${andList(goingOn)}.`;
+}
+
+/** The capabilities whose loss a run rides out, and how it goes on. */
+const GOES_ON_WITHOUT = {
+  agent_tracing: "untraced",
+  memory: "without memory",
+} as const;
+
+function capitalized(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
 /**
@@ -1014,7 +1145,7 @@ export const NO_INTEGRATIONS_LINE =
 
 /** What the core ticket-to-PR flow needs, in capabilities rather than names. */
 export const CORE_CAPABILITIES_LINE =
-  "The ticket-to-PR flow needs an issue tracker, version control and a coding agent. Blocks that need a capability nobody provides stay unavailable in the editor and say which one is missing.";
+  "The ticket-to-PR flow needs an issue tracker and version control; the coding agents it runs are set up as harness profiles, not here. Blocks that need a capability nobody provides stay unavailable in the editor and say which one is missing.";
 
 /**
  * Why a page an integration contributes is not being shown, or null when it is.

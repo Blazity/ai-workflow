@@ -7,7 +7,7 @@ import type {
 import { authAwareFallback, getJSON } from "@/lib/api/server";
 import { isWorkerStatus } from "@/lib/api/worker-errors";
 import { requireSession } from "@/lib/auth/session";
-import { readIntegrationsList } from "@/lib/integrations/list";
+import { readIntegrationsList, readLatestHealthScan } from "@/lib/integrations/list";
 import { blockAvailabilityOf, type CapabilitiesUnread } from "@/lib/integrations/presentation";
 
 import { IntegrationsScreen } from "./integrations-screen";
@@ -36,7 +36,7 @@ import { IntegrationsScreen } from "./integrations-screen";
 export async function IntegrationsData() {
   const session = await requireSession();
 
-  const [list, editor, capabilities] = await Promise.all([
+  const [list, editor, capabilities, scan] = await Promise.all([
     readIntegrationsList(),
     getJSON<WorkflowDefinitionsResponse>("/api/v1/workflow-definitions").catch((error) =>
       authAwareFallback(error, (): WorkflowDefinitionsResponse | null => null),
@@ -48,6 +48,9 @@ export async function IntegrationsData() {
       (error): CapabilitiesUnread =>
         isWorkerStatus(error, 404) ? "older_worker" : authAwareFallback(error, () => "unreadable"),
     ),
+    // The last health scan, so a card that reads Connected says so when the
+    // scan found the integration down (`scanDisagreementLine`).
+    readLatestHealthScan(),
   ]);
 
   const integrations = list?.integrations ?? [];
@@ -62,6 +65,7 @@ export async function IntegrationsData() {
         editor ? blockAvailabilityOf(editor.options.blockRegistry, integrations) : undefined
       }
       capabilities={capabilities}
+      scan={scan}
     />
   );
 }

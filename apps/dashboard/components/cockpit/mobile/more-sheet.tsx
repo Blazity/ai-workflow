@@ -3,6 +3,7 @@
 
 import { MobileSheet } from "./mobile-sheet";
 import { Button } from "@/components/ui/button";
+import { LogoutButton } from "@/components/cockpit/logout-button";
 import {
   CORE_NAV_GROUPS,
   INTEGRATIONS_GROUP_LABEL,
@@ -79,6 +80,11 @@ export function MoreSheet({
             })}
           </div>
         ))}
+        {/* The top bar that holds Sign out on a laptop is not shown on a
+            phone, so this is where a phone signs out. */}
+        <div className="mt-1 border-t border-neutral-200 px-[18px] py-3">
+          <LogoutButton />
+        </div>
       </div>
     </MobileSheet>
   );
