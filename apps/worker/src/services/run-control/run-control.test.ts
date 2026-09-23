@@ -199,19 +199,36 @@ describe("cancel", () => {
       d,
     );
 
-    expect(d.cancelRun).toHaveBeenCalledWith(
-      "AWT-1",
-      { ownerToken: "owner:AWT-1", runId: "run_a" },
-      registry,
+    expect(d.cancelRun).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      target: { ownerToken: "owner:AWT-1", runId: "run_a" },
+      runRegistry: registry,
       // The tracker the answers link through is the one a cancel moves with.
-      d.issueTracker,
-      undefined,
-      undefined,
+      issueTracker: d.issueTracker,
       // Who, not where from: the next provider of this command writes the same
       // sentence for the same act.
-      "Cancelled by U123 through a run control command",
-    );
+      reason: "Cancelled by U123 through a run control command",
+    });
     expect(answer).toMatchObject({ outcome: "cancelled", runId: "run_a" });
+  });
+
+  it("cancels the subject the claim holds, not one derived again from the ticket key", async () => {
+    // A claim taken under another tracker (the tracker changed while the run
+    // was live) holds a subject the ticket key no longer derives to. Deriving
+    // it again named a subject nobody holds and released nothing (H2.2).
+    const registry = registryWith({
+      get: vi.fn().mockResolvedValue(
+        active("AWT-1", { runId: "run_a", subjectKey: "ticket:linear:AWT-1" }),
+      ),
+    });
+    const d = deps(registry);
+
+    await executeRunControlCommand({ kind: "cancel", ticketKey: "AWT-1", actor: "U1" }, d);
+
+    expect(d.cancelRun).toHaveBeenCalledWith(
+      expect.objectContaining({ subjectKey: "ticket:linear:AWT-1", ticketKey: "AWT-1" }),
+    );
   });
 
   it("keeps ownership and says so when the cancellation was not confirmed", async () => {
@@ -240,16 +257,15 @@ describe("cancel", () => {
       d,
     );
 
-    expect(d.cancelRun).toHaveBeenCalledWith(
-      "AWT-1",
-      { ownerToken: "owner:AWT-1", runId: null },
-      registry,
+    expect(d.cancelRun).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      target: { ownerToken: "owner:AWT-1", runId: null },
+      runRegistry: registry,
       // The tracker the answers link through is the one a cancel moves with.
-      d.issueTracker,
-      undefined,
-      undefined,
-      "Cancelled by U1 through a run control command",
-    );
+      issueTracker: d.issueTracker,
+      reason: "Cancelled by U1 through a run control command",
+    });
     expect(answer).toMatchObject({ outcome: "cancelled_mid_dispatch", runId: null });
   });
 

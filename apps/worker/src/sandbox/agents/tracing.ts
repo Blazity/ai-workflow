@@ -129,6 +129,10 @@ export async function applyTracingPlans(input: {
   try {
     await input.registerHooks(hooks);
   } catch (error) {
+    // The installed files, hook.env among them, stay where they are on
+    // purpose: they sit in the provider's own 700 directory with no hook left
+    // to read them, and removing them is one more sandbox command that can
+    // fail on a path that exists to never fail. The sandbox dies with the run.
     logger.warn(
       {
         harness: input.harness,

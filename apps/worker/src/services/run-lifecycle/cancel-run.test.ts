@@ -139,11 +139,12 @@ describe("cancelRun", () => {
 
   it("closes, cancels, drains, cleans, and releases the exact owner", async () => {
     const runRegistry = registry();
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-    )).resolves.toBe(true);
+    })).resolves.toBe(true);
 
     expect(runRegistry.beginCancellation).toHaveBeenCalledWith(
       "ticket:jira:PROJ-1",
@@ -160,11 +161,12 @@ describe("cancelRun", () => {
 
   it("does not cancel a different owner", async () => {
     const runRegistry = registry();
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "foreign", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "foreign", runId: "run-1" },
       runRegistry,
-    )).resolves.toBe(false);
+    })).resolves.toBe(false);
     expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
   });
 
@@ -174,11 +176,12 @@ describe("cancelRun", () => {
       status: Promise.resolve("running"),
     });
     const runRegistry = registry();
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-    )).resolves.toBe(false);
+    })).resolves.toBe(false);
     expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
   });
 
@@ -233,13 +236,14 @@ describe("cancelRun", () => {
   it("performs a compatibility ticket move under the cancelling owner", async () => {
     const runRegistry = registry();
     const issueTracker = { moveTicket: vi.fn() } as unknown as IssueTrackerAdapter;
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
       issueTracker,
-      "Backlog",
-    )).resolves.toBe(true);
+      targetColumn: "Backlog",
+    })).resolves.toBe(true);
     expect(state.moveTicket).toHaveBeenCalledWith({
       issueTracker,
       ticketKey: "PROJ-1",
@@ -277,15 +281,13 @@ describe("cancelRun", () => {
 
   it("records the cancellation reason best-effort after a confirmed cancel", async () => {
     const runRegistry = registry();
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-      undefined,
-      undefined,
-      undefined,
-      "Cancelled via Slack /ai-workflow cancel",
-    )).resolves.toBe(true);
+      reason: "Cancelled via Slack /ai-workflow cancel",
+    })).resolves.toBe(true);
     expect(state.recordStatusReason).toHaveBeenCalledWith(
       "run-1",
       "Cancelled via Slack /ai-workflow cancel",
@@ -295,26 +297,25 @@ describe("cancelRun", () => {
 
   it("skips the reason write when none is given", async () => {
     const runRegistry = registry();
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-    )).resolves.toBe(true);
+    })).resolves.toBe(true);
     expect(state.recordStatusReason).not.toHaveBeenCalled();
   });
 
   it("still confirms cancellation when the reason write fails", async () => {
     state.recordStatusReason.mockRejectedValue(new Error("db down"));
     const runRegistry = registry();
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-      undefined,
-      undefined,
-      undefined,
-      "reason",
-    )).resolves.toBe(true);
+      reason: "reason",
+    })).resolves.toBe(true);
     expect(runRegistry.releaseCancellation).toHaveBeenCalled();
   });
 
@@ -322,11 +323,12 @@ describe("cancelRun", () => {
   // clear the live "awaiting" the park wrote, so cancellation settles it.
   it("settles a parked run as blocked after a confirmed cancel", async () => {
     const runRegistry = registry({ ...active(), state: "parked" });
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-    )).resolves.toBe(true);
+    })).resolves.toBe(true);
     expect(state.markBlockedOnCancel).toHaveBeenCalledWith("run-1");
   });
 
@@ -335,11 +337,12 @@ describe("cancelRun", () => {
   // no longer write, or that flip wins and the cancelled run reads as in flight.
   it("settles the park only after the step drain barrier", async () => {
     const runRegistry = registry({ ...active(), state: "parked" });
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-    )).resolves.toBe(true);
+    })).resolves.toBe(true);
     const drained = Math.max(...state.listSteps.mock.invocationCallOrder);
     expect(state.markBlockedOnCancel.mock.invocationCallOrder[0]).toBeGreaterThan(
       drained,
@@ -349,11 +352,12 @@ describe("cancelRun", () => {
   it("still confirms cancellation when the awaiting settle fails", async () => {
     state.markBlockedOnCancel.mockRejectedValue(new Error("db down"));
     const runRegistry = registry({ ...active(), state: "parked" });
-    await expect(cancelRun(
-      "PROJ-1",
-      { ownerToken: "owner-a", runId: "run-1" },
+    await expect(cancelRun({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      target: { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-    )).resolves.toBe(true);
+    })).resolves.toBe(true);
     expect(runRegistry.releaseCancellation).toHaveBeenCalled();
   });
 });

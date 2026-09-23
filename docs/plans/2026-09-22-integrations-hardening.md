@@ -319,10 +319,15 @@ switched mid-pass would have named a subject the claim does not hold. On a
 deployment with no tracker the watchdog's own re-derivation threw, so a dead
 pull request run that carried a ticket key was never settled.
 
-**Decision.** The caller passes the subject its claim holds (`subjectKey` on
-`CancelRunDetailedInput`); only `cancelRun`, which is handed a bare ticket key,
-derives it. The watchdog takes the pass's tracker id and decides whether a
-claim follows its ticket with `ticketSubjectKey`, never asking the deployment.
+**Decision.** Every cancel is handed the subject its claim holds
+(`subjectKey` on `CancelRunDetailedInput`) and derives nothing. `cancelRun`
+takes the same named input and only reduces the result to a boolean; run
+control, its one caller, passes the subject of the claim it looked up, so a
+claim taken under an earlier tracker is cancelled under its own subject. The
+watchdog takes the pass's tracker id and decides whether a claim follows its
+ticket with `ticketSubjectKey`, never asking the deployment. A run control
+command still finds its claim by deriving the subject from the ticket key it
+was given: that is the one lookup a command addressed by ticket key has.
 
 #### H2.3. Tracing never fails a run, and one function keeps that promise
 
@@ -335,7 +340,20 @@ because the commit guard it also writes must fail loudly.
 harnesses call. It contains every install failure (removing staged copies,
 which may hold the provider's key) and catches the hook registration, leaving
 the sandbox untraced with `agent_tracing_off` in the log. The harness's writer
-keeps throwing for everything that is not tracing.
+keeps throwing for everything that is not tracing. After a failed hook
+registration the installed files, `hook.env` among them, are left in the
+provider's 700 directory on purpose: no hook reads them, and removing them is
+one more command that could fail on the path that must not.
+
+#### H2.4. `getLatestCheckRuns` stays on the GitHub adapter
+
+**Problem.** F26 asked whether the method was an orphan kept alive only by a
+test double.
+
+**Decision.** It stays. The double that overrode it was already gone
+(`60fe42b4`), and the adapter calls it itself to report a pull request head's
+checks (`integrations/github/vcs.ts`), which dispatch reads. Removing it would
+remove live behavior, not dead code.
 
 ## Memory contract (from the S14 gate, before S15)
 
