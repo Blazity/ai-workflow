@@ -1673,8 +1673,9 @@ describe("binding a failed check to what the provider reports now", () => {
       triggerType: "trigger_pr_checks_failed",
       pr: {
         ...event().pr,
-        failedChecks: checks.map(({ id, ...check }) => ({
-          ...check,
+        failedChecks: checks.map(({ id, name, conclusion }) => ({
+          name,
+          conclusion,
           handle: { id, owner: "github-actions" } as never,
         })),
       },
